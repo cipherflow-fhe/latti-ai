@@ -1,0 +1,57 @@
+# Build
+build/
+vs_build/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+.cache/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+venv/
+**/test_venv/
+**/.pyarmor/
+
+# Model files
+*.pth
+*.p
+*.onnx
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+viz/
+debug/
+temp/
+data/
+deps/
+export/**/*.log
+export/**/*.txt
+export/**/*.json
+export/**/*.csv
+export/**/*.yaml
+training/retraining/export/
+training/general_enc_inference_sdk/
+config_user.json
+gen_task/*.json
+**/mega_ag.json
+**/task_signature.json
+
+# Dataset directories
+mnist/
+cifar10/
+lfw/
+resnet/
+resnet_new/
+
+# CLAUDE.md
+CLAUDE.md
+
+# Task plan files
+task_plan*.md

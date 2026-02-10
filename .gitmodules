@@ -1,0 +1,3 @@
+[submodule "inference/lattisense"]
+	path = inference/lattisense
+	url = https://github.com/cipherflow-fhe/lattisense.git

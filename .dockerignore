@@ -1,0 +1,48 @@
+# Build directories
+build/
+**/build/
+**/install/
+cmake-build-*/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+venv/
+.venv/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git (keep .git for submodule init, ignore .gitignore)
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Documentation (keep in image but not needed for build context optimization)
+# docs/
+
+# CI/CD
+.github/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Test outputs
+*.csv
+hetero_performance_results.csv
