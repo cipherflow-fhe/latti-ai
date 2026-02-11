@@ -30,7 +30,7 @@ from pathlib import Path
 # Add model_compiler to Python path
 sys.path.insert(0, str(Path(__file__).parent / 'model_compiler'))
 
-from model_compiler.graph_splitter_recur import run_parallel, init_config_with_args
+from model_compiler.graph_partition_dp import run_parallel, init_config_with_args
 from model_export.onnx_to_json import onnx_to_json
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')

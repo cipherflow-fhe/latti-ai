@@ -30,6 +30,7 @@ viz/
 debug/
 temp/
 data/
+runs/
 deps/
 export/**/*.log
 export/**/*.txt

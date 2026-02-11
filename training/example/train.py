@@ -136,9 +136,6 @@ def main():
     if args.poly_model_convert and args.input_shape is None:
         parser.error('--input-shape is required when --poly_model_convert is enabled, e.g. --input-shape 3 32 32')
 
-    if args.input_shape is not None:
-        args.input_shape = (1, *args.input_shape)
-
     if args.poly_model_convert:
         args.output_dir = args.input_dir
     device = torch.device(f'cuda:{args.gpu}') if args.gpu >= 0 and torch.cuda.is_available() else torch.device('cpu')
@@ -224,14 +221,7 @@ def main():
         export_to_onnx(
             model,
             save_path=onnx_path,
-            input_size=tuple(
-                [
-                    1,
-                    args.input_shape[0],
-                    args.input_shape[1],
-                    args.input_shape[2],
-                ]
-            ),
+            input_size=tuple([1, *args.input_shape]),
             dynamic_batch=False,
         )
         log.info(f'ONNX saved: {onnx_path}')

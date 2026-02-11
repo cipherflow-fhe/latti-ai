@@ -34,29 +34,6 @@ json read_json(string filename) {
     return data;
 }
 
-void write_time(chrono::microseconds time,
-                chrono::microseconds time1,
-                uint64_t fpga_time,
-                const string& project_path,
-                bool fpga) {
-    ofstream myfile;
-    myfile.open("example.txt", iostream::app);
-
-    if (myfile.is_open()) {
-        myfile << project_path << " call computation time: ";
-        myfile << double(time.count() / 1.0e6) << "s";
-        myfile << ", fpga computation time: ";
-        myfile << double(fpga_time) / 1.0e6 << "ms" << endl;
-
-        myfile.close();
-        cout << "Data has been written to the file." << endl;
-    } else {
-        cout << "Unable to open the file." << endl;
-    }
-    if (fpga)
-        total_num = total_num + double(time.count() / 1.0e6);
-}
-
 uint64_t mod_sub(uint64_t x, uint64_t y, uint64_t mod, bool is_print) {
     double res = double(x) - double(y);
     if (is_print) {
