@@ -420,7 +420,7 @@ void Feature2DEncrypted::column_pack(const Array<double, 2>& feature_mg, bool is
     }
 
     for (int i = 0; i < pack_num; i++) {
-        auto enc = context->encode(feature_mg_pack[i], 5, DEFAULT_SCALE);
+        auto enc = context->encode(feature_mg_pack[i], level, scale_in);
         data.push_back(context->encrypt_asymmetric(enc));
     }
 }
@@ -443,7 +443,7 @@ void Feature2DEncrypted::row_pack(const Array<double, 2>& feature_mg, bool is_sy
         }
     }
     for (int i = 0; i < pack_num; i++) {
-        auto enc = context->encode(feature_mg_pack[i], 5, DEFAULT_SCALE);
+        auto enc = context->encode(feature_mg_pack[i], level, scale_in);
         data.push_back(context->encrypt_asymmetric(enc));
     }
 }

@@ -154,7 +154,7 @@ Feature0DEncrypted Feature0DEncrypted::drop_level(int n_level_to_drop) const {
     parallel_for(data.size(), th_nums, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         auto ct_tmp = data[ct_idx].copy();
         for (int j = 0; j < n_level_to_drop; j++) {
-            ct_tmp = context->drop_level(ct_tmp);
+            ct_tmp = ctx_copy.drop_level(ct_tmp);
         }
         result.data[ct_idx] = move(ct_tmp);
         assert(new_level == result.data[ct_idx].get_level());

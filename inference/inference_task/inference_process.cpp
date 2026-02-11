@@ -176,7 +176,6 @@ void InitInferenceProcess::init_add_layer(const string& key, const json& layer, 
     FeatureNode feature_input1(json_features[layer["feature_input"][1].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     CkksParameter& param = *ckks_parameters.at(feature_input0.ckks_parameter_id);
-    CkksContext ctx = CkksContext::create_empty_context(param);
     auto add2d = make_unique<AddLayer>(*ckks_parameters.at(feature_input0.ckks_parameter_id));
     add2d->target_ckks_scale = feature_output.ckks_scale;
     ckks_adds[key] = move(add2d);
@@ -314,9 +313,6 @@ void InitInferenceProcess::init_multiplexed_conv_layer(const string& key,
             }
             ckks_big_conv2ds[key] = move(inv_conv_layer);
         } else {
-            if (stride[0] == 1 && stride[1] == 1 && feature_input.skip[0] == 1 && feature_input.skip[1] == 1) {
-                int level_down = 1;
-            }
             auto mux_conv_layer = make_unique<ParMultiplexedConv2DPackedLayer>(
                 param, feature_input.shape, weight, bias, stride, feature_input.skip,
                 feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale, upsample_factor_in);
@@ -616,8 +612,6 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.start();
                 const Feature2DEncrypted& input0 =
                     dynamic_cast<const Feature2DEncrypted&>(get_feature(feature_input[0]));
-
-                Feature2DEncrypted result0(&context, input0.level - 1);
 
                 if (input0.dim == 2) {
                     auto res = fp->ckks_mult_scalar[key]->run(context, input0);
