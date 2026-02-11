@@ -41,12 +41,6 @@ extern double mpc_fpga_num;
 
 json read_json(std::string filename);
 
-void write_time(std::chrono::microseconds time,
-                std::chrono::microseconds time1,
-                uint64_t fpga_time,
-                const std::string& path,
-                bool fpga = false);
-
 uint64_t mod_sub(uint64_t x, uint64_t y, uint64_t mod, bool is_print = false);
 
 void vec_to_share(Array1D& vec, Array1DUint& share1, Array1DUint& share2, int scale_ord, uint64_t ring_mod);
@@ -89,6 +83,9 @@ Array<uint64_t, dim> array_double_to_uint64(const Array<double, dim>& x, int sca
 }
 
 Array<double, 4> transpose_weight(const Array<double, 4>& weight);
+
 void print_array(const Array<double, 3>& arr, std::ostream& out = std::cout);
+
 void print_array_to_file(const Array<double, 3>& arr, const std::string& filename, bool append = true);
+
 Array<double, 3> upsample_with_zero(const Array<double, 3>& x, const Duo& stride);

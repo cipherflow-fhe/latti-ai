@@ -17,7 +17,7 @@ pip install -r requirements.txt
 ### Step 1: Baseline Training
 
 ```bash
-python example/train.py --epochs 150 --batch-size 128 --lr 0.1 --output-dir ../runs/cifar10/model
+python examples/test_cifar10/train.py --epochs 150 --batch-size 128 --lr 0.1 --output-dir ./runs/cifar10/model
 ```
 
 **Output:** `runs/cifar10/model/tarin_baseline.pth`
@@ -27,7 +27,7 @@ python example/train.py --epochs 150 --batch-size 128 --lr 0.1 --output-dir ../r
 Replace ReLU and max pooling with polynomial approximations and average pooling, respectively, fine-tune, then export to ONNX and H5.
 
 ```bash
-python example/train.py --poly_model_convert --pretrained ../runs/cifar10/model/tarin_baseline.pth --epochs 10 --batch-size 36 --lr 0.001 --input-dir ../runs/cifar10/model --export-dir ../runs/cifar10/task/server --input-shape 3 32 32
+python examples/test_cifar10/train.py --poly_model_convert --pretrained ./runs/cifar10/model/tarin_baseline.pth --epochs 10 --batch-size 36 --lr 0.001 --input-dir ./runs/cifar10/model --export-dir ./runs/cifar10/task/server --input-shape 3 32 32
 ```
 
 **Output:**
@@ -41,7 +41,7 @@ python example/train.py --poly_model_convert --pretrained ../runs/cifar10/model/
 ### Step 3: Model Compilation
 
 ```bash
-python run_compile.py --input=../runs/cifar10/model/trained_poly.onnx --output=../runs/cifar10/ --poly_n=65536 --style=multiplexed
+python training/run_compile.py --input=./runs/cifar10/model/trained_poly.onnx --output=./runs/cifar10/ --poly_n=65536 --style=multiplexed
 ```
 
 **Output:**
