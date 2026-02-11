@@ -21,7 +21,7 @@
 using namespace std;
 
 Feature1DEncrypted::Feature1DEncrypted(CkksContext* context_in, int ct_level) {
-    dim = 2;
+    dim = 1;
     context = context_in;
     level = ct_level;
 }

@@ -67,6 +67,7 @@ inline void bytes_to_ss(const Bytes& bytes, std::stringstream& ss) {
 
 inline Bytes ss_to_bytes(std::stringstream& ss) {
     Bytes bytes(ss.tellp());
+    ss.seekg(0);
     ss.read((char*)bytes.data(), ss.tellp());
     return bytes;
 }

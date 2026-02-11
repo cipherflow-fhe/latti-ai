@@ -122,8 +122,8 @@ template <int dim> Array<double, dim> gen_random_array_positive(const std::array
 
 inline double max_value(Array<double, 3>& values) {
     auto temp = values.to_array_1d();
-    double max_v = 0;
-    for (int i = 0; i < temp.size(); i++) {
+    double max_v = temp[0];
+    for (int i = 1; i < temp.size(); i++) {
         if (max_v < temp[i]) {
             max_v = temp[i];
         }
@@ -133,8 +133,8 @@ inline double max_value(Array<double, 3>& values) {
 
 inline double min_value(Array<double, 3>& values) {
     auto temp = values.to_array_1d();
-    double min_v = 0;
-    for (int i = 0; i < temp.size(); i++) {
+    double min_v = temp[0];
+    for (int i = 1; i < temp.size(); i++) {
         if (min_v > temp[i]) {
             min_v = temp[i];
         }
