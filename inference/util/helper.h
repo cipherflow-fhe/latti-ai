@@ -18,8 +18,10 @@
 
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 
 inline uint32_t div_ceil(uint32_t x, uint32_t q) {
+    assert(q != 0 && "div_ceil: division by zero");
     return (x + q - 1) / q;
 }
