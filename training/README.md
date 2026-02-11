@@ -61,7 +61,7 @@ python example/train.py --poly_model_convert --pretrained ../runs/cifar10/model/
                                  degree=args.degree)
     onnx_path = os.path.join(args.output_dir, 'trained_poly.onnx')
     export_to_onnx(model, save_path=onnx_path,
-                   input_size=tuple([1, args.input_shape[0], args.input_shape[1], args.input_shape[2],]),
+                   input_size=tuple([1, *args.input_shape]),
                    dynamic_batch=False)
 
     h5_path = os.path.join(export_dir, 'model_parameters.h5')
