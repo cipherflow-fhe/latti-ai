@@ -25,6 +25,8 @@ import json
 import os
 import sys
 
+# TODO: Create a general gen_mega_ag.py, or gen_erg.py, script
+
 # Resolve the directory where this script lives.
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -39,9 +41,8 @@ project_root = _dir
 # Add project root and LattiSense library to the Python path so that
 # the frontend and training modules can be imported.
 sys.path.insert(0, project_root)
-sys.path.insert(0, os.path.join(project_root, 'inference', 'lattisense'))
 
-from frontend.custom_task import *  # noqa: E402
+from inference.lattisense.frontend.custom_task import *  # noqa: E402
 from inference.model_generator.deploy_cmds import gen_custom_task  # noqa: E402
 
 # Path to the server-side encrypted computation graph (ergs directory).

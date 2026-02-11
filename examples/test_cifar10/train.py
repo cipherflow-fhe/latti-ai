@@ -38,7 +38,7 @@ from torch.utils.data import DataLoader
 import torchvision
 import torchvision.transforms as transforms
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from model import resnet20
 
@@ -156,14 +156,14 @@ def main():
 
     # Optionally replace ReLU -> RangeNormPoly2d
     if args.poly_model_convert:
-        from nn_tools import (
+        from training.nn_tools import (
             replace_activation_with_poly,
             export_to_onnx,
             fuse_and_export_h5,
             replace_maxpool_with_avgpool,
         )
-        from nn_tools.replace import count_activations
-        from nn_tools.activations import RangeNormPoly2d
+        from training.nn_tools.replace import count_activations
+        from training.nn_tools.activations import RangeNormPoly2d
 
         n_maxpool = count_activations(model, nn.MaxPool2d)
         replace_maxpool_with_avgpool(model)
