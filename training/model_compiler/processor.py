@@ -287,13 +287,15 @@ def update_subgraph_node_param(dag, param_dict: dict[str, EncryptParameterNode],
 
     sub = LayerAbstractGraph()
     sub.dag = dag
+    slot_num = param_dict[param_id].poly_modulus_degree / 2
+    # print(f'slot_num={slot_num}')
     if MPC_REFRESH:
         update_skip_for_btp(sub, print_flag)
         update_level_cost_for_btp(sub)
     for compute_node in compute_nodes_in_topo_sort:
         compute_node.ckks_parameter_id_input = param_id
         compute_node.ckks_parameter_id_output = param_id
-        slot_num = param_dict[param_id].poly_modulus_degree / 2
+        
         populate_pack_num(dag, compute_node, slot_num)
 
 
@@ -354,7 +356,7 @@ def substitute_layers_for_btp(subgraph: LayerAbstractGraph):
             continue
         if compute.layer_type == 'relu2d' or compute.layer_type == 'simple_polyrelu':
             compute.layer_type = APPROX_POLY_TYPE
-            subgraph.dag.nodes[compute]['level_cost'] = compute.order - 1
+            subgraph.dag.nodes[compute]['level_cost'] = math.ceil(math.log2(compute.order)) + 1
 
 
 def set_scale_for_node(graph: LayerAbstractGraph, c_node: ComputeNode, scale: float):
@@ -588,7 +590,7 @@ def find_input_and_output(sub: LayerAbstractGraph):
     return input_nodes, output_nodes
 
 
-def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path):
+def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path, use_btp: bool = True):
     server_task = {}
     for i in range(len(subgraphs)):
         sub = subgraphs[i]
@@ -637,6 +639,7 @@ def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path):
                 'depth': node.depth,
                 'pack_num': graph_to_use.dag.nodes[node]['pack_num'],
             }
+    
     config = {
         'task_type': 'fhe' if len(subgraphs) == 1 else 'hybrid',
         'task_num': len(subgraphs),
@@ -650,6 +653,7 @@ def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path):
         'task_input_param': {'input': param_dict[input_root.node_id]},
         'task_output_param': {'output': param_dict[output_root.node_id]},
         'server_task': server_task,
+        'use_btp': use_btp,
     }
     os.makedirs(file_path, exist_ok=True)
     with open(os.path.join(file_path, 'task_config.json'), 'w') as f:
@@ -821,7 +825,7 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                     compute_node.is_adaptive_avgpool = False
         elif compute_node.layer_type == APPROX_POLY_TYPE:
-            graph.dag.nodes[compute_node]['level_cost'] = compute_node.order - 1
+            graph.dag.nodes[compute_node]['level_cost'] = math.ceil(math.log2(compute_node.order)) + 1
             if preds[0].shape[0] > block_shape[0] or preds[0].shape[1] > block_shape[1]:
                 compute_node.is_big_size = True
 
