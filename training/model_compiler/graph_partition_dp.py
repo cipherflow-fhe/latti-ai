@@ -579,16 +579,16 @@ def process_with_no_btp(graph: LayerAbstractGraph):
     poly_n_to_max_level = {8192: 5, 16384: 9, 65536: 24}
 
     poly_n_to_block_shape = {8192: [64, 64], 16384: [64, 64], 65536: [128, 256]}
-    poly_n_levels = [8192, 16384, 65536]  # 每次都从 8192 开始尝试
+    poly_n_levels = [8192, 16384, 65536]  # always start trying from 8192
 
     result = None
     for poly_n in poly_n_levels:
-        # 更新配置
+        # Update configuration
         config['POLY_N'] = poly_n
         config['MAX_LEVEL'] = poly_n_to_max_level[poly_n]
         config['block_shape'] = poly_n_to_block_shape[poly_n]
 
-        # 同步配置到 components 和 processor 模块
+        # Synchronize the configuration to the components and processor modules
         components.config = config
         processor.config = config
         components._init_config_vars()
@@ -596,7 +596,7 @@ def process_with_no_btp(graph: LayerAbstractGraph):
 
         print(f'Trying POLY_N={poly_n}, MAX_LEVEL={config["MAX_LEVEL"]}, block_shape={config["block_shape"]}')
 
-        # 检查 level 是否满足要求
+        # Check whether the level meets the requirements
         result = reset_level_and_check_level(graph)
 
         if result is not None:
