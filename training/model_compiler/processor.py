@@ -295,7 +295,7 @@ def update_subgraph_node_param(dag, param_dict: dict[str, EncryptParameterNode],
     for compute_node in compute_nodes_in_topo_sort:
         compute_node.ckks_parameter_id_input = param_id
         compute_node.ckks_parameter_id_output = param_id
-        
+
         populate_pack_num(dag, compute_node, slot_num)
 
 
@@ -639,7 +639,7 @@ def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path, use_btp
                 'depth': node.depth,
                 'pack_num': graph_to_use.dag.nodes[node]['pack_num'],
             }
-    
+
     config = {
         'task_type': 'fhe' if len(subgraphs) == 1 else 'hybrid',
         'task_num': len(subgraphs),

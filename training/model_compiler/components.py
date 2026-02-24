@@ -333,7 +333,7 @@ class FeatureNode:
         self.shape = shape
         self.ckks_parameter_id = ckks_parameter_id
         self.node_index = -1
-        self.depth =  -1
+        self.depth = -1
         self.is_total_graph_leading_node = False
         self.scale_up = 1
         self.scale_down = 1
@@ -1399,7 +1399,9 @@ class FheScoreParam:
                     + rescale_time * self.rescale_score
                 )
         elif 'simple_polyrelu' in self.compute_node.layer_type:
-            compute_score = (self.n_packed_in * (self.mult_score + self.add_score)) * (math.ceil(math.log2(self.compute_node.order)) + 1)
+            compute_score = (self.n_packed_in * (self.mult_score + self.add_score)) * (
+                math.ceil(math.log2(self.compute_node.order)) + 1
+            )
             return compute_score * self.acc_rate
         elif 'avgpool2d' == self.compute_node.layer_type:
             num = self.n_packed_in * (self.stride[0] - 1 + math.log2(self.stride[0]))
