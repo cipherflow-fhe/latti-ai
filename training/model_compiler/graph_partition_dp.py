@@ -629,7 +629,7 @@ def compile_graph(
 
 def reset_level_and_check_level(total_graph: LayerAbstractGraph):
     g = GraphPartitioner(total_graph.dag)
-    level_below_max, level_info = g.split_graph_and_set_level((total_graph.dag))
+    level_below_max, max_level, level_info = g.inspect_level_backward((total_graph.dag))
 
     for node in level_info.keys():
         total_graph.dag.nodes[node]['level'] = level_info[node]
@@ -672,23 +672,6 @@ def compile_model_btp(
     total_graph.dag = compiled_graph
     restore_node_attributes(total_graph.dag)
 
-    for node in total_graph.dag.nodes:
-        if isinstance(node, ComputeNode):
-            node.up_scale_str = list()
-            node.down_scale_str = list()
-    if config.get('GRAPH_TYPE', 'btp') == 'btp':
-        set_graph_scale(total_graph)
-        # process_batch_norm(total_graph)
-        if config.get('SET_LEVEL_MAX', False):
-            process_level_for_graph(total_graph)
-
-    if config.get('MPC_REFRESH', False):
-        balance_scale_for_graph(total_graph)
-        if not reset_level_and_check_level(total_graph):
-            print('level over')
-            return float('inf'), None
-        update_btp_to_mpc_refresh(total_graph)
-
     return score, total_graph
 
 
@@ -722,78 +705,112 @@ def _prepare_graph(input_file_path: Path) -> LayerAbstractGraph:
     return pt_graph
 
 
-def _try_no_btp(pt_graph: LayerAbstractGraph, output_dir: Path) -> bool:
+def post_process(
+    graph: LayerAbstractGraph,
+    output_dir: Path,
+    score: float,
+    use_btp: bool,
+):
+    """
+    set_scale、add_drop_level and save compilation results to output directory
+
+    Args:
+        graph: Compiled LayerAbstractGraph
+        output_dir: Output directory
+        score: Compilation score
+        use_btp: Whether BTP mode was used (affects graph_to_task_config call)
+    """
+    slot_num = config.get('POLY_N') / 2
+    for node in graph.dag.nodes:
+        if isinstance(node, ComputeNode):
+            node.up_scale_str = list()
+            node.down_scale_str = list()
+            populate_pack_num(graph.dag, node, slot_num)
+
+    set_graph_scale(graph)
+
+    if config.get('SET_LEVEL_MAX', False):
+        process_level_for_graph(graph)
+    else:
+        add_drop_level_for_graph(graph)
+
+    task_dir = output_dir / 'task'
+    server_dir = task_dir / 'server'
+    client_dir = task_dir / 'client'
+    ergs_dir = server_dir / 'ergs'
+
+    ergs_dir.mkdir(parents=True, exist_ok=True)
+    client_dir.mkdir(parents=True, exist_ok=True)
+
+    erg0_path = ergs_dir / 'erg0.json'
+    graph.to_json(dict(), str(erg0_path), score=score)
+
+    if use_btp:
+        graph_to_task_config([graph], str(server_dir))
+    else:
+        graph_to_task_config([graph], str(server_dir), False)
+
+    server_task_config = server_dir / 'task_config.json'
+    client_task_config = client_dir / 'task_config.json'
+    if server_task_config.exists():
+        shutil.copy(str(server_task_config), str(client_task_config))
+
+    poly_n = config.get('POLY_N', 65536)
+    poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
+    mod_bit = poly_to_mod[poly_n]
+    ckks_param = {
+        'param0': {
+            'poly_modulus_degree': poly_n,
+            'n_mult_level': config.get('MAX_LEVEL'),
+            'coeff_modulus_bit_length': mod_bit,
+            'special_prime_bit_length': mod_bit,
+            'pack_num': 4.0,
+        }
+    }
+
+    with open(server_dir / 'ckks_parameter.json', 'w') as f:
+        json.dump(ckks_param, f, indent=4)
+
+    with open(client_dir / 'ckks_parameter.json', 'w') as f:
+        json.dump(ckks_param, f, indent=4)
+
+    print(f'Output directory: {output_dir}')
+    print(f'Generated structure:')
+    print(f'  task/')
+    print(f'    ├── server/')
+    print(f'    │   ├── ergs/erg0.json')
+    print(f'    │   ├── task_config.json')
+    print(f'    │   └── ckks_parameter.json')
+    print(f'    └── client/')
+    print(f'        ├── task_config.json')
+    print(f'        └── ckks_parameter.json')
+
+
+def _try_no_btp(pt_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph | None, float]:
     """
     Try no-BTP mode compilation with prepared graph
 
     Args:
         pt_graph: Prepared LayerAbstractGraph
-        output_dir: Output directory
 
     Returns:
-        True if no-BTP succeeded, False if BTP is needed
+        (succeeded, graph, score): succeeded=True if no-BTP succeeded, graph and score are set on success
     """
     print('Step 2: Trying no-BTP mode...')
     result = process_with_no_btp(pt_graph)
 
     if result:
-        slot_num = config.get('POLY_N') / 2
-        for node in result.dag.nodes:
-            if isinstance(node, ComputeNode):
-                populate_pack_num(result.dag, node, slot_num)
-
-        set_graph_scale(result)
         print('✓ No-BTP mode succeeded! Saving results...')
 
         total_graph = result
         restore_node_attributes(total_graph.dag)
 
-        # Save files
-        task_dir = output_dir / 'task'
-        server_dir = task_dir / 'server'
-        client_dir = task_dir / 'client'
-        ergs_dir = server_dir / 'ergs'
-
-        ergs_dir.mkdir(parents=True, exist_ok=True)
-        client_dir.mkdir(parents=True, exist_ok=True)
-
-        erg0_path = ergs_dir / 'erg0.json'
-        total_graph.to_json(dict(), str(erg0_path), score=0.0)
-
-        graph_to_task_config([total_graph], str(server_dir), False)
-
-        server_task_config = server_dir / 'task_config.json'
-        client_task_config = client_dir / 'task_config.json'
-        if server_task_config.exists():
-            shutil.copy(str(server_task_config), str(client_task_config))
-
-        # Create ckks_parameter.json
-        poly_n = config.get('POLY_N', 65536)
-        poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
-        mod_bit = poly_to_mod[poly_n]
-        ckks_param = {
-            'param0': {
-                'poly_modulus_degree': poly_n,
-                'n_mult_level': config.get('MAX_LEVEL'),
-                'coeff_modulus_bit_length': mod_bit,
-                'special_prime_bit_length': mod_bit,
-                'pack_num': 4.0,
-            }
-        }
-
-        with open(server_dir / 'ckks_parameter.json', 'w') as f:
-            json.dump(ckks_param, f, indent=4)
-
-        with open(client_dir / 'ckks_parameter.json', 'w') as f:
-            json.dump(ckks_param, f, indent=4)
-
         print(f'\n=== No-BTP Results ===')
         print(f'Score: 0.0')
-        print(f'Output directory: {output_dir}')
-        return True
+        return True, total_graph, 0.0
 
     print('✗ No-BTP mode failed, switching to BTP mode...')
-    return False
+    return False, None, float('inf')
 
 
 def _run_btp_compilation(
@@ -803,17 +820,20 @@ def _run_btp_compilation(
     temperature: float,
     pt_graph: LayerAbstractGraph,
     num_workers: int,
-):
+) -> tuple[LayerAbstractGraph | None, float]:
     """
     Run BTP mode parallel compilation with prepared graph
 
     Args:
         num_experiments: Number of parallel compilation runs
         input_file_path: Input pt.json file path
-        output_dir: Output directory
+        output_dir: Output directory (passed to worker processes)
         temperature: Temperature parameter for randomization
         pt_graph: Prepared graph for BTP compilation
         num_workers: Number of parallel worker processes
+
+    Returns:
+        (best_graph, best_score): best_graph is None if all runs failed
     """
     print('Step 3: Restoring to BTP parameters (POLY_N=65536, MAX_LEVEL=9)...')
 
@@ -846,63 +866,14 @@ def _run_btp_compilation(
 
     if not valid_results:
         print('ERROR: All runs failed! No valid results to save.')
-        return
+        return None, float('inf')
 
     # Find the best result
     best_score, best_graph = min(valid_results, key=lambda x: x[0])
 
-    # Create directory structure
-    task_dir = output_dir / 'task'
-    server_dir = task_dir / 'server'
-    client_dir = task_dir / 'client'
-    ergs_dir = server_dir / 'ergs'
-
-    ergs_dir.mkdir(parents=True, exist_ok=True)
-    client_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save files
-    erg0_path = ergs_dir / 'erg0.json'
-    best_graph.to_json(dict(), str(erg0_path), score=best_score)
-
-    graph_to_task_config([best_graph], str(server_dir))
-
-    server_task_config = server_dir / 'task_config.json'
-    client_task_config = client_dir / 'task_config.json'
-    if server_task_config.exists():
-        shutil.copy(str(server_task_config), str(client_task_config))
-
-    # Create ckks_parameter.json
-    poly_n = config.get('POLY_N', 65536)
-    poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
-    mod_bit = poly_to_mod[poly_n]
-    ckks_param = {
-        'param0': {
-            'poly_modulus_degree': poly_n,
-            'n_mult_level': config.get('MAX_LEVEL'),
-            'coeff_modulus_bit_length': mod_bit,
-            'special_prime_bit_length': mod_bit,
-            'pack_num': 4.0,
-        }
-    }
-
-    with open(server_dir / 'ckks_parameter.json', 'w') as f:
-        json.dump(ckks_param, f, indent=4)
-
-    with open(client_dir / 'ckks_parameter.json', 'w') as f:
-        json.dump(ckks_param, f, indent=4)
-
     print(f'\n=== Results ===')
     print(f'Best score: {best_score}')
-    print(f'Output directory: {output_dir}')
-    print(f'Generated structure:')
-    print(f'  task/')
-    print(f'    ├── server/')
-    print(f'    │   ├── ergs/erg0.json')
-    print(f'    │   ├── task_config.json')
-    print(f'    │   └── ckks_parameter.json')
-    print(f'    └── client/')
-    print(f'        ├── task_config.json')
-    print(f'        └── ckks_parameter.json')
+    return best_graph, best_score
 
 
 def run_parallel(
@@ -932,11 +903,17 @@ def run_parallel(
     pt_graph = _prepare_graph(input_file_path)
 
     # Try no-BTP mode first
-    if _try_no_btp(pt_graph, output_dir):
+    succeeded, graph, score = _try_no_btp(pt_graph)
+    if succeeded:
+        post_process(graph, output_dir, score, use_btp=False)
         return
 
     # No-BTP failed, use BTP mode with the same prepared graph
-    _run_btp_compilation(num_experiments, input_file_path, output_dir, temperature, pt_graph, num_workers)
+    graph, score = _run_btp_compilation(
+        num_experiments, input_file_path, output_dir, temperature, pt_graph, num_workers
+    )
+    if graph is not None:
+        post_process(graph, output_dir, score, use_btp=True)
 
 
 if __name__ == '__main__':
