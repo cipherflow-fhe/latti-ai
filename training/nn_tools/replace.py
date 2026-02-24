@@ -24,7 +24,7 @@ from typing import Type, Callable
 
 import torch.nn as nn
 
-from .activations import RangeNormPoly2d
+from .activations import RangeNormPoly2d, Simple_Polyrelu
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +76,7 @@ def replace_activation(
 def replace_activation_with_poly(
     model: nn.Module,
     old_cls: Type[nn.Module] = nn.ReLU,
+    new_module_factory=RangeNormPoly2d,
     upper_bound: float = 3.0,
     degree: int = 4,
 ) -> nn.Module:
@@ -119,7 +120,7 @@ def replace_activation_with_poly(
     replace_activation(
         model,
         old_cls=old_cls,
-        new_module_factory=RangeNormPoly2d,
+        new_module_factory=new_module_factory,
         upper_bound=upper_bound,
         degree=degree,
         activation=activation,

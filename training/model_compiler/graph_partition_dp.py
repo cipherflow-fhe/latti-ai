@@ -395,7 +395,6 @@ class GraphPartitioner:
         return le_maximal_subgs
 
     def process_btp_level_cost(self, dag: nx.DiGraph):
-
         for node in dag.nodes:
             if isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping':
                 preds: list[FeatureNode] = list(dag.predecessors(node))
