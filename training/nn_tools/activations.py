@@ -88,8 +88,46 @@ class RangeNorm2d(nn.Module):
         )
 
 
+class _SimplePolyreluExport(torch.autograd.Function):
+    """ONNX export helper: emit Simple_Polyrelu as a single custom op."""
+
+    @staticmethod
+    def forward(ctx, x, scale_before, scale_after, degree, activation):
+        if activation == 'relu':
+            coeffs = Simple_Polyrelu._RELU_COEFF
+        else:
+            coeffs = Simple_Polyrelu._SILU_COEFF
+        a0, a1, a2, a3, a4 = coeffs[degree]
+        a0 *= scale_after
+        a1 *= scale_after
+        a2 *= scale_after
+        a4 *= scale_after
+
+        x = scale_before * x
+
+        if degree == 2:
+            return a0 + (a1 + a2 * x) * x - a2
+        elif degree == 4:
+            return a0 + a1 * x + a2 * (x**2 - 1) + a4 * (x**4 - 6 * x**2 + 3)
+        else:
+            raise ValueError(f'Unsupported degree: {degree}')
+
+    @staticmethod
+    def symbolic(g, x, scale_before, scale_after, degree, activation):
+        return g.op(
+            'nn_tools::Simple_Polyrelu',
+            x,
+            scale_before_f=scale_before,
+            scale_after_f=scale_after,
+            degree_i=degree,
+            activation_s=activation,
+        )
+
+
 class Simple_Polyrelu(nn.Module):
     """Polynomial activation approximating ReLU or SiLU via Hermite expansion.
+
+    Exported as a single ``nn_tools::Simple_Polyrelu`` custom op in ONNX.
 
     Args:
         scale_before: Input scaling factor.
@@ -110,7 +148,7 @@ class Simple_Polyrelu(nn.Module):
         4: (0.20662096, 0.50000000, 0.24808519 / np.sqrt(2), 0.0, -0.03780501 / np.sqrt(24)),
     }
 
-    def __init__(self, scale_before=1.0, scale_after=1.0, degree=4, activation='relu'):
+    def __init__(self, scale_before=1.0, scale_after=1.0, degree=4, activation='relu', **kwargs):
         super().__init__()
         self.scale_before = scale_before
         self.scale_after = scale_after
@@ -136,6 +174,14 @@ class Simple_Polyrelu(nn.Module):
         self.a4 = a4 * self.scale_after
 
     def forward(self, x):
+        if torch.onnx.is_in_onnx_export():
+            return _SimplePolyreluExport.apply(
+                x,
+                self.scale_before,
+                self.scale_after,
+                self.degree,
+                self.activation,
+            )
         x = self.scale_before * x
 
         if self.degree == 2:
