@@ -112,7 +112,8 @@ from processor import (
     FheScoreParam,
     add_drop_level_for_graph,
     update_subgraph_node_param,
-    get_slot_num,populate_pack_num,
+    get_slot_num,
+    populate_pack_num,
     update_skip_for_btp,
     update_shape_for_btp,
     balance_scale_for_graph,
@@ -572,6 +573,7 @@ def remove_drop_level_nodes(graph: LayerAbstractGraph) -> LayerAbstractGraph:
 
     return graph
 
+
 def process_with_no_btp(graph: LayerAbstractGraph):
     current_graph_type = config.get('GRAPH_TYPE', 'btp')
 
@@ -609,7 +611,7 @@ def process_with_no_btp(graph: LayerAbstractGraph):
         print(f'Warning: Even with POLY_N=65536, level still exceeds limit!')
 
     return result
-    
+
 
 def compile_graph(
     input_file_path: str,
@@ -638,7 +640,11 @@ def reset_level_and_check_level(total_graph: LayerAbstractGraph):
 
 
 def compile_model_btp(
-    input_file_path: Path, output_dir: Path, temperature=1.0, pt_graph_prepared: LayerAbstractGraph | None = None, stdout=False
+    input_file_path: Path,
+    output_dir: Path,
+    temperature=1.0,
+    pt_graph_prepared: LayerAbstractGraph | None = None,
+    stdout=False,
 ) -> tuple[float, LayerAbstractGraph]:
     """
     Compile model with bootstrapping
