@@ -113,6 +113,7 @@ from processor import (
     add_drop_level_for_graph,
     update_subgraph_node_param,
     get_slot_num,
+    populate_pack_num,
     update_skip_for_btp,
     update_shape_for_btp,
     balance_scale_for_graph,
@@ -573,25 +574,51 @@ def remove_drop_level_nodes(graph: LayerAbstractGraph) -> LayerAbstractGraph:
     return graph
 
 
+def process_with_no_btp(graph: LayerAbstractGraph):
+    current_graph_type = config.get('GRAPH_TYPE', 'btp')
+
+    # not btp style, set max level for polyrelu
+    poly_n_to_max_level = {8192: 5, 16384: 9, 65536: 24}
+
+    poly_n_to_block_shape = {8192: [64, 64], 16384: [64, 64], 65536: [128, 256]}
+    poly_n_levels = [8192, 16384, 65536]  # always start trying from 8192
+
+    result = None
+    for poly_n in poly_n_levels:
+        # Update configuration
+        config['POLY_N'] = poly_n
+        config['MAX_LEVEL'] = poly_n_to_max_level[poly_n]
+        config['block_shape'] = poly_n_to_block_shape[poly_n]
+
+        # Synchronize the configuration to the components and processor modules
+        components.config = config
+        processor.config = config
+        components._init_config_vars()
+        processor._init_config_vars()
+
+        print(f'Trying POLY_N={poly_n}, MAX_LEVEL={config["MAX_LEVEL"]}, block_shape={config["block_shape"]}')
+
+        # Check whether the level meets the requirements
+        result = reset_level_and_check_level(graph)
+
+        if result is not None:
+            print(f'Success! Using POLY_N={poly_n}, MAX_LEVEL={config["MAX_LEVEL"]}')
+            break
+        else:
+            print(f'Level exceeded with POLY_N={poly_n}, trying next level...')
+
+    if result is None:
+        print(f'Warning: Even with POLY_N=65536, level still exceeds limit!')
+
+    return result
+
+
 def compile_graph(
     input_file_path: str,
     output_dir: str | None = None,
     temperature=1.0,
+    pt_graph: LayerAbstractGraph | None = None,
 ):
-
-    pt_graph = LayerAbstractGraph.from_json(input_file_path)
-
-    substitute_layers_for_btp(pt_graph)
-    init_graph_level(pt_graph)
-
-    # pt_graph.to_json(dict(), str(fhe_friendly_path))
-    set_is_adaptive_avgpool(pt_graph)
-    update_shape_for_btp(pt_graph)
-    update_skip_for_btp(pt_graph)
-    update_level_cost_for_btp(pt_graph)
-    # init_graph_level(pt_graph)
-    absorb_scale_for_approx_poly(pt_graph)
-
     score, compiled_graph = optimize_task_segments(pt_graph, temperature=temperature)
 
     if compiled_graph is None:
@@ -613,7 +640,11 @@ def reset_level_and_check_level(total_graph: LayerAbstractGraph):
 
 
 def compile_model_btp(
-    input_file_path: Path, output_dir: Path, temperature=1.0, stdout=False
+    input_file_path: Path,
+    output_dir: Path,
+    temperature=1.0,
+    pt_graph_prepared: LayerAbstractGraph | None = None,
+    stdout=False,
 ) -> tuple[float, LayerAbstractGraph]:
     """
     Compile model with bootstrapping
@@ -630,6 +661,7 @@ def compile_model_btp(
         input_file_path=str(input_file_path),
         output_dir=str(output_dir),
         temperature=temperature,
+        pt_graph=pt_graph_prepared,
     )
 
     if compiled_graph is None:
@@ -662,40 +694,148 @@ def compile_model_btp(
 
 def run_single_compile(args):
     """Wrapper function for multiprocessing - runs a single compilation"""
-    input_file_path, output_dir, temperature = args
-    score, graph = compile_model_btp(input_file_path, output_dir, temperature, stdout=True)
+    input_file_path, output_dir, temperature, pt_graph_prepared = args
+    score, graph = compile_model_btp(input_file_path, output_dir, temperature, pt_graph_prepared, stdout=True)
     return score, graph
 
 
-def run_parallel(
+def _prepare_graph(input_file_path: Path) -> LayerAbstractGraph:
+    """
+    Prepare graph for compilation (common preparation steps)
+
+    Args:
+        input_file_path: Input pt.json file path
+
+    Returns:
+        Prepared LayerAbstractGraph
+    """
+    pt_graph = LayerAbstractGraph.from_json(str(input_file_path))
+
+    substitute_layers_for_btp(pt_graph)
+    init_graph_level(pt_graph)
+    set_is_adaptive_avgpool(pt_graph)
+    update_shape_for_btp(pt_graph)
+    update_skip_for_btp(pt_graph)
+    update_level_cost_for_btp(pt_graph)
+    absorb_scale_for_approx_poly(pt_graph)
+
+    return pt_graph
+
+
+def _try_no_btp(pt_graph: LayerAbstractGraph, output_dir: Path) -> bool:
+    """
+    Try no-BTP mode compilation with prepared graph
+
+    Args:
+        pt_graph: Prepared LayerAbstractGraph
+        output_dir: Output directory
+
+    Returns:
+        True if no-BTP succeeded, False if BTP is needed
+    """
+    print('Step 2: Trying no-BTP mode...')
+    result = process_with_no_btp(pt_graph)
+
+    if result:
+        slot_num = config.get('POLY_N') / 2
+        for node in result.dag.nodes:
+            if isinstance(node, ComputeNode):
+                populate_pack_num(result.dag, node, slot_num)
+
+        set_graph_scale(result)
+        print('✓ No-BTP mode succeeded! Saving results...')
+
+        total_graph = result
+        restore_node_attributes(total_graph.dag)
+
+        # Save files
+        task_dir = output_dir / 'task'
+        server_dir = task_dir / 'server'
+        client_dir = task_dir / 'client'
+        ergs_dir = server_dir / 'ergs'
+
+        ergs_dir.mkdir(parents=True, exist_ok=True)
+        client_dir.mkdir(parents=True, exist_ok=True)
+
+        erg0_path = ergs_dir / 'erg0.json'
+        total_graph.to_json(dict(), str(erg0_path), score=0.0)
+
+        graph_to_task_config([total_graph], str(server_dir), False)
+
+        server_task_config = server_dir / 'task_config.json'
+        client_task_config = client_dir / 'task_config.json'
+        if server_task_config.exists():
+            shutil.copy(str(server_task_config), str(client_task_config))
+
+        # Create ckks_parameter.json
+        poly_n = config.get('POLY_N', 65536)
+        poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
+        mod_bit = poly_to_mod[poly_n]
+        ckks_param = {
+            'param0': {
+                'poly_modulus_degree': poly_n,
+                'n_mult_level': config.get('MAX_LEVEL'),
+                'coeff_modulus_bit_length': mod_bit,
+                'special_prime_bit_length': mod_bit,
+                'pack_num': 4.0,
+            }
+        }
+
+        with open(server_dir / 'ckks_parameter.json', 'w') as f:
+            json.dump(ckks_param, f, indent=4)
+
+        with open(client_dir / 'ckks_parameter.json', 'w') as f:
+            json.dump(ckks_param, f, indent=4)
+
+        print(f'\n=== No-BTP Results ===')
+        print(f'Score: 0.0')
+        print(f'Output directory: {output_dir}')
+        return True
+
+    print('✗ No-BTP mode failed, switching to BTP mode...')
+    return False
+
+
+def _run_btp_compilation(
     num_experiments: int,
     input_file_path: Path,
     output_dir: Path,
     temperature: float,
-    num_workers: int = 16,
+    pt_graph: LayerAbstractGraph,
+    num_workers: int,
 ):
     """
-    Run multiple compilations in parallel and select the best result
-
-    Simplified version: directly calls compile_model_btp in parallel processes
+    Run BTP mode parallel compilation with prepared graph
 
     Args:
         num_experiments: Number of parallel compilation runs
         input_file_path: Input pt.json file path
-        output_dir: Output directory (will contain erg0.json, task_config.json)
+        output_dir: Output directory
         temperature: Temperature parameter for randomization
+        pt_graph: Prepared graph for BTP compilation
         num_workers: Number of parallel worker processes
     """
-    print(f'Starting {num_experiments} parallel runs with {num_workers} processes...')
+    print('Step 3: Restoring to BTP parameters (POLY_N=65536, MAX_LEVEL=9)...')
+
+    config['POLY_N'] = 65536
+    config['MAX_LEVEL'] = 9
+    config['block_shape'] = [128, 256]
+
+    components.config = config
+    processor.config = config
+    components._init_config_vars()
+    processor._init_config_vars()
+
+    print(f'Step 4: Starting {num_experiments} parallel BTP compilations with {num_workers} processes...')
 
     # Prepare arguments for each run
-    args_list = [(input_file_path, output_dir, temperature) for _ in range(num_experiments)]
+    args_list = [(input_file_path, output_dir, temperature, copy.deepcopy(pt_graph)) for _ in range(num_experiments)]
 
     # Run compilations in parallel
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         results = list(executor.map(run_single_compile, args_list))
 
-    # Filter out failed results (score == inf)
+    # Filter out failed results
     valid_results = [(score, graph) for score, graph in results if graph is not None]
     failed_count = num_experiments - len(valid_results)
 
@@ -708,36 +848,30 @@ def run_parallel(
         print('ERROR: All runs failed! No valid results to save.')
         return
 
-    # Find the best result (minimum score)
+    # Find the best result
     best_score, best_graph = min(valid_results, key=lambda x: x[0])
 
-    # Create directory structure: output_dir/task/server/ergs/ and output_dir/task/client/
+    # Create directory structure
     task_dir = output_dir / 'task'
     server_dir = task_dir / 'server'
     client_dir = task_dir / 'client'
     ergs_dir = server_dir / 'ergs'
 
-    # Create all directories
     ergs_dir.mkdir(parents=True, exist_ok=True)
     client_dir.mkdir(parents=True, exist_ok=True)
 
     # Save files
-    # 1. erg0.json in server/ergs/ (this is the ct.json)
     erg0_path = ergs_dir / 'erg0.json'
     best_graph.to_json(dict(), str(erg0_path), score=best_score)
 
-    # 2. task_config.json in both server and client
-    # graph_to_task_config will create task_config.json in server_dir
     graph_to_task_config([best_graph], str(server_dir))
 
-    # Copy task_config.json to client as well
     server_task_config = server_dir / 'task_config.json'
     client_task_config = client_dir / 'task_config.json'
     if server_task_config.exists():
         shutil.copy(str(server_task_config), str(client_task_config))
 
-    # 3. Create ckks_parameter.json for both server and client
-    # Get POLY_N from config
+    # Create ckks_parameter.json
     poly_n = config.get('POLY_N', 65536)
     poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
     mod_bit = poly_to_mod[poly_n]
@@ -751,11 +885,9 @@ def run_parallel(
         }
     }
 
-    # Save to server
     with open(server_dir / 'ckks_parameter.json', 'w') as f:
         json.dump(ckks_param, f, indent=4)
 
-    # Save to client
     with open(client_dir / 'ckks_parameter.json', 'w') as f:
         json.dump(ckks_param, f, indent=4)
 
@@ -771,6 +903,40 @@ def run_parallel(
     print(f'    └── client/')
     print(f'        ├── task_config.json')
     print(f'        └── ckks_parameter.json')
+
+
+def run_parallel(
+    num_experiments: int,
+    input_file_path: Path,
+    output_dir: Path,
+    temperature: float,
+    num_workers: int = 16,
+):
+    """
+    Run multiple compilations in parallel and select the best result
+
+    This is the main entry point for compilation. It tries no-BTP mode first,
+    and falls back to BTP mode if needed.
+
+    Args:
+        num_experiments: Number of parallel compilation runs
+        input_file_path: Input pt.json file path
+        output_dir: Output directory (will contain erg0.json, task_config.json)
+        temperature: Temperature parameter for randomization
+        num_workers: Number of parallel worker processes
+    """
+    print(f'Starting compilation...')
+
+    # Prepare graph once
+    print('Step 1: Preparing graph...')
+    pt_graph = _prepare_graph(input_file_path)
+
+    # Try no-BTP mode first
+    if _try_no_btp(pt_graph, output_dir):
+        return
+
+    # No-BTP failed, use BTP mode with the same prepared graph
+    _run_btp_compilation(num_experiments, input_file_path, output_dir, temperature, pt_graph, num_workers)
 
 
 if __name__ == '__main__':
