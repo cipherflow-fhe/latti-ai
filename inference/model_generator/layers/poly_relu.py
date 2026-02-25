@@ -50,7 +50,7 @@ class PolyReluLayer:
         result = list()
         if self.order != 4:
             for i in range(len(x)):
-                res = x[i]
+                res = rescale(mult(x[i], weight_pt[self.order][i]))
                 for order_idx in range(self.order - 1, 0, -1):
                     res = add(res, weight_pt[order_idx][i])
                     if res.level > x[i].level:

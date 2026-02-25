@@ -54,13 +54,19 @@ class Simple_PolyreluComputeNode(ComputeNode):
         feature_input = [features_nodes[format_id(x.input[0])]]
         feature_output = [features_nodes[format_id(x.output[0])]]
 
-        # 'relu.rangenorm.running_max' -> 'relu'
+        # Extract module path for weight_path mapping.
         module_path = ''
         if len(x.input) >= 2:
             rm_name = x.input[1]  # e.g. 'relu.rangenorm.running_max'
             suffix = '.rangenorm.running_max'
             if rm_name.endswith(suffix):
                 module_path = rm_name[: -len(suffix)]
+        if not module_path:
+            parts = x.name.strip('/').split('/')
+            if len(parts) >= 2:
+                module_path = '.'.join(parts[:-1])
+            else:
+                module_path = layer_id
         degree = 4
         for attr in x.attribute:
             if attr.name == 'degree':
