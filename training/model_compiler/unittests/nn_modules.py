@@ -80,7 +80,14 @@ class NN4(nn.Module):
         self.convs = nn.ModuleList()
         for i in range(self.n_layers):
             self.convs.append(
-                nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, stride=2 if (i % 4 == 2) else 1, padding=1)
+                nn.Conv2d(
+                    in_channels=32,
+                    out_channels=32,
+                    kernel_size=3,
+                    bias=False,
+                    stride=2 if (i % 4 == 2) else 1,
+                    padding=1,
+                )
             )
 
     def forward(self, x):
@@ -114,3 +121,32 @@ class ResNetBasicBlock(nn.Module):
         out += self.shortcut(x)
         out = self.relu2(out)
         return out
+
+
+class WrongPadding(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=(0, 0))
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
+class WrongDilation(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, dilation=2)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+class WrongGroups(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, groups=2)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x

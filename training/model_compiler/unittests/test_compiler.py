@@ -187,6 +187,45 @@ class TestCompiler(unittest.TestCase):
         )
         print(graph)
 
+    def test_wrong_padding(self):
+        nn = nn_modules.WrongPadding()
+        export_to_onnx(
+            nn,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+
+        with self.assertRaisesRegex(ValueError, r'Unsupported padding value: \[0, 0, 0, 0\]'):
+            onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+    def test_wrong_dilation(self):
+        nn = nn_modules.WrongDilation()
+        export_to_onnx(
+            nn,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+
+        with self.assertRaisesRegex(ValueError, r'Unsupported dilation value: \[2, 2\]'):
+            onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+    def test_wrong_groups(self):
+        nn = nn_modules.WrongGroups()
+        export_to_onnx(
+            nn,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+
+        with self.assertRaisesRegex(ValueError, r'Unsupported groups value: 2'):
+            onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
 
 if __name__ == '__main__':
     unittest.main()

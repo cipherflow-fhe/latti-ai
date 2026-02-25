@@ -20,7 +20,7 @@ import logging
 
 import onnx
 from onnx import numpy_helper
-from onnxruntime.tools.symbolic_shape_infer import SymbolicShapeInference
+from onnx import shape_inference
 
 from .operations import FeatureNode, ComputeNode, format_id, get_type_id, get_op_code_generator
 from .operations.Conv import ConvComputeNode
@@ -96,12 +96,7 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
     """
     onnx_model = onnx.load(onnx_filename)
     simplify_onnx_model(onnx_model)
-
-    try:
-        onnx_model.graph.ClearField('value_info')
-        onnx_model = SymbolicShapeInference.infer_shapes(onnx_model, 2**31 - 1, True, True, 1)
-    except Exception:
-        log.warning('Shape inference by onnxruntime failed.')
+    onnx_model = shape_inference.infer_shapes(onnx_model)
 
     graph = onnx_model.graph
     input_value_infos = {i.name: i for i in graph.input}
