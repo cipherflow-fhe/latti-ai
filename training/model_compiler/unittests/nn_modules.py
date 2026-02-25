@@ -48,7 +48,7 @@ class NN1(nn.Module):
 class NN2(nn.Module):
     def __init__(self):
         super().__init__()
-        self.n_layers = 20
+        self.n_layers = 40
         self.convs = nn.ModuleList()
         for i in range(self.n_layers):
             self.convs.append(nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1))

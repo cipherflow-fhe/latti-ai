@@ -24,7 +24,7 @@ sys.path.append(str(script_dir.parent.parent))
 
 from nn_tools.export import export_to_onnx
 from model_export.onnx_to_json import onnx_to_json
-from graph_partition_dp import init_config_with_args, compile_model_btp, run_parallel, config
+from graph_partition_dp import init_config_with_args, run_parallel, config
 from components import LayerAbstractGraph, FeatureNode
 import nn_modules
 
@@ -45,9 +45,12 @@ class TestCompiler(unittest.TestCase):
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
 
         init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
-        score, graph = compile_model_btp(
+        graph, score = run_parallel(
+            num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
+            temperature=1.0,
+            num_workers=1,
         )
 
         self.assertEqual(
@@ -66,9 +69,12 @@ class TestCompiler(unittest.TestCase):
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
 
         init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
-        score, graph = compile_model_btp(
+        graph, score = run_parallel(
+            num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
+            temperature=1.0,
+            num_workers=1,
         )
 
         self.assertEqual(
@@ -87,16 +93,12 @@ class TestCompiler(unittest.TestCase):
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
 
         init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
-        run_parallel(
+        graph, score = run_parallel(
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
             temperature=1.0,
             num_workers=1,
-        )
-        score, graph = compile_model_btp(
-            input_file_path=self.temp_json_path,
-            output_dir=script_dir,
         )
 
         self.assertEqual(
@@ -116,16 +118,12 @@ class TestCompiler(unittest.TestCase):
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
 
         init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
-        run_parallel(
+        graph, score = run_parallel(
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
             temperature=1.0,
             num_workers=1,
-        )
-        score, graph = compile_model_btp(
-            input_file_path=self.temp_json_path,
-            output_dir=script_dir,
         )
 
         self.assertEqual(
@@ -145,16 +143,12 @@ class TestCompiler(unittest.TestCase):
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
 
         init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
-        run_parallel(
+        graph, score = run_parallel(
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
             temperature=1.0,
             num_workers=1,
-        )
-        score, graph = compile_model_btp(
-            input_file_path=self.temp_json_path,
-            output_dir=script_dir,
         )
 
         self.assertEqual(
@@ -174,18 +168,13 @@ class TestCompiler(unittest.TestCase):
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
 
         init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
-        # run_parallel(
-        #     num_experiments=1,
-        #     input_file_path=Path(temp_json_path),
-        #     output_dir=Path(script_dir),
-        #     temperature=1.0,
-        #     num_workers=1,
-        # )
-        score, graph = compile_model_btp(
+        graph, score = run_parallel(
+            num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
+            temperature=1.0,
+            num_workers=1,
         )
-        print(graph)
 
     def test_wrong_padding(self):
         nn = nn_modules.WrongPadding()
