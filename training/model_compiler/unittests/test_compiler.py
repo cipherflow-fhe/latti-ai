@@ -104,6 +104,64 @@ class TestCompiler(unittest.TestCase):
             config['MAX_LEVEL'],
         )
 
+    def test_nn3(self):
+        nn = nn_modules.NN3()
+        export_to_onnx(
+            nn,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        run_parallel(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=1.0,
+            num_workers=1,
+        )
+        score, graph = compile_model_btp(
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+        )
+
+        self.assertEqual(
+            max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)),
+            config['MAX_LEVEL'],
+        )
+
+    def test_nn4(self):
+        nn = nn_modules.NN4()
+        export_to_onnx(
+            nn,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 256, 256]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
+        run_parallel(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=1.0,
+            num_workers=1,
+        )
+        score, graph = compile_model_btp(
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+        )
+
+        self.assertEqual(
+            max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)),
+            config['MAX_LEVEL'],
+        )
+
     def test_resnet_basic_block(self):
         nn = nn_modules.ResNetBasicBlock(32, 32)
         export_to_onnx(

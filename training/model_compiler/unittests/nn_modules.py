@@ -28,7 +28,7 @@ from nn_tools.activations import RangeNormPoly2d
 class NN0(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False)
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
 
     def forward(self, x):
         x = self.conv0(x)
@@ -51,7 +51,37 @@ class NN2(nn.Module):
         self.n_layers = 20
         self.convs = nn.ModuleList()
         for i in range(self.n_layers):
-            self.convs.append(nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False))
+            self.convs.append(nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1))
+
+    def forward(self, x):
+        for i in range(self.n_layers):
+            x = self.convs[i](x)
+        return x
+
+
+class NN3(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.n_layers = 20
+        self.acts = nn.ModuleList()
+        for i in range(self.n_layers):
+            self.acts.append(RangeNormPoly2d(num_features=32))
+
+    def forward(self, x):
+        for i in range(self.n_layers):
+            x = self.acts[i](x)
+        return x
+
+
+class NN4(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.n_layers = 20
+        self.convs = nn.ModuleList()
+        for i in range(self.n_layers):
+            self.convs.append(
+                nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, stride=2 if (i % 4 == 2) else 1, padding=1)
+            )
 
     def forward(self, x):
         for i in range(self.n_layers):
