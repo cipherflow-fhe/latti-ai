@@ -31,12 +31,9 @@ If GPU acceleration is not needed, use this simplified process:
 git clone https://github.com/cipherflow-fhe/latti-ai.git
 cd latti-ai
 git submodule update --init
-cd inference/lattisense
-git submodule update --init fhe_ops_lib/lattigo
-cd ../..
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+git -C inference/lattisense submodule update --init fhe_ops_lib/lattigo
+cmake -B build
+cmake --build build -j$(nproc)
 ```
 
 ### GPU Build (Recommended)
@@ -44,36 +41,27 @@ make -j$(nproc)
 #### Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/cipherflow-fhe/latti-ai.git
+git clone --recursive https://github.com/cipherflow-fhe/latti-ai.git  # This may take ~6 minutes
 cd latti-ai
-git submodule update --init --recursive  # This may take ~6 minutes
 ```
 
-#### Step 2: Build HEonGPU (GPU Acceleration Library)
+#### Step 2: Build and install HEonGPU (GPU Acceleration Library)
 
 ```bash
 cd inference/lattisense/HEonGPU
-mkdir build && cd build
-cmake .. \
+cmake -B build \
   -DCMAKE_CUDA_ARCHITECTURES=<arch> \
   -DCMAKE_CUDA_COMPILER=<path/to/cuda>/bin/nvcc \
   -DCMAKE_INSTALL_PREFIX=$(pwd)/../install
+cmake --build build --parallel $(nproc) --target install
 ```
 
-#### Step 3: Compile and Install HEonGPU
+#### Step 3: Build Project
 
 ```bash
-make -j$(nproc)
-make install
-```
-
-#### Step 4: Build Project
-
-```bash
-cd ../../../..  # Return to project root
-mkdir build && cd build
-cmake .. -DINFERENCE_SDK_ENABLE_GPU=ON
-make -j$(nproc)
+cd ../../..  # Return to project root
+cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=<arch>
+cmake --build build -j$(nproc)
 ```
 
 For detailed build prerequisites, troubleshooting, and build options, see the **[Inference Module Build Guide](docs/en/build-guide.md)**.
@@ -210,42 +198,36 @@ Once the high-level graph is ready, we lower it to hardware-specific instruction
 
 #### Step 1: Generate Low-Level Instructions
 
-Navigate to the built example directory and generate low-level instructions:
+Generate low-level instructions from the project root:
 
 ```bash
-cd build/examples/test_cifar10
-python gen_mega_ag.py
+python inference/interface/gen_mega_ag.py --task-dir ./runs/cifar10/task
 ```
 
 #### Step 2: Runtime Execution
 
-In your application, you can now load the fine-tuned parameters and invoke the generated instructions to process encrypted queries. The following pseudocode illustrates the server-side workflow (see `examples/test_cifar10/inference.cpp` for a complete runnable example):
+Use the `EncryptedInference` interface to run encrypted inference (see `examples/inference.cpp` for the complete example):
 
 ```cpp
-// Load model FHE instructions, load model parameters, and encode parameters.
-InitInferenceProcess init("./task/server/", false);
-init.init_parameters();
-init.load_model_prepare();
+#include "interface/inference_interface.h"
 
-// Receive public keys and encrypted query from client.
-...
+EncryptedInference engine("./task", use_gpu);
 
-// Create an InferenceProcess with the public keys and encrypted input.
-InferenceProcess fp(&init, true);
-fp.available_keys.push_back("input");
-// Pass the encryption context to the server-side inference engine.
-map<string, unique_ptr<CkksContext>> context_map;
-context_map["param0"] = make_unique<CkksContext>(move(context.shallow_copy_context()));
-fp.ckks_contexts = move(context_map);
-fp.set_feature("input", make_unique<Feature2DEncrypted>(move(input_ct)));
+// 1. Encrypt: read input, create crypto context, encrypt
+engine.encrypt("./task/client/img.csv");
 
-// Select compute device: multi-threaded CPU or GPU hardware acceleration
-fp.compute_device = use_gpu ? ComputeDevice::GPU : ComputeDevice::CPU;
-// Execute the FHE ciphertext inference pipeline
-fp.run_task();
+// 2. Evaluate: load model and run encrypted inference
+engine.evaluate();
 
-// Send the result to client.
-...
+// 3. Decrypt: decrypt output and run plaintext verification
+auto result = engine.decrypt();
+```
+
+Run the built example:
+
+```bash
+./build/examples/inference --task-dir ./runs/cifar10/task --input ./examples/test_cifar10/task/client/img.csv
+./build/examples/inference --task-dir ./runs/cifar10/task --input ./examples/test_cifar10/task/client/img.csv --gpu
 ```
 
 ---
@@ -260,28 +242,23 @@ Make sure the project has been built successfully. See [Build & Install](#build-
 
 ### Run
 
-Each example is built into its own subdirectory under `build/examples/`. Run from there so that the relative path `./task/` resolves correctly:
+All commands are run from the **project root directory**. A single `inference` binary at `build/examples/inference` handles all examples via `--task-dir` and `--input`:
 
 ```bash
-cd build/examples
-
 # MNIST
-cd test_mnist
-python gen_mega_ag.py          # Generate GPU-accelerated computation graph instructions
-./test_mnist                   # Run encrypted inference on CPU
-./test_mnist --gpu             # Run encrypted inference with GPU acceleration
+python inference/interface/gen_mega_ag.py --task-dir examples/test_mnist/task
+./build/examples/inference --task-dir examples/test_mnist/task --input examples/test_mnist/task/client/img.csv
+./build/examples/inference --task-dir examples/test_mnist/task --input examples/test_mnist/task/client/img.csv --gpu
 
 # CIFAR-10
-cd ../test_cifar10
-python gen_mega_ag.py
-./test_cifar10
-./test_cifar10 --gpu
+python inference/interface/gen_mega_ag.py --task-dir examples/test_cifar10/task
+./build/examples/inference --task-dir examples/test_cifar10/task --input examples/test_cifar10/task/client/img.csv
+./build/examples/inference --task-dir examples/test_cifar10/task --input examples/test_cifar10/task/client/img.csv --gpu
 
 # ImageNet
-cd ../test_imagenet
-python gen_mega_ag.py
-./test_imagenet
-./test_imagenet --gpu
+python inference/interface/gen_mega_ag.py --task-dir examples/test_imagenet/task
+./build/examples/inference --task-dir examples/test_imagenet/task --input examples/test_imagenet/task/client/img.csv
+./build/examples/inference --task-dir examples/test_imagenet/task --input examples/test_imagenet/task/client/img.csv --gpu
 ```
 
 ---

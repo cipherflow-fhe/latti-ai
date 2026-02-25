@@ -12,24 +12,22 @@ This directory contains end-to-end encrypted inference examples. Each example re
 
 ## Directory Structure
 
-Each example follows the same layout:
-
 ```
-test_<name>/
-├── inference.cpp               # C++ inference entry point
-├── gen_mega_ag.py              # Script to generate mega_ag instructions
-├── CMakeLists.txt              # Build configuration
-└── task/
-    ├── client/
-    │   ├── img.csv             # Sample input image
-    │   ├── ckks_parameter.json # CKKS encryption parameters
-    │   └── task_config.json    # Inference task configuration
-    └── server/
-        ├── model_parameters.h5 # Model weights
-        ├── ckks_parameter.json # CKKS encryption parameters
-        ├── task_config.json    # Inference task configuration
-        └── ergs/
-            └── erg0.json       # Compiled encrypted computation graph
+examples/
+├── inference.cpp               # Unified C++ inference entry point (--task-dir, --gpu)
+├── CMakeLists.txt              # Build configuration (single 'inference' binary)
+└── test_<name>/
+    └── task/
+        ├── client/
+        │   ├── img.csv             # Sample input image
+        │   ├── ckks_parameter.json # CKKS encryption parameters
+        │   └── task_config.json    # Inference task configuration
+        └── server/
+            ├── model_parameters.h5 # Model weights
+            ├── ckks_parameter.json # CKKS encryption parameters
+            ├── task_config.json    # Inference task configuration
+            └── ergs/
+                └── erg0.json       # Compiled encrypted computation graph
 ```
 
 ## Prerequisites
@@ -38,7 +36,7 @@ Make sure the inference module has been built. See the [Inference Module Build G
 
 ## Build
 
-Examples are built automatically as part of the main project build (see the root [Build & Install](../README.md#build--install) guide). After building, each example is available under `build/examples/`.
+Examples are built automatically as part of the main project build (see the root [Build & Install](../README.md#build--install) guide).
 
 ## Run
 
