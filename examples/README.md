@@ -20,14 +20,14 @@ pip install -r requirements.txt
 python examples/test_cifar10/train.py --epochs 150 --batch-size 128 --lr 0.1 --output-dir ./runs/cifar10/model
 ```
 
-**Output:** `runs/cifar10/model/tarin_baseline.pth`
+**Output:** `runs/cifar10/model/train_baseline.pth`
 
 ### Step 2: Operator Replacement & Fine-tuning
 
 Replace ReLU and max pooling with polynomial approximations and average pooling, respectively, fine-tune, then export to ONNX and H5.
 
 ```bash
-python examples/test_cifar10/train.py --poly_model_convert --pretrained ./runs/cifar10/model/tarin_baseline.pth --epochs 10 --batch-size 36 --lr 0.001 --input-dir ./runs/cifar10/model --export-dir ./runs/cifar10/task/server --input-shape 3 32 32
+python examples/test_cifar10/train.py --poly_model_convert --pretrained ./runs/cifar10/model/train_baseline.pth --epochs 10 --batch-size 36 --lr 0.001 --input-dir ./runs/cifar10/model --export-dir ./runs/cifar10/task/server --input-shape 3 32 32
 ```
 
 **Output:**
@@ -59,7 +59,7 @@ python training/run_compile.py --input=./runs/cifar10/model/trained_poly.onnx --
 ```
 runs/cifar10/
 ├── model/
-│   ├── tarin_baseline.pth          # Step 1
+│   ├── train_baseline.pth          # Step 1
 │   ├── train_poly.pth              # Step 2
 │   ├── trained_poly.onnx           # Step 2
 │   └── pt.json                     # Step 3

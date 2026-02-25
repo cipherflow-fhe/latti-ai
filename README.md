@@ -37,9 +37,19 @@ We will use a **ResNet-18** model trained on the **CIFAR-10** dataset as our bas
 
 Before starting, ensure you have:
 
-- A trained model checkpoint (e.g., `baseline.pth`).
-- The training script (`train.py`) defining the PyTorch model.
-- The standard CIFAR-10 dataset files.
+- Python dependencies installed:
+
+```bash
+pip install -r training/requirements.txt
+```
+
+- A trained baseline model checkpoint (e.g., train_baseline.pth). If you don't have one, train it first:
+
+```bash
+python examples/test_cifar10/train.py --epochs 150 --batch-size 128 --lr 0.1 --output-dir ./runs/cifar10/model
+```
+
+This produces `runs/cifar10/model/train_baseline.pth`.
 
 ### Phase 1: Model Adaptation
 
@@ -50,14 +60,14 @@ In this phase, we convert a standard neural network into an **FHE-friendly** ver
 Run the following command to replace ReLU layers with polynomial functions and fine-tune the parameters to maintain accuracy:
 
 ```bash
-python example/train.py \
+python examples/test_cifar10/train.py \
   --poly_model_convert \
-  --pretrained ../runs/cifar10/model/baseline.pth \
+  --pretrained runs/cifar10/model/train_baseline.pth \
   --epochs 10 \
   --batch-size 36 \
   --lr 0.001 \
-  --input-dir ../runs/cifar10/model \
-  --export-dir ../runs/cifar10/task/server \
+  --input-dir runs/cifar10/model \
+  --export-dir runs/cifar10/task/server \
   --input-shape 3 32 32
 ```
 
@@ -70,9 +80,9 @@ Next, compile the adapted model into an **FHE Model Graph**. This step performs 
 - Assigning FHE levels and scales to each layer.
 
 ```bash
-python run_compile.py \
-  --input=../runs/cifar10/model/trained_poly.onnx \
-  --output=../runs/cifar10/ \
+python training/run_compile.py \           
+  --input=runs/cifar10/model/trained_poly.onnx \
+  --output=runs/cifar10/ \
   --poly_n=65536 \
   --style=multiplexed
 ```
