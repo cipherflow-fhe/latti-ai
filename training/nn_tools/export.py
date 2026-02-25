@@ -82,6 +82,7 @@ def export_to_onnx(
         dynamic_axes=dynamic_axes,
         training=torch.onnx.TrainingMode.EVAL,
         keep_initializers_as_inputs=False,
+        dynamo=False,
     )
 
     if verbose:
