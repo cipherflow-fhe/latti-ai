@@ -68,12 +68,12 @@ def set_param(n=16384):
 def gen_custom_task(task_path, n=16384, use_gpu=True, style='ordinary'):
     T_SCALE = 2**6
     set_param(n=n)
-    task_config_info = read_config(os.path.join(task_path, '..', 'task_config.json'))
+    task_config_info = read_config(os.path.join(task_path, 'task_config.json'))
     try:
         block_shape = task_config_info['block_shape']
     except Exception:
         block_shape = [64, 64]
-    config_info = read_config(os.path.join(task_path, 'erg0.json'))
+    config_info = read_config(os.path.join(task_path, 'nn_layers_ct_0.json'))
     input_args = list()
     feature_id_to_nodes_map = {}
     task_input_feature_ids = config_info['input_feature']

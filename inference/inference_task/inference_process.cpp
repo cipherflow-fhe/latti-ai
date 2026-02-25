@@ -425,7 +425,7 @@ void InitInferenceProcess::init_fhe_avgpool_layer(const string& key,
 
 void InitInferenceProcess::load_model_prepare() {
     current_json_path = project_path;
-    json_data = read_json(current_json_path + "/ergs/erg0.json");
+    json_data = read_json(current_json_path + "nn_layers_ct_0.json");
     json_features = json_data.at("feature");
     json_layers = json_data.at("layer");
     string block_input_feature = json_data["input_feature"][0];
@@ -477,7 +477,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
     fp->total_fhe_time = 0.0;
     fp->total_fpga_time = 0.0;
 
-    json_data = read_json(fp->project_path / "ergs/erg0.json");
+    json_data = read_json(fp->project_path / "nn_layers_ct_0.json");
     string block_input_feature = json_data["input_feature"][0];
     json_features = json_data.at("feature");
     json_layers = json_data.at("layer");
@@ -751,7 +751,7 @@ void InferenceProcess::run_task(bool is_mpc) {
     fp->total_fhe_time = 0.0;
     fp->total_fpga_time = 0.0;
 
-    json_data = read_json(fp->project_path / "ergs/erg0.json");
+    json_data = read_json(fp->project_path / "nn_layers_ct_0.json");
     string block_input_feature = json_data["input_feature"][0];
     json_features = json_data.at("feature");
     json_layers = json_data.at("layer");
@@ -893,13 +893,13 @@ void InferenceProcess::run_task(bool is_mpc) {
     // Dynamically create and run task executors based on the compute_device configuration
     switch (compute_device) {
         case ComputeDevice::CPU: {
-            auto task = make_unique<FheTaskCpu>(fp->project_path / "ergs");
+            auto task = make_unique<FheTaskCpu>(fp->project_path);
             fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
         case ComputeDevice::GPU: {
-            auto task = make_unique<FheTaskGpu>(fp->project_path / "ergs");
+            auto task = make_unique<FheTaskGpu>(fp->project_path);
             fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
@@ -949,7 +949,7 @@ Array<double, 3> mult_const(Array<double, 3>& x, double const_scale) {
 }
 
 void InferenceProcess::run_task_plaintext(bool is_mpc) {
-    const json& json_data = read_json(fp->project_path / "ergs/erg0.json");
+    const json& json_data = read_json(fp->project_path / "nn_layers_ct_0.json");
     json json_features = json_data.at("feature");
     json json_layers = json_data.at("layer");
 
