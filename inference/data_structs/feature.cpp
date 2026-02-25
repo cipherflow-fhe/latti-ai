@@ -18,7 +18,7 @@
 
 #include "feature.h"
 #include "util.h"
-#include <strstream>
+#include <sstream>
 
 using namespace std;
 using namespace cxx_sdk_v2;

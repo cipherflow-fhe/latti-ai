@@ -25,18 +25,18 @@ The --poly_model_convert flag enables ReLU -> RangeNormPoly2d replacement and
 triggers ONNX + fused-H5 export after training.
 """
 
-import logging
-import sys
-import os
 import argparse
+import logging
+import os
+import sys
 import time
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
 import torchvision
 import torchvision.transforms as transforms
+from torch.utils.data import DataLoader
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
@@ -158,13 +158,13 @@ def main():
     # Optionally replace ReLU -> RangeNormPoly2d
     if args.poly_model_convert:
         from training.nn_tools import (
-            replace_activation_with_poly,
             export_to_onnx,
             fuse_and_export_h5,
+            replace_activation_with_poly,
             replace_maxpool_with_avgpool,
         )
-        from training.nn_tools.replace import count_activations
         from training.nn_tools.activations import RangeNormPoly2d, Simple_Polyrelu
+        from training.nn_tools.replace import count_activations
 
         n_maxpool = count_activations(model, nn.MaxPool2d)
         replace_maxpool_with_avgpool(model)
