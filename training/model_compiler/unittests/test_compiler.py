@@ -49,7 +49,7 @@ class TestCompiler(unittest.TestCase):
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
-            temperature=1.0,
+            temperature=0.0,
             num_workers=1,
         )
 
@@ -73,7 +73,7 @@ class TestCompiler(unittest.TestCase):
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
-            temperature=1.0,
+            temperature=0.0,
             num_workers=1,
         )
 
@@ -97,7 +97,7 @@ class TestCompiler(unittest.TestCase):
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
-            temperature=1.0,
+            temperature=0.0,
             num_workers=1,
         )
 
@@ -122,7 +122,7 @@ class TestCompiler(unittest.TestCase):
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
-            temperature=1.0,
+            temperature=0.0,
             num_workers=1,
         )
 
@@ -147,7 +147,7 @@ class TestCompiler(unittest.TestCase):
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
-            temperature=1.0,
+            temperature=0.0,
             num_workers=1,
         )
 
@@ -172,7 +172,7 @@ class TestCompiler(unittest.TestCase):
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
-            temperature=1.0,
+            temperature=0.0,
             num_workers=1,
         )
 
