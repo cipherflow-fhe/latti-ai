@@ -26,7 +26,8 @@ PolyRelu::PolyRelu(const CkksParameter& param_in,
                    uint32_t n_channel_per_ct_in,
                    uint32_t level_in,
                    const Duo& upsample_factor_in,
-                   const Duo& block_expansion_in)
+                   const Duo& block_expansion_in,
+                   bool is_ordinary_pack_in)
     : param(param_in.copy()), input_shape(input_shape_in), weight(weight_in.copy()), skip(skip_in) {
     upsample_factor[0] = upsample_factor_in[0];
     upsample_factor[1] = upsample_factor_in[1];
@@ -46,6 +47,7 @@ PolyRelu::PolyRelu(const CkksParameter& param_in,
     cached_channel = weight.get_shape()[1];
     cached_n_packed_out_channel = div_ceil(cached_channel, n_channel_per_ct) * block_expansion[0] * block_expansion[1];
     cached_total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
+    is_ordinary_pack = is_ordinary_pack_in;
 }
 
 PolyRelu::~PolyRelu() {}
@@ -104,21 +106,36 @@ void PolyRelu::prepare_weight_for_non_absorb_case() {
                  n_packed_out_channel_idx++) {
                 const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
                 vector<double> feature_tmp_pack(ctx_copy.get_parameter().get_n() / 2);
-                for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
-                    int block_i = linear_idx / (block_shape[0] * block_shape[1]);
-                    int residual = linear_idx % (block_shape[0] * block_shape[1]);
-                    int shape_i = residual / block_shape[1];
-                    int shape_j = residual % block_shape[1];
+                if (is_ordinary_pack) {
+                    for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
+                        int channel_idx = n_packed_out_channel_idx * n_channel_per_ct + ch;
+                        if (channel_idx >= channel) continue;
+                        for (int j = 0; j < input_shape[0]; j++) {
+                            for (int k = 0; k < input_shape[1]; k++) {
+                                int index = ch * block_shape[0] * block_shape[1]
+                                          + j * block_shape[1] * skip[0]
+                                          + k * skip[1];
+                                feature_tmp_pack[index] = weight.get(idx, channel_idx);
+                            }
+                        }
+                    }
+                } else {
+                    for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
+                        int block_i = linear_idx / (block_shape[0] * block_shape[1]);
+                        int residual = linear_idx % (block_shape[0] * block_shape[1]);
+                        int shape_i = residual / block_shape[1];
+                        int shape_j = residual % block_shape[1];
 
-                    int channel_idx =
-                        n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
-                        block_i * skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
-                    if (channel_idx >= channel || (shape_i % pre_skip[0]) >= skip[0] ||
-                        (shape_j % pre_skip[1]) >= skip[1])
-                        continue;
+                        int channel_idx =
+                            n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
+                            block_i * skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
+                        if (channel_idx >= channel || (shape_i % pre_skip[0]) >= skip[0] ||
+                            (shape_j % pre_skip[1]) >= skip[1])
+                            continue;
 
-                    int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;
-                    feature_tmp_pack[index] = weight.get(idx, channel_idx);
+                        int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;
+                        feature_tmp_pack[index] = weight.get(idx, channel_idx);
+                    }
                 }
 
                 double pack_scale = 1;
@@ -160,21 +177,36 @@ void PolyRelu::prepare_weight_for_non_absorb_case() {
                  n_packed_out_channel_idx++) {
                 const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
                 vector<double> feature_tmp_pack(ctx_copy.get_parameter().get_n() / 2);
-                for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
-                    int block_i = linear_idx / (block_shape[0] * block_shape[1]);
-                    int residual = linear_idx % (block_shape[0] * block_shape[1]);
-                    int shape_i = residual / block_shape[1];
-                    int shape_j = residual % block_shape[1];
+                if (is_ordinary_pack) {
+                    for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
+                        int channel_idx = n_packed_out_channel_idx * n_channel_per_ct + ch;
+                        if (channel_idx >= channel) continue;
+                        for (int j = 0; j < input_shape[0]; j++) {
+                            for (int k = 0; k < input_shape[1]; k++) {
+                                int index = ch * block_shape[0] * block_shape[1]
+                                          + j * block_shape[1] * skip[0]
+                                          + k * skip[1];
+                                feature_tmp_pack[index] = weight.get(idx, channel_idx);
+                            }
+                        }
+                    }
+                } else {
+                    for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
+                        int block_i = linear_idx / (block_shape[0] * block_shape[1]);
+                        int residual = linear_idx % (block_shape[0] * block_shape[1]);
+                        int shape_i = residual / block_shape[1];
+                        int shape_j = residual % block_shape[1];
 
-                    int channel_idx =
-                        n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
-                        block_i * skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
-                    if (channel_idx >= channel || (shape_i % pre_skip[0]) >= skip[0] ||
-                        (shape_j % pre_skip[1]) >= skip[1])
-                        continue;
+                        int channel_idx =
+                            n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
+                            block_i * skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
+                        if (channel_idx >= channel || (shape_i % pre_skip[0]) >= skip[0] ||
+                            (shape_j % pre_skip[1]) >= skip[1])
+                            continue;
 
-                    int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;
-                    feature_tmp_pack[index] = weight.get(idx, channel_idx);
+                        int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;
+                        feature_tmp_pack[index] = weight.get(idx, channel_idx);
+                    }
                 }
                 weight_pt[idx].push_back(ctx_copy.encode_ringt(feature_tmp_pack, coeff_scale[idx]));
             }
@@ -360,7 +392,11 @@ Feature2DEncrypted PolyRelu::run(CkksContext& ctx, const Feature2DEncrypted& x) 
     result.skip[1] = x.skip[1];
     result.n_channel = x.n_channel;
     result.n_channel_per_ct = x.n_channel_per_ct;
-    result.level = x.level - order + 1;
+    if (is_ordinary_pack) {
+        result.level = x.level - order;
+    } else {
+        result.level = x.level - order + 1;
+    }
     result.data = run_core(ctx, x.data);
     return result;
 }
@@ -482,19 +518,34 @@ PolyRelu::generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_packed
 CkksPlaintextRingt
 PolyRelu::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
     vector<double> feature_tmp_pack(N / 2, 0.0);
-    for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
-        int block_i = linear_idx / (block_shape[0] * block_shape[1]);
-        int residual = linear_idx % (block_shape[0] * block_shape[1]);
-        int shape_i = residual / block_shape[1];
-        int shape_j = residual % block_shape[1];
+    if (is_ordinary_pack) {
+        for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
+            int channel_idx = n_packed_out_channel_idx * n_channel_per_ct + ch;
+            if (channel_idx >= cached_channel) continue;
+            for (int j = 0; j < input_shape[0]; j++) {
+                for (int k = 0; k < input_shape[1]; k++) {
+                    int index = ch * block_shape[0] * block_shape[1]
+                              + j * block_shape[1] * skip[0]
+                              + k * skip[1];
+                    feature_tmp_pack[index] = weight.get(idx, channel_idx);
+                }
+            }
+        }
+    } else {
+        for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
+            int block_i = linear_idx / (block_shape[0] * block_shape[1]);
+            int residual = linear_idx % (block_shape[0] * block_shape[1]);
+            int shape_i = residual / block_shape[1];
+            int shape_j = residual % block_shape[1];
 
-        int channel_idx = n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
-                          block_i * cached_skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
-        if (channel_idx >= cached_channel || (shape_i % pre_skip[0]) >= skip[0] || (shape_j % pre_skip[1]) >= skip[1])
-            continue;
+            int channel_idx = n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
+                              block_i * cached_skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
+            if (channel_idx >= cached_channel || (shape_i % pre_skip[0]) >= skip[0] || (shape_j % pre_skip[1]) >= skip[1])
+                continue;
 
-        int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;
-        feature_tmp_pack[index] = weight.get(idx, channel_idx);
+            int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;
+            feature_tmp_pack[index] = weight.get(idx, channel_idx);
+        }
     }
 
     double pack_scale = 1.0;

@@ -36,8 +36,12 @@ class ReshapeComputeNode(ComputeNode):
         reshape_size: list = [-1, 1],
     ):
         super(ReshapeComputeNode, self).__init__(layer_id, layer_type, feature_input, feature_output)
-        feature_output[0].channel = feature_input[0].channel
-        feature_output[0].level = feature_input[0].level
+        fin = feature_input[0]
+        if fin.dim == 2:
+            feature_output[0].channel = fin.channel * fin.shape[0] * fin.shape[1]
+        else:
+            feature_output[0].channel = fin.channel
+        feature_output[0].level = fin.level
         self.reshape_size = reshape_size
 
     @staticmethod
@@ -64,7 +68,7 @@ class ReshapeComputeNode(ComputeNode):
         info['ckks_parameter_id_output'] = self.feature_output[0].ckks_parameter_id
         info['feature_input'] = [i.node_id for i in self.feature_input[:1]]
         info['feature_output'] = [i.node_id for i in self.feature_output]
-        info['shape'] = [-1, 1]
+        info['shape'] = [-1, self.feature_output[0].channel]
         return info
 
     @override
