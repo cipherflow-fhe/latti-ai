@@ -85,7 +85,7 @@ For more details, see the [Training README](../training/README.md).
 |---------|-------|---------|------------|------------|---------------|
 | `test_mnist` | Simple CNN | MNIST | 1 x 16 x 16 |  CKKS (N=16384) | No |
 | `test_cifar10` | ResNet-20 | CIFAR-10 | 3 x 32 x 32 |  CKKS (N=65536) | Yes |
-| `test_imagenet` | MobileNetv2 | ImageNet | 3 x 256 x 256 | CKKS (N=65536) | Yes |
+| `test_imagenet` | MobileNetV2 | ImageNet | 3 x 256 x 256 | CKKS (N=65536) | Yes |
 
 ## Directory Structure
 
@@ -93,7 +93,7 @@ Each example follows the same layout:
 
 ```
 test_<name>/
-├── main.cpp                    # C++ inference script
+├── inference.cpp               # C++ inference entry point
 ├── gen_mega_ag.py              # Script to generate mega_ag instructions
 ├── CMakeLists.txt              # Build configuration
 └── task/
@@ -111,42 +111,15 @@ test_<name>/
 
 ## Prerequisites
 
-Make sure the inference module has been built. See the [Inference Module Build Guide](../inference/README.md).
+Make sure the inference module has been built. See the [Inference Module Build Guide](../docs/en/build-guide.md).
 
 ## Build
 
-```bash
-cd examples
-mkdir -p build && cd build
-cmake ..
-make -j$(nproc)
-```
-
-This builds all three examples and copies `task/` data and `gen_mega_ag.py` into each build subdirectory automatically.
+Examples are built automatically as part of the main project build (see the root [Build & Install](../README.md#build--install) guide). After building, each example is available under `build/examples/`.
 
 ## Run
 
-Each example is built into its own subdirectory under `build/`. Run from there so that the relative path `./task/` resolves correctly:
-
-```bash
-# MNIST
-cd test_mnist
-python gen_mega_ag.py          # Generate GPU-accelerated computation graph instructions
-./test_mnist                   # Run encrypted inference on CPU
-./test_mnist --gpu             # Run encrypted inference with GPU acceleration
-
-# CIFAR-10
-cd ../test_cifar10
-python gen_mega_ag.py
-./test_cifar10
-./test_cifar10 --gpu
-
-# ImageNet
-cd ../test_imagenet
-python gen_mega_ag.py
-./test_imagenet
-./test_imagenet --gpu
-```
+See the [Running Examples](../README.md#running-examples) section in the root README for instructions on running each example.
 
 ## Example Details
 
@@ -168,7 +141,7 @@ ResNet-20 on CIFAR-10 with bootstrapping enabled to support the deeper network. 
 
 ### test_imagenet
 
-MobileNetv2 on ImageNet — a larger-scale example with 1000-class classification. Shows encrypted inference on production-grade models.
+MobileNetV2 on ImageNet — a larger-scale example with 1000-class classification. Shows encrypted inference on production-grade models.
 
 - **Input**: 256x256 RGB image (3 channels)
 - **Output**: 1000-class logits

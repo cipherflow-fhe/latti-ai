@@ -19,9 +19,9 @@ Baseline (standard ReLU):
   python train.py --epochs 200
 
 Poly-ReLU (replace ReLU with RangeNormPoly2d, fine-tune, export):
-  python train.py --poly --pretrained resnet20_baseline.pth --epochs 10
+  python train.py --poly_model_convert --pretrained train_baseline.pth --epochs 10
 
-The --poly flag enables ReLU -> RangeNormPoly2d replacement and
+The --poly_model_convert flag enables ReLU -> RangeNormPoly2d replacement and
 triggers ONNX + fused-H5 export after training.
 """
 
