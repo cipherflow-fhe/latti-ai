@@ -16,12 +16,11 @@
 
 import torch.nn as nn
 import sys
-import os
 from pathlib import Path
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(os.path.join(script_dir, '..'))
-sys.path.append(os.path.join(script_dir, '..', '..'))
+script_dir = Path(__file__).parent.resolve()
+sys.path.append(str(script_dir.parent))
+sys.path.append(str(script_dir.parent.parent))
 
 from nn_tools.activations import RangeNormPoly2d
 
@@ -43,6 +42,20 @@ class NN1(nn.Module):
 
     def forward(self, x):
         x = self.relu0(x)
+        return x
+
+
+class NN2(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.n_layers = 20
+        self.convs = nn.ModuleList()
+        for i in range(self.n_layers):
+            self.convs.append(nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False))
+
+    def forward(self, x):
+        for i in range(self.n_layers):
+            x = self.convs[i](x)
         return x
 
 
