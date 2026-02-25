@@ -122,8 +122,8 @@ python examples/test_cifar10/train.py \
   --input-dir ./runs/cifar10/model \
   --export-dir ./runs/cifar10/task/server \
   --input-shape 3 32 32 \
-  --degree 2 \
-  --upper-bound 1.0 \
+  --degree 4 \
+  --upper-bound 3.0 \
   --poly-module RangeNormPoly2d
 ```
 
