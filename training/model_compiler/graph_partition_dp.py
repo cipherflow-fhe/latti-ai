@@ -904,7 +904,7 @@ def run_parallel(
     succeeded, graph, score = _try_no_btp(pt_graph)
     if succeeded:
         post_process(graph, output_dir, score, use_btp=False)
-        return
+        return graph, score
 
     # No-BTP failed, use BTP mode with the same prepared graph
     graph, score = _run_btp_compilation(
@@ -912,6 +912,8 @@ def run_parallel(
     )
     if graph is not None:
         post_process(graph, output_dir, score, use_btp=True)
+
+    return graph, score
 
 
 if __name__ == '__main__':

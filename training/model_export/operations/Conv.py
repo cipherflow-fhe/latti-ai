@@ -19,7 +19,7 @@ import logging
 # from typing import override
 from typing_extensions import override
 from . import ComputeNode, FeatureNode, format_id, dict_to_args
-from onnx import NodeProto
+from onnx import NodeProto, GraphProto
 
 log = logging.getLogger(__name__)
 
@@ -62,47 +62,56 @@ class ConvComputeNode(ComputeNode):
         self.is_big_size = False
 
     @staticmethod
-    def from_onnx_node(x: NodeProto, features_nodes, style, graph=None) -> 'ConvComputeNode':
+    def from_onnx_node(x: NodeProto, features_nodes, style, graph: GraphProto) -> 'ConvComputeNode':
         from onnx import numpy_helper
 
-        layer_id = format_id(x.name)
-        log.debug('%s', x)
-        layer_type = 'conv2d'
-        feature_input = [features_nodes[format_id(x.input[0])]]
-        feature_output = [features_nodes[format_id(x.output[0])]]
-        attrs = ComputeNode.get_attr_value_dict(x)
-        groups = attrs['group']
-        stride = attrs['strides']
-        kernel_shape = attrs['kernel_shape']
         weight_path = x.input[1]
         if len(x.input) >= 3:
             bias_path = x.input[2]
         else:
             bias_path = None
 
-        # Dynamically infer channel: get from weight tensor shape
-        if graph is not None:
-            # Find weight tensor from graph.initializer
-            weight_tensor = None
-            for init in graph.initializer:
-                if init.name == weight_path:
-                    weight_tensor = init
-                    break
+        # Find weight tensor from graph.initializer
+        weight_tensor = None
+        for init in graph.initializer:
+            if init.name == weight_path:
+                weight_tensor = init
+                break
+        else:
+            raise ValueError('Could find weight tensor.')
 
-            if weight_tensor is not None:
-                # Get weight shape
-                weight_array = numpy_helper.to_array(weight_tensor)
-                weight_shape = weight_array.shape
+        layer_id = format_id(x.name)
+        log.debug('%s', x)
+        layer_type = 'conv2d'
+        feature_input = [features_nodes[format_id(x.input[0])]]
+        feature_output = [features_nodes[format_id(x.output[0])]]
 
-                # Conv2d/Conv1d weight shape: [out_channels, in_channels/groups, ...]
-                out_channels = weight_shape[0]
-                in_channels = weight_shape[1] * groups
+        attrs = ComputeNode.get_attr_value_dict(x)
+        groups = attrs['group']
+        stride = attrs['strides']
+        pads = attrs['pads']
+        dilations = attrs['dilations']
 
-                # Update channel for feature_input and feature_output
-                feature_input[0].channel = in_channels
-                feature_output[0].channel = out_channels
+        weight_shape = numpy_helper.to_array(weight_tensor).shape
+        out_channels = weight_shape[0]
+        in_channels = weight_shape[1] * groups
+        kernel_shape = weight_shape[2:4]
 
-                log.debug('Dynamically inferred Conv channel: input=%s, output=%s', in_channels, out_channels)
+        # Update channel for feature_input and feature_output
+        feature_input[0].channel = in_channels
+        feature_output[0].channel = out_channels
+
+        log.debug('Dynamically inferred Conv channel: input=%s, output=%s', in_channels, out_channels)
+
+        if dilations != [1, 1]:
+            raise ValueError('Unsupported dilation value: ' + str(dilations))
+        # Make sure the relation "feature_output.shape = feature_input.shape // stride" holds
+        if (not 0 <= pads[0] + pads[2] - dilations[0] * (kernel_shape[0] - 1) - 1 + stride[0] < stride[0]) or (
+            not 0 <= pads[1] + pads[3] - dilations[1] * (kernel_shape[1] - 1) - 1 + stride[1] < stride[1]
+        ):
+            raise ValueError('Unsupported padding value: ' + str(pads))
+        if (groups != 1) and (groups != in_channels):
+            raise ValueError('Unsupported groups value: ' + str(groups))
 
         return ConvComputeNode(
             layer_id,
