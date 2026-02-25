@@ -39,12 +39,19 @@ class PolyReluLayer:
         self.n_channel_per_ct = n_channel_per_ct
         self.upsample_factor = upsample_factor
         self.block_expansion = block_expansion
+
+        if input_shape[0] & (input_shape[0] - 1) != 0 or input_shape[1] & (input_shape[1] - 1) != 0:
+            raise ValueError(f"input_shape must be powers of 2, got: [{input_shape[0]}, {input_shape[1]}]")
+        if skip[0] & (skip[0] - 1) != 0 or skip[1] & (skip[1] - 1) != 0:
+            raise ValueError(f"skip must be powers of 2, got: [{skip[0]}, {skip[1]}]")
         self.pre_skip = [1, 1]
         self.pre_skip[0] = self.skip[0] * self.upsample_factor[0]
         self.pre_skip[1] = self.skip[1] * self.upsample_factor[1]
         self.block_shape = [1, 1]
         self.block_shape[0] = int(self.input_shape[0] * self.skip[0] / self.block_expansion[0])
         self.block_shape[1] = int(self.input_shape[1] * self.skip[1] / self.block_expansion[1])
+        if self.block_shape[0] & (self.block_shape[0] - 1) != 0 or self.block_shape[1] & (self.block_shape[1] - 1) != 0:
+            raise ValueError(f"block_shape must be powers of 2, got: [{self.block_shape[0]}, {self.block_shape[1]}]")
 
     def call(self, x: list[CkksCiphertextNode], weight_pt):
         result = list()
