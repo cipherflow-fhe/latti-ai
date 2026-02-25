@@ -29,7 +29,8 @@ public:
              uint32_t n_channel_per_ct_in,
              uint32_t level_in,
              const Duo& upsample_factor_in = {1, 1},
-             const Duo& block_expansion_in = {1, 1});
+             const Duo& block_expansion_in = {1, 1},
+             bool is_ordinary_pack_in = false);
 
     ~PolyRelu();
 
@@ -63,6 +64,7 @@ public:
     Duo block_shape;
     Duo upsample_factor;
     vector<vector<CkksPlaintextRingt>> weight_pt;
+    bool is_ordinary_pack;
 
 private:
     // Cached values for on-demand generation

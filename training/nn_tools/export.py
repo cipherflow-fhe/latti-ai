@@ -361,6 +361,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
     import numpy as np
     import h5py
     from .activations import RangeNormPoly2d as _RangeNormPoly2d
+    from .activations import Simple_Polyrelu as _Simple_Polyrelu
 
     sd = model.state_dict()
 
@@ -368,7 +369,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
         return sd[key].detach().cpu().numpy()
 
     # Collect leaf modules in traversal order
-    target_types = (nn.Conv2d, nn.BatchNorm2d, _RangeNormPoly2d, nn.Linear)
+    target_types = (nn.Conv2d, nn.BatchNorm2d, _RangeNormPoly2d, _Simple_Polyrelu, nn.Linear)
     modules_list = [(name, mod) for name, mod in model.named_modules() if isinstance(mod, target_types)]
 
     fused = {}
@@ -405,6 +406,25 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
         elif isinstance(mod, _RangeNormPoly2d):
             running_max = get_np(f'{name}.rangenorm.running_max').flatten()
             coeffs = _compute_poly_coeffs(running_max, upper_bound, eps, degree)
+            fused[f'{name}.weight'] = coeffs.flatten()
+            if verbose:
+                log.info('Poly coeffs:  %s  (%d coeffs x %d ch)', name, coeffs.shape[0], coeffs.shape[1])
+            i += 1
+
+        elif isinstance(mod, _Simple_Polyrelu):
+            # Determine channel count from preceding Conv/BN layer
+            num_channels = 1
+            for j in range(i - 1, -1, -1):
+                prev_mod = modules_list[j][1]
+                if isinstance(prev_mod, nn.BatchNorm2d):
+                    num_channels = prev_mod.num_features
+                    break
+                elif isinstance(prev_mod, nn.Conv2d):
+                    num_channels = prev_mod.out_channels
+                    break
+            # Simple_Polyrelu has no per-channel normalization, equivalent to s = 1
+            s = np.ones(num_channels)
+            coeffs = _compute_poly_coeffs(s, upper_bound=1.0, eps=0.0, degree=mod.degree)
             fused[f'{name}.weight'] = coeffs.flatten()
             if verbose:
                 log.info('Poly coeffs:  %s  (%d coeffs x %d ch)', name, coeffs.shape[0], coeffs.shape[1])
