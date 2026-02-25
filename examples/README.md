@@ -26,8 +26,7 @@ examples/
             ├── model_parameters.h5 # Model weights
             ├── ckks_parameter.json # CKKS encryption parameters
             ├── task_config.json    # Inference task configuration
-            └── ergs/
-                └── erg0.json       # Compiled encrypted computation graph
+            └── nn_layers_ct_0.json # Compiled encrypted computation graph
 ```
 
 ## Prerequisites
