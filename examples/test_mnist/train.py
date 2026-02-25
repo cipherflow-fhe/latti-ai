@@ -13,10 +13,10 @@
 # limitations under the License.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Train ResNet20 on CIFAR-10 (baseline or poly-ReLU).
+"""Train SimpleCNN on MNIST (baseline or poly-ReLU).
 
 Baseline (standard ReLU):
-  python train.py --epochs 200
+  python train.py --epochs 20
 
 Poly-ReLU (replace ReLU with RangeNormPoly2d, fine-tune, export):
   python train.py --poly_model_convert --pretrained train_baseline.pth --epochs 10
@@ -40,31 +40,31 @@ import torchvision.transforms as transforms
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from model import resnet20
+from model import simple_cnn
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 log = logging.getLogger(__name__)
 
 
-def get_cifar10_loaders(data_dir, batch_size, num_workers=2):
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+def get_mnist_loaders(data_dir, batch_size, num_workers=2):
+    normalize = transforms.Normalize(mean=[0.1307], std=[0.3081])
     train_transform = transforms.Compose(
         [
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, 4),
+            transforms.Resize((16, 16)),
             transforms.ToTensor(),
             normalize,
         ]
     )
     test_transform = transforms.Compose(
         [
+            transforms.Resize((16, 16)),
             transforms.ToTensor(),
             normalize,
         ]
     )
 
-    trainset = torchvision.datasets.CIFAR10(root=data_dir, train=True, download=True, transform=train_transform)
-    testset = torchvision.datasets.CIFAR10(root=data_dir, train=False, download=True, transform=test_transform)
+    trainset = torchvision.datasets.MNIST(root=data_dir, train=True, download=True, transform=train_transform)
+    testset = torchvision.datasets.MNIST(root=data_dir, train=False, download=True, transform=test_transform)
 
     train_loader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
     test_loader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
@@ -104,12 +104,12 @@ def evaluate(model, loader, criterion, device):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Train ResNet20 on CIFAR-10')
+    parser = argparse.ArgumentParser(description='Train SimpleCNN on MNIST')
     parser.add_argument('--data-dir', default='./data')
     parser.add_argument('--pretrained', default=None, help='path to .pth checkpoint')
-    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--epochs', type=int, default=20)
     parser.add_argument('--batch-size', type=int, default=128)
-    parser.add_argument('--lr', type=float, default=0.1)
+    parser.add_argument('--lr', type=float, default=0.01)
     parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--weight-decay', type=float, default=1e-4)
     parser.add_argument('--input-dir', default='./input')
@@ -117,7 +117,7 @@ def main():
     parser.add_argument('--export-dir', default=None, help='directory for fused H5 (default: same as --output-dir)')
     parser.add_argument('--num-workers', type=int, default=2)
     parser.add_argument('--gpu', type=int, default=0, help='-1 for CPU')
-    parser.add_argument('--lr-milestones', type=int, nargs='+', default=[100, 150])
+    parser.add_argument('--lr-milestones', type=int, nargs='+', default=[10, 15])
     parser.add_argument('--lr-gamma', type=float, default=0.1)
 
     # Poly-ReLU options
@@ -130,12 +130,12 @@ def main():
         type=int,
         nargs='+',
         default=None,
-        help='C H W input shape for ONNX export, e.g. --input-shape 3 32 32',
+        help='C H W input shape for ONNX export, e.g. --input-shape 1 16 16',
     )
     args = parser.parse_args()
 
     if args.poly_model_convert and args.input_shape is None:
-        parser.error('--input-shape is required when --poly_model_convert is enabled, e.g. --input-shape 3 32 32')
+        parser.error('--input-shape is required when --poly_model_convert is enabled, e.g. --input-shape 1 16 16')
 
     if args.poly_model_convert:
         args.output_dir = args.input_dir
@@ -144,10 +144,10 @@ def main():
     export_dir = args.export_dir or args.output_dir
     os.makedirs(export_dir, exist_ok=True)
 
-    train_loader, test_loader = get_cifar10_loaders(args.data_dir, args.batch_size, args.num_workers)
+    train_loader, test_loader = get_mnist_loaders(args.data_dir, args.batch_size, args.num_workers)
 
     # Build model
-    model = resnet20()
+    model = simple_cnn()
     if args.pretrained:
         log.info(f'Loading pretrained: {args.pretrained}')
         ckpt = torch.load(args.pretrained, map_location='cpu')
@@ -177,6 +177,7 @@ def main():
         elif args.poly_module == 'Simple_Polyrelu':
             replace_activation_with_poly(model, old_cls=nn.ReLU, new_module_factory=Simple_Polyrelu, upper_bound=args.upper_bound, degree=args.degree)
             n_poly = count_activations(model, Simple_Polyrelu)
+        n_poly = count_activations(model, Simple_Polyrelu)
         log.info(f'Device: {device}  |  ReLU {n_relu} -> Poly {n_poly} (ub={args.upper_bound}, deg={args.degree})')
     else:
         n_params = sum(p.numel() for p in model.parameters())
