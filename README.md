@@ -121,18 +121,38 @@ python examples/test_cifar10/train.py \
   --lr 0.001 \
   --input-dir ./runs/cifar10/model \
   --export-dir ./runs/cifar10/task/server \
-  --input-shape 3 32 32
+  --input-shape 3 32 32 \
+  --degree 2 \
+  --upper-bound 1.0 \
+  --poly-module RangeNormPoly2d
 ```
 
 Workflow of `train.py`: when `--poly_model_convert` is enabled, the script replaces FHE-incompatible operators before training and exports the adapted model after training. Without this flag, it performs standard baseline training only.
 
 ```python
 # 1. Replace FHE-incompatible operators (only when --poly_model_convert is set)
+# args.poly_module indicates the type of activation function to replace[RangeNormPoly2d/Simple_Polyrelu]
+# args.upper_bound indicates the size of the upper bound for the approximation function
+# args.degree indicates the order for the approximation function
 if args.poly_model_convert:
     replace_maxpool_with_avgpool(model)
-    replace_activation_with_poly(model, old_cls=nn.ReLU,
-                                 upper_bound=args.upper_bound,
-                                 degree=args.degree)
+    if args.poly_module == 'RangeNormPoly2d':
+        replace_activation_with_poly(
+            model,
+            old_cls=nn.ReLU,
+            new_module_factory=RangeNormPoly2d,
+            upper_bound=args.upper_bound,
+            degree=args.degree,
+        )
+    elif args.poly_module == 'Simple_Polyrelu':
+        replace_activation_with_poly(
+            model,
+            old_cls=nn.ReLU,
+            new_module_factory=Simple_Polyrelu,
+            upper_bound=args.upper_bound,
+            degree=args.degree,
+        )
+    
 
 # 2. Train (or fine-tune) the model
 for epoch in range(1, args.epochs + 1):
