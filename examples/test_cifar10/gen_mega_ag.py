@@ -46,7 +46,7 @@ from inference.lattisense.frontend.custom_task import *  # noqa: E402
 from inference.model_generator.deploy_cmds import gen_custom_task  # noqa: E402
 
 # Path to the server-side encrypted computation graph (ergs directory).
-task_path = os.path.join(script_dir, 'task', 'server', 'ergs')
+task_path = os.path.join(script_dir, 'task', 'server')
 
 # Read the server task configuration to determine which computation
 # segments (ergs) require GPU-accelerated mega_ag generation.

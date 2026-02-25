@@ -1,24 +1,22 @@
 {
-	"task_type": "fhe",
-	"task_num": 1,
-	"server_start_id": 0,
-	"server_end_id": 1,
-	"is_absorb_polyrelu": false,
+    "task_type": "fhe",
+    "task_num": 1,
+    "server_start_id": 0,
+    "server_end_id": 0,
+    "block_shape": [
+        64,
+        64
+    ],
+    "is_absorb_polyrelu": false,
     "pack_style": "ordinary",
-	"block_shape": [
-		64,
-		64
-	],
-	"server_task": {
-		"erg0": {
-			"enable_fpga": true
-		}
-	},
-	"task_input_param": {
-		"input": {
+    "task_input_id": "input",
+    "task_output_id": "output",
+    "task_input_param": {
+        "input": {
             "dim": 2,
             "channel": 1,
             "scale": 1,
+            "ckks_scale": 1,
             "shape": [
                 16,
                 16
@@ -27,28 +25,37 @@
                 1,
                 1
             ],
-            "pack_num": 32,
             "ckks_parameter_id": "param0",
-            "level": 6
+            "level": 7,
+            "depth": -1,
+            "pack_num": 32
         }
-	},
-	"task_output_param": {
-		"output": {
+    },
+    "task_output_param": {
+        "output": {
             "dim": 0,
             "channel": 10,
             "scale": 1,
+            "ckks_scale": 1,
+            "skip": 256,
+            "ckks_parameter_id": "param0",
             "virtual_shape": [
-                1,
-                1
+                4,
+                4
             ],
             "virtual_skip": [
-                16,
-                16
+                4,
+                4
             ],
-            "skip": 256,
-            "pack_num": 32,
-            "ckks_parameter_id": "param0",
-            "level": 1
+            "level": 0,
+            "depth": -1,
+            "pack_num": 32
         }
-	}
+    },
+    "server_task": {
+        "nn_layers_ct_0": {
+            "enable_fpga": true
+        }
+    },
+    "use_btp": false
 }
