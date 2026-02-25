@@ -116,9 +116,8 @@ from processor import (
     populate_pack_num,
     update_skip_for_btp,
     update_shape_for_btp,
-    balance_scale_for_graph,
     update_level_cost_for_btp,
-    absorb_scale_for_approx_poly,
+    absorb_scale,
     change_skip_for_graph,
     set_graph_scale,
     set_is_adaptive_avgpool,
@@ -456,7 +455,7 @@ class GraphPartitioner:
             new_graph_ab.dag = new_graph
 
             if config.get('MPC_REFRESH', False):
-                absorb_scale_for_approx_poly(new_graph_ab, config.get('MPC_REFRESH', False))
+                absorb_scale(new_graph_ab, config.get('MPC_REFRESH', False))
                 update_subgraph_node_param(new_graph_ab.dag, self.param_dict, 'param0')
                 change_skip_for_graph(new_graph_ab)
                 update_subgraph_node_param(new_graph_ab.dag, self.param_dict, 'param0', True)
@@ -699,7 +698,7 @@ def _prepare_graph(input_file_path: Path) -> LayerAbstractGraph:
     update_shape_for_btp(pt_graph)
     update_skip_for_btp(pt_graph)
     update_level_cost_for_btp(pt_graph)
-    absorb_scale_for_approx_poly(pt_graph)
+    absorb_scale(pt_graph)
 
     return pt_graph
 
@@ -736,12 +735,12 @@ def post_process(
     task_dir = output_dir / 'task'
     server_dir = task_dir / 'server'
     client_dir = task_dir / 'client'
-    ergs_dir = server_dir / 'ergs'
+    ergs_dir = server_dir
 
     ergs_dir.mkdir(parents=True, exist_ok=True)
     client_dir.mkdir(parents=True, exist_ok=True)
 
-    erg0_path = ergs_dir / 'erg0.json'
+    erg0_path = ergs_dir / 'nn_layers_ct_0.json'
     graph.to_json(dict(), str(erg0_path), score=score)
 
     if use_btp:
@@ -777,7 +776,7 @@ def post_process(
     print(f'Generated structure:')
     print(f'  task/')
     print(f'    ├── server/')
-    print(f'    │   ├── ergs/erg0.json')
+    print(f'    │   ├── nn_layers_ct_0.json')
     print(f'    │   ├── task_config.json')
     print(f'    │   └── ckks_parameter.json')
     print(f'    └── client/')
@@ -905,7 +904,7 @@ def run_parallel(
     succeeded, graph, score = _try_no_btp(pt_graph)
     if succeeded:
         post_process(graph, output_dir, score, use_btp=False)
-        return
+        return graph, score
 
     # No-BTP failed, use BTP mode with the same prepared graph
     graph, score = _run_btp_compilation(
@@ -913,6 +912,8 @@ def run_parallel(
     )
     if graph is not None:
         post_process(graph, output_dir, score, use_btp=True)
+
+    return graph, score
 
 
 if __name__ == '__main__':

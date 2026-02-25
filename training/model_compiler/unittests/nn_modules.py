@@ -48,7 +48,7 @@ class NN1(nn.Module):
 class NN2(nn.Module):
     def __init__(self):
         super().__init__()
-        self.n_layers = 20
+        self.n_layers = 40
         self.convs = nn.ModuleList()
         for i in range(self.n_layers):
             self.convs.append(nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1))
@@ -121,3 +121,32 @@ class ResNetBasicBlock(nn.Module):
         out += self.shortcut(x)
         out = self.relu2(out)
         return out
+
+
+class WrongPadding(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=(0, 0))
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
+class WrongDilation(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, dilation=2)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+class WrongGroups(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, groups=2)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
