@@ -36,6 +36,11 @@ class DensePackedLayer:
         self.input_shape: list[int] = input_shape
         self.skip: list[int] = skip
 
+        if input_shape[0] & (input_shape[0] - 1) != 0 or input_shape[1] & (input_shape[1] - 1) != 0:
+            raise ValueError(f"input_shape must be powers of 2, got: [{input_shape[0]}, {input_shape[1]}]")
+        if skip[0] & (skip[0] - 1) != 0 or skip[1] & (skip[1] - 1) != 0:
+            raise ValueError(f"skip must be powers of 2, got: [{skip[0]}, {skip[1]}]")
+
         self.pack: int = pack
         self.n_packed_in_feature: int = n_packed_in_feature
         self.n_packed_out_feature: int = n_packed_out_feature
