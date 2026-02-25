@@ -595,9 +595,9 @@ def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path, use_btp
     for i in range(len(subgraphs)):
         sub = subgraphs[i]
         if sub.is_mpc:
-            server_task['erg' + f'{i}'] = {'enable_fpga': False}
+            server_task['nn_layers_ct_' + f'{i}'] = {'enable_fpga': False}
         else:
-            server_task['erg' + f'{i}'] = {'enable_fpga': True}
+            server_task['nn_layers_ct_' + f'{i}'] = {'enable_fpga': True}
     input_root = subgraphs[0].get_leading_feature_nodes()[0]
 
     if not nx.is_directed_acyclic_graph(subgraphs[-1].dag):
@@ -1174,7 +1174,7 @@ def set_graph_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
     set_feature_scale_for_graph(graph)
 
 
-def absorb_scale_for_approx_poly(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
+def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
     pre_process(graph)
     subgraphs, removed_edges = split_graph_to_linear_subgraph(graph)
     subs_odered, next_dict, pre_dict = sort_subgraphs(subgraphs)
