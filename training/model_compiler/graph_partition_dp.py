@@ -116,7 +116,6 @@ from processor import (
     populate_pack_num,
     update_skip_for_btp,
     update_shape_for_btp,
-    balance_scale_for_graph,
     update_level_cost_for_btp,
     absorb_scale,
     change_skip_for_graph,
