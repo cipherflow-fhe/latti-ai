@@ -380,8 +380,7 @@ void InitInferenceProcess::init_poly_relu2d_layer(const string& key,
     CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
     auto layer_poly_relu = make_unique<PolyRelu>(param, feature_input.shape, order, weight, feature_input.skip,
                                                  feature_input.pack_channel_per_ciphertext, feature_input.level,
-                                                 upsample_factor_in, block_expansion,
-                                                 pack_style != "multiplexed");
+                                                 upsample_factor_in, block_expansion, pack_style != "multiplexed");
     if (is_absorb) {
         if (is_lazy) {
             layer_poly_relu->prepare_weight_lazy();

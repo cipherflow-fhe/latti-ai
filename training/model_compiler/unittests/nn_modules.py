@@ -80,7 +80,14 @@ class NN4(nn.Module):
         self.convs = nn.ModuleList()
         for i in range(self.n_layers):
             self.convs.append(
-                nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, stride=2 if (i % 4 == 2) else 1, padding=1)
+                nn.Conv2d(
+                    in_channels=32,
+                    out_channels=32,
+                    kernel_size=3,
+                    bias=False,
+                    stride=2 if (i % 4 == 2) else 1,
+                    padding=1,
+                )
             )
 
     def forward(self, x):

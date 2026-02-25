@@ -109,12 +109,12 @@ void PolyRelu::prepare_weight_for_non_absorb_case() {
                 if (is_ordinary_pack) {
                     for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
                         int channel_idx = n_packed_out_channel_idx * n_channel_per_ct + ch;
-                        if (channel_idx >= channel) continue;
+                        if (channel_idx >= channel)
+                            continue;
                         for (int j = 0; j < input_shape[0]; j++) {
                             for (int k = 0; k < input_shape[1]; k++) {
-                                int index = ch * block_shape[0] * block_shape[1]
-                                          + j * block_shape[1] * skip[0]
-                                          + k * skip[1];
+                                int index =
+                                    ch * block_shape[0] * block_shape[1] + j * block_shape[1] * skip[0] + k * skip[1];
                                 feature_tmp_pack[index] = weight.get(idx, channel_idx);
                             }
                         }
@@ -180,12 +180,12 @@ void PolyRelu::prepare_weight_for_non_absorb_case() {
                 if (is_ordinary_pack) {
                     for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
                         int channel_idx = n_packed_out_channel_idx * n_channel_per_ct + ch;
-                        if (channel_idx >= channel) continue;
+                        if (channel_idx >= channel)
+                            continue;
                         for (int j = 0; j < input_shape[0]; j++) {
                             for (int k = 0; k < input_shape[1]; k++) {
-                                int index = ch * block_shape[0] * block_shape[1]
-                                          + j * block_shape[1] * skip[0]
-                                          + k * skip[1];
+                                int index =
+                                    ch * block_shape[0] * block_shape[1] + j * block_shape[1] * skip[0] + k * skip[1];
                                 feature_tmp_pack[index] = weight.get(idx, channel_idx);
                             }
                         }
@@ -521,12 +521,11 @@ PolyRelu::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, i
     if (is_ordinary_pack) {
         for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
             int channel_idx = n_packed_out_channel_idx * n_channel_per_ct + ch;
-            if (channel_idx >= cached_channel) continue;
+            if (channel_idx >= cached_channel)
+                continue;
             for (int j = 0; j < input_shape[0]; j++) {
                 for (int k = 0; k < input_shape[1]; k++) {
-                    int index = ch * block_shape[0] * block_shape[1]
-                              + j * block_shape[1] * skip[0]
-                              + k * skip[1];
+                    int index = ch * block_shape[0] * block_shape[1] + j * block_shape[1] * skip[0] + k * skip[1];
                     feature_tmp_pack[index] = weight.get(idx, channel_idx);
                 }
             }
@@ -540,7 +539,8 @@ PolyRelu::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, i
 
             int channel_idx = n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
                               block_i * cached_skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
-            if (channel_idx >= cached_channel || (shape_i % pre_skip[0]) >= skip[0] || (shape_j % pre_skip[1]) >= skip[1])
+            if (channel_idx >= cached_channel || (shape_i % pre_skip[0]) >= skip[0] ||
+                (shape_j % pre_skip[1]) >= skip[1])
                 continue;
 
             int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;

@@ -172,10 +172,22 @@ def main():
         log.info(f'Device: {device}  |  MaxPool2d {n_maxpool} -> AvgPool2d {n_avgpool} ')
         n_relu = count_activations(model, nn.ReLU)
         if args.poly_module == 'RangeNormPoly2d':
-            replace_activation_with_poly(model, old_cls=nn.ReLU, new_module_factory=RangeNormPoly2d, upper_bound=args.upper_bound, degree=args.degree)
+            replace_activation_with_poly(
+                model,
+                old_cls=nn.ReLU,
+                new_module_factory=RangeNormPoly2d,
+                upper_bound=args.upper_bound,
+                degree=args.degree,
+            )
             n_poly = count_activations(model, RangeNormPoly2d)
         elif args.poly_module == 'Simple_Polyrelu':
-            replace_activation_with_poly(model, old_cls=nn.ReLU, new_module_factory=Simple_Polyrelu, upper_bound=args.upper_bound, degree=args.degree)
+            replace_activation_with_poly(
+                model,
+                old_cls=nn.ReLU,
+                new_module_factory=Simple_Polyrelu,
+                upper_bound=args.upper_bound,
+                degree=args.degree,
+            )
             n_poly = count_activations(model, Simple_Polyrelu)
         log.info(f'Device: {device}  |  ReLU {n_relu} -> Poly {n_poly} (ub={args.upper_bound}, deg={args.degree})')
     else:
