@@ -13,10 +13,6 @@ AI developers can complete end-to-end encrypted inference deployment without und
 
 ## Main Features
 
-```
-Plaintext Model Training (PyTorch, etc.) → Model Adaptation (Op Replacement + Fine-tuning) → Model Compilation (Computation Graph) → Encrypted Inference (CPU/GPU)
-```
-
 - **Model Adaptation**: Provides plug-and-play polynomial approximation operators that replace non-polynomial activation functions (e.g., ReLU, SiLU) and MaxPooling with FHE-friendly polynomial activations and AvgPool. After fine-tuning or retraining, the adapted model achieves accuracy on par with the original. Validated on ResNet-18, ResNet-44, MobileNetV2, YOLOv5 and more, with additional conversion strategies under active development.
 
 - **Model Compiler**: Takes adapted model files (`.pth`, `.onnx`) and, through operator mapping and computation graph optimization, automatically generates a CKKS-compatible directed acyclic computation graph (DAG) for encrypted inference, with automatic planning of bootstrapping insertion and data packing strategies.
@@ -24,105 +20,6 @@ Plaintext Model Training (PyTorch, etc.) → Model Adaptation (Op Replacement + 
 - **HE Operator Library**: Implements encrypted versions of core neural network operators based on the CKKS scheme — convolution, deconvolution, fully connected, AvgPool, and BatchNorm — leveraging SIMD slot encoding for vectorized parallel computation and supporting arbitrary-depth ciphertext operations through bootstrapping.
 
 - **Runtime**: Automatically schedules the complete inference pipeline based on the compiler-generated encrypted computation graph, with support for multi-threaded CPU parallelism and GPU acceleration. Encrypted inference results are nearly identical to plaintext inference.
-
----
-
-## Quick Start
-
-This guide demonstrates how to transform a standard PyTorch model into an inference service for encrypted queries using the **Latti-AI** framework.
-
-We will use a **ResNet-18** model trained on the **CIFAR-10** dataset as our baseline.
-
-### Prerequisites
-
-Before starting, ensure you have:
-
-- A trained model checkpoint (e.g., `baseline.pth`).
-- The training script (`train.py`) defining the PyTorch model.
-- The standard CIFAR-10 dataset files.
-
-### Phase 1: Model Adaptation
-
-In this phase, we convert a standard neural network into an **FHE-friendly** version. Fully Homomorphic Encryption (FHE) does not support non-linear activations like ReLU directly, so we swap them for polynomial approximations.
-
-1. Structure Conversion & Fine-Tuning
-
-Run the following command to replace ReLU layers with polynomial functions and fine-tune the parameters to maintain accuracy:
-
-```bash
-python example/train.py \
-  --poly_model_convert \
-  --pretrained ../runs/cifar10/model/baseline.pth \
-  --epochs 10 \
-  --batch-size 36 \
-  --lr 0.001 \
-  --input-dir ../runs/cifar10/model \
-  --export-dir ../runs/cifar10/task/server \
-  --input-shape 3 32 32
-```
-
-2. High-Level FHE Compilation
-
-Next, compile the adapted model into an **FHE Model Graph**. This step performs the optimizations of the following:
-
-- Selecting optimal FHE parameters.
-- Determining bootstrapping positions.
-- Assigning FHE levels and scales to each layer.
-
-```bash
-python run_compile.py \
-  --input=../runs/cifar10/model/trained_poly.onnx \
-  --output=../runs/cifar10/ \
-  --poly_n=65536 \
-  --style=multiplexed
-```
-
-
-### Phase 2: Encrypted Inference
-
-Once the high-level graph is ready, we lower it to hardware-specific instructions for actual execution.
-
-1. Generate Low-Level Instructions
-
-This command generates the necessary code for both CPU and GPU processors:
-
-```bash
-python gen_mega_ag.py
-```
-
-2. Runtime Execution
-
-In your application, you can now load the fine-tuned parameters and invoke the generated instructions to process encrypted queries.
-
-~~~c++
-  ```
-      // Load model FHE instructions, load model parameters, and encode parameters.
-      InitInferenceProcess init("./task/server/", false);
-      init.init_parameters();
-      init.load_model_prepare();
-      
-      // Receive public keys and encrypted query from client.
-      ...
-  
-      // Create an InferenceProcess with the public keys and encrypted input. 
-      InferenceProcess fp(&init, true);
-      fp.available_keys.push_back("input");
-      // Pass the encryption context to the server-side inference engine.
-      map<string, unique_ptr<CkksContext>> context_map;
-      context_map["param0"] = make_unique<CkksContext>(move(context.shallow_copy_context()));
-      fp.ckks_contexts = move(context_map);
-      fp.set_feature("input", make_unique<Feature2DEncrypted>(move(input_ct)));
-  
-      // Select compute device: multi-threaded CPU or GPU hardware acceleration
-      fp.compute_device = use_gpu ? ComputeDevice::GPU : ComputeDevice::CPU;
-      // Execute the FHE ciphertext inference pipeline
-      fp.run_task();
-      
-      // Send the result to client.
-      ...
-  ```
-~~~
-
 
 ## Build & Install
 
@@ -179,217 +76,183 @@ cmake .. -DINFERENCE_SDK_ENABLE_GPU=ON
 make -j$(nproc)
 ```
 
-For detailed build prerequisites, troubleshooting, and build options, see the **[Inference Module Build Guide](inference/README.md)**.
+For detailed build prerequisites, troubleshooting, and build options, see the **[Inference Module Build Guide](docs/en/build-guide.md)**.
 
 ---
 
 ## Quick Start
 
-This example demonstrates the complete pipeline from model adaptation to encrypted inference, using MNIST handwritten digit recognition.
+This guide demonstrates how to transform a standard PyTorch model into an inference service for encrypted queries using the **LattiAI** framework.
 
-> For a quick start, we have pre-completed Step 1 in the `examples/test_mnist/` directory, providing adapted model weights and compiled encrypted computation graphs. To directly experience encrypted inference, skip to [Step 2](#step-2-encrypted-inference).
+We will use a **ResNet-20** model trained on the **CIFAR-10** dataset as an end-to-end example.
 
-### Step 1: Model Adaptation & Compilation
+### Prerequisites
 
-Convert a standard model into the configuration files and computation graphs required for encrypted inference. For the complete toolchain steps, see [training/README.md](training/README.md).
+Before starting, ensure you have:
 
-The following files will be generated after compilation:
+- Successfully built the project (see [Build & Install](#build--install) above).
+- The standard CIFAR-10 dataset files (automatically downloaded on first run).
+
+Install Python dependencies:
+
+```bash
+pip install -r training/requirements.txt
+```
+
+> **Note:** All commands in this guide are run from the **project root directory** unless otherwise specified.
+
+### Phase 1: Model Adaptation & Compilation
+
+In this phase, we convert a standard neural network into an **FHE-friendly** version and compile it into an encrypted computation graph.
+
+```
+Baseline Training  →  Operator Replacement & Fine-tuning  →  Model Compilation
+     (Step 1)                   (Step 2)                        (Step 3)
+```
+
+#### Step 1: Baseline Training
+
+Train a standard ResNet-20 on CIFAR-10 with ReLU activations:
+
+```bash
+python examples/test_cifar10/train.py --epochs 150 --batch-size 128 --lr 0.1 --output-dir ./runs/cifar10/model
+```
+
+**Output:** `./runs/cifar10/model/train_baseline.pth`
+
+#### Step 2: Operator Replacement & Fine-Tuning
+
+FHE does not support non-linear activations like ReLU directly. Run the following command to replace ReLU layers with polynomial functions, swap max pooling for average pooling, and fine-tune the parameters to maintain accuracy. The script automatically exports the adapted model to ONNX format and saves model weights in an H5 file.
+
+```bash
+python examples/test_cifar10/train.py \
+  --poly_model_convert \
+  --pretrained ./runs/cifar10/model/train_baseline.pth \
+  --epochs 10 \
+  --batch-size 36 \
+  --lr 0.001 \
+  --input-dir ./runs/cifar10/model \
+  --export-dir ./runs/cifar10/task/server \
+  --input-shape 3 32 32
+```
+
+Workflow of `train.py`: when `--poly_model_convert` is enabled, the script replaces FHE-incompatible operators before training and exports the adapted model after training. Without this flag, it performs standard baseline training only.
+
+```python
+# 1. Replace FHE-incompatible operators (only when --poly_model_convert is set)
+if args.poly_model_convert:
+    replace_maxpool_with_avgpool(model)
+    replace_activation_with_poly(model, old_cls=nn.ReLU,
+                                 upper_bound=args.upper_bound,
+                                 degree=args.degree)
+
+# 2. Train (or fine-tune) the model
+for epoch in range(1, args.epochs + 1):
+    train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
+    test_loss, test_acc = evaluate(model, test_loader, criterion, device)
+    scheduler.step()
+
+# 3. Export to ONNX & H5 (only when --poly_model_convert is set)
+if args.poly_model_convert:
+    export_to_onnx(model, save_path=onnx_path, ...)
+    fuse_and_export_h5(model, h5_path=h5_path, ...)
+```
+
+- `--pretrained`: loads the baseline checkpoint.
+- `--input-dir`: directory containing the baseline model (also used as output for `.pth` and `.onnx`).
+- `--export-dir`: directory for the H5 weight file, corresponding to the server-side model weights.
+- `--upper-bound`: normalization upper bound for RangeNormPoly2d (default: `3.0`). Controls the input range for polynomial approximation.
+- `--degree`: degree of the polynomial activation (choices: `2`, `4`, `8`; default: `4`). Higher degree gives better approximation but increases FHE computational depth.
+
+**Output:**
 
 | File | Description |
 |------|-------------|
-| `client/ckks_parameter.json` | CKKS encryption parameter configuration |
-| `client/task_config.json` | Client inference task configuration |
-| `server/ckks_parameter.json` | CKKS encryption parameter configuration |
-| `server/task_config.json` | Server inference task configuration |
-| `server/model_parameters.h5` | Model weights |
-| `server/ergs/erg0.json` | Compiled encrypted computation graph |
+| `./runs/cifar10/model/train_poly.pth` | Adapted model checkpoint with polynomial activations |
+| `./runs/cifar10/model/trained_poly.onnx` | Exported adapted model in ONNX format |
+| `./runs/cifar10/task/server/model_parameters.h5` | Model weights (BatchNorm absorbed into Conv) |
 
-### <a id="step-2-encrypted-inference"></a>Step 2: Encrypted Inference
+#### Step 3: High-Level FHE Compilation
 
-Load the files generated in Step 1 and perform model inference on encrypted data.
+Next, compile the adapted model into an **FHE Model Graph**. This step performs the following optimizations:
 
-<details>
-<summary>Click to expand full code</summary>
+- Selecting optimal FHE parameters.
+- Determining bootstrapping positions.
+- Assigning FHE levels and scales to each layer.
 
-**Generate GPU-accelerated computation graph instructions** (`gen_mega_ag.py`):
-
-```python
-import json
-import os
-import sys
-
-# Resolve the directory where this script lives.
-script_dir = os.path.dirname(os.path.abspath(__file__))
-
-# Find project root by walking up until we find the 'training' directory.
-_dir = script_dir
-while _dir != os.path.dirname(_dir):
-    if os.path.isdir(os.path.join(_dir, 'training')):
-        break
-    _dir = os.path.dirname(_dir)
-project_root = _dir
-
-# Add project root and LattiSense library to the Python path so that
-# the frontend and training modules can be imported.
-sys.path.insert(0, project_root)
-sys.path.insert(0, os.path.join(project_root, 'inference', 'lattisense'))
-
-from frontend.custom_task import *  # noqa: E402
-from training.deploy_cmds import gen_custom_task  # noqa: E402
-
-# Path to the server-side encrypted computation graph (ergs directory).
-task_path = os.path.join(script_dir, 'task', 'server', 'ergs')
-
-# Read the server task configuration to determine which computation
-# segments (ergs) require GPU-accelerated mega_ag generation.
-with open(os.path.join(task_path, '..', 'task_config.json'), 'r', encoding='utf-8') as f:
-    config = json.load(f)
-
-# For each erg with FPGA/GPU acceleration enabled, generate the
-# corresponding mega_ag instruction sequence.  mega_ag fuses multiple
-# HE operations into optimized GPU kernels for faster inference.
-for erg_name, erg_config in config['server_task'].items():
-    if erg_config['enable_fpga']:
-        gen_custom_task(task_path, use_gpu=True)
+```bash
+python training/run_compile.py \
+  --input=./runs/cifar10/model/trained_poly.onnx \
+  --output=./runs/cifar10/ \
+  --poly_n=65536 \
+  --style=multiplexed
 ```
 
-**Run encrypted inference** (`main.cpp`):
+- `--input`: the exported adapted model in ONNX format from the previous step.
+- `--output`: root output directory; the compiler generates `task/server/` and `task/client/` subdirectories underneath.
+- `--poly_n`: polynomial modulus degree for CKKS (determines the number of ciphertext slots and security level). `65536` provides 128-bit security with 32768 slots; `16384` provides 128-bit security with 8192 slots but does not support bootstrapping.
+- `--style`: packing style — `multiplexed` (channel-multiplexed packing for higher slot utilization) or `ordinary` (one channel per ciphertext).
+
+**Output:**
+
+| File | Description |
+|------|-------------|
+| `./runs/cifar10/model/pt.json` | Intermediate computation graph (JSON) |
+| `./runs/cifar10/task/server/task_config.json` | Server-side inference task configuration |
+| `./runs/cifar10/task/server/ckks_parameter.json` | CKKS encryption parameter configuration |
+| `./runs/cifar10/task/server/ergs/erg0.json` | Compiled encrypted computation graph (DAG) |
+| `./runs/cifar10/task/client/task_config.json` | Client-side inference task configuration |
+| `./runs/cifar10/task/client/ckks_parameter.json` | CKKS encryption parameter configuration |
+
+### Phase 2: Encrypted Inference
+
+Once the high-level graph is ready, we lower it to hardware-specific instructions for actual execution.
+
+#### Step 1: Generate Low-Level Instructions
+
+Navigate to the built example directory and generate low-level instructions:
+
+```bash
+cd build/examples/test_cifar10
+python gen_mega_ag.py
+```
+
+#### Step 2: Runtime Execution
+
+In your application, you can now load the fine-tuned parameters and invoke the generated instructions to process encrypted queries. The following pseudocode illustrates the server-side workflow (see `examples/test_cifar10/inference.cpp` for a complete runnable example):
 
 ```cpp
-#include <cstring>
-#include <iostream>
-#include <map>
-#include <memory>
-#include <vector>
+// Load model FHE instructions, load model parameters, and encode parameters.
+InitInferenceProcess init("./task/server/", false);
+init.init_parameters();
+init.load_model_prepare();
 
-#include <cxx_sdk_v2/cxx_fhe_task.h>
-#include "data_structs/feature.h"
-#include "inference_task/inference_process.h"
-#include "util.h"
+// Receive public keys and encrypted query from client.
+...
 
-using namespace cxx_sdk_v2;
-using namespace std;
+// Create an InferenceProcess with the public keys and encrypted input.
+InferenceProcess fp(&init, true);
+fp.available_keys.push_back("input");
+// Pass the encryption context to the server-side inference engine.
+map<string, unique_ptr<CkksContext>> context_map;
+context_map["param0"] = make_unique<CkksContext>(move(context.shallow_copy_context()));
+fp.ckks_contexts = move(context_map);
+fp.set_feature("input", make_unique<Feature2DEncrypted>(move(input_ct)));
 
-int main(int argc, char* argv[]) {
-    bool use_gpu = false;
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--gpu") == 0) use_gpu = true;
-    }
+// Select compute device: multi-threaded CPU or GPU hardware acceleration
+fp.compute_device = use_gpu ? ComputeDevice::GPU : ComputeDevice::CPU;
+// Execute the FHE ciphertext inference pipeline
+fp.run_task();
 
-    cout << "========== MNIST Encrypted Inference ==========" << endl;
-    cout << "Device: " << (use_gpu ? "GPU" : "CPU") << endl;
-
-    // ==================== 1. Read Configuration ====================
-    // Load client-side task config and CKKS parameters from JSON files.
-    // These configs are generated by the model compilation step.
-    auto task_config = read_json("./task/client/task_config.json");
-    auto& input_param = task_config["task_input_param"].begin().value();
-    auto& output_param = task_config["task_output_param"].begin().value();
-    // Ciphertext multiplication depth level for the input
-    int level = input_param["level"];
-    // Stride between valid data slots in the output ciphertext
-    int output_skip = output_param["skip"];
-    int channel = input_param["channel"];
-    int height = input_param["shape"][0];
-    int width = input_param["shape"][1];
-    // Packing style: "ordinary" (one channel per ciphertext) or
-    // "multiplexed": (generalized interleaved packing strategy)
-    string pack_style = task_config["pack_style"];
-
-    auto ckks_config = read_json("./task/client/ckks_parameter.json");
-    string ckks_param_id = input_param["ckks_parameter_id"];
-    // Number of usable CKKS slots = poly_modulus_degree / 2
-    int n_slots = ckks_config[ckks_param_id]["poly_modulus_degree"].get<int>() / 2;
-
-    // ==================== 2. Client Side: Encrypt Input ====================
-    // Read the input image from CSV file with shape [channel, height, width].
-    auto input_array = csv_to_array<3>("./task/client/img.csv", {(uint64_t)channel, (uint64_t)height, (uint64_t)width});
-
-    // Create CKKS encryption context (without bootstrapping for MNIST).
-    CkksParameter param = CkksParameter::create_parameter(16384);
-    CkksContext context = CkksContext::create_random_context(param);
-    // Generate rotation public keys (for SIMD rotation operations on ciphertext vectors)
-    context.gen_rotation_keys();
-
-    // Create an encrypted feature map and pack the input data.
-    // The packing strategy depends on the image size relative to the
-    // number of available CKKS slots:
-    //   - ordinary:     one channel per ciphertext (simple packing)
-    //   - multiplexed:  generalized interleaved packing
-    //       - if image pixels > n_slots: split into blocks first
-    //       - otherwise: parallel multiplexed packing
-    Feature2DEncrypted input_ct(&context, level);
-
-    if (pack_style == "ordinary") {
-        input_ct.pack(input_array, false, param.get_default_scale());
-    } else if (height * width > n_slots) {
-        // Image too large for a single ciphertext: split into blocks and
-        // pack each block separately.  channel_packing_factor indicates
-        // how many blocks tile each spatial dimension.
-        Duo block_shape = {task_config["block_shape"][0], task_config["block_shape"][1]};
-        Duo channel_packing_factor = {(uint32_t)(height / block_shape[0]),
-                                      (uint32_t)(width / block_shape[1])};
-        input_ct.split_with_stride_pack(input_array, block_shape, channel_packing_factor, false,
-                                        param.get_default_scale());
-    } else {
-        // Image fits in one ciphertext: use parallel multiplexed packing
-        // to encode multiple channels into a single ciphertext.
-        input_ct.par_mult_pack(input_array, false, param.get_default_scale());
-    }
-
-    // ==================== 3. Server Side: Load Model ====================
-    // Load the pre-compiled encrypted computation graph and model weights.
-    // No bootstrapping parameters needed for MNIST (smaller model depth).
-    InitInferenceProcess init("./task/server/", false);
-    init.init_parameters();
-    init.is_lazy = false;
-    init.load_model_prepare();
-
-    // ==================== 4. Run Encrypted Inference ====================
-    // Configure the inference engine with the encryption context and
-    // encrypted input, then execute the computation graph.
-    InferenceProcess fp(&init, true);
-    fp.available_keys.push_back("input");
-
-    // Pass the encryption context to the server-side inference engine.
-    map<string, unique_ptr<CkksContext>> context_map;
-    context_map["param0"] = make_unique<CkksContext>(move(context.shallow_copy_context()));
-    fp.ckks_contexts = move(context_map);
-    fp.set_feature("input", make_unique<Feature2DEncrypted>(move(input_ct)));
-
-    Timer timer;
-    timer.start();
-    // Select compute device: multi-threaded CPU or GPU hardware acceleration
-    fp.compute_device = use_gpu ? ComputeDevice::GPU : ComputeDevice::CPU;
-    // Execute the full FHE ciphertext inference pipeline
-    fp.run_task();
-    timer.stop();
-    timer.print("Encrypted inference time");
-
-    // ==================== 5. Decrypt and Verify ====================
-    // Retrieve the encrypted output and decrypt it.
-    // output_skip specifies the stride between valid classification scores
-    // in the packed ciphertext slots.
-    auto encrypted_output = fp.get_ciphertext_output_feature0D("output");
-    encrypted_output.skip = output_skip;
-    auto decrypted = encrypted_output.unpack(DecryptType::SPARSE);
-    print_double_message(decrypted.to_array_1d().data(), "Encrypted output", 10);
-
-    // Run plaintext inference on the same input as a correctness reference.
-    fp.p_feature2d_x["input"] = std::move(input_array);
-    fp.run_task_plaintext();
-    auto plain_output = fp.p_feature0d_x["output"];
-    print_double_message(plain_output.data(), "Plaintext output", 10);
-
-    return 0;
-}
+// Send the result to client.
+...
 ```
-
-</details>
 
 ---
 
 ## Running Examples
+
+> For a complete end-to-end walkthrough (from model adaptation to encrypted inference), see [Quick Start](#quick-start). The commands below assume pre-built examples with pre-prepared `task/` folders.
 
 ### Prerequisites
 
@@ -423,9 +286,22 @@ python gen_mega_ag.py
 
 ---
 
+#### Performance
+
+> Testing environment — Server: Intel Xeon Gold 6226R (32 cores) + NVIDIA RTX 5880 Ada (48GB); 128-bit security level.
+
+| Task | Model | Dataset | Baseline Accuracy | FHE Accuracy | CPU Latency (s) | GPU Latency (s) |
+|------|-------|---------|-------------------|-------------|-----------------|-----------------|
+| Classification | MobileNetV2 | ImageNet | 71.8% | 70.1% | 1210.0 | 82.4 |
+
+For detailed benchmarks and methodology, see the [Technical Whitepaper](docs/en/whitepaper.md#performance-evaluation).
+
+---
+
 ## Documentation
 
 - **Technical Whitepaper**: See [docs/en/whitepaper.md](docs/en/whitepaper.md)
+- **Inference Module Build Guide**: See [docs/en/build-guide.md](docs/en/build-guide.md)
 
 ## Related Links
 

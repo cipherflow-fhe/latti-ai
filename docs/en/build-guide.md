@@ -19,7 +19,7 @@ This document contains the complete build and installation guide for the encrypt
 | Dependency | Version | Description |
 |------------|---------|-------------|
 | CMake | >= 3.13 | Build system |
-| C++ Compiler | GCC 12  | C++17 support required |
+| C++ Compiler | GCC 12  | C++20 support required |
 | Go | >= 1.18 | For building Lattigo crypto library |
 | Python | 3.12 | For computation graph compiler |
 
@@ -73,23 +73,16 @@ cmake .. \
   -DCMAKE_INSTALL_PREFIX=$(pwd)/../install
 ```
 
-> **CCCL Package Download Issue**: If the build hangs at `-- CPM: Adding package CCCL@2.5.0`:
-> 1. Edit the file `build/_deps/rapids-cmake-src/rapids-cmake/cpm/versions.json`
-> 2. On line 16, change `git_url` to: `"git_url": "https://gitee.com/Vizl/cccl.git"`
-> 3. Re-run the cmake command above
+> If the build hangs at `-- CPM: Adding package CCCL@2.5.0`, see [CCCL Package Hangs](#cccl-package-hangs).
 
 ### Step 3: Compile and Install HEonGPU
 
-1. Add missing header to `HEonGPU/thirdparty/GPU-NTT/src/include/common/common.cuh`:
-   ```cpp
-   #include <cstdint>
-   ```
+> If compilation fails with a missing `cstdint` header, see [Missing cstdint Header](#missing-cstdint-header).
 
-2. Build and install:
-   ```bash
-   make -j$(nproc)
-   make install
-   ```
+```bash
+make -j$(nproc)
+make install
+```
 
 ### Step 4: Build Project
 
@@ -100,7 +93,7 @@ cmake .. -DINFERENCE_SDK_ENABLE_GPU=ON
 make -j$(nproc)
 ```
 
-
+---
 
 ## Build Options
 
@@ -123,7 +116,7 @@ Set `CMAKE_CUDA_ARCHITECTURES` according to your GPU model (see [CUDA GPUs](http
 | GPU Model | Architecture Code |
 |-----------|-------------------|
 | RTX 30xx Series | 86 |
-| RTX 40xx Series | 89 |
+| RTX 40xx / RTX 5880 Ada | 89 |
 | A100 | 80 |
 | H100 | 90 |
 

@@ -37,7 +37,7 @@ config = None
 
 def _init_config_vars():
     """Initialize global variables from config"""
-    global MAX_LEVEL, GRAPH_TYPE, block_shape
+    global MAX_LEVEL, block_shape
     global POLY_N, STYLE, MPC_REFRESH
 
     if config is None:
@@ -46,7 +46,6 @@ def _init_config_vars():
         _config = config
 
     MAX_LEVEL = _config['MAX_LEVEL']
-    GRAPH_TYPE = _config['GRAPH_TYPE']
     block_shape = _config['block_shape']  # Set by graph_splitter based on POLY_N
     POLY_N = _config['POLY_N']
     STYLE = _config['STYLE']
@@ -56,7 +55,6 @@ def _init_config_vars():
 f_name_index_dict = dict()
 concat_dict = dict()
 MAX_LEVEL = None
-GRAPH_TYPE = None
 block_shape = None
 IS_ABSORB_POLYRELU = False
 POLY_N = None
@@ -335,10 +333,7 @@ class FeatureNode:
         self.shape = shape
         self.ckks_parameter_id = ckks_parameter_id
         self.node_index = -1
-        if GRAPH_TYPE == 'btp':
-            self.depth = MAX_LEVEL
-        else:
-            self.depth = MAX_LEVEL + 1
+        self.depth = -1
         self.is_total_graph_leading_node = False
         self.scale_up = 1
         self.scale_down = 1
@@ -800,7 +795,7 @@ class LayerAbstractGraph:
             elif 'mult_scalar' in layer_type:
                 level_cost = 1
             elif 'relu2d' == layer_type:
-                level_cost = compute_node.order - 1
+                level_cost = math.ceil(math.log2(compute_node.order)) + 1
             elif 'resize' == layer_type:
                 level_cost = 1
             elif 'batchnorm' in layer_type or 'pool' in layer_type:
@@ -1404,7 +1399,9 @@ class FheScoreParam:
                     + rescale_time * self.rescale_score
                 )
         elif 'simple_polyrelu' in self.compute_node.layer_type:
-            compute_score = (self.n_packed_in * (self.mult_score + self.add_score)) * (self.compute_node.order - 1)
+            compute_score = (self.n_packed_in * (self.mult_score + self.add_score)) * (
+                math.ceil(math.log2(self.compute_node.order)) + 1
+            )
             return compute_score * self.acc_rate
         elif 'avgpool2d' == self.compute_node.layer_type:
             num = self.n_packed_in * (self.stride[0] - 1 + math.log2(self.stride[0]))

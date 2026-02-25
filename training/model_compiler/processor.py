@@ -287,13 +287,15 @@ def update_subgraph_node_param(dag, param_dict: dict[str, EncryptParameterNode],
 
     sub = LayerAbstractGraph()
     sub.dag = dag
+    slot_num = param_dict[param_id].poly_modulus_degree / 2
+    # print(f'slot_num={slot_num}')
     if MPC_REFRESH:
         update_skip_for_btp(sub, print_flag)
         update_level_cost_for_btp(sub)
     for compute_node in compute_nodes_in_topo_sort:
         compute_node.ckks_parameter_id_input = param_id
         compute_node.ckks_parameter_id_output = param_id
-        slot_num = param_dict[param_id].poly_modulus_degree / 2
+
         populate_pack_num(dag, compute_node, slot_num)
 
 
@@ -354,7 +356,7 @@ def substitute_layers_for_btp(subgraph: LayerAbstractGraph):
             continue
         if compute.layer_type == 'relu2d' or compute.layer_type == 'simple_polyrelu':
             compute.layer_type = APPROX_POLY_TYPE
-            subgraph.dag.nodes[compute]['level_cost'] = compute.order - 1
+            subgraph.dag.nodes[compute]['level_cost'] = math.ceil(math.log2(compute.order)) + 1
 
 
 def set_scale_for_node(graph: LayerAbstractGraph, c_node: ComputeNode, scale: float):
@@ -371,19 +373,7 @@ def set_scale_for_node(graph: LayerAbstractGraph, c_node: ComputeNode, scale: fl
                 return node
 
 
-def process_batch_norm(graph: LayerAbstractGraph):
-    pre_process(graph)
-    bn_conv_dict = dict()
-    subs, removes = split_graph_to_linear_subgraph(graph)
-    for sub in subs:
-        for node in sub.dag.nodes:
-            if isinstance(node, BatchNormComputeNode):
-                res = find_layer_in_linear_graph(graph, node, 'conv2d', 'up')
-                if res:
-                    res.bn_absorb_path = node.layer_id
-
-    recovery_graph_from_subgraph(graph, subs)
-    del_identity_layer(graph)
+mpc_scale = 1
 
 
 def set_feature_scale_for_graph(graph: LayerAbstractGraph):
@@ -588,14 +578,14 @@ def find_input_and_output(sub: LayerAbstractGraph):
     return input_nodes, output_nodes
 
 
-def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path):
+def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path, use_btp: bool = True):
     server_task = {}
     for i in range(len(subgraphs)):
         sub = subgraphs[i]
         if sub.is_mpc:
-            server_task['erg' + f'{i}'] = {'enable_fpga': False}
+            server_task['nn_layers_ct_' + f'{i}'] = {'enable_fpga': False}
         else:
-            server_task['erg' + f'{i}'] = {'enable_fpga': True}
+            server_task['nn_layers_ct_' + f'{i}'] = {'enable_fpga': True}
     input_root = subgraphs[0].get_leading_feature_nodes()[0]
 
     if not nx.is_directed_acyclic_graph(subgraphs[-1].dag):
@@ -637,6 +627,7 @@ def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path):
                 'depth': node.depth,
                 'pack_num': graph_to_use.dag.nodes[node]['pack_num'],
             }
+
     config = {
         'task_type': 'fhe' if len(subgraphs) == 1 else 'hybrid',
         'task_num': len(subgraphs),
@@ -650,6 +641,7 @@ def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path):
         'task_input_param': {'input': param_dict[input_root.node_id]},
         'task_output_param': {'output': param_dict[output_root.node_id]},
         'server_task': server_task,
+        'use_btp': use_btp,
     }
     os.makedirs(file_path, exist_ok=True)
     with open(os.path.join(file_path, 'task_config.json'), 'w') as f:
@@ -821,7 +813,7 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                     compute_node.is_adaptive_avgpool = False
         elif compute_node.layer_type == APPROX_POLY_TYPE:
-            graph.dag.nodes[compute_node]['level_cost'] = compute_node.order - 1
+            graph.dag.nodes[compute_node]['level_cost'] = math.ceil(math.log2(compute_node.order)) + 1
             if preds[0].shape[0] > block_shape[0] or preds[0].shape[1] > block_shape[1]:
                 compute_node.is_big_size = True
 
@@ -1170,7 +1162,7 @@ def set_graph_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
     set_feature_scale_for_graph(graph)
 
 
-def absorb_scale_for_approx_poly(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
+def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
     pre_process(graph)
     subgraphs, removed_edges = split_graph_to_linear_subgraph(graph)
     subs_odered, next_dict, pre_dict = sort_subgraphs(subgraphs)
@@ -1345,590 +1337,6 @@ def set_depth_for_graph(graph: LayerAbstractGraph):
         else:
             node.depth = max_successor_depth
     return 0
-
-
-fhe_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'simple_polyrelu']
-
-
-def get_split_num(c_node_list: list[ComputeNode], direction: str, order=4):
-    if direction == 'up':
-        n_split = 0
-        for node in c_node_list:
-            if node.layer_type in fhe_layers:
-                n_split = n_split + 1
-    if direction == 'down':
-        n_split = 0
-        n_poly = 0
-        for node in c_node_list:
-            if node.layer_type in fhe_layers:
-                if node.layer_type == 'simple_polyrelu':
-                    n_poly = n_poly + 1
-                n_split = n_split + (1 / order) ** n_poly
-
-    return n_split
-
-
-def get_scale(graph: LayerAbstractGraph):
-    scale = 1.0
-    all_nodes_in_topo_sort = list(nx.topological_sort(graph.dag))
-    compute_nodes_in_topo_sort = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)]
-    for node in compute_nodes_in_topo_sort:
-        if node.layer_type == 'relu2d' or node.layer_type == 'simple_polyrelu':
-            scale = scale * (1 / mpc_scale)
-
-        elif node.layer_type == 'avgpool2d':
-            if (node.is_adaptive_avgpool) or (node.is_big_size):
-                scale = scale * 1 / node.stride[0] / node.stride[1]
-    return scale
-
-
-def absorb_scale_for_one_node_in_linear_down(
-    graph: LayerAbstractGraph, c_node_list: list[ComputeNode], scale: float, n_split: int
-):
-    if n_split == 0:
-        return
-    avg_scale = scale ** (1 / n_split)
-    compute_bias_scale_down(c_node_list, scale, avg_scale)
-    return
-
-
-def compute_bias_scale_up(node_list: list[ComputeNode], avg_scale, order=4):
-    bias_scale_list = list()
-    poly_scale_list = list()
-    pre_scale = 1
-
-    for node in node_list:
-        if node.layer_type in fhe_layers:
-            if node.layer_type == 'simple_polyrelu':
-                bias_scale_list.append(1)
-
-                scale_list = []
-                for i in range(order + 1):
-                    power = order - i
-                    if power > 0:
-                        scale_list.append(1 / (pre_scale ** (power - 1)) * avg_scale)
-                    else:
-                        scale_list.append(pre_scale * avg_scale)
-
-                pre_scale = pre_scale * avg_scale
-                poly_scale_list.append(scale_list)
-                node.weight_scale_list = (np.array(node.weight_scale_list) * np.array(scale_list)).tolist()
-                node.weight_scale = node.weight_scale * scale_list[order // 2]
-            else:
-                pre_scale = pre_scale * avg_scale
-                bias_scale = pre_scale
-                bias_scale_list.append(bias_scale)
-
-                node.weight_scale = node.weight_scale * avg_scale
-                node.bias_scale = node.bias_scale * bias_scale
-
-    return bias_scale_list, poly_scale_list
-
-
-def compute_bias_scale_down(node_list: list[ComputeNode], init_scale, avg_scale, order=4):
-    bias_scale_list = list()
-    poly_scale_list = list()
-    for node in node_list:
-        if node.layer_type in fhe_layers:
-            if node.layer_type == 'simple_polyrelu':
-                bias_scale_list.append(1)
-                scale_list = []
-                for i in range(order + 1):
-                    if i == 0:
-                        scale_list.append(avg_scale)
-                    else:
-                        scale_list.append(avg_scale / init_scale**i)
-
-                poly_scale_list.append(scale_list)
-
-                node.weight_scale_list = (np.array(node.weight_scale_list) * np.array(scale_list)).tolist()
-                node.weight_scale = node.weight_scale * scale_list[0]
-
-                init_scale = init_scale**order / avg_scale
-            else:
-                bias_scale = (1 / init_scale) * avg_scale
-                bias_scale_list.append(bias_scale)
-                node.weight_scale = node.weight_scale * avg_scale
-                node.bias_scale = node.bias_scale * bias_scale
-
-                init_scale = init_scale / avg_scale
-    return bias_scale_list, poly_scale_list
-
-
-def absorb_scale_for_one_node_in_linear_up(
-    graph: LayerAbstractGraph, c_node_list: list[ComputeNode], scale: float, n_split: int
-):
-    if n_split == 0:
-        return
-    avg_scale = scale ** (1 / n_split)
-    compute_bias_scale_up(c_node_list, avg_scale)
-    return
-
-
-def balance_scale_for_subgraph(sub: LayerAbstractGraph, special_process=False, scale=1.0):
-    c_node_list = list()
-    all_nodes_in_topo_sort = list(nx.topological_sort(sub.dag))
-    compute_nodes_in_topo_sort = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)]
-
-    list_up = list()
-    list_down = list()
-
-    expation_scale_list = []
-
-    for i in range(len(compute_nodes_in_topo_sort)):
-        no_mpc_scale = False
-        if compute_nodes_in_topo_sort[i].layer_type in ['relu2d', 'avgpool2d', 'bootstrapping']:
-            if (
-                compute_nodes_in_topo_sort[i].layer_type == 'relu2d'
-                or compute_nodes_in_topo_sort[i].layer_type == 'bootstrapping'
-            ):
-                scale = 1 / mpc_scale
-
-            if compute_nodes_in_topo_sort[i].layer_type == 'avgpool2d':
-                no_mpc_scale = True
-                if compute_nodes_in_topo_sort[i].is_adaptive_avgpool or compute_nodes_in_topo_sort[i].is_big_size:
-                    scale = 1 / compute_nodes_in_topo_sort[i].stride[0] / compute_nodes_in_topo_sort[i].stride[1]
-                else:
-                    scale = 1
-
-            list_up = compute_nodes_in_topo_sort[: i + 1]
-            list_down = compute_nodes_in_topo_sort[i + 1 :]
-            n_split_up = get_split_num(list_up, 'up')
-            n_split_down = get_split_num(list_down, 'down')
-            if (n_split_up + n_split_down) != 0:
-                avg_scale = scale ** (1 / (n_split_up + n_split_down))
-            else:
-                raise ValueError('No conv/fc for absorption')
-                scale = get_scale(sub)
-                return False, scale
-            expation_scale_up_dict = get_expation_scale_up(list_up, avg_scale)
-            if not list(expation_scale_up_dict.keys()):
-                down_value = 1
-            else:
-                down_value = expation_scale_up_dict[list(expation_scale_up_dict.keys())[-1]]
-            scale_from_up = down_value
-            expation_scale_dwon_dict = get_expation_scale_down(list_down, avg_scale, scale_from_up, no_mpc_scale)
-            expation_scale_list.append(expation_scale_up_dict | expation_scale_dwon_dict)
-
-            scale_up = avg_scale**n_split_up
-            scale_down = avg_scale**n_split_down
-
-            absorb_scale_for_one_node_in_linear_up(sub, list_up, scale_up, n_split_up)
-
-            absorb_scale_for_one_node_in_linear_down(sub, list_down, scale_down, n_split_down)
-    expantion_scale_dict = {}
-    if len(expation_scale_list) > 0:
-        all_keys = expation_scale_list[0].keys()
-        for key in all_keys:
-            result = 1
-            for dict_item in expation_scale_list:
-                if key in dict_item:
-                    result *= dict_item[key]
-            expantion_scale_dict[key] = result
-    rebalance_scale(expantion_scale_dict, compute_nodes_in_topo_sort, sub)
-
-    return True, scale
-
-
-mpc_scale = 1
-
-
-def conv_layer_sim(input_val, weight_scale=1, bias_scale=1, weight=0.1, bias=0.05):
-    """Simulate conv layer computation: y = weight_scale * weight * input + bias_scale * bias"""
-    y = weight_scale * weight * input_val + bias_scale * bias
-    return y
-
-
-def mult_scalar_sim(input_val, weight_scale=1):
-    """Simulate mult_scalar layer computation: y = weight_scale * input"""
-    y = weight_scale * input_val
-    return y
-
-
-def poly_func_sim(input_val, order=4, weight_scale_list=None, poly_coeff=None):
-    """Simulate poly(simple_polyrelu) layer computation: y = sum(weight_scale_list[i] * poly_coeff[i] * input^(order-i))
-
-    Args:
-        input_val: Input value
-        order: Polynomial order, default is 4
-        weight_scale_list: Scale coefficients for each term, length is order+1, corresponding to x^order to x^0 coefficients
-        poly_coeff: Polynomial coefficients, length is order+1, corresponding to x^order to x^0 coefficients
-    """
-    if weight_scale_list is None:
-        weight_scale_list = [1] * (order + 1)
-    if poly_coeff is None:
-        poly_coeff = [0.05] * order + [0.01]
-
-    assert len(weight_scale_list) == order + 1, f'weight_scale_list length should be {order + 1}'
-    assert len(poly_coeff) == order + 1, f'poly_coeff length should be {order + 1}'
-
-    y = 0
-    for i in range(order + 1):
-        power = order - i
-        y += weight_scale_list[i] * poly_coeff[i] * (input_val**power)
-    return y
-
-
-def simulate_graph_pt_value(graph: LayerAbstractGraph, input_val=1):
-    """Simulate plaintext computation process of the entire graph (without considering scale)
-
-    Traverse the graph in topological order, supporting multiple paths (multi-input layers such as concat/add).
-
-    Args:
-        graph: LayerAbstractGraph graph
-        input_val: Input value, default is 1
-
-    Returns:
-        feature_values: dict, computed value of each FeatureNode
-    """
-    dag = graph.dag
-    all_nodes_in_topo_sort = list(nx.topological_sort(dag))
-
-    feature_values = {}
-
-    for node in all_nodes_in_topo_sort:
-        if isinstance(node, FeatureNode):
-            preds = list(dag.predecessors(node))
-            if len(preds) == 0:
-                feature_values[node.node_id] = input_val
-
-    for node in all_nodes_in_topo_sort:
-        if isinstance(node, ComputeNode):
-            preds = list(dag.predecessors(node))
-            succs = list(dag.successors(node))
-
-            input_sum = sum(feature_values.get(p.node_id, 0) for p in preds if isinstance(p, FeatureNode))
-
-            if node.layer_type in ['conv2d', 'fc0', 'fc1']:
-                res = conv_layer_sim(input_sum, weight_scale=1, bias_scale=1)
-            elif node.layer_type == 'mult_scalar':
-                res = mult_scalar_sim(input_sum, weight_scale=1)
-            elif node.layer_type == 'simple_polyrelu':
-                res = poly_func_sim(input_sum, weight_scale_list=[1, 1, 1, 1, 1])
-            elif node.layer_type == 'bootstrapping':
-                res = input_sum
-            elif node.layer_type in ['concat', 'add']:
-                res = input_sum
-            else:
-                res = input_sum
-
-            for s in succs:
-                if isinstance(s, FeatureNode):
-                    feature_values[s.node_id] = res
-
-    return feature_values
-
-
-def simulate_graph_ct_value(graph: LayerAbstractGraph, input_val=1):
-    """Simulate ciphertext computation process of the entire graph (applying weight_scale and weight_scale_list)
-
-    Traverse the graph in topological order, supporting multiple paths (multi-input layers such as concat/add).
-
-    Args:
-        graph: LayerAbstractGraph graph
-        input_val: Input value, default is 1
-
-    Returns:
-        feature_values: dict, computed value of each FeatureNode
-    """
-    dag = graph.dag
-    all_nodes_in_topo_sort = list(nx.topological_sort(dag))
-
-    feature_values = {}
-
-    for node in all_nodes_in_topo_sort:
-        if isinstance(node, FeatureNode):
-            preds = list(dag.predecessors(node))
-            if len(preds) == 0:
-                feature_values[node.node_id] = input_val
-
-    for node in all_nodes_in_topo_sort:
-        if isinstance(node, ComputeNode):
-            preds = list(dag.predecessors(node))
-            succs = list(dag.successors(node))
-
-            input_sum = sum(feature_values.get(p.node_id, 0) for p in preds if isinstance(p, FeatureNode))
-
-            if node.layer_type in ['conv2d', 'fc0', 'fc1']:
-                ws = getattr(node, 'weight_scale', 1)
-                bs = getattr(node, 'bias_scale', 1)
-                res = conv_layer_sim(input_sum, weight_scale=ws, bias_scale=bs)
-            elif node.layer_type == 'mult_scalar':
-                ws = getattr(node, 'weight_scale', 1)
-                res = mult_scalar_sim(input_sum, weight_scale=ws)
-            elif node.layer_type == 'simple_polyrelu':
-                wsl = getattr(node, 'weight_scale_list', [1, 1, 1, 1, 1])
-                res = poly_func_sim(input_sum, weight_scale_list=wsl)
-            elif node.layer_type == 'bootstrapping':
-                res = mpc_scale * input_sum
-            elif node.layer_type in ['concat', 'add']:
-                res = input_sum
-            else:
-                res = input_sum
-
-            for s in succs:
-                if isinstance(s, FeatureNode):
-                    feature_values[s.node_id] = res
-
-    return feature_values
-
-
-def verify_graph_scale_correctness(graph: LayerAbstractGraph, input_val=1):
-    """Verify if the scale settings of the entire graph are correct
-
-    Compare the final output results of plaintext computation and ciphertext computation. If the scale settings are correct, the output values should be equal.
-
-    Args:
-        graph: LayerAbstractGraph graph
-        input_val: Input value, default is 1
-
-    Returns:
-        is_correct: bool, whether the results of the final output nodes are approximately equal
-        pt_values: Plaintext computation result dict
-        ct_values: Ciphertext computation result dict
-    """
-    pt_values = simulate_graph_pt_value(graph, input_val)
-    ct_values = simulate_graph_ct_value(graph, input_val)
-
-    dag = graph.dag
-    output_node_ids = []
-    for node in dag.nodes:
-        if isinstance(node, FeatureNode):
-            succs = list(dag.successors(node))
-            if len(succs) == 0:
-                output_node_ids.append(node.node_id)
-
-    is_correct = True
-    print('Verification results (only check output nodes):')
-    for node_id in output_node_ids:
-        pt_val = pt_values.get(node_id, 0)
-        ct_val = ct_values.get(node_id, 0)
-        if pt_val == 0:
-            match = abs(ct_val) < 1e-9
-        else:
-            match = abs(pt_val - ct_val) < 1e-15
-            print(abs(pt_val - ct_val))
-        if not match:
-            is_correct = False
-            print(f'  {node_id}: PT={pt_val}, CT={ct_val} [Mismatch]')
-        else:
-            print(f'  {node_id}: PT={pt_val}, CT={ct_val} [Match]')
-
-    print(f'Scale setting {"correct" if is_correct else "incorrect"}')
-
-    return is_correct, pt_values, ct_values
-
-
-def get_expation_scale_up(c_node_list, avg_scale):
-    """Check the value expansion before entering mpc"""
-    res = 1
-    scale_dict = {}
-    for node in c_node_list:
-        if node.layer_type in fhe_layers:
-            res *= avg_scale
-            scale_dict[node.layer_id] = res
-        else:
-            pass
-    return scale_dict
-
-
-def get_expation_scale_down(c_node_list, avg_scale, scale_from_up, no_mpc_scale=False):
-    """Check the value expansion before entering mpc"""
-    res = scale_from_up * mpc_scale
-    if no_mpc_scale:
-        res = scale_from_up
-    scale_dict = {}
-    for node in c_node_list:
-        if node.layer_type in fhe_layers:
-            if node.layer_type == 'simple_polyrelu':
-                res = res**order * (avg_scale)
-            else:
-                res *= avg_scale
-            scale_dict[node.layer_id] = res
-        else:
-            pass
-    return scale_dict
-
-
-def process_list_up(list_up: list[ComputeNode], k: float, expation_scale_dict: dict) -> tuple[dict, ComputeNode | None]:
-    """Process scale adjustment for the upper segment
-
-    Args:
-        list_up: Upper segment node list
-        k: Expansion value exceeding threshold
-        expation_scale_dict: Expansion value dictionary
-
-    Returns:
-        (expation_scale_up_dict, mult_scalar_node): Upper segment expansion value dictionary and mult_scalar node (if mult_scalar strategy is used)
-    """
-    n_split_num_up = get_split_num(list_up, 'up')
-    avg_scale_up = (1 / k) ** (1 / n_split_num_up)
-    expation_scale_up_dict = get_expation_scale_up(list_up, avg_scale_up)
-
-    original_scales = {}
-    for node in list_up:
-        if node.layer_type in fhe_layers:
-            original_scales[node.layer_id] = {
-                'weight_scale': node.weight_scale,
-                'bias_scale': node.bias_scale,
-                'weight_scale_list': node.weight_scale_list.copy() if hasattr(node, 'weight_scale_list') else None,
-            }
-
-    compute_bias_scale_up(list_up, avg_scale_up)
-
-    min_weight_scale_threshold = 0.0001
-    weight_scales_qualified = True
-    for node in list_up:
-        if node.layer_type in ['conv2d', 'fc0', 'mult_scalar']:
-            if node.weight_scale < min_weight_scale_threshold:
-                weight_scales_qualified = False
-                print(f'@@@weight_scale not qualified: {node.layer_id} weight_scale={node.weight_scale}')
-                break
-
-    if not weight_scales_qualified:
-        print('@@@weight_scale not qualified after averaging, switching to mult_scalar strategy')
-        for node in list_up:
-            if node.layer_id in original_scales:
-                node.weight_scale = original_scales[node.layer_id]['weight_scale']
-                node.bias_scale = original_scales[node.layer_id]['bias_scale']
-                if original_scales[node.layer_id]['weight_scale_list'] is not None:
-                    node.weight_scale_list = original_scales[node.layer_id]['weight_scale_list']
-
-        h_node = list_up[-1]
-
-        timestamp = int(time.time() * 1000000)
-        layer_id = f'{h_node.layer_id}_ts{timestamp}'
-        mult_scalar = MultScalarComputeNode(layer_id, 'mult_scalar', h_node.channel_input, h_node.channel_output)
-        if 1 / k > min_weight_scale_threshold:
-            mult_scalar.weight_scale = 1 / k
-
-            h_expation_scale = expation_scale_dict.get(h_node.layer_id, 1)
-            expation_scale_dict[mult_scalar.layer_id] = h_expation_scale * (1 / k)
-
-            expation_scale_up_dict = {mult_scalar.layer_id: expation_scale_dict[mult_scalar.layer_id]}
-        else:
-            avg_k_up = k * min_weight_scale_threshold
-            avg_k_mult_scalar = 1 / min_weight_scale_threshold
-            n_split_num_up = get_split_num(list_up, 'up')
-            avg_scale_up = (1 / avg_k_up) ** (1 / n_split_num_up)
-            expation_scale_up_dict = get_expation_scale_up(list_up, avg_scale_up)
-            compute_bias_scale_up(list_up, avg_scale_up)
-            for up_node in list_up:
-                if up_node.layer_id in expation_scale_up_dict:
-                    expation_scale_dict[up_node.layer_id] *= expation_scale_up_dict[up_node.layer_id]
-            h_expation_scale = expation_scale_dict.get(h_node.layer_id, 1)
-            expation_scale_dict[mult_scalar.layer_id] = h_expation_scale * (1 / avg_k_mult_scalar)
-            mult_scalar.weight_scale = 1 / avg_k_mult_scalar
-
-            expation_scale_up_dict = {mult_scalar.layer_id: expation_scale_dict[mult_scalar.layer_id]}
-
-        return expation_scale_up_dict, mult_scalar
-
-    for up_node in list_up:
-        if up_node.layer_id in expation_scale_up_dict:
-            expation_scale_dict[up_node.layer_id] *= expation_scale_up_dict[up_node.layer_id]
-
-    return expation_scale_up_dict, None
-
-
-def process_list_down(list_down: list[ComputeNode], k: float, scale_from_up: float, expation_scale_dict: dict) -> dict:
-    """Process scale adjustment for the lower segment
-
-    Args:
-        list_down: Lower segment node list
-        k: Expansion value exceeding threshold
-        scale_from_up: Scale value of the last layer in the upper segment
-        expation_scale_dict: Expansion value dictionary
-
-    Returns:
-        expation_scale_down_dict: Lower segment expansion value dictionary
-    """
-    n_split_num_down = get_split_num(list_down, 'down')
-    if n_split_num_down == 0:
-        raise ValueError(f'n_split_num_down is 0, cannot perform lower segment scale adjustment')
-    avg_scale_down = k ** (1 / n_split_num_down)
-
-    expation_scale_down_dict = get_expation_scale_down(list_down, avg_scale_down, scale_from_up, True)
-    compute_bias_scale_down(list_down, k, avg_scale_down)
-
-    for down_node in list_down:
-        if down_node.layer_id in expation_scale_down_dict:
-            expation_scale_dict[down_node.layer_id] *= expation_scale_down_dict[down_node.layer_id]
-
-    return expation_scale_down_dict
-
-
-def adjust_scale_for_threshold_exceed(
-    expation_scale_dict: dict, c_node_list: list[ComputeNode], i: int, k: float, sub: LayerAbstractGraph
-):
-    """When the expansion value before bootstrapping exceeds the threshold, adjust the scale of upper and lower segments
-
-    Args:
-        expation_scale_dict: Expansion value dictionary
-        c_node_list: Complete node list
-        i: Index of the current bootstrapping node
-        k: Expansion value exceeding threshold
-    """
-    list_up = c_node_list[: i + 1]
-    list_down = c_node_list[i + 1 :]
-
-    expation_scale_up_dict, mult_scalar_node = process_list_up(list_up, k, expation_scale_dict)
-
-    btp_node = c_node_list[i]
-    if mult_scalar_node is not None:
-        c_node_list.insert(i, mult_scalar_node)
-        preds = list(sub.dag.predecessors(btp_node))
-        add_layer(sub, btp_node, 0, 0, 'mult_scalar', preds, None, insert_node=mult_scalar_node)
-
-    if not list(expation_scale_up_dict.keys()):
-        scale_from_up = 1
-    else:
-        scale_from_up = expation_scale_up_dict[list(expation_scale_up_dict.keys())[-1]]
-
-    process_list_down(list_down, k, scale_from_up, expation_scale_dict)
-
-
-def rebalance_scale(expation_scale_dict: dict, c_node_list: list[ComputeNode], sub: LayerAbstractGraph):
-    """Balance scale values to ensure that the values of layers before mpc do not exceed the threshold
-
-    Args:
-        expation_scale_dict: Current expansion value dictionary, key is layer_id, value is expansion value
-        c_node_list: Layer list, list of ComputeNode objects
-        sub: Current subgraph, used to insert mult_scalar nodes
-
-    Returns:
-        Updated expation_scale_dict
-    """
-    threshold = 1.1
-
-    for i, node in enumerate(c_node_list):
-        if node.layer_type == 'bootstrapping':
-            if i > 0:
-                prev_node = c_node_list[i - 1]
-                k = expation_scale_dict.get(prev_node.layer_id, 0)
-                if k > threshold:
-                    adjust_scale_for_threshold_exceed(expation_scale_dict, c_node_list, i, k, sub)
-
-
-def balance_scale_for_graph(graph: LayerAbstractGraph):
-
-    pre_process(graph)
-    subs, remove_edges = split_graph_to_linear_subgraph(graph)
-    subs_odered, next_dict, pre_dict = sort_subgraphs(subs)
-
-    num = 0
-    special_process_list = list()
-    scale_list = dict()
-    reversed_subs_odered = subs_odered[::-1]
-    index = len(reversed_subs_odered) - 1
-    for sub in reversed_subs_odered:
-        balance_scale_for_subgraph(sub)
-        index = index - 1
-
-    recovery_graph_from_subgraph(graph, subs)
-    del_identity_layer(graph)
-    # verify_graph_scale_correctness(graph)
-    return graph
 
 
 if __name__ == '__main__':
