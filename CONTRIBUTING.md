@@ -13,9 +13,60 @@ Thank you for your interest in contributing to Latti-AI! This document provides 
 ### Submitting Pull Requests
 
 1. Fork the repository and create your branch from `main`.
-2. Make your changes and ensure all CI checks pass.
-3. Write clear commit messages describing the changes.
-4. Open a Pull Request with a description of what your changes do and why.
+2. Use the branch naming convention: `<type>/<short-description>` (see below).
+3. Make your changes and ensure all CI checks pass.
+4. Write clear commit messages following [Conventional Commits](https://www.conventionalcommits.org/) format.
+5. Open a Pull Request with a description of what your changes do and why.
+
+## Git Conventions
+
+### Branch Naming
+
+Branch names must follow the format `<type>/<short-description>`:
+
+```
+feat/add-relu-layer
+fix/cifar10-input-size
+refactor/move-test-folder
+docs/update-contributing
+```
+
+- `type` must be one of: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
+- `description` uses lowercase letters, numbers, dots, hyphens, and underscores
+- Protected branches `main` and `develop` are excluded from this rule
+
+### Commit Messages
+
+Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/) format:
+
+```
+<type>: <description>
+<type>(<scope>): <description>
+```
+
+Examples:
+
+```
+feat: add batch normalization layer
+fix(cifar10): correct input_size in train.py
+docs: update build instructions
+```
+
+### Git Hooks (pre-commit)
+
+We use [pre-commit](https://pre-commit.com/) to automate checks. Install hooks after cloning:
+
+```bash
+pip install pre-commit
+pre-commit install
+pre-commit install --hook-type commit-msg
+pre-commit install --hook-type pre-push
+```
+
+This enables:
+- **pre-commit**: C/C++ formatting (clang-format) and Python linting/formatting (ruff)
+- **commit-msg**: Commit message format validation (commitlint)
+- **pre-push**: Branch naming convention check
 
 ## Development Setup
 
