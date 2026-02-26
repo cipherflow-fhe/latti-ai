@@ -40,6 +40,7 @@ from typing import Final
 from components import LayerAbstractGraph, ComputeNode, FeatureNode, config
 import components
 import processor
+import transforms
 
 # Import required functions and classes from processor
 from processor import (
@@ -49,68 +50,18 @@ from processor import (
     BtpScoreParam,
     MpcScoreParam,
     FheScoreParam,
-    insert_drop_level_layers,
     update_subgraph_node_param,
     get_slot_num,
     populate_pack_num,
     update_skip_for_btp,
     update_shape_for_btp,
     update_level_cost_for_btp,
-    absorb_scale,
     change_skip_for_graph,
-    set_graph_scale,
     set_is_adaptive_avgpool,
     graph_to_task_config,
 )
 
 from typing import Callable
-
-
-def add_btp_layer_in_graph(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: dict, restore_lv: int):
-    refreshed_feature = copy.deepcopy(upstream_feature)
-    base_id = upstream_feature.node_id
-    counter = 0
-    new_id = f'{base_id}_refreshed'
-
-    while any(isinstance(n, FeatureNode) and n.node_id == new_id for n in dag.nodes):
-        counter += 1
-        new_id = f'{base_id}_refreshed_{counter}'
-
-    if counter > 100:
-        raise ValueError(f'refreshed nodes with same node id {new_id}. Something is wrong!')
-
-    refreshed_feature.node_id = new_id
-    if config.mpc_refresh:
-        skip = [1, 1]
-    else:
-        skip = dag.nodes[upstream_feature]['skip']
-    dag.add_node(
-        refreshed_feature,
-        level=dag.nodes[upstream_feature]['level'] + restore_lv,
-        skip=skip,
-        virtual_shape=[1, 1],
-        virtual_skip=[1, 1],
-    )
-    for s in list(dag.successors(upstream_feature)):
-        dag.remove_edge(upstream_feature, s)
-        dag.add_edge(refreshed_feature, s)
-
-    btp_node = ComputeNode(
-        layer_id=f'{upstream_feature.node_id}_bootstrap',
-        layer_type='bootstrapping',
-        channel_input=upstream_feature.channel,
-        channel_output=refreshed_feature.channel,
-        ckks_parameter_id_input=upstream_feature.ckks_parameter_id,
-        ckks_parameter_id_output=refreshed_feature.ckks_parameter_id,
-    )
-    dag.add_node(btp_node, name=btp_node.layer_id, level_cost=-restore_lv)
-    dag.add_edge(upstream_feature, btp_node)
-    dag.add_edge(btp_node, refreshed_feature)
-
-    slot_num = get_slot_num(btp_node.ckks_parameter_id_input, param_dict)
-    dag.nodes[refreshed_feature]['pack_num'] = dag.nodes[upstream_feature]['pack_num']
-
-    return btp_node
 
 
 def update_bd_node_in_sub(node: FeatureNode, subgraph: nx.DiGraph, remaining_dag: nx.DiGraph) -> FeatureNode:
@@ -387,7 +338,7 @@ class GraphPartitioner:
             btp_node_list = list()
             for bd_node in refresh_boundary:
                 lv_to_restore = 1
-                btp_node = add_btp_layer_in_graph(new_graph, bd_node, self.param_dict, lv_to_restore)
+                btp_node = transforms.add_btp_layer(new_graph, bd_node, self.param_dict, lv_to_restore)
                 btp_node_list.append(btp_node)
 
             new_graph_ab = LayerAbstractGraph()
@@ -406,7 +357,7 @@ class GraphPartitioner:
                 print('over level ')
                 continue
             self.process_btp_level_cost(new_graph_ab.dag)
-            insert_drop_level_layers(new_graph_ab)
+            transforms.insert_drop_level_layers(new_graph_ab)
             subgraph_cost = calculate_compute_score_for_graph(new_graph, subgraph, self.param_dict)
             for node in btp_node_list:
                 if not config.mpc_refresh:
@@ -458,57 +409,6 @@ def restore_node_attributes(G: nx.DiGraph):
         for attr in node.__dict__.keys():
             if attr in G.nodes[node]:
                 node.__dict__[attr] = G.nodes[node][attr]
-
-
-def init_graph_level(graph: LayerAbstractGraph):
-    for node in graph.dag.nodes:
-        if isinstance(node, FeatureNode):
-            graph.dag.nodes[node]['level'] = 0
-            graph.dag.nodes[node]['pack_num'] = 1
-
-
-def remove_drop_level_nodes(graph: LayerAbstractGraph) -> LayerAbstractGraph:
-    """
-    Remove all drop_level nodes from the graph and reconnect the graph
-
-    The structure of drop_level nodes is typically:
-    input_feature -> drop_level_compute -> output_feature (with _drop_level_output suffix)
-
-    Structure after removal:
-    input_feature -> (directly connected to subsequent nodes)
-
-    Args:
-        graph: LayerAbstractGraph object
-
-    Returns:
-        LayerAbstractGraph: Graph after removing drop_level nodes
-    """
-    nodes_to_remove = []
-
-    for node in graph.dag.nodes:
-        if isinstance(node, ComputeNode) and 'drop_level' in node.layer_type:
-            nodes_to_remove.append(node)
-
-    for drop_node in nodes_to_remove:
-        input_features = list(graph.dag.predecessors(drop_node))
-        output_features = list(graph.dag.successors(drop_node))
-
-        if not input_features or not output_features:
-            print(f'Warning: drop_level node {drop_node.layer_id} has no input or output')
-            continue
-
-        input_feature = input_features[0]
-        output_feature = output_features[0]
-
-        downstream_nodes = list(graph.dag.successors(output_feature))
-
-        for downstream in downstream_nodes:
-            graph.dag.add_edge(input_feature, downstream)
-
-        graph.dag.remove_node(drop_node)
-        graph.dag.remove_node(output_feature)
-
-    return graph
 
 
 def compile_graph(
@@ -572,53 +472,6 @@ def run_single_compile(args):
     pt_graph_prepared, temperature = args
     score, graph = compile_model_btp(pt_graph_prepared, temperature, stdout=True)
     return score, graph
-
-
-def dump_graph(
-    graph: LayerAbstractGraph,
-    output_dir: Path,
-    score: float,
-    use_btp: bool,
-):
-    task_dir = output_dir / 'task'
-    server_dir = task_dir / 'server'
-    client_dir = task_dir / 'client'
-    ergs_dir = server_dir
-
-    ergs_dir.mkdir(parents=True, exist_ok=True)
-    client_dir.mkdir(parents=True, exist_ok=True)
-
-    erg0_path = ergs_dir / 'nn_layers_ct_0.json'
-    graph.to_json(dict(), str(erg0_path), score=score)
-
-    if use_btp:
-        graph_to_task_config([graph], str(server_dir))
-    else:
-        graph_to_task_config([graph], str(server_dir), False)
-
-    server_task_config = server_dir / 'task_config.json'
-    client_task_config = client_dir / 'task_config.json'
-    if server_task_config.exists():
-        shutil.copy(str(server_task_config), str(client_task_config))
-
-    poly_n = config.poly_n
-    poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
-    mod_bit = poly_to_mod[poly_n]
-    ckks_param = {
-        'param0': {
-            'poly_modulus_degree': poly_n,
-            'n_mult_level': config.max_level,
-            'coeff_modulus_bit_length': mod_bit,
-            'special_prime_bit_length': mod_bit,
-            'pack_num': 4.0,
-        }
-    }
-
-    with open(server_dir / 'ckks_parameter.json', 'w') as f:
-        json.dump(ckks_param, f, indent=4)
-
-    with open(client_dir / 'ckks_parameter.json', 'w') as f:
-        json.dump(ckks_param, f, indent=4)
 
 
 if __name__ == '__main__':

@@ -33,8 +33,6 @@ def init_config_with_args(poly_n=None, style=None, graph_type=None):
         style: Computation style (STYLE)
         graph_type: Graph type (GRAPH_TYPE)
     """
-    global config, block_shape
-
     # If command line arguments are provided, override config file values
     if poly_n is not None:
         config.poly_n = poly_n
@@ -89,12 +87,12 @@ def prepare_graph(input_file_path: Path) -> LayerAbstractGraph:
     pt_graph = LayerAbstractGraph.from_json(str(input_file_path))
 
     substitute_layers_for_btp(pt_graph)
-    init_graph_level(pt_graph)
+    transforms.init_levels(pt_graph)
     set_is_adaptive_avgpool(pt_graph)
     update_shape_for_btp(pt_graph)
     update_skip_for_btp(pt_graph)
     update_level_cost_for_btp(pt_graph)
-    absorb_scale(pt_graph)
+    transforms.absorb_scale(pt_graph)
 
     return pt_graph
 
@@ -221,11 +219,57 @@ def post_process(graph: LayerAbstractGraph):
             node.down_scale_str = list()
             populate_pack_num(graph.dag, node, slot_num)
 
-    set_graph_scale(graph)
-
+    transforms.set_graph_scale(graph)
     process_levels(graph)
 
     return graph
+
+
+def dump_graph(
+    graph: LayerAbstractGraph,
+    output_dir: Path,
+    score: float,
+    use_btp: bool,
+):
+    task_dir = output_dir / 'task'
+    server_dir = task_dir / 'server'
+    client_dir = task_dir / 'client'
+    ergs_dir = server_dir
+
+    ergs_dir.mkdir(parents=True, exist_ok=True)
+    client_dir.mkdir(parents=True, exist_ok=True)
+
+    erg0_path = ergs_dir / 'nn_layers_ct_0.json'
+    graph.to_json(dict(), str(erg0_path), score=score)
+
+    if use_btp:
+        graph_to_task_config([graph], str(server_dir))
+    else:
+        graph_to_task_config([graph], str(server_dir), False)
+
+    server_task_config = server_dir / 'task_config.json'
+    client_task_config = client_dir / 'task_config.json'
+    if server_task_config.exists():
+        shutil.copy(str(server_task_config), str(client_task_config))
+
+    poly_n = config.poly_n
+    poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
+    mod_bit = poly_to_mod[poly_n]
+    ckks_param = {
+        'param0': {
+            'poly_modulus_degree': poly_n,
+            'n_mult_level': config.max_level,
+            'coeff_modulus_bit_length': mod_bit,
+            'special_prime_bit_length': mod_bit,
+            'pack_num': 4.0,
+        }
+    }
+
+    with open(server_dir / 'ckks_parameter.json', 'w') as f:
+        json.dump(ckks_param, f, indent=4)
+
+    with open(client_dir / 'ckks_parameter.json', 'w') as f:
+        json.dump(ckks_param, f, indent=4)
 
 
 def run_pipeline(
