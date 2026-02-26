@@ -30,7 +30,7 @@ from pathlib import Path
 # Add model_compiler to Python path
 sys.path.insert(0, str(Path(__file__).parent / 'model_compiler'))
 
-from model_compiler.graph_partition_dp import run_parallel, init_config_with_args
+from model_compiler.pipeline import run_pipeline, init_config_with_args
 from model_export.onnx_to_json import onnx_to_json
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -170,7 +170,7 @@ Examples:
         init_config_with_args(poly_n=args.poly_n, style=args.style, graph_type=args.graph_type)
 
         # Run parallel compilation
-        run_parallel(
+        run_pipeline(
             num_experiments=args.num_experiments,
             input_file_path=pt_json_path,
             output_dir=output_dir,
