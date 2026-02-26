@@ -47,7 +47,6 @@ class GlobalConfig:
             else:
                 cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar']
 
-
         return cls._instance
 
 
