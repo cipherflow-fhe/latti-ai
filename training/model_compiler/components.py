@@ -1363,7 +1363,7 @@ class FheScoreParam:
 
             return compute_score * self.acc_rate
         elif 'fc' in self.compute_node.layer_type:
-            if STYLE == 'ordinary':
+            if config.style == 'ordinary':
                 pred_node = list(self.dag.predecessors(self.compute_node))[0]
                 num = math.log2(self.dag.nodes[pred_node]['skip'][0])
                 n_mult_plain_score = (self.n_packed_in * self.pack * self.n_packed_out) * self.mult_plain_score

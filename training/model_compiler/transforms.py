@@ -20,7 +20,7 @@ import time
 from enum import Enum
 import networkx as nx
 
-from components import LayerAbstractGraph, FeatureNode, ComputeNode, config, DEFAULT_SCALE
+from components import LayerAbstractGraph, FeatureNode, ComputeNode, config, DEFAULT_SCALE, PoolComputeNode
 
 
 class Direction(Enum):
@@ -409,7 +409,7 @@ def set_feature_scales(graph: LayerAbstractGraph):
             scale = mpc_scale
 
         elif compute.layer_type == 'avgpool2d':
-            if GRAPH_TYPE == 'mpc':
+            if config.graph_type == 'mpc':
                 scale = 1.0 / (compute.kernel_shape[0] * compute.kernel_shape[1])
             elif compute.is_adaptive_avgpool or compute.is_big_size:
                 scale = 1.0 / (compute.kernel_shape[0] * compute.kernel_shape[1])
@@ -619,6 +619,8 @@ def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
 
     for i in range(len(subs_odered)):
         if i in invalid_index:
+            from processor import handle_invalid_poly_subgraph
+
             added_id = handle_invalid_poly_subgraph(
                 i, subs_odered, next_dict, pre_dict, subgraph_invalid_poly_dict, use_mpc_refresh
             )
