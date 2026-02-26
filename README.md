@@ -64,7 +64,7 @@ cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=<arch>
 cmake --build build -j$(nproc)
 ```
 
-For detailed build prerequisites, troubleshooting, and build options, see the **[Inference Module Build Guide](docs/en/build-guide.md)**.
+For detailed build prerequisites, troubleshooting, and build options, see the **[Build Guide](docs/en/build-guide.md)**.
 
 ---
 
@@ -298,7 +298,7 @@ For detailed benchmarks and methodology, see the [Technical Whitepaper](docs/en/
 ## Documentation
 
 - **Technical Whitepaper**: See [docs/en/whitepaper.md](docs/en/whitepaper.md)
-- **Inference Module Build Guide**: See [docs/en/build-guide.md](docs/en/build-guide.md)
+- **Build Guide**: See [docs/en/build-guide.md](docs/en/build-guide.md)
 
 ## Related Links
 
