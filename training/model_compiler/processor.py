@@ -225,64 +225,6 @@ def substitute_layers_for_btp(subgraph: LayerAbstractGraph):
 mpc_scale = 1
 
 
-def add_mult_scalar_behind_node(
-    graph: LayerAbstractGraph, compute_node: ComputeNode, other_graph: LayerAbstractGraph
-) -> ComputeNode:
-    f_node = list(graph.dag.successors(compute_node))[0]
-
-    skip = list(graph.dag.nodes[f_node]['skip'])
-    virtual_shape = list(graph.dag.nodes[f_node]['virtual_shape'])
-    virtual_skip = list(graph.dag.nodes[f_node]['virtual_skip'])
-    level = graph.dag.nodes[f_node]['level']
-    pack_num = graph.dag.nodes[f_node]['pack_num']
-
-    added_f_node = copy.deepcopy(f_node)
-    f_node.node_id = f_node.node_id + '_mult_scalar_output'
-    f_node.scale = 1.0
-
-    added_c_node = MultScalarComputeNode(
-        compute_node.layer_id + '_mult_scalar_', 'mult_scalar', compute_node.channel_input, compute_node.channel_output
-    )
-
-    graph.dag.remove_edge(compute_node, f_node)
-
-    graph.dag.add_node(
-        added_f_node,
-        name=added_f_node.node_id,
-        skip=skip,
-        virtual_shape=virtual_shape,
-        virtual_skip=virtual_skip,
-        level=level,
-        pack_num=pack_num,
-    )
-
-    graph.dag.add_node(added_c_node, name=added_c_node.layer_id, level_cost=1)
-
-    graph.dag.add_edge(compute_node, added_f_node)
-    graph.dag.add_edge(added_f_node, added_c_node)
-    graph.dag.add_edge(added_c_node, f_node)
-
-    if other_graph:
-        other_graph.dag.remove_edge(compute_node, f_node)
-
-        other_graph.dag.add_node(
-            added_f_node,
-            name=added_f_node.node_id,
-            skip=skip,
-            virtual_shape=virtual_shape,
-            virtual_skip=virtual_skip,
-            level=level,
-            pack_num=pack_num,
-        )
-        other_graph.dag.add_node(added_c_node, name=added_c_node.layer_id, level_cost=1)
-
-        other_graph.dag.add_edge(compute_node, added_f_node)
-        other_graph.dag.add_edge(added_f_node, added_c_node)
-        other_graph.dag.add_edge(added_c_node, f_node)
-
-    return added_c_node
-
-
 def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path, use_btp: bool = True):
     server_task = {}
     for i in range(len(subgraphs)):
@@ -694,18 +636,6 @@ def change_skip_for_graph(graph: LayerAbstractGraph):
             for f_node in check_res:
                 c_node = list(graph.dag.predecessors(f_node))[0]
                 add_mpc_refresh_mult_scalar(graph, c_node)
-
-
-def handle_invalid_poly_subgraph(
-    subgraph_index, subs_odered, next_dict, pre_dict, subgraph_invalid_poly_dict, use_mpc_refresh: bool = False
-):
-    """Handle poly nodes that cannot be absorbed in the current subgraph, return the layer_id of the added mult_scalar"""
-    current_sub = subs_odered[subgraph_index]
-    all_nodes_in_topo_sort = list(nx.topological_sort(current_sub.dag))
-    first_node = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)][0]
-    mult_scalar_layer = add_mult_scalar_behind_node(current_sub, first_node, None)
-
-    return mult_scalar_layer.layer_id
 
 
 def set_depth_for_graph(graph: LayerAbstractGraph):

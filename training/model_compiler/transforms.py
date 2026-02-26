@@ -20,7 +20,15 @@ import time
 from enum import Enum
 import networkx as nx
 
-from components import LayerAbstractGraph, FeatureNode, ComputeNode, config, DEFAULT_SCALE, PoolComputeNode
+from components import (
+    LayerAbstractGraph,
+    FeatureNode,
+    ComputeNode,
+    config,
+    DEFAULT_SCALE,
+    PoolComputeNode,
+    MultScalarComputeNode,
+)
 
 
 class Direction(Enum):
@@ -28,11 +36,51 @@ class Direction(Enum):
     DOWN = 'down'
 
 
-def _insert_two_nodes_between(dag: nx.DiGraph, old_node_0, old_node_1, new_node_0, new_node_1):
-    dag.remove_edge(old_node_0, old_node_1)
-    dag.add_edge(old_node_0, new_node_0)
-    dag.add_edge(new_node_0, new_node_1)
-    dag.add_edge(new_node_1, old_node_1)
+def _insert_layer_between_feature_and_compute(
+    dag: nx.DiGraph,
+    old_feature: FeatureNode,
+    old_compute: ComputeNode,
+    new_compute: ComputeNode,
+    new_feature: FeatureNode,
+    *,
+    new_compute_args: dict | None = None,
+    new_feature_args: dict | None = None,
+):
+    if new_compute_args is None:
+        new_compute_args = dict()
+    if new_feature_args is None:
+        new_feature_args = dict()
+    dag.add_node(new_compute, **new_compute_args)
+    dag.add_node(new_feature, **new_feature_args)
+
+    dag.remove_edge(old_feature, old_compute)
+    dag.add_edge(old_feature, new_compute)
+    dag.add_edge(new_compute, new_feature)
+    dag.add_edge(new_feature, old_compute)
+
+
+def _insert_layer_after_feature(
+    dag: nx.DiGraph,
+    old_feature: FeatureNode,
+    new_compute: ComputeNode,
+    new_feature: FeatureNode,
+    *,
+    new_compute_args: dict | None = None,
+    new_feature_args: dict | None = None,
+):
+    if new_compute_args is None:
+        new_compute_args = dict()
+    if new_feature_args is None:
+        new_feature_args = dict()
+    dag.add_node(new_compute, **new_compute_args)
+    dag.add_node(new_feature, **new_feature_args)
+
+    old_computes = list(dag.successors(old_feature))
+    for oc in old_computes:
+        dag.remove_edge(old_feature, oc)
+        dag.add_edge(new_feature, oc)
+    dag.add_edge(old_feature, new_compute)
+    dag.add_edge(new_compute, new_feature)
 
 
 def init_levels(graph: LayerAbstractGraph):
@@ -50,8 +98,6 @@ def add_layer(
     layer_type: str,
     preds: list[FeatureNode],
     insert_node: ComputeNode = None,
-    *,
-    other_graph: LayerAbstractGraph | None = None,
 ):
     channel_input = compute_node.channel_input
     channel_output = compute_node.channel_input
@@ -87,16 +133,6 @@ def add_layer(
     if hasattr(feature_node_in, 'node_index'):
         feature_node_out.node_index = feature_node_in.node_index
 
-    graph.dag.add_node(
-        feature_node_out,
-        name=feature_node_out.node_id,
-        skip=skip,
-        virtual_shape=virtue_shape,
-        virtual_skip=virtue_skip,
-        level=level,
-        pack_num=pack_num,
-    )
-
     if insert_node:
         new_compute_node = insert_node
     else:
@@ -121,21 +157,23 @@ def add_layer(
     elif layer_type == 'drop_level':
         level_cost = 0
 
-    graph.dag.add_node(new_compute_node, name=layer_id, level_cost=level_cost)
-    _insert_two_nodes_between(graph.dag, feature_node_in, compute_node, new_compute_node, feature_node_out)
+    _insert_layer_between_feature_and_compute(
+        graph.dag,
+        feature_node_in,
+        compute_node,
+        new_compute_node,
+        feature_node_out,
+        new_compute_args={'name': layer_id, 'level_cost': level_cost},
+        new_feature_args={
+            'name': feature_node_out.node_id,
+            'skip': skip,
+            'virtual_shape': virtue_shape,
+            'virtual_skip': virtue_skip,
+            'level': level,
+            'pack_num': pack_num,
+        },
+    )
 
-    if other_graph is not None:
-        other_graph.dag.add_node(
-            feature_node_out,
-            name=feature_node_out.node_id,
-            skip=skip,
-            virtual_shape=virtue_shape,
-            virtual_skip=virtue_skip,
-            level=level,
-            pack_num=pack_num,
-        )
-        other_graph.dag.add_node(new_compute_node, name=layer_id, level_cost=level_cost)
-        _insert_two_nodes_between(other_graph.dag, feature_node_in, compute_node, new_compute_node, feature_node_out)
     return new_compute_node
 
 
@@ -157,16 +195,6 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
         skip = [1, 1]
     else:
         skip = dag.nodes[upstream_feature]['skip']
-    dag.add_node(
-        refreshed_feature,
-        level=dag.nodes[upstream_feature]['level'] + restore_lv,
-        skip=skip,
-        virtual_shape=[1, 1],
-        virtual_skip=[1, 1],
-    )
-    for s in list(dag.successors(upstream_feature)):
-        dag.remove_edge(upstream_feature, s)
-        dag.add_edge(refreshed_feature, s)
 
     btp_node = ComputeNode(
         layer_id=f'{upstream_feature.node_id}_bootstrap',
@@ -176,14 +204,63 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
         ckks_parameter_id_input=upstream_feature.ckks_parameter_id,
         ckks_parameter_id_output=refreshed_feature.ckks_parameter_id,
     )
-    dag.add_node(btp_node, name=btp_node.layer_id, level_cost=-restore_lv)
-    dag.add_edge(upstream_feature, btp_node)
-    dag.add_edge(btp_node, refreshed_feature)
+
+    _insert_layer_after_feature(
+        dag,
+        upstream_feature,
+        btp_node,
+        refreshed_feature,
+        new_compute_args={'name': btp_node.layer_id, 'level_cost': -restore_lv},
+        new_feature_args={
+            'level': dag.nodes[upstream_feature]['level'] + restore_lv,
+            'skip': skip,
+            'virtual_shape': [1, 1],
+            'virtual_skip': [1, 1],
+        },
+    )
 
     slot_num = param_dict[btp_node.ckks_parameter_id_input].poly_modulus_degree // 2
     dag.nodes[refreshed_feature]['pack_num'] = dag.nodes[upstream_feature]['pack_num']
 
     return btp_node
+
+
+def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: ComputeNode) -> ComputeNode:
+    f_node = list(graph.dag.successors(compute_node))[0]
+
+    skip = list(graph.dag.nodes[f_node]['skip'])
+    virtual_shape = list(graph.dag.nodes[f_node]['virtual_shape'])
+    virtual_skip = list(graph.dag.nodes[f_node]['virtual_skip'])
+    level = graph.dag.nodes[f_node]['level']
+    pack_num = graph.dag.nodes[f_node]['pack_num']
+
+    added_f_node = copy.deepcopy(f_node)
+    f_node.node_id = f_node.node_id + '_mult_scalar_output'
+    f_node.scale = 1.0
+
+    added_c_node = MultScalarComputeNode(
+        compute_node.layer_id + '_mult_scalar_', 'mult_scalar', compute_node.channel_input, compute_node.channel_output
+    )
+
+    graph.dag.remove_edge(compute_node, f_node)
+
+    graph.dag.add_node(
+        added_f_node,
+        name=added_f_node.node_id,
+        skip=skip,
+        virtual_shape=virtual_shape,
+        virtual_skip=virtual_skip,
+        level=level,
+        pack_num=pack_num,
+    )
+
+    graph.dag.add_node(added_c_node, name=added_c_node.layer_id, level_cost=1)
+
+    graph.dag.add_edge(compute_node, added_f_node)
+    graph.dag.add_edge(added_f_node, added_c_node)
+    graph.dag.add_edge(added_c_node, f_node)
+
+    return added_c_node
 
 
 def add_node_for_graph(
@@ -214,17 +291,14 @@ def add_node_for_graph(
                 sub.dag.add_edge(node, add_node)
 
 
-def insert_drop_level_layers(graph: LayerAbstractGraph, *, other_graph: LayerAbstractGraph | None = None):
+def insert_drop_level_layers(graph: LayerAbstractGraph):
     for compute in list(graph.dag.nodes):
         if not isinstance(compute, ComputeNode):
             continue
         if compute.layer_type == 'drop_level':
             continue
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute))
-        try:
-            succ = next(graph.dag.successors(compute))
-        except StopIteration:
-            continue
+        succ = next(graph.dag.successors(compute))
         for i in range(len(preds)):
             if 'level' not in graph.dag.nodes[preds[i]]:
                 print(f"Warning: node {preds[i].node_id} missing 'level' attribute")
@@ -237,14 +311,10 @@ def insert_drop_level_layers(graph: LayerAbstractGraph, *, other_graph: LayerAbs
             level_cost = graph.dag.nodes[compute]['level_cost']
 
             if (pred_level - succ_level) > level_cost:
-                drop_level_layer = add_layer(
-                    graph, compute, compute.depth, i, 'drop_level', preds, other_graph=other_graph
-                )
+                drop_level_layer = add_layer(graph, compute, compute.depth, i, 'drop_level', preds)
                 graph.dag.nodes[drop_level_layer]['level_cost'] = pred_level - succ_level - level_cost
                 succ_sub = next(graph.dag.successors(drop_level_layer))
                 graph.dag.nodes[succ_sub]['level'] = pred_level - graph.dag.nodes[drop_level_layer]['level_cost']
-                if other_graph:
-                    other_graph.dag.nodes[succ_sub]['level'] = graph.dag.nodes[succ_sub]['level']
 
 
 def split_graph_to_linear_subgraph(graph: LayerAbstractGraph) -> tuple[list[LayerAbstractGraph], list[tuple]]:
@@ -446,7 +516,7 @@ def build_edge_mappings(removed_edges):
     return forward_map, backward_map
 
 
-def add_identity_layer(graph: LayerAbstractGraph, node1, node2):
+def add_identity_layer(graph: LayerAbstractGraph, node1: FeatureNode, node2: ComputeNode):
     identity_layer = ComputeNode(
         str(id(node1)) + '_identity',
         'identity',
@@ -597,6 +667,18 @@ def del_identity_layer(graph: LayerAbstractGraph):
             graph.dag.add_edge(pre_n_node, succ_c_node)
 
 
+def handle_invalid_poly_subgraph(
+    subgraph_index, subs_odered, next_dict, pre_dict, subgraph_invalid_poly_dict, use_mpc_refresh: bool = False
+):
+    """Handle poly nodes that cannot be absorbed in the current subgraph, return the layer_id of the added mult_scalar"""
+    current_sub = subs_odered[subgraph_index]
+    all_nodes_in_topo_sort = list(nx.topological_sort(current_sub.dag))
+    first_node = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)][0]
+    mult_scalar_layer = add_mult_scalar_behind_node(current_sub, first_node)
+
+    return mult_scalar_layer.layer_id
+
+
 def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
     pre_process(graph)
     subgraphs, removed_edges = split_graph_to_linear_subgraph(graph)
@@ -619,8 +701,6 @@ def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
 
     for i in range(len(subs_odered)):
         if i in invalid_index:
-            from processor import handle_invalid_poly_subgraph
-
             added_id = handle_invalid_poly_subgraph(
                 i, subs_odered, next_dict, pre_dict, subgraph_invalid_poly_dict, use_mpc_refresh
             )
