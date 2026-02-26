@@ -46,18 +46,18 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 log = logging.getLogger(__name__)
 
 
-def get_mnist_loaders(data_dir, batch_size, num_workers=2):
+def get_mnist_loaders(data_dir, batch_size, num_workers=2, input_shape=[1, 16, 16]):
     normalize = transforms.Normalize(mean=[0.1307], std=[0.3081])
     train_transform = transforms.Compose(
         [
-            transforms.Resize((16, 16)),
+            transforms.Resize((input_shape[1], input_shape[2])),
             transforms.ToTensor(),
             normalize,
         ]
     )
     test_transform = transforms.Compose(
         [
-            transforms.Resize((16, 16)),
+            transforms.Resize((input_shape[1], input_shape[2])),
             transforms.ToTensor(),
             normalize,
         ]
@@ -144,7 +144,7 @@ def main():
     export_dir = args.export_dir or args.output_dir
     os.makedirs(export_dir, exist_ok=True)
 
-    train_loader, test_loader = get_mnist_loaders(args.data_dir, args.batch_size, args.num_workers)
+    train_loader, test_loader = get_mnist_loaders(args.data_dir, args.batch_size, args.num_workers, args.input_shape)
 
     # Build model
     model = simple_cnn()
