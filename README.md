@@ -52,7 +52,7 @@ cd inference/lattisense/HEonGPU
 cmake -B build \
   -DCMAKE_CUDA_ARCHITECTURES=<arch> \
   -DCMAKE_CUDA_COMPILER=<path/to/cuda>/bin/nvcc \
-  -DCMAKE_INSTALL_PREFIX=$(pwd)/../install
+  -DCMAKE_INSTALL_PREFIX=<path/to/HEonGPU>/install
 cmake --build build --parallel $(nproc) --target install
 ```
 
