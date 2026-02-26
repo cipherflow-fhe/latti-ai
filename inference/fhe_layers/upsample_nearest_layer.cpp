@@ -35,12 +35,12 @@ UpsampleNearestLayer::UpsampleNearestLayer(const CkksParameter& param_in,
     skip[1] = skip_in[1];
 
     if ((shape[0] & (shape[0] - 1)) != 0 || (shape[1] & (shape[1] - 1)) != 0) {
-        throw std::invalid_argument("shape must be powers of 2, got: ["
-                                    + std::to_string(shape[0]) + ", " + std::to_string(shape[1]) + "]");
+        throw std::invalid_argument("shape must be powers of 2, got: [" + std::to_string(shape[0]) + ", " +
+                                    std::to_string(shape[1]) + "]");
     }
     if ((skip[0] & (skip[0] - 1)) != 0 || (skip[1] & (skip[1] - 1)) != 0) {
-        throw std::invalid_argument("skip must be powers of 2, got: ["
-                                    + std::to_string(skip[0]) + ", " + std::to_string(skip[1]) + "]");
+        throw std::invalid_argument("skip must be powers of 2, got: [" + std::to_string(skip[0]) + ", " +
+                                    std::to_string(skip[1]) + "]");
     }
 
     n_channel_per_ct = n_channel_per_ct_in;

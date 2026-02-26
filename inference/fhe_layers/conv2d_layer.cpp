@@ -49,16 +49,16 @@ Conv2DLayer::Conv2DLayer(const CkksParameter& param,
     kernel_shape_[1] = weight_shape[3];
 
     if ((input_shape_[0] & (input_shape_[0] - 1)) != 0 || (input_shape_[1] & (input_shape_[1] - 1)) != 0) {
-        throw std::invalid_argument("input_shape must be powers of 2, got: ["
-                                    + std::to_string(input_shape_[0]) + ", " + std::to_string(input_shape_[1]) + "]");
+        throw std::invalid_argument("input_shape must be powers of 2, got: [" + std::to_string(input_shape_[0]) + ", " +
+                                    std::to_string(input_shape_[1]) + "]");
     }
     if ((stride_[0] & (stride_[0] - 1)) != 0 || (stride_[1] & (stride_[1] - 1)) != 0) {
-        throw std::invalid_argument("stride must be powers of 2, got: ["
-                                    + std::to_string(stride_[0]) + ", " + std::to_string(stride_[1]) + "]");
+        throw std::invalid_argument("stride must be powers of 2, got: [" + std::to_string(stride_[0]) + ", " +
+                                    std::to_string(stride_[1]) + "]");
     }
     if ((skip_[0] & (skip_[0] - 1)) != 0 || (skip_[1] & (skip_[1] - 1)) != 0) {
-        throw std::invalid_argument("skip must be powers of 2, got: ["
-                                    + std::to_string(skip_[0]) + ", " + std::to_string(skip_[1]) + "]");
+        throw std::invalid_argument("skip must be powers of 2, got: [" + std::to_string(skip_[0]) + ", " +
+                                    std::to_string(skip_[1]) + "]");
     }
 }
 

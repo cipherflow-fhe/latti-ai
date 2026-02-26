@@ -28,12 +28,12 @@ MultScalarLayer::MultScalarLayer(const CkksParameter& param_in,
                                  const Duo& block_expansion_in)
     : param(param_in.copy()), input_shape(input_shape_in), weight(weight_in.copy()), skip(skip_in) {
     if ((input_shape[0] & (input_shape[0] - 1)) != 0 || (input_shape[1] & (input_shape[1] - 1)) != 0) {
-        throw std::invalid_argument("input_shape must be powers of 2, got: ["
-                                    + std::to_string(input_shape[0]) + ", " + std::to_string(input_shape[1]) + "]");
+        throw std::invalid_argument("input_shape must be powers of 2, got: [" + std::to_string(input_shape[0]) + ", " +
+                                    std::to_string(input_shape[1]) + "]");
     }
     if ((skip[0] & (skip[0] - 1)) != 0 || (skip[1] & (skip[1] - 1)) != 0) {
-        throw std::invalid_argument("skip must be powers of 2, got: ["
-                                    + std::to_string(skip[0]) + ", " + std::to_string(skip[1]) + "]");
+        throw std::invalid_argument("skip must be powers of 2, got: [" + std::to_string(skip[0]) + ", " +
+                                    std::to_string(skip[1]) + "]");
     }
 
     n_channel_per_ct = n_channel_per_ct_in;
@@ -48,8 +48,8 @@ MultScalarLayer::MultScalarLayer(const CkksParameter& param_in,
     block_shape[0] = input_shape[0] / block_expansion[0] * skip[0];
     block_shape[1] = input_shape[1] / block_expansion[1] * skip[1];
     if ((block_shape[0] & (block_shape[0] - 1)) != 0 || (block_shape[1] & (block_shape[1] - 1)) != 0) {
-        throw std::invalid_argument("block_shape must be powers of 2, got: ["
-                                    + std::to_string(block_shape[0]) + ", " + std::to_string(block_shape[1]) + "]");
+        throw std::invalid_argument("block_shape must be powers of 2, got: [" + std::to_string(block_shape[0]) + ", " +
+                                    std::to_string(block_shape[1]) + "]");
     }
 }
 

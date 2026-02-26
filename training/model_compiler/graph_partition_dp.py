@@ -258,9 +258,9 @@ class GraphPartitioner:
             depths.append(depth)
 
         if self.temperature > 1e-6:
-            chosen_depth = random.choices(depths, weights=boltzmann_weighted_probabilities(depths, self.temperature), k=1)[
-                0
-            ]
+            chosen_depth = random.choices(
+                depths, weights=boltzmann_weighted_probabilities(depths, self.temperature), k=1
+            )[0]
             candidates = sorted(subgraphs_in_depths[chosen_depth], key=lambda x: len(x), reverse=True)[:8]
             result = [
                 random.choices(
@@ -272,9 +272,7 @@ class GraphPartitioner:
         else:
             result = []
             for d in depths[:2]:
-                result.append(
-                    max(subgraphs_in_depths[d], key=lambda x: len(x))
-                )
+                result.append(max(subgraphs_in_depths[d], key=lambda x: len(x)))
 
         return result
 

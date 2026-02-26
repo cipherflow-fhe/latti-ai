@@ -27,12 +27,12 @@ Avgpool2DLayer::Avgpool2DLayer(const Duo& shape_in, const Duo& stride_in) : n_bl
     stride[1] = stride_in[1];
 
     if ((shape[0] & (shape[0] - 1)) != 0 || (shape[1] & (shape[1] - 1)) != 0) {
-        throw std::invalid_argument("shape must be powers of 2, got: ["
-                                    + std::to_string(shape[0]) + ", " + std::to_string(shape[1]) + "]");
+        throw std::invalid_argument("shape must be powers of 2, got: [" + std::to_string(shape[0]) + ", " +
+                                    std::to_string(shape[1]) + "]");
     }
     if ((stride[0] & (stride[0] - 1)) != 0 || (stride[1] & (stride[1] - 1)) != 0) {
-        throw std::invalid_argument("stride must be powers of 2, got: ["
-                                    + std::to_string(stride[0]) + ", " + std::to_string(stride[1]) + "]");
+        throw std::invalid_argument("stride must be powers of 2, got: [" + std::to_string(stride[0]) + ", " +
+                                    std::to_string(stride[1]) + "]");
     }
 }
 

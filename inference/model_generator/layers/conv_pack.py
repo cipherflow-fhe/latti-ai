@@ -54,11 +54,11 @@ class Conv2DPackedLayer:
         self.skip: list[int] = skip
 
         if input_shape[0] & (input_shape[0] - 1) != 0 or input_shape[1] & (input_shape[1] - 1) != 0:
-            raise ValueError(f"input_shape must be powers of 2, got: [{input_shape[0]}, {input_shape[1]}]")
+            raise ValueError(f'input_shape must be powers of 2, got: [{input_shape[0]}, {input_shape[1]}]')
         if stride[0] & (stride[0] - 1) != 0 or stride[1] & (stride[1] - 1) != 0:
-            raise ValueError(f"stride must be powers of 2, got: [{stride[0]}, {stride[1]}]")
+            raise ValueError(f'stride must be powers of 2, got: [{stride[0]}, {stride[1]}]')
         if skip[0] & (skip[0] - 1) != 0 or skip[1] & (skip[1] - 1) != 0:
-            raise ValueError(f"skip must be powers of 2, got: [{skip[0]}, {skip[1]}]")
+            raise ValueError(f'skip must be powers of 2, got: [{skip[0]}, {skip[1]}]')
 
         self.pack: int = pack
         self.n_packed_in_channel: int = n_packed_in_channel
