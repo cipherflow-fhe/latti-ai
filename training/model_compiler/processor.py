@@ -363,8 +363,8 @@ def change_conv_transpose_shape(graph: LayerAbstractGraph):
 def check_conv_upsample_factor(graph: LayerAbstractGraph, c_node: ConvComputeNode):
     if c_node.upsample_factor_in[0] != 1:
         f_in = list(graph.dag.predecessors(c_node))[0]
-        if f_in.shape[0] * c_node.upsample_factor_in[0] > block_shape[0] or (
-            f_in.shape[1] * c_node.upsample_factor_in[1] > block_shape[1]
+        if f_in.shape[0] * c_node.upsample_factor_in[0] > config.block_shape[0] or (
+            f_in.shape[1] * c_node.upsample_factor_in[1] > config.block_shape[1]
         ):
             c_node.upsample_factor_in[0] = 1
             c_node.upsample_factor_in[1] = 1

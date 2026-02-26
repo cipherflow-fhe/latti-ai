@@ -701,6 +701,8 @@ def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
 
     for i in range(len(subs_odered)):
         if i in invalid_index:
+            from processor import handle_invalid_poly_subgraph
+
             added_id = handle_invalid_poly_subgraph(
                 i, subs_odered, next_dict, pre_dict, subgraph_invalid_poly_dict, use_mpc_refresh
             )
