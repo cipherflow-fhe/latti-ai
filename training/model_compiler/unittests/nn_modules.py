@@ -127,7 +127,7 @@ class MismatchedScale(nn.Module):
     def __init__(self):
         super().__init__()
         self.avgpool = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
-    
+
     def forward(self, x):
         avg = self.avgpool(x)
         x = x + avg
