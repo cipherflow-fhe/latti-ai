@@ -1,6 +1,9 @@
-{ "param0": { 
-	"poly_modulus_degree": 65536,
-	"n_mult_level": 4,
-	"coeff_modulus_bit_length": 32,
-	"special_prime_bit_length": 32,
-	"pack_num": 4.0 } }
+{
+	"param0": {
+		"poly_modulus_degree": 65536,
+		"n_mult_level": 4,
+		"coeff_modulus_bit_length": 32,
+		"special_prime_bit_length": 32,
+		"pack_num": 4.0
+	}
+}

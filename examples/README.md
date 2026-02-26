@@ -14,7 +14,7 @@ This directory contains end-to-end encrypted inference examples. Each example re
 
 ```
 examples/
-├── inference.cpp               # Unified C++ inference entry point (--task-dir, --gpu)
+├── inference.cpp               # C++ inference entry point using InferenceClient/InferenceServer (--task-dir, --gpu)
 ├── CMakeLists.txt              # Build configuration (single 'inference' binary)
 └── test_<name>/
     └── task/
