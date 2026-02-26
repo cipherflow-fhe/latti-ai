@@ -58,6 +58,11 @@ class UpsampleNearestLayer:
         self.n_channel_per_ct = n_channel_per_ct
         self.level = level
 
+        if shape[0] & (shape[0] - 1) != 0 or shape[1] & (shape[1] - 1) != 0:
+            raise ValueError(f'shape must be powers of 2, got: [{shape[0]}, {shape[1]}]')
+        if skip[0] & (skip[0] - 1) != 0 or skip[1] & (skip[1] - 1) != 0:
+            raise ValueError(f'skip must be powers of 2, got: [{skip[0]}, {skip[1]}]')
+
         # Calculate the number of blocks per ciphertext
         self.n_block_per_ct = (n_channel_per_ct + skip[0] * skip[1] - 1) // (skip[0] * skip[1])
 

@@ -1,6 +1,6 @@
-# Inference Module Build Guide
+# Build Guide
 
-This document contains the complete build and installation guide for the encrypted inference engine.
+This document contains the complete build and installation guide for the Latti-AI project.
 
 ## Table of Contents
 
@@ -19,9 +19,9 @@ This document contains the complete build and installation guide for the encrypt
 | Dependency | Version | Description |
 |------------|---------|-------------|
 | CMake | >= 3.13 | Build system |
-| C++ Compiler | GCC 12  | C++20 support required |
+| C++ Compiler | GCC 12  | C++17/20 support required |
 | Go | >= 1.18 | For building Lattigo crypto library |
-| Python | 3.12 | For computation graph compiler |
+| Python | >=3.10 | For computation graph compiler |
 
 **For GPU Acceleration (Recommended):**
 
@@ -36,18 +36,13 @@ This document contains the complete build and installation guide for the encrypt
 
 If GPU acceleration is not needed, use this simplified process:
 
-### Build
-
 ```bash
 git clone https://github.com/cipherflow-fhe/latti-ai.git
 cd latti-ai
 git submodule update --init
-cd inference/lattisense
-git submodule update --init fhe_ops_lib/lattigo
-cd ../..
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+git -C inference/lattisense submodule update --init fhe_ops_lib/lattigo
+cmake -B build
+cmake --build build -j$(nproc)
 ```
 
 ---
@@ -57,40 +52,31 @@ make -j$(nproc)
 ### Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/cipherflow-fhe/latti-ai.git
+git clone --recursive https://github.com/cipherflow-fhe/latti-ai.git  # This may take ~6 minutes
 cd latti-ai
-git submodule update --init --recursive  # This may take ~6 minutes
 ```
 
-### Step 2: Build HEonGPU (GPU Acceleration Library)
-
-```bash
-cd inference/lattisense/HEonGPU
-mkdir build && cd build
-cmake .. \
-  -DCMAKE_CUDA_ARCHITECTURES=<arch> \
-  -DCMAKE_CUDA_COMPILER=<path/to/cuda>/bin/nvcc \
-  -DCMAKE_INSTALL_PREFIX=$(pwd)/../install
-```
+### Step 2: Build and install HEonGPU (GPU Acceleration Library)
 
 > If the build hangs at `-- CPM: Adding package CCCL@2.5.0`, see [CCCL Package Hangs](#cccl-package-hangs).
-
-### Step 3: Compile and Install HEonGPU
 
 > If compilation fails with a missing `cstdint` header, see [Missing cstdint Header](#missing-cstdint-header).
 
 ```bash
-make -j$(nproc)
-make install
+cd inference/lattisense/HEonGPU
+cmake -B build \
+  -DCMAKE_CUDA_ARCHITECTURES=<arch> \
+  -DCMAKE_CUDA_COMPILER=<path/to/cuda>/bin/nvcc \
+  -DCMAKE_INSTALL_PREFIX=$(pwd)/../install
+cmake --build build --parallel $(nproc) --target install
 ```
 
-### Step 4: Build Project
+### Step 3: Build Project
 
 ```bash
-cd ../../../..  # Return to project root
-mkdir build && cd build
-cmake .. -DINFERENCE_SDK_ENABLE_GPU=ON
-make -j$(nproc)
+cd ../../..  # Return to project root
+cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=<arch>
+cmake --build build -j$(nproc)
 ```
 
 ---
@@ -100,11 +86,12 @@ make -j$(nproc)
 | Option | Default | Description |
 |--------|---------|-------------|
 | `INFERENCE_SDK_ENABLE_GPU` | OFF | Enable GPU acceleration |
+| `LATTISENSE_CUDA_ARCH` | - | CUDA architecture code (required for GPU build) |
 
 
 Example:
 ```bash
-cmake .. -DINFERENCE_SDK_ENABLE_GPU=ON
+cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=89
 ```
 
 ---
@@ -125,18 +112,24 @@ Set `CMAKE_CUDA_ARCHITECTURES` according to your GPU model (see [CUDA GPUs](http
 ## Project Structure
 
 ```
-inference/
-├── CMakeLists.txt
-├── fhe_layers/
-├── inference_task/
-├── unittests/
-└── lattisense/                     # git submodule
-    ├── fhe_ops_lib/
-    │   └── lattigo/                # git submodule — Go FHE crypto backend
-    ├── HEonGPU/                    # git submodule — GPU-accelerated FHE (optional)
-    ├── cxx_sdk_v2/
-    ├── mega_ag_runners/
-    └── frontend/
+latti-ai/
+├── CMakeLists.txt                    # Top-level build entry point
+├── docs/
+├── examples/
+├── training/
+└── inference/
+    ├── CMakeLists.txt
+    ├── fhe_layers/
+    ├── interface/
+    ├── inference_task/
+    ├── unittests/
+    └── lattisense/                   # git submodule
+        ├── fhe_ops_lib/
+        │   └── lattigo/              # git submodule — Go FHE crypto backend
+        ├── HEonGPU/                  # git submodule — GPU-accelerated FHE (optional)
+        ├── cxx_sdk_v2/
+        ├── mega_ag_runners/
+        └── frontend/
 ```
 
 ---

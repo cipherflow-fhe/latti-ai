@@ -120,6 +120,8 @@ class GraphPartitioner:
         self.entire_graph = entire_graph
         self.param_dict = generate_param_dict_for_graph()
 
+        if temperature < 0:
+            raise ValueError('Temperature must be non-negative. If set to 0, a greedy algorithm will be used.')
         self.temperature = temperature
         self.pbar = tqdm(desc=f'Subgraph explorations (temperature={self.temperature})', unit='it')
 
@@ -181,9 +183,6 @@ class GraphPartitioner:
 
     def remove_small_subgraphs(self, subgraphs: set[frozenset], H: nx.DiGraph) -> list[frozenset]:
         def boltzmann_weighted_probabilities(depths: list[int], temperature: float = 1.0) -> list[float]:
-            if temperature <= 0:
-                raise ValueError('Temperature must be positive.')
-
             depths = np.asarray(depths, dtype=float)
 
             scaled = depths / temperature
@@ -209,17 +208,22 @@ class GraphPartitioner:
                 break
             depths.append(depth)
 
-        chosen_depth = random.choices(depths, weights=boltzmann_weighted_probabilities(depths, self.temperature), k=1)[
-            0
-        ]
-        candidates = sorted(subgraphs_in_depths[chosen_depth], key=lambda x: len(x), reverse=True)[:8]
-        result = [
-            random.choices(
-                candidates,
-                weights=boltzmann_weighted_probabilities([len(c) for c in candidates], self.temperature),
-                k=1,
+        if self.temperature > 1e-6:
+            chosen_depth = random.choices(
+                depths, weights=boltzmann_weighted_probabilities(depths, self.temperature), k=1
             )[0]
-        ]
+            candidates = sorted(subgraphs_in_depths[chosen_depth], key=lambda x: len(x), reverse=True)[:8]
+            result = [
+                random.choices(
+                    candidates,
+                    weights=boltzmann_weighted_probabilities([len(c) for c in candidates], self.temperature),
+                    k=1,
+                )[0]
+            ]
+        else:
+            result = []
+            for d in depths[:2]:
+                result.append(max(subgraphs_in_depths[d], key=lambda x: len(x)))
 
         return result
 
@@ -233,14 +237,19 @@ class GraphPartitioner:
     ) -> frozenset:
         def retrieve_boundary_compute_candidates(nodes: set, subgraph: nx.DiGraph, traversed_nodes: set) -> set:
             boundary_candidates = set()
+            new_traversed_nodes = set()
+
             for u in nodes:
                 if u in traversed_nodes:
                     continue
                 for nbr in list(subgraph.predecessors(u)) + list(subgraph.successors(u)):
                     if nbr not in nodes and isinstance(nbr, ComputeNode):
                         boundary_candidates.add(nbr)
-                    traversed_nodes.add(nbr)
-                traversed_nodes.add(u)
+                    new_traversed_nodes.add(nbr)
+                new_traversed_nodes.add(u)
+
+            traversed_nodes |= new_traversed_nodes
+
             return boundary_candidates
 
         curr_sub = H.subgraph(curr_nodes)

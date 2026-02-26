@@ -33,6 +33,13 @@ class Avgpool_layer:
         self.skip = skip
         self.channel = channel
 
+        if shape[0] & (shape[0] - 1) != 0 or shape[1] & (shape[1] - 1) != 0:
+            raise ValueError(f'shape must be powers of 2, got: [{shape[0]}, {shape[1]}]')
+        if stride[0] & (stride[0] - 1) != 0 or stride[1] & (stride[1] - 1) != 0:
+            raise ValueError(f'stride must be powers of 2, got: [{stride[0]}, {stride[1]}]')
+        if skip[0] & (skip[0] - 1) != 0 or skip[1] & (skip[1] - 1) != 0:
+            raise ValueError(f'skip must be powers of 2, got: [{skip[0]}, {skip[1]}]')
+
     def call(self, x: list[DataNode]):
         res: list[DataNode] = list()
         for i in range(len(x)):

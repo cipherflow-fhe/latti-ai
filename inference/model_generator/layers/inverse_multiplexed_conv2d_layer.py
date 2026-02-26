@@ -45,7 +45,18 @@ class InverseMultiplexedConv2d:
         self.stride_next: list[int] = stride_next
         self.skip: list[int] = skip
         self.padding: list[int] = padding
-        self.block_shape: int = block_shape
+        self.block_shape: list[int] = block_shape
+
+        if input_shape[0] & (input_shape[0] - 1) != 0 or input_shape[1] & (input_shape[1] - 1) != 0:
+            raise ValueError(f'input_shape must be powers of 2, got: [{input_shape[0]}, {input_shape[1]}]')
+        if stride[0] & (stride[0] - 1) != 0 or stride[1] & (stride[1] - 1) != 0:
+            raise ValueError(f'stride must be powers of 2, got: [{stride[0]}, {stride[1]}]')
+        if stride_next[0] & (stride_next[0] - 1) != 0 or stride_next[1] & (stride_next[1] - 1) != 0:
+            raise ValueError(f'stride_next must be powers of 2, got: [{stride_next[0]}, {stride_next[1]}]')
+        if skip[0] & (skip[0] - 1) != 0 or skip[1] & (skip[1] - 1) != 0:
+            raise ValueError(f'skip must be powers of 2, got: [{skip[0]}, {skip[1]}]')
+        if block_shape[0] & (block_shape[0] - 1) != 0 or block_shape[1] & (block_shape[1] - 1) != 0:
+            raise ValueError(f'block_shape must be powers of 2, got: [{block_shape[0]}, {block_shape[1]}]')
 
         if self.padding[0] < 0 and self.padding[1] < 0:
             self.padding = [(kernel_shape[0] - 1) // 2, (kernel_shape[1] - 1) // 2]
