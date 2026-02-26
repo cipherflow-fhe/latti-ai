@@ -72,6 +72,8 @@ For detailed build prerequisites, troubleshooting, and build options, see the **
 
 This guide demonstrates how to transform a standard PyTorch model into an inference service for encrypted queries using the **LattiAI** framework.
 
+> **Want to try encrypted inference right away?** We provide pre-prepared task resources for several example models. If you'd like to skip the model adaptation and compilation steps below, jump directly to [Running Examples](#running-examples).
+
 We will use a **ResNet-20** model trained on the **CIFAR-10** dataset as an end-to-end example.
 
 ### Prerequisites
@@ -206,21 +208,26 @@ python inference/interface/gen_mega_ag.py --task-dir ./runs/cifar10/task
 
 #### Step 2: Runtime Execution
 
-Use the `EncryptedInference` interface to run encrypted inference (see `examples/inference.cpp` for the complete example):
+Use the `InferenceClient` / `InferenceServer` interface to run encrypted inference (see `examples/inference.cpp` for the complete example):
 
 ```cpp
-#include "interface/inference_interface.h"
+#include "interface/inference_client.h"
+#include "interface/inference_server.h"
 
-EncryptedInference engine("./task", use_gpu);
+// Client: generate keys and encrypt input
+InferenceClient client("./task/client");
+client.setup();
+auto eval_ctx = client.export_eval_context();           // serialize public keys (Bytes)
+auto encrypted_input = client.encrypt("./task/client/img.csv");  // encrypt and serialize ciphertext (Bytes)
 
-// 1. Encrypt: read input, create crypto context, encrypt
-engine.encrypt("./task/client/img.csv");
+// Server: import public keys, load model, run inference on serialized ciphertext
+InferenceServer server("./task/server", use_gpu);
+server.import_eval_context(eval_ctx);           // deserialize public keys
+server.load_model();
+auto encrypted_output = server.evaluate(encrypted_input);  // deserialize input, inference, serialize output
 
-// 2. Evaluate: load model and run encrypted inference
-engine.evaluate();
-
-// 3. Decrypt: decrypt output and run plaintext verification
-auto result = engine.decrypt();
+// Client: decrypt result
+auto result = client.decrypt(encrypted_output);  // decrypt and deserialize output ciphertext, with secret key
 ```
 
 Run the built example:
@@ -297,4 +304,4 @@ This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE
 
 For questions or feedback, please reach out:
 
-- Email: info@cipherflow.cn
+- Email: lattisense.support@cipherflow.cn

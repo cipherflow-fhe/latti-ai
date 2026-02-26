@@ -70,6 +70,10 @@ jobs:
           cd build/inference/unittests
           ./test_data_structs
           ./test_fhe_layers_hetero "sq*"
+
+      - name: Run compiler tests
+        run: |
+          python -m pytest training/model_compiler/unittests/test_compiler.py -v
   build-docker:
     runs-on: ubuntu-22.04
     needs: build-and-test
@@ -125,6 +129,8 @@ jobs:
             python test_gen_layers.py TestLayerExport.test_sq
             ./test_data_structs
             ./test_fhe_layers_hetero 'sq*'
+            cd /workspace
+            python -m pytest training/model_compiler/unittests/test_compiler.py -v
           "
 
       - name: Push Docker image

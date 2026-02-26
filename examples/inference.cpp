@@ -18,12 +18,14 @@
 
 // Unified encrypted inference example.
 // Works for any task (MNIST, CIFAR-10, ImageNet, etc.) by specifying --task-dir.
+// Demonstrates the InferenceClient / InferenceServer separation.
 
 #include <cstring>
 #include <iostream>
 #include <string>
 
-#include "interface/inference_interface.h"
+#include "interface/inference_client.h"
+#include "interface/inference_server.h"
 
 using namespace std;
 
@@ -51,14 +53,29 @@ int main(int argc, char* argv[]) {
     cout << "Task directory: " << task_dir << endl;
     cout << "Input file:     " << input_csv << endl;
 
-    EncryptedInference engine(task_dir, use_gpu);
+    // --- Client side ---
+    InferenceClient client(task_dir + "/client");
+    client.setup();
+    auto eval_ctx = client.export_eval_context();
+    auto encrypted_input = client.encrypt(input_csv);
 
-    engine.encrypt(input_csv);
-    engine.evaluate();
-    auto result = engine.decrypt();
+    // In actual scenarios, the client sends eval_ctx and encrypted_input to the server over the network.
 
-    print_double_message(result.encrypted_output.data(), "Encrypted output", result.num_outputs);
-    print_double_message(result.plaintext_output.data(), "Plaintext output", result.num_outputs);
+    // --- Server side ---
+    InferenceServer server(task_dir + "/server", use_gpu);
+    server.import_eval_context(eval_ctx);
+    server.load_model();
+    auto encrypted_output = server.evaluate(encrypted_input);
+
+    // In actual scenarios, the server sends encrypted_output back to the client over the network.
+
+    // --- Client side ---
+    auto result = client.decrypt(encrypted_output);
+    print_double_message(result.output.data(), "Encrypted output", result.num_outputs);
+
+    // --- Plaintext verification (server side) ---
+    auto plaintext_output = server.evaluate_plaintext(input_csv);
+    print_double_message(plaintext_output.data(), "Plaintext output", (int)plaintext_output.size());
 
     return 0;
 }
