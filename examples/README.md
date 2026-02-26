@@ -10,29 +10,6 @@ This directory contains end-to-end encrypted inference examples. Each example re
 | `test_cifar10` | ResNet-20 | CIFAR-10 | 3 x 32 x 32 |  CKKS (N=65536) | Yes |
 | `test_imagenet` | MobileNetV2 | ImageNet | 3 x 256 x 256 | CKKS (N=65536) | Yes |
 
-## Directory Structure
-
-```
-examples/
-├── inference.cpp               # Unified C++ inference entry point (--task-dir, --gpu)
-├── CMakeLists.txt              # Build configuration (single 'inference' binary)
-└── test_<name>/
-    └── task/
-        ├── client/
-        │   ├── img.csv             # Sample input image
-        │   ├── ckks_parameter.json # CKKS encryption parameters
-        │   └── task_config.json    # Inference task configuration
-        └── server/
-            ├── model_parameters.h5 # Model weights
-            ├── ckks_parameter.json # CKKS encryption parameters
-            ├── task_config.json    # Inference task configuration
-            └── nn_layers_ct_0.json # Compiled encrypted computation graph
-```
-
-## Prerequisites
-
-Make sure the inference module has been built. See the [Inference Module Build Guide](../docs/en/build-guide.md).
-
 ## Build
 
 Examples are built automatically as part of the main project build (see the root [Build & Install](../README.md#build--install) guide).
