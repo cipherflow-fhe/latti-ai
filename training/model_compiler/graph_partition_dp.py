@@ -230,6 +230,8 @@ class GraphPartitioner:
         self.entire_graph = entire_graph
         self.param_dict = generate_param_dict_for_graph()
 
+        if temperature < 0:
+            raise ValueError('Temperature must be non-negative. If set to 0, a greedy algorithm will be used.')
         self.temperature = temperature
         self.pbar = tqdm(desc=f'Subgraph explorations (temperature={self.temperature})', unit='it')
 
@@ -291,9 +293,6 @@ class GraphPartitioner:
 
     def remove_small_subgraphs(self, subgraphs: set[frozenset], H: nx.DiGraph) -> list[frozenset]:
         def boltzmann_weighted_probabilities(depths: list[int], temperature: float = 1.0) -> list[float]:
-            if temperature <= 0:
-                raise ValueError('Temperature must be positive.')
-
             depths = np.asarray(depths, dtype=float)
 
             scaled = depths / temperature
@@ -319,17 +318,24 @@ class GraphPartitioner:
                 break
             depths.append(depth)
 
-        chosen_depth = random.choices(depths, weights=boltzmann_weighted_probabilities(depths, self.temperature), k=1)[
-            0
-        ]
-        candidates = sorted(subgraphs_in_depths[chosen_depth], key=lambda x: len(x), reverse=True)[:8]
-        result = [
-            random.choices(
-                candidates,
-                weights=boltzmann_weighted_probabilities([len(c) for c in candidates], self.temperature),
-                k=1,
-            )[0]
-        ]
+        if self.temperature > 1e-6:
+            chosen_depth = random.choices(depths, weights=boltzmann_weighted_probabilities(depths, self.temperature), k=1)[
+                0
+            ]
+            candidates = sorted(subgraphs_in_depths[chosen_depth], key=lambda x: len(x), reverse=True)[:8]
+            result = [
+                random.choices(
+                    candidates,
+                    weights=boltzmann_weighted_probabilities([len(c) for c in candidates], self.temperature),
+                    k=1,
+                )[0]
+            ]
+        else:
+            result = []
+            for d in depths[:2]:
+                result.append(
+                    max(subgraphs_in_depths[d], key=lambda x: len(x))
+                )
 
         return result
 
@@ -343,14 +349,19 @@ class GraphPartitioner:
     ) -> frozenset:
         def retrieve_boundary_compute_candidates(nodes: set, subgraph: nx.DiGraph, traversed_nodes: set) -> set:
             boundary_candidates = set()
+            new_traversed_nodes = set()
+
             for u in nodes:
                 if u in traversed_nodes:
                     continue
                 for nbr in list(subgraph.predecessors(u)) + list(subgraph.successors(u)):
                     if nbr not in nodes and isinstance(nbr, ComputeNode):
                         boundary_candidates.add(nbr)
-                    traversed_nodes.add(nbr)
-                traversed_nodes.add(u)
+                    new_traversed_nodes.add(nbr)
+                new_traversed_nodes.add(u)
+
+            traversed_nodes |= new_traversed_nodes
+
             return boundary_candidates
 
         curr_sub = H.subgraph(curr_nodes)
@@ -612,10 +623,8 @@ def process_with_no_btp(graph: LayerAbstractGraph):
 
 
 def compile_graph(
-    input_file_path: str,
-    output_dir: str | None = None,
-    temperature=1.0,
     pt_graph: LayerAbstractGraph | None = None,
+    temperature=1.0,
 ):
     score, compiled_graph = optimize_task_segments(pt_graph, temperature=temperature)
 
@@ -638,10 +647,8 @@ def reset_level_and_check_level(total_graph: LayerAbstractGraph):
 
 
 def compile_model_btp(
-    input_file_path: Path,
-    output_dir: Path,
-    temperature=1.0,
     pt_graph_prepared: LayerAbstractGraph | None = None,
+    temperature=1.0,
     stdout=False,
 ) -> tuple[float, LayerAbstractGraph]:
     """
@@ -656,10 +663,8 @@ def compile_model_btp(
     np.random.seed(seed)
 
     score, compiled_graph = compile_graph(
-        input_file_path=str(input_file_path),
-        output_dir=str(output_dir),
-        temperature=temperature,
         pt_graph=pt_graph_prepared,
+        temperature=temperature,
     )
 
     if compiled_graph is None:
@@ -675,8 +680,8 @@ def compile_model_btp(
 
 def run_single_compile(args):
     """Wrapper function for multiprocessing - runs a single compilation"""
-    input_file_path, output_dir, temperature, pt_graph_prepared = args
-    score, graph = compile_model_btp(input_file_path, output_dir, temperature, pt_graph_prepared, stdout=True)
+    pt_graph_prepared, temperature = args
+    score, graph = compile_model_btp(pt_graph_prepared, temperature, stdout=True)
     return score, graph
 
 
@@ -703,21 +708,7 @@ def _prepare_graph(input_file_path: Path) -> LayerAbstractGraph:
     return pt_graph
 
 
-def post_process(
-    graph: LayerAbstractGraph,
-    output_dir: Path,
-    score: float,
-    use_btp: bool,
-):
-    """
-    set_scale、add_drop_level and save compilation results to output directory
-
-    Args:
-        graph: Compiled LayerAbstractGraph
-        output_dir: Output directory
-        score: Compilation score
-        use_btp: Whether BTP mode was used (affects graph_to_task_config call)
-    """
+def post_process(graph: LayerAbstractGraph):
     slot_num = config.get('POLY_N') / 2
     for node in graph.dag.nodes:
         if isinstance(node, ComputeNode):
@@ -732,6 +723,15 @@ def post_process(
     else:
         add_drop_level_for_graph(graph)
 
+    return graph
+
+
+def dump_graph(
+    graph: LayerAbstractGraph,
+    output_dir: Path,
+    score: float,
+    use_btp: bool,
+):
     task_dir = output_dir / 'task'
     server_dir = task_dir / 'server'
     client_dir = task_dir / 'client'
@@ -772,17 +772,6 @@ def post_process(
     with open(client_dir / 'ckks_parameter.json', 'w') as f:
         json.dump(ckks_param, f, indent=4)
 
-    print(f'Output directory: {output_dir}')
-    print(f'Generated structure:')
-    print(f'  task/')
-    print(f'    ├── server/')
-    print(f'    │   ├── nn_layers_ct_0.json')
-    print(f'    │   ├── task_config.json')
-    print(f'    │   └── ckks_parameter.json')
-    print(f'    └── client/')
-    print(f'        ├── task_config.json')
-    print(f'        └── ckks_parameter.json')
-
 
 def _try_no_btp(pt_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph | None, float]:
     """
@@ -813,10 +802,8 @@ def _try_no_btp(pt_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
 
 def _run_btp_compilation(
     num_experiments: int,
-    input_file_path: Path,
-    output_dir: Path,
-    temperature: float,
     pt_graph: LayerAbstractGraph,
+    temperature: float,
     num_workers: int,
 ) -> tuple[LayerAbstractGraph | None, float]:
     """
@@ -824,8 +811,6 @@ def _run_btp_compilation(
 
     Args:
         num_experiments: Number of parallel compilation runs
-        input_file_path: Input pt.json file path
-        output_dir: Output directory (passed to worker processes)
         temperature: Temperature parameter for randomization
         pt_graph: Prepared graph for BTP compilation
         num_workers: Number of parallel worker processes
@@ -847,7 +832,7 @@ def _run_btp_compilation(
     print(f'Step 4: Starting {num_experiments} parallel BTP compilations with {num_workers} processes...')
 
     # Prepare arguments for each run
-    args_list = [(input_file_path, output_dir, temperature, copy.deepcopy(pt_graph)) for _ in range(num_experiments)]
+    args_list = [(copy.deepcopy(pt_graph), temperature) for _ in range(num_experiments)]
 
     # Run compilations in parallel
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -896,22 +881,20 @@ def run_parallel(
     """
     print(f'Starting compilation...')
 
-    # Prepare graph once
     print('Step 1: Preparing graph...')
     pt_graph = _prepare_graph(input_file_path)
 
-    # Try no-BTP mode first
+    use_btp = False
     succeeded, graph, score = _try_no_btp(pt_graph)
-    if succeeded:
-        post_process(graph, output_dir, score, use_btp=False)
-        return graph, score
+    if not succeeded:
+        use_btp = True
+        graph, score = _run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
+        if graph is None:
+            raise ValueError('Compilation failed.')
 
-    # No-BTP failed, use BTP mode with the same prepared graph
-    graph, score = _run_btp_compilation(
-        num_experiments, input_file_path, output_dir, temperature, pt_graph, num_workers
-    )
-    if graph is not None:
-        post_process(graph, output_dir, score, use_btp=True)
+    graph = post_process(graph)
+
+    dump_graph(graph, output_dir, score, use_btp=use_btp)
 
     return graph, score
 
