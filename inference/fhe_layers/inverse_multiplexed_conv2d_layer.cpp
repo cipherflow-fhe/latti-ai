@@ -55,6 +55,28 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
     stride_next[1] = stride_next_in[1];
     skip[0] = skip_in[0];
     skip[1] = skip_in[1];
+
+    if ((input_shape[0] & (input_shape[0] - 1)) != 0 || (input_shape[1] & (input_shape[1] - 1)) != 0) {
+        throw std::invalid_argument("input_shape must be powers of 2, got: [" + std::to_string(input_shape[0]) + ", " +
+                                    std::to_string(input_shape[1]) + "]");
+    }
+    if ((stride[0] & (stride[0] - 1)) != 0 || (stride[1] & (stride[1] - 1)) != 0) {
+        throw std::invalid_argument("stride must be powers of 2, got: [" + std::to_string(stride[0]) + ", " +
+                                    std::to_string(stride[1]) + "]");
+    }
+    if ((stride_next[0] & (stride_next[0] - 1)) != 0 || (stride_next[1] & (stride_next[1] - 1)) != 0) {
+        throw std::invalid_argument("stride_next must be powers of 2, got: [" + std::to_string(stride_next[0]) + ", " +
+                                    std::to_string(stride_next[1]) + "]");
+    }
+    if ((skip[0] & (skip[0] - 1)) != 0 || (skip[1] & (skip[1] - 1)) != 0) {
+        throw std::invalid_argument("skip must be powers of 2, got: [" + std::to_string(skip[0]) + ", " +
+                                    std::to_string(skip[1]) + "]");
+    }
+    if ((block_shape[0] & (block_shape[0] - 1)) != 0 || (block_shape[1] & (block_shape[1] - 1)) != 0) {
+        throw std::invalid_argument("block_shape must be powers of 2, got: [" + std::to_string(block_shape[0]) + ", " +
+                                    std::to_string(block_shape[1]) + "]");
+    }
+
     weight = weight_in.copy();
     bias = bias_in.copy();
     level = level_in;

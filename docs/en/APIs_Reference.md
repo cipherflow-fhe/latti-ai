@@ -107,7 +107,7 @@ activation = RangeNormPoly2d(upper_bound=3.0, degree=4, activation='relu')
 #### replace_activation_with_poly()
 
 ```python
-replace_activation_with_poly(model, old_cls=nn.ReLU, upper_bound=3.0, degree=4)
+replace_activation_with_poly(model, old_cls=nn.ReLU, new_module_factory=RangeNormPoly2d, upper_bound=3.0, degree=4)
 ```
 
 Replace all instances of `old_cls` activation with `RangeNormPoly2d` in-place.
@@ -118,6 +118,7 @@ Replace all instances of `old_cls` activation with `RangeNormPoly2d` in-place.
 |------|------|---------|-------------|
 | `model` | `nn.Module` | required | PyTorch model (modified in-place) |
 | `old_cls` | `Type[nn.Module]` | `nn.ReLU` | Activation class to replace. Supported: `nn.ReLU`, `nn.SiLU` |
+| `new_module_factory` | `Callable` | `RangeNormPoly2d` | Constructor `(upper_bound, degree, activation) -> nn.Module` |
 | `upper_bound` | `float` | `3.0` | Normalization upper bound |
 | `degree` | `int` | `4` | Polynomial degree (2 or 4) |
 
@@ -416,6 +417,13 @@ Base class for operation nodes in the computation graph.
 | `ResizeComputeNode` | `operations/Resize.py` | Resize |
 | `MatMulComputeNode` | `operations/MatMul.py` | MatMul |
 | `IdentityComputeNode` | `operations/Identity.py` | Identity |
+| `RangeNorm2dComputeNode` | `operations/RangeNorm2d.py` | RangeNorm2d |
+| `RangeNormComputeNode` | `operations/RangeNorm.py` | RangeNorm |
+| `SquareComputeNode` | `operations/Square.py` | Pow |
+| `SoftmaxComputeNode` | `operations/Softmax.py` | Softmax |
+| `ArgmaxComputeNode` | `operations/Argmax.py` | Argmax |
+| `RNNComputeNode` | `operations/RNN.py` | MyRNN |
+| `Relu6ComputeNode` | `operations/Relu6.py` | Clip |
 
 All operation nodes inherit from `ComputeNode` and implement `from_onnx_node()` for construction from ONNX graph nodes.
 
@@ -588,22 +596,6 @@ DAG-based computation graph. Uses `networkx.DiGraph` internally with `FeatureNod
 
 ---
 
-### 2.4 Output File Schemas
-
-The compiler produces the following output structure:
-
-```
-output_dir/
-└── task/
-    ├── server/
-    │   ├── task_config.json      # Server-side task configuration
-    │   ├── ckks_parameter.json   # CKKS encryption parameters
-    │   └── ergs/
-    │       └── erg0.json         # Compiled encrypted computation graph (DAG)
-    └── client/
-        ├── task_config.json      # Client-side task configuration
-        └── ckks_parameter.json   # CKKS encryption parameters
-```
 
 #### task_config.json
 
@@ -1151,3 +1143,349 @@ Generate GPU-accelerated inference instructions (mega_ag format) from a compiled
 | `n` | `int` | `16384` | Polynomial modulus degree |
 | `use_gpu` | `bool` | `True` | Generate GPU-optimized instructions |
 | `style` | `str` | `'ordinary'` | Packing style: `'ordinary'` or `'multiplexed'` |
+
+---
+
+### 3.4 Instruction Generation Layers (Python)
+
+Source: `inference/model_generator/layers/`
+
+These Python layer classes generate FHE computation instructions (graph nodes) for the inference runtime. Each class mirrors a corresponding C++ FHE layer (Section 3.2) and produces the instruction DAG that the runtime executes.
+
+| Layer Class | Source | Description |
+|---|---|---|
+| `Conv2DPackedLayer` | `layers/conv_pack.py` | Packed Conv2D instruction generation |
+| `Conv2DepthwiseLayer` | `layers/conv_dw.py` | Depthwise Conv2D instruction generation |
+| `MultConv2DPackedLayer` | `layers/mult_conv.py` | Multiplexed Conv2D instruction generation |
+| `MultConv2DPackedDepthwiseLayer` | `layers/mult_conv_dw.py` | Multiplexed depthwise Conv2D instruction generation |
+| `DensePackedLayer` | `layers/dense_pack.py` | Packed fully-connected instruction generation |
+| `Avgpool_layer` | `layers/avgpool.py` | Average pooling instruction generation |
+| `PolyReluLayer` | `layers/poly_relu.py` | Polynomial activation instruction generation |
+| `MultScalarLayer` | `layers/mult_scalar.py` | Scalar multiplication instruction generation |
+| `Square_layer` | `layers/square_pack.py` | Element-wise squaring instruction generation |
+| `UpsampleNearestLayer` | `layers/upsample_layer.py` | Nearest-neighbor upsampling instruction generation |
+| `ConcatLayer` | `layers/concat_layer.py` | Channel concatenation instruction generation |
+| `AddLayer` | `layers/add_pack.py` | Element-wise addition instruction generation |
+| `InverseMultiplexedConv2d` | `layers/inverse_multiplexed_conv2d_layer.py` | Inverse multiplexed Conv2D instruction generation |
+
+---
+
+#### Conv2DPackedLayer
+
+```python
+Conv2DPackedLayer(n_out_channel, n_in_channel, input_shape, kernel_shape,
+                  stride, skip, pack, n_packed_in_channel, n_packed_out_channel)
+```
+
+Source: `layers/conv_pack.py`
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `n_out_channel` | `int` | Number of output channels |
+| `n_in_channel` | `int` | Number of input channels |
+| `input_shape` | `list[int]` | Spatial dimensions (must be powers of 2) |
+| `kernel_shape` | `list[int]` | Kernel dimensions |
+| `stride` | `list[int]` | Convolution stride (must be powers of 2) |
+| `skip` | `list[int]` | Skip values (must be powers of 2) |
+| `pack` | `int` | Packing factor |
+| `n_packed_in_channel` | `int` | Number of packed input channels |
+| `n_packed_out_channel` | `int` | Number of packed output channels |
+
+**Raises:** `ValueError` if `input_shape`, `stride`, or `skip` are not powers of 2.
+
+**Key methods:**
+
+- `call(x, weight_pt, bias_pt) -> list[CkksCiphertextNode]` — Generate convolution instructions
+- `call_custom_compute(x, conv_data_source) -> list[CkksCiphertextNode]` — Generate with on-demand weight encoding
+
+---
+
+#### Conv2DepthwiseLayer
+
+```python
+Conv2DepthwiseLayer(n_out_channel, n_in_channel, input_shape, kernel_shape,
+                    stride, skip, pack, n_packed_in_channel, n_packed_out_channel)
+```
+
+Source: `layers/conv_dw.py`
+
+**Parameters:** Same as `Conv2DPackedLayer`.
+
+**Raises:** `ValueError` if `input_shape`, `stride`, or `skip` are not powers of 2.
+
+**Key methods:**
+
+- `call(x, weight_pt, bias_pt) -> list[DataNode]`
+- `call_custom_compute(x, conv_data_source) -> list[DataNode]`
+
+---
+
+#### MultConv2DPackedLayer
+
+```python
+MultConv2DPackedLayer(n_out_channel, n_in_channel, input_shape, kernel_shape,
+                      stride, skip, n_channel_per_ct, n_packed_in_channel,
+                      n_packed_out_channel, upsample_factor=[1, 1])
+```
+
+Source: `layers/mult_conv.py`
+
+**Parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `n_out_channel` | `int` | required | Number of output channels |
+| `n_in_channel` | `int` | required | Number of input channels |
+| `input_shape` | `list[int]` | required | Spatial dimensions (must be powers of 2) |
+| `kernel_shape` | `list[int]` | required | Kernel dimensions |
+| `stride` | `list[int]` | required | Convolution stride (must be powers of 2) |
+| `skip` | `list[int]` | required | Skip values (must be powers of 2) |
+| `n_channel_per_ct` | `int` | required | Channels packed per ciphertext |
+| `n_packed_in_channel` | `int` | required | Number of packed input channels |
+| `n_packed_out_channel` | `int` | required | Number of packed output channels |
+| `upsample_factor` | `list[int]` | `[1, 1]` | Upsampling factor |
+
+**Raises:** `ValueError` if `input_shape`, `stride`, or `skip` are not powers of 2.
+
+**Key methods:**
+
+- `call(x, weight_pt, bias_pt, mast_pt) -> list[CkksCiphertextNode]`
+- `call_custom_compute(x, conv_data_source) -> list[CkksCiphertextNode]`
+
+---
+
+#### MultConv2DPackedDepthwiseLayer
+
+```python
+MultConv2DPackedDepthwiseLayer(n_out_channel, n_in_channel, input_shape, kernel_shape,
+                               stride, skip, n_channel_per_ct, n_packed_in_channel,
+                               n_packed_out_channel, upsample_factor=[1, 1])
+```
+
+Source: `layers/mult_conv_dw.py`
+
+**Parameters:** Same as `MultConv2DPackedLayer`.
+
+**Raises:** `ValueError` if `input_shape`, `stride`, or `skip` are not powers of 2.
+
+**Key methods:**
+
+- `call(x, weight_pt, bias_pt, mast_pt) -> list[CkksCiphertextNode]`
+- `call_custom_compute(x, conv_data_source) -> list[CkksCiphertextNode]`
+
+---
+
+#### DensePackedLayer
+
+```python
+DensePackedLayer(n_out_channel, n_in_channel, input_shape, skip, pack,
+                 n_packed_in_feature, n_packed_out_feature)
+```
+
+Source: `layers/dense_pack.py`
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `n_out_channel` | `int` | Number of output features |
+| `n_in_channel` | `int` | Number of input features |
+| `input_shape` | `list[int]` | Spatial dimensions (must be powers of 2) |
+| `skip` | `list[int]` | Skip values (must be powers of 2) |
+| `pack` | `int` | Packing factor |
+| `n_packed_in_feature` | `int` | Number of packed input features |
+| `n_packed_out_feature` | `int` | Number of packed output features |
+
+**Raises:** `ValueError` if `input_shape` or `skip` are not powers of 2.
+
+**Key methods:**
+
+- `call(x, weight_pt, bias_pt) -> list[CkksCiphertextNode]` — Single-pack mode
+- `call_mult_pack(x, weight_pt, bias_pt, n) -> list` — Mult-pack mode
+- `call_custom_compute(x, dense_data_source) -> list[CkksCiphertextNode]`
+- `call_mult_pack_custom_compute(x, dense_data_source, n) -> list`
+
+---
+
+#### Avgpool_layer
+
+```python
+Avgpool_layer(stride, shape, channel=1, skip=[1, 1])
+```
+
+Source: `layers/avgpool.py`
+
+**Parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `stride` | `list[int]` | required | Pooling stride (must be powers of 2) |
+| `shape` | `list[int]` | required | Spatial dimensions (must be powers of 2) |
+| `channel` | `int` | `1` | Number of channels |
+| `skip` | `list[int]` | `[1, 1]` | Skip values (must be powers of 2) |
+
+**Raises:** `ValueError` if `shape`, `stride`, or `skip` are not powers of 2.
+
+**Key methods:**
+
+- `call(x) -> list[DataNode]` — Standard average pooling
+- `run_adaptive_avgpool(x, n) -> list[DataNode]` — Adaptive (global) average pooling
+
+---
+
+#### PolyReluLayer
+
+```python
+PolyReluLayer(input_shape, order, skip, n_channel_per_ct,
+              upsample_factor=[1, 1], block_expansion=[1, 1])
+```
+
+Source: `layers/poly_relu.py`
+
+**Parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `input_shape` | `list[int]` | required | Spatial dimensions (must be powers of 2) |
+| `order` | `int` | required | Polynomial degree |
+| `skip` | `list[int]` | required | Skip values (must be powers of 2) |
+| `n_channel_per_ct` | `int` | required | Channels packed per ciphertext |
+| `upsample_factor` | `list[int]` | `[1, 1]` | Upsampling factor |
+| `block_expansion` | `list[int]` | `[1, 1]` | Block expansion factor |
+
+**Raises:** `ValueError` if `input_shape`, `skip`, or derived `block_shape` are not powers of 2.
+
+**Key methods:**
+
+- `call(x, weight_pt) -> list` — Generate polynomial activation instructions
+- `call_custom_compute(x, poly_data_source, layer_id='') -> list` — With on-demand weight encoding
+
+---
+
+#### MultScalarLayer
+
+```python
+MultScalarLayer()
+```
+
+Source: `layers/mult_scalar.py`
+
+No constructor parameters.
+
+**Key methods:**
+
+- `call(x1, pt_scale1) -> list[list[DataNode]]` — Scalar multiplication
+
+---
+
+#### Square_layer
+
+```python
+Square_layer(level)
+```
+
+Source: `layers/square_pack.py`
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `level` | `int` | CKKS multiplicative level |
+
+**Key methods:**
+
+- `call(x) -> list[CkksCiphertextNode]` — Element-wise squaring
+
+---
+
+#### UpsampleNearestLayer
+
+```python
+UpsampleNearestLayer(shape, skip, upsample_factor, n_channel_per_ct, level)
+```
+
+Source: `layers/upsample_layer.py`
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `shape` | `list[int]` | Spatial dimensions (must be powers of 2) |
+| `skip` | `list[int]` | Skip values (must be powers of 2) |
+| `upsample_factor` | `list[int]` | Upsampling factor |
+| `n_channel_per_ct` | `int` | Channels packed per ciphertext |
+| `level` | `int` | CKKS multiplicative level |
+
+**Raises:** `ValueError` if `shape` or `skip` are not powers of 2.
+
+**Key methods:**
+
+- `call_custom_compute(x, data_source, n_channel) -> list[CkksCiphertextNode]` — Generate upsampling instructions
+
+---
+
+#### ConcatLayer
+
+```python
+ConcatLayer()
+```
+
+Source: `layers/concat_layer.py`
+
+No constructor parameters.
+
+**Key methods:**
+
+- `call(x1, x2) -> list[CkksCiphertextNode]` — Concatenate two feature maps
+- `call_multiple_inputs(inputs) -> list[CkksCiphertextNode]` — Concatenate multiple feature maps
+
+---
+
+#### AddLayer
+
+```python
+AddLayer()
+```
+
+Source: `layers/add_pack.py`
+
+No constructor parameters.
+
+**Key methods:**
+
+- `call(x1, x2, scale1, scale2, pt_scale1=None, pt_scale2=None) -> list[DataNode]` — Element-wise addition with optional scaling
+- `mult_and_add(x1, x2, pt_scale1, pt_scale2=None) -> DataNode` — Multiply-then-add helper
+
+---
+
+#### InverseMultiplexedConv2d
+
+```python
+InverseMultiplexedConv2d(n_out_channel, n_in_channel, input_shape, padding,
+                         kernel_shape, stride, stride_next, skip, block_shape)
+```
+
+Source: `layers/inverse_multiplexed_conv2d_layer.py`
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `n_out_channel` | `int` | Number of output channels |
+| `n_in_channel` | `int` | Number of input channels |
+| `input_shape` | `list[int]` | Spatial dimensions (must be powers of 2) |
+| `padding` | `list[int]` | Padding values |
+| `kernel_shape` | `list[int]` | Kernel dimensions |
+| `stride` | `list[int]` | Convolution stride (must be powers of 2) |
+| `stride_next` | `list[int]` | Next layer stride (must be powers of 2) |
+| `skip` | `list[int]` | Skip values (must be powers of 2) |
+| `block_shape` | `list[int]` | Block dimensions (must be powers of 2) |
+
+**Raises:** `ValueError` if `input_shape`, `stride`, `stride_next`, `skip`, or `block_shape` are not powers of 2.
+
+**Key methods:**
+
+- `call(x, weight_pt, bias_pt, N) -> list[CkksCiphertextNode]`
+- `call_custom_compute(x, conv_data_source, N) -> list[CkksCiphertextNode]`

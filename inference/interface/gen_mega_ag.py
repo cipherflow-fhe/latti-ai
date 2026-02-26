@@ -55,7 +55,7 @@ def main():
     args = parser.parse_args()
 
     task_dir = os.path.abspath(args.task_dir)
-    ergs_path = os.path.join(task_dir, 'server', 'ergs')
+    ergs_path = os.path.join(task_dir, 'server')
 
     # Read poly_modulus_degree from ckks_parameter.json to determine n.
     ckks_param_path = os.path.join(task_dir, 'client', 'ckks_parameter.json')
