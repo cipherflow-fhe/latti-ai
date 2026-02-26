@@ -25,41 +25,43 @@ import os
 import copy
 
 
-def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), 'config.json')
-    with open(config_path, 'r', encoding='utf8') as f:
-        return json.load(f)
+class GlobalConfig:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+
+            config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+            with open(config_path, 'r', encoding='utf8') as f:
+                config_dict = json.load(f)
+            cls._instance.poly_n = config_dict.get('POLY_N', 65536)
+            cls._instance.block_shape = config_dict.get('block_shape', (1, 1))
+            cls._instance.graph_type = config_dict.get('GRAPH_TYPE', 'btp')
+            cls._instance.style = config_dict.get('STYLE', 'multiplexed')
+            cls._instance.mpc_refresh = config_dict.get('MPC_REFRESH', False)
+            cls._instance.approx_poly_type = config_dict.get('APPROX_POLY_TYPE', 'simple_polyrelu')
+            cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
+            if cls._instance.mpc_refresh:
+                cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'simple_polyrelu']
+            else:
+                cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar']
 
 
-# Global configuration, can be set by external modules
-config = None
+        return cls._instance
 
 
-def _init_config_vars():
-    """Initialize global variables from config"""
-    global MAX_LEVEL, block_shape
-    global POLY_N, STYLE, MPC_REFRESH
-
-    if config is None:
-        raise RuntimeError('Config not initialized. Please call init_config() in graph_splitter first.')
-    else:
-        _config = config
-
-    MAX_LEVEL = _config['MAX_LEVEL']
-    block_shape = _config['block_shape']  # Set by graph_splitter based on POLY_N
-    POLY_N = _config['POLY_N']
-    STYLE = _config['STYLE']
-    MPC_REFRESH = _config['MPC_REFRESH']
+config = GlobalConfig()
 
 
 f_name_index_dict = dict()
 concat_dict = dict()
-MAX_LEVEL = None
-block_shape = None
+# MAX_LEVEL = None
+# block_shape = None
 IS_ABSORB_POLYRELU = False
-POLY_N = None
-STYLE = None
-MPC_REFRESH = None
+# POLY_N = None
+# STYLE = None
+# MPC_REFRESH = None
 
 YOLO_TYPE = True
 IS_BALANCE = False
@@ -825,12 +827,12 @@ class LayerAbstractGraph:
     ) -> None:
         param_dict = dict()
         poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
-        mod_bits = poly_to_mod.get(POLY_N, 41)
+        mod_bits = poly_to_mod.get(config.poly_n, 41)
         param_dict.update(
             {
                 'param0': {
-                    'poly_modulus_degree': POLY_N,
-                    'n_mult_level': MAX_LEVEL,
+                    'poly_modulus_degree': config.poly_n,
+                    'n_mult_level': config.max_level,
                     'coeff_modulus_bit_length': mod_bits,
                     'special_prime_bit_length': mod_bits,
                     'pack_num': 4,
@@ -1142,7 +1144,7 @@ class LayerAbstractGraph:
                 elif layer.is_big_size:
                     conv_type = 'big_size'
                 else:
-                    conv_type = STYLE
+                    conv_type = config.style
                 layers[layer_id]['style'] = conv_type
 
         if mpc_refresh_ids:
@@ -1273,7 +1275,7 @@ class FheScoreParam:
     def get_score(self) -> float:
         compute_score = 0.0
         if 'conv' in self.compute_node.layer_type:
-            if STYLE == 'ordinary':
+            if config.style == 'ordinary':
                 if self.compute_node.groups == 1:
                     n_mult_and_add_score = (
                         (self.n_packed_in * self.pack * self.n_packed_out * self.kernel_shape[0] * self.kernel_shape[1])
@@ -1306,8 +1308,8 @@ class FheScoreParam:
             else:
                 x_size = (
                     math.ceil(self.input_channel / self.pack)
-                    * math.ceil(self.input_shape[0] / block_shape[0])
-                    * math.ceil(self.input_shape[1] / block_shape[1])
+                    * math.ceil(self.input_shape[0] / config.block_shape[0])
+                    * math.ceil(self.input_shape[1] / config.block_shape[1])
                 )
 
                 n_block_per_ct = math.ceil(self.pack / (self.input_skip[0] * self.input_skip[1]))
