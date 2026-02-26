@@ -39,6 +39,8 @@ export/**/*.csv
 export/**/*.yaml
 training/retraining/export/
 training/general_enc_inference_sdk/
+training/model_compiler/unittests/task/*
+training/model_compiler/unittests/temp*
 config_user.json
 gen_task/*.json
 **/mega_ag.json
