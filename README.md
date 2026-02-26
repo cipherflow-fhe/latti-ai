@@ -72,6 +72,8 @@ For detailed build prerequisites, troubleshooting, and build options, see the **
 
 This guide demonstrates how to transform a standard PyTorch model into an inference service for encrypted queries using the **LattiAI** framework.
 
+> Want to try encrypted inference right away? We provide pre-prepared task resources for several example models. If you would like to skip the model adaptation and compilation steps below, jump directly to [Running Examples](#running-examples).
+
 We will use a **ResNet-20** model trained on the **CIFAR-10** dataset as an end-to-end example.
 
 ### Prerequisites
@@ -103,7 +105,7 @@ Baseline Training  →  Operator Replacement & Fine-tuning  →  Model Compilati
 Train a standard ResNet-20 on CIFAR-10 with ReLU activations:
 
 ```bash
-python examples/test_cifar10/train.py --epochs 150 --batch-size 128 --lr 0.1 --output-dir ./runs/cifar10/model
+python examples/test_cifar10/train.py --epochs 150 --batch-size 128 --lr 0.1 --output-dir ./runs/cifar10/model --input-shape 3 32 32
 ```
 
 **Output:** `./runs/cifar10/model/train_baseline.pth`
@@ -131,28 +133,15 @@ Workflow of `train.py`: when `--poly_model_convert` is enabled, the script repla
 
 ```python
 # 1. Replace FHE-incompatible operators (only when --poly_model_convert is set)
-# args.poly_module indicates the type of activation function to replace[RangeNormPoly2d/Simple_Polyrelu]
-# args.upper_bound indicates the size of the upper bound for the approximation function
-# args.degree indicates the order for the approximation function
 if args.poly_model_convert:
     replace_maxpool_with_avgpool(model)
-    if args.poly_module == 'RangeNormPoly2d':
-        replace_activation_with_poly(
-            model,
-            old_cls=nn.ReLU,
-            new_module_factory=RangeNormPoly2d,
-            upper_bound=args.upper_bound,
-            degree=args.degree,
-        )
-    elif args.poly_module == 'Simple_Polyrelu':
-        replace_activation_with_poly(
-            model,
-            old_cls=nn.ReLU,
-            new_module_factory=Simple_Polyrelu,
-            upper_bound=args.upper_bound,
-            degree=args.degree,
-        )
-    
+    replace_activation_with_poly(
+        model,
+        old_cls=nn.ReLU,
+        new_module_factory=RangeNormPoly2d,
+        upper_bound=args.upper_bound,
+        degree=args.degree,
+    )
 
 # 2. Train (or fine-tune) the model
 for epoch in range(1, args.epochs + 1):
@@ -171,6 +160,7 @@ if args.poly_model_convert:
 - `--export-dir`: directory for the H5 weight file, corresponding to the server-side model weights.
 - `--upper-bound`: normalization upper bound for RangeNormPoly2d (default: `3.0`). Controls the input range for polynomial approximation.
 - `--degree`: degree of the polynomial activation (choices: `2`, `4`, `8`; default: `4`). Higher degree gives better approximation but increases FHE computational depth.
+- `--poly-module`: type of polynomial activation to replace ReLU (choices: `RangeNormPoly2d`, `Simple_Polyrelu`).
 
 **Output:**
 
@@ -198,7 +188,7 @@ python training/run_compile.py \
 
 - `--input`: the exported adapted model in ONNX format from the previous step.
 - `--output`: root output directory; the compiler generates `task/server/` and `task/client/` subdirectories underneath.
-- `--poly_n`: polynomial modulus degree for CKKS (determines the number of ciphertext slots and security level). `65536` provides 128-bit security with 32768 slots; `16384` provides 128-bit security with 8192 slots but does not support bootstrapping.
+- `--poly_n`: polynomial modulus degree for CKKS (determines the number of ciphertext slots and security level). `65536` provides 128-bit security with 32768 slots.
 - `--style`: packing style — `multiplexed` (channel-multiplexed packing for higher slot utilization) or `ordinary` (one channel per ciphertext).
 
 **Output:**
@@ -208,7 +198,7 @@ python training/run_compile.py \
 | `./runs/cifar10/model/pt.json` | Intermediate computation graph (JSON) |
 | `./runs/cifar10/task/server/task_config.json` | Server-side inference task configuration |
 | `./runs/cifar10/task/server/ckks_parameter.json` | CKKS encryption parameter configuration |
-| `./runs/cifar10/task/server/ergs/erg0.json` | Compiled encrypted computation graph (DAG) |
+| `./runs/cifar10/task/server/nn_layers_ct_0.json` | Compiled encrypted computation graph (DAG) |
 | `./runs/cifar10/task/client/task_config.json` | Client-side inference task configuration |
 | `./runs/cifar10/task/client/ckks_parameter.json` | CKKS encryption parameter configuration |
 
@@ -258,7 +248,7 @@ Run the built example:
 
 ### Prerequisites
 
-Make sure the project has been built successfully. See [Build & Install](#build--install) above. Examples are built automatically along with the inference module.
+Make sure the project has been built successfully. See [Build & Install](#build--install) above. Examples are built automatically along with the project.
 
 ### Run
 
@@ -287,7 +277,7 @@ python inference/interface/gen_mega_ag.py --task-dir examples/test_imagenet/task
 
 > Testing environment — Server: Intel Xeon Gold 6226R (32 cores) + NVIDIA RTX 5880 Ada (48GB); 128-bit security level.
 
-| Task | Model | Dataset | Baseline Accuracy | FHE Accuracy | CPU Latency (s) | GPU Latency (s) |
+| Task | Model | Dataset | Baseline Accuracy | FHE Accuracy | 16-thread CPU Latency (s) | GPU Latency (s) |
 |------|-------|---------|-------------------|-------------|-----------------|-----------------|
 | Classification | MobileNetV2 | ImageNet | 71.8% | 70.1% | 1210.0 | 82.4 |
 
@@ -299,6 +289,7 @@ For detailed benchmarks and methodology, see the [Technical Whitepaper](docs/en/
 
 - **Technical Whitepaper**: See [docs/en/whitepaper.md](docs/en/whitepaper.md)
 - **Build Guide**: See [docs/en/build-guide.md](docs/en/build-guide.md)
+- **API Reference**: See [docs/en/APIs_Reference.md](docs/en/APIs_Reference.md)
 
 ## Related Links
 
