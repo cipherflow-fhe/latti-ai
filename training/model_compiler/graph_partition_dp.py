@@ -35,143 +35,33 @@ from concurrent.futures import ProcessPoolExecutor
 
 import networkx as nx
 from tqdm import tqdm
+from typing import Final
 
-from components import LayerAbstractGraph, ComputeNode, FeatureNode, load_config
+from components import LayerAbstractGraph, ComputeNode, FeatureNode, config
 import components
 import processor
-
-# Load configuration here
-config = load_config()
-
-
-def init_config_with_args(poly_n=None, style=None, graph_type=None):
-    """
-    Initialize configuration based on command line arguments
-
-    Args:
-        poly_n: Polynomial modulus degree (POLY_N)
-        style: Computation style (STYLE)
-        graph_type: Graph type (GRAPH_TYPE)
-    """
-    # If command line arguments are provided, override config file values
-    if poly_n is not None:
-        config['POLY_N'] = poly_n
-    if style is not None:
-        config['STYLE'] = style
-    if graph_type is not None:
-        config['GRAPH_TYPE'] = graph_type
-
-    # Get current values from config
-    current_poly_n = config.get('POLY_N', 65536)
-    current_style = config.get('STYLE', 'multiplexed')
-    current_graph_type = config.get('GRAPH_TYPE', 'btp')
-
-    # Automatically set MAX_LEVEL based on POLY_N and GRAPH_TYPE
-    if current_graph_type == 'btp':
-        # BTP version configuration
-        poly_n_to_max_level = {8192: 5, 16384: 7, 65536: 9}
-    else:
-        # Non-BTP version configuration
-        poly_n_to_max_level = {8192: 5, 16384: 9, 65536: 24}
-
-    max_level = poly_n_to_max_level.get(current_poly_n)
-    if max_level is not None:
-        config['MAX_LEVEL'] = max_level
-        print(
-            f'Automatically set MAX_LEVEL={max_level} based on GRAPH_TYPE={current_graph_type}, POLY_N={current_poly_n}'
-        )
-    else:
-        print(f'Warning: No MAX_LEVEL mapping for POLY_N={current_poly_n}, using value from config.json')
-
-    # Automatically set block_shape based on POLY_N
-    poly_n_to_block_shape = {65536: [128, 256], 16384: [64, 64], 8192: [64, 64]}
-    block_shape = poly_n_to_block_shape.get(current_poly_n, [64, 64])
-    config['block_shape'] = block_shape
-    print(f'Automatically set block_shape={block_shape} based on POLY_N={current_poly_n}')
-
-    # Set configuration to components and processor modules
-    components.config = config
-    processor.config = config
-
-    # Initialize configuration variables for each module
-    components._init_config_vars()
-    processor._init_config_vars()
-
-    print(
-        f'Configuration initialized: POLY_N={current_poly_n}, STYLE={current_style}, GRAPH_TYPE={current_graph_type}, MAX_LEVEL={config["MAX_LEVEL"]}, block_shape={config["block_shape"]}'
-    )
-
+import transforms
 
 # Import required functions and classes from processor
 from processor import (
     substitute_layers_for_btp,
-    process_level_for_graph,
+    process_levels,
     EncryptParameterNode,
     BtpScoreParam,
     MpcScoreParam,
     FheScoreParam,
-    add_drop_level_for_graph,
     update_subgraph_node_param,
     get_slot_num,
     populate_pack_num,
     update_skip_for_btp,
     update_shape_for_btp,
     update_level_cost_for_btp,
-    absorb_scale,
     change_skip_for_graph,
-    set_graph_scale,
     set_is_adaptive_avgpool,
     graph_to_task_config,
 )
 
 from typing import Callable
-
-
-def add_btp_layer_in_graph(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: dict, restore_lv: int):
-    refreshed_feature = copy.deepcopy(upstream_feature)
-    base_id = upstream_feature.node_id
-    counter = 0
-    new_id = f'{base_id}_refreshed'
-
-    while any(isinstance(n, FeatureNode) and n.node_id == new_id for n in dag.nodes):
-        counter += 1
-        new_id = f'{base_id}_refreshed_{counter}'
-
-    if counter > 100:
-        raise ValueError(f'refreshed nodes with same node id {new_id}. Something is wrong!')
-
-    refreshed_feature.node_id = new_id
-    if config.get('MPC_REFRESH', False):
-        skip = [1, 1]
-    else:
-        skip = dag.nodes[upstream_feature]['skip']
-    dag.add_node(
-        refreshed_feature,
-        level=dag.nodes[upstream_feature]['level'] + restore_lv,
-        skip=skip,
-        virtual_shape=[1, 1],
-        virtual_skip=[1, 1],
-    )
-    for s in list(dag.successors(upstream_feature)):
-        dag.remove_edge(upstream_feature, s)
-        dag.add_edge(refreshed_feature, s)
-
-    btp_node = ComputeNode(
-        layer_id=f'{upstream_feature.node_id}_bootstrap',
-        layer_type='bootstrapping',
-        channel_input=upstream_feature.channel,
-        channel_output=refreshed_feature.channel,
-        ckks_parameter_id_input=upstream_feature.ckks_parameter_id,
-        ckks_parameter_id_output=refreshed_feature.ckks_parameter_id,
-    )
-    dag.add_node(btp_node, name=btp_node.layer_id, level_cost=-restore_lv)
-    dag.add_edge(upstream_feature, btp_node)
-    dag.add_edge(btp_node, refreshed_feature)
-
-    slot_num = get_slot_num(btp_node.ckks_parameter_id_input, param_dict)
-    dag.nodes[refreshed_feature]['pack_num'] = dag.nodes[upstream_feature]['pack_num']
-
-    return btp_node
 
 
 def update_bd_node_in_sub(node: FeatureNode, subgraph: nx.DiGraph, remaining_dag: nx.DiGraph) -> FeatureNode:
@@ -195,7 +85,7 @@ def update_bd_node_in_sub(node: FeatureNode, subgraph: nx.DiGraph, remaining_dag
 def generate_param_dict_for_graph():
     param_dict = dict()
     poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
-    poly_n = config.get('POLY_N', 65536)
+    poly_n = config.poly_n
     mod_bits = poly_to_mod.get(poly_n, 41)
     param_dict[f'param0'] = EncryptParameterNode(poly_n, mod_bits, mod_bits)
 
@@ -230,6 +120,8 @@ class GraphPartitioner:
         self.entire_graph = entire_graph
         self.param_dict = generate_param_dict_for_graph()
 
+        if temperature < 0:
+            raise ValueError('Temperature must be non-negative. If set to 0, a greedy algorithm will be used.')
         self.temperature = temperature
         self.pbar = tqdm(desc=f'Subgraph explorations (temperature={self.temperature})', unit='it')
 
@@ -243,9 +135,9 @@ class GraphPartitioner:
 
             succ_c = list(subgraph.successors(node))
             if len(succ_c) == 0:
-                if config.get('MPC_REFRESH', False) or config.get('GRAPH_TYPE', 'btp') == 'mpc':
+                if config.mpc_refresh or config.graph_type == 'mpc':
                     level_dict[node] = 1
-                elif config.get('GRAPH_TYPE', 'btp') == 'btp' and not config.get('MPC_REFRESH', False):
+                elif config.graph_type == 'btp' and not config.mpc_refresh:
                     level_dict[node] = 0
             else:
                 successing_subg_compute_nodes = [c for c in succ_c if c in subg_nodes]
@@ -258,7 +150,7 @@ class GraphPartitioner:
                         input_feature_lv.append(level_dict[feat] + subgraph.nodes[c]['level_cost'])
 
                 level_dict[node] = max(input_feature_lv)
-                if level_dict[node] > config['MAX_LEVEL']:
+                if level_dict[node] > config.max_level:
                     return False, -1, level_dict
 
             max_level = max(max_level, level_dict[node])
@@ -291,9 +183,6 @@ class GraphPartitioner:
 
     def remove_small_subgraphs(self, subgraphs: set[frozenset], H: nx.DiGraph) -> list[frozenset]:
         def boltzmann_weighted_probabilities(depths: list[int], temperature: float = 1.0) -> list[float]:
-            if temperature <= 0:
-                raise ValueError('Temperature must be positive.')
-
             depths = np.asarray(depths, dtype=float)
 
             scaled = depths / temperature
@@ -319,17 +208,22 @@ class GraphPartitioner:
                 break
             depths.append(depth)
 
-        chosen_depth = random.choices(depths, weights=boltzmann_weighted_probabilities(depths, self.temperature), k=1)[
-            0
-        ]
-        candidates = sorted(subgraphs_in_depths[chosen_depth], key=lambda x: len(x), reverse=True)[:8]
-        result = [
-            random.choices(
-                candidates,
-                weights=boltzmann_weighted_probabilities([len(c) for c in candidates], self.temperature),
-                k=1,
+        if self.temperature > 1e-6:
+            chosen_depth = random.choices(
+                depths, weights=boltzmann_weighted_probabilities(depths, self.temperature), k=1
             )[0]
-        ]
+            candidates = sorted(subgraphs_in_depths[chosen_depth], key=lambda x: len(x), reverse=True)[:8]
+            result = [
+                random.choices(
+                    candidates,
+                    weights=boltzmann_weighted_probabilities([len(c) for c in candidates], self.temperature),
+                    k=1,
+                )[0]
+            ]
+        else:
+            result = []
+            for d in depths[:2]:
+                result.append(max(subgraphs_in_depths[d], key=lambda x: len(x)))
 
         return result
 
@@ -343,14 +237,19 @@ class GraphPartitioner:
     ) -> frozenset:
         def retrieve_boundary_compute_candidates(nodes: set, subgraph: nx.DiGraph, traversed_nodes: set) -> set:
             boundary_candidates = set()
+            new_traversed_nodes = set()
+
             for u in nodes:
                 if u in traversed_nodes:
                     continue
                 for nbr in list(subgraph.predecessors(u)) + list(subgraph.successors(u)):
                     if nbr not in nodes and isinstance(nbr, ComputeNode):
                         boundary_candidates.add(nbr)
-                    traversed_nodes.add(nbr)
-                traversed_nodes.add(u)
+                    new_traversed_nodes.add(nbr)
+                new_traversed_nodes.add(u)
+
+            traversed_nodes |= new_traversed_nodes
+
             return boundary_candidates
 
         curr_sub = H.subgraph(curr_nodes)
@@ -448,14 +347,14 @@ class GraphPartitioner:
             btp_node_list = list()
             for bd_node in refresh_boundary:
                 lv_to_restore = 1
-                btp_node = add_btp_layer_in_graph(new_graph, bd_node, self.param_dict, lv_to_restore)
+                btp_node = transforms.add_btp_layer(new_graph, bd_node, self.param_dict, lv_to_restore)
                 btp_node_list.append(btp_node)
 
             new_graph_ab = LayerAbstractGraph()
             new_graph_ab.dag = new_graph
 
-            if config.get('MPC_REFRESH', False):
-                absorb_scale(new_graph_ab, config.get('MPC_REFRESH', False))
+            if config.mpc_refresh:
+                absorb_scale(new_graph_ab, config.mpc_refresh)
                 update_subgraph_node_param(new_graph_ab.dag, self.param_dict, 'param0')
                 change_skip_for_graph(new_graph_ab)
                 update_subgraph_node_param(new_graph_ab.dag, self.param_dict, 'param0', True)
@@ -467,10 +366,10 @@ class GraphPartitioner:
                 print('over level ')
                 continue
             self.process_btp_level_cost(new_graph_ab.dag)
-            add_drop_level_for_graph(new_graph_ab, None)
+            transforms.insert_drop_level_layers(new_graph_ab)
             subgraph_cost = calculate_compute_score_for_graph(new_graph, subgraph, self.param_dict)
             for node in btp_node_list:
-                if not config.get('MPC_REFRESH', False):
+                if not config.mpc_refresh:
                     s_param = BtpScoreParam(new_graph_ab.dag, node, self.param_dict)
                 else:
                     s_param = MpcScoreParam(new_graph_ab.dag, node, self.param_dict)
@@ -521,101 +420,9 @@ def restore_node_attributes(G: nx.DiGraph):
                 node.__dict__[attr] = G.nodes[node][attr]
 
 
-def init_graph_level(graph: LayerAbstractGraph):
-    for node in graph.dag.nodes:
-        if isinstance(node, FeatureNode):
-            graph.dag.nodes[node]['level'] = 0
-            graph.dag.nodes[node]['pack_num'] = 1
-
-
-def remove_drop_level_nodes(graph: LayerAbstractGraph) -> LayerAbstractGraph:
-    """
-    Remove all drop_level nodes from the graph and reconnect the graph
-
-    The structure of drop_level nodes is typically:
-    input_feature -> drop_level_compute -> output_feature (with _drop_level_output suffix)
-
-    Structure after removal:
-    input_feature -> (directly connected to subsequent nodes)
-
-    Args:
-        graph: LayerAbstractGraph object
-
-    Returns:
-        LayerAbstractGraph: Graph after removing drop_level nodes
-    """
-    nodes_to_remove = []
-
-    for node in graph.dag.nodes:
-        if isinstance(node, ComputeNode) and 'drop_level' in node.layer_type:
-            nodes_to_remove.append(node)
-
-    for drop_node in nodes_to_remove:
-        input_features = list(graph.dag.predecessors(drop_node))
-        output_features = list(graph.dag.successors(drop_node))
-
-        if not input_features or not output_features:
-            print(f'Warning: drop_level node {drop_node.layer_id} has no input or output')
-            continue
-
-        input_feature = input_features[0]
-        output_feature = output_features[0]
-
-        downstream_nodes = list(graph.dag.successors(output_feature))
-
-        for downstream in downstream_nodes:
-            graph.dag.add_edge(input_feature, downstream)
-
-        graph.dag.remove_node(drop_node)
-        graph.dag.remove_node(output_feature)
-
-    return graph
-
-
-def process_with_no_btp(graph: LayerAbstractGraph):
-    current_graph_type = config.get('GRAPH_TYPE', 'btp')
-
-    # not btp style, set max level for polyrelu
-    poly_n_to_max_level = {8192: 5, 16384: 9, 65536: 24}
-
-    poly_n_to_block_shape = {8192: [64, 64], 16384: [64, 64], 65536: [128, 256]}
-    poly_n_levels = [8192, 16384, 65536]  # always start trying from 8192
-
-    result = None
-    for poly_n in poly_n_levels:
-        # Update configuration
-        config['POLY_N'] = poly_n
-        config['MAX_LEVEL'] = poly_n_to_max_level[poly_n]
-        config['block_shape'] = poly_n_to_block_shape[poly_n]
-
-        # Synchronize the configuration to the components and processor modules
-        components.config = config
-        processor.config = config
-        components._init_config_vars()
-        processor._init_config_vars()
-
-        print(f'Trying POLY_N={poly_n}, MAX_LEVEL={config["MAX_LEVEL"]}, block_shape={config["block_shape"]}')
-
-        # Check whether the level meets the requirements
-        result = reset_level_and_check_level(graph)
-
-        if result is not None:
-            print(f'Success! Using POLY_N={poly_n}, MAX_LEVEL={config["MAX_LEVEL"]}')
-            break
-        else:
-            print(f'Level exceeded with POLY_N={poly_n}, trying next level...')
-
-    if result is None:
-        print(f'Warning: Even with POLY_N=65536, level still exceeds limit!')
-
-    return result
-
-
 def compile_graph(
-    input_file_path: str,
-    output_dir: str | None = None,
-    temperature=1.0,
     pt_graph: LayerAbstractGraph | None = None,
+    temperature=1.0,
 ):
     score, compiled_graph = optimize_task_segments(pt_graph, temperature=temperature)
 
@@ -638,10 +445,8 @@ def reset_level_and_check_level(total_graph: LayerAbstractGraph):
 
 
 def compile_model_btp(
-    input_file_path: Path,
-    output_dir: Path,
-    temperature=1.0,
     pt_graph_prepared: LayerAbstractGraph | None = None,
+    temperature=1.0,
     stdout=False,
 ) -> tuple[float, LayerAbstractGraph]:
     """
@@ -656,10 +461,8 @@ def compile_model_btp(
     np.random.seed(seed)
 
     score, compiled_graph = compile_graph(
-        input_file_path=str(input_file_path),
-        output_dir=str(output_dir),
-        temperature=temperature,
         pt_graph=pt_graph_prepared,
+        temperature=temperature,
     )
 
     if compiled_graph is None:
@@ -675,245 +478,9 @@ def compile_model_btp(
 
 def run_single_compile(args):
     """Wrapper function for multiprocessing - runs a single compilation"""
-    input_file_path, output_dir, temperature, pt_graph_prepared = args
-    score, graph = compile_model_btp(input_file_path, output_dir, temperature, pt_graph_prepared, stdout=True)
+    pt_graph_prepared, temperature = args
+    score, graph = compile_model_btp(pt_graph_prepared, temperature, stdout=True)
     return score, graph
-
-
-def _prepare_graph(input_file_path: Path) -> LayerAbstractGraph:
-    """
-    Prepare graph for compilation (common preparation steps)
-
-    Args:
-        input_file_path: Input pt.json file path
-
-    Returns:
-        Prepared LayerAbstractGraph
-    """
-    pt_graph = LayerAbstractGraph.from_json(str(input_file_path))
-
-    substitute_layers_for_btp(pt_graph)
-    init_graph_level(pt_graph)
-    set_is_adaptive_avgpool(pt_graph)
-    update_shape_for_btp(pt_graph)
-    update_skip_for_btp(pt_graph)
-    update_level_cost_for_btp(pt_graph)
-    absorb_scale(pt_graph)
-
-    return pt_graph
-
-
-def post_process(
-    graph: LayerAbstractGraph,
-    output_dir: Path,
-    score: float,
-    use_btp: bool,
-):
-    """
-    set_scale、add_drop_level and save compilation results to output directory
-
-    Args:
-        graph: Compiled LayerAbstractGraph
-        output_dir: Output directory
-        score: Compilation score
-        use_btp: Whether BTP mode was used (affects graph_to_task_config call)
-    """
-    slot_num = config.get('POLY_N') / 2
-    for node in graph.dag.nodes:
-        if isinstance(node, ComputeNode):
-            node.up_scale_str = list()
-            node.down_scale_str = list()
-            populate_pack_num(graph.dag, node, slot_num)
-
-    set_graph_scale(graph)
-
-    if config.get('SET_LEVEL_MAX', False):
-        process_level_for_graph(graph)
-    else:
-        add_drop_level_for_graph(graph)
-
-    task_dir = output_dir / 'task'
-    server_dir = task_dir / 'server'
-    client_dir = task_dir / 'client'
-    ergs_dir = server_dir
-
-    ergs_dir.mkdir(parents=True, exist_ok=True)
-    client_dir.mkdir(parents=True, exist_ok=True)
-
-    erg0_path = ergs_dir / 'nn_layers_ct_0.json'
-    graph.to_json(dict(), str(erg0_path), score=score)
-
-    if use_btp:
-        graph_to_task_config([graph], str(server_dir))
-    else:
-        graph_to_task_config([graph], str(server_dir), False)
-
-    server_task_config = server_dir / 'task_config.json'
-    client_task_config = client_dir / 'task_config.json'
-    if server_task_config.exists():
-        shutil.copy(str(server_task_config), str(client_task_config))
-
-    poly_n = config.get('POLY_N', 65536)
-    poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
-    mod_bit = poly_to_mod[poly_n]
-    ckks_param = {
-        'param0': {
-            'poly_modulus_degree': poly_n,
-            'n_mult_level': config.get('MAX_LEVEL'),
-            'coeff_modulus_bit_length': mod_bit,
-            'special_prime_bit_length': mod_bit,
-            'pack_num': 4.0,
-        }
-    }
-
-    with open(server_dir / 'ckks_parameter.json', 'w') as f:
-        json.dump(ckks_param, f, indent=4)
-
-    with open(client_dir / 'ckks_parameter.json', 'w') as f:
-        json.dump(ckks_param, f, indent=4)
-
-    print(f'Output directory: {output_dir}')
-    print(f'Generated structure:')
-    print(f'  task/')
-    print(f'    ├── server/')
-    print(f'    │   ├── nn_layers_ct_0.json')
-    print(f'    │   ├── task_config.json')
-    print(f'    │   └── ckks_parameter.json')
-    print(f'    └── client/')
-    print(f'        ├── task_config.json')
-    print(f'        └── ckks_parameter.json')
-
-
-def _try_no_btp(pt_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph | None, float]:
-    """
-    Try no-BTP mode compilation with prepared graph
-
-    Args:
-        pt_graph: Prepared LayerAbstractGraph
-
-    Returns:
-        (succeeded, graph, score): succeeded=True if no-BTP succeeded, graph and score are set on success
-    """
-    print('Step 2: Trying no-BTP mode...')
-    result = process_with_no_btp(pt_graph)
-
-    if result:
-        print('✓ No-BTP mode succeeded! Saving results...')
-
-        total_graph = result
-        restore_node_attributes(total_graph.dag)
-
-        print(f'\n=== No-BTP Results ===')
-        print(f'Score: 0.0')
-        return True, total_graph, 0.0
-
-    print('✗ No-BTP mode failed, switching to BTP mode...')
-    return False, None, float('inf')
-
-
-def _run_btp_compilation(
-    num_experiments: int,
-    input_file_path: Path,
-    output_dir: Path,
-    temperature: float,
-    pt_graph: LayerAbstractGraph,
-    num_workers: int,
-) -> tuple[LayerAbstractGraph | None, float]:
-    """
-    Run BTP mode parallel compilation with prepared graph
-
-    Args:
-        num_experiments: Number of parallel compilation runs
-        input_file_path: Input pt.json file path
-        output_dir: Output directory (passed to worker processes)
-        temperature: Temperature parameter for randomization
-        pt_graph: Prepared graph for BTP compilation
-        num_workers: Number of parallel worker processes
-
-    Returns:
-        (best_graph, best_score): best_graph is None if all runs failed
-    """
-    print('Step 3: Restoring to BTP parameters (POLY_N=65536, MAX_LEVEL=9)...')
-
-    config['POLY_N'] = 65536
-    config['MAX_LEVEL'] = 9
-    config['block_shape'] = [128, 256]
-
-    components.config = config
-    processor.config = config
-    components._init_config_vars()
-    processor._init_config_vars()
-
-    print(f'Step 4: Starting {num_experiments} parallel BTP compilations with {num_workers} processes...')
-
-    # Prepare arguments for each run
-    args_list = [(input_file_path, output_dir, temperature, copy.deepcopy(pt_graph)) for _ in range(num_experiments)]
-
-    # Run compilations in parallel
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        results = list(executor.map(run_single_compile, args_list))
-
-    # Filter out failed results
-    valid_results = [(score, graph) for score, graph in results if graph is not None]
-    failed_count = num_experiments - len(valid_results)
-
-    print(f'\n=== Summary ===')
-    print(f'Total runs: {num_experiments}')
-    print(f'Successful: {len(valid_results)}')
-    print(f'Failed (level limit exceeded): {failed_count}')
-
-    if not valid_results:
-        print('ERROR: All runs failed! No valid results to save.')
-        return None, float('inf')
-
-    # Find the best result
-    best_score, best_graph = min(valid_results, key=lambda x: x[0])
-
-    print(f'\n=== Results ===')
-    print(f'Best score: {best_score}')
-    return best_graph, best_score
-
-
-def run_parallel(
-    num_experiments: int,
-    input_file_path: Path,
-    output_dir: Path,
-    temperature: float,
-    num_workers: int = 16,
-):
-    """
-    Run multiple compilations in parallel and select the best result
-
-    This is the main entry point for compilation. It tries no-BTP mode first,
-    and falls back to BTP mode if needed.
-
-    Args:
-        num_experiments: Number of parallel compilation runs
-        input_file_path: Input pt.json file path
-        output_dir: Output directory (will contain erg0.json, task_config.json)
-        temperature: Temperature parameter for randomization
-        num_workers: Number of parallel worker processes
-    """
-    print(f'Starting compilation...')
-
-    # Prepare graph once
-    print('Step 1: Preparing graph...')
-    pt_graph = _prepare_graph(input_file_path)
-
-    # Try no-BTP mode first
-    succeeded, graph, score = _try_no_btp(pt_graph)
-    if succeeded:
-        post_process(graph, output_dir, score, use_btp=False)
-        return graph, score
-
-    # No-BTP failed, use BTP mode with the same prepared graph
-    graph, score = _run_btp_compilation(
-        num_experiments, input_file_path, output_dir, temperature, pt_graph, num_workers
-    )
-    if graph is not None:
-        post_process(graph, output_dir, score, use_btp=True)
-
-    return graph, score
 
 
 if __name__ == '__main__':
@@ -974,7 +541,7 @@ if __name__ == '__main__':
     print(f'Output directory: {output_dir}')
     print(f'Will generate: erg0.json, task_config.json\n')
 
-    run_parallel(
+    run_pipeline(
         num_experiments=DEFAULT_NUM_EXPERIMENTS,
         input_file_path=input_path,
         output_dir=output_dir,

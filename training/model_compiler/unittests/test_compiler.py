@@ -24,8 +24,8 @@ sys.path.append(str(script_dir.parent.parent))
 
 from nn_tools.export import export_to_onnx
 from model_export.onnx_to_json import onnx_to_json
-from graph_partition_dp import init_config_with_args, run_parallel, config
-from components import LayerAbstractGraph, FeatureNode
+from pipeline import init_config_with_args, run_pipeline
+from components import LayerAbstractGraph, FeatureNode, config
 import nn_modules
 
 
@@ -45,11 +45,11 @@ class TestCompiler(unittest.TestCase):
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
 
         init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
-        graph, score = run_parallel(
+        graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
-            temperature=1.0,
+            temperature=0.0,
             num_workers=1,
         )
 
@@ -69,11 +69,11 @@ class TestCompiler(unittest.TestCase):
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
 
         init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
-        graph, score = run_parallel(
+        graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
-            temperature=1.0,
+            temperature=0.0,
             num_workers=1,
         )
 
@@ -93,17 +93,17 @@ class TestCompiler(unittest.TestCase):
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
 
         init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
-        graph, score = run_parallel(
+        graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
-            temperature=1.0,
+            temperature=0.0,
             num_workers=1,
         )
 
         self.assertEqual(
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)),
-            config['MAX_LEVEL'],
+            config.max_level,
         )
 
     def test_nn3(self):
@@ -118,17 +118,17 @@ class TestCompiler(unittest.TestCase):
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
 
         init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
-        graph, score = run_parallel(
+        graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
-            temperature=1.0,
+            temperature=0.0,
             num_workers=1,
         )
 
         self.assertEqual(
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)),
-            config['MAX_LEVEL'],
+            config.max_level,
         )
 
     def test_nn4(self):
@@ -143,17 +143,17 @@ class TestCompiler(unittest.TestCase):
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
 
         init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
-        graph, score = run_parallel(
+        graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
-            temperature=1.0,
+            temperature=0.0,
             num_workers=1,
         )
 
         self.assertEqual(
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)),
-            config['MAX_LEVEL'],
+            config.max_level,
         )
 
     def test_resnet_basic_block(self):
@@ -168,11 +168,31 @@ class TestCompiler(unittest.TestCase):
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
 
         init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
-        graph, score = run_parallel(
+        graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
-            temperature=1.0,
+            temperature=0.0,
+            num_workers=1,
+        )
+
+    def test_mismatched_scale(self):
+        nn = nn_modules.MismatchedScale()
+        export_to_onnx(
+            nn,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
             num_workers=1,
         )
 

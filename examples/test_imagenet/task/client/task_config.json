@@ -10,7 +10,7 @@
 		128
 	],
 	"server_task": {
-		"erg0": {
+		"nn_layers_ct_0": {
 			"enable_fpga": true
 		}
 	},
