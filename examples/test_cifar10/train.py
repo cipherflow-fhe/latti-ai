@@ -46,10 +46,11 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 log = logging.getLogger(__name__)
 
 
-def get_cifar10_loaders(data_dir, batch_size, num_workers=2):
+def get_cifar10_loaders(data_dir, batch_size, num_workers=2, input_shape=[3, 32, 32]):
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     train_transform = transforms.Compose(
         [
+            transforms.Resize((input_shape[1], input_shape[2])),
             transforms.RandomHorizontalFlip(),
             transforms.RandomCrop(32, 4),
             transforms.ToTensor(),
@@ -58,6 +59,7 @@ def get_cifar10_loaders(data_dir, batch_size, num_workers=2):
     )
     test_transform = transforms.Compose(
         [
+            transforms.Resize((input_shape[1], input_shape[2])),
             transforms.ToTensor(),
             normalize,
         ]
@@ -144,7 +146,7 @@ def main():
     export_dir = args.export_dir or args.output_dir
     os.makedirs(export_dir, exist_ok=True)
 
-    train_loader, test_loader = get_cifar10_loaders(args.data_dir, args.batch_size, args.num_workers)
+    train_loader, test_loader = get_cifar10_loaders(args.data_dir, args.batch_size, args.num_workers, args.input_shape)
 
     # Build model
     model = resnet20()
