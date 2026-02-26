@@ -105,7 +105,7 @@ Baseline Training  →  Operator Replacement & Fine-tuning  →  Model Compilati
 Train a standard ResNet-20 on CIFAR-10 with ReLU activations:
 
 ```bash
-python examples/test_cifar10/train.py --epochs 150 --batch-size 128 --lr 0.1 --output-dir ./runs/cifar10/model
+python examples/test_cifar10/train.py --epochs 150 --batch-size 128 --lr 0.1 --output-dir ./runs/cifar10/model --input-shape 3 32 32
 ```
 
 **Output:** `./runs/cifar10/model/train_baseline.pth`
