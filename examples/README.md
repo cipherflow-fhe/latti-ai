@@ -4,11 +4,13 @@ This directory contains end-to-end encrypted inference examples. Each example re
 
 ## Examples Overview
 
-| Example | Model | Dataset | Input Size |  Encryption | Bootstrapping |
-|---------|-------|---------|------------|------------|---------------|
-| `test_mnist` | Simple CNN | MNIST | 1 x 16 x 16 |  CKKS (N=16384) | No |
-| `test_cifar10` | ResNet-20 | CIFAR-10 | 3 x 32 x 32 |  CKKS (N=65536) | Yes |
-| `test_imagenet` | MobileNetV2 | ImageNet | 3 x 256 x 256 | CKKS (N=65536) | Yes |
+
+| Example         | Model       | Dataset  | Input Size    | Encryption     | Bootstrapping |
+| --------------- | ----------- | -------- | ------------- | -------------- | ------------- |
+| `test_mnist`    | Simple CNN  | MNIST    | 1 x 16 x 16   | CKKS (N=16384) | No            |
+| `test_cifar10`  | ResNet-20   | CIFAR-10 | 3 x 32 x 32   | CKKS (N=65536) | Yes           |
+| `test_imagenet` | MobileNetV2 | ImageNet | 3 x 256 x 256 | CKKS (N=65536) | Yes           |
+
 
 ## Build
 
@@ -43,3 +45,4 @@ MobileNetV2 on ImageNet — a larger-scale example with 1000-class classificatio
 - **Input**: 256x256 RGB image (3 channels)
 - **Output**: 1000-class logits
 - **Poly degree**: N = 65536
+

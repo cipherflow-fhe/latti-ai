@@ -628,7 +628,7 @@ def check_approx_poly_subgraph(subgraph: LayerAbstractGraph, invalid_list: list 
                 if (not is_find_dwon) and (not is_find_up):
                     valid_flag = False
                     return valid_flag
-                elif (not is_find_up) and is_find_dwon and target_node_down.layer_type != 'simple_polyrelu':
+                elif (not is_find_up) and is_find_dwon and target_node_down.layer_type == 'simple_polyrelu':
                     valid_flag = False
                     return valid_flag
 
