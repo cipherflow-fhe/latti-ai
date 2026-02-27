@@ -67,6 +67,7 @@ IS_BALANCE = False
 DEFAULT_SCALE = 1
 
 
+# get_multithread_rate_for_btp
 def get_multithread_rate_for_btp(task_num: int):
     if single_thread:
         return 1
