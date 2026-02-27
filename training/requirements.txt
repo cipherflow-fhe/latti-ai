@@ -9,4 +9,4 @@ ordered-set==4.1.0
 typing_extensions==4.15.0
 graphviz==0.21
 h5py==3.14.0
-torchvision==0.23.0
+pytest==8.3.4
