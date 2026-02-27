@@ -28,19 +28,14 @@ def main(input_filename, output_folder, output_name='graph.gv'):
     graph = graphviz.Graph()
 
     for feature_id, feature_p in ct_json['feature'].items():
+        label_str = f'{feature_p["channel"]}'
         if 'shape' in feature_p.keys():
-            graph.node(
-                name=feature_id,
-                label=f'{feature_p["channel"]}, {feature_p["shape"]}, lv{feature_p["level"]}',
-                # label=feature_id,
-                shape='box',
-            )
-        else:
-            graph.node(
-                name=feature_id,
-                label=f'{feature_p["channel"]}, lv{feature_p["level"]}',
-                shape='box',
-            )
+            label_str += f', {feature_p["shape"]}'
+        label_str += f', lv{feature_p["level"]}'
+        feature_scale = float(feature_p['scale'])
+        if abs(feature_scale - 1.0) > 0.00001:
+            label_str += f', scale:{feature_p["scale"]}'
+        graph.node(name=feature_id, label=label_str, shape='box')
 
     for layer_id, layer_p in ct_json['layer'].items():
         is_mpc_layer = layer_p['type'] in ('relu2d', 'maxpool', 'bootstrapping', 'mpc_refresh')
