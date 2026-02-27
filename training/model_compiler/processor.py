@@ -475,9 +475,9 @@ def get_slot_num(ckks_parameter_id_input: str, param_dict: dict) -> int:
 def set_is_adaptive_avgpool(graph: LayerAbstractGraph):
     for node in graph.dag.nodes:
         if isinstance(node, PoolComputeNode):
-            succ_f = list(graph.dag.successors(node))[0]
-            succ_c = list(graph.dag.successors(succ_f))[0]
-            if succ_c.layer_type == 'reshape':
+            succ_f = next(graph.dag.successors(node))
+            succ_c = next(graph.dag.successors(succ_f), None)
+            if (succ_c is not None) and (succ_c.layer_type == 'reshape'):
                 node.is_adaptive_avgpool = True
             else:
                 node.is_adaptive_avgpool = False
