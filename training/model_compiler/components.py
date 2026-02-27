@@ -544,6 +544,23 @@ class MultScalarComputeNode(ComputeNode):
         self.bias_scale = 1
 
 
+class MultCoeffComputeNode(ComputeNode):
+    def __init__(
+        self,
+        layer_id: str,
+        layer_type: str,
+        coeff: float,
+        channel_input: int,
+        channel_output: int,
+        ckks_parameter_id_input: str = 'param0',
+        ckks_parameter_id_output: str = 'param0',
+    ):
+        super().__init__(
+            layer_id, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
+        )
+        self.coeff = coeff
+
+
 class ReshapeComputeNode(ComputeNode):
     def __init__(
         self,
@@ -618,7 +635,7 @@ class LayerAbstractGraph:
             groups = 0
             dim = feature_json['dim']
             channel = feature_json['channel']
-            scale = feature_json['scale']
+            scale = 1.0
             ckks_parameter_id = feature_json['ckks_parameter_id']
             if dim == 2:
                 shape = feature_json['shape']
@@ -772,6 +789,8 @@ class LayerAbstractGraph:
                 )
             elif 'reshape' in layer_type:
                 compute_node = ReshapeComputeNode(key, layer_type, channel_input, channel_output, layer_json['shape'])
+            elif layer_type == 'mult_coeff':
+                compute_node = MultCoeffComputeNode(key, layer_type, layer_json['coeff'], channel_input, channel_output)
             else:
                 compute_node = ComputeNode(
                     key, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
@@ -801,6 +820,8 @@ class LayerAbstractGraph:
             elif 'resize' == layer_type:
                 level_cost = 1
             elif 'batchnorm' in layer_type or 'pool' in layer_type:
+                level_cost = 0
+            elif layer_type == 'mult_coeff':
                 level_cost = 0
 
             graph_info.dag.add_node(compute_node, name=key, level_cost=level_cost)
@@ -1116,6 +1137,17 @@ class LayerAbstractGraph:
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                     'shape': layer.shape,
+                }
+            if layer_type == 'mult_coeff':
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'coeff': layer.coeff,
+                    'channel_input': channel_input,
+                    'channel_output': channel_output,
+                    'ckks_parameter_id_input': ckks_parameter_id_input,
+                    'ckks_parameter_id_output': ckks_parameter_id_output,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
                 }
             if is_last_mpc:
                 layers[layer_id]['is_end'] = True
