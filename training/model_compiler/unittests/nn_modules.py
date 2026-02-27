@@ -25,7 +25,7 @@ sys.path.append(str(script_dir.parent.parent))
 from nn_tools.activations import RangeNormPoly2d
 
 
-class NN0(nn.Module):
+class SingleConv(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
@@ -35,7 +35,7 @@ class NN0(nn.Module):
         return x
 
 
-class NN1(nn.Module):
+class SingleAct(nn.Module):
     def __init__(self):
         super().__init__()
         self.relu0 = RangeNormPoly2d(num_features=32)
@@ -45,7 +45,48 @@ class NN1(nn.Module):
         return x
 
 
-class NN2(nn.Module):
+class SingleAvgpool(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.pool0 = nn.AvgPool2d(kernel_size=2, padding=1)
+
+    def forward(self, x):
+        x = self.pool0(x)
+        return x
+
+
+class SingleMaxpool(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.pool0 = nn.MaxPool2d(kernel_size=2, padding=1)
+
+    def forward(self, x):
+        x = self.pool0(x)
+        return x
+
+
+class SingleDense(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # TODO: if bias=False, the ONNX contains a (unsupported) MatMul op instead of Gemm
+        self.dense0 = nn.Linear(in_features=64, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.dense0(x)
+        return x
+
+
+class SingleReshape(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.reshape0 = nn.Flatten(1)
+
+    def forward(self, x):
+        x = self.reshape0(x)
+        return x
+
+
+class ConvSeries(nn.Module):
     def __init__(self):
         super().__init__()
         self.n_layers = 40
@@ -59,7 +100,7 @@ class NN2(nn.Module):
         return x
 
 
-class NN3(nn.Module):
+class ActSeries(nn.Module):
     def __init__(self):
         super().__init__()
         self.n_layers = 20
@@ -73,7 +114,7 @@ class NN3(nn.Module):
         return x
 
 
-class NN4(nn.Module):
+class ConvSeriesWithStride(nn.Module):
     def __init__(self):
         super().__init__()
         self.n_layers = 20

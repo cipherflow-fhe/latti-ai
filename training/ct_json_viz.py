@@ -45,16 +45,16 @@ def main(input_filename, output_folder, output_name='graph.gv'):
     for layer_id, layer_p in ct_json['layer'].items():
         is_mpc_layer = layer_p['type'] in ('relu2d', 'maxpool', 'bootstrapping', 'mpc_refresh')
         if is_mpc_layer:
-            graph.node(name=layer_id, label=f'type_{layer_p["type"]}', style='filled', fillcolor='cornflowerblue')
+            graph.node(name=layer_id, label=f'{layer_p["type"]}', style='filled', fillcolor='cornflowerblue')
         elif layer_p['type'] == 'mult_scalar':
-            graph.node(name=layer_id, label=f'type_{layer_p["type"]}', style='filled', fillcolor='yellow')
+            graph.node(name=layer_id, label=f'{layer_p["type"]}', style='filled', fillcolor='yellow')
         elif layer_p['type'] == 'drop_level':
-            graph.node(name=layer_id, label=f'type_{layer_p["type"]}', style='filled', fillcolor='red')
+            graph.node(name=layer_id, label=f'{layer_p["type"]}', style='filled', fillcolor='red')
         else:
             if 'weight_scale' in layer_p.keys():
-                graph.node(name=layer_id, label=f'type_{layer_id},scale_{layer_p["weight_scale"]}')
+                graph.node(name=layer_id, label=f'{layer_id}, scale:{layer_p["weight_scale"]}')
             else:
-                graph.node(name=layer_id, label=f'type_{layer_id}')
+                graph.node(name=layer_id, label=f'{layer_id}')
         for input_id in layer_p['feature_input']:
             graph.edge(input_id, layer_id)
         for output_id in layer_p['feature_output']:
