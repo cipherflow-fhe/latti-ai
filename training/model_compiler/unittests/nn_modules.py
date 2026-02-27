@@ -127,11 +127,75 @@ class MismatchedScale(nn.Module):
     def __init__(self):
         super().__init__()
         self.avgpool = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
-    
+
     def forward(self, x):
         avg = self.avgpool(x)
         x = x + avg
         return x
+
+
+class Unit(nn.Module):
+    def __init__(self, pairs: int = 2):
+        super().__init__()
+        self.pairs = pairs
+        self.convs = nn.ModuleList()
+        self.acts = nn.ModuleList()
+        for i in range(pairs):
+            self.convs.append(nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1))
+            self.acts.append(RangeNormPoly2d(num_features=32))
+
+    def forward(self, x):
+        for i in range(self.pairs):
+            x = self.convs[i](x)
+            x = self.acts[i](x)
+        return x
+
+
+class Intertwined(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.units = nn.ModuleList()
+        for i in range(8):
+            self.units.append(Unit(pairs=(3 if i % 2 == 0 else 2)))
+
+    def forward(self, x):
+        x0, x1 = self.units[0](x), self.units[1](x)
+        x0, x1 = self.units[2](x0) + self.units[3](x1), self.units[4](x0) + self.units[5](x1)
+        x = self.units[6](x0) + self.units[7](x1)
+        return x
+
+
+class MutipleInputs(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.n_inputs = 3
+        self.units = nn.ModuleList()
+        for i in range(self.n_inputs + 1):
+            self.units.append(Unit(pairs=5))
+
+    def forward(self, xs):
+        s = torch.zeros_like(x)
+        for i in range(self.n_inputs):
+            s += self.units[i](xs[i])
+        x = self.units[self.n_inputs](s)
+        return x
+
+
+class MutipleOutputs(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.n_outputs = 3
+        self.units = nn.ModuleList()
+        for i in range(self.n_outputs + 1):
+            self.units.append(Unit(pairs=5))
+
+    def forward(self, x):
+        x = torch.zeros_like(x)
+        x = self.units[0](x)
+        ys = list()
+        for i in range(self.n_outputs):
+            ys.append(self.units[i + 1](x))
+        return ys
 
 
 class WrongPadding(nn.Module):

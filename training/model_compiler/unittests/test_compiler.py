@@ -196,6 +196,68 @@ class TestCompiler(unittest.TestCase):
             num_workers=1,
         )
 
+    def test_intertwined(self):
+        nn = nn_modules.Intertwined()
+        export_to_onnx(
+            nn,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+
+    @unittest.skip('Not supported yet')
+    def test_multiple_inputs(self):
+        nn = nn_modules.MutipleInputs()
+        export_to_onnx(
+            nn,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+
+    @unittest.skip('Not supported yet')
+    def test_multiple_outputs(self):
+        nn = nn_modules.MutipleOutputs()
+        export_to_onnx(
+            nn,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+
     def test_wrong_padding(self):
         nn = nn_modules.WrongPadding()
         export_to_onnx(
