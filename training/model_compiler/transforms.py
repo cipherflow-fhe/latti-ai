@@ -470,6 +470,7 @@ def set_scale_for_node(graph: LayerAbstractGraph, c_node: ComputeNode, scale: fl
 
 
 def set_feature_scales(graph: LayerAbstractGraph):
+    mpc_scale = 1.0
     for compute in graph.dag.nodes:
         scale = 1.0
         if not isinstance(compute, ComputeNode):

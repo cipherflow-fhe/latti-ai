@@ -354,7 +354,7 @@ def change_conv_transpose_shape(graph: LayerAbstractGraph):
                         shortest_path = nx.shortest_path(graph.dag, target_c_node, c_node)
                         for node_in in shortest_path:
                             if isinstance(node_in, ComputeNode):
-                                if node_in.layer_type == APPROX_POLY_TYPE:
+                                if node_in.layer_type == config.approx_poly_type:
                                     node_in.upsample_factor_in = target_c_node.upsample_factor_in
 
     return name_pair
@@ -385,7 +385,7 @@ def update_shape_for_btp(graph: LayerAbstractGraph):
                 for i in range(2):
                     succs[0].shape[i] = preds[0].shape[i] / compute_node.stride[i]
 
-                upsample_layer = add_layer(
+                upsample_layer = transforms.add_layer(
                     graph,
                     name_pair[compute_node.layer_id][0],
                     0,
@@ -577,9 +577,9 @@ def add_mpc_refresh_mult_scalar(graph: LayerAbstractGraph, node: ComputeNode):
         graph.dag.nodes[input]['skip'][0] < node.upsample_factor_in[0]
         or graph.dag.nodes[input]['skip'][1] < node.upsample_factor_in[1]
     ) or node.layer_type != 'resize':
-        add_mult_scalar_layer = add_layer(graph, node, 0, 0, 'mult_scalar', preds, None)
+        add_mult_scalar_layer = transforms.add_layer(graph, node, 0, 0, 'mult_scalar', preds, None)
         preds = list(graph.dag.predecessors(add_mult_scalar_layer))
-        add_mpc_refresh = add_layer(graph, add_mult_scalar_layer, 0, 0, 'bootstrapping', preds, None)
+        add_mpc_refresh = transforms.add_layer(graph, add_mult_scalar_layer, 0, 0, 'bootstrapping', preds, None)
 
         nodes_to_process = [add_mpc_refresh, add_mult_scalar_layer]
         upsample_factors = node.upsample_factor_in

@@ -67,6 +67,7 @@ IS_BALANCE = False
 DEFAULT_SCALE = 1
 
 
+# get_multithread_rate_for_btp
 def get_multithread_rate_for_btp(task_num: int):
     if single_thread:
         return 1
@@ -354,7 +355,7 @@ class FeatureNode:
             virtual_shape = getattr(self, 'virtual_shape', [1, 1])
             virtual_skip = getattr(self, 'virtual_skip', [1, 1])
             info['skip'] = virtual_shape[0] * virtual_shape[1] * virtual_skip[0] * virtual_skip[1]
-            info['pack_num'] = math.ceil(POLY_N / 2 / info['skip'])
+            info['pack_num'] = math.ceil(config.poly_n / 2 / info['skip'])
 
         info['ckks_parameter_id'] = self.ckks_parameter_id
         info['level'] = int(self.level)
@@ -1476,7 +1477,7 @@ class MpcScoreParam:
 
     def get_score(self) -> float:
         if 'relu2d' in self.compute_node.layer_type or 'pool' in self.compute_node.layer_type:
-            if 'relu2d' == self.compute_node.layer_type or MPC_REFRESH:
+            if 'relu2d' == self.compute_node.layer_type or config.mpc_refresh:
                 kernel_scale = 1
             elif 'pool' in self.compute_node.layer_type:
                 kernel_scale = self.compute_node.kernel_shape[0] * self.compute_node.kernel_shape[1]
@@ -1486,7 +1487,7 @@ class MpcScoreParam:
                 self.n_packed_in * self.input_ct_score + self.n_packed_out * self.output_ct_score
             ) * ct_trans_rate
             return n_relu_score + n_ct_score
-        if 'bootstrapping' in self.compute_node.layer_type and MPC_REFRESH:
+        if 'bootstrapping' in self.compute_node.layer_type and config.mpc_refresh:
             shape = self.preds[0].shape
             n_ct_score = (
                 self.n_packed_in * self.input_ct_score + self.n_packed_out * self.output_ct_score

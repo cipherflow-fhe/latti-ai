@@ -354,7 +354,7 @@ class GraphPartitioner:
             new_graph_ab.dag = new_graph
 
             if config.mpc_refresh:
-                absorb_scale(new_graph_ab, config.mpc_refresh)
+                transforms.absorb_scale(new_graph_ab, config.mpc_refresh)
                 update_subgraph_node_param(new_graph_ab.dag, self.param_dict, 'param0')
                 change_skip_for_graph(new_graph_ab)
                 update_subgraph_node_param(new_graph_ab.dag, self.param_dict, 'param0', True)
@@ -519,7 +519,7 @@ if __name__ == '__main__':
     args = argparser.parse_args()
 
     # Initialize configuration based on command line arguments (or use defaults)
-    init_config_with_args(poly_n=args.poly_n, style=args.style, graph_type=args.graph_type)
+    # init_config_with_args(poly_n=args.poly_n, style=args.style, graph_type=args.graph_type)
 
     # Main process mode: run multi-process parallel compilation
     print(f'Using temperature: {DEFAULT_TEMPERATURE}')
@@ -541,10 +541,10 @@ if __name__ == '__main__':
     print(f'Output directory: {output_dir}')
     print(f'Will generate: erg0.json, task_config.json\n')
 
-    run_pipeline(
-        num_experiments=DEFAULT_NUM_EXPERIMENTS,
-        input_file_path=input_path,
-        output_dir=output_dir,
-        temperature=DEFAULT_TEMPERATURE,
-        num_workers=DEFAULT_NUM_WORKERS,
-    )
+    # run_pipeline(
+    #     num_experiments=DEFAULT_NUM_EXPERIMENTS,
+    #     input_file_path=input_path,
+    #     output_dir=output_dir,
+    #     temperature=DEFAULT_TEMPERATURE,
+    #     num_workers=DEFAULT_NUM_WORKERS,
+    # )

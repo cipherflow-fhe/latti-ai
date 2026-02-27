@@ -49,10 +49,10 @@ def init_config_with_args(poly_n=None, style=None, graph_type=None):
     # Automatically set MAX_LEVEL based on POLY_N and GRAPH_TYPE
     if current_graph_type == 'btp':
         # BTP version configuration
-        poly_n_to_max_level = {8192: 5, 16384: 7, 65536: 9}
+        poly_n_to_max_level = {65536: 9}
     else:
         # Non-BTP version configuration
-        poly_n_to_max_level = {8192: 5, 16384: 9, 65536: 24}
+        poly_n_to_max_level = {8192: 5, 16384: 9, 32768: 17, 65536: 33}
 
     max_level = poly_n_to_max_level.get(current_poly_n)
     if max_level is not None:
@@ -64,7 +64,7 @@ def init_config_with_args(poly_n=None, style=None, graph_type=None):
         print(f'Warning: No MAX_LEVEL mapping for POLY_N={current_poly_n}, using value from config.json')
 
     # Automatically set block_shape based on POLY_N
-    poly_n_to_block_shape = {65536: [128, 256], 16384: [64, 64], 8192: [64, 64]}
+    poly_n_to_block_shape = {65536: [128, 256], 32768: [128, 128], 16384: [64, 64], 8192: [64, 64]}
     block_shape = poly_n_to_block_shape.get(current_poly_n, [64, 64])
     config.block_shape = block_shape
     print(f'Automatically set block_shape={block_shape} based on POLY_N={current_poly_n}')
@@ -128,10 +128,10 @@ def process_with_no_btp(graph: LayerAbstractGraph):
     current_graph_type = config.graph_type
 
     # not btp style, set max level for polyrelu
-    poly_n_to_max_level = {8192: 5, 16384: 9, 65536: 24}
+    poly_n_to_max_level = {8192: 5, 16384: 9, 32768: 17, 65536: 33}
 
-    poly_n_to_block_shape = {8192: [64, 64], 16384: [64, 64], 65536: [128, 256]}
-    poly_n_levels = [8192, 16384, 65536]  # always start trying from 8192
+    poly_n_to_block_shape = {8192: [64, 64], 16384: [64, 64], 32768: [128, 128], 65536: [128, 256]}
+    poly_n_levels = [8192, 16384, 32768, 65536]  # always start trying from 8192
 
     result = None
     for poly_n in poly_n_levels:
