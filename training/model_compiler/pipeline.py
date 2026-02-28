@@ -64,7 +64,7 @@ def init_config_with_args(poly_n=None, style=None, graph_type=None):
         print(f'Warning: No MAX_LEVEL mapping for POLY_N={current_poly_n}, using value from config.json')
 
     # Automatically set block_shape based on POLY_N
-    poly_n_to_block_shape = {65536: [128, 256], 32768: [128, 128], 16384: [64, 64], 8192: [64, 64]}
+    poly_n_to_block_shape = {65536: [128, 128], 32768: [128, 128], 16384: [64, 64], 8192: [64, 64]}
     block_shape = poly_n_to_block_shape.get(current_poly_n, [64, 64])
     config.block_shape = block_shape
     print(f'Automatically set block_shape={block_shape} based on POLY_N={current_poly_n}')
@@ -179,7 +179,7 @@ def run_btp_compilation(
 
     config.poly_n = 65536
     config.max_level = 9
-    config.block_shape = [128, 256]
+    config.block_shape = [128, 128]
 
     print(f'Step 4: Starting {num_experiments} parallel BTP compilations with {num_workers} processes...')
 
