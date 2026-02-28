@@ -84,7 +84,7 @@ def update_bd_node_in_sub(node: FeatureNode, subgraph: nx.DiGraph, remaining_dag
 
 def generate_param_dict_for_graph():
     param_dict = dict()
-    poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
+    poly_to_mod = {8192: 30, 16384: 34, 32768: 40, 65536: 45}
     poly_n = config.poly_n
     mod_bits = poly_to_mod.get(poly_n, 41)
     param_dict[f'param0'] = EncryptParameterNode(poly_n, mod_bits, mod_bits)

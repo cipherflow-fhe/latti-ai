@@ -27,6 +27,7 @@ from model_export.onnx_to_json import onnx_to_json
 from pipeline import init_config_with_args, run_pipeline
 from components import LayerAbstractGraph, FeatureNode, config
 import nn_modules
+from processor import check_level_cost, check_multi_input_level_skip_aligned
 
 
 class TestCompiler(unittest.TestCase):
@@ -325,6 +326,8 @@ class TestCompiler(unittest.TestCase):
             temperature=0.0,
             num_workers=1,
         )
+        self.assertEqual(check_level_cost(graph), True)
+        self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
 
     def test_resnet_20(self):
         import torch.nn as nn
@@ -365,6 +368,8 @@ class TestCompiler(unittest.TestCase):
             temperature=0.0,
             num_workers=1,
         )
+        self.assertEqual(check_level_cost(graph), True)
+        self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
 
     def test_mismatched_scale(self):
         model = nn_modules.MismatchedScale()

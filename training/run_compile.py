@@ -184,7 +184,7 @@ Examples:
         task_dir = output_dir / 'task'
         if task_dir.exists():
             print(
-                f'[Compile] Structure: task/server/ergs/erg0.json, task/{{server,client}}/{{task_config,ckks_parameter}}.json'
+                f'[Compile] Structure: task/server/nn_layers_ct_0.json, task/{{server,client}}/{{task_config,ckks_parameter}}.json'
             )
 
         return 0
