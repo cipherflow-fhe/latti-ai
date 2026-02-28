@@ -638,6 +638,69 @@ def change_skip_for_graph(graph: LayerAbstractGraph):
                 add_mpc_refresh_mult_scalar(graph, c_node)
 
 
+def check_level_cost(graph: LayerAbstractGraph) -> bool:
+    """
+    Check that for each compute node: output_level - input_level == level_cost.
+
+    Returns True if all compute nodes satisfy the constraint, False otherwise.
+    """
+    result = True
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode) or node.layer_type in ['drop_level', 'bootstrapping']:
+            continue
+        level_cost = graph.dag.nodes[node].get('level_cost')
+        if level_cost is None:
+            continue
+        preds: list[FeatureNode] = list(graph.dag.predecessors(node))
+        succs: list[FeatureNode] = list(graph.dag.successors(node))
+        if not preds or not succs:
+            continue
+        input_level = max(graph.dag.nodes[p]['level'] for p in preds)
+        output_level = graph.dag.nodes[succs[0]]['level']
+        if input_level - output_level != level_cost:
+            print(
+                f'[check_level_cost] FAIL: {node.layer_id} ({node.layer_type}): '
+                f'input_level({input_level}) - output_level({output_level}) = '
+                f'{input_level - output_level}, expected level_cost={level_cost}'
+            )
+            result = False
+    return result
+
+
+def check_multi_input_level_skip_aligned(graph: LayerAbstractGraph) -> bool:
+    """
+    Check that for each compute node with multiple input FeatureNodes,
+    all inputs have the same skip and level.
+
+    Returns True if all such nodes satisfy the constraint, False otherwise.
+    """
+    result = True
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode):
+            continue
+        preds: list[FeatureNode] = list(graph.dag.predecessors(node))
+        if len(preds) < 2:
+            continue
+        base_level = graph.dag.nodes[preds[0]]['level']
+        base_skip = graph.dag.nodes[preds[0]]['skip'][:2]
+        for p in preds[1:]:
+            p_level = graph.dag.nodes[p]['level']
+            p_skip = graph.dag.nodes[p]['skip'][:2]
+            if p_level != base_level:
+                print(
+                    f'[check_multi_input_consistency] FAIL level: {node.layer_id} ({node.layer_type}): '
+                    f'{preds[0].node_id} level={base_level} vs {p.node_id} level={p_level}'
+                )
+                result = False
+            if p_skip != base_skip:
+                print(
+                    f'[check_multi_input_consistency] FAIL skip: {node.layer_id} ({node.layer_type}): '
+                    f'{preds[0].node_id} skip={base_skip} vs {p.node_id} skip={p_skip}'
+                )
+                result = False
+    return result
+
+
 def set_depth_for_graph(graph: LayerAbstractGraph):
     for node in graph.dag.nodes:
         node.depth = 0

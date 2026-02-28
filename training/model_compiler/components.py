@@ -42,10 +42,7 @@ class GlobalConfig:
             cls._instance.mpc_refresh = config_dict.get('MPC_REFRESH', False)
             cls._instance.approx_poly_type = config_dict.get('APPROX_POLY_TYPE', 'simple_polyrelu')
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
-            if cls._instance.mpc_refresh:
-                cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'simple_polyrelu']
-            else:
-                cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar']
+            cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'simple_polyrelu']
 
         return cls._instance
 
@@ -795,7 +792,7 @@ class LayerAbstractGraph:
                 compute_node = ComputeNode(
                     key, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
                 )
-                if layer_type == 'relu2d' and config.mpc_refresh == False:
+                if layer_type == 'relu2d' and not config.mpc_refresh:
                     raise ValueError('Relu2d is not supported in current mode')
                 if 'concat2d' == layer_type:
                     concat_input_index_list = list()
@@ -849,7 +846,7 @@ class LayerAbstractGraph:
         score=0.0,
     ) -> None:
         param_dict = dict()
-        poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
+        poly_to_mod = {8192: 30, 16384: 34, 32768: 40, 65536: 45}
         mod_bits = poly_to_mod.get(config.poly_n, 41)
         param_dict.update(
             {

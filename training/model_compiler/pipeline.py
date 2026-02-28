@@ -253,7 +253,7 @@ def dump_graph(
         shutil.copy(str(server_task_config), str(client_task_config))
 
     poly_n = config.poly_n
-    poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
+    poly_to_mod = {8192: 30, 16384: 34, 32768: 40, 65536: 45}
     mod_bit = poly_to_mod[poly_n]
     ckks_param = {
         'param0': {
