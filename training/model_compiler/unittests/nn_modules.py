@@ -267,3 +267,18 @@ class WrongGroups(nn.Module):
     def forward(self, x):
         x = self.conv0(x)
         return x
+
+
+class Drop_level_nn(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(32, 32, 3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.relu1 = RangeNormPoly2d(num_features=32)
+
+    def forward(self, x):
+        x1 = self.conv1(x)
+        x2 = self.bn1(x1)
+        x3 = self.relu1(x2)
+        x4 = x3 + x
+        return x4

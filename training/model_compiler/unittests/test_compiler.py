@@ -27,6 +27,7 @@ from model_export.onnx_to_json import onnx_to_json
 from pipeline import init_config_with_args, run_pipeline
 from components import LayerAbstractGraph, FeatureNode, config
 import nn_modules
+from processor import check_level_cost, check_multi_input_level_skip_aligned
 
 
 class TestCompiler(unittest.TestCase):
@@ -255,6 +256,8 @@ class TestCompiler(unittest.TestCase):
             temperature=0.0,
             num_workers=1,
         )
+        self.assertEqual(check_level_cost(graph), True)
+        self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
 
     def test_mismatched_scale(self):
         nn = nn_modules.MismatchedScale()
@@ -376,6 +379,28 @@ class TestCompiler(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, r'Unsupported groups value: 2'):
             onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+    def test_drop_level(self):
+        nn = nn_modules.Drop_level_nn()
+        export_to_onnx(
+            nn,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+        self.assertEqual(check_level_cost(graph), True)
+        self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
 
 
 if __name__ == '__main__':
