@@ -121,7 +121,7 @@ class _SimplePolyreluExport(torch.autograd.Function):
             scale_after_f=scale_after,
             degree_i=degree,
             activation_s=activation,
-        )
+        ).setType(x.type())
 
 
 class Simple_Polyrelu(nn.Module):
@@ -229,7 +229,7 @@ class _RangeNormPoly2dExport(torch.autograd.Function):
             degree_i=degree,
             eps_f=eps,
             activation_s=activation,
-        )
+        ).setType(x.type())
 
 
 class RangeNormPoly2d(nn.Module):
