@@ -646,7 +646,7 @@ def check_level_cost(graph: LayerAbstractGraph) -> bool:
     """
     result = True
     for node in graph.dag.nodes:
-        if not isinstance(node, ComputeNode):
+        if not isinstance(node, ComputeNode) or node.layer_type in ['drop_level', 'bootstrapping']:
             continue
         level_cost = graph.dag.nodes[node].get('level_cost')
         if level_cost is None:

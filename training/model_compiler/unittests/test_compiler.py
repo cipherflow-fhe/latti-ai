@@ -368,6 +368,8 @@ class TestCompiler(unittest.TestCase):
             temperature=0.0,
             num_workers=1,
         )
+        self.assertEqual(check_level_cost(graph), True)
+        self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
 
     def test_mismatched_scale(self):
         model = nn_modules.MismatchedScale()
