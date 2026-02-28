@@ -782,8 +782,6 @@ void InferenceProcess::run_task(bool is_mpc) {
     }
 
     for (const auto& layer : json_layers.items()) {
-        Timer aa;
-        aa.start();
         const string& key = layer.key();
 
         const string& layer_type = layer.value()["type"].get<string>();
