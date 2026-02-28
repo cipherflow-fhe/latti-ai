@@ -27,6 +27,7 @@ from model_export.onnx_to_json import onnx_to_json
 from pipeline import init_config_with_args, run_pipeline
 from components import LayerAbstractGraph, FeatureNode, config
 import nn_modules
+from processor import check_level_cost, check_multi_input_level_skip_aligned
 
 
 class TestCompiler(unittest.TestCase):
@@ -325,6 +326,50 @@ class TestCompiler(unittest.TestCase):
             temperature=0.0,
             num_workers=1,
         )
+        self.assertEqual(check_level_cost(graph), True)
+        self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
+
+    def test_resnet_20(self):
+        import torch.nn as nn
+        from training.nn_tools.activations import RangeNormPoly2d, Simple_Polyrelu
+        from training.nn_tools import (
+            export_to_onnx,
+            fuse_and_export_h5,
+            replace_activation_with_poly,
+            replace_maxpool_with_avgpool,
+        )
+        from resnet import resnet20
+
+        model = resnet20()
+
+        replace_maxpool_with_avgpool(model)
+        replace_activation_with_poly(
+            model,
+            old_cls=nn.ReLU,
+            new_module_factory=Simple_Polyrelu,
+            upper_bound=3.0,
+            degree=4,
+        )
+
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 3, 32, 32]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+        self.assertEqual(check_level_cost(graph), True)
+        self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
 
     def test_resnet_20(self):
         import torch.nn as nn
