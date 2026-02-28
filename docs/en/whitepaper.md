@@ -721,8 +721,8 @@ We tested using the ResNet20 model. Our framework's encrypted inference model in
 
 | Model | Parameters (M)| Baseline Model Accuracy| Secure Inference Model Accuracy | Computation Resource | Inference Latency (s) |
 | :---: | :---: |  :---: |  :---: | :---: | :---: |
-| ResNet20 | 0.3 | 91.9% | 92.0% | 16-thread CPU | 467.4 |
-| ResNet20 | 0.3 | 91.9% | 92.0% | GPU | 27.0 |
+| ResNet20 | 0.3 | 91.9% | 92.0% | 16-thread CPU | 445.2 |
+| ResNet20 | 0.3 | 91.9% | 92.0% | GPU | 15.6 |
 
 #### ImageNet Dataset
 
