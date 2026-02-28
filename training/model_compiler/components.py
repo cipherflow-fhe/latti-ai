@@ -795,6 +795,8 @@ class LayerAbstractGraph:
                 compute_node = ComputeNode(
                     key, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
                 )
+                if layer_type == 'relu2d' and config.mpc_refresh == False:
+                    raise ValueError('Relu2d is not supported in current mode')
                 if 'concat2d' == layer_type:
                     concat_input_index_list = list()
                     for name in feature_input:
