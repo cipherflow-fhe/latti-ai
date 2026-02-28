@@ -26,35 +26,32 @@ def main(input_filename, output_folder, output_name='graph.gv'):
         ct_json = json.load(f)
 
     graph = graphviz.Graph()
+    graph.attr(ranksep='0.2')
 
     for feature_id, feature_p in ct_json['feature'].items():
+        label_str = f'{feature_p["channel"]}'
         if 'shape' in feature_p.keys():
-            graph.node(
-                name=feature_id,
-                label=f'{feature_p["channel"]}, {feature_p["shape"]}, lv{feature_p["level"]}',
-                # label=feature_id,
-                shape='box',
-            )
-        else:
-            graph.node(
-                name=feature_id,
-                label=f'{feature_p["channel"]}, lv{feature_p["level"]}',
-                shape='box',
-            )
+            label_str += f', {feature_p["shape"]}'
+        label_str += f', lv{feature_p["level"]}'
+        feature_scale = float(feature_p['scale'])
+        if abs(feature_scale - 1.0) > 0.00001:
+            label_str += f', scale:{feature_p["scale"]}'
+        graph.node(name=feature_id, label=label_str, shape='box')
 
     for layer_id, layer_p in ct_json['layer'].items():
-        is_mpc_layer = layer_p['type'] in ('relu2d', 'maxpool', 'bootstrapping', 'mpc_refresh')
-        if is_mpc_layer:
-            graph.node(name=layer_id, label=f'{layer_p["type"]}', style='filled', fillcolor='cornflowerblue')
+        label_str = f'{layer_p["type"]}'
+        scale = float(layer_p.get('weight_scale', 1.0))
+        if abs(scale - 1.0) > 0.00001:
+            label_str += f', scale:{scale:4g}'
+        if layer_p['type'] in ('relu2d', 'maxpool', 'bootstrapping', 'mpc_refresh'):
+            graph.node(name=layer_id, label=label_str, style='filled', fillcolor='cornflowerblue')
         elif layer_p['type'] == 'mult_scalar':
-            graph.node(name=layer_id, label=f'{layer_p["type"]}', style='filled', fillcolor='yellow')
+            graph.node(name=layer_id, label=label_str, style='filled', fillcolor='yellow')
         elif layer_p['type'] == 'drop_level':
-            graph.node(name=layer_id, label=f'{layer_p["type"]}', style='filled', fillcolor='red')
+            graph.node(name=layer_id, label=label_str, style='filled', fillcolor='red')
         else:
-            if 'weight_scale' in layer_p.keys():
-                graph.node(name=layer_id, label=f'{layer_id}, scale:{layer_p["weight_scale"]}')
-            else:
-                graph.node(name=layer_id, label=f'{layer_id}')
+            graph.node(name=layer_id, label=label_str)
+
         for input_id in layer_p['feature_input']:
             graph.edge(input_id, layer_id)
         for output_id in layer_p['feature_output']:

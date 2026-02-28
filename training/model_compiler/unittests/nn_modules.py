@@ -86,6 +86,15 @@ class SingleReshape(nn.Module):
         return x
 
 
+class SingleMultCoeff(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        x = 5 * x
+        return x
+
+
 class ConvSeries(nn.Module):
     def __init__(self):
         super().__init__()
@@ -137,6 +146,32 @@ class ConvSeriesWithStride(nn.Module):
         return x
 
 
+class MultCoeffSeries(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.n_layers = 5
+
+    def forward(self, x):
+        for i in range(self.n_layers):
+            x = x * (1.1 + i * 0.1)
+        return x
+
+
+class ConvAndMultCoeffSeries(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.n_layers = 5
+        self.convs = nn.ModuleList()
+        for i in range(self.n_layers):
+            self.convs.append(nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1))
+
+    def forward(self, x):
+        for i in range(self.n_layers):
+            x = self.convs[i](x)
+            x = x * (1.1 + i * 0.1)
+        return x
+
+
 class ResNetBasicBlock(nn.Module):
     expansion = 1
 
@@ -167,11 +202,10 @@ class ResNetBasicBlock(nn.Module):
 class MismatchedScale(nn.Module):
     def __init__(self):
         super().__init__()
-        self.avgpool = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
 
     def forward(self, x):
-        avg = self.avgpool(x)
-        x = x + avg
+        y = x * 5
+        x = x + y
         return x
 
 
@@ -203,6 +237,20 @@ class Intertwined(nn.Module):
         x0, x1 = self.units[0](x), self.units[1](x)
         x0, x1 = self.units[2](x0) + self.units[3](x1), self.units[4](x0) + self.units[5](x1)
         x = self.units[6](x0) + self.units[7](x1)
+        return x
+
+
+class IntertwinedWithCoeff(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.units = nn.ModuleList()
+        for i in range(8):
+            self.units.append(Unit(pairs=(3 if i % 2 == 0 else 2)))
+
+    def forward(self, x):
+        x0, x1 = self.units[0](x), self.units[1](x) * 1.1
+        x0, x1 = self.units[2](x0) * 1.2 + self.units[3](x1) * 1.3, self.units[4](x0) * 1.4 + self.units[5](x1) * 1.5
+        x = self.units[6](x0) * 1.6 + self.units[7](x1)
         return x
 
 
@@ -269,16 +317,11 @@ class WrongGroups(nn.Module):
         return x
 
 
-class Drop_level_nn(nn.Module):
+class SingleRelu(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(32, 32, 3, stride=1, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.relu1 = RangeNormPoly2d(num_features=32)
+        self.relu0 = nn.ReLU()
 
     def forward(self, x):
-        x1 = self.conv1(x)
-        x2 = self.bn1(x1)
-        x3 = self.relu1(x2)
-        x4 = x3 + x
-        return x4
+        x = self.relu0(x)
+        return x
