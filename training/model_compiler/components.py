@@ -579,7 +579,6 @@ class LayerAbstractGraph:
     def __init__(self, parent_graph: Optional['LayerAbstractGraph'] = None):
         self.parent_graph = parent_graph
         self.dag = nx.DiGraph()
-        self.compute_nodes_in_topo_sort = list()
         self.graph_id = None
         self.parent_graph_id = None
 

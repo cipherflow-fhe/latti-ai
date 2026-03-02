@@ -263,32 +263,6 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
     return added_c_node
 
 
-def add_node_for_graph(sub: nx.DiGraph, forward_map: dict, backward_map: dict, original_graph: nx.DiGraph):
-    all_nodes_in_topo_sort = list(nx.topological_sort(sub))
-    compute_nodes_in_topo_sort = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)]
-    for node in compute_nodes_in_topo_sort:
-        if sub.in_degree(node) == 0:
-            add_nodes = backward_map.get(node, [])
-            for add_node in add_nodes:
-                if add_node in original_graph.nodes:
-                    attrs = original_graph.nodes[add_node]
-                    sub.add_node(add_node, **attrs)
-                else:
-                    sub.add_node(add_node)
-                sub.add_edge(add_node, node)
-
-    for node in reversed(compute_nodes_in_topo_sort):
-        if sub.out_degree(node) == 0:
-            add_nodes = forward_map.get(node, [])
-            for add_node in add_nodes:
-                if add_node in original_graph.nodes:
-                    attrs = original_graph.nodes[add_node]
-                    sub.add_node(add_node, **attrs)
-                else:
-                    sub.add_node(add_node)
-                sub.add_edge(node, add_node)
-
-
 def insert_drop_level_layers(graph: LayerAbstractGraph):
     for compute in list(graph.dag.nodes):
         if not isinstance(compute, ComputeNode):
@@ -315,34 +289,27 @@ def insert_drop_level_layers(graph: LayerAbstractGraph):
                 graph.dag.nodes[succ_sub]['level'] = pred_level - graph.dag.nodes[drop_level_layer]['level_cost']
 
 
-def split_graph_to_linear_subgraph(graph: LayerAbstractGraph) -> tuple[list[LayerAbstractGraph], list[tuple]]:
+def split_graph_to_linear_subgraph(graph: LayerAbstractGraph) -> list[LayerAbstractGraph]:
     dag_of_linear_subgraphs = graph.dag.copy()
-    removed_edges = []
-    for node in dag_of_linear_subgraphs.nodes:
-        if dag_of_linear_subgraphs.in_degree(node) > 1 or dag_of_linear_subgraphs.out_degree(node) > 1:
-            in_nodes_list = list(dag_of_linear_subgraphs.predecessors(node))
-            out_nodes_list = list(dag_of_linear_subgraphs.successors(node))
-            if len(in_nodes_list) > 1:
-                for node_in in in_nodes_list:
+    for node in graph.dag.nodes:
+        if graph.dag.in_degree(node) > 1:
+            for node_in in graph.dag.predecessors(node):
+                if dag_of_linear_subgraphs.has_edge(node_in, node):
                     dag_of_linear_subgraphs.remove_edge(node_in, node)
-                    removed_edges.append((node_in, node))
-            if len(out_nodes_list) > 1:
-                for node_out in out_nodes_list:
+        if graph.dag.out_degree(node) > 1:
+            for node_out in graph.dag.successors(node):
+                if dag_of_linear_subgraphs.has_edge(node, node_out):
                     dag_of_linear_subgraphs.remove_edge(node, node_out)
-                    removed_edges.append((node, node_out))
 
     weak_components = list(nx.weakly_connected_components(dag_of_linear_subgraphs))
-
     subgraphs = list()
-    forward_map, backward_map = build_edge_mappings(removed_edges)
     for component in weak_components:
         if len(component) > 1:
             sub = LayerAbstractGraph()
             sub.dag = dag_of_linear_subgraphs.subgraph(component).copy()
             subgraphs.append(sub)
-            add_node_for_graph(sub.dag, forward_map, backward_map, dag_of_linear_subgraphs)
 
-    return subgraphs, removed_edges
+    return subgraphs
 
 
 def find_linear_fhe_layer(
@@ -443,7 +410,7 @@ def handle_valid_poly_subgraph(subgraph: LayerAbstractGraph, use_mpc_refresh: bo
 
 
 def set_graph_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
-    subgraphs, removed_edges = split_graph_to_linear_subgraph(graph)
+    subgraphs = split_graph_to_linear_subgraph(graph)
     for sub in subgraphs:
         handle_valid_poly_subgraph(sub, use_mpc_refresh)
 
@@ -498,70 +465,11 @@ def check_degree(graph: LayerAbstractGraph, node):
         return True
 
 
-def build_edge_mappings(removed_edges):
-    forward_map = {}
-    backward_map = {}
-
-    for node_in, node in removed_edges:
-        if node_in not in forward_map:
-            forward_map[node_in] = []
-        forward_map[node_in].append(node)
-
-        if node not in backward_map:
-            backward_map[node] = []
-        backward_map[node].append(node_in)
-
-    return forward_map, backward_map
-
-
-def sort_subgraphs(subgraphs: list[LayerAbstractGraph]):
-    sorted_subgraphs = list()
-    index_graph = nx.DiGraph()
-    for i in range(len(subgraphs)):
-        index_graph = nx.compose(compress_graph(subgraphs[i], i), index_graph)
-    if not nx.is_directed_acyclic_graph(index_graph):
-        print('Cycle exists')
-        print(list(nx.simple_cycles(index_graph)))
-    all_nodes_in_topo_sort = list(nx.topological_sort(index_graph))
-    int_res = [value for value in all_nodes_in_topo_sort if isinstance(value, int)]
-    index = 0
-
-    pre_next_dict = dict()
-    for value in int_res:
-        sorted_subgraphs.append(subgraphs[value])
-        pre_next_dict[value] = index
-        index = index + 1
-    next_sub_dict = dict()
-    for node in index_graph.nodes:
-        if not isinstance(node, int):
-            preds = list(index_graph.predecessors(node))
-            succs = list(index_graph.successors(node))
-            if len(succs) >= 1:
-                if preds:
-                    next_sub_dict[pre_next_dict[preds[0]]] = [pre_next_dict[value] for value in succs]
-    prev_sub_dict = dict()
-    for u, vs in next_sub_dict.items():
-        for v in vs:
-            if v not in prev_sub_dict:
-                prev_sub_dict[v] = []
-            if u not in prev_sub_dict[v]:
-                prev_sub_dict[v].append(u)
-    return sorted_subgraphs, next_sub_dict, prev_sub_dict
-
-
-def compress_graph(graph: LayerAbstractGraph, graph_out_index: int):
-    graph_out = nx.DiGraph()
-
-    graph_out.add_node(graph_out_index)
-
-    inputs, outputs = graph.get_leading_feature_nodes(), graph.get_output_feature_nodes()
-    for node in inputs:
-        graph_out.add_node(node)
-        graph_out.add_edge(node, graph_out_index)
-    for node in outputs:
-        graph_out.add_node(node)
-        graph_out.add_edge(graph_out_index, node)
-    return graph_out
+def sort_subgraphs(graph: nx.DiGraph, subgraphs: list[LayerAbstractGraph]):
+    # For a linear subgraph, use any of its node as representative. Determine the order of subgraphs by their representatives.
+    all_nodes_in_topo_sort = list(nx.topological_sort(graph))
+    sorted_subgraphs = sorted(subgraphs, key=lambda x: all_nodes_in_topo_sort.index(next(iter(x.dag.nodes()))))
+    return sorted_subgraphs
 
 
 def check_approx_poly_subgraph(subgraph: LayerAbstractGraph, invalid_list: list = None, use_mpc_refresh: bool = False):
@@ -591,7 +499,7 @@ def check_approx_poly_subgraph(subgraph: LayerAbstractGraph, invalid_list: list 
 
 
 def handle_invalid_poly_subgraph(
-    graph, subgraph_index, subs_ordered, next_dict, pre_dict, subgraph_invalid_poly_dict, use_mpc_refresh: bool = False
+    graph, subgraph_index, subs_ordered, subgraph_invalid_poly_dict, use_mpc_refresh: bool = False
 ):
     """Handle poly nodes that cannot be absorbed in the current subgraph, return the layer_id of the added mult_scalar"""
     current_sub = subs_ordered[subgraph_index]
@@ -603,8 +511,8 @@ def handle_invalid_poly_subgraph(
 
 
 def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
-    subgraphs, removed_edges = split_graph_to_linear_subgraph(graph)
-    subs_odered, next_dict, pre_dict = sort_subgraphs(subgraphs)
+    subgraphs = split_graph_to_linear_subgraph(graph)
+    subs_ordered = sort_subgraphs(graph.dag, subgraphs)
 
     index = 0
     invalid_index = []
@@ -614,18 +522,16 @@ def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
 
     added_mult_scalar_ids = []
 
-    for sub_in in subs_odered:
+    for sub_in in subs_ordered:
         invalid_poly_nodes = []
         if not check_approx_poly_subgraph(sub_in, invalid_poly_nodes, use_mpc_refresh):
             invalid_index.append(index)
         subgraph_invalid_poly_dict[index] = invalid_poly_nodes
         index = index + 1
 
-    for i in range(len(subs_odered)):
+    for i in range(len(subs_ordered)):
         if i in invalid_index:
-            added_id = handle_invalid_poly_subgraph(
-                graph, i, subs_odered, next_dict, pre_dict, subgraph_invalid_poly_dict, use_mpc_refresh
-            )
+            added_id = handle_invalid_poly_subgraph(graph, i, subs_ordered, subgraph_invalid_poly_dict, use_mpc_refresh)
             if added_id:
                 added_mult_scalar_ids.append(added_id)
 
