@@ -42,10 +42,7 @@ class GlobalConfig:
             cls._instance.mpc_refresh = config_dict.get('MPC_REFRESH', False)
             cls._instance.approx_poly_type = config_dict.get('APPROX_POLY_TYPE', 'simple_polyrelu')
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
-            if cls._instance.mpc_refresh:
-                cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'simple_polyrelu']
-            else:
-                cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar']
+            cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'simple_polyrelu']
 
         return cls._instance
 
@@ -67,6 +64,7 @@ IS_BALANCE = False
 DEFAULT_SCALE = 1
 
 
+# get_multithread_rate_for_btp
 def get_multithread_rate_for_btp(task_num: int):
     if single_thread:
         return 1
@@ -354,7 +352,7 @@ class FeatureNode:
             virtual_shape = getattr(self, 'virtual_shape', [1, 1])
             virtual_skip = getattr(self, 'virtual_skip', [1, 1])
             info['skip'] = virtual_shape[0] * virtual_shape[1] * virtual_skip[0] * virtual_skip[1]
-            info['pack_num'] = math.ceil(POLY_N / 2 / info['skip'])
+            info['pack_num'] = math.ceil(config.poly_n / 2 / info['skip'])
 
         info['ckks_parameter_id'] = self.ckks_parameter_id
         info['level'] = int(self.level)
@@ -543,6 +541,23 @@ class MultScalarComputeNode(ComputeNode):
         self.bias_scale = 1
 
 
+class MultCoeffComputeNode(ComputeNode):
+    def __init__(
+        self,
+        layer_id: str,
+        layer_type: str,
+        coeff: float,
+        channel_input: int,
+        channel_output: int,
+        ckks_parameter_id_input: str = 'param0',
+        ckks_parameter_id_output: str = 'param0',
+    ):
+        super().__init__(
+            layer_id, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
+        )
+        self.coeff = coeff
+
+
 class ReshapeComputeNode(ComputeNode):
     def __init__(
         self,
@@ -617,7 +632,7 @@ class LayerAbstractGraph:
             groups = 0
             dim = feature_json['dim']
             channel = feature_json['channel']
-            scale = feature_json['scale']
+            scale = 1.0
             ckks_parameter_id = feature_json['ckks_parameter_id']
             if dim == 2:
                 shape = feature_json['shape']
@@ -771,10 +786,14 @@ class LayerAbstractGraph:
                 )
             elif 'reshape' in layer_type:
                 compute_node = ReshapeComputeNode(key, layer_type, channel_input, channel_output, layer_json['shape'])
+            elif layer_type == 'mult_coeff':
+                compute_node = MultCoeffComputeNode(key, layer_type, layer_json['coeff'], channel_input, channel_output)
             else:
                 compute_node = ComputeNode(
                     key, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
                 )
+                if layer_type == 'relu2d' and not config.mpc_refresh:
+                    raise ValueError('Relu2d is not supported in current mode')
                 if 'concat2d' == layer_type:
                     concat_input_index_list = list()
                     for name in feature_input:
@@ -801,6 +820,8 @@ class LayerAbstractGraph:
                 level_cost = 1
             elif 'batchnorm' in layer_type or 'pool' in layer_type:
                 level_cost = 0
+            elif layer_type == 'mult_coeff':
+                level_cost = 0
 
             graph_info.dag.add_node(compute_node, name=key, level_cost=level_cost)
             graph_info.dag.add_edges_from([(node, compute_node) for node in feature_input])
@@ -825,7 +846,7 @@ class LayerAbstractGraph:
         score=0.0,
     ) -> None:
         param_dict = dict()
-        poly_to_mod = {8192: 31, 16384: 34, 65536: 41}
+        poly_to_mod = {8192: 30, 16384: 34, 32768: 40, 65536: 45}
         mod_bits = poly_to_mod.get(config.poly_n, 41)
         param_dict.update(
             {
@@ -1115,6 +1136,17 @@ class LayerAbstractGraph:
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                     'shape': layer.shape,
+                }
+            if layer_type == 'mult_coeff':
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'coeff': layer.coeff,
+                    'channel_input': channel_input,
+                    'channel_output': channel_output,
+                    'ckks_parameter_id_input': ckks_parameter_id_input,
+                    'ckks_parameter_id_output': ckks_parameter_id_output,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
                 }
             if is_last_mpc:
                 layers[layer_id]['is_end'] = True
@@ -1476,7 +1508,7 @@ class MpcScoreParam:
 
     def get_score(self) -> float:
         if 'relu2d' in self.compute_node.layer_type or 'pool' in self.compute_node.layer_type:
-            if 'relu2d' == self.compute_node.layer_type or MPC_REFRESH:
+            if 'relu2d' == self.compute_node.layer_type or config.mpc_refresh:
                 kernel_scale = 1
             elif 'pool' in self.compute_node.layer_type:
                 kernel_scale = self.compute_node.kernel_shape[0] * self.compute_node.kernel_shape[1]
@@ -1486,7 +1518,7 @@ class MpcScoreParam:
                 self.n_packed_in * self.input_ct_score + self.n_packed_out * self.output_ct_score
             ) * ct_trans_rate
             return n_relu_score + n_ct_score
-        if 'bootstrapping' in self.compute_node.layer_type and MPC_REFRESH:
+        if 'bootstrapping' in self.compute_node.layer_type and config.mpc_refresh:
             shape = self.preds[0].shape
             n_ct_score = (
                 self.n_packed_in * self.input_ct_score + self.n_packed_out * self.output_ct_score

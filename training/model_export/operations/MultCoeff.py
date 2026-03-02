@@ -23,8 +23,8 @@ from onnx import NodeProto
 log = logging.getLogger(__name__)
 
 
-class ConstMulComputeNode(ComputeNode):
-    """Compute node for ConstMul operation"""
+class MultCoeffComputeNode(ComputeNode):
+    """Compute node for MultCoeff operation"""
 
     def __init__(
         self,
@@ -32,24 +32,30 @@ class ConstMulComputeNode(ComputeNode):
         layer_type: str,
         feature_input: list[FeatureNode],
         feature_output: list[FeatureNode],
-        scale: float,
+        coeff: float,
     ):
         super().__init__(layer_id, layer_type, feature_input, feature_output)
         feature_output[0].shape = feature_input[0].shape
         feature_output[0].skip = feature_input[0].skip
         feature_output[0].level = feature_input[0].level
-        feature_output[0].scale = scale
+        self.coeff = coeff
 
     @staticmethod
-    def from_onnx_node(x: NodeProto, features_nodes, constant_nodes) -> 'ConstMulComputeNode':
+    def from_onnx_node(x: NodeProto, features_nodes, constant_nodes) -> 'MultCoeffComputeNode':
         layer_id = format_id(x.name)
-        layer_type = 'mul'
+        layer_type = 'mult_coeff'
         log.debug('%s', x)
-        feature_input = [features_nodes[format_id(x.input[1])]]
+        if format_id(x.input[0]) in features_nodes:
+            variable_input_name = format_id(x.input[0])
+            const_input_name = format_id(x.input[1])
+        elif format_id(x.input[1]) in features_nodes:
+            variable_input_name = format_id(x.input[1])
+            const_input_name = format_id(x.input[0])
+        feature_input = [features_nodes[variable_input_name]]
         feature_output = [features_nodes[format_id(x.output[0])]]
-        scale = round(constant_nodes[format_id(x.input[0])][0].astype(float), 5)
+        coeff = round(float(constant_nodes[const_input_name][0]), 5)
 
-        return ConstMulComputeNode(layer_id, layer_type, feature_input, feature_output, scale)
+        return MultCoeffComputeNode(layer_id, layer_type, feature_input, feature_output, coeff)
 
     @override
     def to_json(self):
@@ -57,6 +63,7 @@ class ConstMulComputeNode(ComputeNode):
         self.feature_output[0].shape = self.feature_input[0].shape
         self.feature_output[0].skip = self.feature_input[0].skip
         info['type'] = self.layer_type
+        info['coeff'] = self.coeff
         info['channel_input'] = int(self.feature_input[0].channel)
         info['channel_output'] = int(self.feature_output[0].channel)
         info['ckks_parameter_id_input'] = self.feature_input[0].ckks_parameter_id

@@ -379,7 +379,7 @@ def handle_valid_poly_subgraph(subgraph: LayerAbstractGraph, use_mpc_refresh: bo
                     find, res_node = find_linear_fhe_layer(node, subgraph, Direction.UP)
                     if find:
                         node.up_scale_str.append(res_node.layer_id)
-                elif node.layer_type in {'avgpool2d'}:
+                elif node.layer_type in {'avgpool2d', 'mult_coeff'}:
                     find_down, res_node_down = find_linear_fhe_layer(node, subgraph, Direction.DOWN)
                     if find_down and res_node_down.layer_type != 'simple_polyrelu':
                         node.down_scale_str.append(res_node_down.layer_id)
@@ -470,6 +470,7 @@ def set_scale_for_node(graph: LayerAbstractGraph, c_node: ComputeNode, scale: fl
 
 
 def set_feature_scales(graph: LayerAbstractGraph):
+    mpc_scale = 1.0
     for compute in graph.dag.nodes:
         scale = 1.0
         if not isinstance(compute, ComputeNode):
@@ -483,6 +484,8 @@ def set_feature_scales(graph: LayerAbstractGraph):
                 scale = 1.0 / (compute.kernel_shape[0] * compute.kernel_shape[1])
             elif compute.is_adaptive_avgpool or compute.is_big_size:
                 scale = 1.0 / (compute.kernel_shape[0] * compute.kernel_shape[1])
+        elif compute.layer_type == 'mult_coeff':
+            scale = compute.coeff
 
         if compute.layer_type == 'simple_polyrelu':
             while compute.up_scale_str:
@@ -588,18 +591,12 @@ def sort_subgraphs(subgraphs: list[LayerAbstractGraph]):
     return sorted_subgraphs, next_sub_dict, prev_sub_dict
 
 
-def find_input_and_output(sub: LayerAbstractGraph):
-    input_nodes = sub.get_leading_feature_nodes()
-    output_nodes = sub.get_output_feature_nodes()
-    return input_nodes, output_nodes
-
-
 def compress_graph(graph: LayerAbstractGraph, graph_out_index: int):
     graph_out = nx.DiGraph()
 
     graph_out.add_node(graph_out_index)
 
-    inputs, outputs = find_input_and_output(graph)
+    inputs, outputs = graph.get_leading_feature_nodes(), graph.get_output_feature_nodes()
     for node in inputs:
         graph_out.add_node(node)
         graph_out.add_edge(node, graph_out_index)
@@ -615,7 +612,7 @@ def check_approx_poly_subgraph(subgraph: LayerAbstractGraph, invalid_list: list 
     if use_mpc_refresh:
         approx_poly_layer = ['bootstrapping']
     else:
-        approx_poly_layer = ['avgpool2d']
+        approx_poly_layer = ['avgpool2d', 'mult_coeff']
     valid_flag = True
 
     for node in subgraph.dag.nodes:

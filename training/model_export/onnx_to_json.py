@@ -29,7 +29,7 @@ from .operations.Dense import DenseComputeNode
 from .operations.Relu import ReluComputeNode
 from .operations.Reshape import ReshapeComputeNode
 from .operations.Dropout import DropoutComputeNode
-from .operations.ConstMul import ConstMulComputeNode
+from .operations.MultCoeff import MultCoeffComputeNode
 from .operations.AveragePool import AveragePoolComputeNode
 from .operations.MaxPool import MaxPoolComputeNode
 from .operations.Sigmoid import SigmoidComputeNode
@@ -136,7 +136,7 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
             case 'Dropout':
                 compute_node = DropoutComputeNode.from_onnx_node(n, features_nodes)
             case 'Mul':
-                compute_node = ConstMulComputeNode.from_onnx_node(n, features_nodes, constant_nodes)
+                compute_node = MultCoeffComputeNode.from_onnx_node(n, features_nodes, constant_nodes)
             case 'AveragePool':
                 compute_node = AveragePoolComputeNode.from_onnx_node(n, features_nodes)
             case 'GlobalAveragePool':

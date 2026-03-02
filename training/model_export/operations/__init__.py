@@ -250,7 +250,7 @@ def get_type_id(op: str):
     elif op == 'Dropout' or op == 'dropout':
         output = 'dropout'
     elif op == 'Mul' or op == 'mul':
-        output = 'mul'
+        output = 'mult_coeff'
     elif op == 'Sigmoid' or op == 'sigmoid':
         output = 'sigmoid'
     elif op == 'Sub':

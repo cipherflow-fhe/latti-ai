@@ -354,7 +354,7 @@ def change_conv_transpose_shape(graph: LayerAbstractGraph):
                         shortest_path = nx.shortest_path(graph.dag, target_c_node, c_node)
                         for node_in in shortest_path:
                             if isinstance(node_in, ComputeNode):
-                                if node_in.layer_type == APPROX_POLY_TYPE:
+                                if node_in.layer_type == config.approx_poly_type:
                                     node_in.upsample_factor_in = target_c_node.upsample_factor_in
 
     return name_pair
@@ -385,7 +385,7 @@ def update_shape_for_btp(graph: LayerAbstractGraph):
                 for i in range(2):
                     succs[0].shape[i] = preds[0].shape[i] / compute_node.stride[i]
 
-                upsample_layer = add_layer(
+                upsample_layer = transforms.add_layer(
                     graph,
                     name_pair[compute_node.layer_id][0],
                     0,
@@ -475,9 +475,9 @@ def get_slot_num(ckks_parameter_id_input: str, param_dict: dict) -> int:
 def set_is_adaptive_avgpool(graph: LayerAbstractGraph):
     for node in graph.dag.nodes:
         if isinstance(node, PoolComputeNode):
-            succ_f = list(graph.dag.successors(node))[0]
-            succ_c = list(graph.dag.successors(succ_f))[0]
-            if succ_c.layer_type == 'reshape':
+            succ_f = next(graph.dag.successors(node))
+            succ_c = next(graph.dag.successors(succ_f), None)
+            if (succ_c is not None) and (succ_c.layer_type == 'reshape'):
                 node.is_adaptive_avgpool = True
             else:
                 node.is_adaptive_avgpool = False
@@ -577,9 +577,9 @@ def add_mpc_refresh_mult_scalar(graph: LayerAbstractGraph, node: ComputeNode):
         graph.dag.nodes[input]['skip'][0] < node.upsample_factor_in[0]
         or graph.dag.nodes[input]['skip'][1] < node.upsample_factor_in[1]
     ) or node.layer_type != 'resize':
-        add_mult_scalar_layer = add_layer(graph, node, 0, 0, 'mult_scalar', preds, None)
+        add_mult_scalar_layer = transforms.add_layer(graph, node, 0, 0, 'mult_scalar', preds, None)
         preds = list(graph.dag.predecessors(add_mult_scalar_layer))
-        add_mpc_refresh = add_layer(graph, add_mult_scalar_layer, 0, 0, 'bootstrapping', preds, None)
+        add_mpc_refresh = transforms.add_layer(graph, add_mult_scalar_layer, 0, 0, 'bootstrapping', preds, None)
 
         nodes_to_process = [add_mpc_refresh, add_mult_scalar_layer]
         upsample_factors = node.upsample_factor_in
@@ -636,6 +636,69 @@ def change_skip_for_graph(graph: LayerAbstractGraph):
             for f_node in check_res:
                 c_node = list(graph.dag.predecessors(f_node))[0]
                 add_mpc_refresh_mult_scalar(graph, c_node)
+
+
+def check_level_cost(graph: LayerAbstractGraph) -> bool:
+    """
+    Check that for each compute node: output_level - input_level == level_cost.
+
+    Returns True if all compute nodes satisfy the constraint, False otherwise.
+    """
+    result = True
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode) or node.layer_type in ['drop_level', 'bootstrapping']:
+            continue
+        level_cost = graph.dag.nodes[node].get('level_cost')
+        if level_cost is None:
+            continue
+        preds: list[FeatureNode] = list(graph.dag.predecessors(node))
+        succs: list[FeatureNode] = list(graph.dag.successors(node))
+        if not preds or not succs:
+            continue
+        input_level = max(graph.dag.nodes[p]['level'] for p in preds)
+        output_level = graph.dag.nodes[succs[0]]['level']
+        if input_level - output_level != level_cost:
+            print(
+                f'[check_level_cost] FAIL: {node.layer_id} ({node.layer_type}): '
+                f'input_level({input_level}) - output_level({output_level}) = '
+                f'{input_level - output_level}, expected level_cost={level_cost}'
+            )
+            result = False
+    return result
+
+
+def check_multi_input_level_skip_aligned(graph: LayerAbstractGraph) -> bool:
+    """
+    Check that for each compute node with multiple input FeatureNodes,
+    all inputs have the same skip and level.
+
+    Returns True if all such nodes satisfy the constraint, False otherwise.
+    """
+    result = True
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode):
+            continue
+        preds: list[FeatureNode] = list(graph.dag.predecessors(node))
+        if len(preds) < 2:
+            continue
+        base_level = graph.dag.nodes[preds[0]]['level']
+        base_skip = graph.dag.nodes[preds[0]]['skip'][:2]
+        for p in preds[1:]:
+            p_level = graph.dag.nodes[p]['level']
+            p_skip = graph.dag.nodes[p]['skip'][:2]
+            if p_level != base_level:
+                print(
+                    f'[check_multi_input_consistency] FAIL level: {node.layer_id} ({node.layer_type}): '
+                    f'{preds[0].node_id} level={base_level} vs {p.node_id} level={p_level}'
+                )
+                result = False
+            if p_skip != base_skip:
+                print(
+                    f'[check_multi_input_consistency] FAIL skip: {node.layer_id} ({node.layer_type}): '
+                    f'{preds[0].node_id} skip={base_skip} vs {p.node_id} skip={p_skip}'
+                )
+                result = False
+    return result
 
 
 def set_depth_for_graph(graph: LayerAbstractGraph):

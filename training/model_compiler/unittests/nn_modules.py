@@ -25,7 +25,7 @@ sys.path.append(str(script_dir.parent.parent))
 from nn_tools.activations import RangeNormPoly2d
 
 
-class NN0(nn.Module):
+class SingleConv(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
@@ -35,7 +35,7 @@ class NN0(nn.Module):
         return x
 
 
-class NN1(nn.Module):
+class SingleAct(nn.Module):
     def __init__(self):
         super().__init__()
         self.relu0 = RangeNormPoly2d(num_features=32)
@@ -45,7 +45,57 @@ class NN1(nn.Module):
         return x
 
 
-class NN2(nn.Module):
+class SingleAvgpool(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.pool0 = nn.AvgPool2d(kernel_size=2, padding=1)
+
+    def forward(self, x):
+        x = self.pool0(x)
+        return x
+
+
+class SingleMaxpool(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.pool0 = nn.MaxPool2d(kernel_size=2, padding=1)
+
+    def forward(self, x):
+        x = self.pool0(x)
+        return x
+
+
+class SingleDense(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # TODO: if bias=False, the ONNX contains a (unsupported) MatMul op instead of Gemm
+        self.dense0 = nn.Linear(in_features=64, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.dense0(x)
+        return x
+
+
+class SingleReshape(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.reshape0 = nn.Flatten(1)
+
+    def forward(self, x):
+        x = self.reshape0(x)
+        return x
+
+
+class SingleMultCoeff(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        x = 5 * x
+        return x
+
+
+class ConvSeries(nn.Module):
     def __init__(self):
         super().__init__()
         self.n_layers = 40
@@ -59,7 +109,7 @@ class NN2(nn.Module):
         return x
 
 
-class NN3(nn.Module):
+class ActSeries(nn.Module):
     def __init__(self):
         super().__init__()
         self.n_layers = 20
@@ -73,7 +123,7 @@ class NN3(nn.Module):
         return x
 
 
-class NN4(nn.Module):
+class ConvSeriesWithStride(nn.Module):
     def __init__(self):
         super().__init__()
         self.n_layers = 20
@@ -93,6 +143,32 @@ class NN4(nn.Module):
     def forward(self, x):
         for i in range(self.n_layers):
             x = self.convs[i](x)
+        return x
+
+
+class MultCoeffSeries(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.n_layers = 5
+
+    def forward(self, x):
+        for i in range(self.n_layers):
+            x = x * (1.1 + i * 0.1)
+        return x
+
+
+class ConvAndMultCoeffSeries(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.n_layers = 5
+        self.convs = nn.ModuleList()
+        for i in range(self.n_layers):
+            self.convs.append(nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1))
+
+    def forward(self, x):
+        for i in range(self.n_layers):
+            x = self.convs[i](x)
+            x = x * (1.1 + i * 0.1)
         return x
 
 
@@ -126,12 +202,89 @@ class ResNetBasicBlock(nn.Module):
 class MismatchedScale(nn.Module):
     def __init__(self):
         super().__init__()
-        self.avgpool = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
 
     def forward(self, x):
-        avg = self.avgpool(x)
-        x = x + avg
+        y = x * 5
+        x = x + y
         return x
+
+
+class Unit(nn.Module):
+    def __init__(self, pairs: int = 2):
+        super().__init__()
+        self.pairs = pairs
+        self.convs = nn.ModuleList()
+        self.acts = nn.ModuleList()
+        for i in range(pairs):
+            self.convs.append(nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1))
+            self.acts.append(RangeNormPoly2d(num_features=32))
+
+    def forward(self, x):
+        for i in range(self.pairs):
+            x = self.convs[i](x)
+            x = self.acts[i](x)
+        return x
+
+
+class Intertwined(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.units = nn.ModuleList()
+        for i in range(8):
+            self.units.append(Unit(pairs=(3 if i % 2 == 0 else 2)))
+
+    def forward(self, x):
+        x0, x1 = self.units[0](x), self.units[1](x)
+        x0, x1 = self.units[2](x0) + self.units[3](x1), self.units[4](x0) + self.units[5](x1)
+        x = self.units[6](x0) + self.units[7](x1)
+        return x
+
+
+class IntertwinedWithCoeff(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.units = nn.ModuleList()
+        for i in range(8):
+            self.units.append(Unit(pairs=(3 if i % 2 == 0 else 2)))
+
+    def forward(self, x):
+        x0, x1 = self.units[0](x), self.units[1](x) * 1.1
+        x0, x1 = self.units[2](x0) * 1.2 + self.units[3](x1) * 1.3, self.units[4](x0) * 1.4 + self.units[5](x1) * 1.5
+        x = self.units[6](x0) * 1.6 + self.units[7](x1)
+        return x
+
+
+class MutipleInputs(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.n_inputs = 3
+        self.units = nn.ModuleList()
+        for i in range(self.n_inputs + 1):
+            self.units.append(Unit(pairs=5))
+
+    def forward(self, xs):
+        s = torch.zeros_like(x)
+        for i in range(self.n_inputs):
+            s += self.units[i](xs[i])
+        x = self.units[self.n_inputs](s)
+        return x
+
+
+class MutipleOutputs(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.n_outputs = 3
+        self.units = nn.ModuleList()
+        for i in range(self.n_outputs + 1):
+            self.units.append(Unit(pairs=5))
+
+    def forward(self, x):
+        x = torch.zeros_like(x)
+        x = self.units[0](x)
+        ys = list()
+        for i in range(self.n_outputs):
+            ys.append(self.units[i + 1](x))
+        return ys
 
 
 class WrongPadding(nn.Module):
@@ -161,4 +314,14 @@ class WrongGroups(nn.Module):
 
     def forward(self, x):
         x = self.conv0(x)
+        return x
+
+
+class SingleRelu(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu0 = nn.ReLU()
+
+    def forward(self, x):
+        x = self.relu0(x)
         return x
