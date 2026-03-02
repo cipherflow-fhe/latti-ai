@@ -233,20 +233,15 @@ def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path, use_btp
             server_task['nn_layers_ct_' + f'{i}'] = {'enable_fpga': False}
         else:
             server_task['nn_layers_ct_' + f'{i}'] = {'enable_fpga': True}
-    input_root = subgraphs[0].get_leading_feature_nodes()[0]
+    input_roots = subgraphs[0].get_leading_feature_nodes()
 
     if not nx.is_directed_acyclic_graph(subgraphs[-1].dag):
         raise ValueError('Cycle exists in graph, cannot perform topological sort!')
 
-    all_nodes_in_topo_sort = list(nx.topological_sort(subgraphs[-1].dag))
-    compute_nodes_in_topo_sort = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)]
-
-    succs = list(subgraphs[-1].dag.successors(compute_nodes_in_topo_sort[-1]))
-    output_root = succs[0]
+    output_roots = [node for node, out_deg in subgraphs[-1].dag.out_degree() if out_deg == 0]
 
     param_dict = dict()
-    for idx, node in enumerate([input_root, output_root]):
-        graph_to_use = subgraphs[0] if idx == 0 else subgraphs[-1]
+    for node, graph_to_use in [(n, subgraphs[0]) for n in input_roots] + [(n, subgraphs[-1]) for n in output_roots]:
         if node.dim == 0:
             param_dict[node.node_id] = {
                 'dim': node.dim,
@@ -283,10 +278,10 @@ def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path, use_btp
         'block_shape': config.block_shape,
         'is_absorb_polyrelu': False,
         'pack_style': config.style,
-        'task_input_id': str(input_root.node_id),
-        'task_output_id': str(output_root.node_id),
-        'task_input_param': {'input': param_dict[input_root.node_id]},
-        'task_output_param': {'output': param_dict[output_root.node_id]},
+        'task_input_id': [str(n.node_id) for n in input_roots],
+        'task_output_id': [str(n.node_id) for n in output_roots],
+        'task_input_param': {str(n.node_id): param_dict[n.node_id] for n in input_roots},
+        'task_output_param': {str(n.node_id): param_dict[n.node_id] for n in output_roots},
         'server_task': server_task,
         'use_btp': use_btp,
     }
