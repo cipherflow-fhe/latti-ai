@@ -199,6 +199,14 @@ class ResNetBasicBlock(nn.Module):
         return out
 
 
+class SingleAdd(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x0, x1):
+        return x0 + x1
+
+
 class MismatchedScale(nn.Module):
     def __init__(self):
         super().__init__()

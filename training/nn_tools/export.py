@@ -17,7 +17,7 @@
 
 import logging
 import os
-from typing import Tuple, Optional
+from typing import Tuple, List, Union, Optional
 
 import torch
 import torch.nn as nn
@@ -29,12 +29,14 @@ log = logging.getLogger(__name__)
 def export_to_onnx(
     model: nn.Module,
     save_path: str,
-    input_size: Tuple[int, ...] = (1, 3, 32, 32),
+    input_size: Union[Tuple[int, ...], List[Tuple[int, ...]]] = (1, 3, 32, 32),
     opset_version: int = 13,
     dynamic_batch: bool = True,
     remove_identity: bool = True,
     save_h5: bool = True,
     verbose: bool = True,
+    input_names: Optional[List[str]] = None,
+    output_names: Optional[List[str]] = None,
 ) -> str:
     """Export a PyTorch model to ONNX.
 
@@ -43,12 +45,15 @@ def export_to_onnx(
     Args:
         model:           PyTorch model.
         save_path:       Output ``.onnx`` file path.
-        input_size:      Input tensor shape (default ``(1, 3, 32, 32)`` for CIFAR-10).
+        input_size:      Single input shape ``(N, C, H, W)`` or a list of shapes
+                         for models with multiple inputs.
         opset_version:   ONNX opset version.
         dynamic_batch:   Enable dynamic batch-size axis.
         remove_identity: Remove Identity ops after export.
         save_h5:         Also save weights to an H5 file.
         verbose:         Log progress information.
+        input_names:     Names for each input tensor. Auto-generated if None.
+        output_names:    Names for each output tensor. Auto-generated if None.
 
     Returns:
         Path to the saved ONNX file.
@@ -57,7 +62,19 @@ def export_to_onnx(
     export_model.eval()
     export_model.cpu()
 
-    dummy_input = torch.randn(input_size)
+    # Support both single input_size and list of input sizes
+    multi_input = isinstance(input_size, (list, tuple)) and isinstance(input_size[0], (list, tuple))
+    if multi_input:
+        dummy_input = tuple(torch.randn(s) for s in input_size)
+        n_inputs = len(input_size)
+    else:
+        dummy_input = torch.randn(input_size)
+        n_inputs = 1
+
+    if input_names is None:
+        input_names = [f'input_{i}' for i in range(n_inputs)] if multi_input else ['input']
+    if output_names is None:
+        output_names = ['output']
 
     save_dir = os.path.dirname(save_path)
     if save_dir:
@@ -65,10 +82,7 @@ def export_to_onnx(
 
     dynamic_axes = None
     if dynamic_batch:
-        dynamic_axes = {
-            'input': {0: 'batch_size'},
-            'output': {0: 'batch_size'},
-        }
+        dynamic_axes = {name: {0: 'batch_size'} for name in input_names + output_names}
 
     torch.onnx.export(
         export_model,
@@ -77,8 +91,8 @@ def export_to_onnx(
         export_params=True,
         opset_version=opset_version,
         do_constant_folding=False,
-        input_names=['input'],
-        output_names=['output'],
+        input_names=input_names,
+        output_names=output_names,
         dynamic_axes=dynamic_axes,
         training=torch.onnx.TrainingMode.EVAL,
         keep_initializers_as_inputs=False,
