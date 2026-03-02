@@ -243,7 +243,7 @@ def main():
             input_size=tuple([1, *args.input_shape]),
             dynamic_batch=False,
         )
-        log.info(f'ONNX saved: {onnx_path} over!')
+        log.info(f'ONNX saved: {onnx_path}')
 
         h5_path = os.path.join(export_dir, 'model_parameters.h5')
         fuse_and_export_h5(model, h5_path=h5_path, upper_bound=args.upper_bound, degree=args.degree, eps=1e-3)
