@@ -721,8 +721,8 @@ We tested using the ResNet20 model. Our framework's encrypted inference model in
 
 | Model | Parameters (M)| Baseline Model Accuracy| Secure Inference Model Accuracy | Computation Resource | Inference Latency (s) |
 | :---: | :---: |  :---: |  :---: | :---: | :---: |
-| ResNet20 | 0.3 | 91.9% | 92.0% | 16-thread CPU | 445.2 |
-| ResNet20 | 0.3 | 91.9% | 92.0% | GPU | 15.6 |
+| ResNet20 | 0.3 | 91.9% | 92.0% | 16-thread CPU | 310.3 |
+| ResNet20 | 0.3 | 91.9% | 92.0% | GPU | 13.5 |
 
 #### ImageNet Dataset
 
@@ -736,8 +736,8 @@ This framework tested using the MobileNetv2 architecture, with this model having
 
 | Model | Parameters (M)| Baseline Model Accuracy| Secure Inference Model Accuracy | Computation Resource | Inference Latency (s) |
 | :---: | :---: | :---: | :---: | :---: | :---: |
-| MobileNetv2 | 3.5 | 71.8% | 70.1% | 16-thread CPU | 1210.0 |
-| MobileNetv2 | 3.5 | 71.8% | 70.1% | GPU | 82.4 |
+| MobileNetv2 | 3.5 | 71.8% | 70.1% | 16-thread CPU | 1090.2 |
+| MobileNetv2 | 3.5 | 71.8% | 70.1% | GPU | 71.3 |
 
 ### Object Detection Tasks
 
