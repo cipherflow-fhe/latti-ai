@@ -243,7 +243,6 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
     )
 
     graph.dag.remove_edge(compute_node, f_node)
-
     graph.dag.add_node(
         added_f_node,
         name=added_f_node.node_id,
@@ -253,9 +252,7 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
         level=level,
         pack_num=pack_num,
     )
-
     graph.dag.add_node(added_c_node, name=added_c_node.layer_id, level_cost=1)
-
     graph.dag.add_edge(compute_node, added_f_node)
     graph.dag.add_edge(added_f_node, added_c_node)
     graph.dag.add_edge(added_c_node, f_node)
@@ -301,13 +298,12 @@ def split_graph_to_linear_subgraph(graph: LayerAbstractGraph) -> list[LayerAbstr
                 if dag_of_linear_subgraphs.has_edge(node, node_out):
                     dag_of_linear_subgraphs.remove_edge(node, node_out)
 
-    weak_components = list(nx.weakly_connected_components(dag_of_linear_subgraphs))
+    components = list(nx.weakly_connected_components(dag_of_linear_subgraphs))
     subgraphs = list()
-    for component in weak_components:
-        if len(component) > 1:
-            sub = LayerAbstractGraph()
-            sub.dag = dag_of_linear_subgraphs.subgraph(component).copy()
-            subgraphs.append(sub)
+    for component in components:
+        sub = LayerAbstractGraph()
+        sub.dag = dag_of_linear_subgraphs.subgraph(component).copy()
+        subgraphs.append(sub)
 
     return subgraphs
 
@@ -458,20 +454,6 @@ def set_feature_scales(graph: LayerAbstractGraph):
             node_out = set_scale_for_node(graph, compute, scale)
 
 
-def check_degree(graph: LayerAbstractGraph, node):
-    if graph.dag.in_degree(node) > 1 or graph.dag.out_degree(node) > 1:
-        return False
-    else:
-        return True
-
-
-def sort_subgraphs(graph: nx.DiGraph, subgraphs: list[LayerAbstractGraph]):
-    # For a linear subgraph, use any of its node as representative. Determine the order of subgraphs by their representatives.
-    all_nodes_in_topo_sort = list(nx.topological_sort(graph))
-    sorted_subgraphs = sorted(subgraphs, key=lambda x: all_nodes_in_topo_sort.index(next(iter(x.dag.nodes()))))
-    return sorted_subgraphs
-
-
 def check_approx_poly_subgraph(subgraph: LayerAbstractGraph, invalid_list: list = None, use_mpc_refresh: bool = False):
     """Check if the approx poly nodes in the linear subgraph can be absorbed"""
 
@@ -512,26 +494,22 @@ def handle_invalid_poly_subgraph(
 
 def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
     subgraphs = split_graph_to_linear_subgraph(graph)
-    subs_ordered = sort_subgraphs(graph.dag, subgraphs)
 
     index = 0
     invalid_index = []
-    processed_index = []
-
     subgraph_invalid_poly_dict = dict()
-
     added_mult_scalar_ids = []
 
-    for sub_in in subs_ordered:
+    for sub_in in subgraphs:
         invalid_poly_nodes = []
         if not check_approx_poly_subgraph(sub_in, invalid_poly_nodes, use_mpc_refresh):
             invalid_index.append(index)
         subgraph_invalid_poly_dict[index] = invalid_poly_nodes
         index = index + 1
 
-    for i in range(len(subs_ordered)):
+    for i in range(len(subgraphs)):
         if i in invalid_index:
-            added_id = handle_invalid_poly_subgraph(graph, i, subs_ordered, subgraph_invalid_poly_dict, use_mpc_refresh)
+            added_id = handle_invalid_poly_subgraph(graph, i, subgraphs, subgraph_invalid_poly_dict, use_mpc_refresh)
             if added_id:
                 added_mult_scalar_ids.append(added_id)
 

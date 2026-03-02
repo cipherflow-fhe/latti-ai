@@ -586,7 +586,6 @@ class LayerAbstractGraph:
         self.list_layer_name: list[str] = list()
         self.layer_order_list: list[str] = list()
         self.is_mpc = False
-        self.leading_nodes = None
 
     def __repr__(self):
         result: str = ''
