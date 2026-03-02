@@ -235,20 +235,17 @@ class GraphPartitioner:
         H: nx.DiGraph,
         memsize=8192,
     ) -> frozenset:
-        def retrieve_boundary_compute_candidates(nodes: set, subgraph: nx.DiGraph, traversed_nodes: set) -> set:
-            boundary_candidates = set()
-            new_traversed_nodes = set()
+        """
+        Starting from curr_nodes, keep adding upstream neighboring compute nodes
+        until the subgraph is maximal under the level constraint.
+        """
 
+        def retrieve_boundary_compute_candidates(nodes: set, subgraph: nx.DiGraph) -> set:
+            boundary_candidates = set()
             for u in nodes:
-                if u in traversed_nodes:
-                    continue
-                for nbr in list(subgraph.predecessors(u)) + list(subgraph.successors(u)):
+                for nbr in list(subgraph.predecessors(u)):
                     if nbr not in nodes and isinstance(nbr, ComputeNode):
                         boundary_candidates.add(nbr)
-                    new_traversed_nodes.add(nbr)
-                new_traversed_nodes.add(u)
-
-            traversed_nodes |= new_traversed_nodes
 
             return boundary_candidates
 
@@ -260,9 +257,8 @@ class GraphPartitioner:
 
         results: list[frozenset] = [curr_nodes]
 
-        traversed_nodes = set()
         new_curr_nodes = set(curr_nodes)
-        boundary_candidates = retrieve_boundary_compute_candidates(curr_nodes, H, traversed_nodes)
+        boundary_candidates = retrieve_boundary_compute_candidates(curr_nodes, H)
 
         while boundary_candidates:
             v = boundary_candidates.pop()
@@ -284,7 +280,7 @@ class GraphPartitioner:
             results.append(frozen_nodes_to_inspect)
             if len(results) >= memsize:
                 results.pop(0)
-            boundary_candidates |= retrieve_boundary_compute_candidates(new_curr_nodes, H, traversed_nodes)
+            boundary_candidates |= retrieve_boundary_compute_candidates(new_curr_nodes, H)
 
         le_maximal_subgs = frozenset(results)
         for res in le_maximal_subgs:
@@ -313,9 +309,10 @@ class GraphPartitioner:
             immediate_comp_nodes = H.predecessors(leaf_data)
             for comp in immediate_comp_nodes:
                 end = list(H.predecessors(comp)) + list(H.successors(comp)) + [comp]
-                all_subgraphs_less_than_capacity |= self.grow_connected_until_maximal(
+                new_components = self.grow_connected_until_maximal(
                     frozenset(end), frozenset(H_nodes), le_maximal_subg_memo, H
                 )
+                all_subgraphs_less_than_capacity |= new_components
             assert len(all_subgraphs_less_than_capacity) > 0
 
         subgraphs = self.remove_small_subgraphs(all_subgraphs_less_than_capacity, H)
@@ -343,12 +340,25 @@ class GraphPartitioner:
                 if is_refreshed:
                     refresh_boundary.remove(bd_node)
 
+            # For the subgraph, i.e. the smaller part later to be joined to the remaining graph,
+            # we consider the minimal multiplicative depth allowed for each node.
+            _, _, level_info = self.inspect_level_backward(subgraph)
+            for node in level_info.keys():
+                subgraph.nodes[node]['level'] = level_info[node]
+
             new_graph = nx.compose(subgraph, remaining_modifed_graph)
             btp_node_list = list()
             for bd_node in refresh_boundary:
-                lv_to_restore = 1
-                btp_node = transforms.add_btp_layer(new_graph, bd_node, self.param_dict, lv_to_restore)
-                btp_node_list.append(btp_node)
+                # inspect the level difference for the boundary node in the two graphs, and insert restoring nodes if needed
+                upstream_graph = (
+                    remaining_modifed_graph if list(remaining_modifed_graph.predecessors(bd_node)) else subgraph
+                )
+                downstream_graph = subgraph if upstream_graph is remaining_modifed_graph else remaining_modifed_graph
+
+                lv_to_restore = downstream_graph.nodes[bd_node]['level'] - upstream_graph.nodes[bd_node]['level']
+                if lv_to_restore > 0:
+                    btp_node = transforms.add_btp_layer(new_graph, bd_node, self.param_dict, lv_to_restore)
+                    btp_node_list.append(btp_node)
 
             new_graph_ab = LayerAbstractGraph()
             new_graph_ab.dag = new_graph
