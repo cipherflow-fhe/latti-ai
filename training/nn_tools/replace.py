@@ -106,7 +106,7 @@ def replace_activation_with_poly(
         >>> # or replace SiLU activations
         >>> replace_activation_with_poly(model, old_cls=nn.SiLU, degree=4)
     """
-    _supported = (nn.ReLU, nn.SiLU)
+    _supported = (nn.ReLU, nn.ReLU6, nn.SiLU)
     if old_cls not in _supported:
         raise ValueError(
             f'Unsupported activation class: {old_cls.__name__}. '
@@ -114,7 +114,7 @@ def replace_activation_with_poly(
             f'For other activations, use Chebyshev polynomial fitting.'
         )
 
-    _activation_map = {nn.ReLU: 'relu', nn.SiLU: 'silu'}
+    _activation_map = {nn.ReLU: 'relu', nn.ReLU6: 'relu', nn.SiLU: 'silu'}
     activation = _activation_map[old_cls]
 
     replace_activation(
