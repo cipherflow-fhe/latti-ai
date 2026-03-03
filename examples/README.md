@@ -20,6 +20,34 @@ Examples are built automatically as part of the main project build (see the root
 
 See the [Running Examples](../README.md#running-examples) section in the root README for instructions on running each example.
 
+## Verification
+
+The `inference` binary supports a `--verify` mode that compares encrypted inference results against plaintext results element-by-element, reporting per-element errors and overall pass/fail status.
+
+### Manual Verification
+
+```bash
+# CPU mode
+./build/examples/inference --task-dir examples/test_mnist/task --input examples/test_mnist/task/client/img.csv --verify
+
+# GPU mode
+./build/examples/inference --task-dir examples/test_mnist/task --input examples/test_mnist/task/client/img.csv --verify --gpu
+```
+
+### Batch Verification with CTest
+
+All examples are registered as CTest tests with labels for easy filtering. Run from the `build/` directory:
+
+```bash
+ctest -L example-cpu -V          # All CPU examples
+ctest -L example-gpu -V          # All GPU examples
+ctest -R mnist -V                # MNIST only (CPU + GPU)
+ctest -R cifar10-gpu -V          # CIFAR-10 GPU only
+ctest -L example -V              # All examples (CPU + GPU)
+```
+
+Available labels: `example`, `example-cpu`, `example-gpu`, `mnist`, `cifar10`, `imagenet`.
+
 ## Example Details
 
 ### test_mnist

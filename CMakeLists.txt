@@ -55,6 +55,8 @@ endif()
 
 include_directories(${HDF5_INCLUDE_DIRS})
 
+enable_testing()
+
 add_subdirectory(inference)
 add_subdirectory(examples)
 
