@@ -28,6 +28,7 @@ from components import (
     DEFAULT_SCALE,
     PoolComputeNode,
     MultScalarComputeNode,
+    UpsampleComputeNode,
 )
 
 
@@ -154,8 +155,6 @@ def add_layer(
     level_cost = 0
     if layer_type == 'mult_scalar':
         level_cost = 1
-    elif layer_type == 'drop_level':
-        level_cost = 0
 
     _insert_layer_between_feature_and_compute(
         graph.dag,
@@ -454,28 +453,26 @@ def set_feature_scales(graph: LayerAbstractGraph):
             node_out = set_scale_for_node(graph, compute, scale)
 
 
-def check_approx_poly_subgraph(subgraph: LayerAbstractGraph, invalid_list: list = None, use_mpc_refresh: bool = False):
-    """Check if the approx poly nodes in the linear subgraph can be absorbed"""
+def check_subgraph_validity(subgraph: LayerAbstractGraph, invalid_list: list = None, use_mpc_refresh: bool = False):
+    """Check if nodes in the linear subgraph can be absorbed"""
 
     if use_mpc_refresh:
-        approx_poly_layer = ['bootstrapping']
+        layers_to_absorb = ['bootstrapping']
     else:
-        approx_poly_layer = ['avgpool2d', 'mult_coeff']
+        layers_to_absorb = ['avgpool2d', 'mult_coeff']
     valid_flag = True
 
     for node in subgraph.dag.nodes:
         if isinstance(node, ComputeNode):
-            if node.layer_type in approx_poly_layer:
+            if node.layer_type in layers_to_absorb:
                 if isinstance(node, PoolComputeNode) and (not node.is_adaptive_avgpool) and (not node.is_big_size):
                     continue
                 is_find_dwon, target_node_down = find_linear_fhe_layer(node, subgraph, Direction.DOWN)
                 is_find_up, target_node_up = find_linear_fhe_layer(node, subgraph, Direction.UP)
                 if (not is_find_dwon) and (not is_find_up):
-                    valid_flag = False
-                    return valid_flag
+                    return False
                 elif (not is_find_up) and is_find_dwon and target_node_down.layer_type == 'simple_polyrelu':
-                    valid_flag = False
-                    return valid_flag
+                    return False
 
     return valid_flag
 
@@ -502,7 +499,7 @@ def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
 
     for sub_in in subgraphs:
         invalid_poly_nodes = []
-        if not check_approx_poly_subgraph(sub_in, invalid_poly_nodes, use_mpc_refresh):
+        if not check_subgraph_validity(sub_in, invalid_poly_nodes, use_mpc_refresh):
             invalid_index.append(index)
         subgraph_invalid_poly_dict[index] = invalid_poly_nodes
         index = index + 1
