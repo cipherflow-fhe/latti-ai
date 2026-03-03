@@ -51,94 +51,38 @@ def get_leading_feature_nodes(dag: nx.DiGraph) -> list[FeatureNode]:
     return leading_feature_nodes
 
 
-def populate_pack_num(dag: nx.DiGraph, node, slot_num: int):
-    sub = LayerAbstractGraph()
-    sub.dag = dag
-    preds = list(sub.dag.predecessors(node))
-    succs = list(sub.dag.successors(node))
-    if config.style == 'multiplexed':
-        in_node = preds[0]
-        out_node = succs[0]
-        if in_node.dim == 0:
-            sub.dag.nodes[in_node]['pack_num'] = int(
-                math.ceil(
-                    slot_num
-                    / (
-                        sub.dag.nodes[in_node]['virtual_shape'][0]
-                        * sub.dag.nodes[in_node]['virtual_shape'][1]
-                        * sub.dag.nodes[in_node]['virtual_skip'][0]
-                        * sub.dag.nodes[in_node]['virtual_skip'][1]
-                    )
-                )
+def _calc_pack_num(dag: nx.DiGraph, feature_node, slot_num: int, use_skip: bool = True) -> int:
+    attrs = dag.nodes[feature_node]
+    if feature_node.dim == 0:
+        return math.ceil(
+            slot_num
+            / (
+                attrs['virtual_shape'][0]
+                * attrs['virtual_shape'][1]
+                * attrs['virtual_skip'][0]
+                * attrs['virtual_skip'][1]
             )
-        else:
-            sub.dag.nodes[in_node]['pack_num'] = math.ceil(slot_num / (in_node.shape[0] * in_node.shape[1]))
-        if out_node.dim == 0:
-            sub.dag.nodes[out_node]['pack_num'] = int(
-                math.ceil(
-                    slot_num
-                    / (
-                        sub.dag.nodes[out_node]['virtual_shape'][0]
-                        * sub.dag.nodes[out_node]['virtual_shape'][1]
-                        * sub.dag.nodes[out_node]['virtual_skip'][0]
-                        * sub.dag.nodes[out_node]['virtual_skip'][1]
-                    )
-                )
-            )
-        else:
-            sub.dag.nodes[out_node]['pack_num'] = math.ceil(slot_num / (out_node.shape[0] * out_node.shape[1]))
+        )
     else:
-        if 'reshape' == node.layer_type:
-            sub.dag.nodes[succs[0]]['pack_num'] = math.ceil(
-                slot_num
-                / (
-                    sub.dag.nodes[succs[0]]['virtual_shape'][0]
-                    * sub.dag.nodes[succs[0]]['virtual_shape'][1]
-                    * sub.dag.nodes[succs[0]]['virtual_skip'][0]
-                    * sub.dag.nodes[succs[0]]['virtual_skip'][1]
-                )
-            )
-        elif preds[0].dim == 0:
-            in_node = preds[0]
-            out_node = succs[0]
+        denom = feature_node.shape[0] * feature_node.shape[1]
+        if use_skip:
+            denom *= attrs['skip'][0] * attrs['skip'][1]
+        return math.ceil(slot_num / denom)
 
-            sub.dag.nodes[succs[0]]['pack_num'] = math.ceil(
-                slot_num
-                / (
-                    sub.dag.nodes[succs[0]]['virtual_shape'][0]
-                    * sub.dag.nodes[succs[0]]['virtual_shape'][1]
-                    * sub.dag.nodes[succs[0]]['virtual_skip'][0]
-                    * sub.dag.nodes[succs[0]]['virtual_skip'][1]
-                )
-            )
-            sub.dag.nodes[preds[0]]['pack_num'] = math.ceil(
-                slot_num
-                / (
-                    sub.dag.nodes[preds[0]]['virtual_shape'][0]
-                    * sub.dag.nodes[preds[0]]['virtual_shape'][1]
-                    * sub.dag.nodes[preds[0]]['virtual_skip'][0]
-                    * sub.dag.nodes[preds[0]]['virtual_skip'][1]
-                )
-            )
+
+def populate_pack_num(dag: nx.DiGraph, node, slot_num: int):
+    preds = list(dag.predecessors(node))
+    succs = list(dag.successors(node))
+    if config.style == 'multiplexed':
+        for f_node in preds + succs:
+            dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num, use_skip=False)
+    else:
+        if node.layer_type == 'reshape':
+            for f_node in succs:
+                dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num)
         else:
-            sub.dag.nodes[succs[0]]['pack_num'] = math.ceil(
-                slot_num
-                / (
-                    succs[0].shape[0]
-                    * succs[0].shape[1]
-                    * sub.dag.nodes[succs[0]]['skip'][0]
-                    * sub.dag.nodes[succs[0]]['skip'][1]
-                )
-            )
-            sub.dag.nodes[preds[0]]['pack_num'] = math.ceil(
-                slot_num
-                / (
-                    preds[0].shape[0]
-                    * preds[0].shape[1]
-                    * sub.dag.nodes[preds[0]]['skip'][0]
-                    * sub.dag.nodes[preds[0]]['skip'][1]
-                )
-            )
+            for f_node in preds + succs:
+                dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num)
 
 
 def update_subgraph_node_param(dag, param_dict: dict[str, EncryptParameterNode], param_id, print_flag=False):
@@ -516,7 +460,6 @@ def update_skip_for_btp(graph: LayerAbstractGraph, print_flag=False):
                 graph.dag.nodes[succs[0]]['skip'] = [1, 1]
 
         if 'upsample' == compute_node.layer_type:
-            graph.dag.nodes[succs[0]]['skip'][0] = 1
             graph.dag.nodes[succs[0]]['skip'] = [1, 1]
         if (
             'batchnorm' in compute_node.layer_type
