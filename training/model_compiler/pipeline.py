@@ -243,9 +243,9 @@ def dump_graph(
     graph.to_json(dict(), str(erg0_path), score=score)
 
     if use_btp:
-        graph_to_task_config([graph], str(server_dir))
+        graph_to_task_config(graph, str(server_dir))
     else:
-        graph_to_task_config([graph], str(server_dir), False)
+        graph_to_task_config(graph, str(server_dir), False)
 
     server_task_config = server_dir / 'task_config.json'
     client_task_config = client_dir / 'task_config.json'

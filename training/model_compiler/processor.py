@@ -225,41 +225,35 @@ def substitute_layers_for_btp(subgraph: LayerAbstractGraph):
 mpc_scale = 1
 
 
-def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path, use_btp: bool = True):
+def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = True):
     server_task = {}
-    for i in range(len(subgraphs)):
-        sub = subgraphs[i]
-        if sub.is_mpc:
-            server_task['nn_layers_ct_' + f'{i}'] = {'enable_fpga': False}
-        else:
-            server_task['nn_layers_ct_' + f'{i}'] = {'enable_fpga': True}
-    input_root = subgraphs[0].get_leading_feature_nodes()[0]
+    if graph.is_mpc:
+        server_task['nn_layers_ct_0'] = {'enable_fpga': False}
+    else:
+        server_task['nn_layers_ct_0'] = {'enable_fpga': True}
 
-    if not nx.is_directed_acyclic_graph(subgraphs[-1].dag):
+    input_roots = graph.get_leading_feature_nodes()
+
+    if not nx.is_directed_acyclic_graph(graph.dag):
         raise ValueError('Cycle exists in graph, cannot perform topological sort!')
 
-    all_nodes_in_topo_sort = list(nx.topological_sort(subgraphs[-1].dag))
-    compute_nodes_in_topo_sort = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)]
-
-    succs = list(subgraphs[-1].dag.successors(compute_nodes_in_topo_sort[-1]))
-    output_root = succs[0]
+    output_roots = [node for node, out_deg in graph.dag.out_degree() if out_deg == 0]
 
     param_dict = dict()
-    for idx, node in enumerate([input_root, output_root]):
-        graph_to_use = subgraphs[0] if idx == 0 else subgraphs[-1]
+    for node in input_roots + output_roots:
         if node.dim == 0:
             param_dict[node.node_id] = {
                 'dim': node.dim,
                 'channel': node.channel,
                 'scale': node.scale,
                 'ckks_scale': node.ckks_scale,
-                'skip': int(graph_to_use.dag.nodes[node]['skip'][0]),
+                'skip': int(graph.dag.nodes[node]['skip'][0]),
                 'ckks_parameter_id': node.ckks_parameter_id,
-                'virtual_shape': [int(x) for x in graph_to_use.dag.nodes[node]['virtual_shape']],
-                'virtual_skip': [int(x) for x in graph_to_use.dag.nodes[node]['virtual_skip']],
-                'level': graph_to_use.dag.nodes[node]['level'],
+                'virtual_shape': [int(x) for x in graph.dag.nodes[node]['virtual_shape']],
+                'virtual_skip': [int(x) for x in graph.dag.nodes[node]['virtual_skip']],
+                'level': graph.dag.nodes[node]['level'],
                 'depth': node.depth,
-                'pack_num': graph_to_use.dag.nodes[node]['pack_num'],
+                'pack_num': graph.dag.nodes[node]['pack_num'],
             }
         elif node.dim == 2:
             param_dict[node.node_id] = {
@@ -268,25 +262,25 @@ def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path, use_btp
                 'scale': node.scale,
                 'ckks_scale': node.ckks_scale,
                 'shape': node.shape,
-                'skip': graph_to_use.dag.nodes[node]['skip'],
+                'skip': graph.dag.nodes[node]['skip'],
                 'ckks_parameter_id': node.ckks_parameter_id,
-                'level': graph_to_use.dag.nodes[node]['level'],
+                'level': graph.dag.nodes[node]['level'],
                 'depth': node.depth,
-                'pack_num': graph_to_use.dag.nodes[node]['pack_num'],
+                'pack_num': graph.dag.nodes[node]['pack_num'],
             }
 
     task_config = {
-        'task_type': 'fhe' if len(subgraphs) == 1 else 'hybrid',
-        'task_num': len(subgraphs),
+        'task_type': 'fhe',
+        'task_num': 1,
         'server_start_id': 0,
-        'server_end_id': len(subgraphs) - 1,
+        'server_end_id': 0,
         'block_shape': config.block_shape,
         'is_absorb_polyrelu': False,
         'pack_style': config.style,
-        'task_input_id': str(input_root.node_id),
-        'task_output_id': str(output_root.node_id),
-        'task_input_param': {'input': param_dict[input_root.node_id]},
-        'task_output_param': {'output': param_dict[output_root.node_id]},
+        'task_input_id': [str(n.node_id) for n in input_roots],
+        'task_output_id': [str(n.node_id) for n in output_roots],
+        'task_input_param': {str(n.node_id): param_dict[n.node_id] for n in input_roots},
+        'task_output_param': {str(n.node_id): param_dict[n.node_id] for n in output_roots},
         'server_task': server_task,
         'use_btp': use_btp,
     }
