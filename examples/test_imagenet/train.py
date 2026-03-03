@@ -61,8 +61,7 @@ def get_imagenet_loaders(data_dir, batch_size, num_workers=4, input_shape=[3, 22
     )
     test_transform = transforms.Compose(
         [
-            transforms.Resize(int(input_shape[1] * 256 / 224)),
-            transforms.CenterCrop((input_shape[1], input_shape[2])),
+            transforms.Resize((input_shape[1], input_shape[2])),
             transforms.ToTensor(),
             normalize,
         ]
