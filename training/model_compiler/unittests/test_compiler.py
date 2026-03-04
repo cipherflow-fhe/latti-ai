@@ -15,6 +15,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import unittest
+import math
 import sys
 from pathlib import Path
 
@@ -27,7 +28,7 @@ from model_export.onnx_to_json import onnx_to_json
 from pipeline import init_config_with_args, run_pipeline
 from components import LayerAbstractGraph, FeatureNode, config
 import nn_modules
-from processor import check_level_cost, check_multi_input_level_skip_aligned
+from processor import check_level_cost, check_multi_input_level_skip_aligned, check_feature_scale
 
 
 class TestCompiler(unittest.TestCase):
@@ -101,6 +102,28 @@ class TestCompiler(unittest.TestCase):
             temperature=0.0,
             num_workers=1,
         )
+        self.assertEqual(check_feature_scale(graph), True)
+
+    def test_single_avgpool_big_size(self):
+        model = nn_modules.SingleAvgpool()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 256, 256]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+        self.assertEqual(check_feature_scale(graph), True)
 
     def test_single_maxpool(self):
         model = nn_modules.SingleMaxpool()
@@ -181,6 +204,7 @@ class TestCompiler(unittest.TestCase):
             temperature=0.0,
             num_workers=1,
         )
+        self.assertEqual(check_feature_scale(graph), True)
 
     def test_single_add(self):
         model = nn_modules.SingleAdd()
@@ -297,7 +321,7 @@ class TestCompiler(unittest.TestCase):
             temperature=0.0,
             num_workers=1,
         )
-
+        self.assertEqual(check_feature_scale(graph), True)
         self.assertEqual(
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)),
             1,
@@ -593,6 +617,107 @@ class TestCompiler(unittest.TestCase):
                 temperature=0.0,
                 num_workers=1,
             )
+
+    def test_pack_num_ordinary(self):
+        model = nn_modules.ConvSeriesWithStride()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+
+        for node in graph.dag.nodes:
+            if isinstance(node, FeatureNode):
+                attrs = graph.dag.nodes[node]
+                self.assertIn('pack_num', attrs)
+                self.assertGreater(attrs['pack_num'], 0)
+                if node.dim == 0:
+                    expected = math.ceil(
+                        config.poly_n
+                        / 2
+                        / (
+                            attrs['virtual_shape'][0]
+                            * attrs['virtual_shape'][1]
+                            * attrs['virtual_skip'][0]
+                            * attrs['virtual_skip'][1]
+                        )
+                    )
+                else:
+                    expected = math.ceil(
+                        config.poly_n / 2 / (node.shape[0] * node.shape[1] * attrs['skip'][0] * attrs['skip'][1])
+                    )
+                self.assertEqual(attrs['pack_num'], expected)
+
+    def test_pack_num_multiplexed(self):
+        model = nn_modules.ConvSeriesWithStride()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 256, 256]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+
+        for node in graph.dag.nodes:
+            if isinstance(node, FeatureNode):
+                attrs = graph.dag.nodes[node]
+                self.assertIn('pack_num', attrs)
+                self.assertGreater(attrs['pack_num'], 0)
+                if node.dim == 0:
+                    expected = math.ceil(
+                        config.poly_n
+                        / 2
+                        / (
+                            attrs['virtual_shape'][0]
+                            * attrs['virtual_shape'][1]
+                            * attrs['virtual_skip'][0]
+                            * attrs['virtual_skip'][1]
+                        )
+                    )
+                else:
+                    expected = math.ceil(config.poly_n / 2 / (node.shape[0] * node.shape[1]))
+                self.assertEqual(attrs['pack_num'], expected)
+
+    def test_split_simple_model(self):
+        model = nn_modules.SkipConnect()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        from pipeline import prepare_graph
+        from transforms import split_graph_to_linear_subgraph
+
+        pt_graph = prepare_graph(self.temp_json_path)
+        subs = split_graph_to_linear_subgraph(pt_graph)
+        self.assertEqual(len(subs), 2)
 
 
 if __name__ == '__main__':
