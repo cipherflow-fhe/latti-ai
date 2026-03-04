@@ -389,9 +389,9 @@ void InitInferenceProcess::init_poly_relu2d_layer(const string& key,
         }
     } else {
         if (is_lazy) {
-            layer_poly_relu->prepare_weight_for_non_absorb_case_lazy();
+            layer_poly_relu->prepare_weight_bsgs_lazy();
         } else {
-            layer_poly_relu->prepare_weight_for_non_absorb_case();
+            layer_poly_relu->prepare_weight_bsgs();
         }
     }
     ckks_poly_relu[key] = move(layer_poly_relu);
@@ -507,6 +507,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
             FeatureNode feature_input_node(json_features[feature_input[0]]);
             unique_ptr<FeatureEncrypted> result;
             auto& context = *ckks_contexts.at(feature_input_node.ckks_parameter_id);
+            cout << ">>> LAYER: " << key << " type=" << layer_type << endl;
             if (layer_type == "conv2d") {
                 fhe_timer.start();
                 const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
@@ -731,7 +732,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                         result = make_unique<Feature2DEncrypted>(fp->ckks_poly_relu[key]->run(context, input2D));
                     } else {
                         result = make_unique<Feature2DEncrypted>(
-                            fp->ckks_poly_relu[key]->run_for_non_absorb_case(context, input2D));
+                            fp->ckks_poly_relu[key]->run_bsgs(context, input2D));
                     }
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted");

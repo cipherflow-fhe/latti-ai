@@ -356,7 +356,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayerDepthwise::run_core(CkksCo
             } else {
                 auto& w_pt_rt = weight_pt[ct_idx][k];
                 auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level);
-                auto r_tmp = ctx_copy.mult_plain_mul(rotated_x[ct_idx][k], w_pt);
+                r_tmp = ctx_copy.mult_plain_mul(rotated_x[ct_idx][k], w_pt);
             }
             if (k == 0) {
                 s = move(r_tmp);
