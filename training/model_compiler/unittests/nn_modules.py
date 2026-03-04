@@ -333,3 +333,16 @@ class SingleRelu(nn.Module):
     def forward(self, x):
         x = self.relu0(x)
         return x
+
+
+class SimpleModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+
+    def forward(self, x):
+        x1 = self.conv0(x)
+        x2 = self.conv0(x1)
+        x3 = x + x2
+        x4 = self.conv0(x3)
+        return x4
