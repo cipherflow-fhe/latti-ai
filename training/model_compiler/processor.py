@@ -638,6 +638,36 @@ def check_multi_input_level_skip_aligned(graph: LayerAbstractGraph) -> bool:
     return result
 
 
+def check_feature_scale(graph: LayerAbstractGraph):
+    all_nodes_in_topo_sort = list(nx.topological_sort(graph.dag))
+    for node in all_nodes_in_topo_sort:
+        if not isinstance(node, ComputeNode):
+            continue
+        preds = list(graph.dag.predecessors(node))
+        succs = list(graph.dag.successors(node))
+        if not preds or not succs:
+            continue
+        assert all(p.scale == preds[0].scale for p in preds), (
+            f'[calculate_feture_scale_for_test] preds scale mismatch at {node.layer_id}: {[p.scale for p in preds]}'
+        )
+        f_node = preds[0]
+        out_node = succs[0]
+        if node.layer_type in config.absorbable_layers:
+            out_node.scale = f_node.scale * node.weight_scale
+        elif node.layer_type == 'mult_coeff':
+            out_node.scale = f_node.scale * (1 / node.coeff)
+        elif node.layer_type == 'avgpool2d':
+            if (not node.is_adaptive_avgpool) and (not node.is_big_size):
+                out_node.scale = f_node.scale
+            else:
+                out_node.scale = f_node.scale * (node.kernel_shape[0] * node.kernel_shape[1])
+        else:
+            out_node.scale = f_node.scale
+
+    output_nodes = [node for node, out_deg in graph.dag.out_degree() if out_deg == 0 and isinstance(node, FeatureNode)]
+    return all(math.isclose(node.scale, 1.0) for node in output_nodes)
+
+
 def set_depth_for_graph(graph: LayerAbstractGraph):
     for node in graph.dag.nodes:
         node.depth = 0
