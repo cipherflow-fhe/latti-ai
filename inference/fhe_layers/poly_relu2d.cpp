@@ -666,7 +666,6 @@ void PolyRelu::analyze_depth_distribution() const {
             max_depth = std::max(max_depth, info.depth);
         }
     }
-    std::cout << "\n最大深度: " << max_depth << std::endl;
 }
 
 // ======================== BSGS (Optimal Power) Mode ========================
@@ -678,7 +677,6 @@ void PolyRelu::init_bsgs() {
     baby_steps = (int)ceil(sqrt(order + 1));
     bsgs_giant_steps = (int)ceil((double)(order + 1) / baby_steps);
 
-    // 初始化modulus向量并计算所有幂次
     modulus.clear();
     for (int i = 0; i <= (int)level; i++) {
         modulus.push_back(param.get_q(i));

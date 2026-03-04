@@ -23,12 +23,12 @@
 
 // 幂次信息结构
 struct PowerInfo {
-    int depth;     // 计算深度（乘法次数）
-    int level;     // 密文level
-    double scale;  // 密文scale
-    int decomp_a;  // 分解：x^n = x^a * x^b
+    int depth;     // depth
+    int level;     // level
+    double scale;  // scale
+    int decomp_a;  // x^n = x^a * x^b
     int decomp_b;
-    bool computed;  // 是否已计算
+    bool computed;  // is compute
 };
 
 class PolyRelu {
@@ -104,7 +104,6 @@ private:
     void determine_required_powers_bsgs();
     void compute_coefficient_scales_bsgs(std::map<int, double>& coeff_scale, std::map<int, int>& level_order);
 
-    // 幂次计算方法
     void compute_all_powers();
     void compute_power(int n);
     PowerInfo get_power_info(int n) const;
