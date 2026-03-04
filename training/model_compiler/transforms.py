@@ -300,6 +300,9 @@ def split_graph_to_linear_subgraph(graph: LayerAbstractGraph) -> list[LayerAbstr
     components = list(nx.weakly_connected_components(dag_of_linear_subgraphs))
     subgraphs = list()
     for component in components:
+        # A single feature_node does not constitute a subgraph
+        if len(component) <= 1:
+            continue
         sub = LayerAbstractGraph()
         sub.dag = dag_of_linear_subgraphs.subgraph(component).copy()
         subgraphs.append(sub)
