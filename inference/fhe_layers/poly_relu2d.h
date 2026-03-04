@@ -23,12 +23,12 @@
 
 // 幂次信息结构
 struct PowerInfo {
-    int depth;           // 计算深度（乘法次数）
-    int level;           // 密文level
-    double scale;        // 密文scale
-    int decomp_a;        // 分解：x^n = x^a * x^b
+    int depth;     // 计算深度（乘法次数）
+    int level;     // 密文level
+    double scale;  // 密文scale
+    int decomp_a;  // 分解：x^n = x^a * x^b
     int decomp_b;
-    bool computed;       // 是否已计算
+    bool computed;  // 是否已计算
 };
 
 class PolyRelu {
@@ -57,7 +57,8 @@ public:
     CkksPlaintextRingt generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
     CkksPlaintextRingt
     generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
-    CkksPlaintextRingt generate_weight_pt_for_bsgs_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
+    CkksPlaintextRingt
+    generate_weight_pt_for_bsgs_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
 
     virtual Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
     virtual Feature2DEncrypted run_for_non_absorb_case(CkksContext& ctx, const Feature2DEncrypted& x);
@@ -97,7 +98,6 @@ private:
     map<int, double> cached_coeff_scale;  // For order==4 case
     map<int, int> cached_level_order;     // For order==4 case
 
-    
     // BSGS private methods
     void init_bsgs();
     void analyze_all_powers_bsgs();

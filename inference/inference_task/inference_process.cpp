@@ -731,8 +731,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     if (fp->is_absorb_polyrelu) {
                         result = make_unique<Feature2DEncrypted>(fp->ckks_poly_relu[key]->run(context, input2D));
                     } else {
-                        result = make_unique<Feature2DEncrypted>(
-                            fp->ckks_poly_relu[key]->run_bsgs(context, input2D));
+                        result = make_unique<Feature2DEncrypted>(fp->ckks_poly_relu[key]->run_bsgs(context, input2D));
                     }
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted");

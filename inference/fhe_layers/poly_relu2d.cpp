@@ -607,8 +607,10 @@ void PolyRelu::compute_power(int n) {
 
     for (int a = 1; a <= n / 2; a++) {
         int b = n - a;
-        if (powers.find(a) == powers.end()) compute_power(a);
-        if (powers.find(b) == powers.end()) compute_power(b);
+        if (powers.find(a) == powers.end())
+            compute_power(a);
+        if (powers.find(b) == powers.end())
+            compute_power(b);
 
         int depth = std::max(powers[a].depth, powers[b].depth) + 1;
 
@@ -670,7 +672,8 @@ void PolyRelu::analyze_depth_distribution() const {
 // ======================== BSGS (Optimal Power) Mode ========================
 
 void PolyRelu::init_bsgs() {
-    if (bsgs_initialized) return;
+    if (bsgs_initialized)
+        return;
 
     baby_steps = (int)ceil(sqrt(order + 1));
     bsgs_giant_steps = (int)ceil((double)(order + 1) / baby_steps);
@@ -682,7 +685,7 @@ void PolyRelu::init_bsgs() {
     }
     powers.clear();
     compute_all_powers();
-    
+
     // analyze_all_powers_bsgs();
     determine_required_powers_bsgs();
     compute_coefficient_scales_bsgs(cached_bsgs_coeff_scale, cached_bsgs_level_order);
@@ -711,8 +714,7 @@ void PolyRelu::determine_required_powers_bsgs() {
     }
 }
 
-void PolyRelu::compute_coefficient_scales_bsgs(std::map<int, double>& coeff_scale,
-                                                 std::map<int, int>& level_order) {
+void PolyRelu::compute_coefficient_scales_bsgs(std::map<int, double>& coeff_scale, std::map<int, int>& level_order) {
     double S = param.get_default_scale();
 
     // Find deepest required power to determine output level
@@ -737,7 +739,8 @@ void PolyRelu::compute_coefficient_scales_bsgs(std::map<int, double>& coeff_scal
         } else {
             // Pg(x) needs to multiply by x^(g*baby), then rescale
             int giant_power = g * baby_steps;
-            if (giant_power > order) break;
+            if (giant_power > order)
+                break;
 
             PowerInfo gp_info = get_power_info(giant_power);
             int level_mult = bsgs_output_level + 1;
@@ -829,7 +832,8 @@ void PolyRelu::prepare_weight_bsgs_lazy() {
     weight_pt.clear();
 }
 
-CkksPlaintextRingt PolyRelu::generate_weight_pt_for_bsgs_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
+CkksPlaintextRingt
+PolyRelu::generate_weight_pt_for_bsgs_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
     vector<double> feature_tmp_pack(N / 2, 0.0);
 
     if (is_ordinary_pack) {
@@ -851,9 +855,8 @@ CkksPlaintextRingt PolyRelu::generate_weight_pt_for_bsgs_indices(CkksContext& ct
             int shape_i = residual / block_shape[1];
             int shape_j = residual % block_shape[1];
 
-            int channel_idx =
-                n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
-                block_i * cached_skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
+            int channel_idx = n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
+                              block_i * cached_skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
             if (channel_idx >= cached_channel || (shape_i % pre_skip[0]) >= skip[0] ||
                 (shape_j % pre_skip[1]) >= skip[1])
                 continue;
@@ -880,8 +883,7 @@ Feature2DEncrypted PolyRelu::run_bsgs(CkksContext& ctx, const Feature2DEncrypted
     return result;
 }
 
-std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx,
-                                                      const std::vector<CkksCiphertext>& x) {
+std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
     std::vector<CkksCiphertext> result(x.size());
 
     if (order <= 0) {
@@ -901,7 +903,8 @@ std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx,
         for (int p : required_powers) {
             powers_to_compute.insert(p);
             std::function<void(int)> add_dependencies = [&](int n) {
-                if (n <= 1) return;
+                if (n <= 1)
+                    return;
                 PowerInfo info = get_power_info(n);
                 if (info.decomp_a > 1) {
                     powers_to_compute.insert(info.decomp_a);
@@ -937,10 +940,8 @@ std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx,
                 x_b = ctx_copy.drop_level(x_b);
             }
 
-            x_powers[i] = ctx_copy.rescale(
-                ctx_copy.relinearize(ctx_copy.mult(x_a, x_b)),
-                ctx_copy.get_parameter().get_default_scale()
-            );
+            x_powers[i] = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(x_a, x_b)),
+                                           ctx_copy.get_parameter().get_default_scale());
             if (x_powers[i].is_empty()) {
                 throw std::runtime_error("BSGS: x_powers[" + std::to_string(i) + "] is empty after computation");
             }
@@ -957,7 +958,8 @@ std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx,
 
             for (int b = 0; b < baby_steps; b++) {
                 int idx = g * baby_steps + b;
-                if (idx > order) break;
+                if (idx > order)
+                    break;
 
                 if (b == 0) {
                     continue;  // Constant term added later
@@ -974,16 +976,10 @@ std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx,
                     if (weight_pt.empty()) {
                         auto coeff_pt_rt = generate_weight_pt_for_bsgs_indices(ctx_copy, idx, x_idx);
                         auto coeff_pt = ctx_copy.ringt_to_mul(coeff_pt_rt, x_copy.get_level());
-                        term = ctx_copy.rescale(
-                            ctx_copy.mult_plain_mul(x_copy, coeff_pt),
-                            target_scale
-                        );
+                        term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_copy, coeff_pt), target_scale);
                     } else {
                         auto coeff_pt = ctx_copy.ringt_to_mul(weight_pt[idx][x_idx], x_copy.get_level());
-                        term = ctx_copy.rescale(
-                            ctx_copy.mult_plain_mul(x_copy, coeff_pt),
-                            target_scale
-                        );
+                        term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_copy, coeff_pt), target_scale);
                     }
 
                     if (!baby_poly_initialized[g]) {
@@ -992,8 +988,8 @@ std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx,
                     } else {
                         if (baby_polys[g].is_empty() || term.is_empty()) {
                             throw std::runtime_error("BSGS baby_poly add: g=" + std::to_string(g) +
-                                " b_empty=" + std::to_string(baby_polys[g].is_empty()) +
-                                " t_empty=" + std::to_string(term.is_empty()));
+                                                     " b_empty=" + std::to_string(baby_polys[g].is_empty()) +
+                                                     " t_empty=" + std::to_string(term.is_empty()));
                         }
                         baby_polys[g] = ctx_copy.add(baby_polys[g], term);
                     }
@@ -1018,12 +1014,14 @@ std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx,
         }
         result[x_idx] = baby_polys[0].copy();
         if (result[x_idx].is_empty()) {
-            throw std::runtime_error("BSGS: result[x_idx] empty after copy from baby_polys[0], x_idx=" + std::to_string(x_idx));
+            throw std::runtime_error("BSGS: result[x_idx] empty after copy from baby_polys[0], x_idx=" +
+                                     std::to_string(x_idx));
         }
 
         for (int g = 1; g < bsgs_giant_steps; g++) {
             int giant_power = g * baby_steps;
-            if (giant_power > order) break;
+            if (giant_power > order)
+                break;
 
             auto x_giant = x_powers[giant_power].copy();
             int mult_level = bsgs_output_level + 1;
@@ -1040,10 +1038,8 @@ std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx,
                 while (baby_poly_copy.get_level() > mult_level) {
                     baby_poly_copy = ctx_copy.drop_level(baby_poly_copy);
                 }
-                term = ctx_copy.rescale(
-                    ctx_copy.relinearize(ctx_copy.mult(baby_poly_copy, x_giant)),
-                    ctx_copy.get_parameter().get_default_scale()
-                );
+                term = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(baby_poly_copy, x_giant)),
+                                        ctx_copy.get_parameter().get_default_scale());
             } else {
                 // Special case: only constant term, directly a_const * x^giant_power
                 int const_idx = g * baby_steps;
@@ -1051,16 +1047,12 @@ std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx,
                     if (weight_pt.empty()) {
                         auto coeff_pt_rt = generate_weight_pt_for_bsgs_indices(ctx_copy, const_idx, x_idx);
                         auto coeff_pt = ctx_copy.ringt_to_mul(coeff_pt_rt, x_giant.get_level());
-                        term = ctx_copy.rescale(
-                            ctx_copy.mult_plain_mul(x_giant, coeff_pt),
-                            ctx_copy.get_parameter().get_default_scale()
-                        );
+                        term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_giant, coeff_pt),
+                                                ctx_copy.get_parameter().get_default_scale());
                     } else {
                         auto coeff_pt = ctx_copy.ringt_to_mul(weight_pt[const_idx][x_idx], x_giant.get_level());
-                        term = ctx_copy.rescale(
-                            ctx_copy.mult_plain_mul(x_giant, coeff_pt),
-                            ctx_copy.get_parameter().get_default_scale()
-                        );
+                        term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_giant, coeff_pt),
+                                                ctx_copy.get_parameter().get_default_scale());
                     }
                 }
             }
