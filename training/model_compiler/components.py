@@ -799,7 +799,7 @@ class LayerAbstractGraph:
 
                     concat_dict.update({key: concat_input_index_list})
                 if 'simple_polyrelu' == layer_type or 'relu2d' == layer_type:
-                    compute_node.path = layer_json['weight_path']
+                    compute_node.path = layer_json.get('weight_path', '')
                     if 'order' in layer_json.keys():
                         compute_node.order = layer_json['order']
                     else:

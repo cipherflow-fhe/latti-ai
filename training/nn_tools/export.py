@@ -37,6 +37,7 @@ def export_to_onnx(
     verbose: bool = True,
     input_names: Optional[List[str]] = None,
     output_names: Optional[List[str]] = None,
+    do_constant_folding=False,
 ) -> str:
     """Export a PyTorch model to ONNX.
 
@@ -90,7 +91,7 @@ def export_to_onnx(
         save_path,
         export_params=True,
         opset_version=opset_version,
-        do_constant_folding=False,
+        do_constant_folding=do_constant_folding,
         input_names=input_names,
         output_names=output_names,
         dynamic_axes=dynamic_axes,
