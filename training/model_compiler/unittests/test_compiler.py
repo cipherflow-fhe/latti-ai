@@ -701,7 +701,7 @@ class TestCompiler(unittest.TestCase):
                 self.assertEqual(attrs['pack_num'], expected)
 
     def test_split_simple_model(self):
-        model = nn_modules.SimpleModel()
+        model = nn_modules.SkipConnect()
         export_to_onnx(
             model,
             save_path=self.temp_onnx_path,
