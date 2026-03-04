@@ -87,6 +87,8 @@ public:
     int baby_steps = 0;
     int bsgs_giant_steps = 0;
 
+    static int compute_bsgs_level_cost(int order);
+
 private:
     // Cached values for on-demand generation
     int N;

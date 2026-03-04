@@ -670,6 +670,74 @@ void PolyRelu::analyze_depth_distribution() const {
 
 // ======================== BSGS (Optimal Power) Mode ========================
 
+int PolyRelu::compute_bsgs_level_cost(int order) {
+    if (order <= 1)
+        return 1;
+    int baby_steps = (int)ceil(sqrt(order + 1));
+    int giant_steps = (int)ceil((double)(order + 1) / baby_steps);
+
+    // Power decomposition: n -> (depth, a, b)
+    struct PInfo {
+        int depth, a, b;
+    };
+    std::map<int, PInfo> pinfo;
+    pinfo[1] = {0, 0, 0};
+    for (int n = 2; n <= order; n++) {
+        int best_d = std::numeric_limits<int>::max(), best_a = 1, best_b = n - 1;
+        for (int a = 1; a <= n / 2; a++) {
+            int b = n - a;
+            int d = std::max(pinfo[a].depth, pinfo[b].depth) + 1;
+            if (d < best_d || (d == best_d && std::abs(a - b) < std::abs(best_a - best_b))) {
+                best_d = d;
+                best_a = a;
+                best_b = b;
+            }
+        }
+        pinfo[n] = {best_d, best_a, best_b};
+    }
+
+    // Required powers + dependencies
+    std::set<int> required, to_compute;
+    for (int i = 1; i <= baby_steps; i++) {
+        required.insert(i);
+        to_compute.insert(i);
+    }
+    for (int g = 1; g < giant_steps; g++) {
+        int gp = g * baby_steps;
+        if (gp <= order) {
+            required.insert(gp);
+            to_compute.insert(gp);
+        }
+    }
+    std::function<void(int)> add_deps = [&](int n) {
+        if (n <= 1)
+            return;
+        if (pinfo[n].a > 1) {
+            to_compute.insert(pinfo[n].a);
+            add_deps(pinfo[n].a);
+        }
+        if (pinfo[n].b > 1) {
+            to_compute.insert(pinfo[n].b);
+            add_deps(pinfo[n].b);
+        }
+    };
+    for (int p : std::set<int>(required))
+        add_deps(p);
+
+    // Compute power depths
+    std::map<int, int> pd;
+    pd[1] = 0;
+    for (int n : to_compute) {
+        if (n <= 1)
+            continue;
+        pd[n] = std::max(pd[pinfo[n].a], pd[pinfo[n].b]) + 1;
+    }
+    int max_d = 0;
+    for (int p : required)
+        max_d = std::max(max_d, pd[p]);
+    return max_d + 1;
+}
+
 void PolyRelu::init_bsgs() {
     if (bsgs_initialized)
         return;
