@@ -21,7 +21,6 @@
 #include <map>
 #include <set>
 
-// 幂次信息结构
 struct PowerInfo {
     int depth;     // depth
     int level;     // level
