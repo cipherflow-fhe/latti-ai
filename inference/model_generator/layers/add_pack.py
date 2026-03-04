@@ -40,16 +40,6 @@ class AddLayer:
     ):
         result: list[DataNode] = list()
         if scale1 == 1.0 and scale2 == 1.0:
-            for i in range(len(x1)):
-                if x2[i].level < x1[i].level:
-                    drop_level_n = x1[i].level - x2[i].level
-                    temp = drop_level(x1[i], drop_level_n)
-                    res = add(temp, x2[i])
-                elif x2[i].level > x1[i].level:
-                    drop_level_n = x2[i].level - x1[i].level
-                    temp = drop_level(x2[i], drop_level_n)
-                    res = add(temp, x1[i])
-                elif x2[i].level == x1[i].level:
-                    res = add(x1[i], x2[i])
-                result.append(res)
+            res = add(x1[i], x2[i])
+            result.append(res)
         return result

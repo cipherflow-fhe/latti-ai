@@ -112,15 +112,17 @@ class DensePackedLayer:
         result = []
 
         for packed_out_feature_idx in range(0, n_packed_out_feature_for_mult_pack):
+            partial_sum: DataNode | None = None
+            x_ct_list = []
+            w_pt_list = []
             for in_feature_idx in range(0, len(weight_pt[packed_out_feature_idx])):
                 x_ct = input_rotated_x[in_feature_idx]
                 w_pt = weight_pt[packed_out_feature_idx][in_feature_idx]
-                p = mult(x_ct, w_pt)
-                if in_feature_idx == 0:
-                    s = p
-                else:
-                    s = add(s, p)
-            s = rescale(s)
+                x_ct_list.append(x_ct)
+                w_pt_list.append(w_pt)
+
+            partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+            s = rescale(partial_sum)
             b_pt = bias_pt[packed_out_feature_idx]
             s = add(s, b_pt)
             n_term = input_ct_shape[0] * input_ct_shape[1]
@@ -210,6 +212,9 @@ class DensePackedLayer:
 
         for packed_out_feature_idx in range(0, n_packed_out_feature_for_mult_pack):
             # Use cached_n_block_input instead of n_block_input
+            partial_sum: CkksCiphertextNode | None = None
+            x_ct_list = []
+            w_pt_list = []
             for in_feature_idx in range(0, cached_n_block_input):
                 x_ct = input_rotated_x[in_feature_idx]
                 w_pt = CkksPlaintextRingtNode(f'encode_pt_{packed_out_feature_idx}_{in_feature_idx}')
@@ -224,12 +229,10 @@ class DensePackedLayer:
                         'j': in_feature_idx,
                     },
                 )
-                p = mult(x_ct, w_pt)
-                if in_feature_idx == 0:
-                    s = p
-                else:
-                    s = add(s, p)
-            s = rescale(s)
+                x_ct_list.append(x_ct)
+                w_pt_list.append(w_pt)
+            partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+            s = rescale(partial_sum)
             b_pt = CkksPlaintextRingtNode(f'encode_pt_{packed_out_feature_idx}')
             custom_compute(
                 inputs=[dense_data_source],

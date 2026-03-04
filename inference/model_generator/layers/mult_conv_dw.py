@@ -117,14 +117,15 @@ class MultConv2DPackedDepthwiseLayer:
         res: list = list()
         result_ct = list()
         for ct_idx in range(len(weight_pt)):
+            partial_sum: DataNode | None = None
+            x_ct_list = list()
+            w_pt_list = list()
             for j in range(len(weight_pt[ct_idx])):
                 w_pt = weight_pt[ct_idx][j]
-                r = mult(kernel_rotations[ct_idx][j], w_pt)
-                if j == 0:
-                    s = r
-                else:
-                    s = add(s, r)
-            s = rescale(s)
+                x_ct_list.append(kernel_rotations[ct_idx][j])
+                w_pt_list.append(w_pt)
+            partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+            s = rescale(partial_sum)
             if self.stride[0] == 1:
                 res.append(s)
             else:
@@ -193,6 +194,9 @@ class MultConv2DPackedDepthwiseLayer:
 
         k_size = self.kernel_shape[0] * self.kernel_shape[1]
         for ct_idx in range(n_pack_in_channel):
+            partial_sum: DataNode | None = None
+            x_ct_list = list()
+            w_pt_list = list()
             for j in range(k_size):
                 w_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}_{j}')
                 custom_compute(
@@ -201,12 +205,10 @@ class MultConv2DPackedDepthwiseLayer:
                     type='encode_pt',
                     attributes={'op_class': op_class, 'type': 'weight_pt', 'i': ct_idx, 'j': j},
                 )
-                r = mult(kernel_rotations[ct_idx][j], w_pt)
-                if j == 0:
-                    s = r
-                else:
-                    s = add(s, r)
-            s = rescale(s)
+                x_ct_list.append(kernel_rotations[ct_idx][j])
+                w_pt_list.append(w_pt)
+            partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+            s = rescale(partial_sum)
             if self.stride[0] == 1:
                 res.append(s)
             else:

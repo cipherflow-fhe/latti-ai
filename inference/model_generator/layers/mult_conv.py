@@ -143,6 +143,9 @@ class MultConv2DPackedLayer:
         size_1 = int(n_pack_in_channel * self.n_block_per_ct)
         size_2 = int(self.kernel_shape[0] * self.kernel_shape[1])
         for ct_idx in range(size_0):
+            partial_sum: DataNode | None = None
+            x_ct_list = list()
+            w_pt_list = list()
             for j in range(size_1):
                 for k in range(size_2):
                     w_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}_{j}_{k}')
@@ -152,12 +155,10 @@ class MultConv2DPackedLayer:
                         type='encode_pt',
                         attributes={'op_class': op_class, 'type': 'weight_pt', 'i': ct_idx, 'j': j, 'k': k},
                     )
-                    r = mult(kernel_rotations[j][k], w_pt)
-                    if j == 0 and k == 0:
-                        s = r
-                    else:
-                        s = add(s, r)
-            s = rescale(s)
+                    x_ct_list.append(kernel_rotations[j][k])
+                    w_pt_list.append(w_pt)
+            partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+            s = rescale(partial_sum)
             s = self.sum_slot(s, self.skip[0], self.skip[1] * self.input_shape[1])
             s = self.sum_slot(s, self.skip[1], 1)
             if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
@@ -266,15 +267,17 @@ class MultConv2DPackedLayer:
         res: list = list()
         result_ct = list()
         for ct_idx in range(len(weight_pt)):
+            partial_sum: DataNode | None = None
+            x_ct_list = list()
+            w_pt_list = list()
             for j in range(len(weight_pt[ct_idx])):
                 for k in range(len(weight_pt[ct_idx][j])):
+                    x_ct = kernel_rotations[j][k]
                     w_pt = weight_pt[ct_idx][j][k]
-                    r = mult(kernel_rotations[j][k], w_pt)
-                    if j == 0 and k == 0:
-                        s = r
-                    else:
-                        s = add(s, r)
-            s = rescale(s)
+                    x_ct_list.append(x_ct)
+                    w_pt_list.append(w_pt)
+            partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+            s = rescale(partial_sum)
             s = self.sum_slot(s, self.skip[0], self.skip[1] * self.input_shape[1])
             s = self.sum_slot(s, self.skip[1], 1)
             if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:

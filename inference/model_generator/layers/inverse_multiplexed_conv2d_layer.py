@@ -126,6 +126,9 @@ class InverseMultiplexedConv2d:
                     base_idx = (r_i2 * stride_next1 + r_j2) * self.kernel_shape[0] * self.kernel_shape[1]
                     # Use the level of the first rotated_x as reference, ensuring all w_pt have consistent level
                     reference_level = rotated_x[0][base_idx].level
+                    partial_sum: DataNode | None = None
+                    x_ct_list = []
+                    w_pt_list = []
                     for j in range(0, self.n_in_channel):
                         for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
                             w_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}_{j}_{k + base_idx}')
@@ -141,13 +144,10 @@ class InverseMultiplexedConv2d:
                                     'k': k + base_idx,
                                 },
                             )
-                            one_mult_res = mult(rotated_x[j][k + base_idx], w_pt)
-
-                            if j == 0 and k == 0:
-                                s = one_mult_res
-                            else:
-                                s = add(s, one_mult_res)
-                    s = rescale(s)
+                            x_ct_list.append(rotated_x[j][k + base_idx])
+                            w_pt_list.append(w_pt)
+                    partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+                    s = rescale(partial_sum)
                     b_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}')
                     custom_compute(
                         inputs=[conv_data_source],  # Reference same data source
@@ -243,18 +243,18 @@ class InverseMultiplexedConv2d:
         for ct_idx in range(0, len(weight_pt)):
             for r_i2 in range(0, stride_next0):
                 for r_j2 in range(0, stride_next1):
-                    s = 0
+                    partial_sum: DataNode | None = None
+                    x_ct_list = list()
+                    w_pt_list = list()
+                    # s = 0
                     out_ct_idx = ct_idx * stride_next0 * stride_next1 + r_i2 * stride_next1 + r_j2
                     base_idx = (r_i2 * stride_next1 + r_j2) * self.kernel_shape[0] * self.kernel_shape[1]
                     for j in range(0, len(weight_pt[ct_idx])):
                         for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
-                            one_mult_res = mult(rotated_x[j][k + base_idx], weight_pt[ct_idx][j][k + base_idx])
-
-                            if j == 0 and k == 0:
-                                s = one_mult_res
-                            else:
-                                s = add(s, one_mult_res)
-                    s = rescale(s)
+                            x_ct_list.append(rotated_x[j][k + base_idx])
+                            w_pt_list.append(weight_pt[ct_idx][j][k + base_idx])
+                    partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+                    s = rescale(partial_sum)
                     s = add(s, bias_pt[ct_idx])
                     temp_res[out_ct_idx] = s
 
