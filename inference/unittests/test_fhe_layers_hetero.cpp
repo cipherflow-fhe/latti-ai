@@ -981,53 +981,107 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
     REQUIRE(result.rmse < 1.0e-2 * result.rms);
 }
 
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu", "", HeteroProcessors) {
+// Helper: compute BSGS level cost (mirrors Python PolyReluLayer.compute_bsgs_level_cost)
+static int compute_bsgs_level_cost(int order) {
+    if (order <= 1) return 1;
+    int baby_steps = (int)ceil(sqrt(order + 1));
+    int giant_steps = (int)ceil((double)(order + 1) / baby_steps);
+
+    // Power decomposition: n -> (depth, a, b)
+    struct PInfo { int depth, a, b; };
+    map<int, PInfo> pinfo;
+    pinfo[1] = {0, 0, 0};
+    for (int n = 2; n <= order; n++) {
+        int best_d = INT_MAX, best_a = 1, best_b = n - 1;
+        for (int a = 1; a <= n / 2; a++) {
+            int b = n - a;
+            int d = max(pinfo[a].depth, pinfo[b].depth) + 1;
+            if (d < best_d || (d == best_d && abs(a - b) < abs(best_a - best_b))) {
+                best_d = d; best_a = a; best_b = b;
+            }
+        }
+        pinfo[n] = {best_d, best_a, best_b};
+    }
+
+    // Required powers + dependencies
+    set<int> required, to_compute;
+    for (int i = 1; i <= baby_steps; i++) { required.insert(i); to_compute.insert(i); }
+    for (int g = 1; g < giant_steps; g++) {
+        int gp = g * baby_steps;
+        if (gp <= order) { required.insert(gp); to_compute.insert(gp); }
+    }
+    std::function<void(int)> add_deps = [&](int n) {
+        if (n <= 1) return;
+        if (pinfo[n].a > 1) { to_compute.insert(pinfo[n].a); add_deps(pinfo[n].a); }
+        if (pinfo[n].b > 1) { to_compute.insert(pinfo[n].b); add_deps(pinfo[n].b); }
+    };
+    for (int p : set<int>(required)) add_deps(p);
+
+    // Compute power depths
+    map<int, int> pd;
+    pd[1] = 0;
+    for (int n : to_compute) {
+        if (n <= 1) continue;
+        pd[n] = max(pd[pinfo[n].a], pd[pinfo[n].b]) + 1;
+    }
+    int max_d = 0;
+    for (int p : required) max_d = max(max_d, pd[p]);
+    return max_d + 1;
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs", "", HeteroProcessors) {
     Duo input_shape = {32, 32};
     uint32_t n_channel = 32;
     Duo skip = {1, 1};
     uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
-    int init_level = 3;
-    int order = 2;
+    int init_level = 8;
+    vector<int> orders = {2, 4, 6, 8, 10, 12, 16, 32, 64};
 
-    auto input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
-    auto weight = gen_random_array<2>({3, input_shape[0]}, 1.0);
+    for (int order : orders) {
+        SECTION("order=" + to_string(order)) {
+            auto input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
+            auto weight = gen_random_array<2>({order + 1, (int)n_channel}, 1.0);
 
-    Feature2DEncrypted input_feature(&this->context, init_level, skip);
-    input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
+            Feature2DEncrypted input_feature(&this->context, init_level, skip);
+            input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
 
-    PolyRelu polyx(this->context.get_parameter(), {input_shape[0], input_shape[1]}, order, weight, skip,
-                   n_channel_per_ct, init_level);
-    polyx.prepare_weight();
+            PolyRelu polyx(this->context.get_parameter(), {input_shape[0], input_shape[1]}, order, weight, skip,
+                           n_channel_per_ct, init_level);
+            polyx.prepare_weight_bsgs();
 
-    Feature2DEncrypted output_feature(&this->context, init_level - 1);
-    output_feature.skip = skip;
-    output_feature.shape = input_shape;
-    output_feature.n_channel = n_channel;
-    output_feature.n_channel_per_ct = input_feature.n_channel_per_ct;
-    for (int i = 0; i < div_ceil(n_channel, n_channel_per_ct); i++) {
-        output_feature.data.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+            int output_level = init_level - compute_bsgs_level_cost(order);
+            Feature2DEncrypted output_feature(&this->context, output_level);
+            output_feature.skip = skip;
+            output_feature.shape = input_shape;
+            output_feature.n_channel = n_channel;
+            output_feature.n_channel_per_ct = input_feature.n_channel_per_ct;
+            for (int i = 0; i < div_ceil(n_channel, n_channel_per_ct); i++) {
+                output_feature.data.push_back(
+                    this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+            }
+
+            vector<CxxVectorArgument> cxx_args;
+            cxx_args.push_back(CxxVectorArgument{"input_node", &input_feature.data});
+            for (int i = 0; i <= order; i++) {
+                cxx_args.push_back(CxxVectorArgument{"weight_pt" + to_string(i), &polyx.weight_pt[i]});
+            }
+            cxx_args.push_back(CxxVectorArgument{"output_ct", &output_feature.data});
+
+            string project_path = base_path + "/CKKS_poly_relu_bsgs_" + to_string(n_channel) +
+                                  "_channel_order_" + to_string(order) + "/level_" + to_string(init_level);
+
+            this->run(project_path, cxx_args);
+
+            auto output_mg = output_feature.par_mult_unpack();
+            auto output_mg_expected = polyx.run_plaintext_for_non_absorb_case(input_array);
+
+            INFO("order=" << order);
+            print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+            print_double_message(output_mg_expected.to_array_1d().data(), "output_mg_expected", 10);
+
+            auto compare_result = compare(output_mg_expected, output_mg);
+            REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+            REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+        }
     }
-
-    vector<CxxVectorArgument> cxx_args = {
-        CxxVectorArgument{"input_node", &input_feature.data},
-        CxxVectorArgument{"weight_pt0", &polyx.weight_pt[0]},
-        CxxVectorArgument{"weight_pt1", &polyx.weight_pt[1]},
-        CxxVectorArgument{"output_ct", &output_feature.data},
-    };
-
-    string project_path =
-        base_path + "/CKKS_poly_relu_" + to_string(n_channel) + "_channel/level_" + to_string(init_level);
-
-    this->run(project_path, cxx_args);
-
-    auto output_mg = output_feature.par_mult_unpack();
-
-    auto output_mg_expected = polyx.run_plaintext(input_array);
-
-    print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
-    print_double_message(output_mg_expected.to_array_1d().data(), "output_mg_expected", 32);
-
-    auto compare_result = compare(output_mg_expected, output_mg);
-    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
-    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
 }
