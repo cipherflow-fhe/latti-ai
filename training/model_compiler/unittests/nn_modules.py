@@ -346,3 +346,27 @@ class SkipConnect(nn.Module):
         x3 = x + x2
         x4 = self.conv0(x3)
         return x4
+
+
+class ConvAndConvTransposeBlock(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.conv1 = nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=2)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = self.conv1(x)
+        return x
+
+
+class ConvAndUpsample(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=2)
+        self.resize = nn.Upsample(scale_factor=2, mode='nearest')
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = self.resize(x)
+        return x

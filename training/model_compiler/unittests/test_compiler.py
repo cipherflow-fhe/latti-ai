@@ -26,7 +26,7 @@ sys.path.append(str(script_dir.parent.parent))
 from nn_tools.export import export_to_onnx
 from model_export.onnx_to_json import onnx_to_json
 from pipeline import init_config_with_args, run_pipeline
-from components import LayerAbstractGraph, FeatureNode, config
+from components import LayerAbstractGraph, FeatureNode, config, ComputeNode, UpsampleComputeNode
 import nn_modules
 from processor import check_level_cost, check_multi_input_level_skip_aligned, check_feature_scale
 
@@ -718,6 +718,62 @@ class TestCompiler(unittest.TestCase):
         pt_graph = prepare_graph(self.temp_json_path)
         subs = split_graph_to_linear_subgraph(pt_graph)
         self.assertEqual(len(subs), 2)
+
+    def test_conv_and_convtranspose(self):
+        model = nn_modules.ConvAndConvTransposeBlock()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 128, 128]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+        res = False
+        for node in graph.dag.nodes:
+            # Upsample layer need to be added for large sizes
+            if isinstance(node, UpsampleComputeNode):
+                if node.upsample_factor_in == [2, 2]:
+                    res = True
+        self.assertEqual(res, True)
+
+    def test_conv_and_upsample(self):
+        model = nn_modules.ConvAndUpsample()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+            do_constant_folding=True,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+        res = False
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode):
+                input = list(graph.dag.predecessors(node))[0]
+                output = list(graph.dag.successors(node))[0]
+                if graph.dag.nodes[output]['skip'][0] == graph.dag.nodes[input]['skip'][0] / node.upsample_factor_in[0]:
+                    res = True
+        self.assertEqual(res, True)
 
 
 if __name__ == '__main__':
