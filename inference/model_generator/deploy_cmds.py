@@ -369,7 +369,7 @@ def gen_custom_task(task_path, n=16384, use_gpu=True, style='ordinary'):
 
             if level < feature_id_in_nodes[0].level:
                 feature_id_in_nodes = [drop_level(node, drop_level_n) for node in feature_id_in_nodes]
-            layer_output_nodes = polyrelu.call(feature_id_in_nodes, weight_pt)
+            layer_output_nodes = polyrelu.call_bsgs(feature_id_in_nodes, weight_pt)
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
             for i in range(len(weight_pt)):
                 input_args.append(Argument(f'poly_reluw_{layer_id}_{i}', weight_pt[i]))

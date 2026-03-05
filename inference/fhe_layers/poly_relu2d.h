@@ -18,6 +18,17 @@
 
 #pragma once
 #include "../data_structs/feature.h"
+#include <map>
+#include <set>
+
+struct PowerInfo {
+    int depth;     // depth
+    int level;     // level
+    double scale;  // scale
+    int decomp_a;  // x^n = x^a * x^b
+    int decomp_b;
+    bool computed;  // is compute
+};
 
 class PolyRelu {
 public:
@@ -35,20 +46,26 @@ public:
     ~PolyRelu();
 
     virtual void prepare_weight();
-    virtual void prepare_weight_for_non_absorb_case();
     virtual void prepare_weight_lazy();
-    virtual void prepare_weight_for_non_absorb_case_lazy();
+    virtual void prepare_weight_bsgs();
+    virtual void prepare_weight_bsgs_lazy();
+    virtual void prepare_weight_hornor();
+    virtual void prepare_weight_hornor_lazy();
 
     // Helper functions to generate weights on-demand (for lazy mode)
     CkksPlaintextRingt generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
     CkksPlaintextRingt
     generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
+    CkksPlaintextRingt
+    generate_weight_pt_for_bsgs_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
 
     virtual Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
-    virtual Feature2DEncrypted run_for_non_absorb_case(CkksContext& ctx, const Feature2DEncrypted& x);
     std::vector<CkksCiphertext> run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
-    std::vector<CkksCiphertext> run_core_for_non_absorb_case(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
-    virtual Array<double, 3> run_plaintext(const Array<double, 3>& x);
+    virtual Feature2DEncrypted run_bsgs(CkksContext& ctx, const Feature2DEncrypted& x);
+    std::vector<CkksCiphertext> run_core_bsgs(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
+    virtual Feature2DEncrypted run_horner(CkksContext& ctx, const Feature2DEncrypted& x);
+    std::vector<CkksCiphertext> run_core_horner(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
+    virtual Array<double, 3> run_plaintext_absorb_case(const Array<double, 3>& x);
     virtual Array<double, 3> run_plaintext_for_non_absorb_case(const Array<double, 3>& x);
 
     CkksParameter param;
@@ -66,6 +83,12 @@ public:
     vector<vector<CkksPlaintextRingt>> weight_pt;
     bool is_ordinary_pack;
 
+    // BSGS parameters (public for inspection)
+    int baby_steps = 0;
+    int bsgs_giant_steps = 0;
+
+    static int compute_bsgs_level_cost(int order);
+
 private:
     // Cached values for on-demand generation
     int N;
@@ -75,4 +98,26 @@ private:
     int cached_total_block_size;
     map<int, double> cached_coeff_scale;  // For order==4 case
     map<int, int> cached_level_order;     // For order==4 case
+
+    // BSGS private methods
+    void init_bsgs();
+    void analyze_all_powers_bsgs();
+    void determine_required_powers_bsgs();
+    void compute_coefficient_scales_bsgs(std::map<int, double>& coeff_scale, std::map<int, int>& level_order);
+
+    void compute_all_powers();
+    void compute_power(int n);
+    PowerInfo get_power_info(int n) const;
+    void analyze_depth_distribution() const;
+
+    // BSGS private members
+    std::vector<double> modulus;
+    std::map<int, PowerInfo> powers;
+    std::set<int> required_powers;
+    std::vector<double> baby_poly_output_scale;
+    std::vector<int> baby_poly_output_level;
+    int bsgs_output_level = 0;
+    std::map<int, double> cached_bsgs_coeff_scale;
+    std::map<int, int> cached_bsgs_level_order;
+    bool bsgs_initialized = false;
 };

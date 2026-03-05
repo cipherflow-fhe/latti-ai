@@ -433,34 +433,39 @@ class TestLayerExport(unittest.TestCase):
                 'multiplexed',
             )
 
-    def test_poly_relu(self):
+    def test_poly_relu_bsgs(self):
         N = 16384
         set_param(n=N)
-        level = 3
         n_in_channel = 32
         input_shape = [32, 32]
-        order = 2
         skip = [1, 1]
         n_in_channel_per_ct = int(np.floor(N / 2 / (input_shape[0] * input_shape[1])))
         n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
-        input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
-        weight_pt = [
-            [CkksPlaintextRingtNode(f'polyw_{1}_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order)
-        ]
+        orders = [2, 4, 6, 8, 10, 12, 16, 32, 64]
+        level = 8
 
-        poly_layer = PolyReluLayer(input_shape, order, skip, n_in_channel_per_ct)
-        output_ct = poly_layer.call(input_ct, weight_pt)
+        for order in orders:
+            input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+            weight_pt = [
+                [CkksPlaintextRingtNode(f'polyw_{1}_{i}_{j}') for j in range(n_pack_in_channel)]
+                for i in range(order + 1)
+            ]
 
-        input_args = list()
-        input_args.append(Argument('input_node', input_ct))
-        for i in range(order):
-            input_args.append(Argument(f'weight_pt{i}', weight_pt[i]))
+            poly_layer = PolyReluLayer(input_shape, order, skip, n_in_channel_per_ct)
+            output_ct = poly_layer.call_bsgs(input_ct, weight_pt)
 
-        process_custom_task(
-            input_args=input_args,
-            output_args=[Argument('output_ct', output_ct)],
-            output_instruction_path=os.path.join(base_path, f'CKKS_poly_relu_{n_in_channel}_channel', f'level_{level}'),
-        )
+            input_args = list()
+            input_args.append(Argument('input_node', input_ct))
+            for i in range(order + 1):
+                input_args.append(Argument(f'weight_pt{i}', weight_pt[i]))
+
+            process_custom_task(
+                input_args=input_args,
+                output_args=[Argument('output_ct', output_ct)],
+                output_instruction_path=os.path.join(
+                    base_path, f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order}', f'level_{level}'
+                ),
+            )
 
     def test_fc_cyclic(self):
         N = 16384
