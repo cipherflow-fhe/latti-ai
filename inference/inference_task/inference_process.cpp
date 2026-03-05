@@ -1051,7 +1051,7 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
             if (layer_type == "poly_relu2d" || layer_type == "simple_polyrelu") {
                 const Array<double, 3>& input0 = p_feature2d_x[feature_input[0]];
                 if (fp->is_absorb_polyrelu) {
-                    result = fp->ckks_poly_relu[key]->run_plaintext(input0);
+                    result = fp->ckks_poly_relu[key]->run_plaintext_absorb_case(input0);
                 } else {
                     result = fp->ckks_poly_relu[key]->run_plaintext_for_non_absorb_case(input0);
                 }
