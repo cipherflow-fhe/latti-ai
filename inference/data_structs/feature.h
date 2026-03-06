@@ -40,6 +40,7 @@ public:
     uint32_t n_channel = 0;
     uint32_t n_channel_per_ct = 0;
     uint32_t level = 0;
+    uint32_t matmul_block_size = 0;
     double ckks_scale = 0;
     double multiplier = 0;
 
@@ -153,6 +154,13 @@ public:
     virtual Array<double, 3> unpack() const;
     virtual Array<double, 2> unpack_column() const;
     virtual Array<double, 2> unpack_row() const;
+
+    // Block column-major packing: each k*k block -> one ciphertext
+    virtual void block_col_major_pack(const Array<double, 2>& matrix,
+                                      uint32_t k,
+                                      bool is_symmetric = false,
+                                      double scale_in = DEFAULT_SCALE);
+    virtual Array<double, 2> block_col_major_unpack(uint32_t m, uint32_t n, uint32_t k) const;
 
     void split_to_shares(Feature2DEncrypted* share0, Feature2DShare* share1) const;
     void split_to_shares_for_multi_channel_pack(Feature2DEncrypted* share0,
