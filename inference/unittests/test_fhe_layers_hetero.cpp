@@ -36,6 +36,8 @@
 #include "fhe_layers/activation_layer.h"
 #include "fhe_layers/conv2d_depthwise.h"
 #include "fhe_layers/dense_packed_layer.h"
+#include "fhe_layers/block_ccmm.h"
+#include "fhe_layers/block_cpmm.h"
 #include "ut_util.h"
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 
@@ -1036,4 +1038,130 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs", "", HeteroProces
             REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
         }
     }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_ccmm_matmul", "", HeteroProcessors) {
+    uint32_t k = 4;
+    uint32_t m = 8, n = 8, p = 8;
+    int init_level = 8;
+
+    Array<double, 2> A_mat = gen_random_array<2>({m, n}, 1.0);
+    Array<double, 2> B_mat = gen_random_array<2>({n, p}, 1.0);
+
+    // Pack A and B using block column-major encoding
+    Feature2DEncrypted A_enc(&this->context, init_level);
+    A_enc.shape = {m, n};
+    A_enc.matmul_block_size = k;
+    A_enc.block_col_major_pack(A_mat, k, false, this->default_scale);
+
+    Feature2DEncrypted B_enc(&this->context, init_level);
+    B_enc.shape = {n, p};
+    B_enc.matmul_block_size = k;
+    B_enc.block_col_major_pack(B_mat, k, false, this->default_scale);
+
+    // Create BlockCCMM and run
+    BlockCCMM ccmm(this->context.get_parameter(), A_enc.shape, B_enc.shape, A_enc.matmul_block_size,
+                   B_enc.matmul_block_size, A_enc.level, B_enc.level);
+    ccmm.precompute_diagonals();
+    Feature2DEncrypted C_enc = ccmm.run(this->context, A_enc, B_enc);
+
+    // Unpack result
+    auto C_result = C_enc.block_col_major_unpack(C_enc.shape[0], C_enc.shape[1], C_enc.matmul_block_size);
+
+    // Compute expected plaintext matmul: C = A @ B
+    Array<double, 2> C_expected({m, p});
+    for (uint32_t i = 0; i < m; i++) {
+        for (uint32_t j = 0; j < p; j++) {
+            double sum = 0.0;
+            for (uint32_t l = 0; l < n; l++) {
+                sum += A_mat.get(i, l) * B_mat.get(l, j);
+            }
+            C_expected.set(i, j, sum);
+        }
+    }
+
+    // Compare element by element
+    double max_error = 0.0;
+    double max_abs = 0.0;
+    double sse = 0.0;
+    double ss = 0.0;
+    for (uint32_t i = 0; i < m; i++) {
+        for (uint32_t j = 0; j < p; j++) {
+            double expected_val = C_expected.get(i, j);
+            double result_val = C_result.get(i, j);
+            double error = std::abs(expected_val - result_val);
+            max_error = std::max(max_error, error);
+            max_abs = std::max(max_abs, std::abs(expected_val));
+            sse += error * error;
+            ss += expected_val * expected_val;
+        }
+    }
+    double rmse = std::sqrt(sse / (m * p));
+    double rms = std::sqrt(ss / (m * p));
+
+    print_double_message(C_result.to_array_1d().data(), "output_mg", 12);
+    print_double_message(C_expected.to_array_1d().data(), "output_mg_expected", 12);
+
+    REQUIRE(max_error < 5.0e-2 * max_abs);
+    REQUIRE(rmse < 1.0e-2 * rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_cpmm_matmul", "", HeteroProcessors) {
+    uint32_t d = 4;
+    uint32_t m = 8, n = 8, p = 8;
+    int init_level = 8;
+
+    Array<double, 2> A_mat = gen_random_array<2>({m, n}, 1.0);
+    Array<double, 2> B_mat = gen_random_array<2>({n, p}, 1.0);
+
+    // Pack A using block column-major encoding
+    Feature2DEncrypted A_enc(&this->context, init_level);
+    A_enc.shape = {m, n};
+    A_enc.matmul_block_size = d;
+    A_enc.block_col_major_pack(A_mat, d, false, this->default_scale);
+
+    // Create BlockCPMM, precompute B diagonals, and run
+    BlockCPMM cpmm(this->context.get_parameter(), A_enc.shape, {n, p}, d, A_enc.level);
+    cpmm.precompute_diagonals(B_mat);
+    Feature2DEncrypted C_enc = cpmm.run(this->context, A_enc);
+
+    // Unpack result
+    auto C_result = C_enc.block_col_major_unpack(C_enc.shape[0], C_enc.shape[1], C_enc.matmul_block_size);
+
+    // Compute expected plaintext matmul: C = A @ B
+    Array<double, 2> C_expected({m, p});
+    for (uint32_t i = 0; i < m; i++) {
+        for (uint32_t j = 0; j < p; j++) {
+            double sum = 0.0;
+            for (uint32_t l = 0; l < n; l++) {
+                sum += A_mat.get(i, l) * B_mat.get(l, j);
+            }
+            C_expected.set(i, j, sum);
+        }
+    }
+
+    // Compare element by element
+    double max_error = 0.0;
+    double max_abs = 0.0;
+    double sse = 0.0;
+    double ss = 0.0;
+    for (uint32_t i = 0; i < m; i++) {
+        for (uint32_t j = 0; j < p; j++) {
+            double expected_val = C_expected.get(i, j);
+            double result_val = C_result.get(i, j);
+            double error = std::abs(expected_val - result_val);
+            max_error = std::max(max_error, error);
+            max_abs = std::max(max_abs, std::abs(expected_val));
+            sse += error * error;
+            ss += expected_val * expected_val;
+        }
+    }
+    double rmse = std::sqrt(sse / (m * p));
+    double rms = std::sqrt(ss / (m * p));
+
+    print_double_message(C_result.to_array_1d().data(), "output_mg", 12);
+    print_double_message(C_expected.to_array_1d().data(), "output_mg_expected", 12);
+
+    REQUIRE(max_error < 5.0e-2 * max_abs);
+    REQUIRE(rmse < 1.0e-2 * rms);
 }
