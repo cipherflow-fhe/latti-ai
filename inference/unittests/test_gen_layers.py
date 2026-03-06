@@ -433,7 +433,7 @@ class TestLayerExport(unittest.TestCase):
                 'multiplexed',
             )
 
-    def test_poly_relu_bsgs(self):
+    def test_poly_bsgs(self):
         N = 16384
         set_param(n=N)
         n_in_channel = 32
@@ -689,6 +689,58 @@ class TestLayerExport(unittest.TestCase):
                     base_path, f'CKKS_fc_prepare_weight_pack_cyclic_{s}_{s}_mult_apck', f'level_{level}', 'server'
                 ),
             )
+
+    def test_poly_relu_bsgs(self):
+        N = 16384
+        set_param(n=N)
+        n_in_channel = 32
+        input_shape = [32, 32]
+        skip = [1, 1]
+        n_in_channel_per_ct = int(np.floor(N / 2 / (input_shape[0] * input_shape[1])))
+        n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
+        order0 = 7
+        order1 = 7
+        level_cost0 = PolyReluLayer.compute_bsgs_level_cost(order0)
+        level_cost1 = PolyReluLayer.compute_bsgs_level_cost(order1)
+        level = level_cost0 + level_cost1 + 1  # +1 for sign(x)*x multiplication
+
+        input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+        weight_pt0 = [
+            [CkksPlaintextRingtNode(f'poly0w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order0 + 1)
+        ]
+        poly_layer0 = PolyReluLayer(input_shape, order0, skip, n_in_channel_per_ct)
+        output_ct0 = poly_layer0.call_bsgs(input_ct, weight_pt0)
+
+        weight_pt1 = [
+            [CkksPlaintextRingtNode(f'poly1w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order1 + 1)
+        ]
+        poly_layer1 = PolyReluLayer(input_shape, order1, skip, n_in_channel_per_ct)
+        output_ct1 = poly_layer1.call_bsgs(output_ct0, weight_pt1)
+
+        output_ct = list()
+        for idx in range(len(output_ct1)):
+            tmp = input_ct[idx]
+            if tmp.level > output_ct1[idx].level:
+                tmp = drop_level(tmp, tmp.level - output_ct1[idx].level)
+            tmp0 = rescale(relin(mult(output_ct1[idx], tmp)))
+            tmp1 = input_ct[idx]
+            if tmp1.level > tmp0.level:
+                tmp1 = drop_level(tmp1, tmp1.level - tmp0.level)
+            output_ct.append(add(tmp0, tmp1))
+
+        input_args = list()
+        input_args.append(Argument('input_node', input_ct))
+        for i in range(order0 + 1):
+            input_args.append(Argument(f'poly0_weight_pt{i}', weight_pt0[i]))
+        for i in range(order1 + 1):
+            input_args.append(Argument(f'poly1_weight_pt{i}', weight_pt1[i]))
+        process_custom_task(
+            input_args=input_args,
+            output_args=[Argument('output_ct', output_ct)],
+            output_instruction_path=os.path.join(
+                base_path, f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order0}_{order1}', f'level_{level}'
+            ),
+        )
 
 
 if __name__ == '__main__':

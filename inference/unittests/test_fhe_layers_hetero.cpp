@@ -981,7 +981,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
     REQUIRE(result.rmse < 1.0e-2 * result.rms);
 }
 
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs", "", HeteroProcessors) {
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs", "", HeteroProcessors) {
     Duo input_shape = {32, 32};
     uint32_t n_channel = 32;
     Duo skip = {1, 1};
@@ -1036,4 +1036,103 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs", "", HeteroProces
             REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
         }
     }
+}
+
+static Array<double, 2> make_uniform_coeff(const vector<double>& c, uint32_t n_channel) {
+    Array<double, 2> coeff({(uint64_t)c.size(), (uint64_t)n_channel});
+    for (int i = 0; i < (int)c.size(); i++) {
+        for (uint32_t ch = 0; ch < n_channel; ch++) {
+            coeff.set(i, ch, c[i]);
+        }
+    }
+    return coeff;
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs", "", HeteroProcessors) {
+    Duo input_shape = {32, 32};
+    uint32_t n_channel = 32;
+    Duo skip = {1, 1};
+    uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
+    int order0 = 7;
+    int order1 = 7;
+    int level_cost0 = PolyRelu::compute_bsgs_level_cost(order0);
+    int level_cost1 = PolyRelu::compute_bsgs_level_cost(order1);
+    int init_level = level_cost0 + level_cost1 + 1;  // +1 for sign(x)*x multiplication
+
+    auto input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
+    // auto weight0 = gen_random_array<2>({order0 + 1, (int)n_channel}, 1.0);
+    // auto weight1 = gen_random_array<2>({order1 + 1, (int)n_channel}, 1.0);
+    auto weight0 = make_uniform_coeff(
+        {0.0, 7.30445164958251, 0.0, -3.46825871108659e1, 0.0, 5.98596518298826e1, 0.0, -3.18755225906466e1},
+        n_channel);
+    auto weight1 = make_uniform_coeff(
+        {0.0, 2.40085652217597, 0.0, -2.63125454261783, 0.0, 1.54912674773593, 0.0, -3.31172956504304e-1}, n_channel);
+
+    Feature2DEncrypted input_feature(&this->context, init_level, skip);
+    input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
+
+    // Layer 0: p0(x)
+    PolyRelu poly0(this->context.get_parameter(), input_shape, order0, weight0, skip, n_channel_per_ct, init_level);
+    poly0.prepare_weight_bsgs();
+
+    // Layer 1: sign(x) ≈ p1(p0(x))
+    PolyRelu poly1(this->context.get_parameter(), input_shape, order1, weight1, skip, n_channel_per_ct,
+                   init_level - level_cost0);
+    poly1.prepare_weight_bsgs();
+
+    // Output: after sign*x mult + rescale
+    int output_level = init_level - level_cost0 - level_cost1 - 1;
+    Feature2DEncrypted output_feature(&this->context, output_level);
+    output_feature.skip = skip;
+    output_feature.shape = input_shape;
+    output_feature.n_channel = n_channel;
+    output_feature.n_channel_per_ct = input_feature.n_channel_per_ct;
+    for (int i = 0; i < div_ceil(n_channel, n_channel_per_ct); i++) {
+        output_feature.data.push_back(this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+    }
+
+    // Build cxx_args matching Python naming: poly0_weight_pt{i}, poly1_weight_pt{i}
+    vector<CxxVectorArgument> cxx_args;
+    cxx_args.push_back(CxxVectorArgument{"input_node", &input_feature.data});
+    for (int i = 0; i <= order0; i++) {
+        cxx_args.push_back(CxxVectorArgument{"poly0_weight_pt" + to_string(i), &poly0.weight_pt[i]});
+    }
+    for (int i = 0; i <= order1; i++) {
+        cxx_args.push_back(CxxVectorArgument{"poly1_weight_pt" + to_string(i), &poly1.weight_pt[i]});
+    }
+    cxx_args.push_back(CxxVectorArgument{"output_ct", &output_feature.data});
+
+    string project_path = base_path + "/CKKS_poly_relu_bsgs_" + to_string(n_channel) + "_channel_order_" +
+                          to_string(order0) + "_" + to_string(order1) + "/level_" + to_string(init_level);
+
+    this->run(project_path, cxx_args);
+
+    auto output_mg = output_feature.par_mult_unpack();
+
+    // Plaintext reference: result = x + sign(x) * x
+    auto p0_plain = poly0.run_plaintext_for_non_absorb_case(input_array);
+    auto sign_plain = poly1.run_plaintext_for_non_absorb_case(p0_plain);
+    Array<double, 3> expected({n_channel, input_shape[0], input_shape[1]});
+    for (uint64_t i = 0; i < input_array.get_size(); i++) {
+        expected.set(i, input_array.get(i) + sign_plain.get(i) * input_array.get(i));
+    }
+
+    // relu(x) = (x + sign(x) * x) / 2
+    Array<double, 3> relu_ct({n_channel, input_shape[0], input_shape[1]});
+    Array<double, 3> relu_expected({n_channel, input_shape[0], input_shape[1]});
+    Array<double, 3> relu_true({n_channel, input_shape[0], input_shape[1]});
+    for (uint64_t i = 0; i < input_array.get_size(); i++) {
+        relu_ct.set(i, output_mg.get(i) / 2.0);
+        relu_expected.set(i, expected.get(i) / 2.0);
+        relu_true.set(i, std::max(0.0, input_array.get(i)));
+    }
+
+    print_double_message(input_array.to_array_1d().data(), "input_array", 10);
+    print_double_message(relu_true.to_array_1d().data(), "relu_true", 10);
+    print_double_message(relu_expected.to_array_1d().data(), "relu_plain", 10);
+    print_double_message(relu_ct.to_array_1d().data(), "relu_ct", 10);
+
+    auto compare_result = compare(expected, output_mg);
+    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
 }
