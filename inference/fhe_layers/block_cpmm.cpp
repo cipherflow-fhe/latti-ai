@@ -25,9 +25,10 @@ using namespace std;
 BlockCPMM::BlockCPMM(const CkksParameter& param_in,
                      const Duo& shape_A,
                      const Duo& shape_B,
+                     const Array<double, 2>& B_mat_in,
                      uint32_t block_size,
                      uint32_t level_A)
-    : param_(param_in.copy()) {
+    : param_(param_in.copy()), B_mat_(B_mat_in.copy()) {
     assert(shape_A[1] == shape_B[0] && "inner dimensions must match: shape_A[1] != shape_B[0]");
 
     level_ = level_A;
@@ -64,10 +65,10 @@ int BlockCPMM::get_block_index(int bi, int bj, int num_block_rows) {
 // Build diagonal k for B block (bj, bp):
 // diag_k[i + d*j] = B[(bj*d + (j+k)%d), (bp*d + j)]
 // Same value replicated across all rows i, tiled across num_chunks_
-std::vector<double> BlockCPMM::build_block_diagonal(const Array<double, 2>& B_mat, int bj, int bp, int k) const {
+std::vector<double> BlockCPMM::build_block_diagonal(int bj, int bp, int k) const {
     vector<double> diag_base(chunk_size_, 0.0);
     for (uint32_t j = 0; j < d_; j++) {
-        double val = B_mat.get(bj * d_ + (j + k) % d_, bp * d_ + j);
+        double val = B_mat_.get(bj * d_ + (j + k) % d_, bp * d_ + j);
         for (uint32_t i = 0; i < d_; i++) {
             diag_base[i + d_ * j] = val;
         }
@@ -82,7 +83,7 @@ std::vector<double> BlockCPMM::build_block_diagonal(const Array<double, 2>& B_ma
     return diag;
 }
 
-void BlockCPMM::precompute_diagonals(const Array<double, 2>& B_mat) {
+void BlockCPMM::precompute_diagonals() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
 
     double scale = param_.get_q(level_);
@@ -96,7 +97,7 @@ void BlockCPMM::precompute_diagonals(const Array<double, 2>& B_mat) {
             int b_idx = get_block_index(bj, bp, num_block_rows_B_);
             diag_pt_[b_idx].reserve(d_);
             for (uint32_t k = 0; k < d_; k++) {
-                auto diag_vec = build_block_diagonal(B_mat, bj, bp, k);
+                auto diag_vec = build_block_diagonal(bj, bp, k);
                 diag_pt_[b_idx].push_back(ctx.encode_ringt(diag_vec, scale));
             }
         }

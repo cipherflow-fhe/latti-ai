@@ -26,20 +26,22 @@ public:
     BlockCPMM(const CkksParameter& param_in,
               const Duo& shape_A,
               const Duo& shape_B,
+              const Array<double, 2>& B_mat_in,
               uint32_t block_size,
               uint32_t level_A);
     ~BlockCPMM();
 
-    void precompute_diagonals(const Array<double, 2>& B_mat);
+    void precompute_diagonals();
     Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& A);
 
 private:
     std::vector<CkksCiphertext> run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& A_cts);
     CkksCiphertext block_mult_cpmm(CkksContext& ctx, const CkksCiphertext& a, int bj, int bp) const;
-    std::vector<double> build_block_diagonal(const Array<double, 2>& B_mat, int bj, int bp, int k) const;
+    std::vector<double> build_block_diagonal(int bj, int bp, int k) const;
     static int get_block_index(int bi, int bj, int num_block_rows);
 
     CkksParameter param_;
+    Array<double, 2> B_mat_;
     uint32_t m_, n_, p_;
     uint32_t d_;  // block size (d×d blocks)
     uint32_t n_slot_;
