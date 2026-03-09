@@ -15,8 +15,9 @@ add_library(fhe_layers
   multiplexed_conv2d_pack_layer_depthwise.cpp
   poly_relu2d.cpp
   mult_scaler.cpp
-  block_ccmm.cpp
-  block_cpmm.cpp
+  block_col_major_ccmm.cpp
+  block_col_major_cpmm.cpp
+  block_col_major_transpose.cpp
   ../data_structs/feature.cpp
   ../data_structs/feature1d.cpp
   ../data_structs/feature2d.cpp

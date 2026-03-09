@@ -16,18 +16,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "block_cpmm.h"
+#include "block_col_major_cpmm.h"
 #include <cassert>
 #include <cmath>
 
 using namespace std;
 
-BlockCPMM::BlockCPMM(const CkksParameter& param_in,
-                     const Duo& shape_A,
-                     const Duo& shape_B,
-                     const Array<double, 2>& B_mat_in,
-                     uint32_t block_size,
-                     uint32_t level_A)
+BlockColMajorCPMM::BlockColMajorCPMM(const CkksParameter& param_in,
+                                     const Duo& shape_A,
+                                     const Duo& shape_B,
+                                     const Array<double, 2>& B_mat_in,
+                                     uint32_t block_size,
+                                     uint32_t level_A)
     : param_(param_in.copy()), B_mat_(B_mat_in.copy()) {
     assert(shape_A[1] == shape_B[0] && "inner dimensions must match: shape_A[1] != shape_B[0]");
 
@@ -56,16 +56,16 @@ BlockCPMM::BlockCPMM(const CkksParameter& param_in,
     num_block_cols_B_ = p / d_;
 }
 
-BlockCPMM::~BlockCPMM() {}
+BlockColMajorCPMM::~BlockColMajorCPMM() {}
 
-int BlockCPMM::get_block_index(int bi, int bj, int num_block_rows) {
+int BlockColMajorCPMM::get_block_index(int bi, int bj, int num_block_rows) {
     return bi + num_block_rows * bj;
 }
 
 // Build diagonal k for B block (bj, bp):
 // diag_k[i + d*j] = B[(bj*d + (j+k)%d), (bp*d + j)]
 // Same value replicated across all rows i, tiled across num_chunks_
-std::vector<double> BlockCPMM::build_block_diagonal(int bj, int bp, int k) const {
+std::vector<double> BlockColMajorCPMM::build_block_diagonal(int bj, int bp, int k) const {
     vector<double> diag_base(chunk_size_, 0.0);
     for (uint32_t j = 0; j < d_; j++) {
         double val = B_mat_.get(bj * d_ + (j + k) % d_, bp * d_ + j);
@@ -83,7 +83,7 @@ std::vector<double> BlockCPMM::build_block_diagonal(int bj, int bp, int k) const
     return diag;
 }
 
-void BlockCPMM::precompute_diagonals() {
+void BlockColMajorCPMM::precompute_diagonals() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
 
     double scale = param_.get_q(level_);
@@ -106,7 +106,7 @@ void BlockCPMM::precompute_diagonals() {
 
 // block_mult_cpmm: C_block = Σ_{k=0}^{d-1} rot(a, k*d) ⊙ diag_k(B_block)
 // Input level L -> Output level L-1
-CkksCiphertext BlockCPMM::block_mult_cpmm(CkksContext& ctx, const CkksCiphertext& a, int bj, int bp) const {
+CkksCiphertext BlockColMajorCPMM::block_mult_cpmm(CkksContext& ctx, const CkksCiphertext& a, int bj, int bp) const {
     double default_scale = param_.get_default_scale();
     int b_idx = get_block_index(bj, bp, num_block_rows_B_);
     CkksCiphertext result(0);
@@ -127,7 +127,7 @@ CkksCiphertext BlockCPMM::block_mult_cpmm(CkksContext& ctx, const CkksCiphertext
     return ctx.rescale(result, default_scale);
 }
 
-std::vector<CkksCiphertext> BlockCPMM::run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& A_cts) {
+std::vector<CkksCiphertext> BlockColMajorCPMM::run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& A_cts) {
     uint32_t num_result_blocks = num_block_rows_A_ * num_block_cols_B_;
     vector<CkksCiphertext> C_cts;
     C_cts.resize(num_result_blocks);
@@ -152,7 +152,7 @@ std::vector<CkksCiphertext> BlockCPMM::run_core(CkksContext& ctx, const std::vec
     return C_cts;
 }
 
-Feature2DEncrypted BlockCPMM::run(CkksContext& ctx, const Feature2DEncrypted& A) {
+Feature2DEncrypted BlockColMajorCPMM::run(CkksContext& ctx, const Feature2DEncrypted& A) {
     Feature2DEncrypted result(&ctx, A.level);
     result.data = run_core(ctx, A.data);
     result.level = A.level - 1;  // block_mult_cpmm consumes 1 level

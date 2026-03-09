@@ -155,12 +155,12 @@ public:
     virtual Array<double, 2> unpack_column() const;
     virtual Array<double, 2> unpack_row() const;
 
-    // Block column-major packing: each k*k block -> one ciphertext
+    // Block column-major packing: each d*d block -> one ciphertext
     virtual void block_col_major_pack(const Array<double, 2>& matrix,
-                                      uint32_t k,
+                                      uint32_t d,
                                       bool is_symmetric = false,
                                       double scale_in = DEFAULT_SCALE);
-    virtual Array<double, 2> block_col_major_unpack(uint32_t m, uint32_t n, uint32_t k) const;
+    virtual Array<double, 2> block_col_major_unpack(uint32_t m, uint32_t n, uint32_t d) const;
 
     void split_to_shares(Feature2DEncrypted* share0, Feature2DShare* share1) const;
     void split_to_shares_for_multi_channel_pack(Feature2DEncrypted* share0,

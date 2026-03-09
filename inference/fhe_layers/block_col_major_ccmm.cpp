@@ -16,19 +16,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "block_ccmm.h"
+#include "block_col_major_ccmm.h"
 #include <cassert>
 #include <cmath>
 
 using namespace std;
 
-BlockCCMM::BlockCCMM(const CkksParameter& param_in,
-                     const Duo& shape_A,
-                     const Duo& shape_B,
-                     uint32_t block_size_A,
-                     uint32_t block_size_B,
-                     uint32_t level_A,
-                     uint32_t level_B)
+BlockColMajorCCMM::BlockColMajorCCMM(const CkksParameter& param_in,
+                                     const Duo& shape_A,
+                                     const Duo& shape_B,
+                                     uint32_t block_size_A,
+                                     uint32_t block_size_B,
+                                     uint32_t level_A,
+                                     uint32_t level_B)
     : param_(param_in.copy()) {
     assert(level_A == level_B && "level of A and B must match");
     assert(block_size_A == block_size_B && "matmul_block_size of A and B must match");
@@ -60,14 +60,14 @@ BlockCCMM::BlockCCMM(const CkksParameter& param_in,
     num_block_cols_B_ = p / d_;
 }
 
-BlockCCMM::~BlockCCMM() {}
+BlockColMajorCCMM::~BlockColMajorCCMM() {}
 
-int BlockCCMM::get_block_index(int bi, int bj, int num_block_rows) {
+int BlockColMajorCCMM::get_block_index(int bi, int bj, int num_block_rows) {
     return bi + num_block_rows * bj;
 }
 
 // Build sigma diagonal vector at index d*k_idx
-std::vector<double> BlockCCMM::build_sigma_diagonal(int k_idx) const {
+std::vector<double> BlockColMajorCCMM::build_sigma_diagonal(int k_idx) const {
     vector<double> u_base(chunk_size_, 0.0);
     for (uint32_t j = 0; j < d_; j++) {
         for (uint32_t i = 0; i < d_; i++) {
@@ -90,7 +90,7 @@ std::vector<double> BlockCCMM::build_sigma_diagonal(int k_idx) const {
 }
 
 // Build tau diagonal vector at given offset (-(d-1) to (d-1))
-std::vector<double> BlockCCMM::build_tau_diagonal(int offset) const {
+std::vector<double> BlockColMajorCCMM::build_tau_diagonal(int offset) const {
     vector<double> u_base(chunk_size_, 0.0);
     for (uint32_t j = 0; j < d_; j++) {
         for (uint32_t i = 0; i < d_; i++) {
@@ -114,7 +114,7 @@ std::vector<double> BlockCCMM::build_tau_diagonal(int offset) const {
 }
 
 // Build psi diagonal pair (w_k, w_{k-d}) for given k_val
-std::pair<std::vector<double>, std::vector<double>> BlockCCMM::build_psi_diagonals(int k_val) const {
+std::pair<std::vector<double>, std::vector<double>> BlockColMajorCCMM::build_psi_diagonals(int k_val) const {
     vector<double> w_k_base(chunk_size_, 0.0);
     vector<double> w_k_minus_d_base(chunk_size_, 0.0);
 
@@ -150,16 +150,18 @@ std::pair<std::vector<double>, std::vector<double>> BlockCCMM::build_psi_diagona
 }
 
 // Build all-ones vector for psi when i=0 (identity transform)
-std::vector<double> BlockCCMM::build_psi_k_equal_0_diagonals() const {
+std::vector<double> BlockColMajorCCMM::build_psi_k_equal_0_diagonals() const {
     return vector<double>(n_slot_, 1.0);
 }
 
-void BlockCCMM::precompute_diagonals() {
+void BlockColMajorCCMM::precompute_diagonals() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
 
     double default_scale = param_.get_default_scale();
     double sigma_tau_scale = param_.get_q(level_);
-    double psi_scale = param_.get_q(level_ - 2) * param_.get_q(level_ - 1) / default_scale;
+    // Divide before multiply to avoid double overflow
+    // multiplying two may exceed double's 53-bit mantissa precision.
+    double psi_scale = param_.get_q(level_ - 2) / default_scale * param_.get_q(level_ - 1);
 
     // Sigma: d diagonal vectors
     sigma_diag_pt_.clear();
@@ -195,7 +197,7 @@ void BlockCCMM::precompute_diagonals() {
 
 // sigma: d rotations + d pt_muls + (d-1) adds + 1 rescale
 // Input level L -> Output level L-1
-CkksCiphertext BlockCCMM::sigma_on_ct(CkksContext& ctx, const CkksCiphertext& a) const {
+CkksCiphertext BlockColMajorCCMM::sigma_on_ct(CkksContext& ctx, const CkksCiphertext& a) const {
     double default_scale = param_.get_default_scale();
     CkksCiphertext result(0);
 
@@ -217,7 +219,7 @@ CkksCiphertext BlockCCMM::sigma_on_ct(CkksContext& ctx, const CkksCiphertext& a)
 
 // tau: (2d-1) rotations + (2d-1) pt_muls + (2d-2) adds + 1 rescale
 // Input level L -> Output level L-1
-CkksCiphertext BlockCCMM::tau_on_ct(CkksContext& ctx, const CkksCiphertext& b) const {
+CkksCiphertext BlockColMajorCCMM::tau_on_ct(CkksContext& ctx, const CkksCiphertext& b) const {
     double default_scale = param_.get_default_scale();
     CkksCiphertext result(0);
 
@@ -242,14 +244,14 @@ CkksCiphertext BlockCCMM::tau_on_ct(CkksContext& ctx, const CkksCiphertext& b) c
 
 // phi^i: rotation by d*i positions (rotation only, no level consumed)
 // Input level L-1 -> Output level L-1
-CkksCiphertext BlockCCMM::phi_on_ct(CkksContext& ctx, const CkksCiphertext& a_sigma, int i) const {
+CkksCiphertext BlockColMajorCCMM::phi_on_ct(CkksContext& ctx, const CkksCiphertext& a_sigma, int i) const {
     int rot = ((int)(d_ * i)) % (int)chunk_size_;
     return (rot == 0) ? a_sigma.copy() : ctx.rotate(a_sigma, rot);
 }
 
 // psi^i: 2 rotations + 2 pt_muls + 1 add + 1 rescale
 // Input level L-1 -> Output level L-2
-CkksCiphertext BlockCCMM::psi_on_ct(CkksContext& ctx, const CkksCiphertext& b_tau, int i) const {
+CkksCiphertext BlockColMajorCCMM::psi_on_ct(CkksContext& ctx, const CkksCiphertext& b_tau, int i) const {
     double default_scale = param_.get_default_scale();
     int psi_idx = i - 1;  // psi_w_k_pt_ is 0-indexed for i=1..d-1
 
@@ -271,7 +273,8 @@ CkksCiphertext BlockCCMM::psi_on_ct(CkksContext& ctx, const CkksCiphertext& b_ta
 
 // block_mult: full block multiply of two d*d block ciphertexts
 // Input level L -> Output level L-3
-CkksCiphertext BlockCCMM::block_mult_ct(CkksContext& ctx, const CkksCiphertext& a, const CkksCiphertext& b) const {
+CkksCiphertext
+BlockColMajorCCMM::block_mult_ct(CkksContext& ctx, const CkksCiphertext& a, const CkksCiphertext& b) const {
     double default_scale = param_.get_default_scale();
 
     // Step 1: Apply sigma/tau transforms (L -> L-1)
@@ -301,9 +304,9 @@ CkksCiphertext BlockCCMM::block_mult_ct(CkksContext& ctx, const CkksCiphertext& 
     return result;  // at L-3
 }
 
-std::vector<CkksCiphertext> BlockCCMM::run_core(CkksContext& ctx,
-                                                const std::vector<CkksCiphertext>& A_cts,
-                                                const std::vector<CkksCiphertext>& B_cts) {
+std::vector<CkksCiphertext> BlockColMajorCCMM::run_core(CkksContext& ctx,
+                                                        const std::vector<CkksCiphertext>& A_cts,
+                                                        const std::vector<CkksCiphertext>& B_cts) {
     uint32_t num_result_blocks = num_block_rows_A_ * num_block_cols_B_;
     vector<CkksCiphertext> C_cts;
     C_cts.resize(num_result_blocks);
@@ -330,7 +333,7 @@ std::vector<CkksCiphertext> BlockCCMM::run_core(CkksContext& ctx,
     return C_cts;
 }
 
-Feature2DEncrypted BlockCCMM::run(CkksContext& ctx, const Feature2DEncrypted& A, const Feature2DEncrypted& B) {
+Feature2DEncrypted BlockColMajorCCMM::run(CkksContext& ctx, const Feature2DEncrypted& A, const Feature2DEncrypted& B) {
     Feature2DEncrypted result(&ctx, A.level);
     result.data = run_core(ctx, A.data, B.data);
     result.level = A.level - 3;  // block_mult consumes 3 levels

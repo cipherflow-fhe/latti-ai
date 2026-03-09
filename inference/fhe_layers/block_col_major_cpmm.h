@@ -21,15 +21,15 @@
 
 using namespace cxx_sdk_v2;
 
-class BlockCPMM {
+class BlockColMajorCPMM {
 public:
-    BlockCPMM(const CkksParameter& param_in,
-              const Duo& shape_A,
-              const Duo& shape_B,
-              const Array<double, 2>& B_mat_in,
-              uint32_t block_size,
-              uint32_t level_A);
-    ~BlockCPMM();
+    BlockColMajorCPMM(const CkksParameter& param_in,
+                      const Duo& shape_A,
+                      const Duo& shape_B,
+                      const Array<double, 2>& B_mat_in,
+                      uint32_t block_size,
+                      uint32_t level_A);
+    ~BlockColMajorCPMM();
 
     void precompute_diagonals();
     Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& A);

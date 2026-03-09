@@ -108,6 +108,46 @@ ArrayComparison compare(const Array3D& expected, const Array3D& output) {
     return result;
 }
 
+ArrayComparison compare(const Array<double, 2>& expected, const Array<double, 2>& output) {
+    double max_error = 0.0;
+    double max_abs = 0.0;
+    int max_error_pos[2] = {0, 0};
+    double squared_error = 0.0;
+    double squared = 0.0;
+    array<uint64_t, 2> shape = expected.get_shape();
+    for (int i0 = 0; i0 < shape[0]; i0++) {
+        for (int i1 = 0; i1 < shape[1]; i1++) {
+            double y_pc = expected.get(i0, i1);
+            double y = output.get(i0, i1);
+            double diff = fabs(y_pc - y);
+            squared_error += (y_pc - y) * (y_pc - y);
+            squared += y_pc * y_pc;
+            if (max_error < diff) {
+                max_error = diff;
+                max_error_pos[0] = i0;
+                max_error_pos[1] = i1;
+            }
+            if (max_abs < fabs(y_pc)) {
+                max_abs = fabs(y_pc);
+            }
+        }
+    }
+
+    ArrayComparison result;
+    result.dim = 2;
+    result.max_abs = max_abs;
+    result.max_error = max_error;
+    result.max_error_pos = {max_error_pos[0], max_error_pos[1]};
+    result.rms = sqrt(squared / (shape[0] * shape[1]));
+    result.rmse = sqrt(squared_error / (shape[0] * shape[1]));
+
+    // Print max error position and values
+    printf("Max error position: [%d, %d], expected=%.6f, actual=%.6f, error=%.6f\n", max_error_pos[0], max_error_pos[1],
+           expected.get(max_error_pos[0], max_error_pos[1]), output.get(max_error_pos[0], max_error_pos[1]), max_error);
+
+    return result;
+}
+
 ArrayComparison compare(const Array<double, 3>& expected, const Array<double, 3>& output) {
     double max_error = 0.0;
     double max_abs = 0.0;

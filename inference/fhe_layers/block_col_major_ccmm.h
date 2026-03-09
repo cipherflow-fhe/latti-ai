@@ -21,16 +21,16 @@
 
 using namespace cxx_sdk_v2;
 
-class BlockCCMM {
+class BlockColMajorCCMM {
 public:
-    BlockCCMM(const CkksParameter& param_in,
-              const Duo& shape_A,
-              const Duo& shape_B,
-              uint32_t block_size_A,
-              uint32_t block_size_B,
-              uint32_t level_A,
-              uint32_t level_B);
-    ~BlockCCMM();
+    BlockColMajorCCMM(const CkksParameter& param_in,
+                      const Duo& shape_A,
+                      const Duo& shape_B,
+                      uint32_t block_size_A,
+                      uint32_t block_size_B,
+                      uint32_t level_A,
+                      uint32_t level_B);
+    ~BlockColMajorCCMM();
 
     void precompute_diagonals();
 

@@ -692,15 +692,15 @@ Feature2DEncrypted Feature2DEncrypted::copy() const {
 }
 
 void Feature2DEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
-                                              uint32_t k,
+                                              uint32_t d,
                                               bool is_symmetric,
                                               double scale_in) {
     uint32_t m = matrix.get_shape()[0];
     uint32_t n_cols = matrix.get_shape()[1];
-    uint32_t num_block_rows = m / k;
-    uint32_t num_block_cols = n_cols / k;
+    uint32_t num_block_rows = m / d;
+    uint32_t num_block_cols = n_cols / d;
     int n_slot = context->get_parameter().get_n() / 2;
-    uint32_t chunk_size = k * k;
+    uint32_t chunk_size = d * d;
     const int N_THREAD = 4;
 
     uint32_t total_blocks = num_block_rows * num_block_cols;
@@ -713,9 +713,9 @@ void Feature2DEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
             vector<double> vec(n_slot, 0.0);
             uint32_t num_chunks = n_slot / chunk_size;
             for (uint32_t c = 0; c < num_chunks; c++) {
-                for (uint32_t col = 0; col < k; col++) {
-                    for (uint32_t row = 0; row < k; row++) {
-                        vec[c * chunk_size + row + k * col] = matrix.get(bi * k + row, bj * k + col);
+                for (uint32_t col = 0; col < d; col++) {
+                    for (uint32_t row = 0; row < d; row++) {
+                        vec[c * chunk_size + row + d * col] = matrix.get(bi * d + row, bj * d + col);
                     }
                 }
             }
@@ -741,9 +741,9 @@ void Feature2DEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
     });
 }
 
-Array<double, 2> Feature2DEncrypted::block_col_major_unpack(uint32_t m, uint32_t n, uint32_t k) const {
-    uint32_t num_block_rows = m / k;
-    uint32_t num_block_cols = n / k;
+Array<double, 2> Feature2DEncrypted::block_col_major_unpack(uint32_t m, uint32_t n, uint32_t d) const {
+    uint32_t num_block_rows = m / d;
+    uint32_t num_block_cols = n / d;
     const int N_THREAD = 4;
     uint32_t total_blocks = num_block_rows * num_block_cols;
 
@@ -756,10 +756,10 @@ Array<double, 2> Feature2DEncrypted::block_col_major_unpack(uint32_t m, uint32_t
 
         CkksPlaintext x_pt = ctx_copy.decrypt(data[idx]);
         Array1D x_mg = ctx_copy.decode(x_pt);
-        // Extract first k*k elements (column-major within block)
-        for (uint32_t col = 0; col < k; col++) {
-            for (uint32_t row = 0; row < k; row++) {
-                result.set(bi * k + row, bj * k + col, x_mg[row + k * col]);
+        // Extract first d*d elements (column-major within block)
+        for (uint32_t col = 0; col < d; col++) {
+            for (uint32_t row = 0; row < d; row++) {
+                result.set(bi * d + row, bj * d + col, x_mg[row + d * col]);
             }
         }
     });
