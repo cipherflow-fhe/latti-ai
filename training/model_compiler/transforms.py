@@ -91,6 +91,7 @@ def init_levels(graph: LayerAbstractGraph):
             graph.dag.nodes[node]['pack_num'] = 1
 
 
+# added_f_node.attr = compute_node.pre[0].attr
 def add_layer(
     graph: LayerAbstractGraph,
     compute_node: ComputeNode,
@@ -190,14 +191,14 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
         raise ValueError(f'refreshed nodes with same node id {new_id}. Something is wrong!')
 
     refreshed_feature.node_id = new_id
-    if config.mpc_refresh:
+    if config.graph_type == 'mpc_refresh':
         skip = [1, 1]
     else:
         skip = dag.nodes[upstream_feature]['skip']
 
     btp_node = ComputeNode(
         layer_id=f'{upstream_feature.node_id}_bootstrap',
-        layer_type='bootstrapping',
+        layer_type='mpc_refresh' if config.graph_type == 'mpc_refresh' else 'bootstrapping',
         channel_input=upstream_feature.channel,
         channel_output=refreshed_feature.channel,
         ckks_parameter_id_input=upstream_feature.ckks_parameter_id,
@@ -224,7 +225,8 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
     return btp_node
 
 
-def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: ComputeNode) -> ComputeNode:
+# added_f_node.attr = compute_node.succ[0].attr
+def add_layer_behind(graph: LayerAbstractGraph, compute_node: ComputeNode, layer_type: str) -> ComputeNode:
     f_node = list(graph.dag.successors(compute_node))[0]
 
     skip = list(graph.dag.nodes[f_node]['skip'])
@@ -234,12 +236,27 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
     pack_num = graph.dag.nodes[f_node]['pack_num']
 
     added_f_node = copy.deepcopy(f_node)
-    f_node.node_id = f_node.node_id + '_mult_scalar_output'
+    f_node.node_id = f_node.node_id + f'_{layer_type}_output'
     f_node.scale = 1.0
 
-    added_c_node = MultScalarComputeNode(
-        compute_node.layer_id + '_mult_scalar_', 'mult_scalar', compute_node.channel_input, compute_node.channel_output
-    )
+    if layer_type == 'mult_scalar':
+        added_c_node = MultScalarComputeNode(
+            compute_node.layer_id + f'_{layer_type}_',
+            layer_type,
+            compute_node.channel_input,
+            compute_node.channel_output,
+        )
+    else:
+        added_c_node = ComputeNode(
+            compute_node.layer_id + f'_{layer_type}_',
+            layer_type,
+            compute_node.channel_input,
+            compute_node.channel_output,
+            compute_node.ckks_parameter_id_input,
+            compute_node.ckks_parameter_id_output,
+        )
+
+    level_cost = 1 if layer_type == 'mult_scalar' else 0
 
     graph.dag.remove_edge(compute_node, f_node)
     graph.dag.add_node(
@@ -251,12 +268,16 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
         level=level,
         pack_num=pack_num,
     )
-    graph.dag.add_node(added_c_node, name=added_c_node.layer_id, level_cost=1)
+    graph.dag.add_node(added_c_node, name=added_c_node.layer_id, level_cost=level_cost)
     graph.dag.add_edge(compute_node, added_f_node)
     graph.dag.add_edge(added_f_node, added_c_node)
     graph.dag.add_edge(added_c_node, f_node)
 
     return added_c_node
+
+
+def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: ComputeNode) -> ComputeNode:
+    return add_layer_behind(graph, compute_node, 'mult_scalar')
 
 
 def insert_drop_level_layers(graph: LayerAbstractGraph):
@@ -355,7 +376,7 @@ def handle_valid_poly_subgraph(subgraph: LayerAbstractGraph, use_mpc_refresh: bo
         candidates = {}
 
         for node in subgraph.dag.nodes:
-            if isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping':
+            if isinstance(node, ComputeNode) and node.layer_type in ('bootstrapping', 'mpc_refresh'):
                 find_down, res_node_down = find_linear_fhe_layer(node, subgraph, Direction.DOWN)
                 find_up, res_node_up = find_linear_fhe_layer(node, subgraph, Direction.UP)
 
@@ -459,10 +480,7 @@ def set_feature_scales(graph: LayerAbstractGraph):
 def check_subgraph_validity(subgraph: LayerAbstractGraph, invalid_list: list = None, use_mpc_refresh: bool = False):
     """Check if nodes in the linear subgraph can be absorbed"""
 
-    if use_mpc_refresh:
-        layers_to_absorb = ['bootstrapping']
-    else:
-        layers_to_absorb = ['avgpool2d', 'mult_coeff']
+    layers_to_absorb = ['avgpool2d', 'mult_coeff']
     valid_flag = True
 
     for node in subgraph.dag.nodes:

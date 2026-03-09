@@ -83,7 +83,13 @@ Examples:
         help='Computation style: ordinary or multiplexed',
     )
 
-    parser.add_argument('--graph_type', type=str, choices=['btp'], default=None, help='Graph type: btp')
+    parser.add_argument(
+        '--graph_type', type=str, choices=['btp', 'mpc_refresh'], default=None, help='Graph type: btp, mpc_refresh'
+    )
+
+    parser.add_argument(
+        '--skip_no_btp', action='store_true', default=False, help='Skip try_no_btp and go directly to BTP compilation'
+    )
 
     parser.add_argument(
         '--num_experiments', type=int, default=128, help='Number of parallel compilation experiments (default: 128)'
@@ -176,6 +182,7 @@ Examples:
             output_dir=output_dir,
             temperature=args.temperature,
             num_workers=args.num_workers,
+            skip_no_btp=args.skip_no_btp,
         )
 
         print(f'\n[Compile] Success! Output: {output_dir}')

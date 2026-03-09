@@ -790,7 +790,7 @@ class LayerAbstractGraph:
                 compute_node = ComputeNode(
                     key, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
                 )
-                if layer_type == 'relu2d' and not config.mpc_refresh:
+                if layer_type == 'relu2d' and config.graph_type != 'mpc_refresh':
                     raise ValueError('Relu2d is not supported in current mode')
                 if 'concat2d' == layer_type:
                     concat_input_index_list = list()
@@ -813,7 +813,7 @@ class LayerAbstractGraph:
             elif 'mult_scalar' in layer_type:
                 level_cost = 1
             elif 'relu2d' == layer_type:
-                level_cost = math.ceil(math.log2(compute_node.order)) + 1
+                level_cost = 0
             elif 'resize' == layer_type:
                 level_cost = 1
             elif 'batchnorm' in layer_type or 'pool' in layer_type:
@@ -1238,8 +1238,8 @@ class LayerAbstractGraph:
                 else:
                     raise ValueError('Unsupported dim value.')
 
-        input_feature = [node.node_id for node in list(self.dag.predecessors(compute_list[0]))]
-        output_feature = [node.node_id for node in list(self.dag.successors(compute_list[-1]))]
+        input_feature = [node.node_id for node in self.dag.nodes if self.dag.in_degree(node) == 0]
+        output_feature = [node.node_id for node in self.dag.nodes if self.dag.out_degree(node) == 0]
         config_info = {
             'score': score,
             'ckks_parameter': param_dict,
@@ -1506,7 +1506,7 @@ class MpcScoreParam:
 
     def get_score(self) -> float:
         if 'relu2d' in self.compute_node.layer_type or 'pool' in self.compute_node.layer_type:
-            if 'relu2d' == self.compute_node.layer_type or config.mpc_refresh:
+            if 'relu2d' == self.compute_node.layer_type or config.graph_type == 'mpc_refresh':
                 kernel_scale = 1
             elif 'pool' in self.compute_node.layer_type:
                 kernel_scale = self.compute_node.kernel_shape[0] * self.compute_node.kernel_shape[1]
@@ -1516,7 +1516,7 @@ class MpcScoreParam:
                 self.n_packed_in * self.input_ct_score + self.n_packed_out * self.output_ct_score
             ) * ct_trans_rate
             return n_relu_score + n_ct_score
-        if 'bootstrapping' in self.compute_node.layer_type and config.mpc_refresh:
+        if self.compute_node.layer_type == 'mpc_refresh':
             shape = self.preds[0].shape
             n_ct_score = (
                 self.n_packed_in * self.input_ct_score + self.n_packed_out * self.output_ct_score

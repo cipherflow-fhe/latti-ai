@@ -370,3 +370,36 @@ class ConvAndUpsample(nn.Module):
         x = self.conv0(x)
         x = self.resize(x)
         return x
+
+
+class ConvReluAndUpsample(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=2)
+        self.relu0 = nn.ReLU()
+        self.resize = nn.Upsample(scale_factor=2, mode='nearest')
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = self.relu0(x)
+        x = self.resize(x)
+        return x
+
+
+class CustomModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=2)
+        self.conv1 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=2)
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=2)
+        self.conv3 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=2)
+        self.relu0 = nn.ReLU()
+
+    def forward(self, x):
+        x1 = self.conv0(x)
+        x2 = self.conv1(x1)
+        x3 = self.conv2(x)
+        x4 = self.conv3(x3)
+        x5 = self.relu0(x4)
+        x6 = x2 + x5
+        return x6

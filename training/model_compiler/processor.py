@@ -35,7 +35,7 @@ order = 4
 def process_levels(graph: LayerAbstractGraph):
     if config.set_max_level:
         for node in graph.dag.nodes:
-            if isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping':
+            if isinstance(node, ComputeNode) and node.layer_type in ('bootstrapping', 'mpc_refresh'):
                 succ = next(graph.dag.successors(node))
                 graph.dag.nodes[succ]['level'] = config.max_level
 
@@ -96,7 +96,7 @@ def update_subgraph_node_param(dag, param_dict: dict[str, EncryptParameterNode],
     sub.dag = dag
     slot_num = param_dict[param_id].poly_modulus_degree / 2
     # print(f'slot_num={slot_num}')
-    if config.mpc_refresh:
+    if config.graph_type == 'mpc_refresh':
         update_skip_for_btp(sub, print_flag)
         update_level_cost_for_btp(sub)
     for compute_node in compute_nodes_in_topo_sort:
@@ -118,7 +118,7 @@ def add_btp_layer(graph: LayerAbstractGraph, feature: FeatureNode):
 
     btp_node = ComputeNode(
         layer_id=f'{feature.node_id}_bootstrap',
-        layer_type='bootstrapping',
+        layer_type='mpc_refresh' if config.graph_type == 'mpc_refresh' else 'bootstrapping',
         channel_input=feature.channel,
         channel_output=refreshed_feature.channel,
         ckks_parameter_id_input=feature.ckks_parameter_id,
@@ -466,14 +466,15 @@ def update_skip_for_btp(graph: LayerAbstractGraph, print_flag=False):
             or 'drop_level' in compute_node.layer_type
             or 'mult_scalar' in compute_node.layer_type
             or 'bootstrapping' in compute_node.layer_type
+            or compute_node.layer_type == 'mpc_refresh'
             or config.approx_poly_type == compute_node.layer_type
             or 'relu2d' == compute_node.layer_type
             or 'identity' == compute_node.layer_type
         ):
             graph.dag.nodes[succs[0]]['skip'] = graph.dag.nodes[preds[0]]['skip']
-            if config.mpc_refresh and 'bootstrapping' in compute_node.layer_type:
+            if compute_node.layer_type == 'mpc_refresh' and compute_node.change_skip_to == 0:
                 graph.dag.nodes[succs[0]]['skip'] = [1, 1]
-            if 'bootstrapping' in compute_node.layer_type and compute_node.change_skip_to != 0:
+            elif compute_node.layer_type == 'mpc_refresh' and compute_node.change_skip_to != 0:
                 graph.dag.nodes[succs[0]]['skip'] = [compute_node.change_skip_to, compute_node.change_skip_to]
 
         if 'add' in compute_node.layer_type or 'concat2d' == compute_node.layer_type:
@@ -506,28 +507,21 @@ def update_skip_for_btp(graph: LayerAbstractGraph, print_flag=False):
             )
 
 
-def add_mpc_refresh_mult_scalar(graph: LayerAbstractGraph, node: ComputeNode):
-    preds = list(graph.dag.predecessors(node))
-    input = preds[0]
-    level = 0
-    if (
-        graph.dag.nodes[input]['skip'][0] < node.upsample_factor_in[0]
-        or graph.dag.nodes[input]['skip'][1] < node.upsample_factor_in[1]
-    ) or node.layer_type != 'resize':
-        add_mult_scalar_layer = transforms.add_layer(graph, node, 0, 0, 'mult_scalar', preds, None)
-        preds = list(graph.dag.predecessors(add_mult_scalar_layer))
-        add_mpc_refresh = transforms.add_layer(graph, add_mult_scalar_layer, 0, 0, 'bootstrapping', preds, None)
+def add_mpc_refresh_for_resize(graph: LayerAbstractGraph, node: ComputeNode):
+    print('run----')
+    pre_f_nodes = list(graph.dag.predecessors(node))
+    upsample_factors = node.upsample_factor_in
+    refresh_node = transforms.add_layer(graph, node, 0, 0, 'mpc_refresh', pre_f_nodes)
+    refresh_node.change_skip_to = upsample_factors[0]
+    succ_node = list(graph.dag.successors(refresh_node))[0]
+    graph.dag.nodes[succ_node]['skip'][:2] = upsample_factors
+    print('add=', succ_node.node_id, graph.dag.nodes[succ_node]['skip'])
 
-        nodes_to_process = [add_mpc_refresh, add_mult_scalar_layer]
-        upsample_factors = node.upsample_factor_in
-        add_mpc_refresh.change_skip_to = upsample_factors[0]
-        for node_id in nodes_to_process:
-            succ_node = list(graph.dag.successors(node_id))[0]
-            graph.dag.nodes[succ_node]['skip'][:2] = upsample_factors
-            if node_id.layer_type == 'mpc_refresh' or node_id.layer_type == 'bootstrapping':
-                graph.dag.nodes[succ_node]['level'] = level + 1
-            else:
-                graph.dag.nodes[succ_node]['level'] = level
+
+def add_mpc_refresh_for_align(graph: LayerAbstractGraph, node: ComputeNode):
+    refresh_node = transforms.add_layer_behind(graph, node, 'mpc_refresh')
+    succ_node = list(graph.dag.successors(refresh_node))[0]
+    graph.dag.nodes[succ_node]['skip'][:2] = [1, 1]
 
 
 def check_preds_skip(graph: LayerAbstractGraph, preds: list) -> list:
@@ -563,16 +557,15 @@ def change_skip_for_graph(graph: LayerAbstractGraph):
         pre = list(graph.dag.predecessors(node))[0]
         if graph.dag.nodes[pre]['skip'][0] >= node.upsample_factor_in[0]:
             continue
-        add_mpc_refresh_mult_scalar(graph, node)
-        succ = list(graph.dag.successors(node))[0]
-        graph.dag.nodes[succ]['skip'] = [1, 1]
+        add_mpc_refresh_for_resize(graph, node)
+
     for node in concat_add_layer_list:
         preds = list(graph.dag.predecessors(node))
         check_res = check_preds_skip(graph, preds)
         if check_res:
             for f_node in check_res:
                 c_node = list(graph.dag.predecessors(f_node))[0]
-                add_mpc_refresh_mult_scalar(graph, c_node)
+                add_mpc_refresh_for_align(graph, c_node)
 
 
 def check_level_cost(graph: LayerAbstractGraph) -> bool:
@@ -583,7 +576,7 @@ def check_level_cost(graph: LayerAbstractGraph) -> bool:
     """
     result = True
     for node in graph.dag.nodes:
-        if not isinstance(node, ComputeNode) or node.layer_type in ['drop_level', 'bootstrapping']:
+        if not isinstance(node, ComputeNode) or node.layer_type in ['drop_level', 'bootstrapping', 'mpc_refresh']:
             continue
         level_cost = graph.dag.nodes[node].get('level_cost')
         if level_cost is None:

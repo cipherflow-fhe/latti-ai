@@ -175,11 +175,16 @@ def run_btp_compilation(
     Returns:
         (best_graph, best_score): best_graph is None if all runs failed
     """
-    print('Step 3: Restoring to BTP parameters (POLY_N=65536, MAX_LEVEL=9)...')
-
-    config.poly_n = 65536
-    config.max_level = 9
-    config.block_shape = [128, 128]
+    if config.graph_type == 'mpc_refresh':
+        print('Step 3: Restoring to mpc_refresh parameters (POLY_N=16384, MAX_LEVEL=9)...')
+        config.poly_n = 16384
+        config.max_level = 9
+        config.block_shape = [64, 64]
+    else:
+        print('Step 3: Restoring to BTP parameters (POLY_N=65536, MAX_LEVEL=9)...')
+        config.poly_n = 65536
+        config.max_level = 9
+        config.block_shape = [128, 128]
 
     print(f'Step 4: Starting {num_experiments} parallel BTP compilations with {num_workers} processes...')
 
@@ -278,6 +283,7 @@ def run_pipeline(
     output_dir: Path,
     temperature: float,
     num_workers: int = 16,
+    skip_no_btp: bool = False,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -298,8 +304,14 @@ def run_pipeline(
     pt_graph = prepare_graph(input_file_path)
 
     use_btp = False
-    succeeded, graph, score = try_no_btp(pt_graph)
-    if not succeeded:
+    if not skip_no_btp:
+        succeeded, graph, score = try_no_btp(pt_graph)
+        if not succeeded:
+            use_btp = True
+            graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
+            if graph is None:
+                raise ValueError('Compilation failed.')
+    else:
         use_btp = True
         graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
         if graph is None:

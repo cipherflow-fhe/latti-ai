@@ -69,7 +69,7 @@ def update_bd_node_in_sub(node: FeatureNode, subgraph: nx.DiGraph, remaining_dag
     succ_computes_remain = list(remaining_dag.successors(node))
     is_refreshed = False
     for succ_c in succ_computes_remain:
-        if 'bootstrapping' in succ_c.layer_type:
+        if 'bootstrapping' in succ_c.layer_type or succ_c.layer_type == 'mpc_refresh':
             is_refreshed = True
     if is_refreshed and len(pre_computes_sub) == 0:
         refreshed_node = list(remaining_dag.successors(succ_c))[0]
@@ -108,13 +108,6 @@ def calculate_compute_score_for_graph(
     return compute_score
 
 
-def update_btp_to_mpc_refresh(graph: LayerAbstractGraph):
-    for node in graph.dag.nodes:
-        if isinstance(node, ComputeNode):
-            if node.layer_type == 'bootstrapping':
-                node.layer_type = 'mpc_refresh'
-
-
 class GraphPartitioner:
     def __init__(self, entire_graph: nx.DiGraph, temperature: float = 1.0):
         self.entire_graph = entire_graph
@@ -135,9 +128,9 @@ class GraphPartitioner:
 
             succ_c = list(subgraph.successors(node))
             if len(succ_c) == 0:
-                if config.mpc_refresh or config.graph_type == 'mpc':
+                if config.graph_type in ('mpc_refresh', 'mpc'):
                     level_dict[node] = 1
-                elif config.graph_type == 'btp' and not config.mpc_refresh:
+                elif config.graph_type == 'btp':
                     level_dict[node] = 0
             else:
                 successing_subg_compute_nodes = [c for c in succ_c if c in subg_nodes]
@@ -162,7 +155,7 @@ class GraphPartitioner:
         btp_nodes = list()
         for compute in splitted_graph.dag.nodes:
             if isinstance(compute, ComputeNode):
-                if compute.layer_type == 'bootstrapping':
+                if compute.layer_type in ('bootstrapping', 'mpc_refresh'):
                     btp_nodes.append(compute)
         splitted_graph.dag.remove_nodes_from(btp_nodes)
 
@@ -290,7 +283,7 @@ class GraphPartitioner:
 
     def process_btp_level_cost(self, dag: nx.DiGraph):
         for node in dag.nodes:
-            if isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping':
+            if isinstance(node, ComputeNode) and node.layer_type in ('bootstrapping', 'mpc_refresh'):
                 preds: list[FeatureNode] = list(dag.predecessors(node))
                 succs: list[FeatureNode] = list(dag.successors(node))
                 dag.nodes[node]['level_cost'] = dag.nodes[preds[0]]['level'] - dag.nodes[succs[0]]['level']
@@ -363,9 +356,10 @@ class GraphPartitioner:
             new_graph_ab = LayerAbstractGraph()
             new_graph_ab.dag = new_graph
 
-            if config.mpc_refresh:
-                transforms.absorb_scale(new_graph_ab, config.mpc_refresh)
-                update_subgraph_node_param(new_graph_ab.dag, self.param_dict, 'param0')
+            if config.graph_type == 'mpc_refresh':
+                # transforms.absorb_scale(new_graph_ab, True)
+                # update_subgraph_node_param(new_graph_ab.dag, self.param_dict, 'param0')
+                update_skip_for_btp(new_graph_ab)
                 change_skip_for_graph(new_graph_ab)
                 update_subgraph_node_param(new_graph_ab.dag, self.param_dict, 'param0', True)
             level_below_max, level_info = self.split_graph_and_set_level((new_graph_ab.dag))
@@ -379,7 +373,7 @@ class GraphPartitioner:
             transforms.insert_drop_level_layers(new_graph_ab)
             subgraph_cost = calculate_compute_score_for_graph(new_graph, subgraph, self.param_dict)
             for node in btp_node_list:
-                if not config.mpc_refresh:
+                if config.graph_type != 'mpc_refresh':
                     s_param = BtpScoreParam(new_graph_ab.dag, node, self.param_dict)
                 else:
                     s_param = MpcScoreParam(new_graph_ab.dag, node, self.param_dict)
@@ -524,7 +518,11 @@ if __name__ == '__main__':
         help="Computation style (STYLE): 'ordinary' or 'multiplexed'",
     )
     argparser.add_argument(
-        '--graph_type', type=str, choices=['btp'], default=None, help="Graph type (GRAPH_TYPE): 'btp'"
+        '--graph_type',
+        type=str,
+        choices=['btp', 'mpc_refresh'],
+        default=None,
+        help="Graph type (GRAPH_TYPE): 'btp' or 'mpc_refresh'",
     )
     args = argparser.parse_args()
 

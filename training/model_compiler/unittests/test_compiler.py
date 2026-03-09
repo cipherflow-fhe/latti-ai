@@ -775,6 +775,120 @@ class TestCompiler(unittest.TestCase):
                     res = True
         self.assertEqual(res, True)
 
+    # Test whether the level is set correctly in mpc_refresh mode
+    def test_level_set(self):
+        model = nn_modules.ConvSeries()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+            do_constant_folding=True,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='mpc_refresh')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+            skip_no_btp=True,
+        )
+        res = False
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode):
+                if node.layer_type == 'mpc_refresh':
+                    in_node = list(graph.dag.predecessors(node))[0]
+                    if graph.dag.nodes[in_node]['level'] == 1:
+                        res = True
+        self.assertEqual(res, True)
+        self.assertEqual(check_level_cost(graph), True)
+
+    # Test whether skip is aligned in mpc_refresh mode
+    def test_skip_alignment(self):
+        model = nn_modules.CustomModel()
+
+        from training.nn_tools.activations import Simple_Polyrelu
+        from training.nn_tools import export_to_onnx, replace_activation_with_poly
+        import torch.nn as nn
+
+        replace_activation_with_poly(
+            model,
+            old_cls=nn.ReLU,
+            new_module_factory=Simple_Polyrelu,
+            upper_bound=3.0,
+            degree=4,
+        )
+
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+            do_constant_folding=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='mpc_refresh')
+        from pipeline import prepare_graph
+        from processor import update_skip_for_btp, change_skip_for_graph
+
+        pt_gragh = prepare_graph(self.temp_json_path)
+        for node in pt_gragh.dag.nodes:
+            if isinstance(node, ComputeNode):
+                if node.layer_type == 'simple_polyrelu':
+                    node.layer_type = 'mpc_refresh'
+        update_skip_for_btp(pt_gragh)
+        change_skip_for_graph(pt_gragh)
+        self.assertEqual(check_multi_input_level_skip_aligned(pt_gragh), True)
+        return
+
+    def test_resize_skip_less_upsample_factor(self):
+        model = nn_modules.ConvReluAndUpsample()
+
+        from training.nn_tools.activations import Simple_Polyrelu
+        from training.nn_tools import export_to_onnx, replace_activation_with_poly
+        import torch.nn as nn
+
+        replace_activation_with_poly(
+            model,
+            old_cls=nn.ReLU,
+            new_module_factory=Simple_Polyrelu,
+            upper_bound=3.0,
+            degree=4,
+        )
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+            do_constant_folding=True,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='mpc_refresh')
+        from pipeline import prepare_graph
+        from processor import update_skip_for_btp, change_skip_for_graph
+
+        pt_gragh = prepare_graph(self.temp_json_path)
+        for node in pt_gragh.dag.nodes:
+            if isinstance(node, ComputeNode):
+                if node.layer_type == 'simple_polyrelu':
+                    node.layer_type = 'mpc_refresh'
+        update_skip_for_btp(pt_gragh)
+        change_skip_for_graph(pt_gragh)
+        res = True
+        for node in pt_gragh.dag.nodes:
+            if isinstance(node, ComputeNode):
+                if node.layer_type == 'resize':
+                    input = list(pt_gragh.dag.predecessors(node))[0]
+                    if pt_gragh.dag.nodes[input]['skip'][0] < node.upsample_factor_in[0]:
+                        res = False
+        self.assertEqual(res, True)
+
 
 if __name__ == '__main__':
     unittest.main()
