@@ -37,8 +37,6 @@ ParMultiplexedConv1DPackedLayer::ParMultiplexedConv1DPackedLayer(const CkksParam
 ParMultiplexedConv1DPackedLayer::~ParMultiplexedConv1DPackedLayer() {}
 
 vector<double> ParMultiplexedConv1DPackedLayer::select_tensor(int num) const {
-    // Reason: 使用输出布局 (skip_out = skip * stride)，而非输入布局
-    // 确保 select_tensor 的槽位与 par_mult_unpack 的期望一致
     uint32_t skip_out = skip * stride;
     uint32_t output_shape = input_shape / stride;
     uint32_t output_shape_with_skip = output_shape * skip_out;
@@ -60,7 +58,6 @@ CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_weight_pt_for_indic
                                                                                    int out_ch,
                                                                                    int packed_in_idx,
                                                                                    int kernel_idx) const {
-    // Reason: 每个输出通道独立编码权重，每个 slot 编码 weight[out_ch, in_ch_at_slot, k]
     uint32_t shape_with_skip = input_shape * skip;
     uint32_t n_groups = n_channel_per_ct / skip;
     const auto& mask = kernel_masks_[kernel_idx];
@@ -73,7 +70,7 @@ CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_weight_pt_for_indic
 
     int base_channel_in = packed_in_idx * n_channel_per_ct;
 
-    // 按 par_mult_pack 布局：slot = (in_ch/skip)*shape_with_skip + data_idx*skip + (in_ch%skip)
+    // slot = (in_ch/skip)*shape_with_skip + data_idx*skip + (in_ch%skip)
     for (int in_ch_local = 0; in_ch_local < (int)n_channel_per_ct; in_ch_local++) {
         int in_ch = base_channel_in + in_ch_local;
         if (in_ch >= (int)n_channel_in)
@@ -95,7 +92,6 @@ CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_weight_pt_for_indic
 
 CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx,
                                                                                int packed_out_idx) const {
-    // Reason: bias 编码使用输出布局 (skip_out = skip * stride)
     uint32_t skip_out = skip * stride;
     uint32_t output_shape = input_shape / stride;
     vector<double> bias_data(N / 2, 0.0);
@@ -116,7 +112,6 @@ CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_bias_pt_for_index(C
 
 CkksPlaintext ParMultiplexedConv1DPackedLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int idx) const {
     vector<double> st = select_tensor(idx);
-    // Reason: mask 在 level-1 编码，与 mult_plain_mul 后的密文 level 匹配
     return ctx.encode(st, level - 1, ctx.get_parameter().get_q(level - 1));
 }
 
@@ -125,7 +120,6 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
     uint32_t half_kernel_shape = kernel_shape / 2;
     uint32_t n_groups = n_channel_per_ct / skip;
 
-    // 生成 kernel mask
     vector<vector<double>> kernel_mask(kernel_shape);
     for (int i = 0; i < kernel_shape; i++) {
         kernel_mask[i].resize(input_shape, 0.0);
@@ -149,7 +143,6 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
     uint32_t input_block_size = input_shape * skip;
     weight_pt.clear();
     weight_pt.resize(n_weight_pt);
-    // weight 在 block *skip[0] 方向旋转
     for (int i = 0; i < n_weight_pt; i++) {
         weight_pt[i].resize(n_packed_in_channel * n_block_per_ct);
     }
@@ -158,7 +151,6 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
         for (int packed_in_idx = 0; packed_in_idx < (int)n_packed_in_channel; packed_in_idx++) {
             int base_channel_in = packed_in_idx * n_channel_per_ct;
             for (int block_idx = 0; block_idx < n_block_per_ct; ++block_idx) {
-                // Reason: 二维索引 (packed_in_idx, block_idx) 展开到一维
                 int w_idx = packed_in_idx * n_block_per_ct + block_idx;
                 weight_pt[out_ch][w_idx].resize(kernel_shape);
                 for (int kernel_idx = 0; kernel_idx < (int)kernel_shape; kernel_idx++) {
@@ -170,7 +162,6 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
                         int channel_index = shape_linear % skip;
                         int data_idx = shape_linear / skip;
 
-                        // Reason: block_idx 控制输入通道旋转偏移，t 选择不同输出通道
                         uint32_t channel_in =
                             base_channel_in + (block_idx * skip + t * skip + channel_index) % n_channel_per_ct;
                         uint32_t channel_out = out_ch * n_block_per_ct + t;
@@ -186,8 +177,6 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
         }
     }
 
-    // Reason: skip==1 && stride==1 时布局天然匹配 par_mult_pack，无需整理
-    // 否则 (skip>1 或 stride>1) 需要 select+rotate 通道整理
     bool needs_rearrange = (skip > 1 || stride > 1);
 
     if (!needs_rearrange) {
@@ -373,17 +362,14 @@ vector<CkksCiphertext> ParMultiplexedConv1DPackedLayer::run_core(CkksContext& ct
             if (out_ch >= (int)n_channel_out)
                 break;
 
-            // 确定源 CT 和 block
             int wg = out_ch / n_block_per_ct;
             int t = out_ch % n_block_per_ct;
             if (wg >= (int)n_out_groups)
                 break;
 
-            // select: 用 block_select_pt[t] mask 选中 block t 中 offset=0 的数据
             auto masked = ctx_copy.mult_plain(result[wg], block_select_pt[t]);
             masked = ctx_copy.rescale(masked, ctx_copy.get_parameter().get_default_scale());
 
-            // 计算旋转量: 从源位置到目标位置
             int group = ch_local / (int)skip_out;
             int ch_offset = ch_local % (int)skip_out;
             int source_base = t * (int)input_block_size;

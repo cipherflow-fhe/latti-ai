@@ -124,7 +124,7 @@ void Conv1DPackedLayer::prepare_weight() {
                 weight_pt[i][j][k] = ctx.encode_ringt(kernel_temp[i][j][k], weight_scale);
             }
         }
-        bias_pt[i] = ctx.encode(bias_tmp[i], level, DEFAULT_SCALE);
+        bias_pt[i] = ctx.encode(bias_tmp[i], level, ctx.get_parameter().get_default_scale());
     }
 }
 
