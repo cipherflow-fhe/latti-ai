@@ -108,7 +108,7 @@ Array<double, dim> h5_to_array(const hid_t& h5_file,
 
 class InitInferenceProcess {
 public:
-    InitInferenceProcess() {};
+    InitInferenceProcess() {}
     InitInferenceProcess(const string& project_path_in, bool is_fpga = true);
     virtual ~InitInferenceProcess();
 
@@ -191,7 +191,7 @@ public:
 
 class InferenceProcess {
 public:
-    InferenceProcess() {};
+    InferenceProcess() {}
     InferenceProcess(InitInferenceProcess* fp_in, bool is_fpga_in);
     virtual ~InferenceProcess();
     InitInferenceProcess* fp;
