@@ -690,3 +690,78 @@ Feature2DEncrypted Feature2DEncrypted::copy() const {
     }
     return result;
 }
+
+void Feature2DEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
+                                              uint32_t d,
+                                              bool is_symmetric,
+                                              double scale_in) {
+    uint32_t m = matrix.get_shape()[0];
+    uint32_t n_cols = matrix.get_shape()[1];
+    uint32_t num_block_rows = m / d;
+    uint32_t num_block_cols = n_cols / d;
+    int n_slot = context->get_parameter().get_n() / 2;
+    uint32_t chunk_size = d * d;
+    const int N_THREAD = 4;
+
+    uint32_t total_blocks = num_block_rows * num_block_cols;
+    vector<vector<double>> block_vecs(total_blocks);
+
+    // Column-major block order: for bj in [0, num_block_cols), for bi in [0, num_block_rows)
+    for (uint32_t bj = 0; bj < num_block_cols; bj++) {
+        for (uint32_t bi = 0; bi < num_block_rows; bi++) {
+            uint32_t block_idx = bi + num_block_rows * bj;
+            vector<double> vec(n_slot, 0.0);
+            uint32_t num_chunks = n_slot / chunk_size;
+            for (uint32_t c = 0; c < num_chunks; c++) {
+                for (uint32_t col = 0; col < d; col++) {
+                    for (uint32_t row = 0; row < d; row++) {
+                        vec[c * chunk_size + row + d * col] = matrix.get(bi * d + row, bj * d + col);
+                    }
+                }
+            }
+            block_vecs[block_idx] = move(vec);
+        }
+    }
+
+    data.clear();
+    data_compress.clear();
+    if (is_symmetric) {
+        data_compress.resize(total_blocks);
+    } else {
+        data.resize(total_blocks);
+    }
+
+    parallel_for(total_blocks, N_THREAD, *context, [&](CkksContext& ctx_copy, int idx) {
+        auto enc = ctx_copy.encode(block_vecs[idx], level, scale_in);
+        if (is_symmetric) {
+            data_compress[idx] = ctx_copy.encrypt_symmetric_compressed(enc);
+        } else {
+            data[idx] = ctx_copy.encrypt_symmetric(enc);
+        }
+    });
+}
+
+Array<double, 2> Feature2DEncrypted::block_col_major_unpack(uint32_t m, uint32_t n, uint32_t d) const {
+    uint32_t num_block_rows = m / d;
+    uint32_t num_block_cols = n / d;
+    const int N_THREAD = 4;
+    uint32_t total_blocks = num_block_rows * num_block_cols;
+
+    Array<double, 2> result({(uint64_t)m, (uint64_t)n});
+
+    parallel_for(total_blocks, N_THREAD, *context, [&](CkksContext& ctx_copy, int idx) {
+        // Recover bi, bj from column-major block index
+        uint32_t bi = idx % num_block_rows;
+        uint32_t bj = idx / num_block_rows;
+
+        CkksPlaintext x_pt = ctx_copy.decrypt(data[idx]);
+        Array1D x_mg = ctx_copy.decode(x_pt);
+        // Extract first d*d elements (column-major within block)
+        for (uint32_t col = 0; col < d; col++) {
+            for (uint32_t row = 0; row < d; row++) {
+                result.set(bi * d + row, bj * d + col, x_mg[row + d * col]);
+            }
+        }
+    });
+    return result;
+}

@@ -36,6 +36,9 @@
 #include "fhe_layers/activation_layer.h"
 #include "fhe_layers/conv2d_depthwise.h"
 #include "fhe_layers/dense_packed_layer.h"
+#include "fhe_layers/block_col_major_ccmm.h"
+#include "fhe_layers/block_col_major_cpmm.h"
+#include "fhe_layers/block_col_major_transpose.h"
 #include "ut_util.h"
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 
@@ -1034,6 +1037,189 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs", "", HeteroProcessors)
             auto compare_result = compare(output_mg_expected, output_mg);
             REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
             REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+        }
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_ccmm_matmul", "", HeteroProcessors) {
+    vector<uint32_t> ds = {16};
+    vector<uint32_t> dims = {16, 32};
+    vector<int> levels = {3};
+
+    for (uint32_t d : ds) {
+        SECTION("d=" + to_string(d)) {
+            for (int init_level : levels) {
+                SECTION("level=" + to_string(init_level)) {
+                    for (uint32_t m : dims) {
+                        SECTION("m=" + to_string(m)) {
+                            for (uint32_t n : dims) {
+                                SECTION("n=" + to_string(n)) {
+                                    for (uint32_t p : dims) {
+                                        SECTION("p=" + to_string(p)) {
+                                            Array<double, 2> A_mat = gen_random_array<2>({m, n}, 1.0);
+                                            Array<double, 2> B_mat = gen_random_array<2>({n, p}, 1.0);
+
+                                            Feature2DEncrypted A_enc(&this->context, init_level);
+                                            A_enc.shape = {m, n};
+                                            A_enc.matmul_block_size = d;
+                                            A_enc.block_col_major_pack(
+                                                A_mat, d, false, this->context.get_parameter().get_default_scale());
+
+                                            Feature2DEncrypted B_enc(&this->context, init_level);
+                                            B_enc.shape = {n, p};
+                                            B_enc.matmul_block_size = d;
+                                            B_enc.block_col_major_pack(
+                                                B_mat, d, false, this->context.get_parameter().get_default_scale());
+
+                                            BlockColMajorCCMM ccmm(this->context.get_parameter(), A_enc.shape,
+                                                                   B_enc.shape, A_enc.matmul_block_size,
+                                                                   B_enc.matmul_block_size, A_enc.level, B_enc.level);
+                                            ccmm.precompute_diagonals();
+                                            Feature2DEncrypted C_enc = ccmm.run(this->context, A_enc, B_enc);
+
+                                            auto C_result = C_enc.block_col_major_unpack(C_enc.shape[0], C_enc.shape[1],
+                                                                                         C_enc.matmul_block_size);
+
+                                            Array<double, 2> C_expected({m, p});
+                                            for (uint32_t i = 0; i < m; i++) {
+                                                for (uint32_t j = 0; j < p; j++) {
+                                                    double sum = 0.0;
+                                                    for (uint32_t l = 0; l < n; l++) {
+                                                        sum += A_mat.get(i, l) * B_mat.get(l, j);
+                                                    }
+                                                    C_expected.set(i, j, sum);
+                                                }
+                                            }
+
+                                            print_double_message(C_result.to_array_1d().data(), "output_mg", 10);
+                                            print_double_message(C_expected.to_array_1d().data(), "output_mg_expected",
+                                                                 10);
+
+                                            auto compare_result = compare(C_expected, C_result);
+                                            REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+                                            REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_cpmm_matmul", "", HeteroProcessors) {
+    vector<uint32_t> ds = {16};
+    vector<uint32_t> dims = {16, 32};
+    vector<int> levels = {1};
+
+    for (uint32_t d : ds) {
+        SECTION("d=" + to_string(d)) {
+            for (int init_level : levels) {
+                SECTION("level=" + to_string(init_level)) {
+                    for (uint32_t m : dims) {
+                        SECTION("m=" + to_string(m)) {
+                            for (uint32_t n : dims) {
+                                SECTION("n=" + to_string(n)) {
+                                    for (uint32_t p : dims) {
+                                        SECTION("p=" + to_string(p)) {
+                                            Array<double, 2> A_mat = gen_random_array<2>({m, n}, 1.0);
+                                            Array<double, 2> B_mat = gen_random_array<2>({n, p}, 1.0);
+
+                                            Feature2DEncrypted A_enc(&this->context, init_level);
+                                            A_enc.shape = {m, n};
+                                            A_enc.matmul_block_size = d;
+                                            A_enc.block_col_major_pack(
+                                                A_mat, d, false, this->context.get_parameter().get_default_scale());
+
+                                            BlockColMajorCPMM cpmm(this->context.get_parameter(), A_enc.shape, {n, p},
+                                                                   B_mat, d, A_enc.level);
+                                            cpmm.precompute_diagonals();
+                                            Feature2DEncrypted C_enc = cpmm.run(this->context, A_enc);
+
+                                            auto C_result = C_enc.block_col_major_unpack(C_enc.shape[0], C_enc.shape[1],
+                                                                                         C_enc.matmul_block_size);
+
+                                            Array<double, 2> C_expected({m, p});
+                                            for (uint32_t i = 0; i < m; i++) {
+                                                for (uint32_t j = 0; j < p; j++) {
+                                                    double sum = 0.0;
+                                                    for (uint32_t l = 0; l < n; l++) {
+                                                        sum += A_mat.get(i, l) * B_mat.get(l, j);
+                                                    }
+                                                    C_expected.set(i, j, sum);
+                                                }
+                                            }
+
+                                            print_double_message(C_result.to_array_1d().data(), "output_mg", 10);
+                                            print_double_message(C_expected.to_array_1d().data(), "output_mg_expected",
+                                                                 10);
+
+                                            auto compare_result = compare(C_expected, C_result);
+                                            REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+                                            REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_transpose", "", HeteroProcessors) {
+    vector<uint32_t> ds = {16};
+    vector<uint32_t> dims = {16, 32};
+    vector<int> levels = {1};
+
+    for (uint32_t d : ds) {
+        SECTION("d=" + to_string(d)) {
+            for (int init_level : levels) {
+                SECTION("level=" + to_string(init_level)) {
+                    for (uint32_t m : dims) {
+                        SECTION("m=" + to_string(m)) {
+                            for (uint32_t n : dims) {
+                                SECTION("n=" + to_string(n)) {
+                                    Array<double, 2> A_mat = gen_random_array<2>({m, n}, 1.0);
+
+                                    Feature2DEncrypted A_enc(&this->context, init_level);
+                                    A_enc.shape = {m, n};
+                                    A_enc.matmul_block_size = d;
+                                    A_enc.block_col_major_pack(A_mat, d, false,
+                                                               this->context.get_parameter().get_default_scale());
+
+                                    BlockColMajorTranspose bt(this->context.get_parameter(), A_enc.shape,
+                                                              A_enc.matmul_block_size, A_enc.level);
+                                    bt.precompute_diagonals();
+                                    Feature2DEncrypted AT_enc = bt.run(this->context, A_enc);
+
+                                    auto AT_result = AT_enc.block_col_major_unpack(AT_enc.shape[0], AT_enc.shape[1],
+                                                                                   AT_enc.matmul_block_size);
+
+                                    Array<double, 2> AT_expected({n, m});
+                                    for (uint32_t i = 0; i < m; i++) {
+                                        for (uint32_t j = 0; j < n; j++) {
+                                            AT_expected.set(j, i, A_mat.get(i, j));
+                                        }
+                                    }
+
+                                    print_double_message(AT_result.to_array_1d().data(), "output_mg", 10);
+                                    print_double_message(AT_expected.to_array_1d().data(), "output_mg_expected", 10);
+
+                                    auto compare_result = compare(AT_expected, AT_result);
+                                    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+                                    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

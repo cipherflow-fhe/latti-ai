@@ -36,6 +36,8 @@ ArrayComparison compare(const Array3D& expected, const Array3D& output);
 
 ArrayComparison compare(const Array<double, 3>& expected, const Array<double, 3>& output);
 
+ArrayComparison compare(const Array<double, 2>& expected, const Array<double, 2>& output);
+
 ArrayComparison compare(const Array1D& expected, const Array1D& output);
 
 ArrayComparison compare(const Array<double, 1>& expected, const Array<double, 1>& output);
