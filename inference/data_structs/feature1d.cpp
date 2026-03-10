@@ -31,9 +31,10 @@ void Feature1DEncrypted::pack(Array<double, 2>& feature_mg, bool is_symmetric, d
     const int N_THREAD = 4;
     n_channel = feature_mg.get_shape()[0];
     shape = feature_mg.get_shape()[1];
-    n_channel_per_ct = context->get_parameter().get_n() / 2 / shape;
+
+    uint32_t shape_with_skip = shape * skip;
+    n_channel_per_ct = context->get_parameter().get_n() / 2 / shape_with_skip;
     uint32_t n_ct = div_ceil(n_channel, n_channel_per_ct);
-    vector<vector<double>> feature_data;
 
     data.clear();
     data_compress.clear();
@@ -45,15 +46,25 @@ void Feature1DEncrypted::pack(Array<double, 2>& feature_mg, bool is_symmetric, d
 
     parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<double> image_flat;
-        image_flat.reserve(n_channel_per_ct * shape);
+        image_flat.reserve(n_channel_per_ct * shape_with_skip);
+
         for (int k = 0; k < n_channel_per_ct; k++) {
-            if (ct_idx * n_channel_per_ct + k < n_channel) {
+            int channel_idx = ct_idx * n_channel_per_ct + k;
+
+            if (channel_idx < n_channel) {
                 for (int i = 0; i < shape; i++) {
-                    image_flat.push_back(feature_mg.get(ct_idx * n_channel_per_ct + k, i));
+                    image_flat.push_back(feature_mg.get(channel_idx, i));
+                    for (int s = 1; s < skip; s++) {
+                        image_flat.push_back(0.0);
+                    }
                 }
             } else {
+                int wrap_channel_idx = channel_idx % n_channel;
                 for (int i = 0; i < shape; i++) {
-                    image_flat.push_back(feature_mg.get((ct_idx * n_channel_per_ct + k) % n_channel, i));
+                    image_flat.push_back(feature_mg.get(wrap_channel_idx, i));
+                    for (int s = 1; s < skip; s++) {
+                        image_flat.push_back(0.0);
+                    }
                 }
             }
         }
