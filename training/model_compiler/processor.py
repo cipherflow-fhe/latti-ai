@@ -78,7 +78,7 @@ def populate_pack_num(dag: nx.DiGraph, node, slot_num: int):
             dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num, use_skip=False)
     else:
         if node.layer_type == 'reshape':
-            for f_node in succs:
+            for f_node in preds + succs:
                 dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num)
         else:
             for f_node in preds + succs:
@@ -238,37 +238,6 @@ def process_avgpool2d(graph: LayerAbstractGraph):
     for node in graph.dag.nodes:
         if isinstance(node, PoolComputeNode):
             node.is_adaptive_avgpool = True
-
-
-def find_layer_in_linear_graph(graph: LayerAbstractGraph, c_node: ComputeNode, target_layer_type: str, direction: str):
-    if direction == 'up':
-        preds = list(graph.dag.predecessors(c_node))
-        if len(preds) == 0 or len(preds) > 1:
-            return False
-        start_node = preds[0]
-        while True:
-            if isinstance(start_node, ComputeNode) and start_node.layer_type == target_layer_type:
-                return start_node
-            else:
-                start_preds = list(graph.dag.predecessors(start_node))
-                if len(start_preds) == 0 or len(start_preds) > 1:
-                    return False
-                start_node = start_preds[0]
-                continue
-    else:
-        succs = list(graph.dag.successors(c_node))
-        if len(succs) == 0 or len(succs) > 1:
-            return False
-        start_node = succs[0]
-        while True:
-            if isinstance(start_node, ComputeNode) and start_node.layer_type == target_layer_type:
-                return start_node
-            else:
-                start_succs = list(graph.dag.successors(start_node))
-                if len(start_succs) == 0 or len(start_succs) > 1:
-                    return False
-                start_node = start_succs[0]
-                continue
 
 
 def change_conv_transpose_shape(graph: LayerAbstractGraph):
