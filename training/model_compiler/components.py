@@ -545,6 +545,33 @@ class UpsampleComputeNode(SpatialComputeNode):
         )
 
 
+class UpsampleNearestComputeNode(SpatialComputeNode):
+    def __init__(
+        self,
+        layer_id: str,
+        layer_type: str,
+        channel_input: int,
+        channel_output: int,
+        ckks_parameter_id_input: str = 'param0',
+        ckks_parameter_id_output: str = 'param0',
+        *,
+        stride: list = None,
+        upsample_factor: list = None,
+        upsample_factor_in: list = None,
+    ):
+        super().__init__(
+            layer_id,
+            layer_type,
+            channel_input,
+            channel_output,
+            ckks_parameter_id_input,
+            ckks_parameter_id_output,
+            stride=stride,
+            upsample_factor=upsample_factor,
+            upsample_factor_in=upsample_factor_in,
+        )
+
+
 class PoolComputeNode(SpatialComputeNode):
     def __init__(
         self,
@@ -797,11 +824,16 @@ class LayerAbstractGraph:
             elif layer_type == 'resize':
                 if 'upsample_factor' in layer_json:
                     upsample_factor = layer_json['upsample_factor']
-                compute_node = ComputeNode(
-                    key, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
+                compute_node = UpsampleNearestComputeNode(
+                    key,
+                    layer_type,
+                    channel_input,
+                    channel_output,
+                    ckks_parameter_id_input,
+                    ckks_parameter_id_output,
+                    upsample_factor=upsample_factor,
                 )
                 compute_node.is_resize = True
-                compute_node.upsample_factor = upsample_factor
             elif 'fc' in layer_type:
                 weight_path = layer_json['weight_path']
                 bias_path = layer_json['bias_path']
