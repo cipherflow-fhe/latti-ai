@@ -140,8 +140,7 @@ Array<double, 2> Feature1DEncrypted::par_mult_unpack() const {
     int n_slot = context->get_parameter().get_n() / 2;
 
     uint32_t shape_with_skip = shape * skip;
-    int n_channel_per_ct_local = (n_slot / shape_with_skip) * skip;
-    int n_mult_pack_per_ct = std::min(n_channel_per_ct_local, (int)n_channel);
+    int n_mult_pack_per_ct = std::min((int)n_channel_per_ct, (int)n_channel);
 
     Array<double, 2> result({n_channel, shape});
 
