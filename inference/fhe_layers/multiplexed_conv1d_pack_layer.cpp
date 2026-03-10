@@ -90,8 +90,7 @@ CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_weight_pt_for_indic
         int channel_index = shape_linear % skip;
         int data_idx = shape_linear / skip;
 
-        uint32_t channel_in =
-            base_channel_in + (block_idx * skip + t * skip + channel_index) % n_channel_per_ct;
+        uint32_t channel_in = base_channel_in + (block_idx * skip + t * skip + channel_index) % n_channel_per_ct;
         uint32_t channel_out = wg * n_block_per_ct + t;
 
         if (channel_in < n_channel_in && channel_out < n_channel_out) {
@@ -102,8 +101,7 @@ CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_weight_pt_for_indic
     return ctx.encode_ringt(w, weight_scale);
 }
 
-CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx,
-                                                                               int idx) const {
+CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int idx) const {
     bool needs_rearrange = (skip > 1 || stride > 1);
     int n_block_per_ct = div_ceil(n_channel_per_ct, skip);
     uint32_t input_block_size = cached_input_block_size;
@@ -130,8 +128,7 @@ CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_bias_pt_for_index(C
                 int group = ch_local / (int)skip_out;
                 int ch_offset = ch_local % (int)skip_out;
                 for (int out_idx = 0; out_idx < (int)output_shape; out_idx++) {
-                    int slot_idx =
-                        group * (int)(output_shape * skip_out) + out_idx * (int)skip_out + ch_offset;
+                    int slot_idx = group * (int)(output_shape * skip_out) + out_idx * (int)skip_out + ch_offset;
                     bias_data[slot_idx] = bias.get(out_ch);
                 }
             }
