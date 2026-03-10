@@ -241,8 +241,8 @@ auto result = client.decrypt(encrypted_output);  // decrypt and deserialize outp
 Run the built example:
 
 ```bash
-./build/examples/inference --task-dir ./runs/cifar10/task --input ./examples/test_cifar10/task/client/img.csv
-./build/examples/inference --task-dir ./runs/cifar10/task --input ./examples/test_cifar10/task/client/img.csv --gpu
+./build/examples/inference --task-dir ./runs/cifar10/task --input ./examples/test_cifar10/task/client/img.csv --verify
+./build/examples/inference --task-dir ./runs/cifar10/task --input ./examples/test_cifar10/task/client/img.csv --gpu --verify
 ```
 
 ---
@@ -256,24 +256,30 @@ Run the built example:
 Make sure the project has been built successfully. See [Build & Install](#build--install) above. Examples are built automatically along with the project.
 
 ### Run
+First, generate instructions for each example (run from the **project root directory**):
 
-All commands are run from the **project root directory**. A single `inference` binary at `build/examples/inference` handles all examples via `--task-dir` and `--input`:
 
 ```bash
-# MNIST
 python inference/interface/gen_mega_ag.py --task-dir examples/test_mnist/task
-./build/examples/inference --task-dir examples/test_mnist/task --input examples/test_mnist/task/client/img.csv
-./build/examples/inference --task-dir examples/test_mnist/task --input examples/test_mnist/task/client/img.csv --gpu
-
-# CIFAR-10
 python inference/interface/gen_mega_ag.py --task-dir examples/test_cifar10/task
-./build/examples/inference --task-dir examples/test_cifar10/task --input examples/test_cifar10/task/client/img.csv
-./build/examples/inference --task-dir examples/test_cifar10/task --input examples/test_cifar10/task/client/img.csv --gpu
-
-# ImageNet
 python inference/interface/gen_mega_ag.py --task-dir examples/test_imagenet/task
-./build/examples/inference --task-dir examples/test_imagenet/task --input examples/test_imagenet/task/client/img.csv
-./build/examples/inference --task-dir examples/test_imagenet/task --input examples/test_imagenet/task/client/img.csv --gpu
+```
+
+Then use CTest to run examples from the `build/` directory. Each test runs encrypted inference and verifies the result against plaintext output:
+
+```bash
+cd build
+ctest -L example-cpu -V          # All CPU examples
+ctest -L example-gpu -V          # All GPU examples
+ctest -R mnist -V                # MNIST only (CPU + GPU)
+ctest -R mnist-cpu -V            # MNIST CPU only
+ctest -R mnist-gpu -V            # MNIST GPU only
+ctest -R cifar10 -V              # CIFAR-10 only (CPU + GPU)
+ctest -R cifar10-cpu -V          # CIFAR-10 CPU only
+ctest -R cifar10-gpu -V          # CIFAR-10 GPU only
+ctest -R imagenet -V             # ImageNet only (CPU + GPU)
+ctest -R imagenet-cpu -V         # ImageNet CPU only
+ctest -R imagenet-gpu -V         # ImageNet GPU only
 ```
 
 ---
