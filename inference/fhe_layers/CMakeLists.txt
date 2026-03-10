@@ -15,6 +15,8 @@ add_library(fhe_layers
   multiplexed_conv2d_pack_layer_depthwise.cpp
   poly_relu2d.cpp
   mult_scaler.cpp
+  conv1d_packed_layer.cpp
+  multiplexed_conv1d_pack_layer.cpp
   ../data_structs/feature.cpp
   ../data_structs/feature1d.cpp
   ../data_structs/feature2d.cpp
