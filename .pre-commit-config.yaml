@@ -5,7 +5,7 @@ repos:
       - id: clang-format
         stages: [pre-commit]
         types_or: [c, c++, cuda]
-        exclude: ^(inference/lattisense/|build/|venv/)
+        exclude: ^(inference/lattisense/|build/|venv/)|catch\.hpp$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.9.10
