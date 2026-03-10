@@ -26,7 +26,15 @@ sys.path.append(str(script_dir.parent.parent))
 from nn_tools.export import export_to_onnx
 from model_export.onnx_to_json import onnx_to_json
 from pipeline import init_config_with_args, run_pipeline
-from components import LayerAbstractGraph, FeatureNode, config, ComputeNode, UpsampleComputeNode
+from components import (
+    LayerAbstractGraph,
+    FeatureNode,
+    config,
+    ComputeNode,
+    ConvComputeNode,
+    UpsampleComputeNode,
+    SpatialComputeNode,
+)
 import nn_modules
 from processor import check_level_cost, check_multi_input_level_skip_aligned, check_feature_scale
 
@@ -700,8 +708,8 @@ class TestCompiler(unittest.TestCase):
                     expected = math.ceil(config.poly_n / 2 / (node.shape[0] * node.shape[1]))
                 self.assertEqual(attrs['pack_num'], expected)
 
-    def test_split_simple_model(self):
-        model = nn_modules.SkipConnect()
+    def test_split_skip_connection(self):
+        model = nn_modules.SkipConnection()
         export_to_onnx(
             model,
             save_path=self.temp_onnx_path,
@@ -724,7 +732,7 @@ class TestCompiler(unittest.TestCase):
         export_to_onnx(
             model,
             save_path=self.temp_onnx_path,
-            input_size=tuple([1, 32, 128, 128]),
+            input_size=tuple([1, 32, 16, 16]),
             dynamic_batch=False,
             save_h5=False,
         )
@@ -741,7 +749,7 @@ class TestCompiler(unittest.TestCase):
         res = False
         for node in graph.dag.nodes:
             # Upsample layer need to be added for large sizes
-            if isinstance(node, UpsampleComputeNode):
+            if isinstance(node, ConvComputeNode):
                 if node.upsample_factor_in == [2, 2]:
                     res = True
         self.assertEqual(res, True)
@@ -768,10 +776,10 @@ class TestCompiler(unittest.TestCase):
         )
         res = False
         for node in graph.dag.nodes:
-            if isinstance(node, ComputeNode):
+            if isinstance(node, ComputeNode) and node.layer_type == 'resize':
                 input = list(graph.dag.predecessors(node))[0]
                 output = list(graph.dag.successors(node))[0]
-                if graph.dag.nodes[output]['skip'][0] == graph.dag.nodes[input]['skip'][0] / node.upsample_factor_in[0]:
+                if graph.dag.nodes[output]['skip'][0] == graph.dag.nodes[input]['skip'][0] / node.upsample_factor[0]:
                     res = True
         self.assertEqual(res, True)
 

@@ -87,11 +87,18 @@ def prepare_graph(input_file_path: Path) -> LayerAbstractGraph:
     pt_graph = LayerAbstractGraph.from_json(str(input_file_path))
 
     substitute_layers_for_btp(pt_graph)
-    transforms.init_levels(pt_graph)
-    set_is_adaptive_avgpool(pt_graph)
-    update_shape_for_btp(pt_graph)
-    update_skip_for_btp(pt_graph)
-    update_level_cost_for_btp(pt_graph)
+    # transforms.init_levels(pt_graph)
+    # set_is_adaptive_avgpool(pt_graph)
+    # update_shape_for_btp(pt_graph)
+    # update_skip_for_btp(pt_graph)
+    # update_level_cost_for_btp(pt_graph)
+
+    transforms.split_upsampling_layers(pt_graph)
+    transforms.infer_shapes_and_skips(pt_graph)
+    transforms.combine_convs_with_upsamples(pt_graph)
+    transforms.infer_shapes_and_skips(pt_graph)
+    transforms.set_level_costs(pt_graph)
+
     transforms.absorb_scale(pt_graph)
 
     return pt_graph
@@ -189,6 +196,7 @@ def run_btp_compilation(
     # Run compilations in parallel
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         results = list(executor.map(run_single_compile, args_list))
+    # results = [run_single_compile(*args_list)]
 
     # Filter out failed results
     valid_results = [(score, graph) for score, graph in results if graph is not None]

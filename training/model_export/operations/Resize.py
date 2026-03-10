@@ -70,5 +70,5 @@ class ResizeComputeNode(ComputeNode):
         info['ckks_parameter_id_output'] = self.feature_output[0].ckks_parameter_id
         info['feature_input'] = [i.node_id for i in self.feature_input]
         info['feature_output'] = [i.node_id for i in self.feature_output]
-        info['upsample_factor_in'] = [2, 2]
+        info['upsample_factor'] = [2, 2]
         return info

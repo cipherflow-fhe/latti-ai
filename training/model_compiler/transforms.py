@@ -20,16 +20,7 @@ import time
 from enum import Enum
 import networkx as nx
 
-from components import (
-    LayerAbstractGraph,
-    FeatureNode,
-    ComputeNode,
-    config,
-    DEFAULT_SCALE,
-    PoolComputeNode,
-    MultScalarComputeNode,
-    UpsampleComputeNode,
-)
+from components import *
 
 
 class Direction(Enum):
@@ -230,8 +221,8 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
     skip = list(graph.dag.nodes[f_node]['skip'])
     virtual_shape = list(graph.dag.nodes[f_node]['virtual_shape'])
     virtual_skip = list(graph.dag.nodes[f_node]['virtual_skip'])
-    level = graph.dag.nodes[f_node]['level']
-    pack_num = graph.dag.nodes[f_node]['pack_num']
+    # level = graph.dag.nodes[f_node]['level']
+    # pack_num = graph.dag.nodes[f_node]['pack_num']
 
     added_f_node = copy.deepcopy(f_node)
     f_node.node_id = f_node.node_id + '_mult_scalar_output'
@@ -248,15 +239,207 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
         skip=skip,
         virtual_shape=virtual_shape,
         virtual_skip=virtual_skip,
-        level=level,
-        pack_num=pack_num,
+        # level=level,
+        # pack_num=pack_num,
     )
-    graph.dag.add_node(added_c_node, name=added_c_node.layer_id, level_cost=1)
+    graph.dag.add_node(added_c_node, name=added_c_node.layer_id)
+    graph.dag.nodes[added_c_node]['level_cost'] = 1
     graph.dag.add_edge(compute_node, added_f_node)
     graph.dag.add_edge(added_f_node, added_c_node)
     graph.dag.add_edge(added_c_node, f_node)
 
     return added_c_node
+
+
+def find_layer_in_linear_graph(graph: LayerAbstractGraph, c_node: ComputeNode, target_layer_type: str, direction: str):
+    if direction == 'up':
+        preds = list(graph.dag.predecessors(c_node))
+        if len(preds) == 0 or len(preds) > 1:
+            return False
+        start_node = preds[0]
+        while True:
+            if isinstance(start_node, ComputeNode) and start_node.layer_type == target_layer_type:
+                return start_node
+            else:
+                start_preds = list(graph.dag.predecessors(start_node))
+                if len(start_preds) == 0 or len(start_preds) > 1:
+                    return False
+                start_node = start_preds[0]
+                continue
+    else:
+        succs = list(graph.dag.successors(c_node))
+        if len(succs) == 0 or len(succs) > 1:
+            return False
+        start_node = succs[0]
+        while True:
+            if isinstance(start_node, ComputeNode) and start_node.layer_type == target_layer_type:
+                return start_node
+            else:
+                start_succs = list(graph.dag.successors(start_node))
+                if len(start_succs) == 0 or len(start_succs) > 1:
+                    return False
+                start_node = start_succs[0]
+                continue
+
+
+def split_upsampling_layers(graph: LayerAbstractGraph):
+    for conv_node in list(graph.dag.nodes):
+        if not isinstance(conv_node, ConvComputeNode):
+            continue
+        if conv_node.upsample_factor[0] > 1:
+            feature_in = next(graph.dag.predecessors(conv_node))
+            upsample_layer = UpsampleComputeNode(
+                layer_id=f'{conv_node.layer_id}_upsample',
+                layer_type='upsample',
+                channel_input=conv_node.channel_input,
+                channel_output=conv_node.channel_output,
+                ckks_parameter_id_input=conv_node.ckks_parameter_id_input,
+                ckks_parameter_id_output=conv_node.ckks_parameter_id_output,
+                upsample_factor=conv_node.upsample_factor,
+            )
+            upsample_layer.level_cost = 1
+            upsampled_feature = FeatureNode(
+                key=f'{upsample_layer.layer_id}_output',
+                dim=2,
+                channel=upsample_layer.channel_output,
+                scale=feature_in.scale,
+                ckks_parameter_id=upsample_layer.ckks_parameter_id_output,
+            )
+            _insert_layer_between_feature_and_compute(
+                graph.dag,
+                feature_in,
+                conv_node,
+                upsample_layer,
+                upsampled_feature,
+                new_feature_args={
+                    'virtual_shape': list(graph.dag.nodes[feature_in]['virtual_shape']),
+                    'virtual_skip': list(graph.dag.nodes[feature_in]['virtual_skip']),
+                },
+            )
+            conv_node.upsample_factor = [1, 1]
+
+
+def infer_shapes_and_skips(graph: LayerAbstractGraph):
+    sorted_nodes = list(nx.topological_sort(graph.dag))
+    sorted_compute_nodes = [node for node in sorted_nodes if isinstance(node, ComputeNode)]
+
+    for compute_node in sorted_compute_nodes:
+        preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
+        succ: FeatureNode = next(graph.dag.successors(compute_node))
+        graph.dag.nodes[succ]['skip'] = [1, 1]
+        if isinstance(compute_node, SpatialComputeNode):
+            for i in range(2):
+                succ.shape[i] = (
+                    preds[0].shape[i]
+                    // compute_node.stride[i]
+                    * compute_node.upsample_factor_in[i]
+                    * compute_node.upsample_factor[i]
+                )
+                graph.dag.nodes[succ]['skip'][i] = (
+                    graph.dag.nodes[preds[0]]['skip'][i]
+                    * compute_node.stride[i]
+                    // compute_node.upsample_factor_in[i]
+                    // compute_node.upsample_factor[i]
+                )
+        else:
+            for i in range(2):
+                succ.shape[i] = preds[0].shape[i]
+                graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
+
+
+def combine_convs_with_upsamples(graph: LayerAbstractGraph):
+    for upsample_node in list(graph.dag.nodes):
+        if not isinstance(upsample_node, UpsampleComputeNode):
+            continue
+        conv_node = find_layer_in_linear_graph(graph, upsample_node, 'conv2d', 'up')
+        if conv_node is False:
+            raise ValueError('Cannot find a conv node above the upsampling node.')
+        feature_in = next(graph.dag.predecessors(conv_node))
+
+        if (
+            feature_in.shape[0] * conv_node.upsample_factor_in[0] * upsample_node.upsample_factor[0]
+            > config.block_shape[0]
+            or feature_in.shape[1] * conv_node.upsample_factor_in[1] * upsample_node.upsample_factor[1]
+            > config.block_shape[1]
+        ):
+            continue
+
+        conv_node.upsample_factor_in[0] *= upsample_node.upsample_factor[0]
+        conv_node.upsample_factor_in[1] *= upsample_node.upsample_factor[1]
+
+        cur_node = conv_node
+        while True:
+            cur_node = next(graph.dag.successors(cur_node))
+            cur_node = next(graph.dag.successors(cur_node))
+            if cur_node == upsample_node:
+                break
+            if cur_node.layer_type in ('relu2d', 'simple_polyrelu'):
+                cur_node.zero_skip[0] *= upsample_node.upsample_factor[0]
+                cur_node.zero_skip[1] *= upsample_node.upsample_factor[1]
+
+        upsample_node.upsample_factor = [1, 1]
+
+
+def set_level_costs(graph: LayerAbstractGraph):
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode):
+            continue
+        compute_node: ComputeNode = node
+        preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
+        succ: FeatureNode = next(graph.dag.successors(compute_node))
+
+        if isinstance(compute_node, ConvComputeNode):
+            if config.style == 'ordinary':
+                graph.dag.nodes[compute_node]['level_cost'] = 1
+            elif config.style == 'multiplexed':
+                if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+                    compute_node.is_big_size = True
+                    graph.dag.nodes[compute_node]['level_cost'] = 1
+                else:
+                    if compute_node.groups == 1:
+                        if compute_node.stride[0] == 1 and graph.dag.nodes[preds[0]]['skip'][0] == 1:
+                            graph.dag.nodes[compute_node]['level_cost'] = 1
+                        else:
+                            graph.dag.nodes[compute_node]['level_cost'] = 2
+                    else:
+                        if compute_node.stride[0] == 1:
+                            graph.dag.nodes[compute_node]['level_cost'] = 1
+                        else:
+                            graph.dag.nodes[compute_node]['level_cost'] = 2
+            else:
+                raise ValueError('Unsupported config.style')
+
+        elif compute_node.layer_type == 'avgpool2d':
+            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+                graph.dag.nodes[compute_node]['level_cost'] = 0
+                compute_node.is_big_size = True
+                compute_node.is_adaptive_avgpool = False
+            else:
+                compute_node.is_big_size = False
+                succs_sub = list(graph.dag.successors(succ))
+                if succs_sub and succs_sub[0].layer_type == 'reshape':
+                    graph.dag.nodes[compute_node]['level_cost'] = 0
+                    compute_node.is_adaptive_avgpool = True
+                else:
+                    graph.dag.nodes[compute_node]['level_cost'] = 1
+                    compute_node.is_adaptive_avgpool = False
+        elif compute_node.layer_type == config.approx_poly_type:
+            graph.dag.nodes[compute_node]['level_cost'] = math.ceil(math.log2(compute_node.order)) + 1
+            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+                compute_node.is_big_size = True
+        elif isinstance(compute_node, UpsampleComputeNode):
+            if compute_node.upsample_factor[0] == 1 and compute_node.upsample_factor[1] == 1:
+                graph.dag.nodes[compute_node]['level_cost'] = 0
+            else:
+                graph.dag.nodes[compute_node]['level_cost'] = 1
+        elif compute_node.layer_type.startswith('fc'):
+            graph.dag.nodes[compute_node]['level_cost'] = 1
+        elif 'mult_scalar' in compute_node.layer_type:
+            graph.dag.nodes[compute_node]['level_cost'] = 1
+        elif 'resize' in compute_node.layer_type:
+            graph.dag.nodes[compute_node]['level_cost'] = 1
+        else:
+            graph.dag.nodes[compute_node]['level_cost'] = 0
 
 
 def insert_drop_level_layers(graph: LayerAbstractGraph):

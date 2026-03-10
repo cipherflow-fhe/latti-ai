@@ -322,8 +322,10 @@ class FeatureNode:
         scale: float = 1.0,
         ckks_parameter_id: str = 'param0',
         ckks_scale=DEFAULT_SCALE,
-        shape: list = [1, 1],
+        shape: list = None,
     ):
+        if shape is None:
+            shape = [1, 1]
         self.node_id = key
         self.dim = dim
         self.channel = channel
@@ -376,13 +378,12 @@ class ComputeNode:
         self.channel_output = channel_output
         self.ckks_parameter_id_input = ckks_parameter_id_input
         self.ckks_parameter_id_output = ckks_parameter_id_output
-        self.level = -1
         self.depth = 100
         self.is_end = False
         self.up_scale_str = list()
         self.down_scale_str = list()
         self.vec_scale_str = list()
-        self.upsample_factor_in = [1, 1]
+        self.zero_skip = [1, 1]
         self.is_big_size = False
         self.order = 0
         self.scale_up = 1
@@ -398,7 +399,7 @@ class ComputeNode:
         return f'ComputeNode: {self.layer_id}'
 
 
-class ConvComputeNode(ComputeNode):
+class SpatialComputeNode(ComputeNode):
     def __init__(
         self,
         layer_id: str,
@@ -407,25 +408,62 @@ class ConvComputeNode(ComputeNode):
         channel_output: int,
         ckks_parameter_id_input: str = 'param0',
         ckks_parameter_id_output: str = 'param0',
-        groups: int = 0,
-        stride: list = [0, 0],
-        kernel_shape: list = [0, 0],
-        parameter_paths: dict | None = None,
-        upsample_factor_in: list = [1, 1],
+        *,
+        stride: list = None,
+        upsample_factor: list = None,
+        upsample_factor_in: list = None,
     ):
+        if stride is None:
+            stride = [1, 1]
+        if upsample_factor is None:
+            upsample_factor = [1, 1]
+        if upsample_factor_in is None:
+            upsample_factor_in = [1, 1]
         super().__init__(
             layer_id, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
         )
-        self.kernel_shape = kernel_shape
         self.stride = stride
+        self.upsample_factor = upsample_factor  # the "stride" from ConvTranpose
+        self.upsample_factor_in = upsample_factor_in  # absorbed from some downstream upsampling layer
+
+
+class ConvComputeNode(SpatialComputeNode):
+    def __init__(
+        self,
+        layer_id: str,
+        layer_type: str,
+        channel_input: int,
+        channel_output: int,
+        ckks_parameter_id_input: str = 'param0',
+        ckks_parameter_id_output: str = 'param0',
+        *,
+        stride: list = None,
+        upsample_factor: list = None,
+        upsample_factor_in: list = None,
+        groups: int = 0,
+        kernel_shape: list = None,
+        parameter_paths: dict | None = None,
+    ):
+        if kernel_shape is None:
+            kernel_shape = [1, 1]
+        super().__init__(
+            layer_id,
+            layer_type,
+            channel_input,
+            channel_output,
+            ckks_parameter_id_input,
+            ckks_parameter_id_output,
+            stride=stride,
+            upsample_factor=upsample_factor,
+            upsample_factor_in=upsample_factor_in,
+        )
+        self.kernel_shape = kernel_shape
         self.groups = groups
-        self.upsample_factor_in = upsample_factor_in
         self.bn_absorb_path = ''
         if parameter_paths is None:
             self.parameter_paths = dict()
         else:
             self.parameter_paths = parameter_paths
-
         self.scale_up = 1
         self.scale_down = 1
         self.vec_scale_path = ''
@@ -480,7 +518,7 @@ class BatchNormComputeNode(ComputeNode):
             self.parameter_paths = parameter_paths
 
 
-class UpsampleComputeNode(ComputeNode):
+class UpsampleComputeNode(SpatialComputeNode):
     def __init__(
         self,
         layer_id: str,
@@ -489,15 +527,25 @@ class UpsampleComputeNode(ComputeNode):
         channel_output: int,
         ckks_parameter_id_input: str = 'param0',
         ckks_parameter_id_output: str = 'param0',
+        *,
+        stride: list = None,
+        upsample_factor: list = None,
+        upsample_factor_in: list = None,
     ):
         super().__init__(
-            layer_id, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
+            layer_id,
+            layer_type,
+            channel_input,
+            channel_output,
+            ckks_parameter_id_input,
+            ckks_parameter_id_output,
+            stride=stride,
+            upsample_factor=upsample_factor,
+            upsample_factor_in=upsample_factor_in,
         )
 
-        self.upsample_factor_in = [1, 1]
 
-
-class PoolComputeNode(ComputeNode):
+class PoolComputeNode(SpatialComputeNode):
     def __init__(
         self,
         layer_id: str,
@@ -506,15 +554,27 @@ class PoolComputeNode(ComputeNode):
         channel_output: int,
         ckks_parameter_id_input: str = 'param0',
         ckks_parameter_id_output: str = 'param0',
-        stride: list = [0, 0],
-        kernel_shape: list = [0, 0],
+        *,
+        stride: list = None,
+        upsample_factor: list = None,
+        upsample_factor_in: list = None,
+        kernel_shape: list = None,
         is_adaptive_avgpool=False,
         padding=[0, 0],
     ):
+        if kernel_shape is None:
+            kernel_shape = [1, 1]
         super().__init__(
-            layer_id, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
+            layer_id,
+            layer_type,
+            channel_input,
+            channel_output,
+            ckks_parameter_id_input,
+            ckks_parameter_id_output,
+            stride=stride,
+            upsample_factor=upsample_factor,
+            upsample_factor_in=upsample_factor_in,
         )
-        self.stride = stride
         self.kernel_shape = kernel_shape
         self.is_adaptive_avgpool = is_adaptive_avgpool
         self.padding = padding
@@ -709,9 +769,10 @@ class LayerAbstractGraph:
                 kernel_shape = layer_json['kernel_shape']
                 stride = layer_json['stride']
                 groups = layer_json['groups']
+                upsample_factor = layer_json.get('upsample_factor', [1, 1])
                 is_conv_transpose = False
-                if 'upsample_factor_in' in layer_json and layer_json['upsample_factor_in'][0] != 1:
-                    upsample_factor_in = layer_json['upsample_factor_in']
+                if 'upsample_factor' in layer_json and layer_json['upsample_factor'][0] != 1:
+                    upsample_factor = layer_json['upsample_factor']
                     is_conv_transpose = True
 
                 compute_node = ConvComputeNode(
@@ -721,26 +782,26 @@ class LayerAbstractGraph:
                     channel_output,
                     ckks_parameter_id_input,
                     ckks_parameter_id_output,
-                    groups,
-                    stride,
-                    kernel_shape,
+                    groups=groups,
+                    stride=stride,
+                    kernel_shape=kernel_shape,
                     parameter_paths={
                         'weight': weight_path,
                         'bias': bias_path,
                         'running_mean': running_mean_path,
                         'running_var': running_var_path,
                     },
-                    upsample_factor_in=upsample_factor_in,
+                    upsample_factor=upsample_factor,
                 )
                 compute_node.is_conv_transpose = is_conv_transpose
             elif layer_type == 'resize':
-                if 'upsample_factor_in' in layer_json:
-                    upsample_factor_in = layer_json['upsample_factor_in']
+                if 'upsample_factor' in layer_json:
+                    upsample_factor = layer_json['upsample_factor']
                 compute_node = ComputeNode(
                     key, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
                 )
                 compute_node.is_resize = True
-                compute_node.upsample_factor_in = upsample_factor_in
+                compute_node.upsample_factor = upsample_factor
             elif 'fc' in layer_type:
                 weight_path = layer_json['weight_path']
                 bias_path = layer_json['bias_path']
@@ -774,8 +835,8 @@ class LayerAbstractGraph:
                     channel_output,
                     ckks_parameter_id_input,
                     ckks_parameter_id_output,
-                    stride,
-                    kernel_shape,
+                    stride=stride,
+                    kernel_shape=kernel_shape,
                     padding=padding,
                 )
             elif 'mult_scalar' in layer_type:
@@ -805,23 +866,7 @@ class LayerAbstractGraph:
                     else:
                         compute_node.order = 0
 
-            level_cost = 0
-            if 'conv' in layer_type:
-                level_cost = 1
-            elif 'fc' in layer_type:
-                level_cost = 1
-            elif 'mult_scalar' in layer_type:
-                level_cost = 1
-            elif 'relu2d' == layer_type:
-                level_cost = math.ceil(math.log2(compute_node.order)) + 1
-            elif 'resize' == layer_type:
-                level_cost = 1
-            elif 'batchnorm' in layer_type or 'pool' in layer_type:
-                level_cost = 0
-            elif layer_type == 'mult_coeff':
-                level_cost = 0
-
-            graph_info.dag.add_node(compute_node, name=key, level_cost=level_cost)
+            graph_info.dag.add_node(compute_node, name=key)
             graph_info.dag.add_edges_from([(node, compute_node) for node in feature_input])
             graph_info.dag.add_edges_from([(compute_node, node) for node in feature_output])
 
@@ -934,7 +979,7 @@ class LayerAbstractGraph:
                     'ckks_parameter_id_output': ckks_parameter_id_output,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
-                    'upsample_factor_in': layer.upsample_factor_in,
+                    'upsample_factor': layer.upsample_factor,
                 }
             if 'upsample' in layer_type:
                 layers[layer_id] = {
@@ -945,7 +990,7 @@ class LayerAbstractGraph:
                     'ckks_parameter_id_output': ckks_parameter_id_output,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
-                    'upsample_factor_in': layer.upsample_factor_in,
+                    'upsample_factor': layer.upsample_factor,
                 }
 
             if 'conv' in layer_type:
@@ -1154,7 +1199,7 @@ class LayerAbstractGraph:
             if 'simple_polyrelu' == layer_type:
                 # layers[layer_id]['weight_path'] = layer_id + '.weight'
                 layers[layer_id]['weight_path'] = layer.path
-                layers[layer_id]['upsample_factor_in'] = layer.upsample_factor_in
+                layers[layer_id]['zero_skip'] = layer.zero_skip
                 layers[layer_id]['is_big_size'] = layer.is_big_size
                 layers[layer_id]['is_absorb_polyrelu'] = IS_ABSORB_POLYRELU
             if 'level_cost' in self.dag.nodes[layer]:
