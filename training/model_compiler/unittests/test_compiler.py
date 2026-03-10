@@ -34,6 +34,7 @@ from components import (
     ConvComputeNode,
     UpsampleComputeNode,
     SpatialComputeNode,
+    ActivationComputeNode,
 )
 import nn_modules
 from processor import check_level_cost, check_multi_input_level_skip_aligned, check_feature_scale
@@ -746,13 +747,12 @@ class TestCompiler(unittest.TestCase):
             temperature=0.0,
             num_workers=1,
         )
-        res = False
-        for node in graph.dag.nodes:
-            # Upsample layer need to be added for large sizes
-            if isinstance(node, ConvComputeNode):
-                if node.upsample_factor_in == [2, 2]:
-                    res = True
-        self.assertEqual(res, True)
+        self.assertTrue(
+            any(node.upsample_factor_in == [2, 2] for node in graph.dag.nodes if isinstance(node, ConvComputeNode))
+        )
+        self.assertTrue(
+            any(node.zero_skip == [2, 2] for node in graph.dag.nodes if isinstance(node, ActivationComputeNode))
+        )
 
     def test_conv_and_upsample(self):
         model = nn_modules.ConvAndUpsample()

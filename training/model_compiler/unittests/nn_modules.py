@@ -352,10 +352,12 @@ class ConvAndConvTransposeBlock(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.relu0 = RangeNormPoly2d(num_features=32)
         self.conv1 = nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=2)
 
     def forward(self, x):
         x = self.conv0(x)
+        x = self.relu0(x)
         x = self.conv1(x)
         return x
 

@@ -93,8 +93,6 @@ def add_layer(
 ):
     channel_input = compute_node.channel_input
     channel_output = compute_node.channel_input
-    ckks_parameter_id_input = compute_node.ckks_parameter_id_input
-    ckks_parameter_id_output = compute_node.ckks_parameter_id_input
     feature_node_in = preds[index]
 
     dim = feature_node_in.dim
@@ -117,7 +115,7 @@ def add_layer(
         dim,
         channel_output,
         scale,
-        ckks_parameter_id_output,
+        feature_node_in.ckks_parameter_id,
         ckks_scale,
         shape,
     )
@@ -129,17 +127,11 @@ def add_layer(
         new_compute_node = insert_node
     else:
         if layer_type == 'mult_scalar':
-            new_compute_node = MultScalarComputeNode(
-                layer_id, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
-            )
+            new_compute_node = MultScalarComputeNode(layer_id, layer_type, channel_input, channel_output)
         elif layer_type == 'upsample':
-            new_compute_node = UpsampleComputeNode(
-                layer_id, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
-            )
+            new_compute_node = UpsampleComputeNode(layer_id, layer_type, channel_input, channel_output)
         else:
-            new_compute_node = ComputeNode(
-                layer_id, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
-            )
+            new_compute_node = ComputeNode(layer_id, layer_type, channel_input, channel_output)
 
     new_compute_node.depth = depth_out
 
@@ -191,8 +183,6 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
         layer_type='bootstrapping',
         channel_input=upstream_feature.channel,
         channel_output=refreshed_feature.channel,
-        ckks_parameter_id_input=upstream_feature.ckks_parameter_id,
-        ckks_parameter_id_output=refreshed_feature.ckks_parameter_id,
     )
 
     _insert_layer_after_feature(
@@ -209,7 +199,7 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
         },
     )
 
-    slot_num = param_dict[btp_node.ckks_parameter_id_input].poly_modulus_degree // 2
+    slot_num = param_dict[upstream_feature.ckks_parameter_id].poly_modulus_degree // 2
     dag.nodes[refreshed_feature]['pack_num'] = dag.nodes[upstream_feature]['pack_num']
 
     return btp_node
@@ -286,15 +276,13 @@ def split_upsampling_layers(graph: LayerAbstractGraph):
     for conv_node in list(graph.dag.nodes):
         if not isinstance(conv_node, ConvComputeNode):
             continue
-        if conv_node.upsample_factor[0] > 1:
+        if any(x > 1 for x in conv_node.upsample_factor):
             feature_in = next(graph.dag.predecessors(conv_node))
             upsample_layer = UpsampleComputeNode(
                 layer_id=f'{conv_node.layer_id}_upsample',
                 layer_type='upsample',
                 channel_input=conv_node.channel_input,
                 channel_output=conv_node.channel_output,
-                ckks_parameter_id_input=conv_node.ckks_parameter_id_input,
-                ckks_parameter_id_output=conv_node.ckks_parameter_id_output,
                 upsample_factor=conv_node.upsample_factor,
             )
             upsample_layer.level_cost = 1
@@ -303,7 +291,7 @@ def split_upsampling_layers(graph: LayerAbstractGraph):
                 dim=2,
                 channel=upsample_layer.channel_output,
                 scale=feature_in.scale,
-                ckks_parameter_id=upsample_layer.ckks_parameter_id_output,
+                ckks_parameter_id=feature_in.ckks_parameter_id,
             )
             _insert_layer_between_feature_and_compute(
                 graph.dag,
@@ -344,7 +332,7 @@ def infer_shapes_and_skips(graph: LayerAbstractGraph):
             graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip']
             continue
         if isinstance(compute_node, SpatialComputeNode):
-            for i in range(2):
+            for i in range(compute_node.dim):
                 succ.shape[i] = (
                     preds[0].shape[i]
                     // compute_node.stride[i]
@@ -358,7 +346,7 @@ def infer_shapes_and_skips(graph: LayerAbstractGraph):
                     // compute_node.upsample_factor[i]
                 )
         else:
-            for i in range(2):
+            for i in range(preds[0].dim):
                 succ.shape[i] = preds[0].shape[i]
                 graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
 
@@ -378,23 +366,22 @@ def combine_convs_with_upsamples(graph: LayerAbstractGraph):
         ):
             continue
 
-        conv_node.upsample_factor_in[0] *= upsample_node.upsample_factor[0]
-        conv_node.upsample_factor_in[1] *= upsample_node.upsample_factor[1]
+        for i in range(conv_node.dim):
+            conv_node.upsample_factor_in[i] *= upsample_node.upsample_factor[i]
 
         cur_compute_node = conv_node
         while True:
             cur_feature_node = next(graph.dag.successors(cur_compute_node))
-            cur_feature_node.shape[0] *= upsample_node.upsample_factor[0]
-            cur_feature_node.shape[1] *= upsample_node.upsample_factor[1]
-            graph.dag.nodes[cur_feature_node]['skip'][0] //= upsample_node.upsample_factor[0]
-            graph.dag.nodes[cur_feature_node]['skip'][1] //= upsample_node.upsample_factor[1]
+            for i in range(cur_feature_node.dim):
+                cur_feature_node.shape[i] *= upsample_node.upsample_factor[i]
+                graph.dag.nodes[cur_feature_node]['skip'][i] //= upsample_node.upsample_factor[i]
 
             cur_compute_node = next(graph.dag.successors(cur_feature_node))
             if cur_compute_node == upsample_node:
                 break
             if cur_compute_node.layer_type in ('relu2d', 'simple_polyrelu'):
-                cur_compute_node.zero_skip[0] *= upsample_node.upsample_factor[0]
-                cur_compute_node.zero_skip[1] *= upsample_node.upsample_factor[1]
+                for i in range(cur_feature_node.dim):
+                    cur_compute_node.zero_skip[i] *= upsample_node.upsample_factor[i]
 
         upsample_node.upsample_factor = [1, 1]
 
