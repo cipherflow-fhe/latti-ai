@@ -354,28 +354,31 @@ def combine_convs_with_upsamples(graph: LayerAbstractGraph):
         conv_node = find_layer_in_linear_graph(graph, upsample_node, 'conv2d', 'up')
         if conv_node is False:
             raise ValueError('Cannot find a conv node above the upsampling node.')
-        feature_in = next(graph.dag.predecessors(conv_node))
+        conv_out = next(graph.dag.successors(conv_node))
 
         if (
-            feature_in.shape[0] * conv_node.upsample_factor_in[0] * upsample_node.upsample_factor[0]
-            > config.block_shape[0]
-            or feature_in.shape[1] * conv_node.upsample_factor_in[1] * upsample_node.upsample_factor[1]
-            > config.block_shape[1]
+            conv_out.shape[0] * upsample_node.upsample_factor[0] > config.block_shape[0]
+            or conv_out.shape[1] * upsample_node.upsample_factor[1] > config.block_shape[1]
         ):
             continue
 
         conv_node.upsample_factor_in[0] *= upsample_node.upsample_factor[0]
         conv_node.upsample_factor_in[1] *= upsample_node.upsample_factor[1]
 
-        cur_node = conv_node
+        cur_compute_node = conv_node
         while True:
-            cur_node = next(graph.dag.successors(cur_node))
-            cur_node = next(graph.dag.successors(cur_node))
-            if cur_node == upsample_node:
+            cur_feature_node = next(graph.dag.successors(cur_compute_node))
+            cur_feature_node.shape[0] *= upsample_node.upsample_factor[0]
+            cur_feature_node.shape[1] *= upsample_node.upsample_factor[1]
+            graph.dag.nodes[cur_feature_node]['skip'][0] //= upsample_node.upsample_factor[0]
+            graph.dag.nodes[cur_feature_node]['skip'][1] //= upsample_node.upsample_factor[1]
+
+            cur_compute_node = next(graph.dag.successors(cur_feature_node))
+            if cur_compute_node == upsample_node:
                 break
-            if cur_node.layer_type in ('relu2d', 'simple_polyrelu'):
-                cur_node.zero_skip[0] *= upsample_node.upsample_factor[0]
-                cur_node.zero_skip[1] *= upsample_node.upsample_factor[1]
+            if cur_compute_node.layer_type in ('relu2d', 'simple_polyrelu'):
+                cur_compute_node.zero_skip[0] *= upsample_node.upsample_factor[0]
+                cur_compute_node.zero_skip[1] *= upsample_node.upsample_factor[1]
 
         upsample_node.upsample_factor = [1, 1]
 
