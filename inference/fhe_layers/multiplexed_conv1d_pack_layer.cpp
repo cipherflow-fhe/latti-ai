@@ -48,6 +48,7 @@ ParMultiplexedConv1DPackedLayer::ParMultiplexedConv1DPackedLayer(const CkksParam
     n_mult_pack_per_ct = n_channel_per_ct;
     n_packed_in_channel = div_ceil(n_channel_in, n_channel_per_ct);
     n_packed_out_channel = div_ceil(n_channel_out, n_channel_per_ct);
+    cached_input_block_size = input_shape * skip;
 }
 
 ParMultiplexedConv1DPackedLayer::~ParMultiplexedConv1DPackedLayer() {}
@@ -261,12 +262,6 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
 
 void ParMultiplexedConv1DPackedLayer::prepare_weight_for_lazy() {
     uint32_t half_kernel_shape = kernel_shape / 2;
-
-    // Cache values for on-demand generation
-    cached_n_packed_in_ct = n_packed_in_channel;
-    cached_n_packed_out_ct = n_packed_out_channel;
-    cached_input_block_size = input_shape * skip;
-
     // Generate kernel masks
     kernel_masks_.clear();
     kernel_masks_.resize(kernel_shape);
