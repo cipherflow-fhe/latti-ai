@@ -992,10 +992,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs", "", HeteroProcessors)
     int init_level = 8;
     vector<int> orders = {2, 4, 6, 8, 10, 12, 16, 32, 64};
 
-    for (int order : orders) {
+    for (uint32_t order : orders) {
         SECTION("order=" + to_string(order)) {
             auto input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
-            auto weight = gen_random_array<2>({order + 1, (int)n_channel}, 1.0);
+            auto weight = gen_random_array<2>({order + 1, n_channel}, 1.0);
 
             Feature2DEncrypted input_feature(&this->context, init_level, skip);
             input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());

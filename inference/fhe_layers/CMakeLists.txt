@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 add_library(fhe_layers 
   conv2d_layer.cpp 
   upsample_layer.cpp
@@ -30,3 +31,14 @@ target_include_directories(fhe_layers PUBLIC
   ${CMAKE_SOURCE_DIR}/data_structs/
 )
 target_link_libraries(fhe_layers PUBLIC lattisense)
+=======
+add_library(fhe_layers conv2d_layer.cpp upsample_layer.cpp upsample_nearest_layer.cpp inverse_multiplexed_conv2d_layer
+                .cpp concat_layer.cpp conv2d_packed_layer.cpp activation_layer.cpp dense_packed_layer.cpp reshape_layer
+                .cpp add_layer.cpp conv2d_depthwise.cpp avgpool2d_layer.cpp multiplexed_conv2d_pack_layer
+                .cpp multiplexed_conv2d_pack_layer_depthwise.cpp poly_relu2d.cpp mult_scaler.cpp conv1d_packed_layer
+                .cpp multiplexed_conv1d_pack_layer.cpp../
+            data_structs / feature.cpp../ data_structs / feature1d.cpp../ data_structs / feature2d.cpp../ data_structs /
+            feature0d.cpp../ util.cpp)
+    target_include_directories(fhe_layers PUBLIC ${CMAKE_SOURCE_DIR} / data_structs /)
+        target_link_libraries(fhe_layers PUBLIC lattisense)
+>>>>>>> Stashed changes
