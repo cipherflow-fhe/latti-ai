@@ -39,10 +39,6 @@
 #
 #   LayerAbstractGraph                – DAG of FeatureNode / ComputeNode; owns from_json
 #                                       and to_json for the task config format
-#
-#   FheScoreParam                     – latency cost model for FHE compute nodes
-#   MpcScoreParam                     – communication cost model for MPC refresh nodes
-#   BtpScoreParam                     – latency cost model for bootstrapping nodes
 
 import json
 from typing import Optional
@@ -82,244 +78,11 @@ config = GlobalConfig()
 
 f_name_index_dict = dict()
 concat_dict = dict()
-# MAX_LEVEL = None
-# block_shape = None
 IS_ABSORB_POLYRELU = False
-# POLY_N = None
-# STYLE = None
-# MPC_REFRESH = None
-
 YOLO_TYPE = True
 IS_BALANCE = False
 DEFAULT_SCALE = 1
-
-
-# get_multithread_rate_for_btp
-def get_multithread_rate_for_btp(task_num: int):
-    if single_thread:
-        return 1
-    if task_num == 1:
-        return 1
-    elif task_num == 2:
-        return 1.5
-    elif task_num > 2 and task_num < 16:
-        return task_num * 0.8
-    elif task_num >= 16:
-        return 12
-
-
-def get_multithread_rate(task_num: int):
-    if single_thread:
-        return 1
-    if task_num == 1:
-        return 1
-    elif task_num == 2:
-        return 1.6
-    elif task_num <= 4:
-        return 2.8
-    elif task_num <= 8:
-        return 5.2
-    elif task_num <= 16:
-        return 8
-    else:
-        return 8
-
-
-def get_multithread_rate_for_block_rotation(task_num: int):
-    if single_thread:
-        return 1
-    if task_num == 1:
-        return 1
-    elif task_num == 2:
-        return 1.2
-    elif task_num <= 4:
-        return 1.8
-    elif task_num <= 8:
-        return 2.7
-    elif task_num <= 16:
-        return 5.9
-    else:
-        return 5.9
-
-
-def get_multithread_rate_for_kernel_rotation(task_num: int):
-    if single_thread:
-        return 1
-    if task_num == 1:
-        return 1
-    elif task_num == 2:
-        return 1.8
-    elif task_num <= 4:
-        return 2.7
-    elif task_num <= 8:
-        return 4
-    elif task_num <= 16:
-        return 6.5
-    else:
-        return 6.5
-
-
 single_thread = False
-
-
-def get_multithread_rate_for_weight_ops(task_num: int):
-    if single_thread:
-        return 1
-    if task_num == 1:
-        return 1
-    elif task_num == 2:
-        return 1.7
-    elif task_num <= 4:
-        return 3.5
-    elif task_num <= 8:
-        return 4.8
-    elif task_num <= 16:
-        return 6.1
-    else:
-        return 6.1
-
-
-mult_plain_time = {
-    65536: {
-        1: 0.00279,
-        2: 0.00428,
-        3: 0.00582,
-        4: 0.00726,
-        5: 0.00732,
-        6: 0.00849,
-        7: 0.00982,
-        8: 0.0112,
-        9: 0.0119,
-    },
-    16384: {
-        1: 0.000686,
-        2: 0.001037,
-        3: 0.001333,
-        4: 0.001670,
-        5: 0.002007,
-        6: 0.002378,
-        7: 0.002809,
-        8: 0.003,
-        9: 0.003,
-    },
-    8192: {1: 0.000261, 2: 0.000362, 3: 0.000465, 4: 0.000596, 5: 0.000833},
-}
-
-mult_time = {
-    65536: {
-        1: 0.004064,
-        2: 0.004677,
-        3: 0.005629,
-        4: 0.006466,
-        5: 0.009199,
-        6: 0.010248,
-        7: 0.011975,
-        8: 0.013173,
-        9: 0.014370,
-    },
-    16384: {
-        1: 0.003216,
-        2: 0.004368,
-        3: 0.005244,
-        4: 0.007070,
-        5: 0.008787,
-        6: 0.011128,
-        7: 0.012594,
-        8: 0.013,
-        9: 0.013,
-    },
-    8192: {1: 0.001429, 2: 0.002002, 3: 0.002831, 4: 0.003705, 5: 0.004831},
-}
-
-rotate_time = {
-    65536: {
-        0: 0.0186,
-        1: 0.0214,
-        2: 0.0235,
-        3: 0.0257,
-        4: 0.029,
-        5: 0.0315,
-        6: 0.0402,
-        7: 0.0444,
-        8: 0.0551,
-        9: 0.0599,
-    },
-    16384: {
-        0: 0.00283,
-        1: 0.003980,
-        2: 0.006282,
-        3: 0.007841,
-        4: 0.011171,
-        5: 0.013181,
-        6: 0.017956,
-        7: 0.020501,
-        8: 0.02,
-        9: 0.02,
-    },
-    8192: {0: 0.000582, 1: 0.000981, 2: 0.001466, 3: 0.00222, 4: 0.00276, 5: 0.003626},
-}
-
-rescale_time = {
-    8192: {1: 0.00027, 2: 0.0004, 3: 0.00055, 4: 0.00065, 5: 0.00082},
-    16384: {
-        1: 0.00056,
-        2: 0.00085143,
-        3: 0.00113714,
-        4: 0.00144699,
-        5: 0.00172215,
-        6: 0.00202571,
-        7: 0.00231143,
-        8: 0.002,
-        9: 0.002,
-    },
-    65536: {
-        1: 0.00196,
-        2: 0.00298,
-        3: 0.00398,
-        4: 0.00506446,
-        5: 0.00602752,
-        6: 0.00709,
-        7: 0.00809,
-        8: 0.00913,
-        9: 0.0101,
-    },
-}
-
-add_time = {
-    65536: {
-        0: 0.000086,
-        1: 0.000183,
-        2: 0.000276,
-        3: 0.000367,
-        4: 0.000471,
-        5: 0.00106,
-        6: 0.00184,
-        7: 0.0019,
-        8: 0.002,
-        9: 0.0021,
-    },
-    16384: {
-        0: 0.00002,
-        1: 0.00004,
-        2: 0.00007,
-        3: 0.00009,
-        4: 0.0001,
-        5: 0.00025,
-        6: 0.0004,
-        7: 0.0005,
-        8: 0.0002,
-        9: 0.0002,
-    },
-    8192: {0: 0.00009, 1: 0.001021, 2: 0.001466, 3: 0.002185, 4: 0.003026, 5: 0.003026},
-}
-
-btp_time = {'8192': 7, '16384': 12, '65536': 24}
-
-
-# def read_config(config_path):
-#     with open(config_path, 'r', encoding='utf8') as fp:
-#         config_ctx = json.load(fp)
-#     return config_ctx
 
 
 class EncryptParameterNode:
@@ -643,10 +406,11 @@ class ReshapeComputeNode(ComputeNode):
         layer_type: str,
         channel_input: int,
         channel_output: int,
-        shape: list[int],
+        *,
+        new_shape: list[int],
     ):
         super().__init__(layer_id, layer_type, channel_input, channel_output)
-        self.shape = shape
+        self.new_shape = new_shape
 
 
 class ActivationComputeNode(ComputeNode):
@@ -863,7 +627,9 @@ class LayerAbstractGraph:
             elif 'mult_scalar' in layer_type:
                 compute_node = MultScalarComputeNode(key, layer_type, channel_input, channel_output)
             elif 'reshape' in layer_type:
-                compute_node = ReshapeComputeNode(key, layer_type, channel_input, channel_output, layer_json['shape'])
+                compute_node = ReshapeComputeNode(
+                    key, layer_type, channel_input, channel_output, new_shape=layer_json['shape'][1:]
+                )
             elif layer_type == 'mult_coeff':
                 compute_node = MultCoeffComputeNode(key, layer_type, layer_json['coeff'], channel_input, channel_output)
             elif layer_type in ('simple_polyrelu', 'relu2d', 'square', 'sigmoid'):
@@ -1194,7 +960,7 @@ class LayerAbstractGraph:
                     'ckks_parameter_id_output': ckks_parameter_id_output,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
-                    'shape': layer.shape,
+                    'shape': layer.new_shape,
                 }
             if layer_type == 'mult_coeff':
                 layers[layer_id] = {
