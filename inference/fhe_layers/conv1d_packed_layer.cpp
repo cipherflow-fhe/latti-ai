@@ -144,12 +144,6 @@ void Conv1DPackedLayer::prepare_weight_lazy() {
     uint32_t half_kernel_shape = kernel_shape / 2;
     uint32_t shape_ct = input_shape * skip;
 
-    // Cache values for on-demand generation
-    N = param.get_n();
-    cached_n_packed_in_ct = n_packed_in_channel;
-    cached_n_packed_out_ct = n_packed_out_channel;
-    cached_input_block_size = shape_ct;
-
     // Generate kernel masks
     kernel_masks_.clear();
     for (int i = 0; i < kernel_shape; i++) {
@@ -193,7 +187,7 @@ CkksPlaintextRingt Conv1DPackedLayer::generate_weight_pt_for_indices(CkksContext
     const double encode_pt_scale = weight_scale;
 
     std::vector<double> packed_weights;
-    packed_weights.reserve(N / 2);
+    packed_weights.reserve(param.get_n() / 2);
 
     for (int pack_idx = 0; pack_idx < n_channel_per_ct; pack_idx++) {
         int out_channel_idx = ct_idx * n_channel_per_ct + pack_idx;

@@ -73,10 +73,5 @@ private:
     uint32_t n_packed_out_channel;
     uint32_t level;
     double weight_scale;
-
-    int N;
-    uint32_t cached_n_packed_in_ct;
-    uint32_t cached_n_packed_out_ct;
-    uint32_t cached_input_block_size;
     std::vector<std::vector<double>> kernel_masks_;
 };

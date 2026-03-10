@@ -39,13 +39,12 @@ public:
     ~ParMultiplexedConv1DPackedLayer();
 
     void prepare_weight();
-    void prepare_weight_for_lazy() {};
+    void prepare_weight_for_lazy();
 
     // Helper functions to generate weights/bias on-demand (for lazy mode)
-    CkksPlaintextRingt
-    generate_weight_pt_for_indices(CkksContext& ctx, int packed_out_idx, int packed_in_idx, int kernel_idx) const;
-    CkksPlaintextRingt generate_bias_pt_for_index(CkksContext& ctx, int packed_out_idx) const;
-    CkksPlaintext generate_select_tensor_pt_for_index(CkksContext& ctx, int idx) const;
+    CkksPlaintextRingt generate_weight_pt_for_indices(CkksContext& ctx, int wg, int w_idx, int kernel_idx) const;
+    CkksPlaintextRingt generate_bias_pt_for_index(CkksContext& ctx, int idx) const;
+    CkksPlaintext generate_select_tensor_pt_for_index(CkksContext& ctx, int t) const;
 
     Feature1DEncrypted run(CkksContext& ctx, Feature1DEncrypted& x);
     virtual vector<double> select_tensor(int num) const;
@@ -78,7 +77,6 @@ private:
     uint32_t n_packed_out_channel;
     uint32_t n_mult_pack_per_ct;
 
-    int N;
     uint32_t cached_n_packed_in_ct;
     uint32_t cached_n_packed_out_ct;
     uint32_t cached_input_block_size;
