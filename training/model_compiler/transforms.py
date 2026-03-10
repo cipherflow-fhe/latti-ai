@@ -93,8 +93,6 @@ def add_layer(
 ):
     channel_input = compute_node.channel_input
     channel_output = compute_node.channel_input
-    ckks_parameter_id_input = compute_node.ckks_parameter_id_input
-    ckks_parameter_id_output = compute_node.ckks_parameter_id_input
     feature_node_in = preds[index]
 
     dim = feature_node_in.dim
@@ -117,7 +115,7 @@ def add_layer(
         dim,
         channel_output,
         scale,
-        ckks_parameter_id_output,
+        feature_node_in.ckks_parameter_id,
         ckks_scale,
         shape,
     )
@@ -129,17 +127,11 @@ def add_layer(
         new_compute_node = insert_node
     else:
         if layer_type == 'mult_scalar':
-            new_compute_node = MultScalarComputeNode(
-                layer_id, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
-            )
+            new_compute_node = MultScalarComputeNode(layer_id, layer_type, channel_input, channel_output)
         elif layer_type == 'upsample':
-            new_compute_node = UpsampleComputeNode(
-                layer_id, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
-            )
+            new_compute_node = UpsampleComputeNode(layer_id, layer_type, channel_input, channel_output)
         else:
-            new_compute_node = ComputeNode(
-                layer_id, layer_type, channel_input, channel_output, ckks_parameter_id_input, ckks_parameter_id_output
-            )
+            new_compute_node = ComputeNode(layer_id, layer_type, channel_input, channel_output)
 
     new_compute_node.depth = depth_out
 
@@ -191,8 +183,6 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
         layer_type='bootstrapping',
         channel_input=upstream_feature.channel,
         channel_output=refreshed_feature.channel,
-        ckks_parameter_id_input=upstream_feature.ckks_parameter_id,
-        ckks_parameter_id_output=refreshed_feature.ckks_parameter_id,
     )
 
     _insert_layer_after_feature(
@@ -209,7 +199,7 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
         },
     )
 
-    slot_num = param_dict[btp_node.ckks_parameter_id_input].poly_modulus_degree // 2
+    slot_num = param_dict[upstream_feature.ckks_parameter_id].poly_modulus_degree // 2
     dag.nodes[refreshed_feature]['pack_num'] = dag.nodes[upstream_feature]['pack_num']
 
     return btp_node
@@ -293,8 +283,6 @@ def split_upsampling_layers(graph: LayerAbstractGraph):
                 layer_type='upsample',
                 channel_input=conv_node.channel_input,
                 channel_output=conv_node.channel_output,
-                ckks_parameter_id_input=conv_node.ckks_parameter_id_input,
-                ckks_parameter_id_output=conv_node.ckks_parameter_id_output,
                 upsample_factor=conv_node.upsample_factor,
             )
             upsample_layer.level_cost = 1
@@ -303,7 +291,7 @@ def split_upsampling_layers(graph: LayerAbstractGraph):
                 dim=2,
                 channel=upsample_layer.channel_output,
                 scale=feature_in.scale,
-                ckks_parameter_id=upsample_layer.ckks_parameter_id_output,
+                ckks_parameter_id=feature_in.ckks_parameter_id,
             )
             _insert_layer_between_feature_and_compute(
                 graph.dag,

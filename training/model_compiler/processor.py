@@ -100,9 +100,6 @@ def update_subgraph_node_param(dag, param_dict: dict[str, EncryptParameterNode],
         update_skip_for_btp(sub, print_flag)
         update_level_cost_for_btp(sub)
     for compute_node in compute_nodes_in_topo_sort:
-        compute_node.ckks_parameter_id_input = param_id
-        compute_node.ckks_parameter_id_output = param_id
-
         populate_pack_num(dag, compute_node, slot_num)
 
 
@@ -121,8 +118,6 @@ def add_btp_layer(graph: LayerAbstractGraph, feature: FeatureNode):
         layer_type='bootstrapping',
         channel_input=feature.channel,
         channel_output=refreshed_feature.channel,
-        ckks_parameter_id_input=feature.ckks_parameter_id,
-        ckks_parameter_id_output=refreshed_feature.ckks_parameter_id,
     )
     graph.dag.add_node(btp_node)
     graph.dag.add_edge(feature, btp_node)
