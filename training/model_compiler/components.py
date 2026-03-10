@@ -14,6 +14,36 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+
+# Class hierarchy overview:
+#
+#   GlobalConfig                      – singleton for compiler configuration
+#
+#   EncryptParameterNode              – CKKS encryption parameters (degree, modulus, …)
+#
+#   FeatureNode                       – a ciphertext tensor (node between compute layers)
+#
+#   ComputeNode                       – base class for all compute/layer nodes
+#   ├── SpatialComputeNode            – layers with stride / upsample geometry
+#   │   ├── ConvComputeNode           – convolution (regular and transposed)
+#   │   ├── UpsampleComputeNode       – nearest-neighbour upsample (split from ConvTranspose)
+#   │   ├── UpsampleNearestComputeNode– upsample from a 'resize' op in the original graph
+#   │   └── PoolComputeNode           – average / adaptive pooling
+#   ├── DenseComputeNode              – fully-connected layer
+#   ├── BatchNormComputeNode          – batch normalisation
+#   ├── MultScalarComputeNode         – element-wise scalar multiply
+#   ├── MultCoeffComputeNode          – multiply by a fixed scalar coefficient
+#   ├── ReshapeComputeNode            – reshape / flatten
+#   └── ActivationComputeNode         – activation functions (simple_polyrelu, relu2d,
+#                                       square, sigmoid)
+#
+#   LayerAbstractGraph                – DAG of FeatureNode / ComputeNode; owns from_json
+#                                       and to_json for the task config format
+#
+#   FheScoreParam                     – latency cost model for FHE compute nodes
+#   MpcScoreParam                     – communication cost model for MPC refresh nodes
+#   BtpScoreParam                     – latency cost model for bootstrapping nodes
+
 import json
 from typing import Optional
 import math
@@ -402,17 +432,24 @@ class SpatialComputeNode(ComputeNode):
         channel_input: int,
         channel_output: int,
         *,
+        dim: int = 2,
         stride: list = None,
         upsample_factor: list = None,
         upsample_factor_in: list = None,
     ):
-        if stride is None:
-            stride = [1, 1]
-        if upsample_factor is None:
-            upsample_factor = [1, 1]
-        if upsample_factor_in is None:
-            upsample_factor_in = [1, 1]
         super().__init__(layer_id, layer_type, channel_input, channel_output)
+        self.dim = dim
+        if stride is None:
+            stride = [1] * dim
+        if upsample_factor is None:
+            upsample_factor = [1] * dim
+        if upsample_factor_in is None:
+            upsample_factor_in = [1] * dim
+        if len(stride) != dim or len(upsample_factor) != dim or len(upsample_factor_in) != dim:
+            raise ValueError(
+                f'stride, upsample_factor, and upsample_factor_in must all have length dim={dim}, '
+                f'got {len(stride)}, {len(upsample_factor)}, {len(upsample_factor_in)}'
+            )
         self.stride = stride
         self.upsample_factor = upsample_factor  # the "stride" from ConvTranpose
         self.upsample_factor_in = upsample_factor_in  # absorbed from some downstream upsampling layer
@@ -426,6 +463,7 @@ class ConvComputeNode(SpatialComputeNode):
         channel_input: int,
         channel_output: int,
         *,
+        dim: int = 2,
         stride: list = None,
         upsample_factor: list = None,
         upsample_factor_in: list = None,
@@ -433,8 +471,6 @@ class ConvComputeNode(SpatialComputeNode):
         kernel_shape: list = None,
         parameter_paths: dict | None = None,
     ):
-        if kernel_shape is None:
-            kernel_shape = [1, 1]
         super().__init__(
             layer_id,
             layer_type,
@@ -444,6 +480,8 @@ class ConvComputeNode(SpatialComputeNode):
             upsample_factor=upsample_factor,
             upsample_factor_in=upsample_factor_in,
         )
+        if kernel_shape is None:
+            kernel_shape = [1] * self.dim
         self.kernel_shape = kernel_shape
         self.groups = groups
         self.bn_absorb_path = ''
@@ -451,11 +489,7 @@ class ConvComputeNode(SpatialComputeNode):
             self.parameter_paths = dict()
         else:
             self.parameter_paths = parameter_paths
-        self.scale_up = 1
-        self.scale_down = 1
         self.vec_scale_path = ''
-        self.weight_scale = 1
-        self.bias_scale = 1
         self.is_conv_transpose = False
 
 
@@ -474,11 +508,7 @@ class DenseComputeNode(ComputeNode):
         else:
             self.parameter_paths = parameter_paths
         self.bn_absorb_path = ''
-        self.scale_up = 1
-        self.scale_down = 1
         self.vec_scale_path = ''
-        self.weight_scale = 1
-        self.bias_scale = 1
 
 
 class BatchNormComputeNode(ComputeNode):
@@ -505,6 +535,7 @@ class UpsampleComputeNode(SpatialComputeNode):
         channel_input: int,
         channel_output: int,
         *,
+        dim: int = 2,
         stride: list = None,
         upsample_factor: list = None,
         upsample_factor_in: list = None,
@@ -514,6 +545,7 @@ class UpsampleComputeNode(SpatialComputeNode):
             layer_type,
             channel_input,
             channel_output,
+            dim=dim,
             stride=stride,
             upsample_factor=upsample_factor,
             upsample_factor_in=upsample_factor_in,
@@ -528,6 +560,7 @@ class UpsampleNearestComputeNode(SpatialComputeNode):
         channel_input: int,
         channel_output: int,
         *,
+        dim: int = 2,
         stride: list = None,
         upsample_factor: list = None,
         upsample_factor_in: list = None,
@@ -537,6 +570,7 @@ class UpsampleNearestComputeNode(SpatialComputeNode):
             layer_type,
             channel_input,
             channel_output,
+            dim=dim,
             stride=stride,
             upsample_factor=upsample_factor,
             upsample_factor_in=upsample_factor_in,
@@ -551,6 +585,7 @@ class PoolComputeNode(SpatialComputeNode):
         channel_input: int,
         channel_output: int,
         *,
+        dim: int = 2,
         stride: list = None,
         upsample_factor: list = None,
         upsample_factor_in: list = None,
@@ -558,17 +593,18 @@ class PoolComputeNode(SpatialComputeNode):
         is_adaptive_avgpool=False,
         padding=[0, 0],
     ):
-        if kernel_shape is None:
-            kernel_shape = [1, 1]
         super().__init__(
             layer_id,
             layer_type,
             channel_input,
             channel_output,
+            dim=dim,
             stride=stride,
             upsample_factor=upsample_factor,
             upsample_factor_in=upsample_factor_in,
         )
+        if kernel_shape is None:
+            kernel_shape = [1] * self.dim
         self.kernel_shape = kernel_shape
         self.is_adaptive_avgpool = is_adaptive_avgpool
         self.padding = padding
@@ -584,11 +620,7 @@ class MultScalarComputeNode(ComputeNode):
     ):
         super().__init__(layer_id, layer_type, channel_input, channel_output)
         self.scale = 1
-        self.scale_up = 1
-        self.scale_down = 1
         self.vec_scale_path = ''
-        self.weight_scale = 1
-        self.bias_scale = 1
 
 
 class MultCoeffComputeNode(ComputeNode):
