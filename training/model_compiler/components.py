@@ -120,7 +120,7 @@ class FeatureNode:
         if shape is None:
             shape = [1, 1]
         self.node_id = key
-        self.dim = dim
+        self.dim = dim  # number of spatial dimensions
         self.channel = channel
         self.scale = scale
         self.ckks_scale = ckks_scale
@@ -176,7 +176,6 @@ class ComputeNode:
         self.order = 0
         self.scale_up = 1
         self.scale_down = 1
-        self.is_resize = False
         self.change_skip_to = 0
         self.weight_scale = 1
         self.bias_scale = 1
@@ -479,7 +478,6 @@ class LayerAbstractGraph:
         feature_dict = dict()
         f_index = 0
         for key, feature_json in graph_json['feature'].items():
-            groups = 0
             dim = feature_json['dim']
             channel = feature_json['channel']
             scale = 1.0
@@ -490,12 +488,14 @@ class LayerAbstractGraph:
                 virtual_skip = [1, 1]
                 virtual_shape = [1, 1]
                 node = FeatureNode(key, dim, channel, scale, ckks_parameter_id, DEFAULT_SCALE, shape)
-            if dim == 0:
+            elif dim == 0:
                 shape = [0, 0]
                 skip = [1, 0]
                 virtual_skip = feature_json['virtual_skip']
                 virtual_shape = feature_json['virtual_shape']
                 node = FeatureNode(key, dim, channel, scale, ckks_parameter_id, DEFAULT_SCALE, shape)
+            else:
+                raise ValueError(f'Unsupported feature dim: {dim}')
             node.node_index = f_index
 
             f_name_index_dict[node.node_id] = f_index
@@ -506,38 +506,20 @@ class LayerAbstractGraph:
         for key, layer_json in graph_json['layer'].items():
             graph_info.layer_order_list.append(key)
             layer_type = layer_json['type']
-            stride = [1, 1]
-            kernel_shape = [1, 1]
-            skip = [1, 1]
-            upsample_factor_in = [1, 1]
             channel_input = layer_json['channel_input']
             channel_output = layer_json['channel_output']
 
-            feature_input = [
-                feature_dict[layer_json['feature_input'][i]] for i in range(len(layer_json['feature_input']))
-            ]
-            feature_output = [
-                feature_dict[layer_json['feature_output'][i]] for i in range(len(layer_json['feature_output']))
-            ]
+            feature_input = [feature_dict[fid] for fid in layer_json['feature_input']]
+            feature_output = [feature_dict[fid] for fid in layer_json['feature_output']]
 
             running_mean_path = None
             running_var_path = None
 
             if 'batchnorm' in layer_type:
-                if 'weight_path' in layer_json:
-                    weight_path = layer_json['weight_path']
-                else:
-                    weight_path = ''
-                if 'bias_path' in layer_json:
-                    bias_path = layer_json['bias_path']
-                else:
-                    bias_path = ''
-                running_mean_path = ''
-                running_var_path = ''
-                if 'running_mean_path' in layer_json:
-                    running_mean_path = layer_json['running_mean_path']
-                if 'running_var_path' in layer_json:
-                    running_var_path = layer_json['running_var_path']
+                weight_path = layer_json.get('weight_path', '')
+                bias_path = layer_json.get('bias_path', '')
+                running_mean_path = layer_json.get('running_mean_path', '')
+                running_var_path = layer_json.get('running_var_path', '')
 
                 compute_node = BatchNormComputeNode(
                     key,
@@ -580,6 +562,7 @@ class LayerAbstractGraph:
                     upsample_factor=upsample_factor,
                 )
                 compute_node.is_conv_transpose = is_conv_transpose
+
             elif layer_type == 'resize':
                 if 'upsample_factor' in layer_json:
                     upsample_factor = layer_json['upsample_factor']
@@ -590,7 +573,7 @@ class LayerAbstractGraph:
                     channel_output,
                     upsample_factor=upsample_factor,
                 )
-                compute_node.is_resize = True
+
             elif 'fc' in layer_type:
                 weight_path = layer_json['weight_path']
                 bias_path = layer_json['bias_path']
@@ -602,17 +585,13 @@ class LayerAbstractGraph:
                     parameter_paths={
                         'weight': weight_path,
                         'bias': bias_path,
-                        'running_mean': running_mean_path,
-                        'running_var': running_var_path,
                     },
                 )
+
             elif 'pool' in layer_type:
                 kernel_shape = layer_json['kernel_shape']
                 stride = layer_json['stride']
-                if 'padding' in layer_json:
-                    padding = layer_json['padding']
-                else:
-                    padding = [1, 1]
+                padding = layer_json.get('padding', [1, 1])
                 if layer_type == 'avgpool':
                     layer_type = 'avgpool2d'
                 compute_node = PoolComputeNode(
@@ -624,14 +603,18 @@ class LayerAbstractGraph:
                     kernel_shape=kernel_shape,
                     padding=padding,
                 )
+
             elif 'mult_scalar' in layer_type:
                 compute_node = MultScalarComputeNode(key, layer_type, channel_input, channel_output)
+
             elif 'reshape' in layer_type:
                 compute_node = ReshapeComputeNode(
                     key, layer_type, channel_input, channel_output, new_shape=layer_json['shape'][1:]
                 )
+
             elif layer_type == 'mult_coeff':
                 compute_node = MultCoeffComputeNode(key, layer_type, layer_json['coeff'], channel_input, channel_output)
+
             elif layer_type in ('simple_polyrelu', 'relu2d', 'square', 'sigmoid'):
                 if layer_type == 'relu2d' and not config.mpc_refresh:
                     raise ValueError('Relu2d is not supported in current mode')
@@ -639,6 +622,7 @@ class LayerAbstractGraph:
                 if layer_type in ('simple_polyrelu', 'relu2d'):
                     compute_node.path = layer_json.get('weight_path', '')
                     compute_node.order = layer_json.get('order', 0)
+
             else:
                 compute_node = ComputeNode(key, layer_type, channel_input, channel_output)
                 if 'concat2d' == layer_type:

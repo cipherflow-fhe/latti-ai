@@ -236,6 +236,30 @@ class TestCompiler(unittest.TestCase):
             num_workers=1,
         )
 
+    def test_conv_with_batchnorms(self):
+        model = nn_modules.ConvWithBatchNorms()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+
+        self.assertEqual(
+            max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 1
+        )
+
     def test_conv_series(self):
         model = nn_modules.ConvSeries()
         export_to_onnx(
