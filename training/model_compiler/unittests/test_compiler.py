@@ -15,6 +15,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import unittest
+import math
 import sys
 from pathlib import Path
 
@@ -25,9 +26,9 @@ sys.path.append(str(script_dir.parent.parent))
 from nn_tools.export import export_to_onnx
 from model_export.onnx_to_json import onnx_to_json
 from pipeline import init_config_with_args, run_pipeline
-from components import LayerAbstractGraph, FeatureNode, config
+from components import LayerAbstractGraph, FeatureNode, config, ComputeNode, UpsampleComputeNode
 import nn_modules
-from processor import check_level_cost, check_multi_input_level_skip_aligned
+from processor import check_level_cost, check_multi_input_level_skip_aligned, check_feature_scale
 
 
 class TestCompiler(unittest.TestCase):
@@ -101,6 +102,28 @@ class TestCompiler(unittest.TestCase):
             temperature=0.0,
             num_workers=1,
         )
+        self.assertEqual(check_feature_scale(graph), True)
+
+    def test_single_avgpool_big_size(self):
+        model = nn_modules.SingleAvgpool()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 256, 256]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+        self.assertEqual(check_feature_scale(graph), True)
 
     def test_single_maxpool(self):
         model = nn_modules.SingleMaxpool()
@@ -181,6 +204,7 @@ class TestCompiler(unittest.TestCase):
             temperature=0.0,
             num_workers=1,
         )
+        self.assertEqual(check_feature_scale(graph), True)
 
     def test_single_add(self):
         model = nn_modules.SingleAdd()
@@ -297,7 +321,7 @@ class TestCompiler(unittest.TestCase):
             temperature=0.0,
             num_workers=1,
         )
-
+        self.assertEqual(check_feature_scale(graph), True)
         self.assertEqual(
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)),
             1,
@@ -391,6 +415,46 @@ class TestCompiler(unittest.TestCase):
         )
         self.assertEqual(check_level_cost(graph), True)
         self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
+
+    def test_resnet_20(self):
+        import torch.nn as nn
+        from training.nn_tools.activations import RangeNormPoly2d, Simple_Polyrelu
+        from training.nn_tools import (
+            export_to_onnx,
+            fuse_and_export_h5,
+            replace_activation_with_poly,
+            replace_maxpool_with_avgpool,
+        )
+        from resnet import resnet20
+
+        model = resnet20()
+
+        replace_maxpool_with_avgpool(model)
+        replace_activation_with_poly(
+            model,
+            old_cls=nn.ReLU,
+            new_module_factory=Simple_Polyrelu,
+            upper_bound=3.0,
+            degree=4,
+        )
+
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 3, 32, 32]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
 
     def test_mismatched_scale(self):
         model = nn_modules.MismatchedScale()
@@ -553,6 +617,163 @@ class TestCompiler(unittest.TestCase):
                 temperature=0.0,
                 num_workers=1,
             )
+
+    def test_pack_num_ordinary(self):
+        model = nn_modules.ConvSeriesWithStride()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+
+        for node in graph.dag.nodes:
+            if isinstance(node, FeatureNode):
+                attrs = graph.dag.nodes[node]
+                self.assertIn('pack_num', attrs)
+                self.assertGreater(attrs['pack_num'], 0)
+                if node.dim == 0:
+                    expected = math.ceil(
+                        config.poly_n
+                        / 2
+                        / (
+                            attrs['virtual_shape'][0]
+                            * attrs['virtual_shape'][1]
+                            * attrs['virtual_skip'][0]
+                            * attrs['virtual_skip'][1]
+                        )
+                    )
+                else:
+                    expected = math.ceil(
+                        config.poly_n / 2 / (node.shape[0] * node.shape[1] * attrs['skip'][0] * attrs['skip'][1])
+                    )
+                self.assertEqual(attrs['pack_num'], expected)
+
+    def test_pack_num_multiplexed(self):
+        model = nn_modules.ConvSeriesWithStride()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 256, 256]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+
+        for node in graph.dag.nodes:
+            if isinstance(node, FeatureNode):
+                attrs = graph.dag.nodes[node]
+                self.assertIn('pack_num', attrs)
+                self.assertGreater(attrs['pack_num'], 0)
+                if node.dim == 0:
+                    expected = math.ceil(
+                        config.poly_n
+                        / 2
+                        / (
+                            attrs['virtual_shape'][0]
+                            * attrs['virtual_shape'][1]
+                            * attrs['virtual_skip'][0]
+                            * attrs['virtual_skip'][1]
+                        )
+                    )
+                else:
+                    expected = math.ceil(config.poly_n / 2 / (node.shape[0] * node.shape[1]))
+                self.assertEqual(attrs['pack_num'], expected)
+
+    def test_split_simple_model(self):
+        model = nn_modules.SkipConnect()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        from pipeline import prepare_graph
+        from transforms import split_graph_to_linear_subgraph
+
+        pt_graph = prepare_graph(self.temp_json_path)
+        subs = split_graph_to_linear_subgraph(pt_graph)
+        self.assertEqual(len(subs), 2)
+
+    def test_conv_and_convtranspose(self):
+        model = nn_modules.ConvAndConvTransposeBlock()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 128, 128]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+        res = False
+        for node in graph.dag.nodes:
+            # Upsample layer need to be added for large sizes
+            if isinstance(node, UpsampleComputeNode):
+                if node.upsample_factor_in == [2, 2]:
+                    res = True
+        self.assertEqual(res, True)
+
+    def test_conv_and_upsample(self):
+        model = nn_modules.ConvAndUpsample()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+            do_constant_folding=True,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+        res = False
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode):
+                input = list(graph.dag.predecessors(node))[0]
+                output = list(graph.dag.successors(node))[0]
+                if graph.dag.nodes[output]['skip'][0] == graph.dag.nodes[input]['skip'][0] / node.upsample_factor_in[0]:
+                    res = True
+        self.assertEqual(res, True)
 
 
 if __name__ == '__main__':

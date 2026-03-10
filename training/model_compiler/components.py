@@ -579,7 +579,6 @@ class LayerAbstractGraph:
     def __init__(self, parent_graph: Optional['LayerAbstractGraph'] = None):
         self.parent_graph = parent_graph
         self.dag = nx.DiGraph()
-        self.compute_nodes_in_topo_sort = list()
         self.graph_id = None
         self.parent_graph_id = None
 
@@ -587,7 +586,6 @@ class LayerAbstractGraph:
         self.list_layer_name: list[str] = list()
         self.layer_order_list: list[str] = list()
         self.is_mpc = False
-        self.leading_nodes = None
 
     def __repr__(self):
         result: str = ''
@@ -801,7 +799,7 @@ class LayerAbstractGraph:
 
                     concat_dict.update({key: concat_input_index_list})
                 if 'simple_polyrelu' == layer_type or 'relu2d' == layer_type:
-                    compute_node.path = layer_json['weight_path']
+                    compute_node.path = layer_json.get('weight_path', '')
                     if 'order' in layer_json.keys():
                         compute_node.order = layer_json['order']
                     else:

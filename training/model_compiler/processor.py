@@ -51,94 +51,38 @@ def get_leading_feature_nodes(dag: nx.DiGraph) -> list[FeatureNode]:
     return leading_feature_nodes
 
 
-def populate_pack_num(dag: nx.DiGraph, node, slot_num: int):
-    sub = LayerAbstractGraph()
-    sub.dag = dag
-    preds = list(sub.dag.predecessors(node))
-    succs = list(sub.dag.successors(node))
-    if config.style == 'multiplexed':
-        in_node = preds[0]
-        out_node = succs[0]
-        if in_node.dim == 0:
-            sub.dag.nodes[in_node]['pack_num'] = int(
-                math.ceil(
-                    slot_num
-                    / (
-                        sub.dag.nodes[in_node]['virtual_shape'][0]
-                        * sub.dag.nodes[in_node]['virtual_shape'][1]
-                        * sub.dag.nodes[in_node]['virtual_skip'][0]
-                        * sub.dag.nodes[in_node]['virtual_skip'][1]
-                    )
-                )
+def _calc_pack_num(dag: nx.DiGraph, feature_node, slot_num: int, use_skip: bool = True) -> int:
+    attrs = dag.nodes[feature_node]
+    if feature_node.dim == 0:
+        return math.ceil(
+            slot_num
+            / (
+                attrs['virtual_shape'][0]
+                * attrs['virtual_shape'][1]
+                * attrs['virtual_skip'][0]
+                * attrs['virtual_skip'][1]
             )
-        else:
-            sub.dag.nodes[in_node]['pack_num'] = math.ceil(slot_num / (in_node.shape[0] * in_node.shape[1]))
-        if out_node.dim == 0:
-            sub.dag.nodes[out_node]['pack_num'] = int(
-                math.ceil(
-                    slot_num
-                    / (
-                        sub.dag.nodes[out_node]['virtual_shape'][0]
-                        * sub.dag.nodes[out_node]['virtual_shape'][1]
-                        * sub.dag.nodes[out_node]['virtual_skip'][0]
-                        * sub.dag.nodes[out_node]['virtual_skip'][1]
-                    )
-                )
-            )
-        else:
-            sub.dag.nodes[out_node]['pack_num'] = math.ceil(slot_num / (out_node.shape[0] * out_node.shape[1]))
+        )
     else:
-        if 'reshape' == node.layer_type:
-            sub.dag.nodes[succs[0]]['pack_num'] = math.ceil(
-                slot_num
-                / (
-                    sub.dag.nodes[succs[0]]['virtual_shape'][0]
-                    * sub.dag.nodes[succs[0]]['virtual_shape'][1]
-                    * sub.dag.nodes[succs[0]]['virtual_skip'][0]
-                    * sub.dag.nodes[succs[0]]['virtual_skip'][1]
-                )
-            )
-        elif preds[0].dim == 0:
-            in_node = preds[0]
-            out_node = succs[0]
+        denom = feature_node.shape[0] * feature_node.shape[1]
+        if use_skip:
+            denom *= attrs['skip'][0] * attrs['skip'][1]
+        return math.ceil(slot_num / denom)
 
-            sub.dag.nodes[succs[0]]['pack_num'] = math.ceil(
-                slot_num
-                / (
-                    sub.dag.nodes[succs[0]]['virtual_shape'][0]
-                    * sub.dag.nodes[succs[0]]['virtual_shape'][1]
-                    * sub.dag.nodes[succs[0]]['virtual_skip'][0]
-                    * sub.dag.nodes[succs[0]]['virtual_skip'][1]
-                )
-            )
-            sub.dag.nodes[preds[0]]['pack_num'] = math.ceil(
-                slot_num
-                / (
-                    sub.dag.nodes[preds[0]]['virtual_shape'][0]
-                    * sub.dag.nodes[preds[0]]['virtual_shape'][1]
-                    * sub.dag.nodes[preds[0]]['virtual_skip'][0]
-                    * sub.dag.nodes[preds[0]]['virtual_skip'][1]
-                )
-            )
+
+def populate_pack_num(dag: nx.DiGraph, node, slot_num: int):
+    preds = list(dag.predecessors(node))
+    succs = list(dag.successors(node))
+    if config.style == 'multiplexed':
+        for f_node in preds + succs:
+            dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num, use_skip=False)
+    else:
+        if node.layer_type == 'reshape':
+            for f_node in succs:
+                dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num)
         else:
-            sub.dag.nodes[succs[0]]['pack_num'] = math.ceil(
-                slot_num
-                / (
-                    succs[0].shape[0]
-                    * succs[0].shape[1]
-                    * sub.dag.nodes[succs[0]]['skip'][0]
-                    * sub.dag.nodes[succs[0]]['skip'][1]
-                )
-            )
-            sub.dag.nodes[preds[0]]['pack_num'] = math.ceil(
-                slot_num
-                / (
-                    preds[0].shape[0]
-                    * preds[0].shape[1]
-                    * sub.dag.nodes[preds[0]]['skip'][0]
-                    * sub.dag.nodes[preds[0]]['skip'][1]
-                )
-            )
+            for f_node in preds + succs:
+                dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num)
 
 
 def update_subgraph_node_param(dag, param_dict: dict[str, EncryptParameterNode], param_id, print_flag=False):
@@ -225,41 +169,35 @@ def substitute_layers_for_btp(subgraph: LayerAbstractGraph):
 mpc_scale = 1
 
 
-def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path, use_btp: bool = True):
+def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = True):
     server_task = {}
-    for i in range(len(subgraphs)):
-        sub = subgraphs[i]
-        if sub.is_mpc:
-            server_task['nn_layers_ct_' + f'{i}'] = {'enable_fpga': False}
-        else:
-            server_task['nn_layers_ct_' + f'{i}'] = {'enable_fpga': True}
-    input_root = subgraphs[0].get_leading_feature_nodes()[0]
+    if graph.is_mpc:
+        server_task['nn_layers_ct_0'] = {'enable_fpga': False}
+    else:
+        server_task['nn_layers_ct_0'] = {'enable_fpga': True}
 
-    if not nx.is_directed_acyclic_graph(subgraphs[-1].dag):
+    input_roots = graph.get_leading_feature_nodes()
+
+    if not nx.is_directed_acyclic_graph(graph.dag):
         raise ValueError('Cycle exists in graph, cannot perform topological sort!')
 
-    all_nodes_in_topo_sort = list(nx.topological_sort(subgraphs[-1].dag))
-    compute_nodes_in_topo_sort = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)]
-
-    succs = list(subgraphs[-1].dag.successors(compute_nodes_in_topo_sort[-1]))
-    output_root = succs[0]
+    output_roots = [node for node, out_deg in graph.dag.out_degree() if out_deg == 0]
 
     param_dict = dict()
-    for idx, node in enumerate([input_root, output_root]):
-        graph_to_use = subgraphs[0] if idx == 0 else subgraphs[-1]
+    for node in input_roots + output_roots:
         if node.dim == 0:
             param_dict[node.node_id] = {
                 'dim': node.dim,
                 'channel': node.channel,
                 'scale': node.scale,
                 'ckks_scale': node.ckks_scale,
-                'skip': int(graph_to_use.dag.nodes[node]['skip'][0]),
+                'skip': int(graph.dag.nodes[node]['skip'][0]),
                 'ckks_parameter_id': node.ckks_parameter_id,
-                'virtual_shape': [int(x) for x in graph_to_use.dag.nodes[node]['virtual_shape']],
-                'virtual_skip': [int(x) for x in graph_to_use.dag.nodes[node]['virtual_skip']],
-                'level': graph_to_use.dag.nodes[node]['level'],
+                'virtual_shape': [int(x) for x in graph.dag.nodes[node]['virtual_shape']],
+                'virtual_skip': [int(x) for x in graph.dag.nodes[node]['virtual_skip']],
+                'level': graph.dag.nodes[node]['level'],
                 'depth': node.depth,
-                'pack_num': graph_to_use.dag.nodes[node]['pack_num'],
+                'pack_num': graph.dag.nodes[node]['pack_num'],
             }
         elif node.dim == 2:
             param_dict[node.node_id] = {
@@ -268,25 +206,25 @@ def graph_to_task_config(subgraphs: list[LayerAbstractGraph], file_path, use_btp
                 'scale': node.scale,
                 'ckks_scale': node.ckks_scale,
                 'shape': node.shape,
-                'skip': graph_to_use.dag.nodes[node]['skip'],
+                'skip': graph.dag.nodes[node]['skip'],
                 'ckks_parameter_id': node.ckks_parameter_id,
-                'level': graph_to_use.dag.nodes[node]['level'],
+                'level': graph.dag.nodes[node]['level'],
                 'depth': node.depth,
-                'pack_num': graph_to_use.dag.nodes[node]['pack_num'],
+                'pack_num': graph.dag.nodes[node]['pack_num'],
             }
 
     task_config = {
-        'task_type': 'fhe' if len(subgraphs) == 1 else 'hybrid',
-        'task_num': len(subgraphs),
+        'task_type': 'fhe',
+        'task_num': 1,
         'server_start_id': 0,
-        'server_end_id': len(subgraphs) - 1,
+        'server_end_id': 0,
         'block_shape': config.block_shape,
         'is_absorb_polyrelu': False,
         'pack_style': config.style,
-        'task_input_id': str(input_root.node_id),
-        'task_output_id': str(output_root.node_id),
-        'task_input_param': {'input': param_dict[input_root.node_id]},
-        'task_output_param': {'output': param_dict[output_root.node_id]},
+        'task_input_id': [str(n.node_id) for n in input_roots],
+        'task_output_id': [str(n.node_id) for n in output_roots],
+        'task_input_param': {str(n.node_id): param_dict[n.node_id] for n in input_roots},
+        'task_output_param': {str(n.node_id): param_dict[n.node_id] for n in output_roots},
         'server_task': server_task,
         'use_btp': use_btp,
     }
@@ -522,7 +460,6 @@ def update_skip_for_btp(graph: LayerAbstractGraph, print_flag=False):
                 graph.dag.nodes[succs[0]]['skip'] = [1, 1]
 
         if 'upsample' == compute_node.layer_type:
-            graph.dag.nodes[succs[0]]['skip'][0] = 1
             graph.dag.nodes[succs[0]]['skip'] = [1, 1]
         if (
             'batchnorm' in compute_node.layer_type
@@ -699,6 +636,36 @@ def check_multi_input_level_skip_aligned(graph: LayerAbstractGraph) -> bool:
                 )
                 result = False
     return result
+
+
+def check_feature_scale(graph: LayerAbstractGraph):
+    all_nodes_in_topo_sort = list(nx.topological_sort(graph.dag))
+    for node in all_nodes_in_topo_sort:
+        if not isinstance(node, ComputeNode):
+            continue
+        preds = list(graph.dag.predecessors(node))
+        succs = list(graph.dag.successors(node))
+        if not preds or not succs:
+            continue
+        assert all(p.scale == preds[0].scale for p in preds), (
+            f'[calculate_feture_scale_for_test] preds scale mismatch at {node.layer_id}: {[p.scale for p in preds]}'
+        )
+        f_node = preds[0]
+        out_node = succs[0]
+        if node.layer_type in config.absorbable_layers:
+            out_node.scale = f_node.scale * node.weight_scale
+        elif node.layer_type == 'mult_coeff':
+            out_node.scale = f_node.scale * (1 / node.coeff)
+        elif node.layer_type == 'avgpool2d':
+            if (not node.is_adaptive_avgpool) and (not node.is_big_size):
+                out_node.scale = f_node.scale
+            else:
+                out_node.scale = f_node.scale * (node.kernel_shape[0] * node.kernel_shape[1])
+        else:
+            out_node.scale = f_node.scale
+
+    output_nodes = [node for node, out_deg in graph.dag.out_degree() if out_deg == 0 and isinstance(node, FeatureNode)]
+    return all(math.isclose(node.scale, 1.0) for node in output_nodes)
 
 
 def set_depth_for_graph(graph: LayerAbstractGraph):
