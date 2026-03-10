@@ -89,7 +89,11 @@ We use [clang-format](https://clang.llvm.org/docs/ClangFormat.html) with the con
 Format your code before committing:
 
 ```bash
-clang-format -i <file>
+# Format all C/C++ files
+pre-commit run clang-format --all-files
+
+# Format all (C/C++ + Python)
+pre-commit run --all-files
 ```
 
 ### Python
@@ -97,8 +101,8 @@ clang-format -i <file>
 We use [Ruff](https://docs.astral.sh/ruff/) with the configuration in `ruff.toml` (120 character line limit, single quotes).
 
 ```bash
-ruff check .
-ruff format .
+pre-commit run ruff --all-files
+pre-commit run ruff-format --all-files
 ```
 
 ## Testing
