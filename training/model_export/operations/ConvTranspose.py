@@ -34,7 +34,7 @@ class ConvTransposeComputeNode(ComputeNode):
         feature_input: list[FeatureNode],
         feature_output: list[FeatureNode],
         groups: int,
-        upsample_factor_in: list,
+        upsample_factor: list,
         kernel_shape: list,
         weight_path: str = None,
         bias_path: str = None,
@@ -43,17 +43,17 @@ class ConvTransposeComputeNode(ComputeNode):
         self.layer_id = layer_id
         self.groups = groups
         self.kernel_shape = kernel_shape
-        self.upsample_factor_in = upsample_factor_in
+        self.upsample_factor = upsample_factor
         self.weight_path = weight_path
         self.bias_path = bias_path
         if feature_input[0].dim == 2:
-            feature_output[0].skip[0] = feature_input[0].skip[0] // upsample_factor_in[0]
-            feature_output[0].skip[1] = feature_input[0].skip[1] // upsample_factor_in[1]
-            feature_output[0].shape[0] = feature_input[0].shape[0] * upsample_factor_in[0]
-            feature_output[0].shape[1] = feature_input[0].shape[1] * upsample_factor_in[1]
+            feature_output[0].skip[0] = feature_input[0].skip[0] // upsample_factor[0]
+            feature_output[0].skip[1] = feature_input[0].skip[1] // upsample_factor[1]
+            feature_output[0].shape[0] = feature_input[0].shape[0] * upsample_factor[0]
+            feature_output[0].shape[1] = feature_input[0].shape[1] * upsample_factor[1]
         if feature_input[0].dim == 1:
-            feature_output[0].skip[0] = feature_input[0].skip[0] // upsample_factor_in[0]
-            feature_output[0].shape[0] = feature_input[0].shape[0] * upsample_factor_in[0]
+            feature_output[0].skip[0] = feature_input[0].skip[0] // upsample_factor[0]
+            feature_output[0].shape[0] = feature_input[0].shape[0] * upsample_factor[0]
         feature_output[0].level = feature_input[0].level - 1
         self.weight_path = self.weight_path
         self.bias_path = self.bias_path
@@ -98,7 +98,7 @@ class ConvTransposeComputeNode(ComputeNode):
         info['feature_output'] = [i.node_id for i in self.feature_output]
         info['groups'] = self.groups
         info['stride'] = [1, 1]
-        info['upsample_factor_in'] = self.upsample_factor_in
+        info['upsample_factor'] = self.upsample_factor
         info['kernel_shape'] = self.kernel_shape
         info['weight_path'] = self.weight_path
         info['bias_path'] = self.bias_path if self.bias_path is not None else None
@@ -111,7 +111,7 @@ class ConvTransposeComputeNode(ComputeNode):
         params_str = dict()
         params_str['groups'] = self.groups
         params_str['stride'] = [1, 1]
-        params_str['upsample_factor_in'] = self.upsample_factor_in
+        params_str['upsample_factor'] = self.upsample_factor
         params_str['kernel_size'] = self.kernel_shape
         if self.feature_input[0].dim == 2:
             params_str['padding'] = [1, 1]
