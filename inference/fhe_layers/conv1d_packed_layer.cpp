@@ -30,10 +30,8 @@ Conv1DPackedLayer::Conv1DPackedLayer(const CkksParameter& param_in,
                                      uint32_t pack_in,
                                      uint32_t level_in,
                                      double residual_scale)
-    : param(param_in.copy()) {
+    : param(param_in.copy()), weight(weight_in.copy()), bias(bias_in.copy()) {
     input_shape = input_shape_in;
-    weight = weight_in.copy();
-    bias = bias_in.copy();
     skip = skip_in;
 
     n_channel_per_ct = pack_in;

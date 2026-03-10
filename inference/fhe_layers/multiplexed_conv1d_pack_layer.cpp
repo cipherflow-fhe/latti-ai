@@ -33,10 +33,8 @@ ParMultiplexedConv1DPackedLayer::ParMultiplexedConv1DPackedLayer(const CkksParam
                                                                  uint32_t n_channel_per_ct_in,
                                                                  uint32_t level_in,
                                                                  double residual_scale)
-    : param(param_in.copy()) {
+    : param(param_in.copy()), weight(weight_in.copy()), bias(bias_in.copy()) {
     input_shape = input_shape_in;
-    weight = weight_in.copy();
-    bias = bias_in.copy();
     skip = skip_in;
     stride = stride_in;
     n_channel_per_ct = n_channel_per_ct_in;
