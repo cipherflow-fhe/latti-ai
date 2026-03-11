@@ -315,6 +315,7 @@ def infer_shapes_and_skips(graph: LayerAbstractGraph):
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
         succ: FeatureNode = next(graph.dag.successors(compute_node))
         graph.dag.nodes[succ]['skip'] = [1, 1]
+
         if 'reshape' == compute_node.layer_type:
             graph.dag.nodes[succ]['virtual_shape'] = preds[0].shape
             graph.dag.nodes[succ]['virtual_skip'] = graph.dag.nodes[preds[0]]['skip']
@@ -324,7 +325,17 @@ def infer_shapes_and_skips(graph: LayerAbstractGraph):
                 * graph.dag.nodes[preds[0]]['skip'][0]
                 * graph.dag.nodes[preds[0]]['skip'][1]
             )
-            graph.dag.nodes[succ]['skip'] = [skip, skip]
+            graph.dag.nodes[succ]['skip'] = [skip]
+            continue
+        if isinstance(compute_node, PoolComputeNode):
+            for i in range(2):
+                if not compute_node.is_adaptive_avgpool:
+                    succ.shape[i] = preds[0].shape[i] / compute_node.stride[i]
+                    graph.dag.nodes[succ]['skip'][0] = graph.dag.nodes[preds[0]]['skip'][0] * compute_node.stride[0]
+                    graph.dag.nodes[succ]['skip'][1] = graph.dag.nodes[preds[0]]['skip'][1] * compute_node.stride[1]
+                else:
+                    succ.shape[i] = preds[0].shape[i]
+                    graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip']
             continue
         if preds[0].dim == 0 and succ.dim == 0:
             graph.dag.nodes[succ]['virtual_skip'] = graph.dag.nodes[preds[0]]['virtual_skip']
@@ -349,6 +360,8 @@ def infer_shapes_and_skips(graph: LayerAbstractGraph):
             for i in range(preds[0].dim):
                 succ.shape[i] = preds[0].shape[i]
                 graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
+        if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+            graph.dag.nodes[succ]['skip'] = [1, 1]
 
 
 def combine_convs_with_upsamples(graph: LayerAbstractGraph):

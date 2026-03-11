@@ -840,6 +840,67 @@ class TestCompiler(unittest.TestCase):
                     break
         self.assertEqual(res, True)
 
+    def test_conv_avgpool_reshape_dense(self):
+        model = nn_modules.ConvAvgpoolReshapeAndDense()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 3, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+            do_constant_folding=True,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+        res = None
+        from components import PoolComputeNode
+
+        for node in graph.dag.nodes:
+            if isinstance(node, PoolComputeNode):
+                input = list(graph.dag.predecessors(node))[0]
+                output = list(graph.dag.successors(node))[0]
+                if output.shape == input.shape and graph.dag.nodes[output]['skip'] == graph.dag.nodes[input]['skip']:
+                    res = True
+                    break
+        self.assertEqual(res, True)
+
+    def test_single_conv_with_stride_big_size(self):
+        model = nn_modules.SingleConv(2)
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 256, 256]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
+
+        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+        res = None
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode):
+                input = list(graph.dag.predecessors(node))[0]
+                output = list(graph.dag.successors(node))[0]
+                if graph.dag.nodes[output]['skip'] == [1, 1]:
+                    res = True
+                    break
+        self.assertEqual(res, True)
+
 
 if __name__ == '__main__':
     unittest.main()
