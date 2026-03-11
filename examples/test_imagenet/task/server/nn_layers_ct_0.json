@@ -3302,7 +3302,7 @@
                 "_features_features_0_features_0_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_0_features_0_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -3389,7 +3389,7 @@
                 "_features_features_1_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_1_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -3512,7 +3512,7 @@
                 "_features_features_2_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_2_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -3599,7 +3599,7 @@
                 "_features_features_2_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_2_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -3722,7 +3722,7 @@
                 "_features_features_3_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_3_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -3781,7 +3781,7 @@
                 "_features_features_3_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_3_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -3947,7 +3947,7 @@
                 "_features_features_4_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_4_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4034,7 +4034,7 @@
                 "_features_features_4_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_4_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4157,7 +4157,7 @@
                 "_features_features_5_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_5_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4216,7 +4216,7 @@
                 "_features_features_5_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_5_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4396,7 +4396,7 @@
                 "_features_features_6_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_6_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4455,7 +4455,7 @@
                 "_features_features_6_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_6_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4621,7 +4621,7 @@
                 "_features_features_7_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_7_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4708,7 +4708,7 @@
                 "_features_features_7_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_7_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4831,7 +4831,7 @@
                 "_features_features_8_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_8_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4918,7 +4918,7 @@
                 "_features_features_8_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_8_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -5098,7 +5098,7 @@
                 "_features_features_9_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_9_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -5185,7 +5185,7 @@
                 "_features_features_9_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_9_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -5337,7 +5337,7 @@
                 "_features_features_10_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_10_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -5424,7 +5424,7 @@
                 "_features_features_10_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_10_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -5562,7 +5562,7 @@
                 "_features_features_11_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_11_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -5649,7 +5649,7 @@
                 "_features_features_11_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_11_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -5786,7 +5786,7 @@
                 "_features_features_12_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_12_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -5873,7 +5873,7 @@
                 "_features_features_12_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_12_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -6025,7 +6025,7 @@
                 "_features_features_13_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_13_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -6112,7 +6112,7 @@
                 "_features_features_13_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_13_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -6250,7 +6250,7 @@
                 "_features_features_14_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_14_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -6337,7 +6337,7 @@
                 "_features_features_14_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_14_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -6474,7 +6474,7 @@
                 "_features_features_15_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_15_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -6561,7 +6561,7 @@
                 "_features_features_15_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_15_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -6713,7 +6713,7 @@
                 "_features_features_16_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_16_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -6800,7 +6800,7 @@
                 "_features_features_16_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_16_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -6938,7 +6938,7 @@
                 "_features_features_17_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_17_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -7025,7 +7025,7 @@
                 "_features_features_17_conv_conv_5_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_features_features_17_conv_conv_5_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -7148,7 +7148,7 @@
                 "_conv_conv_2_poly_SimplePolyrelu_output_0"
             ],
             "weight_path": "_conv_conv_2_poly_SimplePolyrelu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],

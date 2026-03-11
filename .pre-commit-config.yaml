@@ -1,11 +1,11 @@
 repos:
   - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: v18.1.8
+    rev: v18.1.3
     hooks:
       - id: clang-format
         stages: [pre-commit]
         types_or: [c, c++, cuda]
-        exclude: ^(inference/lattisense/|build/|venv/)
+        exclude: ^(inference/lattisense/|build/|venv/)|catch\.hpp$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.9.10

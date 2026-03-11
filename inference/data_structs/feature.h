@@ -227,9 +227,12 @@ void parallel_for(int n, int n_thread, CkksBtpContext& context, const function<v
 
 class Feature1DEncrypted : public FeatureEncrypted {
 public:
-    Feature1DEncrypted(CkksContext* context_in, int ct_level);
+    Feature1DEncrypted(CkksContext* context_in, int ct_level, uint32_t skip_in = 1);
     virtual void pack(Array<double, 2>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
     virtual Array<double, 2> unpack() const;
+    virtual void
+    par_mult_pack(const Array<double, 2>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
+    virtual Array<double, 2> par_mult_unpack() const;
     uint32_t shape = 0;
     uint32_t skip = 0;
     std::vector<CkksCiphertext> data;
