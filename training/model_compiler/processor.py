@@ -243,7 +243,7 @@ def change_conv_transpose_shape(graph: LayerAbstractGraph):
             if isinstance(c_node, ConvComputeNode):
                 if c_node.is_conv_transpose:
                     target_c_node = find_layer_in_linear_graph(graph, c_node, 'conv2d', 'up')
-                    if target_c_node:
+                    if target_c_node is not None:
                         f_in = list(graph.dag.predecessors(target_c_node))[0]
                         f_out = list(graph.dag.successors(target_c_node))[0]
                         target_c_node.upsample_factor_in[0] = c_node.upsample_factor_in[0]
