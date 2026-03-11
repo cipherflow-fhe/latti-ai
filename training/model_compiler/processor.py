@@ -104,27 +104,6 @@ def update_subgraph_node_param(dag, param_dict: dict[str, EncryptParameterNode],
         populate_pack_num(dag, compute_node, slot_num)
 
 
-def add_btp_layer(graph: LayerAbstractGraph, feature: FeatureNode):
-    refreshed_feature = copy.deepcopy(feature)
-
-    refreshed_feature.node_id = f'{feature.node_id}_refreshed'
-    feature_attrs = graph.dag.nodes[feature].copy() if feature in graph.dag.nodes else {}
-    graph.dag.add_node(refreshed_feature, **feature_attrs)
-    for s in list(graph.dag.successors(feature)):
-        graph.dag.remove_edge(feature, s)
-        graph.dag.add_edge(refreshed_feature, s)
-
-    btp_node = ComputeNode(
-        layer_id=f'{feature.node_id}_bootstrap',
-        layer_type='bootstrapping',
-        channel_input=feature.channel,
-        channel_output=refreshed_feature.channel,
-    )
-    graph.dag.add_node(btp_node)
-    graph.dag.add_edge(feature, btp_node)
-    graph.dag.add_edge(btp_node, refreshed_feature)
-
-
 def sync_node_attributes(source_graph: LayerAbstractGraph, target_graph: LayerAbstractGraph):
     """
     Synchronize node attributes from source_graph to the same nodes in target_graph
@@ -160,9 +139,6 @@ def substitute_layers_for_btp(subgraph: LayerAbstractGraph):
         if compute.layer_type == 'relu2d' or compute.layer_type == 'simple_polyrelu':
             compute.layer_type = config.approx_poly_type
             subgraph.dag.nodes[compute]['level_cost'] = math.ceil(math.log2(compute.order)) + 1
-
-
-mpc_scale = 1
 
 
 def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = True):
@@ -243,7 +219,7 @@ def change_conv_transpose_shape(graph: LayerAbstractGraph):
             if isinstance(c_node, ConvComputeNode):
                 if c_node.is_conv_transpose:
                     target_c_node = find_layer_in_linear_graph(graph, c_node, 'conv2d', 'up')
-                    if target_c_node:
+                    if target_c_node is not None:
                         f_in = list(graph.dag.predecessors(target_c_node))[0]
                         f_out = list(graph.dag.successors(target_c_node))[0]
                         target_c_node.upsample_factor_in[0] = c_node.upsample_factor_in[0]
