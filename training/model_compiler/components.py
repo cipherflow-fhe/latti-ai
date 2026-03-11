@@ -39,10 +39,6 @@
 #
 #   LayerAbstractGraph                – DAG of FeatureNode / ComputeNode; owns from_json
 #                                       and to_json for the task config format
-#
-#   FheScoreParam                     – latency cost model for FHE compute nodes
-#   MpcScoreParam                     – communication cost model for MPC refresh nodes
-#   BtpScoreParam                     – latency cost model for bootstrapping nodes
 
 import json
 from typing import Optional
@@ -82,244 +78,11 @@ config = GlobalConfig()
 
 f_name_index_dict = dict()
 concat_dict = dict()
-# MAX_LEVEL = None
-# block_shape = None
 IS_ABSORB_POLYRELU = False
-# POLY_N = None
-# STYLE = None
-# MPC_REFRESH = None
-
 YOLO_TYPE = True
 IS_BALANCE = False
 DEFAULT_SCALE = 1
-
-
-# get_multithread_rate_for_btp
-def get_multithread_rate_for_btp(task_num: int):
-    if single_thread:
-        return 1
-    if task_num == 1:
-        return 1
-    elif task_num == 2:
-        return 1.5
-    elif task_num > 2 and task_num < 16:
-        return task_num * 0.8
-    elif task_num >= 16:
-        return 12
-
-
-def get_multithread_rate(task_num: int):
-    if single_thread:
-        return 1
-    if task_num == 1:
-        return 1
-    elif task_num == 2:
-        return 1.6
-    elif task_num <= 4:
-        return 2.8
-    elif task_num <= 8:
-        return 5.2
-    elif task_num <= 16:
-        return 8
-    else:
-        return 8
-
-
-def get_multithread_rate_for_block_rotation(task_num: int):
-    if single_thread:
-        return 1
-    if task_num == 1:
-        return 1
-    elif task_num == 2:
-        return 1.2
-    elif task_num <= 4:
-        return 1.8
-    elif task_num <= 8:
-        return 2.7
-    elif task_num <= 16:
-        return 5.9
-    else:
-        return 5.9
-
-
-def get_multithread_rate_for_kernel_rotation(task_num: int):
-    if single_thread:
-        return 1
-    if task_num == 1:
-        return 1
-    elif task_num == 2:
-        return 1.8
-    elif task_num <= 4:
-        return 2.7
-    elif task_num <= 8:
-        return 4
-    elif task_num <= 16:
-        return 6.5
-    else:
-        return 6.5
-
-
 single_thread = False
-
-
-def get_multithread_rate_for_weight_ops(task_num: int):
-    if single_thread:
-        return 1
-    if task_num == 1:
-        return 1
-    elif task_num == 2:
-        return 1.7
-    elif task_num <= 4:
-        return 3.5
-    elif task_num <= 8:
-        return 4.8
-    elif task_num <= 16:
-        return 6.1
-    else:
-        return 6.1
-
-
-mult_plain_time = {
-    65536: {
-        1: 0.00279,
-        2: 0.00428,
-        3: 0.00582,
-        4: 0.00726,
-        5: 0.00732,
-        6: 0.00849,
-        7: 0.00982,
-        8: 0.0112,
-        9: 0.0119,
-    },
-    16384: {
-        1: 0.000686,
-        2: 0.001037,
-        3: 0.001333,
-        4: 0.001670,
-        5: 0.002007,
-        6: 0.002378,
-        7: 0.002809,
-        8: 0.003,
-        9: 0.003,
-    },
-    8192: {1: 0.000261, 2: 0.000362, 3: 0.000465, 4: 0.000596, 5: 0.000833},
-}
-
-mult_time = {
-    65536: {
-        1: 0.004064,
-        2: 0.004677,
-        3: 0.005629,
-        4: 0.006466,
-        5: 0.009199,
-        6: 0.010248,
-        7: 0.011975,
-        8: 0.013173,
-        9: 0.014370,
-    },
-    16384: {
-        1: 0.003216,
-        2: 0.004368,
-        3: 0.005244,
-        4: 0.007070,
-        5: 0.008787,
-        6: 0.011128,
-        7: 0.012594,
-        8: 0.013,
-        9: 0.013,
-    },
-    8192: {1: 0.001429, 2: 0.002002, 3: 0.002831, 4: 0.003705, 5: 0.004831},
-}
-
-rotate_time = {
-    65536: {
-        0: 0.0186,
-        1: 0.0214,
-        2: 0.0235,
-        3: 0.0257,
-        4: 0.029,
-        5: 0.0315,
-        6: 0.0402,
-        7: 0.0444,
-        8: 0.0551,
-        9: 0.0599,
-    },
-    16384: {
-        0: 0.00283,
-        1: 0.003980,
-        2: 0.006282,
-        3: 0.007841,
-        4: 0.011171,
-        5: 0.013181,
-        6: 0.017956,
-        7: 0.020501,
-        8: 0.02,
-        9: 0.02,
-    },
-    8192: {0: 0.000582, 1: 0.000981, 2: 0.001466, 3: 0.00222, 4: 0.00276, 5: 0.003626},
-}
-
-rescale_time = {
-    8192: {1: 0.00027, 2: 0.0004, 3: 0.00055, 4: 0.00065, 5: 0.00082},
-    16384: {
-        1: 0.00056,
-        2: 0.00085143,
-        3: 0.00113714,
-        4: 0.00144699,
-        5: 0.00172215,
-        6: 0.00202571,
-        7: 0.00231143,
-        8: 0.002,
-        9: 0.002,
-    },
-    65536: {
-        1: 0.00196,
-        2: 0.00298,
-        3: 0.00398,
-        4: 0.00506446,
-        5: 0.00602752,
-        6: 0.00709,
-        7: 0.00809,
-        8: 0.00913,
-        9: 0.0101,
-    },
-}
-
-add_time = {
-    65536: {
-        0: 0.000086,
-        1: 0.000183,
-        2: 0.000276,
-        3: 0.000367,
-        4: 0.000471,
-        5: 0.00106,
-        6: 0.00184,
-        7: 0.0019,
-        8: 0.002,
-        9: 0.0021,
-    },
-    16384: {
-        0: 0.00002,
-        1: 0.00004,
-        2: 0.00007,
-        3: 0.00009,
-        4: 0.0001,
-        5: 0.00025,
-        6: 0.0004,
-        7: 0.0005,
-        8: 0.0002,
-        9: 0.0002,
-    },
-    8192: {0: 0.00009, 1: 0.001021, 2: 0.001466, 3: 0.002185, 4: 0.003026, 5: 0.003026},
-}
-
-btp_time = {'8192': 7, '16384': 12, '65536': 24}
-
-
-# def read_config(config_path):
-#     with open(config_path, 'r', encoding='utf8') as fp:
-#         config_ctx = json.load(fp)
-#     return config_ctx
 
 
 class EncryptParameterNode:
@@ -357,7 +120,7 @@ class FeatureNode:
         if shape is None:
             shape = [1, 1]
         self.node_id = key
-        self.dim = dim
+        self.dim = dim  # number of spatial dimensions
         self.channel = channel
         self.scale = scale
         self.ckks_scale = ckks_scale
@@ -413,7 +176,6 @@ class ComputeNode:
         self.order = 0
         self.scale_up = 1
         self.scale_down = 1
-        self.is_resize = False
         self.change_skip_to = 0
         self.weight_scale = 1
         self.bias_scale = 1
@@ -643,10 +405,11 @@ class ReshapeComputeNode(ComputeNode):
         layer_type: str,
         channel_input: int,
         channel_output: int,
-        shape: list[int],
+        *,
+        new_shape: list[int],
     ):
         super().__init__(layer_id, layer_type, channel_input, channel_output)
-        self.shape = shape
+        self.new_shape = new_shape
 
 
 class ActivationComputeNode(ComputeNode):
@@ -715,7 +478,6 @@ class LayerAbstractGraph:
         feature_dict = dict()
         f_index = 0
         for key, feature_json in graph_json['feature'].items():
-            groups = 0
             dim = feature_json['dim']
             channel = feature_json['channel']
             scale = 1.0
@@ -726,12 +488,14 @@ class LayerAbstractGraph:
                 virtual_skip = [1, 1]
                 virtual_shape = [1, 1]
                 node = FeatureNode(key, dim, channel, scale, ckks_parameter_id, DEFAULT_SCALE, shape)
-            if dim == 0:
+            elif dim == 0:
                 shape = [0, 0]
                 skip = [1, 0]
                 virtual_skip = feature_json['virtual_skip']
                 virtual_shape = feature_json['virtual_shape']
                 node = FeatureNode(key, dim, channel, scale, ckks_parameter_id, DEFAULT_SCALE, shape)
+            else:
+                raise ValueError(f'Unsupported feature dim: {dim}')
             node.node_index = f_index
 
             f_name_index_dict[node.node_id] = f_index
@@ -742,38 +506,20 @@ class LayerAbstractGraph:
         for key, layer_json in graph_json['layer'].items():
             graph_info.layer_order_list.append(key)
             layer_type = layer_json['type']
-            stride = [1, 1]
-            kernel_shape = [1, 1]
-            skip = [1, 1]
-            upsample_factor_in = [1, 1]
             channel_input = layer_json['channel_input']
             channel_output = layer_json['channel_output']
 
-            feature_input = [
-                feature_dict[layer_json['feature_input'][i]] for i in range(len(layer_json['feature_input']))
-            ]
-            feature_output = [
-                feature_dict[layer_json['feature_output'][i]] for i in range(len(layer_json['feature_output']))
-            ]
+            feature_input = [feature_dict[fid] for fid in layer_json['feature_input']]
+            feature_output = [feature_dict[fid] for fid in layer_json['feature_output']]
 
             running_mean_path = None
             running_var_path = None
 
             if 'batchnorm' in layer_type:
-                if 'weight_path' in layer_json:
-                    weight_path = layer_json['weight_path']
-                else:
-                    weight_path = ''
-                if 'bias_path' in layer_json:
-                    bias_path = layer_json['bias_path']
-                else:
-                    bias_path = ''
-                running_mean_path = ''
-                running_var_path = ''
-                if 'running_mean_path' in layer_json:
-                    running_mean_path = layer_json['running_mean_path']
-                if 'running_var_path' in layer_json:
-                    running_var_path = layer_json['running_var_path']
+                weight_path = layer_json.get('weight_path', '')
+                bias_path = layer_json.get('bias_path', '')
+                running_mean_path = layer_json.get('running_mean_path', '')
+                running_var_path = layer_json.get('running_var_path', '')
 
                 compute_node = BatchNormComputeNode(
                     key,
@@ -816,6 +562,7 @@ class LayerAbstractGraph:
                     upsample_factor=upsample_factor,
                 )
                 compute_node.is_conv_transpose = is_conv_transpose
+
             elif layer_type == 'resize':
                 if 'upsample_factor' in layer_json:
                     upsample_factor = layer_json['upsample_factor']
@@ -826,7 +573,7 @@ class LayerAbstractGraph:
                     channel_output,
                     upsample_factor=upsample_factor,
                 )
-                compute_node.is_resize = True
+
             elif 'fc' in layer_type:
                 weight_path = layer_json['weight_path']
                 bias_path = layer_json['bias_path']
@@ -838,17 +585,13 @@ class LayerAbstractGraph:
                     parameter_paths={
                         'weight': weight_path,
                         'bias': bias_path,
-                        'running_mean': running_mean_path,
-                        'running_var': running_var_path,
                     },
                 )
+
             elif 'pool' in layer_type:
                 kernel_shape = layer_json['kernel_shape']
                 stride = layer_json['stride']
-                if 'padding' in layer_json:
-                    padding = layer_json['padding']
-                else:
-                    padding = [1, 1]
+                padding = layer_json.get('padding', [1, 1])
                 if layer_type == 'avgpool':
                     layer_type = 'avgpool2d'
                 compute_node = PoolComputeNode(
@@ -860,12 +603,18 @@ class LayerAbstractGraph:
                     kernel_shape=kernel_shape,
                     padding=padding,
                 )
+
             elif 'mult_scalar' in layer_type:
                 compute_node = MultScalarComputeNode(key, layer_type, channel_input, channel_output)
+
             elif 'reshape' in layer_type:
-                compute_node = ReshapeComputeNode(key, layer_type, channel_input, channel_output, layer_json['shape'])
+                compute_node = ReshapeComputeNode(
+                    key, layer_type, channel_input, channel_output, new_shape=layer_json['shape'][1:]
+                )
+
             elif layer_type == 'mult_coeff':
                 compute_node = MultCoeffComputeNode(key, layer_type, layer_json['coeff'], channel_input, channel_output)
+
             elif layer_type in ('simple_polyrelu', 'relu2d', 'square', 'sigmoid'):
                 if layer_type == 'relu2d' and not config.mpc_refresh:
                     raise ValueError('Relu2d is not supported in current mode')
@@ -873,6 +622,7 @@ class LayerAbstractGraph:
                 if layer_type in ('simple_polyrelu', 'relu2d'):
                     compute_node.path = layer_json.get('weight_path', '')
                     compute_node.order = layer_json.get('order', 0)
+
             else:
                 compute_node = ComputeNode(key, layer_type, channel_input, channel_output)
                 if 'concat2d' == layer_type:
@@ -1194,7 +944,7 @@ class LayerAbstractGraph:
                     'ckks_parameter_id_output': ckks_parameter_id_output,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
-                    'shape': layer.shape,
+                    'shape': layer.new_shape,
                 }
             if layer_type == 'mult_coeff':
                 layers[layer_id] = {
@@ -1316,287 +1066,6 @@ class LayerAbstractGraph:
                 json.dump(config_info, f, indent=4, ensure_ascii=False)
         else:
             print(json.dumps(config_info))
-
-
-class FheScoreParam:
-    def __init__(
-        self, dag: nx.DiGraph, compute_node: ComputeNode, param: dict[str, EncryptParameterNode], level
-    ) -> None:
-        preds: list[FeatureNode] = list(dag.predecessors(compute_node))
-        succs: list[FeatureNode] = list(dag.successors(compute_node))
-
-        self.dag = dag
-        self.acc_rate = 1
-        self.compute_node = compute_node
-        self.input_mult_level = dag.nodes[preds[0]]['level']
-        self.output_mult_level = dag.nodes[succs[0]]['level']
-        self.input_degree = param[preds[0].ckks_parameter_id].poly_modulus_degree
-        self.output_degree = param[succs[0].ckks_parameter_id].poly_modulus_degree
-        if compute_node.layer_type == 'conv2d':
-            self.stride = compute_node.stride
-            self.kernel_shape = compute_node.kernel_shape
-        if compute_node.layer_type == 'avgpool2d':
-            self.stride = compute_node.stride
-        if preds[0].dim == 2:
-            self.input_shape = preds[0].shape
-            self.output_shape = succs[0].shape
-            self.input_skip = dag.nodes[preds[0]]['skip']
-            self.output_skip = dag.nodes[succs[0]]['skip']
-        else:
-            self.input_shape = dag.nodes[preds[0]]['virtual_shape']
-            self.output_shape = dag.nodes[succs[0]]['virtual_shape']
-            self.input_skip = dag.nodes[preds[0]]['virtual_skip']
-            self.output_skip = dag.nodes[succs[0]]['virtual_skip']
-
-        self.pack = dag.nodes[preds[0]]['pack_num']
-        self.pack_out = dag.nodes[succs[0]]['pack_num']
-
-        self.input_channel = compute_node.channel_input
-        self.output_channel = compute_node.channel_output
-        self.n_packed_in = math.ceil(self.input_channel / self.pack)
-        self.n_packed_out = math.ceil(self.output_channel / self.pack_out)
-        if level > 0:
-            self.mult_score = mult_time[self.input_degree][level]
-            self.mult_plain_score = mult_plain_time[self.input_degree][level]
-            self.rescale_score = rescale_time[self.input_degree][level]
-        self.rotate_score = rotate_time[self.input_degree][level]
-        self.add_score = add_time[self.input_degree][level]
-
-    def get_score(self) -> float:
-        compute_score = 0.0
-        if 'conv' in self.compute_node.layer_type:
-            if config.style == 'ordinary':
-                if self.compute_node.groups == 1:
-                    n_mult_and_add_score = (
-                        (self.n_packed_in * self.pack * self.n_packed_out * self.kernel_shape[0] * self.kernel_shape[1])
-                        * (self.mult_plain_score + self.add_score)
-                        / get_multithread_rate(self.n_packed_out)
-                    ) + self.n_packed_out * self.rescale_score / get_multithread_rate(self.n_packed_out)
-                else:
-                    n_mult_and_add_score = (
-                        (self.n_packed_out * self.kernel_shape[0] * self.kernel_shape[1])
-                        * (self.mult_plain_score + self.add_score)
-                        / get_multithread_rate(self.n_packed_out)
-                    ) + self.n_packed_out * self.rescale_score / get_multithread_rate(self.n_packed_out)
-
-                if self.compute_node.groups == 1:
-                    n_rotate_step_1 = self.n_packed_in * (self.pack - 1)
-                    n_rotate_step_2 = (
-                        self.n_packed_in
-                        * self.pack
-                        * (self.kernel_shape[0] - 1 + self.kernel_shape[0] * (self.kernel_shape[1] - 1))
-                    )
-                    n_rotate_score = (
-                        n_rotate_step_1 / get_multithread_rate(self.n_packed_in)
-                        + n_rotate_step_2 / get_multithread_rate(self.n_packed_in * self.pack)
-                    ) * self.rotate_score
-                else:
-                    n_rotate_step = self.n_packed_in * (
-                        self.kernel_shape[0] - 1 + self.kernel_shape[0] * (self.kernel_shape[1] - 1)
-                    )
-                    n_rotate_score = n_rotate_step / get_multithread_rate(self.n_packed_in) * self.rotate_score
-            else:
-                x_size = (
-                    math.ceil(self.input_channel / self.pack)
-                    * math.ceil(self.input_shape[0] / config.block_shape[0])
-                    * math.ceil(self.input_shape[1] / config.block_shape[1])
-                )
-
-                n_block_per_ct = math.ceil(self.pack / (self.input_skip[0] * self.input_skip[1]))
-                rotate_num1 = x_size / get_multithread_rate_for_block_rotation(x_size) * (n_block_per_ct - 1)
-                rotated_size = x_size * n_block_per_ct
-                rotate_num2 = (
-                    rotated_size
-                    / get_multithread_rate_for_kernel_rotation(rotated_size)
-                    * (self.kernel_shape[0] * self.kernel_shape[1] - 1)
-                )
-                weight_size = math.ceil(self.output_channel / n_block_per_ct)
-
-                if self.stride[0] != 1 and self.input_skip[0] != 1:
-                    rotate_num3 = (
-                        weight_size
-                        / get_multithread_rate_for_weight_ops(weight_size)
-                        * (math.log2(self.input_skip[0]) * 2 + n_block_per_ct)
-                    )
-                else:
-                    rotate_num3 = (
-                        weight_size
-                        / get_multithread_rate_for_weight_ops(weight_size)
-                        * (math.log2(self.input_skip[0]))
-                        * 2
-                    )
-
-                n_in_ct = math.ceil(self.input_channel / self.pack)
-                n_out_ct = math.ceil(self.output_channel / self.pack_out)
-                if self.stride[0] != 1:
-                    mult_num = weight_size * (
-                        n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1] + n_block_per_ct
-                    )
-                else:
-                    mult_num = weight_size * (n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1])
-                mult_num = mult_num / get_multithread_rate_for_weight_ops(weight_size)
-                add_num = (
-                    weight_size
-                    / get_multithread_rate_for_weight_ops(weight_size)
-                    * (
-                        (math.log2(self.input_skip[0])) * 2
-                        + n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1]
-                    )
-                    + n_out_ct
-                )
-
-                n_rescale_score = (
-                    weight_size / get_multithread_rate_for_weight_ops(weight_size) * n_block_per_ct * self.rescale_score
-                )
-                n_mult_and_add_score = mult_num * self.mult_plain_score + add_num * self.add_score + n_rescale_score
-                n_rotate_score = (rotate_num1 + rotate_num2 + rotate_num3) * self.rotate_score
-            compute_score = n_mult_and_add_score + n_rotate_score
-
-            return compute_score * self.acc_rate
-        elif 'fc' in self.compute_node.layer_type:
-            if config.style == 'ordinary':
-                pred_node = list(self.dag.predecessors(self.compute_node))[0]
-                num = math.log2(self.dag.nodes[pred_node]['skip'][0])
-                n_mult_plain_score = (self.n_packed_in * self.pack * self.n_packed_out) * self.mult_plain_score
-                n_add_score = (self.n_packed_in * (self.pack - 1) + self.n_packed_out * num) * self.add_score
-                n_rotate_score = (
-                    self.n_packed_in * (self.pack - 1) / get_multithread_rate(self.n_packed_in)
-                    + self.n_packed_out * num
-                ) * self.rotate_score
-                compute_score = n_mult_plain_score + n_add_score + n_rotate_score
-                return compute_score * self.acc_rate
-            else:
-                n_block_input = math.ceil(self.input_channel / (self.input_skip[0] * self.input_skip[1]))
-                n_num_pre_ct = (
-                    self.input_degree
-                    / 2
-                    / (self.input_skip[0] * self.input_skip[1] * self.input_shape[0] * self.input_shape[1])
-                )
-
-                n_packed_out_feature_for_mult_pack = math.ceil(self.output_channel / n_num_pre_ct)
-                x_size = math.ceil(self.input_channel / self.pack)
-                acc_rate = get_multithread_rate(n_packed_out_feature_for_mult_pack)
-                rot_time = (n_block_input - 1) * x_size + n_packed_out_feature_for_mult_pack / acc_rate * (
-                    math.log2(self.input_shape[0] * self.input_shape[1] * self.input_skip[0] * self.input_skip[1])
-                )
-                mult_time = n_packed_out_feature_for_mult_pack / acc_rate * (x_size * n_block_input)
-
-                add_time = n_packed_out_feature_for_mult_pack / acc_rate * (x_size * n_block_input + 1)
-
-                rescale_time = n_packed_out_feature_for_mult_pack / acc_rate
-                return (
-                    rot_time * self.rotate_score
-                    + mult_time * self.mult_plain_score
-                    + add_time * self.add_score
-                    + rescale_time * self.rescale_score
-                )
-        elif 'simple_polyrelu' in self.compute_node.layer_type:
-            compute_score = (self.n_packed_in * (self.mult_score + self.add_score)) * (
-                math.ceil(math.log2(self.compute_node.order)) + 1
-            )
-            return compute_score * self.acc_rate
-        elif 'avgpool2d' == self.compute_node.layer_type:
-            num = self.n_packed_in * (self.stride[0] - 1 + math.log2(self.stride[0]))
-            n_add_score = num * self.add_score
-            n_rotate_score = num * self.rotate_score
-            compute_score = n_add_score + n_rotate_score
-            return compute_score * self.acc_rate
-        elif 'add2d' == self.compute_node.layer_type:
-            n_add_score = self.n_packed_in * self.add_score
-            compute_score = n_add_score
-            return compute_score * self.acc_rate
-
-
-mpc_refresh_rate = 1 / 15
-ct_trans_rate = 1 / 10
-
-
-class MpcScoreParam:
-    def __init__(
-        self,
-        dag: LayerAbstractGraph,
-        compute_node: ComputeNode,
-        param: dict[str, EncryptParameterNode],
-        bit_len=44,
-        mpc_scale=16,
-    ) -> None:
-        graph = LayerAbstractGraph()
-        graph.dag = dag
-        preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
-        succs: list[FeatureNode] = list(graph.dag.successors(compute_node))
-        self.preds = preds
-        self.succs = succs
-        self.compute_node = compute_node
-        self.input_coeff_mod = param[preds[0].ckks_parameter_id].coeff_modulus_bit_length
-        self.output_coeff_mod = param[succs[0].ckks_parameter_id].coeff_modulus_bit_length
-        self.input_special_mod = param[preds[0].ckks_parameter_id].special_prime_bit_length
-        self.output_special_mod = param[succs[0].ckks_parameter_id].special_prime_bit_length
-        self.input_mult_level = graph.dag.nodes[preds[0]]['level']
-        self.output_mult_level = graph.dag.nodes[succs[0]]['level']
-        self.input_degree = param[preds[0].ckks_parameter_id].poly_modulus_degree
-        self.output_degree = param[succs[0].ckks_parameter_id].poly_modulus_degree
-        MB_scale = 2**23
-        self.relu_score = bit_len * mpc_scale / MB_scale
-        self.input_ct_score = (88 + self.input_coeff_mod * self.input_mult_level) * self.input_degree * 2 / MB_scale
-        self.output_ct_score = (
-            (88 + self.output_coeff_mod * self.output_mult_level) * self.output_degree * 1.5 / MB_scale
-        )
-
-        self.input_channel = compute_node.channel_input
-        self.output_channel = compute_node.channel_output
-        if (not preds[0].shape) and (not graph.dag.nodes[preds[0]]['skip']):
-            input_shape = preds[0].shape
-            output_shape = succs[0].shape
-            input_skip = graph.dag.nodes[preds[0]]['skip']
-            output_skip = graph.dag.nodes[succs[0]]['skip']
-        else:
-            input_shape = graph.dag.nodes[preds[0]]['virtual_shape']
-            output_shape = graph.dag.nodes[succs[0]]['virtual_shape']
-            input_skip = graph.dag.nodes[preds[0]]['virtual_skip']
-            output_skip = graph.dag.nodes[succs[0]]['virtual_skip']
-
-        self.input_channel = compute_node.channel_input
-        self.output_channel = compute_node.channel_output
-        temp_num_in = input_shape[0] * input_shape[1] * input_skip[0] * input_skip[1]
-        temp_num_out = output_shape[0] * output_shape[1]
-
-        self.n_packed_in = math.ceil(self.input_channel * temp_num_in / self.input_degree / 2)
-        self.n_packed_out = math.ceil(self.output_channel * temp_num_out / self.input_degree / 2)
-
-    def get_score(self) -> float:
-        if 'relu2d' in self.compute_node.layer_type or 'pool' in self.compute_node.layer_type:
-            if 'relu2d' == self.compute_node.layer_type or config.mpc_refresh:
-                kernel_scale = 1
-            elif 'pool' in self.compute_node.layer_type:
-                kernel_scale = self.compute_node.kernel_shape[0] * self.compute_node.kernel_shape[1]
-            shape = self.preds[0].shape
-            n_relu_score = self.input_channel * shape[0] * shape[1] * self.relu_score / kernel_scale * mpc_refresh_rate
-            n_ct_score = (
-                self.n_packed_in * self.input_ct_score + self.n_packed_out * self.output_ct_score
-            ) * ct_trans_rate
-            return n_relu_score + n_ct_score
-        if 'bootstrapping' in self.compute_node.layer_type and config.mpc_refresh:
-            shape = self.preds[0].shape
-            n_ct_score = (
-                self.n_packed_in * self.input_ct_score + self.n_packed_out * self.output_ct_score
-            ) * ct_trans_rate
-            n_mpc_refresh = self.input_channel * shape[0] * shape[1] * self.relu_score * mpc_refresh_rate
-            return n_ct_score + n_mpc_refresh
-
-
-class BtpScoreParam:
-    def __init__(self, dag: nx.DiGraph, compute_node: ComputeNode, param: dict[str, EncryptParameterNode]) -> None:
-        graph = LayerAbstractGraph()
-        graph.dag = dag
-        pred = list(graph.dag.predecessors(compute_node))[0]
-        self.n = param[pred.ckks_parameter_id].poly_modulus_degree
-        btp_slot = int(self.n / 2)
-
-        self.ct_num = math.ceil(pred.shape[0] * pred.shape[1] * compute_node.channel_input / btp_slot)
-
-    def get_score(self):
-        score = self.ct_num * btp_time[str(self.n)] / get_multithread_rate_for_btp(self.ct_num)
-        return score
 
 
 if __name__ == '__main__':
