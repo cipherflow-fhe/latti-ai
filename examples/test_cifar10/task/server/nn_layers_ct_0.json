@@ -2313,7 +2313,7 @@
                 "_relu_RangeNormPoly2d_output_0"
             ],
             "weight_path": "relu.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -2425,7 +2425,7 @@
                 "_layer1_layer1_0_relu1_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer1.0.relu1.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -2566,7 +2566,7 @@
                 "_layer1_layer1_0_relu2_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer1.0.relu2.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -2692,7 +2692,7 @@
                 "_layer1_layer1_1_relu1_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer1.1.relu1.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -2819,7 +2819,7 @@
                 "_layer1_layer1_1_relu2_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer1.1.relu2.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -2973,7 +2973,7 @@
                 "_layer1_layer1_2_relu1_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer1.2.relu1.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -3072,7 +3072,7 @@
                 "_layer1_layer1_2_relu2_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer1.2.relu2.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -3266,7 +3266,7 @@
                 "_layer2_layer2_0_relu1_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer2.0.relu1.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -3407,7 +3407,7 @@
                 "_layer2_layer2_0_relu2_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer2.0.relu2.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -3533,7 +3533,7 @@
                 "_layer2_layer2_1_relu1_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer2.1.relu1.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -3660,7 +3660,7 @@
                 "_layer2_layer2_1_relu2_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer2.1.relu2.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -3814,7 +3814,7 @@
                 "_layer2_layer2_2_relu1_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer2.2.relu1.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -3941,7 +3941,7 @@
                 "_layer2_layer2_2_relu2_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer2.2.relu2.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4149,7 +4149,7 @@
                 "_layer3_layer3_0_relu1_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer3.0.relu1.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4248,7 +4248,7 @@
                 "_layer3_layer3_0_relu2_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer3.0.relu2.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4402,7 +4402,7 @@
                 "_layer3_layer3_1_relu1_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer3.1.relu1.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4515,7 +4515,7 @@
                 "_layer3_layer3_1_relu2_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer3.1.relu2.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4641,7 +4641,7 @@
                 "_layer3_layer3_2_relu1_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer3.2.relu1.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],
@@ -4768,7 +4768,7 @@
                 "_layer3_layer3_2_relu2_RangeNormPoly2d_output_0"
             ],
             "weight_path": "layer3.2.relu2.weight",
-            "upsample_factor_in": [
+            "zero_skip": [
                 1,
                 1
             ],

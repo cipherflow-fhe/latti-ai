@@ -39,7 +39,7 @@ public:
              const Duo& skip_in,
              uint32_t n_channel_per_ct_in,
              uint32_t level_in,
-             const Duo& upsample_factor_in = {1, 1},
+             const Duo& zero_skip_in = {1, 1},
              const Duo& block_expansion_in = {1, 1},
              bool is_ordinary_pack_in = false);
 
@@ -79,7 +79,7 @@ public:
     Duo pre_skip;
     Duo block_expansion;
     Duo block_shape;
-    Duo upsample_factor;
+    Duo zero_skip;
     vector<vector<CkksPlaintextRingt>> weight_pt;
     bool is_ordinary_pack;
 

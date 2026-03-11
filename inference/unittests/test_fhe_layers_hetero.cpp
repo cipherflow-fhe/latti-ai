@@ -39,6 +39,8 @@
 #include "fhe_layers/block_col_major_ccmm.h"
 #include "fhe_layers/block_col_major_cpmm.h"
 #include "fhe_layers/block_col_major_transpose.h"
+#include "fhe_layers/conv1d_packed_layer.h"
+#include "fhe_layers/multiplexed_conv1d_pack_layer.h"
 #include "ut_util.h"
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 
@@ -992,10 +994,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs", "", HeteroProcessors)
     int init_level = 8;
     vector<int> orders = {2, 4, 6, 8, 10, 12, 16, 32, 64};
 
-    for (int order : orders) {
+    for (uint32_t order : orders) {
         SECTION("order=" + to_string(order)) {
             auto input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
-            auto weight = gen_random_array<2>({order + 1, (int)n_channel}, 1.0);
+            auto weight = gen_random_array<2>({order + 1, n_channel}, 1.0);
 
             Feature2DEncrypted input_feature(&this->context, init_level, skip);
             input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
@@ -1321,4 +1323,121 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs", "", HeteroProces
     auto compare_result = compare(expected, output_mg);
     REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
     REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv1d", "", HeteroProcessors) {
+    uint32_t n_in_channel = 4;
+    uint32_t n_out_channel = 4;
+    int init_level = 5;
+
+    vector<uint32_t> input_shapes = {4, 8, 16, 64, 512};
+    vector<uint32_t> kernel_shapes = {1, 3, 5};
+    vector<uint32_t> skips = {2, 4};
+    vector<uint32_t> strides = {1, 2};
+
+    for (uint32_t s : input_shapes) {
+        uint32_t input_shape = s;
+        SECTION("input_shape=" + str({input_shape})) {
+            for (uint32_t k : kernel_shapes) {
+                uint32_t kernel_shape = k;
+                SECTION("kernel_shape=" + str({kernel_shape})) {
+                    for (uint32_t s0 : skips) {
+                        uint32_t skip = s0;
+                        uint32_t n_channel_per_ct = div_ceil(this->N / 2, input_shape * skip);
+                        SECTION("skip=" + str({skip})) {
+                            for (uint32_t s1 : strides) {
+                                uint32_t stride = s1;
+                                SECTION("stride=" + str({stride})) {
+                                    Array<double, 3> conv0_weight =
+                                        gen_random_array<3>({n_out_channel, n_in_channel, kernel_shape}, 1.0);
+                                    Array<double, 1> conv0_bias = gen_random_array<1>({n_out_channel}, 1.0);
+                                    Array<double, 2> input_array =
+                                        gen_random_array<2>({n_in_channel, input_shape}, 1.0);
+
+                                    Feature1DEncrypted input_feature(&this->context, init_level, skip);
+                                    input_feature.pack(input_array);
+                                    Conv1DPackedLayer conv0_layer(this->context.get_parameter(), input_shape,
+                                                                  conv0_weight, conv0_bias, stride, skip,
+                                                                  n_channel_per_ct, init_level);
+                                    conv0_layer.prepare_weight();
+
+                                    Feature1DEncrypted output_feature = conv0_layer.run(this->context, input_feature);
+                                    output_feature.skip = skip * stride;
+                                    cout << "skip=" << output_feature.skip << endl;
+
+                                    Array<double, 2> output_mg = output_feature.unpack();
+                                    Array<double, 2> plain_output = conv0_layer.plaintext_call(input_array);
+
+                                    print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+                                    print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
+
+                                    auto compare_result = compare(plain_output.to_array_2d(), output_mg.to_array_2d());
+                                    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+                                    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroProcessors) {
+    uint32_t n_in_channel = 16;
+    uint32_t n_out_channel = 32;
+    int init_level = 5;
+
+    vector<uint32_t> input_shapes = {4, 8, 16, 64, 512};
+    vector<uint32_t> kernel_shapes = {1, 3, 5};
+    vector<uint32_t> skips = {2, 4};
+    vector<uint32_t> strides = {1, 2};
+
+    for (uint32_t s : input_shapes) {
+        uint32_t input_shape = s;
+        SECTION("input_shape=" + str({input_shape})) {
+            for (uint32_t k : kernel_shapes) {
+                uint32_t kernel_shape = k;
+                SECTION("kernel_shape=" + str({kernel_shape})) {
+                    for (uint32_t s0 : skips) {
+                        uint32_t skip = s0;
+                        uint32_t n_channel_per_ct = div_ceil(this->N / 2, input_shape);
+                        SECTION("skip=" + str({skip})) {
+                            for (uint32_t s1 : strides) {
+                                uint32_t stride = s1;
+                                SECTION("stride=" + str({stride})) {
+                                    Array<double, 3> conv0_weight =
+                                        gen_random_array<3>({n_out_channel, n_in_channel, kernel_shape}, 1.0);
+                                    Array<double, 1> conv0_bias = gen_random_array<1>({n_out_channel}, 1.0);
+                                    Array<double, 2> input_array =
+                                        gen_random_array<2>({n_in_channel, input_shape}, 1.0);
+
+                                    Feature1DEncrypted input_feature(&this->context, init_level, skip);
+                                    input_feature.par_mult_pack(input_array, false, this->param.get_default_scale());
+                                    ParMultiplexedConv1DPackedLayer conv0_layer(
+                                        this->context.get_parameter(), input_shape, conv0_weight, conv0_bias, stride,
+                                        skip, n_channel_per_ct, init_level);
+                                    conv0_layer.prepare_weight();
+
+                                    Feature1DEncrypted output_feature = conv0_layer.run(this->context, input_feature);
+                                    cout << "skip=" << output_feature.skip << endl;
+
+                                    Array<double, 2> output_mg = output_feature.par_mult_unpack();
+                                    Array<double, 2> plain_output = conv0_layer.plaintext_call(input_array);
+
+                                    print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+                                    print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
+
+                                    auto compare_result = compare(plain_output.to_array_2d(), output_mg.to_array_2d());
+                                    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+                                    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
