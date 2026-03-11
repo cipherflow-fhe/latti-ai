@@ -807,6 +807,39 @@ class TestCompiler(unittest.TestCase):
                     res = True
         self.assertEqual(res, True)
 
+    def test_conv_reshape_dense(self):
+        model = nn_modules.ConvReshapeAndDense()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 3, 32, 32]),
+            dynamic_batch=False,
+            save_h5=False,
+            do_constant_folding=True,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+        res = None
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode) and node.layer_type == 'reshape':
+                input = list(graph.dag.predecessors(node))[0]
+                output = list(graph.dag.successors(node))[0]
+                if (
+                    graph.dag.nodes[output]['virtual_shape'][0] == 16
+                    and graph.dag.nodes[output]['virtual_skip'][0] == 2
+                ):
+                    res = True
+                    break
+        self.assertEqual(res, True)
+
 
 if __name__ == '__main__':
     unittest.main()
