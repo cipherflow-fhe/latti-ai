@@ -17,6 +17,7 @@
 import sys
 import os
 from components import *
+from score import FheScoreParam, MpcScoreParam, BtpScoreParam
 import copy
 from itertools import product
 import math

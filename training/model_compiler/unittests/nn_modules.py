@@ -95,6 +95,26 @@ class SingleMultCoeff(nn.Module):
         return x
 
 
+class SingleAdd(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x0, x1):
+        return x0 + x1
+
+
+class ConvWithBatchNorms(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.bn0 = nn.BatchNorm2d(num_features=32)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = self.bn0(x)
+        return x
+
+
 class ConvSeries(nn.Module):
     def __init__(self):
         super().__init__()
@@ -197,14 +217,6 @@ class ResNetBasicBlock(nn.Module):
         out += self.shortcut(x)
         out = self.relu2(out)
         return out
-
-
-class SingleAdd(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x0, x1):
-        return x0 + x1
 
 
 class MismatchedScale(nn.Module):
