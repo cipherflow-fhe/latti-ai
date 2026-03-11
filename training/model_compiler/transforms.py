@@ -293,8 +293,6 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
         new_compute_args={'name': mult_scalar_node.layer_id, 'level_cost': 1},
     )
 
-    return mult_scalar_node
-
 
 def find_layer_in_linear_graph(
     graph: LayerAbstractGraph, c_node: ComputeNode, target_layer_type: str, direction: str
@@ -685,61 +683,45 @@ def set_feature_scales(graph: LayerAbstractGraph):
             node_out = set_scale_for_node(graph, compute, scale)
 
 
-def check_subgraph_validity(subgraph: LayerAbstractGraph, invalid_list: list = None, use_mpc_refresh: bool = False):
+def linear_subgraph_can_absorb_scale(subgraph: LayerAbstractGraph, use_mpc_refresh: bool = False):
     """Check if nodes in the linear subgraph can be absorbed"""
-
     if use_mpc_refresh:
         layers_to_absorb = ['bootstrapping']
     else:
         layers_to_absorb = ['avgpool2d', 'mult_coeff']
-    valid_flag = True
 
     for node in subgraph.dag.nodes:
         if isinstance(node, ComputeNode):
             if node.layer_type in layers_to_absorb:
                 if isinstance(node, PoolComputeNode) and (not node.is_adaptive_avgpool) and (not node.is_big_size):
                     continue
-                is_find_dwon, target_node_down = find_linear_fhe_layer(node, subgraph, Direction.DOWN)
-                is_find_up, target_node_up = find_linear_fhe_layer(node, subgraph, Direction.UP)
-                if (not is_find_dwon) and (not is_find_up):
+                found_down, target_node_down = find_linear_fhe_layer(node, subgraph, Direction.DOWN)
+                found_up, target_node_up = find_linear_fhe_layer(node, subgraph, Direction.UP)
+                if (not found_down) and (not found_up):
                     return False
-                elif (not is_find_up) and is_find_dwon and target_node_down.layer_type == 'simple_polyrelu':
+                elif (not found_up) and found_down and target_node_down.layer_type == 'simple_polyrelu':
                     return False
+                else:
+                    continue
 
-    return valid_flag
+    return True
 
 
-def handle_invalid_poly_subgraph(
-    graph, subgraph_index, subs_ordered, subgraph_invalid_poly_dict, use_mpc_refresh: bool = False
-):
+def insert_mult_scalar_in_linear_subgraph(graph, subgraph):
     """Handle poly nodes that cannot be absorbed in the current subgraph, return the layer_id of the added mult_scalar"""
-    current_sub = subs_ordered[subgraph_index]
-    all_nodes_in_topo_sort = list(nx.topological_sort(current_sub.dag))
-    first_node = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)][0]
-    mult_scalar_layer = add_mult_scalar_behind_node(graph, first_node)
-
-    return mult_scalar_layer.layer_id
+    fist_compute_node = next(node for node in nx.topological_sort(subgraph.dag) if isinstance(node, ComputeNode))
+    add_mult_scalar_behind_node(graph, fist_compute_node)
 
 
 def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
     subgraphs = split_graph_to_linear_subgraph(graph)
 
-    index = 0
-    invalid_index = []
-    subgraph_invalid_poly_dict = dict()
-    added_mult_scalar_ids = []
+    unchangable_subgraphs = list()
+    for subgraph in subgraphs:
+        if not linear_subgraph_can_absorb_scale(subgraph, use_mpc_refresh):
+            unchangable_subgraphs.append(subgraph)
 
-    for sub_in in subgraphs:
-        invalid_poly_nodes = []
-        if not check_subgraph_validity(sub_in, invalid_poly_nodes, use_mpc_refresh):
-            invalid_index.append(index)
-        subgraph_invalid_poly_dict[index] = invalid_poly_nodes
-        index = index + 1
-
-    for i in range(len(subgraphs)):
-        if i in invalid_index:
-            added_id = handle_invalid_poly_subgraph(graph, i, subgraphs, subgraph_invalid_poly_dict, use_mpc_refresh)
-            if added_id:
-                added_mult_scalar_ids.append(added_id)
+    for subgraph in unchangable_subgraphs:
+        insert_mult_scalar_in_linear_subgraph(graph, subgraph)
 
     return graph
