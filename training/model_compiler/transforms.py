@@ -357,6 +357,22 @@ def infer_shapes_and_skips(graph: LayerAbstractGraph):
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
         succ: FeatureNode = next(graph.dag.successors(compute_node))
         graph.dag.nodes[succ]['skip'] = [1] * succ.dim
+        if 'reshape' == compute_node.layer_type:
+            graph.dag.nodes[succ]['virtual_shape'] = preds[0].shape
+            graph.dag.nodes[succ]['virtual_skip'] = graph.dag.nodes[preds[0]]['skip']
+            skip = (
+                preds[0].shape[0]
+                * preds[0].shape[1]
+                * graph.dag.nodes[preds[0]]['skip'][0]
+                * graph.dag.nodes[preds[0]]['skip'][1]
+            )
+            graph.dag.nodes[succ]['skip'] = [skip, skip]
+            continue
+        if preds[0].dim == 0 and succ.dim == 0:
+            graph.dag.nodes[succ]['virtual_skip'] = graph.dag.nodes[preds[0]]['virtual_skip']
+            graph.dag.nodes[succ]['virtual_shape'] = graph.dag.nodes[preds[0]]['virtual_shape']
+            graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip']
+            continue
         if isinstance(compute_node, SpatialComputeNode):
             for i in range(compute_node.dim):
                 succ.shape[i] = (
