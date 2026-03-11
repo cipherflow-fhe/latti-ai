@@ -34,6 +34,7 @@ from components import (
     ConvComputeNode,
     UpsampleComputeNode,
     SpatialComputeNode,
+    ActivationComputeNode,
 )
 import nn_modules
 from processor import check_level_cost, check_multi_input_level_skip_aligned, check_feature_scale
@@ -233,6 +234,30 @@ class TestCompiler(unittest.TestCase):
             output_dir=script_dir,
             temperature=0.0,
             num_workers=1,
+        )
+
+    def test_conv_with_batchnorms(self):
+        model = nn_modules.ConvWithBatchNorms()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=tuple([1, 32, 64, 64]),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+        )
+
+        self.assertEqual(
+            max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 1
         )
 
     def test_conv_series(self):
@@ -746,13 +771,12 @@ class TestCompiler(unittest.TestCase):
             temperature=0.0,
             num_workers=1,
         )
-        res = False
-        for node in graph.dag.nodes:
-            # Upsample layer need to be added for large sizes
-            if isinstance(node, ConvComputeNode):
-                if node.upsample_factor_in == [2, 2]:
-                    res = True
-        self.assertEqual(res, True)
+        self.assertTrue(
+            any(node.upsample_factor_in == [2, 2] for node in graph.dag.nodes if isinstance(node, ConvComputeNode))
+        )
+        self.assertTrue(
+            any(node.zero_skip == [2, 2] for node in graph.dag.nodes if isinstance(node, ActivationComputeNode))
+        )
 
     def test_conv_and_upsample(self):
         model = nn_modules.ConvAndUpsample()
