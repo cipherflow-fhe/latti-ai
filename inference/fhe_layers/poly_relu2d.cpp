@@ -29,7 +29,7 @@ PolyRelu::PolyRelu(const CkksParameter& param_in,
                    const Duo& skip_in,
                    uint32_t n_channel_per_ct_in,
                    uint32_t level_in,
-                   const Duo& upsample_factor_in,
+                   const Duo& zero_skip_in,
                    const Duo& block_expansion_in,
                    bool is_ordinary_pack_in)
     : param(param_in.copy()), input_shape(input_shape_in), weight(weight_in.copy()), skip(skip_in) {
@@ -42,14 +42,14 @@ PolyRelu::PolyRelu(const CkksParameter& param_in,
                                     std::to_string(skip[1]) + "]");
     }
 
-    upsample_factor[0] = upsample_factor_in[0];
-    upsample_factor[1] = upsample_factor_in[1];
+    zero_skip[0] = zero_skip_in[0];
+    zero_skip[1] = zero_skip_in[1];
     order = order_in;
     level = level_in;
     n_channel_per_ct = n_channel_per_ct_in;
     n_block_per_ct = std::ceil(n_channel_per_ct / (skip[0] * skip[1]));
-    pre_skip[0] = skip[0] * upsample_factor[0];
-    pre_skip[1] = skip[1] * upsample_factor[1];
+    pre_skip[0] = skip[0] * zero_skip[0];
+    pre_skip[1] = skip[1] * zero_skip[1];
     block_expansion[0] = block_expansion_in[0];
     block_expansion[1] = block_expansion_in[1];
     block_shape[0] = input_shape[0] * skip[0] / block_expansion[0];
@@ -180,9 +180,8 @@ Array<double, 3> PolyRelu::run_plaintext_for_non_absorb_case(const Array<double,
     for (int in_channel_idx = 0; in_channel_idx < n_out_channel; in_channel_idx++) {
         for (int i = 0; i < input_shape[0]; i++) {
             for (int j = 0; j < input_shape[1]; j++) {
-                if (i % upsample_factor[0] == 0 && j % upsample_factor[1] == 0) {
+                if (i % zero_skip[0] == 0 && j % zero_skip[1] == 0) {
                     auto p = weight.get(0, in_channel_idx);
-
                     for (int k = 1; k < order + 1; k++) {
                         p += weight.get(k, in_channel_idx) * pow(x.get(in_channel_idx, i, j), k);
                     }

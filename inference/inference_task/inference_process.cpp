@@ -367,7 +367,7 @@ void InitInferenceProcess::init_poly_relu2d_layer(const string& key,
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     Duo block_expansion = {div_ceil(feature_input.shape[0], block_shape_in[0]),
                            div_ceil(feature_input.shape[1], block_shape_in[1])};
-    Duo upsample_factor_in = {layer["upsample_factor_in"][0], layer["upsample_factor_in"][1]};
+    Duo zero_skip_in = {layer["zero_skip"][0], layer["zero_skip"][1]};
     uint32_t order = layer["order"];
     Array<double, 2> weight;
     double weight_scale = layer["weight_scale"];
@@ -380,7 +380,7 @@ void InitInferenceProcess::init_poly_relu2d_layer(const string& key,
     CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
     auto layer_poly_relu = make_unique<PolyRelu>(param, feature_input.shape, order, weight, feature_input.skip,
                                                  feature_input.pack_channel_per_ciphertext, feature_input.level,
-                                                 upsample_factor_in, block_expansion, pack_style != "multiplexed");
+                                                 zero_skip_in, block_expansion, pack_style != "multiplexed");
     if (is_absorb) {
         if (is_lazy) {
             layer_poly_relu->prepare_weight_lazy();
