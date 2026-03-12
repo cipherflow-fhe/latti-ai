@@ -74,17 +74,17 @@ def init_config_with_args(poly_n=None, style=None, graph_type=None):
     )
 
 
-def prepare_graph(input_file_path: Path) -> LayerAbstractGraph:
+def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     """
     Prepare graph for compilation (common preparation steps)
 
     Args:
-        input_file_path: Input pt.json file path
+        raw_graph: Raw LayerAbstractGraph loaded from json
 
     Returns:
         Prepared LayerAbstractGraph
     """
-    pt_graph = LayerAbstractGraph.from_json(str(input_file_path))
+    pt_graph = copy.deepcopy(raw_graph)
 
     substitute_layers_for_btp(pt_graph)
     # transforms.init_levels(pt_graph)
@@ -102,12 +102,12 @@ def prepare_graph(input_file_path: Path) -> LayerAbstractGraph:
     return pt_graph
 
 
-def try_no_btp(input_file_path: Path) -> tuple[bool, LayerAbstractGraph | None, float]:
+def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph | None, float]:
     """
     Try no-BTP mode compilation with prepared graph
 
     Args:
-        input_file_path: Input pt.json file path
+        raw_graph: Raw LayerAbstractGraph
 
     Returns:
         (succeeded, graph, score): succeeded=True if no-BTP succeeded, graph and score are set on success
@@ -126,7 +126,7 @@ def try_no_btp(input_file_path: Path) -> tuple[bool, LayerAbstractGraph | None, 
         print(f'Trying POLY_N={poly_n}, MAX_LEVEL={config.max_level}, block_shape={config.block_shape}')
 
         # (1) Pre-process
-        pt_graph = prepare_graph(input_file_path)
+        pt_graph = prepare_graph(raw_graph)
 
         # (2) Process
         result = process_with_no_btp(pt_graph)
@@ -154,7 +154,7 @@ def process_with_no_btp(graph: LayerAbstractGraph):
 
 def try_btp(
     num_experiments: int,
-    input_file_path: Path,
+    raw_graph: LayerAbstractGraph,
     temperature: float,
     num_workers: int,
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
@@ -168,7 +168,7 @@ def try_btp(
         config.block_shape = params['block_shape']
 
         # (1) Pre-process
-        pt_graph = prepare_graph(input_file_path)
+        pt_graph = prepare_graph(raw_graph)
 
         # (2) Process
         graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
@@ -317,11 +317,13 @@ def run_pipeline(
     """
     print(f'Starting compilation...')
 
+    raw_graph = LayerAbstractGraph.from_json(str(input_file_path))
+
     use_btp = False
-    succeeded, graph, score = try_no_btp(input_file_path)
+    succeeded, graph, score = try_no_btp(raw_graph)
     if not succeeded:
         use_btp = True
-        succeeded, graph, score = try_btp(num_experiments, input_file_path, temperature, num_workers)
+        succeeded, graph, score = try_btp(num_experiments, raw_graph, temperature, num_workers)
         if not succeeded:
             raise ValueError('Compilation failed.')
 
