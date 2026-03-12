@@ -152,6 +152,34 @@ def process_with_no_btp(graph: LayerAbstractGraph):
     return reset_level_and_check_level(graph)
 
 
+def try_btp(
+    num_experiments: int,
+    input_file_path: Path,
+    temperature: float,
+    num_workers: int,
+) -> tuple[bool, LayerAbstractGraph | None, float]:
+    btp_param_list = [
+        {'poly_n': 65536, 'max_level': 9, 'block_shape': [128, 128]},
+    ]
+    for params in btp_param_list:
+        config.poly_n = params['poly_n']
+        config.max_level = params['max_level']
+        config.block_shape = params['block_shape']
+
+        # (1) Pre-process
+        pt_graph = prepare_graph(input_file_path)
+
+        # (2) Process
+        graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
+
+        # (3) Post-process
+        if graph is not None:
+            graph = post_process(graph)
+            return True, graph, score
+
+    return False, None, float('inf')
+
+
 def run_btp_compilation(
     num_experiments: int,
     pt_graph: LayerAbstractGraph,
@@ -288,26 +316,8 @@ def run_pipeline(
     succeeded, graph, score = try_no_btp(input_file_path)
     if not succeeded:
         use_btp = True
-        btp_param_list = [
-            {'poly_n': 65536, 'max_level': 9, 'block_shape': [128, 128]},
-        ]
-        for params in btp_param_list:
-            config.poly_n = params['poly_n']
-            config.max_level = params['max_level']
-            config.block_shape = params['block_shape']
-
-            # (1) Pre-process
-            pt_graph = prepare_graph(input_file_path)
-
-            # (2) Process
-            graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
-
-            # (3) Post-process
-            if graph is not None:
-                graph = post_process(graph)
-                break
-
-        if graph is None:
+        succeeded, graph, score = try_btp(num_experiments, input_file_path, temperature, num_workers)
+        if not succeeded:
             raise ValueError('Compilation failed.')
 
     dump_graph(graph, output_dir, score, use_btp=use_btp)
