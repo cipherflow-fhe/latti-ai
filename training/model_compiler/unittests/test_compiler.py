@@ -750,7 +750,7 @@ class TestCompiler(unittest.TestCase):
 
         raw_graph = LayerAbstractGraph.from_json(self.temp_json_path)
         pt_graph = prepare_graph(raw_graph)
-        subs = split_graph_to_linear_subgraph(pt_graph)
+        subs = split_graph_to_linear_subgraph(pt_graph.dag)
         self.assertEqual(len(subs), 2)
 
     def test_conv_and_convtranspose(self):
