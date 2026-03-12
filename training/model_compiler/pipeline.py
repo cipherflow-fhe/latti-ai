@@ -296,13 +296,13 @@ def run_pipeline(
             config.max_level = params['max_level']
             config.block_shape = params['block_shape']
 
-            # (1) 前处理
+            # (1) Pre-process
             pt_graph = prepare_graph(input_file_path)
 
-            # (2) 执行
+            # (2) Process
             graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
 
-            # (3) 后处理
+            # (3) Post-process
             if graph is not None:
                 graph = post_process(graph)
                 break
