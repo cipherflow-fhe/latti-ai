@@ -74,17 +74,17 @@ def init_config_with_args(poly_n=None, style=None, graph_type=None):
     )
 
 
-def prepare_graph(input_file_path: Path) -> LayerAbstractGraph:
+def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     """
     Prepare graph for compilation (common preparation steps)
 
     Args:
-        input_file_path: Input pt.json file path
+        raw_graph: Raw LayerAbstractGraph loaded from json
 
     Returns:
         Prepared LayerAbstractGraph
     """
-    pt_graph = LayerAbstractGraph.from_json(str(input_file_path))
+    pt_graph = copy.deepcopy(raw_graph)
 
     substitute_layers_for_btp(pt_graph)
     # transforms.init_levels(pt_graph)
@@ -102,64 +102,87 @@ def prepare_graph(input_file_path: Path) -> LayerAbstractGraph:
     return pt_graph
 
 
-def try_no_btp(pt_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph | None, float]:
+def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph | None, float]:
     """
     Try no-BTP mode compilation with prepared graph
 
     Args:
-        pt_graph: Prepared LayerAbstractGraph
+        raw_graph: Raw LayerAbstractGraph
 
     Returns:
         (succeeded, graph, score): succeeded=True if no-BTP succeeded, graph and score are set on success
     """
     print('Step 2: Trying no-BTP mode...')
-    result = process_with_no_btp(pt_graph)
 
-    if result:
-        print('✓ No-BTP mode succeeded! Saving results...')
+    # not btp style, set max level for polyrelu
+    poly_n_to_max_level = {8192: 5, 16384: 9, 32768: 17, 65536: 33}
+    poly_n_to_block_shape = {8192: [64, 64], 16384: [64, 64], 32768: [128, 128], 65536: [128, 256]}
+    poly_n_levels = [8192, 16384, 32768, 65536]  # always start trying from 8192
 
-        total_graph = result
-        restore_node_attributes(total_graph.dag)
+    for poly_n in poly_n_levels:
+        config.poly_n = poly_n
+        config.max_level = poly_n_to_max_level[poly_n]
+        config.block_shape = poly_n_to_block_shape[poly_n]
+        print(f'Trying POLY_N={poly_n}, MAX_LEVEL={config.max_level}, block_shape={config.block_shape}')
 
-        print(f'\n=== No-BTP Results ===')
-        print(f'Score: 0.0')
-        return True, total_graph, 0.0
+        # (1) Pre-process
+        pt_graph = prepare_graph(raw_graph)
 
+        # (2) Process
+        result = process_with_no_btp(pt_graph)
+
+        # (3) Post-process
+        if result is not None:
+            print(f'Success! Using POLY_N={poly_n}, MAX_LEVEL={config.max_level}')
+            print('✓ No-BTP mode succeeded! Saving results...')
+            restore_node_attributes(result.dag)
+            result = post_process(result)
+            print(f'\n=== No-BTP Results ===')
+            print(f'Score: 0.0')
+            return True, result, 0.0
+        else:
+            print(f'Level exceeded with POLY_N={poly_n}, trying next level...')
+
+    print(f'Warning: Even with POLY_N=65536, level still exceeds limit!')
     print('✗ No-BTP mode failed, switching to BTP mode...')
     return False, None, float('inf')
 
 
 def process_with_no_btp(graph: LayerAbstractGraph):
-    current_graph_type = config.graph_type
+    return reset_level_and_check_level(graph)
 
-    # not btp style, set max level for polyrelu
-    poly_n_to_max_level = {8192: 5, 16384: 9, 32768: 17, 65536: 33}
 
-    poly_n_to_block_shape = {8192: [64, 64], 16384: [64, 64], 32768: [128, 128], 65536: [128, 256]}
-    poly_n_levels = [8192, 16384, 32768, 65536]  # always start trying from 8192
+def try_btp(
+    num_experiments: int,
+    raw_graph: LayerAbstractGraph,
+    temperature: float,
+    num_workers: int,
+) -> tuple[bool, LayerAbstractGraph | None, float]:
+    btp_param_list = [
+        {'poly_n': 65536, 'max_level': 9, 'block_shape': [128, 128]},
+    ]
+    valid_results = []
+    for params in btp_param_list:
+        config.poly_n = params['poly_n']
+        config.max_level = params['max_level']
+        config.block_shape = params['block_shape']
 
-    result = None
-    for poly_n in poly_n_levels:
-        # Update configuration
-        config.poly_n = poly_n
-        config.max_level = poly_n_to_max_level[poly_n]
-        config.block_shape = poly_n_to_block_shape[poly_n]
+        # (1) Pre-process
+        pt_graph = prepare_graph(raw_graph)
 
-        print(f'Trying POLY_N={poly_n}, MAX_LEVEL={config.max_level}, block_shape={config.block_shape}')
+        # (2) Process
+        graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
 
-        # Check whether the level meets the requirements
-        result = reset_level_and_check_level(graph)
+        # (3) Post-process
+        if graph is not None:
+            graph = post_process(graph)
+            valid_results.append((score, graph))
 
-        if result is not None:
-            print(f'Success! Using POLY_N={poly_n}, MAX_LEVEL={config.max_level}')
-            break
-        else:
-            print(f'Level exceeded with POLY_N={poly_n}, trying next level...')
+    if not valid_results:
+        return False, None, float('inf')
 
-    if result is None:
-        print(f'Warning: Even with POLY_N=65536, level still exceeds limit!')
-
-    return result
+    best_score, best_graph = min(valid_results, key=lambda x: x[0])
+    return True, best_graph, best_score
 
 
 def run_btp_compilation(
@@ -180,12 +203,6 @@ def run_btp_compilation(
     Returns:
         (best_graph, best_score): best_graph is None if all runs failed
     """
-    print('Step 3: Restoring to BTP parameters (POLY_N=65536, MAX_LEVEL=9)...')
-
-    config.poly_n = 65536
-    config.max_level = 9
-    config.block_shape = [128, 128]
-
     print(f'Step 4: Starting {num_experiments} parallel BTP compilations with {num_workers} processes...')
 
     # Prepare arguments for each run
@@ -300,18 +317,15 @@ def run_pipeline(
     """
     print(f'Starting compilation...')
 
-    print('Step 1: Preparing graph...')
-    pt_graph = prepare_graph(input_file_path)
+    raw_graph = LayerAbstractGraph.from_json(str(input_file_path))
 
     use_btp = False
-    succeeded, graph, score = try_no_btp(pt_graph)
+    succeeded, graph, score = try_no_btp(raw_graph)
     if not succeeded:
         use_btp = True
-        graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
-        if graph is None:
+        succeeded, graph, score = try_btp(num_experiments, raw_graph, temperature, num_workers)
+        if not succeeded:
             raise ValueError('Compilation failed.')
-
-    graph = post_process(graph)
 
     dump_graph(graph, output_dir, score, use_btp=use_btp)
 
