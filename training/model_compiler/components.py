@@ -44,7 +44,6 @@ import json
 from typing import Optional
 import math
 from ordered_set import OrderedSet
-import numpy as np
 import networkx as nx
 from enum import Enum
 import os
@@ -427,15 +426,8 @@ class ActivationComputeNode(ComputeNode):
 
 
 class LayerAbstractGraph:
-    def __init__(self, parent_graph: Optional['LayerAbstractGraph'] = None):
-        self.parent_graph = parent_graph
+    def __init__(self):
         self.dag = nx.DiGraph()
-        self.graph_id = None
-        self.parent_graph_id = None
-
-        self.order_key: dict[str, int] = dict()
-        self.list_layer_name: list[str] = list()
-        self.layer_order_list: list[str] = list()
         self.is_mpc = False
 
     def __repr__(self):
@@ -461,13 +453,6 @@ class LayerAbstractGraph:
                 if any(isinstance(next_node, ComputeNode) for next_node in self.dag.successors(node)):
                     leading_feature_nodes.append(node)
         return leading_feature_nodes
-
-    def get_output_feature_nodes(self) -> list[FeatureNode]:
-        outputs = []
-        for node, out_degree in self.dag.out_degree():
-            if out_degree == 0 and isinstance(node, FeatureNode):
-                outputs.append(node)
-        return outputs
 
     @staticmethod
     def from_json(json_path, is_fpga=False) -> 'LayerAbstractGraph':
@@ -504,7 +489,6 @@ class LayerAbstractGraph:
             f_index = f_index + 1
 
         for key, layer_json in graph_json['layer'].items():
-            graph_info.layer_order_list.append(key)
             layer_type = layer_json['type']
             channel_input = layer_json['channel_input']
             channel_output = layer_json['channel_output']
@@ -684,12 +668,7 @@ class LayerAbstractGraph:
                 compute_list.append(node)
 
         conv_num = 0
-        conv_list = list()
-        conv_name = ''
-        last_relu_id = ''
         mpc_refresh_ids = []
-
-        i = 0
 
         for layer in compute_list:
             preds = list(self.dag.predecessors(layer))
@@ -764,7 +743,6 @@ class LayerAbstractGraph:
 
                 base_string = layer.parameter_paths['weight'].rsplit('.', 1)[0] + '.bias'
                 conv_num = conv_num + 1
-                conv_name = layer.layer_id
 
                 absorb_type = list()
                 absorb_path = list()
@@ -918,12 +896,9 @@ class LayerAbstractGraph:
                 }
 
             if 'maxpool' == layer_type:
-                last_relu_id = layer_id
                 layers[layer_id]['is_end'] = False
 
             if 'relu2d' == layer_type:
-                last_relu_id = layer_id
-                conv_list.append(conv_name)
                 layers[layer_id] = {
                     'type': layer_type,
                     'is_end': False,
@@ -995,7 +970,6 @@ class LayerAbstractGraph:
 
         features = dict()
         all_nodes_in_topo_sort = list(nx.topological_sort(self.dag))
-        f_index = 0
         for feature in all_nodes_in_topo_sort:
             if isinstance(feature, FeatureNode):
                 key = feature.node_id
