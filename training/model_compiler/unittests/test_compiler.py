@@ -748,7 +748,8 @@ class TestCompiler(unittest.TestCase):
         from pipeline import prepare_graph
         from transforms import split_graph_to_linear_subgraph
 
-        pt_graph = prepare_graph(self.temp_json_path)
+        raw_graph = LayerAbstractGraph.from_json(self.temp_json_path)
+        pt_graph = prepare_graph(raw_graph)
         subs = split_graph_to_linear_subgraph(pt_graph)
         self.assertEqual(len(subs), 2)
 
