@@ -749,7 +749,7 @@ class TestCompiler(unittest.TestCase):
         from transforms import split_graph_to_linear_subgraph
 
         pt_graph = prepare_graph(self.temp_json_path)
-        subs = split_graph_to_linear_subgraph(pt_graph)
+        subs = split_graph_to_linear_subgraph(pt_graph.dag)
         self.assertEqual(len(subs), 2)
 
     def test_conv_and_convtranspose(self):

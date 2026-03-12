@@ -312,6 +312,24 @@ def find_layer_in_linear_graph(
             return node
 
 
+def find_absorbable_layer_in_linear_subgraph(
+    subgraph: nx.DiGraph, c_node: ComputeNode, direction: Direction
+) -> ComputeNode | None:
+    node = c_node
+    while True:
+        if direction == Direction.UP:
+            if subgraph.in_degree(node) != 1:
+                return None
+            node = next(subgraph.predecessors(node))
+        else:
+            if subgraph.out_degree(node) != 1:
+                return None
+            node = next(subgraph.successors(node))
+
+        if isinstance(node, ComputeNode) and node.layer_type in config.absorbable_layers:
+            return node
+
+
 def split_upsampling_layers(graph: LayerAbstractGraph):
     for conv_node in list(graph.dag.nodes):
         if not isinstance(conv_node, ConvComputeNode):
@@ -524,83 +542,54 @@ def insert_drop_level_layers(graph: LayerAbstractGraph):
                 graph.dag.nodes[succ_sub]['level'] = pred_level - graph.dag.nodes[drop_level_layer]['level_cost']
 
 
-def split_graph_to_linear_subgraph(graph: LayerAbstractGraph) -> list[LayerAbstractGraph]:
-    dag_of_linear_subgraphs = graph.dag.copy()
-    for node in graph.dag.nodes:
-        if graph.dag.in_degree(node) > 1:
-            for node_in in graph.dag.predecessors(node):
+def split_graph_to_linear_subgraph(dag: nx.DiGraph) -> list[nx.DiGraph]:
+    dag_of_linear_subgraphs = dag.copy()
+    for node in dag.nodes:
+        if dag.in_degree(node) > 1:
+            for node_in in dag.predecessors(node):
                 if dag_of_linear_subgraphs.has_edge(node_in, node):
                     dag_of_linear_subgraphs.remove_edge(node_in, node)
-        if graph.dag.out_degree(node) > 1:
-            for node_out in graph.dag.successors(node):
+        if dag.out_degree(node) > 1:
+            for node_out in dag.successors(node):
                 if dag_of_linear_subgraphs.has_edge(node, node_out):
                     dag_of_linear_subgraphs.remove_edge(node, node_out)
 
     components = list(nx.weakly_connected_components(dag_of_linear_subgraphs))
-    subgraphs = list()
-    for component in components:
-        # A single feature_node does not constitute a subgraph
-        if len(component) <= 1:
-            continue
-        sub = LayerAbstractGraph()
-        sub.dag = dag_of_linear_subgraphs.subgraph(component).copy()
-        subgraphs.append(sub)
-
-    return subgraphs
+    return [dag_of_linear_subgraphs.subgraph(component).copy() for component in components if len(component) > 1]
 
 
-def find_linear_fhe_layer(
-    compute_node: ComputeNode, graph: LayerAbstractGraph, direction: Direction
-) -> tuple[bool, ComputeNode]:
-    node = compute_node
-    while True:
-        if direction == Direction.UP:
-            node_list = list(graph.dag.predecessors(node))
-        else:
-            node_list = list(graph.dag.successors(node))
-        if not node_list:
-            return [False, None]
-
-        if isinstance(node_list[0], FeatureNode):
-            node = node_list[0]
-            continue
-
-        if node_list[0].layer_type in config.absorbable_layers:
-            return [True, node_list[0]]
-
-        node = node_list[0]
-
-
-def handle_valid_poly_subgraph(subgraph: LayerAbstractGraph, use_mpc_refresh: bool = False):
+def handle_valid_poly_subgraph(subgraph: nx.DiGraph, use_mpc_refresh: bool = False):
     """Handle poly nodes that can be absorbed in the current subgraph"""
 
     if not use_mpc_refresh:
-        for node in subgraph.dag.nodes:
+        for node in subgraph.nodes:
             if isinstance(node, ComputeNode):
                 if node.layer_type == 'simple_polyrelu' or node.layer_type == 'relu2d':
-                    find, res_node = find_linear_fhe_layer(node, subgraph, Direction.UP)
-                    if find:
+                    res_node = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.UP)
+                    if res_node is not None:
                         node.up_scale_str.append(res_node.layer_id)
                 elif node.layer_type in {'avgpool2d', 'mult_coeff'}:
-                    find_down, res_node_down = find_linear_fhe_layer(node, subgraph, Direction.DOWN)
-                    if find_down and res_node_down.layer_type != 'simple_polyrelu':
+                    res_node_down = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.DOWN)
+                    if res_node_down is not None and res_node_down.layer_type != 'simple_polyrelu':
                         node.down_scale_str.append(res_node_down.layer_id)
 
                         continue
-                    find_up, res_node_up = find_linear_fhe_layer(node, subgraph, Direction.UP)
-                    if find_up:
+                    res_node_up = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.UP)
+                    if res_node_up is not None:
                         node.up_scale_str.append(res_node_up.layer_id)
     else:
         candidates = {}
 
-        for node in subgraph.dag.nodes:
+        for node in subgraph.nodes:
             if isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping':
-                find_down, res_node_down = find_linear_fhe_layer(node, subgraph, Direction.DOWN)
-                find_up, res_node_up = find_linear_fhe_layer(node, subgraph, Direction.UP)
+                res_node_down = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.DOWN)
+                res_node_up = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.UP)
 
                 candidates[node] = {
-                    'down': res_node_down if (find_down and res_node_down.layer_type != 'simple_polyrelu') else None,
-                    'up': res_node_up if find_up else None,
+                    'down': res_node_down
+                    if (res_node_down is not None and res_node_down.layer_type != 'simple_polyrelu')
+                    else None,
+                    'up': res_node_up,
                 }
 
         initial_assignment = {}
@@ -647,7 +636,7 @@ def handle_valid_poly_subgraph(subgraph: LayerAbstractGraph, use_mpc_refresh: bo
 
 
 def set_graph_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
-    subgraphs = split_graph_to_linear_subgraph(graph)
+    subgraphs = split_graph_to_linear_subgraph(graph.dag)
     for sub in subgraphs:
         handle_valid_poly_subgraph(sub, use_mpc_refresh)
 
@@ -695,23 +684,27 @@ def set_feature_scales(graph: LayerAbstractGraph):
             node_out = set_scale_for_node(graph, compute, scale)
 
 
-def linear_subgraph_can_absorb_scale(subgraph: LayerAbstractGraph, use_mpc_refresh: bool = False):
+def linear_subgraph_can_absorb_scale(subgraph: nx.DiGraph, use_mpc_refresh: bool = False):
     """Check if nodes in the linear subgraph can be absorbed"""
     if use_mpc_refresh:
         layers_to_absorb = ['bootstrapping']
     else:
         layers_to_absorb = ['avgpool2d', 'mult_coeff']
 
-    for node in subgraph.dag.nodes:
+    for node in subgraph.nodes:
         if isinstance(node, ComputeNode):
             if node.layer_type in layers_to_absorb:
                 if isinstance(node, PoolComputeNode) and (not node.is_adaptive_avgpool) and (not node.is_big_size):
                     continue
-                found_down, target_node_down = find_linear_fhe_layer(node, subgraph, Direction.DOWN)
-                found_up, target_node_up = find_linear_fhe_layer(node, subgraph, Direction.UP)
-                if (not found_down) and (not found_up):
+                target_node_down = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.DOWN)
+                target_node_up = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.UP)
+                if target_node_down is None and target_node_up is None:
                     return False
-                elif (not found_up) and found_down and target_node_down.layer_type == 'simple_polyrelu':
+                elif (
+                    target_node_up is None
+                    and target_node_down is not None
+                    and target_node_down.layer_type == 'simple_polyrelu'
+                ):
                     return False
                 else:
                     continue
@@ -719,14 +712,13 @@ def linear_subgraph_can_absorb_scale(subgraph: LayerAbstractGraph, use_mpc_refre
     return True
 
 
-def insert_mult_scalar_in_linear_subgraph(graph, subgraph):
-    """Handle poly nodes that cannot be absorbed in the current subgraph, return the layer_id of the added mult_scalar"""
-    fist_compute_node = next(node for node in nx.topological_sort(subgraph.dag) if isinstance(node, ComputeNode))
-    add_mult_scalar_behind_node(graph, fist_compute_node)
+def insert_mult_scalar_in_linear_subgraph(graph, subgraph: nx.DiGraph):
+    first_compute_node = next(node for node in nx.topological_sort(subgraph) if isinstance(node, ComputeNode))
+    add_mult_scalar_behind_node(graph, first_compute_node)
 
 
 def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
-    subgraphs = split_graph_to_linear_subgraph(graph)
+    subgraphs = split_graph_to_linear_subgraph(graph.dag)
 
     unchangable_subgraphs = list()
     for subgraph in subgraphs:
