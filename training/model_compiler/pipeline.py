@@ -161,6 +161,7 @@ def try_btp(
     btp_param_list = [
         {'poly_n': 65536, 'max_level': 9, 'block_shape': [128, 128]},
     ]
+    valid_results = []
     for params in btp_param_list:
         config.poly_n = params['poly_n']
         config.max_level = params['max_level']
@@ -175,9 +176,13 @@ def try_btp(
         # (3) Post-process
         if graph is not None:
             graph = post_process(graph)
-            return True, graph, score
+            valid_results.append((score, graph))
 
-    return False, None, float('inf')
+    if not valid_results:
+        return False, None, float('inf')
+
+    best_score, best_graph = min(valid_results, key=lambda x: x[0])
+    return True, best_graph, best_score
 
 
 def run_btp_compilation(
