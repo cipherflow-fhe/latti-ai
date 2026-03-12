@@ -26,9 +26,9 @@ from nn_tools.activations import RangeNormPoly2d
 
 
 class SingleConv(nn.Module):
-    def __init__(self):
+    def __init__(self, stride=1):
         super().__init__()
-        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=stride)
 
     def forward(self, x):
         x = self.conv0(x)
@@ -394,6 +394,21 @@ class ConvReshapeAndDense(nn.Module):
 
     def forward(self, x):
         x = self.conv0(x)
+        x = x.view(x.size(0), -1)
+        x = self.dense0(x)
+        return x
+
+
+class ConvAvgpoolReshapeAndDense(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, bias=False, padding=1, stride=2)
+        self.pool0 = nn.AvgPool2d(kernel_size=8, stride=8, padding=0)
+        self.dense0 = nn.Linear(in_features=48, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = self.pool0(x)
         x = x.view(x.size(0), -1)
         x = self.dense0(x)
         return x

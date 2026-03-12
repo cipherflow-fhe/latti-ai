@@ -88,11 +88,10 @@ def prepare_graph(input_file_path: Path) -> LayerAbstractGraph:
 
     substitute_layers_for_btp(pt_graph)
     # transforms.init_levels(pt_graph)
-    # set_is_adaptive_avgpool(pt_graph)
     # update_shape_for_btp(pt_graph)
     # update_skip_for_btp(pt_graph)
     # update_level_cost_for_btp(pt_graph)
-
+    set_is_adaptive_avgpool(pt_graph)
     transforms.split_upsampling_layers(pt_graph)
     transforms.infer_shapes_and_skips(pt_graph)
     transforms.combine_convs_with_upsamples(pt_graph)
