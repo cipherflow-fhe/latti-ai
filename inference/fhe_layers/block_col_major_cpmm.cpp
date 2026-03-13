@@ -41,19 +41,28 @@ BlockColMajorCPMM::BlockColMajorCPMM(const CkksParameter& param_in,
     n_ = n;
     p_ = p;
 
-    assert(m % d_ == 0 && "m must be divisible by block_size");
-    assert(n % d_ == 0 && "n must be divisible by block_size");
-    assert(p % d_ == 0 && "p must be divisible by block_size");
-
     n_slot_ = param_.get_n() / 2;
     chunk_size_ = d_ * d_;
     assert(n_slot_ % chunk_size_ == 0 && "n_slot must be divisible by block_size^2");
     num_chunks_ = n_slot_ / chunk_size_;
 
-    num_block_rows_A_ = m / d_;
-    num_block_cols_A_ = n / d_;
-    num_block_rows_B_ = n / d_;
-    num_block_cols_B_ = p / d_;
+    num_block_rows_A_ = div_ceil(m, d_);
+    num_block_cols_A_ = div_ceil(n, d_);
+    num_block_rows_B_ = div_ceil(n, d_);
+    num_block_cols_B_ = div_ceil(p, d_);
+
+    // Pad B_mat_ to full block dimensions so build_block_diagonal can access all slots
+    uint32_t padded_rows = num_block_rows_B_ * d_;
+    uint32_t padded_cols = num_block_cols_B_ * d_;
+    if (padded_rows != n || padded_cols != p) {
+        Array<double, 2> B_padded({padded_rows, padded_cols});
+        for (uint32_t i = 0; i < n; i++) {
+            for (uint32_t j = 0; j < p; j++) {
+                B_padded.set(i, j, B_mat_.get(i, j));
+            }
+        }
+        B_mat_ = std::move(B_padded);
+    }
 }
 
 BlockColMajorCPMM::~BlockColMajorCPMM() {}

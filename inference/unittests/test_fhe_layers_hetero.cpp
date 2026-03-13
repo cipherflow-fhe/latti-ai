@@ -1045,7 +1045,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs", "", HeteroProcessors)
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_ccmm_matmul", "", HeteroProcessors) {
     vector<uint32_t> ds = {16};
-    vector<uint32_t> dims = {16, 32};
+    vector<uint32_t> dims = {16, 20};
     vector<int> levels = {3};
 
     for (uint32_t d : ds) {
@@ -1114,7 +1114,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_ccmm_matmul", "", HeteroPro
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_cpmm_matmul", "", HeteroProcessors) {
     vector<uint32_t> ds = {16};
-    vector<uint32_t> dims = {16, 32};
+    vector<uint32_t> dims = {16, 20};
     vector<int> levels = {1};
 
     for (uint32_t d : ds) {
@@ -1176,7 +1176,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_cpmm_matmul", "", HeteroPro
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_transpose", "", HeteroProcessors) {
     vector<uint32_t> ds = {16};
-    vector<uint32_t> dims = {16, 32};
+    vector<uint32_t> dims = {16, 20};
     vector<int> levels = {1};
 
     for (uint32_t d : ds) {
