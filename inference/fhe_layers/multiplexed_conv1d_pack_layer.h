@@ -52,9 +52,8 @@ public:
     Array<double, 2> plaintext_call(const Array<double, 2>& x);
 
     std::vector<std::vector<std::vector<CkksPlaintextRingt>>> weight_pt;
-    std::vector<CkksPlaintext> bias_pt;
-    std::vector<CkksPlaintext> select_tensor_pt;
-    std::vector<CkksPlaintext> block_select_pt;
+    std::vector<CkksPlaintextRingt> bias_pt;
+    std::vector<CkksPlaintextRingt> block_select_pt;
 
     uint32_t input_shape;
     uint32_t skip;

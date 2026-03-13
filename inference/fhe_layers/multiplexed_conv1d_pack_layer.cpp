@@ -224,7 +224,7 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
                     }
                 }
             }
-            bias_pt[wg] = ctx.encode(bias_data, level - 1, ctx.get_parameter().get_default_scale());
+            bias_pt[wg] = ctx.encode_ringt(bias_data, ctx.get_parameter().get_default_scale());
         }
     } else {
         uint32_t skip_out = skip * stride;
@@ -245,7 +245,7 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
                     }
                 }
             }
-            bias_pt[po] = ctx.encode(bias_data, level - 2, ctx.get_parameter().get_q(level - 1));
+            bias_pt[po] = ctx.encode_ringt(bias_data, ctx.get_parameter().get_q(level - 1));
         }
 
         block_select_pt.resize(n_block_per_ct);
@@ -255,7 +255,7 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
                 int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip;
                 mask[slot_idx] = 1.0;
             }
-            block_select_pt[t] = ctx.encode(mask, level - 1, ctx.get_parameter().get_q(level - 1));
+            block_select_pt[t] = ctx.encode_ringt(mask, ctx.get_parameter().get_q(level - 1));
         }
     }
 }
@@ -410,7 +410,7 @@ vector<CkksCiphertext> ParMultiplexedConv1DPackedLayer::run_core(CkksContext& ct
                 auto b_rt = generate_bias_pt_for_index(ctx, wg);
                 result[wg] = ctx.add_plain_ringt(result[wg], b_rt);
             } else {
-                result[wg] = ctx.add_plain(result[wg], bias_pt[wg]);
+                result[wg] = ctx.add_plain_ringt(result[wg], bias_pt[wg]);
             }
         }
         return result;
@@ -442,7 +442,8 @@ vector<CkksCiphertext> ParMultiplexedConv1DPackedLayer::run_core(CkksContext& ct
                 auto bs_pt = generate_select_tensor_pt_for_index(ctx_copy, t);
                 masked = ctx_copy.mult_plain(result[wg], bs_pt);
             } else {
-                masked = ctx_copy.mult_plain(result[wg], block_select_pt[t]);
+                auto bs_pt = ctx_copy.ringt_to_mul(block_select_pt[t], level - 1);
+                masked = ctx_copy.mult_plain_mul(result[wg], bs_pt);
             }
             masked = ctx_copy.rescale(masked, ctx_copy.get_parameter().get_default_scale());
 
@@ -468,7 +469,7 @@ vector<CkksCiphertext> ParMultiplexedConv1DPackedLayer::run_core(CkksContext& ct
             auto b_rt = generate_bias_pt_for_index(ctx_copy, po);
             combined = ctx_copy.add_plain_ringt(combined, b_rt);
         } else {
-            combined = ctx_copy.add_plain(combined, bias_pt[po]);
+            combined = ctx_copy.add_plain_ringt(combined, bias_pt[po]);
         }
         merged_result[po] = move(combined);
     });

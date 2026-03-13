@@ -36,6 +36,8 @@ from model_generator.layers.square_pack import *
 from model_generator.layers.inverse_multiplexed_conv2d_layer import *
 from model_generator.layers.upsample_layer import *
 from model_generator.layers.concat_layer import *
+from model_generator.layers.conv1d_packed_layer import *
+from model_generator.layers.multiplexed_conv1d_pack_layer import *
 
 
 def read_config(config_path):

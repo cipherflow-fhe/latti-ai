@@ -55,7 +55,7 @@ public:
     Array<double, 1> bias;
     CkksParameter param;
     std::vector<std::vector<std::vector<CkksPlaintextRingt>>> weight_pt;
-    std::vector<CkksPlaintext> bias_pt;
+    std::vector<CkksPlaintextRingt> bias_pt;
     bool normal_conv = true;
 
 private:
