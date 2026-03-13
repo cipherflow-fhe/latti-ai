@@ -16,6 +16,7 @@
 
 
 import copy
+import math
 import time
 from enum import Enum
 import networkx as nx
@@ -26,6 +27,33 @@ from components import *
 class Direction(Enum):
     UP = 'up'
     DOWN = 'down'
+
+
+def _calc_pack_num(dag: nx.DiGraph, feature_node, slot_num: int, use_skip: bool = True) -> int:
+    attrs = dag.nodes[feature_node]
+    if feature_node.dim == 0:
+        return math.ceil(
+            slot_num
+            / (
+                attrs['virtual_shape'][0]
+                * attrs['virtual_shape'][1]
+                * attrs['virtual_skip'][0]
+                * attrs['virtual_skip'][1]
+            )
+        )
+    else:
+        denom = feature_node.shape[0] * feature_node.shape[1]
+        if use_skip:
+            denom *= attrs['skip'][0] * attrs['skip'][1]
+        return math.ceil(slot_num / denom)
+
+
+def populate_pack_num(dag: nx.DiGraph, node, slot_num: int):
+    preds = list(dag.predecessors(node))
+    succs = list(dag.successors(node))
+    use_skip = config.style != 'multiplexed'
+    for f_node in preds + succs:
+        dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num, use_skip=use_skip)
 
 
 def _insert_layer_between_feature_and_compute(
@@ -365,7 +393,7 @@ def split_upsampling_layers(graph: LayerAbstractGraph):
             conv_node.upsample_factor = [1, 1]
 
 
-def infer_shapes_and_skips(graph: LayerAbstractGraph):
+def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
     sorted_nodes = list(nx.topological_sort(graph.dag))
     sorted_compute_nodes = [node for node in sorted_nodes if isinstance(node, ComputeNode)]
 
@@ -419,6 +447,7 @@ def infer_shapes_and_skips(graph: LayerAbstractGraph):
                 graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
         if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
             graph.dag.nodes[succ]['skip'] = [1, 1]
+        populate_pack_num(graph.dag, compute_node, config.poly_n / 2)
 
 
 def combine_convs_with_upsamples(graph: LayerAbstractGraph):

@@ -93,7 +93,7 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     # update_level_cost_for_btp(pt_graph)
     set_is_adaptive_avgpool(pt_graph)
     transforms.split_upsampling_layers(pt_graph)
-    transforms.infer_shapes_and_skips(pt_graph)
+    transforms.infer_shapes_skips_and_pack_num(pt_graph)
     transforms.combine_convs_with_upsamples(pt_graph)
     transforms.set_level_costs(pt_graph)
 
@@ -240,7 +240,7 @@ def post_process(graph: LayerAbstractGraph):
         if isinstance(node, ComputeNode):
             node.up_scale_str = list()
             node.down_scale_str = list()
-            populate_pack_num(graph.dag, node, slot_num)
+            transforms.populate_pack_num(graph.dag, node, slot_num)
 
     transforms.set_graph_scale(graph)
     process_levels(graph)

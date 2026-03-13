@@ -52,40 +52,6 @@ def get_leading_feature_nodes(dag: nx.DiGraph) -> list[FeatureNode]:
     return leading_feature_nodes
 
 
-def _calc_pack_num(dag: nx.DiGraph, feature_node, slot_num: int, use_skip: bool = True) -> int:
-    attrs = dag.nodes[feature_node]
-    if feature_node.dim == 0:
-        return math.ceil(
-            slot_num
-            / (
-                attrs['virtual_shape'][0]
-                * attrs['virtual_shape'][1]
-                * attrs['virtual_skip'][0]
-                * attrs['virtual_skip'][1]
-            )
-        )
-    else:
-        denom = feature_node.shape[0] * feature_node.shape[1]
-        if use_skip:
-            denom *= attrs['skip'][0] * attrs['skip'][1]
-        return math.ceil(slot_num / denom)
-
-
-def populate_pack_num(dag: nx.DiGraph, node, slot_num: int):
-    preds = list(dag.predecessors(node))
-    succs = list(dag.successors(node))
-    if config.style == 'multiplexed':
-        for f_node in preds + succs:
-            dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num, use_skip=False)
-    else:
-        if node.layer_type == 'reshape':
-            for f_node in preds + succs:
-                dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num)
-        else:
-            for f_node in preds + succs:
-                dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num)
-
-
 def update_subgraph_node_param(dag, param_dict: dict[str, EncryptParameterNode], param_id, print_flag=False):
     all_nodes_in_topo_sort = list(nx.topological_sort(dag))
     compute_nodes_in_topo_sort = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)]
@@ -101,7 +67,7 @@ def update_subgraph_node_param(dag, param_dict: dict[str, EncryptParameterNode],
         update_skip_for_btp(sub, print_flag)
         update_level_cost_for_btp(sub)
     for compute_node in compute_nodes_in_topo_sort:
-        populate_pack_num(dag, compute_node, slot_num)
+        transforms.populate_pack_num(dag, compute_node, slot_num)
 
 
 def sync_node_attributes(source_graph: LayerAbstractGraph, target_graph: LayerAbstractGraph):
