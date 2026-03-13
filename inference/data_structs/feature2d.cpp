@@ -697,8 +697,8 @@ void Feature2DEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
                                               double scale_in) {
     uint32_t m = matrix.get_shape()[0];
     uint32_t n_cols = matrix.get_shape()[1];
-    uint32_t num_block_rows = m / d;
-    uint32_t num_block_cols = n_cols / d;
+    uint32_t num_block_rows = div_ceil(m, d);
+    uint32_t num_block_cols = div_ceil(n_cols, d);
     int n_slot = context->get_parameter().get_n() / 2;
     uint32_t chunk_size = d * d;
     const int N_THREAD = 4;
@@ -715,7 +715,11 @@ void Feature2DEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
             for (uint32_t c = 0; c < num_chunks; c++) {
                 for (uint32_t col = 0; col < d; col++) {
                     for (uint32_t row = 0; row < d; row++) {
-                        vec[c * chunk_size + row + d * col] = matrix.get(bi * d + row, bj * d + col);
+                        uint32_t r = bi * d + row;
+                        uint32_t c_col = bj * d + col;
+                        if (r < m && c_col < n_cols) {
+                            vec[c * chunk_size + row + d * col] = matrix.get(r, c_col);
+                        }
                     }
                 }
             }
@@ -742,8 +746,8 @@ void Feature2DEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
 }
 
 Array<double, 2> Feature2DEncrypted::block_col_major_unpack(uint32_t m, uint32_t n, uint32_t d) const {
-    uint32_t num_block_rows = m / d;
-    uint32_t num_block_cols = n / d;
+    uint32_t num_block_rows = div_ceil(m, d);
+    uint32_t num_block_cols = div_ceil(n, d);
     const int N_THREAD = 4;
     uint32_t total_blocks = num_block_rows * num_block_cols;
 
@@ -759,7 +763,11 @@ Array<double, 2> Feature2DEncrypted::block_col_major_unpack(uint32_t m, uint32_t
         // Extract first d*d elements (column-major within block)
         for (uint32_t col = 0; col < d; col++) {
             for (uint32_t row = 0; row < d; row++) {
-                result.set(bi * d + row, bj * d + col, x_mg[row + d * col]);
+                uint32_t r = bi * d + row;
+                uint32_t c_col = bj * d + col;
+                if (r < m && c_col < n) {
+                    result.set(r, c_col, x_mg[row + d * col]);
+                }
             }
         }
     });

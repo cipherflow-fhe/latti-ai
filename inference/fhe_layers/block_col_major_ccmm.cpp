@@ -45,19 +45,15 @@ BlockColMajorCCMM::BlockColMajorCCMM(const CkksParameter& param_in,
     n_ = n;
     p_ = p;
 
-    assert(m % d_ == 0 && "m must be divisible by d_");
-    assert(n % d_ == 0 && "n must be divisible by d_");
-    assert(p % d_ == 0 && "p must be divisible by d_");
-
     n_slot_ = param_.get_n() / 2;
     chunk_size_ = d_ * d_;
     assert(n_slot_ % chunk_size_ == 0 && "n_slot must be divisible by d^2");
     num_chunks_ = n_slot_ / chunk_size_;
 
-    num_block_rows_A_ = m / d_;
-    num_block_cols_A_ = n / d_;
-    num_block_rows_B_ = n / d_;
-    num_block_cols_B_ = p / d_;
+    num_block_rows_A_ = div_ceil(m, d_);
+    num_block_cols_A_ = div_ceil(n, d_);
+    num_block_rows_B_ = div_ceil(n, d_);
+    num_block_cols_B_ = div_ceil(p, d_);
 }
 
 BlockColMajorCCMM::~BlockColMajorCCMM() {}
