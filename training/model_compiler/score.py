@@ -327,8 +327,8 @@ class FheScoreParam:
             else:
                 x_size = (
                     math.ceil(self.input_channel / self.pack)
-                    * math.ceil(self.input_shape[0] / config.block_shape[0])
-                    * math.ceil(self.input_shape[1] / config.block_shape[1])
+                    * math.ceil(self.input_shape[0] / config.fhe_param.block_shape[0])
+                    * math.ceil(self.input_shape[1] / config.fhe_param.block_shape[1])
                 )
 
                 n_block_per_ct = math.ceil(self.pack / (self.input_skip[0] * self.input_skip[1]))

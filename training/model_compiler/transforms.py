@@ -417,7 +417,7 @@ def infer_shapes_and_skips(graph: LayerAbstractGraph):
             for i in range(preds[0].dim):
                 succ.shape[i] = preds[0].shape[i]
                 graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
-        if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+        if preds[0].shape[0] > config.fhe_param.block_shape[0] or preds[0].shape[1] > config.fhe_param.block_shape[1]:
             graph.dag.nodes[succ]['skip'] = [1, 1]
 
 
@@ -431,7 +431,9 @@ def combine_convs_with_upsamples(graph: LayerAbstractGraph):
         conv_out = next(graph.dag.successors(conv_node))
         dim = upsample_node.dim
 
-        if any(conv_out.shape[i] * upsample_node.upsample_factor[i] > config.block_shape[i] for i in range(dim)):
+        if any(
+            conv_out.shape[i] * upsample_node.upsample_factor[i] > config.fhe_param.block_shape[i] for i in range(dim)
+        ):
             continue
 
         for i in range(dim):
@@ -466,7 +468,10 @@ def set_level_costs(graph: LayerAbstractGraph):
             if config.style == 'ordinary':
                 graph.dag.nodes[compute_node]['level_cost'] = 1
             elif config.style == 'multiplexed':
-                if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+                if (
+                    preds[0].shape[0] > config.fhe_param.block_shape[0]
+                    or preds[0].shape[1] > config.fhe_param.block_shape[1]
+                ):
                     compute_node.is_big_size = True
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                 else:
@@ -484,7 +489,10 @@ def set_level_costs(graph: LayerAbstractGraph):
                 raise ValueError('Unsupported config.style')
 
         elif compute_node.layer_type == 'avgpool2d':
-            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+            if (
+                preds[0].shape[0] > config.fhe_param.block_shape[0]
+                or preds[0].shape[1] > config.fhe_param.block_shape[1]
+            ):
                 graph.dag.nodes[compute_node]['level_cost'] = 0
                 compute_node.is_big_size = True
                 compute_node.is_adaptive_avgpool = False
@@ -499,7 +507,10 @@ def set_level_costs(graph: LayerAbstractGraph):
                     compute_node.is_adaptive_avgpool = False
         elif compute_node.layer_type == config.approx_poly_type:
             graph.dag.nodes[compute_node]['level_cost'] = math.ceil(math.log2(compute_node.order)) + 1
-            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+            if (
+                preds[0].shape[0] > config.fhe_param.block_shape[0]
+                or preds[0].shape[1] > config.fhe_param.block_shape[1]
+            ):
                 compute_node.is_big_size = True
         elif isinstance(compute_node, UpsampleComputeNode):
             if compute_node.upsample_factor[0] == 1 and compute_node.upsample_factor[1] == 1:

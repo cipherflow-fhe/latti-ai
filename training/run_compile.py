@@ -167,7 +167,7 @@ Examples:
 
     try:
         # Initialize configuration with command line arguments
-        init_config_with_args(poly_n=args.poly_n, style=args.style, graph_type=args.graph_type)
+        init_config_with_args(style=args.style, graph_type=args.graph_type)
 
         # Run parallel compilation
         run_pipeline(

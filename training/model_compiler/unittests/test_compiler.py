@@ -137,7 +137,7 @@ def check_feature_scale(graph: LayerAbstractGraph):
 def check_dropped_levels_per_subgraph(graph: LayerAbstractGraph) -> bool:
     """
     For every linear subgraph, verify that the sum of level_cost values on all
-    drop_level nodes does not exceed config.max_level + 2.
+    drop_level nodes does not exceed config.fhe_param.max_level + 2.
 
     Returns True if all subgraphs satisfy the constraint, False otherwise.
     """
@@ -149,10 +149,10 @@ def check_dropped_levels_per_subgraph(graph: LayerAbstractGraph) -> bool:
             for node in sub.nodes
             if isinstance(node, ComputeNode) and node.layer_type == 'drop_level'
         )
-        if total_dropped > config.max_level + 2:
+        if total_dropped > config.fhe_param.max_level + 2:
             print(
                 f'[check_dropped_levels_per_subgraph] FAIL: subgraph total dropped levels '
-                f'{total_dropped} > config.max_level + 2 = {config.max_level + 2}'
+                f'{total_dropped} > config.fhe_param.max_level + 2 = {config.fhe_param.max_level + 2}'
             )
             result = False
     return result
@@ -168,7 +168,6 @@ class CompilerTestBase(unittest.TestCase):
         input_size,
         style='ordinary',
         graph_type='btp',
-        poly_n=65536,
         **export_kwargs,
     ):
         export_to_onnx(
@@ -180,7 +179,7 @@ class CompilerTestBase(unittest.TestCase):
             **export_kwargs,
         )
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, style)
-        init_config_with_args(poly_n=poly_n, style=style, graph_type=graph_type)
+        init_config_with_args(style=style, graph_type=graph_type)
         graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
@@ -253,7 +252,7 @@ class TestCompiler(CompilerTestBase):
 
         self.assertEqual(
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)),
-            config.max_level,
+            config.fhe_param.max_level,
         )
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
 
@@ -263,7 +262,7 @@ class TestCompiler(CompilerTestBase):
 
         self.assertEqual(
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)),
-            config.max_level,
+            config.fhe_param.max_level,
         )
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
 
@@ -273,7 +272,7 @@ class TestCompiler(CompilerTestBase):
 
         self.assertEqual(
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)),
-            config.max_level,
+            config.fhe_param.max_level,
         )
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
 
@@ -335,7 +334,7 @@ class TestCompiler(CompilerTestBase):
         )
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
 
-        init_config_with_args(poly_n=65536, style='multiplexed', graph_type='btp')
+        init_config_with_args(style='multiplexed', graph_type='btp')
         graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
@@ -382,7 +381,7 @@ class TestCompiler(CompilerTestBase):
                 self.assertGreater(attrs['pack_num'], 0)
                 if node.dim == 0:
                     expected = math.ceil(
-                        config.poly_n
+                        config.fhe_param.poly_modulus_degree
                         / 2
                         / (
                             attrs['virtual_shape'][0]
@@ -393,7 +392,9 @@ class TestCompiler(CompilerTestBase):
                     )
                 else:
                     expected = math.ceil(
-                        config.poly_n / 2 / (node.shape[0] * node.shape[1] * attrs['skip'][0] * attrs['skip'][1])
+                        config.fhe_param.poly_modulus_degree
+                        / 2
+                        / (node.shape[0] * node.shape[1] * attrs['skip'][0] * attrs['skip'][1])
                     )
                 self.assertEqual(attrs['pack_num'], expected)
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
@@ -409,7 +410,7 @@ class TestCompiler(CompilerTestBase):
                 self.assertGreater(attrs['pack_num'], 0)
                 if node.dim == 0:
                     expected = math.ceil(
-                        config.poly_n
+                        config.fhe_param.poly_modulus_degree
                         / 2
                         / (
                             attrs['virtual_shape'][0]
@@ -419,7 +420,7 @@ class TestCompiler(CompilerTestBase):
                         )
                     )
                 else:
-                    expected = math.ceil(config.poly_n / 2 / (node.shape[0] * node.shape[1]))
+                    expected = math.ceil(config.fhe_param.poly_modulus_degree / 2 / (node.shape[0] * node.shape[1]))
                 self.assertEqual(attrs['pack_num'], expected)
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
 
@@ -434,7 +435,7 @@ class TestCompiler(CompilerTestBase):
         )
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
 
-        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        init_config_with_args(style='ordinary', graph_type='btp')
         from pipeline import prepare_graph
         from transforms import split_graph_to_linear_subgraph
 
@@ -549,7 +550,7 @@ class TestCompilerErrors(CompilerTestBase):
     def test_unreplaced_relu(self):
         self._export_only(nn_modules.SingleRelu(), (1, 32, 64, 64))
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
-        init_config_with_args(poly_n=65536, style='ordinary', graph_type='btp')
+        init_config_with_args(style='ordinary', graph_type='btp')
         with self.assertRaisesRegex(ValueError, r'Relu2d is not supported in current mode'):
             run_pipeline(
                 num_experiments=1,
@@ -576,8 +577,8 @@ class TestPolyDegree(CompilerTestBase):
         model = nn_modules.PolyDegreeN8192()
         graph, score = self._export_and_compile(model, (1, 32, 8, 8))
         # No-BTP selects the smallest poly_n whose max_level accommodates the graph.
-        self.assertEqual(config.poly_n, 8192)
-        self.assertEqual(config.max_level, 5)
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 8192)
+        self.assertEqual(config.fhe_param.max_level, 5)
         self.assertIsNotNone(graph)
         # No bootstrapping nodes should be present.
         self.assertFalse(any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes))
@@ -586,8 +587,8 @@ class TestPolyDegree(CompilerTestBase):
         """3 Conv + 1 Act = 6 levels; exceeds poly_n=8192 (max 5), fits poly_n=16384 (max 9); no-BTP mode."""
         model = nn_modules.PolyDegreeN16384()
         graph, score = self._export_and_compile(model, (1, 32, 8, 8))
-        self.assertEqual(config.poly_n, 16384)
-        self.assertEqual(config.max_level, 9)
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 16384)
+        self.assertEqual(config.fhe_param.max_level, 9)
         self.assertIsNotNone(graph)
         self.assertFalse(any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes))
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
@@ -596,8 +597,8 @@ class TestPolyDegree(CompilerTestBase):
         """4 Conv + 2 Act = 10 levels; exceeds poly_n=16384 (max 9), fits poly_n=32768 (max 17); no-BTP mode."""
         model = nn_modules.PolyDegreeN32768()
         graph, score = self._export_and_compile(model, (1, 32, 8, 8))
-        self.assertEqual(config.poly_n, 32768)
-        self.assertEqual(config.max_level, 17)
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 32768)
+        self.assertEqual(config.fhe_param.max_level, 17)
         self.assertIsNotNone(graph)
         self.assertFalse(any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes))
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
@@ -606,8 +607,8 @@ class TestPolyDegree(CompilerTestBase):
         """6 Conv + 4 Act = 18 levels; exceeds poly_n=32768 (max 17), fits poly_n=65536 (max 33); no-BTP mode."""
         model = nn_modules.PolyDegreeN65536NoBtp()
         graph, score = self._export_and_compile(model, (1, 32, 8, 8))
-        self.assertEqual(config.poly_n, 65536)
-        self.assertEqual(config.max_level, 33)
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 65536)
+        self.assertEqual(config.fhe_param.max_level, 33)
         self.assertIsNotNone(graph)
         self.assertFalse(any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes))
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
@@ -616,8 +617,8 @@ class TestPolyDegree(CompilerTestBase):
         """4 Conv + 10 Act = 34 levels; exceeds all non-BTP limits → BTP mode, poly_n=65536, max_level=9."""
         model = nn_modules.PolyDegreeNBtp()
         graph, score = self._export_and_compile(model, (1, 32, 8, 8))
-        self.assertEqual(config.poly_n, 65536)
-        self.assertEqual(config.max_level, 9)
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 65536)
+        self.assertEqual(config.fhe_param.max_level, 9)
         self.assertIsNotNone(graph)
         # BTP mode must insert bootstrapping nodes.
         self.assertTrue(any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes))

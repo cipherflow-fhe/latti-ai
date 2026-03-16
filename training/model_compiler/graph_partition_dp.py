@@ -80,7 +80,9 @@ def update_bd_node_in_sub(node: FeatureNode, subgraph: nx.DiGraph, remaining_dag
 
 def generate_param_dict_for_graph():
     param_dict = dict()
-    param_dict['param0'] = FheParameter(config.poly_n, config.max_level)
+    param_dict['param0'] = FheParameter(
+        config.fhe_param.poly_modulus_degree, config.fhe_param.max_level, config.fhe_param.coeff_modulus_bit_length
+    )
     return param_dict
 
 
@@ -142,7 +144,7 @@ class GraphPartitioner:
                         input_feature_lv.append(level_dict[feat] + subgraph.nodes[c]['level_cost'])
 
                 level_dict[node] = max(input_feature_lv)
-                if level_dict[node] > config.max_level:
+                if level_dict[node] > config.fhe_param.max_level:
                     return False, -1, level_dict
 
             max_level = max(max_level, level_dict[node])

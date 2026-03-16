@@ -52,18 +52,17 @@ import copy
 
 
 class FheParameter:
-    _POLY_TO_MOD: dict[int, int] = {8192: 30, 16384: 34, 32768: 40, 65536: 45}
-
     def __init__(
         self,
         poly_modulus_degree: int,
         n_mult_level: int,
+        coeff_modulus_bit_length: int,
         block_shape: list | None = None,
     ):
         self.poly_modulus_degree = poly_modulus_degree
         self.max_level = n_mult_level
-        self.coeff_modulus_bit_length = self._POLY_TO_MOD.get(poly_modulus_degree, 41)
-        self.special_prime_bit_length = self.coeff_modulus_bit_length
+        self.coeff_modulus_bit_length = coeff_modulus_bit_length
+        self.special_prime_bit_length = coeff_modulus_bit_length
         self.block_shape = block_shape
 
     def to_dict(self) -> dict:
@@ -72,6 +71,7 @@ class FheParameter:
             'n_mult_level': self.max_level,
             'coeff_modulus_bit_length': self.coeff_modulus_bit_length,
             'special_prime_bit_length': self.special_prime_bit_length,
+            'block_shape': self.block_shape,
         }
 
     def __repr__(self) -> str:
@@ -79,7 +79,8 @@ class FheParameter:
             f'FheParameter(poly_modulus_degree={self.poly_modulus_degree}, '
             f'n_mult_level={self.max_level}, '
             f'coeff_modulus_bit_length={self.coeff_modulus_bit_length}, '
-            f'special_prime_bit_length={self.special_prime_bit_length})'
+            f'special_prime_bit_length={self.special_prime_bit_length}, '
+            f'block_shape={self.block_shape})'
         )
 
 
@@ -98,6 +99,7 @@ class GlobalConfig:
             cls._instance.fhe_param = FheParameter(
                 poly_modulus_degree=config_dict.get('POLY_N', 65536),
                 n_mult_level=0,  # overwritten by initialize_config() before first use
+                coeff_modulus_bit_length=0,  # overwritten by initialize_config() before first use
                 block_shape=config_dict.get('block_shape', (1, 1)),
             )
             cls._instance.graph_type = config_dict.get('GRAPH_TYPE', 'btp')
@@ -108,32 +110,6 @@ class GlobalConfig:
             cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'simple_polyrelu']
 
         return cls._instance
-
-    @property
-    def poly_n(self) -> int:
-        return self.fhe_param.poly_modulus_degree
-
-    @poly_n.setter
-    def poly_n(self, value: int) -> None:
-        self.fhe_param.poly_modulus_degree = value
-        self.fhe_param.coeff_modulus_bit_length = FheParameter._POLY_TO_MOD.get(value, 41)
-        self.fhe_param.special_prime_bit_length = self.fhe_param.coeff_modulus_bit_length
-
-    @property
-    def max_level(self) -> int:
-        return self.fhe_param.max_level
-
-    @max_level.setter
-    def max_level(self, value: int) -> None:
-        self.fhe_param.max_level = value
-
-    @property
-    def block_shape(self):
-        return self.fhe_param.block_shape
-
-    @block_shape.setter
-    def block_shape(self, value) -> None:
-        self.fhe_param.block_shape = value
 
 
 config = GlobalConfig()
@@ -189,7 +165,7 @@ class FeatureNode:
             virtual_shape = getattr(self, 'virtual_shape', [1, 1])
             virtual_skip = getattr(self, 'virtual_skip', [1, 1])
             info['skip'] = virtual_shape[0] * virtual_shape[1] * virtual_skip[0] * virtual_skip[1]
-            info['pack_num'] = math.ceil(config.poly_n / 2 / info['skip'])
+            info['pack_num'] = math.ceil(config.fhe_param.poly_modulus_degree / 2 / info['skip'])
 
         info['ckks_parameter_id'] = self.ckks_parameter_id
         info['level'] = int(self.level)

@@ -18,18 +18,17 @@
 from pathlib import Path
 
 import components
-from components import LayerAbstractGraph, FheParameter, config
+from components import LayerAbstractGraph, config
 import processor
 from processor import *
 from graph_partition_dp import *
 
 
-def init_config_with_args(poly_n=None, style=None, graph_type=None):
+def init_config_with_args(style=None, graph_type=None):
     """
     Initialize configuration based on command line arguments
 
     Args:
-        poly_n: Polynomial modulus degree (POLY_N)
         style: Computation style (STYLE)
         graph_type: Graph type (GRAPH_TYPE)
     """
@@ -38,34 +37,7 @@ def init_config_with_args(poly_n=None, style=None, graph_type=None):
     if graph_type is not None:
         config.graph_type = graph_type
 
-    current_graph_type = config.graph_type
-
-    # Automatically set MAX_LEVEL based on POLY_N and GRAPH_TYPE
-    if current_graph_type == 'btp':
-        poly_n_to_max_level = {65536: 9}
-    else:
-        poly_n_to_max_level = {8192: 5, 16384: 9, 32768: 17, 65536: 33}
-
-    poly_n_to_block_shape = {65536: [128, 128], 32768: [128, 128], 16384: [64, 64], 8192: [64, 64]}
-
-    current_poly_n = poly_n if poly_n is not None else config.poly_n
-    max_level = poly_n_to_max_level.get(current_poly_n)
-    if max_level is None:
-        print(f'Warning: No MAX_LEVEL mapping for POLY_N={current_poly_n}, using value from config.json')
-        max_level = config.fhe_param.max_level
-    block_shape = poly_n_to_block_shape.get(current_poly_n, [64, 64])
-
-    config.fhe_param = FheParameter(
-        poly_modulus_degree=current_poly_n,
-        n_mult_level=max_level,
-        block_shape=block_shape,
-    )
-
-    print(f'Automatically set MAX_LEVEL={max_level} based on GRAPH_TYPE={current_graph_type}, POLY_N={current_poly_n}')
-    print(f'Automatically set block_shape={block_shape} based on POLY_N={current_poly_n}')
-    print(
-        f'Configuration initialized: POLY_N={current_poly_n}, STYLE={config.style}, GRAPH_TYPE={current_graph_type}, MAX_LEVEL={max_level}, block_shape={block_shape}'
-    )
+    print(f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}')
 
 
 def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
@@ -110,17 +82,15 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
 
     # not btp style, set max level for polyrelu
     no_btp_params = [
-        components.FheParameter(8192, 5, [64, 64]),
-        components.FheParameter(16384, 9, [64, 64]),
-        components.FheParameter(32768, 17, [128, 128]),
-        components.FheParameter(65536, 33, [128, 256]),
+        components.FheParameter(8192, 5, 30, [64, 64]),
+        components.FheParameter(16384, 9, 34, [64, 64]),
+        components.FheParameter(32768, 17, 40, [128, 128]),
+        components.FheParameter(65536, 33, 45, [128, 256]),
     ]
 
     for params in no_btp_params:
         config.fhe_param = params
-        print(
-            f'Trying POLY_N={config.poly_n}, MAX_LEVEL={config.fhe_param.max_level}, block_shape={config.block_shape}'
-        )
+        print(f'Trying FheParam = {config.fhe_param}')
 
         # (1) Pre-process
         pt_graph = prepare_graph(raw_graph)
@@ -130,7 +100,7 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
 
         # (3) Post-process
         if result is not None:
-            print(f'Success! Using POLY_N={config.poly_n}, MAX_LEVEL={config.fhe_param.max_level}')
+            print(f'Success! Using FheParam = {config.fhe_param}')
             print('✓ No-BTP mode succeeded! Saving results...')
             restore_node_attributes(result.dag)
             result = post_process(result)
@@ -138,7 +108,7 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
             print(f'Score: 0.0')
             return True, result, 0.0
         else:
-            print(f'Level exceeded with POLY_N={config.poly_n}, trying next level...')
+            print(f'Level exceeded with POLY_N={config.fhe_param.poly_modulus_degree}, trying next level...')
 
     print(f'Warning: Even with POLY_N=65536, level still exceeds limit!')
     print('✗ No-BTP mode failed, switching to BTP mode...')
@@ -156,7 +126,7 @@ def try_btp(
     num_workers: int,
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
     btp_param_list = [
-        components.FheParameter(65536, 9, [128, 128]),
+        components.FheParameter(65536, 9, 45, [128, 128]),
     ]
     valid_results = []
     for params in btp_param_list:
@@ -230,7 +200,7 @@ def run_btp_compilation(
 
 
 def post_process(graph: LayerAbstractGraph):
-    slot_num = config.poly_n / 2
+    slot_num = config.fhe_param.poly_modulus_degree / 2
     for node in graph.dag.nodes:
         if isinstance(node, ComputeNode):
             node.up_scale_str = list()
