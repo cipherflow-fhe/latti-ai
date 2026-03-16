@@ -24,54 +24,20 @@ from processor import *
 from graph_partition_dp import *
 
 
-def init_config_with_args(poly_n=None, style=None, graph_type=None):
+def init_config_with_args(style=None, graph_type=None):
     """
     Initialize configuration based on command line arguments
 
     Args:
-        poly_n: Polynomial modulus degree (POLY_N)
         style: Computation style (STYLE)
         graph_type: Graph type (GRAPH_TYPE)
     """
-    # If command line arguments are provided, override config file values
-    if poly_n is not None:
-        config.poly_n = poly_n
     if style is not None:
         config.style = style
     if graph_type is not None:
         config.graph_type = graph_type
 
-    # Get current values from config
-    current_poly_n = config.poly_n
-    current_style = config.style
-    current_graph_type = config.graph_type
-
-    # Automatically set MAX_LEVEL based on POLY_N and GRAPH_TYPE
-    if current_graph_type == 'btp':
-        # BTP version configuration
-        poly_n_to_max_level = {65536: 9}
-    else:
-        # Non-BTP version configuration
-        poly_n_to_max_level = {8192: 5, 16384: 9, 32768: 17, 65536: 33}
-
-    max_level = poly_n_to_max_level.get(current_poly_n)
-    if max_level is not None:
-        config.max_level = max_level
-        print(
-            f'Automatically set MAX_LEVEL={max_level} based on GRAPH_TYPE={current_graph_type}, POLY_N={current_poly_n}'
-        )
-    else:
-        print(f'Warning: No MAX_LEVEL mapping for POLY_N={current_poly_n}, using value from config.json')
-
-    # Automatically set block_shape based on POLY_N
-    poly_n_to_block_shape = {65536: [128, 128], 32768: [128, 128], 16384: [64, 64], 8192: [64, 64]}
-    block_shape = poly_n_to_block_shape.get(current_poly_n, [64, 64])
-    config.block_shape = block_shape
-    print(f'Automatically set block_shape={block_shape} based on POLY_N={current_poly_n}')
-
-    print(
-        f'Configuration initialized: POLY_N={current_poly_n}, STYLE={current_style}, GRAPH_TYPE={current_graph_type}, MAX_LEVEL={config.max_level}, block_shape={config.block_shape}'
-    )
+    print(f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}')
 
 
 def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
@@ -115,15 +81,16 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
     print('Step 2: Trying no-BTP mode...')
 
     # not btp style, set max level for polyrelu
-    poly_n_to_max_level = {8192: 5, 16384: 9, 32768: 17, 65536: 33}
-    poly_n_to_block_shape = {8192: [64, 64], 16384: [64, 64], 32768: [128, 128], 65536: [128, 256]}
-    poly_n_levels = [8192, 16384, 32768, 65536]  # always start trying from 8192
+    no_btp_params = [
+        components.FheParameter(8192, 5, 30, [64, 64]),
+        components.FheParameter(16384, 9, 34, [64, 64]),
+        components.FheParameter(32768, 17, 40, [128, 128]),
+        components.FheParameter(65536, 33, 45, [128, 256]),
+    ]
 
-    for poly_n in poly_n_levels:
-        config.poly_n = poly_n
-        config.max_level = poly_n_to_max_level[poly_n]
-        config.block_shape = poly_n_to_block_shape[poly_n]
-        print(f'Trying POLY_N={poly_n}, MAX_LEVEL={config.max_level}, block_shape={config.block_shape}')
+    for params in no_btp_params:
+        config.fhe_param = params
+        print(f'Trying FheParam = {config.fhe_param}')
 
         # (1) Pre-process
         pt_graph = prepare_graph(raw_graph)
@@ -133,7 +100,7 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
 
         # (3) Post-process
         if result is not None:
-            print(f'Success! Using POLY_N={poly_n}, MAX_LEVEL={config.max_level}')
+            print(f'Success! Using FheParam = {config.fhe_param}')
             print('✓ No-BTP mode succeeded! Saving results...')
             restore_node_attributes(result.dag)
             result = post_process(result)
@@ -141,7 +108,7 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
             print(f'Score: 0.0')
             return True, result, 0.0
         else:
-            print(f'Level exceeded with POLY_N={poly_n}, trying next level...')
+            print(f'Level exceeded with POLY_N={config.fhe_param.poly_modulus_degree}, trying next level...')
 
     print(f'Warning: Even with POLY_N=65536, level still exceeds limit!')
     print('✗ No-BTP mode failed, switching to BTP mode...')
@@ -159,13 +126,11 @@ def try_btp(
     num_workers: int,
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
     btp_param_list = [
-        {'poly_n': 65536, 'max_level': 9, 'block_shape': [128, 128]},
+        components.FheParameter(65536, 9, 45, [128, 128]),
     ]
     valid_results = []
     for params in btp_param_list:
-        config.poly_n = params['poly_n']
-        config.max_level = params['max_level']
-        config.block_shape = params['block_shape']
+        config.fhe_param = params
 
         # (1) Pre-process
         pt_graph = prepare_graph(raw_graph)
@@ -235,7 +200,7 @@ def run_btp_compilation(
 
 
 def post_process(graph: LayerAbstractGraph):
-    slot_num = config.poly_n / 2
+    slot_num = config.fhe_param.poly_modulus_degree / 2
     for node in graph.dag.nodes:
         if isinstance(node, ComputeNode):
             node.up_scale_str = list()
@@ -275,18 +240,7 @@ def dump_graph(
     if server_task_config.exists():
         shutil.copy(str(server_task_config), str(client_task_config))
 
-    poly_n = config.poly_n
-    poly_to_mod = {8192: 30, 16384: 34, 32768: 40, 65536: 45}
-    mod_bit = poly_to_mod[poly_n]
-    ckks_param = {
-        'param0': {
-            'poly_modulus_degree': poly_n,
-            'n_mult_level': config.max_level,
-            'coeff_modulus_bit_length': mod_bit,
-            'special_prime_bit_length': mod_bit,
-            'pack_num': 4.0,
-        }
-    }
+    ckks_param = {'param0': {**config.fhe_param.to_dict(), 'pack_num': 4.0}}
 
     with open(server_dir / 'ckks_parameter.json', 'w') as f:
         json.dump(ckks_param, f, indent=4)
@@ -299,7 +253,7 @@ def run_pipeline(
     num_experiments: int,
     input_file_path: Path,
     output_dir: Path,
-    temperature: float,
+    temperature: float = 0.0,
     num_workers: int = 16,
 ):
     """

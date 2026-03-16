@@ -17,9 +17,10 @@
 
 # Class hierarchy overview:
 #
-#   GlobalConfig                      – singleton for compiler configuration
+#   FheParameter                      – CKKS encryption parameters (degree, modulus, …); held by GlobalConfig
 #
-#   EncryptParameterNode              – CKKS encryption parameters (degree, modulus, …)
+#   GlobalConfig                      – singleton for compiler configuration; exposes fhe_param,
+#                                       poly_n, and block_shape (the latter two as properties)
 #
 #   FeatureNode                       – a ciphertext tensor (node between compute layers)
 #
@@ -50,6 +51,39 @@ import os
 import copy
 
 
+class FheParameter:
+    def __init__(
+        self,
+        poly_modulus_degree: int,
+        n_mult_level: int,
+        coeff_modulus_bit_length: int,
+        block_shape: list | None = None,
+    ):
+        self.poly_modulus_degree = poly_modulus_degree
+        self.max_level = n_mult_level
+        self.coeff_modulus_bit_length = coeff_modulus_bit_length
+        self.special_prime_bit_length = coeff_modulus_bit_length
+        self.block_shape = block_shape
+
+    def to_dict(self) -> dict:
+        return {
+            'poly_modulus_degree': self.poly_modulus_degree,
+            'n_mult_level': self.max_level,
+            'coeff_modulus_bit_length': self.coeff_modulus_bit_length,
+            'special_prime_bit_length': self.special_prime_bit_length,
+            'block_shape': self.block_shape,
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f'FheParameter(poly_modulus_degree={self.poly_modulus_degree}, '
+            f'n_mult_level={self.max_level}, '
+            f'coeff_modulus_bit_length={self.coeff_modulus_bit_length}, '
+            f'special_prime_bit_length={self.special_prime_bit_length}, '
+            f'block_shape={self.block_shape})'
+        )
+
+
 class GlobalConfig:
     _instance = None
 
@@ -60,8 +94,14 @@ class GlobalConfig:
             config_path = os.path.join(os.path.dirname(__file__), 'config.json')
             with open(config_path, 'r', encoding='utf8') as f:
                 config_dict = json.load(f)
-            cls._instance.poly_n = config_dict.get('POLY_N', 65536)
-            cls._instance.block_shape = config_dict.get('block_shape', (1, 1))
+            # FHE parameters are encapsulated in a single FheParameter instance.
+            # poly_n and block_shape are exposed as properties that delegate to it.
+            cls._instance.fhe_param = FheParameter(
+                poly_modulus_degree=config_dict.get('POLY_N', 65536),
+                n_mult_level=0,  # overwritten by initialize_config() before first use
+                coeff_modulus_bit_length=0,  # overwritten by initialize_config() before first use
+                block_shape=config_dict.get('block_shape', (1, 1)),
+            )
             cls._instance.graph_type = config_dict.get('GRAPH_TYPE', 'btp')
             cls._instance.style = config_dict.get('STYLE', 'multiplexed')
             cls._instance.mpc_refresh = config_dict.get('MPC_REFRESH', False)
@@ -82,27 +122,6 @@ YOLO_TYPE = True
 IS_BALANCE = False
 DEFAULT_SCALE = 1
 single_thread = False
-
-
-class EncryptParameterNode:
-    def __init__(
-        self,
-        poly_modulus_degree: int,
-        coeff_modulus_bit_length: int,
-        special_prime_bit_length: int,
-    ):
-        self.poly_modulus_degree = poly_modulus_degree
-        self.coeff_modulus_bit_length = coeff_modulus_bit_length
-        self.special_prime_bit_length = special_prime_bit_length
-
-    def __repr__(self) -> str:
-        return (
-            f'poly_modulus_degree: {self.poly_modulus_degree}, '
-            + f'mult_level: {self.mult_level}, '
-            + f'coeff_modulus_bit_length: {self.coeff_modulus_bit_length}, '
-            + f'special_prime_bit_length: {self.special_prime_bit_length}, '
-            + f'pack_num: {self.pack_num}'
-        )
 
 
 class FeatureNode:
@@ -146,7 +165,7 @@ class FeatureNode:
             virtual_shape = getattr(self, 'virtual_shape', [1, 1])
             virtual_skip = getattr(self, 'virtual_skip', [1, 1])
             info['skip'] = virtual_shape[0] * virtual_shape[1] * virtual_skip[0] * virtual_skip[1]
-            info['pack_num'] = math.ceil(config.poly_n / 2 / info['skip'])
+            info['pack_num'] = math.ceil(config.fhe_param.poly_modulus_degree / 2 / info['skip'])
 
         info['ckks_parameter_id'] = self.ckks_parameter_id
         info['level'] = int(self.level)
@@ -633,25 +652,13 @@ class LayerAbstractGraph:
 
     def to_json(
         self,
-        param: dict[str, EncryptParameterNode],
+        param: dict[str, FheParameter],
         output_path: str | None,
         is_last_mpc=False,
         score=0.0,
     ) -> None:
         param_dict = dict()
-        poly_to_mod = {8192: 30, 16384: 34, 32768: 40, 65536: 45}
-        mod_bits = poly_to_mod.get(config.poly_n, 41)
-        param_dict.update(
-            {
-                'param0': {
-                    'poly_modulus_degree': config.poly_n,
-                    'n_mult_level': config.max_level,
-                    'coeff_modulus_bit_length': mod_bits,
-                    'special_prime_bit_length': mod_bits,
-                    'pack_num': 4,
-                }
-            }
-        )
+        param_dict['param0'] = {**config.fhe_param.to_dict(), 'pack_num': 4}
         layers = dict()
 
         compute_list: list[ComputeNode] = list()
