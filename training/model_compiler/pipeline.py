@@ -253,7 +253,7 @@ def run_pipeline(
     num_experiments: int,
     input_file_path: Path,
     output_dir: Path,
-    temperature: float,
+    temperature: float = 0.0,
     num_workers: int = 16,
 ):
     """
