@@ -158,7 +158,7 @@ class FeatureNode:
         info['dim'] = self.dim
         info['channel'] = self.channel
         info['scale'] = self.scale
-        if self.dim == 2:
+        if self.dim in (1, 2):
             info['shape'] = self.shape
 
         if self.dim == 0:
@@ -256,6 +256,7 @@ class ConvComputeNode(SpatialComputeNode):
             layer_type,
             channel_input,
             channel_output,
+            dim=dim,
             stride=stride,
             upsample_factor=upsample_factor,
             upsample_factor_in=upsample_factor_in,
@@ -486,11 +487,11 @@ class LayerAbstractGraph:
             channel = feature_json['channel']
             scale = 1.0
             ckks_parameter_id = feature_json['ckks_parameter_id']
-            if dim == 2:
+            if dim in (1, 2):
                 shape = feature_json['shape']
-                skip = [1, 1]
-                virtual_skip = [1, 1]
-                virtual_shape = [1, 1]
+                skip = [1] * dim
+                virtual_skip = [1] * dim
+                virtual_shape = [1] * dim
                 node = FeatureNode(key, dim, channel, scale, ckks_parameter_id, DEFAULT_SCALE, shape)
             elif dim == 0:
                 shape = [0, 0]
@@ -542,7 +543,8 @@ class LayerAbstractGraph:
                 kernel_shape = layer_json['kernel_shape']
                 stride = layer_json['stride']
                 groups = layer_json['groups']
-                upsample_factor = layer_json.get('upsample_factor', [1, 1])
+                dim = feature_input[0].dim
+                upsample_factor = layer_json.get('upsample_factor', [1] * dim)
                 is_conv_transpose = False
                 if 'upsample_factor' in layer_json and layer_json['upsample_factor'][0] != 1:
                     upsample_factor = layer_json['upsample_factor']
@@ -553,6 +555,7 @@ class LayerAbstractGraph:
                     layer_type,
                     channel_input,
                     channel_output,
+                    dim=dim,
                     groups=groups,
                     stride=stride,
                     kernel_shape=kernel_shape,
@@ -1014,7 +1017,7 @@ class LayerAbstractGraph:
                         'depth': depth,
                         'pack_num': pack_num,
                     }
-                elif dim == 2:
+                elif dim in (1, 2):
                     features[key] = {
                         'dim': dim,
                         'channel': channel,

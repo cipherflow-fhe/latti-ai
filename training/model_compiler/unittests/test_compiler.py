@@ -199,9 +199,25 @@ class TestCompiler(CompilerTestBase):
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 1
         )
 
+    def test_single_conv1d(self):
+        model = nn_modules.SingleConv1d()
+        graph, score = self._export_and_compile(model, (1, 32, 64))
+
+        self.assertEqual(
+            max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 1
+        )
+
     def test_single_act(self):
         model = nn_modules.SingleAct()
         graph, score = self._export_and_compile(model, (1, 32, 64, 64))
+
+        self.assertEqual(
+            max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 3
+        )
+
+    def test_single_act1d(self):
+        model = nn_modules.SingleAct1d()
+        graph, score = self._export_and_compile(model, (1, 32, 64))
 
         self.assertEqual(
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 3

@@ -81,7 +81,7 @@ class FeatureNode(object):
         if self.dim == 1:
             info['shape'] = self.shape
             info['skip'] = self.skip
-            info['pack_num'] = math.ceil(N / 2 / self.shape[0] / self.skip[1])
+            info['pack_num'] = math.ceil(N / 2 / self.shape[0] / self.skip[0])
         if self.dim == 0:
             info['virtual_shape'] = [8, 8]
             info['virtual_skip'] = [1, 1]
