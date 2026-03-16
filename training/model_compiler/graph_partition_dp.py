@@ -46,7 +46,7 @@ import transforms
 from processor import (
     substitute_layers_for_btp,
     process_levels,
-    EncryptParameterNode,
+    FheParameter,
     BtpScoreParam,
     MpcScoreParam,
     FheScoreParam,
@@ -80,16 +80,12 @@ def update_bd_node_in_sub(node: FeatureNode, subgraph: nx.DiGraph, remaining_dag
 
 def generate_param_dict_for_graph():
     param_dict = dict()
-    poly_to_mod = {8192: 30, 16384: 34, 32768: 40, 65536: 45}
-    poly_n = config.poly_n
-    mod_bits = poly_to_mod.get(poly_n, 41)
-    param_dict[f'param0'] = EncryptParameterNode(poly_n, mod_bits, mod_bits)
-
+    param_dict['param0'] = FheParameter(config.poly_n, config.max_level)
     return param_dict
 
 
 def calculate_compute_score_for_graph(
-    enclosing_graph: nx.DiGraph, grow: nx.DiGraph, param_dict: dict[str, EncryptParameterNode]
+    enclosing_graph: nx.DiGraph, grow: nx.DiGraph, param_dict: dict[str, FheParameter]
 ) -> float:
     compute_score = 0.0
     for compute in grow.nodes:

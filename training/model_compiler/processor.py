@@ -86,7 +86,7 @@ def populate_pack_num(dag: nx.DiGraph, node, slot_num: int):
                 dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num)
 
 
-def update_subgraph_node_param(dag, param_dict: dict[str, EncryptParameterNode], param_id, print_flag=False):
+def update_subgraph_node_param(dag, param_dict: dict[str, FheParameter], param_id, print_flag=False):
     all_nodes_in_topo_sort = list(nx.topological_sort(dag))
     compute_nodes_in_topo_sort = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)]
     for node in dag.nodes:
@@ -117,7 +117,7 @@ def sync_node_attributes(source_graph: LayerAbstractGraph, target_graph: LayerAb
             target_graph.dag.nodes[node].update(source_graph.dag.nodes[node])
 
 
-def set_param(sub: LayerAbstractGraph, param_dict: dict[str, EncryptParameterNode], param_id: str, is_print=False):
+def set_param(sub: LayerAbstractGraph, param_dict: dict[str, FheParameter], param_id: str, is_print=False):
     update_subgraph_node_param(sub, param_dict, param_id, is_print)
 
 

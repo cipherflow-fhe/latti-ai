@@ -20,7 +20,7 @@ import networkx as nx
 
 from components import (
     ComputeNode,
-    EncryptParameterNode,
+    FheParameter,
     FeatureNode,
     LayerAbstractGraph,
     config,
@@ -250,9 +250,7 @@ ct_trans_rate = 1 / 10
 
 
 class FheScoreParam:
-    def __init__(
-        self, dag: nx.DiGraph, compute_node: ComputeNode, param: dict[str, EncryptParameterNode], level
-    ) -> None:
+    def __init__(self, dag: nx.DiGraph, compute_node: ComputeNode, param: dict[str, FheParameter], level) -> None:
         preds: list[FeatureNode] = list(dag.predecessors(compute_node))
         succs: list[FeatureNode] = list(dag.successors(compute_node))
 
@@ -443,7 +441,7 @@ class MpcScoreParam:
         self,
         dag: LayerAbstractGraph,
         compute_node: ComputeNode,
-        param: dict[str, EncryptParameterNode],
+        param: dict[str, FheParameter],
         bit_len=44,
         mpc_scale=16,
     ) -> None:
@@ -512,7 +510,7 @@ class MpcScoreParam:
 
 
 class BtpScoreParam:
-    def __init__(self, dag: nx.DiGraph, compute_node: ComputeNode, param: dict[str, EncryptParameterNode]) -> None:
+    def __init__(self, dag: nx.DiGraph, compute_node: ComputeNode, param: dict[str, FheParameter]) -> None:
         graph = LayerAbstractGraph()
         graph.dag = dag
         pred = list(graph.dag.predecessors(compute_node))[0]
