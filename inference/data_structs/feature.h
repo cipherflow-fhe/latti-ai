@@ -162,6 +162,17 @@ public:
                                       double scale_in = DEFAULT_SCALE);
     virtual Array<double, 2> block_col_major_unpack(uint32_t m, uint32_t n, uint32_t d) const;
 
+    // Parallel (interleaved) block column-major packing: interleave blocks from
+    // multiple heads at the same block position into a single ciphertext.
+    // matrix shape: m × (n_heads * cols_per_head), block_size d = head_dim.
+    virtual void par_block_col_major_pack(const Array<double, 2>& matrix,
+                                          uint32_t d,
+                                          uint32_t n_heads,
+                                          bool is_symmetric = false,
+                                          double scale_in = DEFAULT_SCALE);
+    virtual Array<double, 2>
+    par_block_col_major_unpack(uint32_t m, uint32_t n_per_head, uint32_t d, uint32_t n_heads) const;
+
     void split_to_shares(Feature2DEncrypted* share0, Feature2DShare* share1) const;
     void split_to_shares_for_multi_channel_pack(Feature2DEncrypted* share0,
                                                 Feature2DShare* share1,
