@@ -48,12 +48,11 @@ Examples:
   # Using pt.json file directly
   python run_compile.py -i pt.json
   python run_compile.py -i pt.json -o ./output
-  python run_compile.py -i pt.json -o ./output --poly_n 65536 --style ordinary
+  python run_compile.py -i pt.json -o ./output --style ordinary
 
   # Using ONNX model file (will auto-convert to pt.json)
   python run_compile.py -i model.onnx
   python run_compile.py -i model.onnx -o ./output --style multiplexed
-  python run_compile.py -i model.onnx -o ./output --poly_n 65536 --style ordinary
         """,
     )
 
@@ -68,22 +67,14 @@ Examples:
     )
 
     parser.add_argument(
-        '--poly_n',
-        type=int,
-        choices=[8192, 16384, 65536],
-        default=None,
-        help='Polynomial modulus degree: 8192, 16384, or 65536',
-    )
-
-    parser.add_argument(
         '--style',
         type=str,
         choices=['ordinary', 'multiplexed'],
-        default=None,
-        help='Computation style: ordinary or multiplexed',
+        default='multiplexed',
+        help='Computation style: ordinary or multiplexed (default: multiplexed)',
     )
 
-    parser.add_argument('--graph_type', type=str, choices=['btp'], default=None, help='Graph type: btp')
+    parser.add_argument('--graph_type', type=str, choices=['btp'], default='btp', help='Graph type: btp (default: btp)')
 
     parser.add_argument(
         '--num_experiments', type=int, default=128, help='Number of parallel compilation experiments (default: 128)'
@@ -154,15 +145,7 @@ Examples:
     # Print configuration
     print(f'\n[Compile] Input: {pt_json_path}')
     print(f'[Compile] Output: {output_dir}')
-    if args.poly_n or args.style or args.graph_type:
-        config_parts = []
-        if args.poly_n:
-            config_parts.append(f'POLY_N={args.poly_n}')
-        if args.style:
-            config_parts.append(f'STYLE={args.style}')
-        if args.graph_type:
-            config_parts.append(f'GRAPH_TYPE={args.graph_type}')
-        print(f'[Compile] Config: {", ".join(config_parts)}')
+    print(f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}')
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
     try:
