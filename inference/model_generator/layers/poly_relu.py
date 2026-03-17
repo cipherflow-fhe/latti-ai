@@ -53,6 +53,26 @@ class PolyReluLayer:
         if self.block_shape[0] & (self.block_shape[0] - 1) != 0 or self.block_shape[1] & (self.block_shape[1] - 1) != 0:
             raise ValueError(f'block_shape must be powers of 2, got: [{self.block_shape[0]}, {self.block_shape[1]}]')
 
+    @classmethod
+    def create_for_feature0d(cls, order, skip, n_channel_per_ct):
+        """Create a PolyReluLayer for Feature0D (1D channel-only, no spatial dimensions).
+
+        Args:
+            order: polynomial order
+            skip: 1D skip value (scalar), channel ch at slot ch * skip
+            n_channel_per_ct: number of channels packed per ciphertext
+        """
+        obj = cls.__new__(cls)
+        obj.input_shape = [1, 1]
+        obj.order = order
+        obj.skip = [skip, 1]
+        obj.n_channel_per_ct = n_channel_per_ct
+        obj.upsample_factor = [1, 1]
+        obj.block_expansion = [1, 1]
+        obj.pre_skip = [skip, 1]
+        obj.block_shape = [skip, 1]
+        return obj
+
     def call(self, x: list[CkksCiphertextNode], weight_pt):
         x = list(x)  # shallow copy to avoid mutating caller's list
         result = list()
@@ -519,6 +539,38 @@ class PolyReluLayer:
                     attributes={
                         'op_class': op_class,
                         'type': 'weight_pt',
+                        'i': idx,
+                        'j': x_idx,
+                    },
+                )
+                weight_cache[key] = w_pt
+            return weight_cache[key]
+
+        return self._run_bsgs_core(x, get_weight)
+
+    def call_bsgs_feature0d(self, x: list[CkksCiphertextNode], weight_pt):
+        """BSGS for Feature0D with pre-computed weight plaintexts (eager mode).
+
+        Identical algorithm to call_bsgs — only weight packing differs,
+        which is handled by the caller when building weight_pt.
+        """
+        return self._run_bsgs_core(x, lambda idx, x_idx: weight_pt[idx][x_idx])
+
+    def call_bsgs_feature0d_lazy(self, x: list[CkksCiphertextNode], poly_data_source, layer_id: str = ''):
+        """BSGS for Feature0D with on-demand weight generation (lazy mode)."""
+        weight_cache = {}
+
+        def get_weight(idx, x_idx):
+            key = (idx, x_idx)
+            if key not in weight_cache:
+                w_pt = CkksPlaintextRingtNode(f'encode_pt_0d_{idx}_{x_idx}')
+                custom_compute(
+                    inputs=[poly_data_source],
+                    output=w_pt,
+                    type='encode_pt',
+                    attributes={
+                        'op_class': op_class,
+                        'type': 'weight_pt_feature0d',
                         'i': idx,
                         'j': x_idx,
                     },
