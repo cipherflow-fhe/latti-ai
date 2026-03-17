@@ -42,7 +42,6 @@ import components
 import processor
 import transforms
 
-# Import required functions and classes from processor
 from processor import (
     substitute_layers_for_btp,
     process_levels,
@@ -56,8 +55,6 @@ from processor import (
     set_is_adaptive_avgpool,
     graph_to_task_config,
 )
-
-from typing import Callable
 
 
 def update_bd_node_in_sub(node: FeatureNode, subgraph: nx.DiGraph, remaining_dag: nx.DiGraph) -> FeatureNode:

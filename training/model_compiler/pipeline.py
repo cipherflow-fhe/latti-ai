@@ -262,7 +262,7 @@ def run_pipeline(
         config.graph_type = graph_type
     print(f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}')
 
-    raw_graph = LayerAbstractGraph.from_json(str(input_file_path))
+    raw_graph = LayerAbstractGraph.from_json(input_file_path)
 
     use_btp = False
     succeeded, graph, score = try_no_btp(raw_graph)

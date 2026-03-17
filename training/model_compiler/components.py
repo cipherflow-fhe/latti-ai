@@ -42,13 +42,9 @@
 #                                       and to_json for the task config format
 
 import json
-from typing import Optional
 import math
-from ordered_set import OrderedSet
 import networkx as nx
-from enum import Enum
 import os
-import copy
 
 
 class FheParameter:
@@ -94,13 +90,12 @@ class GlobalConfig:
             config_path = os.path.join(os.path.dirname(__file__), 'config.json')
             with open(config_path, 'r', encoding='utf8') as f:
                 config_dict = json.load(f)
-            # FHE parameters are encapsulated in a single FheParameter instance.
-            # poly_n and block_shape are exposed as properties that delegate to it.
+            # fhe_param will be overwritten by initialize_config() before first use
             cls._instance.fhe_param = FheParameter(
-                poly_modulus_degree=config_dict.get('POLY_N', 65536),
-                n_mult_level=0,  # overwritten by initialize_config() before first use
-                coeff_modulus_bit_length=0,  # overwritten by initialize_config() before first use
-                block_shape=config_dict.get('block_shape', (1, 1)),
+                poly_modulus_degree=65536,
+                n_mult_level=0,
+                coeff_modulus_bit_length=0,
+                block_shape=(1, 1),
             )
             cls._instance.graph_type = config_dict.get('GRAPH_TYPE', 'btp')
             cls._instance.style = config_dict.get('STYLE', 'multiplexed')
@@ -115,8 +110,6 @@ class GlobalConfig:
 config = GlobalConfig()
 
 
-f_name_index_dict = dict()
-concat_dict = dict()
 IS_ABSORB_POLYRELU = False
 YOLO_TYPE = True
 IS_BALANCE = False
@@ -503,7 +496,6 @@ class LayerAbstractGraph:
                 raise ValueError(f'Unsupported feature dim: {dim}')
             node.node_index = f_index
 
-            f_name_index_dict[node.node_id] = f_index
             graph_info.dag.add_node(node, name=key, skip=skip, virtual_shape=virtual_shape, virtual_skip=virtual_skip)
             feature_dict[key] = node
             f_index = f_index + 1
@@ -631,12 +623,6 @@ class LayerAbstractGraph:
 
             else:
                 compute_node = ComputeNode(key, layer_type, channel_input, channel_output)
-                if 'concat2d' == layer_type:
-                    concat_input_index_list = list()
-                    for name in feature_input:
-                        concat_input_index_list.append(f_name_index_dict[name.node_id])
-
-                    concat_dict.update({key: concat_input_index_list})
 
             graph_info.dag.add_node(compute_node, name=key)
             graph_info.dag.add_edges_from([(node, compute_node) for node in feature_input])
@@ -708,14 +694,9 @@ class LayerAbstractGraph:
                 or 'concat2d' == layer_type
                 or 'identity' == layer_type
             ):
-                odrder_id = list()
                 if 'concat2d' == layer_type:
-                    for value in concat_dict[layer_id]:
-                        for node in preds:
-                            if isinstance(node, FeatureNode):
-                                if node.node_index == value:
-                                    odrder_id.append(node.node_id)
-                    input_feature_ids = odrder_id
+                    # The ordering of concat2d inputs is recovered from node_index on the FeatureNodes, which is set at parse time.
+                    input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: n.node_index)]
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,

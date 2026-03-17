@@ -1,5 +1,4 @@
 {
-  "POLY_N": 65536,
   "GRAPH_TYPE": "btp",
   "STYLE": "multiplexed",
   "MPC_REFRESH": false,
