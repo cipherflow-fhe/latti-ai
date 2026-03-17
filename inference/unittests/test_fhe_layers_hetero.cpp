@@ -1043,6 +1043,79 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs", "", HeteroProcessors)
     }
 }
 
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature0d", "", HeteroProcessors) {
+    uint32_t n_channel = 32;
+    int init_level = 8;
+    vector<int> orders = {2, 4, 6, 8};
+    vector<uint32_t> skips = {1, 2, 128, 256};
+
+    for (uint32_t skip_val : skips) {
+        SECTION("skip=" + to_string(skip_val)) {
+            uint32_t n_channel_per_ct = this->n_slot / skip_val;
+
+            for (uint32_t order : orders) {
+                int level_cost = PolyRelu::compute_bsgs_level_cost(order);
+                if (init_level < level_cost)
+                    continue;
+
+                SECTION("order=" + to_string(order)) {
+                    auto input_array = gen_random_array<1>({n_channel}, 1.0);
+                    auto weight = gen_random_array<2>({order + 1, n_channel}, 0.5);
+
+                    // Pack into Feature0DEncrypted
+                    Feature0DEncrypted input_feature(&this->context, init_level);
+                    input_feature.skip = skip_val;
+                    input_feature.n_channel = n_channel;
+                    input_feature.pack_skip(input_array, false);
+
+                    // Create PolyRelu for Feature0D: input_shape={1,1}, skip={skip_val, 1}
+                    Duo input_shape = {1, 1};
+                    Duo skip = {skip_val, 1};
+                    PolyRelu polyx(this->context.get_parameter(), input_shape, order, weight, skip, n_channel_per_ct,
+                                   init_level, {1, 1}, {1, 1}, true);
+                    polyx.prepare_weight_for_feature0d();
+
+                    int output_level = init_level - level_cost;
+                    uint32_t n_packed_ct = div_ceil(n_channel, n_channel_per_ct);
+
+                    Feature0DEncrypted output_feature(&this->context, output_level);
+                    output_feature.skip = skip_val;
+                    output_feature.n_channel = n_channel;
+                    output_feature.n_channel_per_ct = n_channel_per_ct;
+                    for (uint32_t i = 0; i < n_packed_ct; i++) {
+                        output_feature.data.push_back(
+                            this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+                    }
+
+                    vector<CxxVectorArgument> cxx_args;
+                    cxx_args.push_back(CxxVectorArgument{"input_node", &input_feature.data});
+                    for (int i = 0; i <= (int)order; i++) {
+                        cxx_args.push_back(CxxVectorArgument{"weight_pt" + to_string(i), &polyx.weight_pt[i]});
+                    }
+                    cxx_args.push_back(CxxVectorArgument{"output_ct", &output_feature.data});
+
+                    string project_path = base_path + "/CKKS_poly_relu_bsgs_feature0d_" + to_string(n_channel) +
+                                          "_channel_order_" + to_string(order) + "_skip_" + to_string(skip_val) +
+                                          "/level_" + to_string(init_level);
+
+                    this->run(project_path, cxx_args);
+
+                    auto output_mg = output_feature.unpack(DecryptType::SPARSE);
+                    auto output_mg_expected = polyx.run_plaintext_for_non_absorb_case_0d(input_array);
+
+                    INFO("order=" << order << " skip=" << skip_val);
+                    print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+                    print_double_message(output_mg_expected.to_array_1d().data(), "output_mg_expected", 10);
+
+                    auto compare_result = compare(output_mg_expected, output_mg);
+                    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+                    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                }
+            }
+        }
+    }
+}
+
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_ccmm_matmul", "", HeteroProcessors) {
     vector<uint32_t> ds = {16};
     vector<uint32_t> dims = {16, 32};
