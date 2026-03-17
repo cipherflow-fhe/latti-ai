@@ -111,6 +111,51 @@ void PolyRelu::prepare_weight() {
     });
 }
 
+void PolyRelu::prepare_weight_for_feature0d() {
+    init_bsgs();
+    is_feature_0d = true;
+
+    int channel = weight.get_shape()[1];
+    int n_packed_out_channel = div_ceil(channel, n_channel_per_ct);
+    int skip_0d = skip[0];
+    weight_pt.resize(order + 1);
+
+    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    ctx.resize_copies(order + 1);
+    parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
+        for (int ct_idx = 0; ct_idx < n_packed_out_channel; ct_idx++) {
+            vector<double> feature_tmp_pack(ctx_copy.get_parameter().get_n() / 2, 0.0);
+            for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
+                int channel_idx = ct_idx * n_channel_per_ct + ch;
+                if (channel_idx >= channel)
+                    continue;
+                feature_tmp_pack[ch * skip_0d] = weight.get(idx, channel_idx);
+            }
+            double pack_scale = cached_bsgs_coeff_scale[idx];
+            weight_pt[idx].push_back(ctx_copy.encode_ringt(feature_tmp_pack, pack_scale));
+        }
+    });
+}
+
+void PolyRelu::prepare_weight_for_feature0d_lazy() {
+    init_bsgs();
+    is_feature_0d = true;
+    weight_pt.clear();
+}
+
+CkksPlaintextRingt PolyRelu::generate_weight_pt_for_feature0d_indices(CkksContext& ctx, int idx, int ct_idx) const {
+    vector<double> feature_tmp_pack(N / 2, 0.0);
+    int skip_0d = skip[0];
+    for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
+        int channel_idx = ct_idx * n_channel_per_ct + ch;
+        if (channel_idx >= cached_channel)
+            continue;
+        feature_tmp_pack[ch * skip_0d] = weight.get(idx, channel_idx);
+    }
+    double pack_scale = cached_bsgs_coeff_scale.at(idx);
+    return ctx.encode_ringt(feature_tmp_pack, pack_scale);
+}
+
 std::vector<CkksCiphertext> PolyRelu::run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
     vector<CkksCiphertext> result(x.size());
 
@@ -193,7 +238,18 @@ Array<double, 3> PolyRelu::run_plaintext_for_non_absorb_case(const Array<double,
     return result;
 }
 
-// ======================== Lazy Mode Implementations ========================
+Array<double, 1> PolyRelu::run_plaintext_for_non_absorb_case_0d(const Array<double, 1>& x) {
+    int n_channel = x.get_size();
+    Array<double, 1> result({(uint64_t)n_channel});
+    for (int ch = 0; ch < n_channel; ch++) {
+        double p = weight.get(0, ch);
+        for (int k = 1; k <= order; k++) {
+            p += weight.get(k, ch) * pow(x.get(ch), k);
+        }
+        result.set(ch, p);
+    }
+    return result;
+}
 
 void PolyRelu::prepare_weight_lazy() {
     // Don't pre-generate weight_pt, just resize the container
@@ -713,6 +769,16 @@ Feature2DEncrypted PolyRelu::run_bsgs(CkksContext& ctx, const Feature2DEncrypted
     return result;
 }
 
+Feature0DEncrypted PolyRelu::run_bsgs(CkksContext& ctx, const Feature0DEncrypted& x) {
+    Feature0DEncrypted result(&ctx, x.level);
+    result.n_channel = x.n_channel;
+    result.n_channel_per_ct = x.n_channel_per_ct;
+    result.skip = x.skip;
+    result.data = run_core_bsgs(ctx, x.data);
+    result.level = result.data[0].get_level();
+    return result;
+}
+
 std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
     std::vector<CkksCiphertext> result(x.size());
 
@@ -804,7 +870,9 @@ std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx, const std:
 
                     CkksCiphertext term;
                     if (weight_pt.empty()) {
-                        auto coeff_pt_rt = generate_weight_pt_for_bsgs_indices(ctx_copy, idx, x_idx);
+                        auto coeff_pt_rt = is_feature_0d ?
+                                               generate_weight_pt_for_feature0d_indices(ctx_copy, idx, x_idx) :
+                                               generate_weight_pt_for_bsgs_indices(ctx_copy, idx, x_idx);
                         auto coeff_pt = ctx_copy.ringt_to_mul(coeff_pt_rt, x_copy.get_level());
                         term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_copy, coeff_pt), target_scale);
                     } else {
@@ -830,7 +898,9 @@ std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx, const std:
             int const_idx = g * baby_steps;
             if (const_idx <= order && baby_poly_has_terms[g]) {
                 if (weight_pt.empty()) {
-                    auto coeff_pt = generate_weight_pt_for_bsgs_indices(ctx_copy, const_idx, x_idx);
+                    auto coeff_pt = is_feature_0d ?
+                                        generate_weight_pt_for_feature0d_indices(ctx_copy, const_idx, x_idx) :
+                                        generate_weight_pt_for_bsgs_indices(ctx_copy, const_idx, x_idx);
                     baby_polys[g] = ctx_copy.add_plain_ringt(baby_polys[g], coeff_pt);
                 } else {
                     baby_polys[g] = ctx_copy.add_plain_ringt(baby_polys[g], weight_pt[const_idx][x_idx]);
@@ -875,7 +945,9 @@ std::vector<CkksCiphertext> PolyRelu::run_core_bsgs(CkksContext& ctx, const std:
                 int const_idx = g * baby_steps;
                 if (const_idx <= order) {
                     if (weight_pt.empty()) {
-                        auto coeff_pt_rt = generate_weight_pt_for_bsgs_indices(ctx_copy, const_idx, x_idx);
+                        auto coeff_pt_rt = is_feature_0d ?
+                                               generate_weight_pt_for_feature0d_indices(ctx_copy, const_idx, x_idx) :
+                                               generate_weight_pt_for_bsgs_indices(ctx_copy, const_idx, x_idx);
                         auto coeff_pt = ctx_copy.ringt_to_mul(coeff_pt_rt, x_giant.get_level());
                         term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_giant, coeff_pt),
                                                 ctx_copy.get_parameter().get_default_scale());

@@ -742,6 +742,170 @@ class TestLayerExport(unittest.TestCase):
             ),
         )
 
+    def test_poly_bsgs_feature0d(self):
+        N = 16384
+        set_param(n=N)
+        n_in_channel = 32
+        orders = [2, 4, 6, 8]
+        skips = [1, 2, 128, 256]
+
+        for skip_val in skips:
+            n_channel_per_ct = N // 2 // skip_val
+            n_pack_in_channel = int(np.ceil(n_in_channel / n_channel_per_ct))
+            level = 8
+
+            for order in orders:
+                level_cost = PolyReluLayer.compute_bsgs_level_cost(order)
+                if level < level_cost:
+                    continue
+
+                input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+                weight_pt = [
+                    [CkksPlaintextRingtNode(f'polyw_0d_{i}_{j}') for j in range(n_pack_in_channel)]
+                    for i in range(order + 1)
+                ]
+
+                poly_layer = PolyReluLayer.create_for_feature0d(order, skip_val, n_channel_per_ct)
+                output_ct = poly_layer.call_bsgs_feature0d(input_ct, weight_pt)
+
+                input_args = list()
+                input_args.append(Argument('input_node', input_ct))
+                for i in range(order + 1):
+                    input_args.append(Argument(f'weight_pt{i}', weight_pt[i]))
+
+                process_custom_task(
+                    input_args=input_args,
+                    output_args=[Argument('output_ct', output_ct)],
+                    output_instruction_path=os.path.join(
+                        base_path,
+                        f'CKKS_poly_relu_bsgs_feature0d_{n_in_channel}_channel_order_{order}_skip_{skip_val}',
+                        f'level_{level}',
+                    ),
+                )
+
+    def test_conv1d_layer(self):
+        N = 16384
+        set_param(n=N)
+        n_in_channel = 4
+        n_out_channel = 4
+        init_level = 5
+
+        input_shapes = [32, 64, 512]
+        kernel_shapes = [1, 3, 5]
+        skips = [2, 4]
+        strides = [1, 2]
+
+        for input_shape in input_shapes:
+            for kernel_shape in kernel_shapes:
+                for skip in skips:
+                    for stride in strides:
+                        n_channel_per_ct = int(N / 2 / input_shape / skip)
+                        n_pack_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
+                        n_packed_out_channel = math.ceil(n_out_channel / (n_channel_per_ct * stride))
+                        input_ct = [CkksCiphertextNode(f'input_{k}', init_level) for k in range(n_pack_in_channel)]
+                        rot_n_channel_per_ct = n_in_channel if n_in_channel < n_channel_per_ct else n_channel_per_ct
+                        weight_pt = [
+                            [
+                                [CkksPlaintextRingtNode(f'weight_{i}_{k}_{j}') for k in range(kernel_shape)]
+                                for j in range(rot_n_channel_per_ct)
+                            ]
+                            for i in range(n_packed_out_channel)
+                        ]
+                        bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_channel)]
+
+                        conv1d = Conv1DPackedLayer(
+                            n_out_channel,
+                            n_in_channel,
+                            input_shape,
+                            kernel_shape,
+                            stride,
+                            skip,
+                            n_channel_per_ct,
+                            n_pack_in_channel,
+                            n_packed_out_channel,
+                        )
+                        output_ct = conv1d.call(input_ct, weight_pt, bias_pt)
+
+                        input_args = list()
+                        input_args.append(Argument('input_node', input_ct))
+                        input_args.append(Argument(f'weight_pt', weight_pt))
+                        input_args.append(Argument(f'bias_pt', bias_pt))
+
+                        process_custom_task(
+                            input_args=input_args,
+                            output_args=[Argument('output_ct', output_ct)],
+                            output_instruction_path=os.path.join(
+                                base_path,
+                                f'conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}',
+                                f'level_{init_level}',
+                                'server',
+                            ),
+                        )
+
+    def test_mux_conv1d_layer(self):
+        N = 16384
+        set_param(n=N)
+
+        n_in_channel = 16
+        n_out_channel = 32
+        init_level = 5
+
+        input_shapes = [32, 64, 512]
+        kernel_shapes = [1, 3, 5]
+        skips = [2, 4]
+        strides = [1, 2]
+
+        for input_shape in input_shapes:
+            for kernel_shape in kernel_shapes:
+                for skip in skips:
+                    for stride in strides:
+                        n_channel_per_ct = math.ceil(N / 2 / input_shape)
+                        n_packed_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
+                        n_packed_out_channel = math.ceil(n_out_channel / n_channel_per_ct)
+                        n_block_per_ct = math.ceil(n_channel_per_ct / skip)
+                        n_weight_pt = math.ceil(n_out_channel / n_block_per_ct)
+                        input_ct = [CkksCiphertextNode(f'input_{k}', init_level) for k in range(n_packed_in_channel)]
+                        weight_pt = [
+                            [
+                                [CkksPlaintextRingtNode(f'weight_pt_{i}_{k}_{j}') for k in range(kernel_shape)]
+                                for j in range(n_packed_in_channel * n_block_per_ct)
+                            ]
+                            for i in range(n_weight_pt)
+                        ]
+                        bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_channel)]
+                        conv1d = ParMultiplexedConv1DPackedLayer(
+                            n_out_channel,
+                            n_in_channel,
+                            input_shape,
+                            kernel_shape,
+                            stride,
+                            skip,
+                            n_channel_per_ct,
+                            n_packed_in_channel,
+                            n_packed_out_channel,
+                        )
+                        n_select_pt = min(n_block_per_ct, n_out_channel)
+                        block_select_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
+                        output_ct = conv1d.call(input_ct, weight_pt, bias_pt, block_select_pt)
+
+                        input_args = list()
+                        input_args.append(Argument('input_node', input_ct))
+                        input_args.append(Argument(f'weight_pt', weight_pt))
+                        input_args.append(Argument(f'bias_pt', bias_pt))
+                        if len(block_select_pt) != 0:
+                            input_args.append(Argument(f'block_select_pt', block_select_pt))
+
+                        process_custom_task(
+                            input_args=input_args,
+                            output_args=[Argument('output_ct', output_ct)],
+                            output_instruction_path=os.path.join(
+                                base_path,
+                                f'multiplexed_conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}',
+                                f'level_{init_level}',
+                                'server',
+                            ),
+                        )
+
 
 if __name__ == '__main__':
     unittest.main()

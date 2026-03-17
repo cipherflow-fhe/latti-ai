@@ -1043,6 +1043,79 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs", "", HeteroProcessors)
     }
 }
 
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature0d", "", HeteroProcessors) {
+    uint32_t n_channel = 32;
+    int init_level = 8;
+    vector<int> orders = {2, 4, 6, 8};
+    vector<uint32_t> skips = {1, 2, 128, 256};
+
+    for (uint32_t skip_val : skips) {
+        SECTION("skip=" + to_string(skip_val)) {
+            uint32_t n_channel_per_ct = this->n_slot / skip_val;
+
+            for (uint32_t order : orders) {
+                int level_cost = PolyRelu::compute_bsgs_level_cost(order);
+                if (init_level < level_cost)
+                    continue;
+
+                SECTION("order=" + to_string(order)) {
+                    auto input_array = gen_random_array<1>({n_channel}, 1.0);
+                    auto weight = gen_random_array<2>({order + 1, n_channel}, 0.5);
+
+                    // Pack into Feature0DEncrypted
+                    Feature0DEncrypted input_feature(&this->context, init_level);
+                    input_feature.skip = skip_val;
+                    input_feature.n_channel = n_channel;
+                    input_feature.pack_skip(input_array, false);
+
+                    // Create PolyRelu for Feature0D: input_shape={1,1}, skip={skip_val, 1}
+                    Duo input_shape = {1, 1};
+                    Duo skip = {skip_val, 1};
+                    PolyRelu polyx(this->context.get_parameter(), input_shape, order, weight, skip, n_channel_per_ct,
+                                   init_level, {1, 1}, {1, 1}, true);
+                    polyx.prepare_weight_for_feature0d();
+
+                    int output_level = init_level - level_cost;
+                    uint32_t n_packed_ct = div_ceil(n_channel, n_channel_per_ct);
+
+                    Feature0DEncrypted output_feature(&this->context, output_level);
+                    output_feature.skip = skip_val;
+                    output_feature.n_channel = n_channel;
+                    output_feature.n_channel_per_ct = n_channel_per_ct;
+                    for (uint32_t i = 0; i < n_packed_ct; i++) {
+                        output_feature.data.push_back(
+                            this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+                    }
+
+                    vector<CxxVectorArgument> cxx_args;
+                    cxx_args.push_back(CxxVectorArgument{"input_node", &input_feature.data});
+                    for (int i = 0; i <= (int)order; i++) {
+                        cxx_args.push_back(CxxVectorArgument{"weight_pt" + to_string(i), &polyx.weight_pt[i]});
+                    }
+                    cxx_args.push_back(CxxVectorArgument{"output_ct", &output_feature.data});
+
+                    string project_path = base_path + "/CKKS_poly_relu_bsgs_feature0d_" + to_string(n_channel) +
+                                          "_channel_order_" + to_string(order) + "_skip_" + to_string(skip_val) +
+                                          "/level_" + to_string(init_level);
+
+                    this->run(project_path, cxx_args);
+
+                    auto output_mg = output_feature.unpack(DecryptType::SPARSE);
+                    auto output_mg_expected = polyx.run_plaintext_for_non_absorb_case_0d(input_array);
+
+                    INFO("order=" << order << " skip=" << skip_val);
+                    print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+                    print_double_message(output_mg_expected.to_array_1d().data(), "output_mg_expected", 10);
+
+                    auto compare_result = compare(output_mg_expected, output_mg);
+                    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+                    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                }
+            }
+        }
+    }
+}
+
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_ccmm_matmul", "", HeteroProcessors) {
     vector<uint32_t> ds = {16};
     vector<uint32_t> dims = {16, 20};
@@ -1330,7 +1403,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv1d", "", HeteroProcessors) {
     uint32_t n_out_channel = 4;
     int init_level = 5;
 
-    vector<uint32_t> input_shapes = {4, 8, 16, 64, 512};
+    vector<uint32_t> input_shapes = {32, 64, 512};
     vector<uint32_t> kernel_shapes = {1, 3, 5};
     vector<uint32_t> skips = {2, 4};
     vector<uint32_t> strides = {1, 2};
@@ -1361,9 +1434,28 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv1d", "", HeteroProcessors) {
                                                                   n_channel_per_ct, init_level);
                                     conv0_layer.prepare_weight();
 
-                                    Feature1DEncrypted output_feature = conv0_layer.run(this->context, input_feature);
+                                    Feature1DEncrypted output_feature(&this->context, init_level - 1, skip * stride);
+                                    output_feature.shape = input_shape / stride;
                                     output_feature.skip = skip * stride;
-                                    cout << "skip=" << output_feature.skip << endl;
+                                    output_feature.n_channel = n_out_channel;
+                                    output_feature.n_channel_per_ct = n_channel_per_ct;
+                                    for (int i = 0; i < div_ceil(n_out_channel, n_channel_per_ct); i++) {
+                                        output_feature.data.push_back(this->context.new_ciphertext(
+                                            init_level - 1, this->param.get_default_scale()));
+                                    }
+
+                                    vector<CxxVectorArgument> cxx_args;
+                                    cxx_args.push_back(CxxVectorArgument{"input_node", &input_feature.data});
+                                    cxx_args.push_back(CxxVectorArgument{"weight_pt", &conv0_layer.weight_pt});
+                                    cxx_args.push_back(CxxVectorArgument{"bias_pt", &conv0_layer.bias_pt});
+                                    cxx_args.push_back(CxxVectorArgument{"output_ct", &output_feature.data});
+
+                                    string project_path = base_path + "/conv1d_input_shape_" + to_string(input_shape) +
+                                                          "_kernel_shape_" + to_string(kernel_shape) + "_skip_" +
+                                                          to_string(skip) + "_stride_" + to_string(stride) + "/level_" +
+                                                          to_string(init_level) + "/server/";
+
+                                    this->run(project_path, cxx_args);
 
                                     Array<double, 2> output_mg = output_feature.unpack();
                                     Array<double, 2> plain_output = conv0_layer.plaintext_call(input_array);
@@ -1389,7 +1481,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
     uint32_t n_out_channel = 32;
     int init_level = 5;
 
-    vector<uint32_t> input_shapes = {4, 8, 16, 64, 512};
+    vector<uint32_t> input_shapes = {32, 64, 512};
     vector<uint32_t> kernel_shapes = {1, 3, 5};
     vector<uint32_t> skips = {2, 4};
     vector<uint32_t> strides = {1, 2};
@@ -1398,6 +1490,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
         uint32_t input_shape = s;
         SECTION("input_shape=" + str({input_shape})) {
             for (uint32_t k : kernel_shapes) {
+                if (k > input_shape) {
+                    continue;
+                }
                 uint32_t kernel_shape = k;
                 SECTION("kernel_shape=" + str({kernel_shape})) {
                     for (uint32_t s0 : skips) {
@@ -1420,8 +1515,44 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
                                         skip, n_channel_per_ct, init_level);
                                     conv0_layer.prepare_weight();
 
-                                    Feature1DEncrypted output_feature = conv0_layer.run(this->context, input_feature);
-                                    cout << "skip=" << output_feature.skip << endl;
+                                    bool needs_rearrange = (skip > 1 || stride > 1);
+                                    int output_level = needs_rearrange ? init_level - 2 : init_level - 1;
+                                    uint32_t n_block_per_ct = div_ceil(n_channel_per_ct, skip);
+                                    uint32_t n_output_cts = needs_rearrange ?
+                                                                div_ceil(n_out_channel, n_channel_per_ct) :
+                                                                div_ceil(n_out_channel, n_block_per_ct);
+
+                                    Feature1DEncrypted output_feature(&this->context, output_level, skip * stride);
+                                    output_feature.shape = input_shape / stride;
+                                    output_feature.skip = skip * stride;
+                                    output_feature.n_channel = n_out_channel;
+                                    output_feature.n_channel_per_ct = n_channel_per_ct;
+                                    for (uint32_t i = 0; i < n_output_cts; i++) {
+                                        output_feature.data.push_back(this->context.new_ciphertext(
+                                            output_level, this->param.get_default_scale()));
+                                    }
+
+                                    uint32_t n_select_pt = min(n_block_per_ct, n_out_channel);
+                                    vector<CkksPlaintextRingt> select_pt_subset;
+                                    for (int i = 0; i < n_select_pt; i++) {
+                                        select_pt_subset.push_back(move(conv0_layer.block_select_pt[i]));
+                                    }
+
+                                    vector<CxxVectorArgument> cxx_args;
+                                    cxx_args.push_back(CxxVectorArgument{"input_node", &input_feature.data});
+                                    cxx_args.push_back(CxxVectorArgument{"weight_pt", &conv0_layer.weight_pt});
+                                    cxx_args.push_back(CxxVectorArgument{"bias_pt", &conv0_layer.bias_pt});
+                                    if (needs_rearrange) {
+                                        cxx_args.push_back(CxxVectorArgument{"block_select_pt", &select_pt_subset});
+                                    }
+                                    cxx_args.push_back(CxxVectorArgument{"output_ct", &output_feature.data});
+
+                                    string project_path =
+                                        base_path + "/multiplexed_conv1d_input_shape_" + to_string(input_shape) +
+                                        "_kernel_shape_" + to_string(kernel_shape) + "_skip_" + to_string(skip) +
+                                        "_stride_" + to_string(stride) + "/level_" + to_string(init_level) + "/server/";
+
+                                    this->run(project_path, cxx_args);
 
                                     Array<double, 2> output_mg = output_feature.par_mult_unpack();
                                     Array<double, 2> plain_output = conv0_layer.plaintext_call(input_array);

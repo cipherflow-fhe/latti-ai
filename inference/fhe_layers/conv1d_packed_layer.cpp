@@ -136,7 +136,7 @@ void Conv1DPackedLayer::prepare_weight() {
                 weight_pt[i][j][k] = ctx.encode_ringt(kernel_temp[i][j][k], weight_scale);
             }
         }
-        bias_pt[i] = ctx.encode(bias_tmp[i], level, ctx.get_parameter().get_default_scale());
+        bias_pt[i] = ctx.encode_ringt(bias_tmp[i], ctx.get_parameter().get_default_scale());
     }
 }
 
@@ -309,7 +309,7 @@ void Conv1DPackedLayer::mult_add(CkksContext* ctx,
         } else {
             // Normal mode: use pre-generated bias
             const auto& bias_plaintext = bias_pt[packed_out_channel_idx];
-            accumulator = ctx->add_plain(accumulator, bias_plaintext);
+            accumulator = ctx->add_plain_ringt(accumulator, bias_plaintext);
         }
 
         result[packed_out_channel_idx] = move(accumulator);
