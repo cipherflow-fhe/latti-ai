@@ -256,8 +256,7 @@ std::vector<CkksCiphertext> ParBlockColMajorCPMM::run_core(CkksContext& ctx,
                                                            const std::vector<uint32_t>& mb_indices) {
     uint32_t K_eff = mb_indices.size();
     uint32_t cts_per_mb = num_block_rows_A_ * n_cts_per_block_idx_;
-    uint32_t num_result_cts = num_block_rows_A_ * n_cts_per_block_idx_;
-    vector<CkksCiphertext> C_cts(num_result_cts);
+    vector<CkksCiphertext> C_cts(cts_per_mb);
     double default_scale = param_.get_default_scale();
 
     parallel_for(num_block_rows_A_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
