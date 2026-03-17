@@ -18,7 +18,7 @@
 from pathlib import Path
 
 import components
-from components import LayerAbstractGraph, config
+from components import LayerAbstractGraph, config, PN13QP218, PN14QP438, PN15QP880, PN16QP1761, N16QP1546H192H32
 import processor
 from processor import *
 from graph_partition_dp import *
@@ -64,13 +64,7 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
     """
     print('Step 2: Trying no-BTP mode...')
 
-    # not btp style, set max level for polyrelu
-    no_btp_params = [
-        components.FheParameter(8192, 5, 30, [64, 64]),
-        components.FheParameter(16384, 9, 34, [64, 64]),
-        components.FheParameter(32768, 17, 40, [128, 128]),
-        components.FheParameter(65536, 33, 45, [128, 256]),
-    ]
+    no_btp_params = [PN13QP218, PN14QP438, PN15QP880, PN16QP1761]
 
     for params in no_btp_params:
         config.fhe_param = params
@@ -109,9 +103,7 @@ def try_btp(
     temperature: float,
     num_workers: int,
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
-    btp_param_list = [
-        components.FheParameter(65536, 9, 45, [128, 128]),
-    ]
+    btp_param_list = [N16QP1546H192H32]
     valid_results = []
     for params in btp_param_list:
         config.fhe_param = params

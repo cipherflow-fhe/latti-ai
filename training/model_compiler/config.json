@@ -3,5 +3,6 @@
   "STYLE": "multiplexed",
   "MPC_REFRESH": false,
   "APPROX_POLY_TYPE": "simple_polyrelu",
-  "SET_LEVEL_MAX": true
+  "SET_LEVEL_MAX": true,
+  "SINGLE_THREAD": false
 }
