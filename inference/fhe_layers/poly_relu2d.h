@@ -51,6 +51,8 @@ public:
     virtual void prepare_weight_bsgs_lazy();
     virtual void prepare_weight_hornor();
     virtual void prepare_weight_hornor_lazy();
+    virtual void prepare_weight_for_feature0d();
+    virtual void prepare_weight_for_feature0d_lazy();
 
     // Helper functions to generate weights on-demand (for lazy mode)
     CkksPlaintextRingt generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
@@ -58,15 +60,18 @@ public:
     generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
     CkksPlaintextRingt
     generate_weight_pt_for_bsgs_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
+    CkksPlaintextRingt generate_weight_pt_for_feature0d_indices(CkksContext& ctx, int idx, int ct_idx) const;
 
     virtual Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
     std::vector<CkksCiphertext> run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
     virtual Feature2DEncrypted run_bsgs(CkksContext& ctx, const Feature2DEncrypted& x);
+    virtual Feature0DEncrypted run_bsgs(CkksContext& ctx, const Feature0DEncrypted& x);
     std::vector<CkksCiphertext> run_core_bsgs(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
     virtual Feature2DEncrypted run_horner(CkksContext& ctx, const Feature2DEncrypted& x);
     std::vector<CkksCiphertext> run_core_horner(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
     virtual Array<double, 3> run_plaintext_absorb_case(const Array<double, 3>& x);
     virtual Array<double, 3> run_plaintext_for_non_absorb_case(const Array<double, 3>& x);
+    virtual Array<double, 1> run_plaintext_for_non_absorb_case_0d(const Array<double, 1>& x);
 
     CkksParameter param;
     Duo input_shape;
@@ -82,6 +87,7 @@ public:
     Duo zero_skip;
     vector<vector<CkksPlaintextRingt>> weight_pt;
     bool is_ordinary_pack;
+    bool is_feature_0d = false;
 
     // BSGS parameters (public for inspection)
     int baby_steps = 0;
