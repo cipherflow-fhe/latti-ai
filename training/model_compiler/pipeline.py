@@ -24,22 +24,6 @@ from processor import *
 from graph_partition_dp import *
 
 
-def init_config_with_args(style=None, graph_type=None):
-    """
-    Initialize configuration based on command line arguments
-
-    Args:
-        style: Computation style (STYLE)
-        graph_type: Graph type (GRAPH_TYPE)
-    """
-    if style is not None:
-        config.style = style
-    if graph_type is not None:
-        config.graph_type = graph_type
-
-    print(f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}')
-
-
 def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     """
     Prepare graph for compilation (common preparation steps)
@@ -176,7 +160,6 @@ def run_btp_compilation(
     # Run compilations in parallel
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         results = list(executor.map(run_single_compile, args_list))
-    # results = [run_single_compile(*args_list)]
 
     # Filter out failed results
     valid_results = [(score, graph) for score, graph in results if graph is not None]
@@ -255,6 +238,8 @@ def run_pipeline(
     output_dir: Path,
     temperature: float = 0.0,
     num_workers: int = 16,
+    style: str | None = None,
+    graph_type: str | None = None,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -268,8 +253,14 @@ def run_pipeline(
         output_dir: Output directory (will contain erg0.json, task_config.json)
         temperature: Temperature parameter for randomization
         num_workers: Number of parallel worker processes
+        style: Computation style (STYLE)
+        graph_type: Graph type (GRAPH_TYPE)
     """
-    print(f'Starting compilation...')
+    if style is not None:
+        config.style = style
+    if graph_type is not None:
+        config.graph_type = graph_type
+    print(f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}')
 
     raw_graph = LayerAbstractGraph.from_json(str(input_file_path))
 

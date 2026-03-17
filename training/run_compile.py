@@ -27,10 +27,9 @@ import logging
 import sys
 from pathlib import Path
 
-# Add model_compiler to Python path
 sys.path.insert(0, str(Path(__file__).parent / 'model_compiler'))
 
-from model_compiler.pipeline import run_pipeline, init_config_with_args
+from model_compiler.pipeline import run_pipeline
 from model_export.onnx_to_json import onnx_to_json
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -56,12 +55,10 @@ Examples:
         """,
     )
 
-    # Required arguments
     parser.add_argument(
         '-i', '--input', type=str, required=True, help='Input ONNX model file (.onnx) or JSON file (pt.json) (required)'
     )
 
-    # Optional arguments
     parser.add_argument(
         '-o', '--output', type=str, default=None, help='Output directory path (default: same as input file directory)'
     )
@@ -88,7 +85,6 @@ Examples:
 
     args = parser.parse_args()
 
-    # Validate input file
     input_path = Path(args.input)
     if not input_path.exists():
         print(f'[Error] Input file not found: {input_path}')
@@ -98,7 +94,6 @@ Examples:
         print(f'[Error] Input path is not a file: {input_path}')
         sys.exit(1)
 
-    # Check if input is ONNX or JSON
     is_onnx = input_path.suffix.lower() == '.onnx'
     is_json = input_path.suffix.lower() == '.json'
 
@@ -106,21 +101,15 @@ Examples:
         print(f'[Error] Input file must be .onnx or .json, got: {input_path.suffix}')
         sys.exit(1)
 
-    # Determine output directory
     if args.output:
         output_dir = Path(args.output)
     else:
         output_dir = input_path.parent
 
-    # Create output directory if it doesn't exist
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # If input is ONNX, convert it to pt.json first
     if is_onnx:
-        # Determine style for ONNX conversion
         onnx_style = args.style if args.style else 'ordinary'
-
-        # Generate pt.json filename
         pt_json_path = output_dir / 'pt.json'
 
         print(f'\n[ONNX→JSON] Input: {input_path}')
@@ -137,33 +126,28 @@ Examples:
             traceback.print_exc()
             sys.exit(1)
 
-        # Update input_path to the generated pt.json
         input_path = pt_json_path
     else:
         pt_json_path = input_path
 
-    # Print configuration
     print(f'\n[Compile] Input: {pt_json_path}')
     print(f'[Compile] Output: {output_dir}')
     print(f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}')
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
     try:
-        # Initialize configuration with command line arguments
-        init_config_with_args(style=args.style, graph_type=args.graph_type)
-
-        # Run parallel compilation
         run_pipeline(
             num_experiments=args.num_experiments,
             input_file_path=pt_json_path,
             output_dir=output_dir,
             temperature=args.temperature,
             num_workers=args.num_workers,
+            style=args.style,
+            graph_type=args.graph_type,
         )
 
         print(f'\n[Compile] Success! Output: {output_dir}')
 
-        # List generated files in task structure
         task_dir = output_dir / 'task'
         if task_dir.exists():
             print(
