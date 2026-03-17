@@ -22,6 +22,7 @@ add_library(fhe_layers
   block_col_major_transpose.cpp
   par_block_col_major_transpose.cpp
   par_block_col_major_ccmm.cpp
+  par_block_col_major_cpmm.cpp
   ../data_structs/feature.cpp
   ../data_structs/feature1d.cpp
   ../data_structs/feature2d.cpp

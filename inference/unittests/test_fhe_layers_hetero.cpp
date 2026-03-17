@@ -41,6 +41,7 @@
 #include "fhe_layers/block_col_major_transpose.h"
 #include "fhe_layers/par_block_col_major_transpose.h"
 #include "fhe_layers/par_block_col_major_ccmm.h"
+#include "fhe_layers/par_block_col_major_cpmm.h"
 #include "fhe_layers/conv1d_packed_layer.h"
 #include "fhe_layers/multiplexed_conv1d_pack_layer.h"
 #include "ut_util.h"
@@ -1445,93 +1446,228 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
 }
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_qkt_v_attention", "", HeteroProcessors) {
-    // ViT-tiny attention: seq_len=53, n_heads=3, head_dim=16, d=16
-    uint32_t seq_len = 53;
-    uint32_t n_heads = 3;
-    uint32_t head_dim = 16;
-    uint32_t d = head_dim;
-    uint32_t total_dim = n_heads * head_dim;  // 48
-    // Level budget: transpose(1) + CCMM(3) + CCMM(3) = 7
-    int init_level = 7;
-
-    // Use small scale to keep values manageable through two multiplications
-    Array<double, 2> Q_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
-    Array<double, 2> K_mat = gen_random_array<2>({seq_len, total_dim}, 0.1);
-    Array<double, 2> V_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
-
     double default_scale = this->context.get_parameter().get_default_scale();
 
-    // Pack Q, K, V using par_block_col_major_pack
-    Feature2DEncrypted Q_enc(&this->context, init_level);
-    Q_enc.shape = {seq_len, head_dim};
-    Q_enc.matmul_block_size = d;
-    Q_enc.par_block_col_major_pack(Q_mat, d, n_heads, false, default_scale);
+    auto run_attention_test = [&](uint32_t seq_len, uint32_t n_heads, uint32_t head_dim, int init_level) {
+        uint32_t d = head_dim;
+        uint32_t total_dim = n_heads * head_dim;
 
-    Feature2DEncrypted K_enc(&this->context, init_level);
-    K_enc.shape = {seq_len, head_dim};
-    K_enc.matmul_block_size = d;
-    K_enc.par_block_col_major_pack(K_mat, d, n_heads, false, default_scale);
+        // Use small scale to keep values manageable through two multiplications
+        Array<double, 2> Q_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
+        Array<double, 2> K_mat = gen_random_array<2>({seq_len, total_dim}, 0.1);
+        Array<double, 2> V_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
 
-    Feature2DEncrypted V_enc(&this->context, init_level);
-    V_enc.shape = {seq_len, head_dim};
-    V_enc.matmul_block_size = d;
-    V_enc.par_block_col_major_pack(V_mat, d, n_heads, false, default_scale);
+        // Pack Q, K, V using par_block_col_major_pack
+        Feature2DEncrypted Q_enc(&this->context, init_level);
+        Q_enc.shape = {seq_len, head_dim};
+        Q_enc.matmul_block_size = d;
+        Q_enc.par_block_col_major_pack(Q_mat, d, n_heads, false, default_scale);
 
-    // Step 1: Transpose K -> K^T (per head: seq_len x head_dim -> head_dim x seq_len)
-    ParBlockColMajorTranspose kt_transpose(this->context.get_parameter(), {seq_len, head_dim}, d, n_heads, init_level);
-    kt_transpose.precompute_diagonals();
-    Feature2DEncrypted KT_enc = kt_transpose.run(this->context, K_enc);
-    // KT_enc at level init_level - 1, shape = {head_dim, seq_len}
+        Feature2DEncrypted K_enc(&this->context, init_level);
+        K_enc.shape = {seq_len, head_dim};
+        K_enc.matmul_block_size = d;
+        K_enc.par_block_col_major_pack(K_mat, d, n_heads, false, default_scale);
 
-    // Step 2: Drop Q to match K^T level
-    Feature2DEncrypted Q_dropped = Q_enc.drop_level(1);
-    Q_dropped.matmul_block_size = d;
+        Feature2DEncrypted V_enc(&this->context, init_level);
+        V_enc.shape = {seq_len, head_dim};
+        V_enc.matmul_block_size = d;
+        V_enc.par_block_col_major_pack(V_mat, d, n_heads, false, default_scale);
 
-    // Step 3: Q * K^T  (per head: seq_len x head_dim @ head_dim x seq_len = seq_len x seq_len)
-    ParBlockColMajorCCMM qkt_ccmm(this->context.get_parameter(), {seq_len, head_dim}, {head_dim, seq_len}, d, n_heads,
-                                  init_level - 1);
-    qkt_ccmm.precompute_diagonals();
-    Feature2DEncrypted attn_enc = qkt_ccmm.run(this->context, Q_dropped, KT_enc);
-    // attn_enc at level init_level - 4, shape = {seq_len, seq_len}
+        // Step 1: Transpose K -> K^T (per head: seq_len x head_dim -> head_dim x seq_len)
+        ParBlockColMajorTranspose kt_transpose(this->context.get_parameter(), {seq_len, head_dim}, d, n_heads,
+                                               init_level);
+        kt_transpose.precompute_diagonals();
+        Feature2DEncrypted KT_enc = kt_transpose.run(this->context, K_enc);
+        // KT_enc at level init_level - 1, shape = {head_dim, seq_len}
 
-    // Step 4: Drop V to match attention scores level
-    Feature2DEncrypted V_dropped = V_enc.drop_level(4);
-    V_dropped.matmul_block_size = d;
+        // Step 2: Drop Q to match K^T level
+        Feature2DEncrypted Q_dropped = Q_enc.drop_level(1);
+        Q_dropped.matmul_block_size = d;
 
-    // Step 5: attn_scores * V  (per head: seq_len x seq_len @ seq_len x head_dim = seq_len x head_dim)
-    ParBlockColMajorCCMM attnv_ccmm(this->context.get_parameter(), {seq_len, seq_len}, {seq_len, head_dim}, d, n_heads,
-                                    init_level - 4);
-    attnv_ccmm.precompute_diagonals();
-    Feature2DEncrypted result_enc = attnv_ccmm.run(this->context, attn_enc, V_dropped);
-    // result_enc at level init_level - 7 = 0, shape = {seq_len, head_dim}
+        // Step 3: Q * K^T  (per head: seq_len x head_dim @ head_dim x seq_len = seq_len x seq_len)
+        ParBlockColMajorCCMM qkt_ccmm(this->context.get_parameter(), {seq_len, head_dim}, {head_dim, seq_len}, d,
+                                      n_heads, init_level - 1);
+        qkt_ccmm.precompute_diagonals();
+        Feature2DEncrypted attn_enc = qkt_ccmm.run(this->context, Q_dropped, KT_enc);
+        // attn_enc at level init_level - 4, shape = {seq_len, seq_len}
 
-    // Unpack result
-    auto result = result_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
+        // Step 4: Drop V to match attention scores level
+        Feature2DEncrypted V_dropped = V_enc.drop_level(4);
+        V_dropped.matmul_block_size = d;
 
-    // Compute expected: per head, Q_h @ K_h^T @ V_h
-    Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
-    for (uint32_t h = 0; h < n_heads; h++) {
-        for (uint32_t i = 0; i < seq_len; i++) {
-            for (uint32_t j = 0; j < head_dim; j++) {
-                double sum = 0.0;
-                for (uint32_t k1 = 0; k1 < seq_len; k1++) {
-                    double attn_score = 0.0;
-                    for (uint32_t k2 = 0; k2 < head_dim; k2++) {
-                        attn_score += Q_mat.get(i, h * head_dim + k2) * K_mat.get(k1, h * head_dim + k2);
+        // Step 5: attn_scores * V  (per head: seq_len x seq_len @ seq_len x head_dim = seq_len x head_dim)
+        ParBlockColMajorCCMM attnv_ccmm(this->context.get_parameter(), {seq_len, seq_len}, {seq_len, head_dim}, d,
+                                        n_heads, init_level - 4);
+        attnv_ccmm.precompute_diagonals();
+        Feature2DEncrypted result_enc = attnv_ccmm.run(this->context, attn_enc, V_dropped);
+        // result_enc at level init_level - 7 = 0, shape = {seq_len, head_dim}
+
+        // Unpack result
+        auto result = result_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
+
+        // Compute expected: per head, Q_h @ K_h^T @ V_h
+        Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
+        for (uint32_t h = 0; h < n_heads; h++) {
+            for (uint32_t i = 0; i < seq_len; i++) {
+                for (uint32_t j = 0; j < head_dim; j++) {
+                    double sum = 0.0;
+                    for (uint32_t k1 = 0; k1 < seq_len; k1++) {
+                        double attn_score = 0.0;
+                        for (uint32_t k2 = 0; k2 < head_dim; k2++) {
+                            attn_score += Q_mat.get(i, h * head_dim + k2) * K_mat.get(k1, h * head_dim + k2);
+                        }
+                        sum += attn_score * V_mat.get(k1, h * head_dim + j);
                     }
-                    sum += attn_score * V_mat.get(k1, h * head_dim + j);
+                    expected.set(i, h * head_dim + j, sum);
                 }
-                expected.set(i, h * head_dim + j, sum);
             }
         }
+
+        print_double_message(result.to_array_1d().data(), "output_mg", 10);
+        print_double_message(expected.to_array_1d().data(), "output_mg_expected", 10);
+
+        auto compare_result = compare(expected, result);
+        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+        REQUIRE(compare_result.max_error < 0.05 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 0.01 * compare_result.rms);
+    };
+
+    SECTION("G=1: seq_len=53, n_heads=3, head_dim=16") {
+        // Level budget: transpose(1) + CCMM(3) + CCMM(3) = 7
+        run_attention_test(53, 3, 16, 7);
     }
 
-    print_double_message(result.to_array_1d().data(), "output_mg", 10);
-    print_double_message(expected.to_array_1d().data(), "output_mg_expected", 10);
+    // SECTION("G=2: seq_len=83, n_heads=3, head_dim=64") {
+    //     // n_slot=8192, d=64, d^2=4096, n_h_padded=4, n_h_padded*d^2=16384 > 8192
+    //     // S=8192/4096=2, G=4/2=2
+    //     // Level budget: transpose(1) + CCMM(3) + CCMM(3) = 7
+    //     run_attention_test(83, 3, 64, 7);
+    // }
+}
 
-    auto compare_result = compare(expected, result);
-    std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
-              << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
-    REQUIRE(compare_result.max_error < 0.05 * compare_result.max_abs);
-    REQUIRE(compare_result.rmse < 0.01 * compare_result.rms);
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_cpmm_square", "", HeteroProcessors) {
+    double default_scale = this->context.get_parameter().get_default_scale();
+
+    auto run_square_test = [&](uint32_t m, uint32_t n_heads, uint32_t head_dim, int init_level) {
+        uint32_t d = head_dim;
+        uint32_t total_dim = n_heads * head_dim;
+
+        Array<double, 2> A_mat = gen_random_array<2>({m, total_dim}, 0.5);
+        Array<double, 2> W_mat = gen_random_array<2>({total_dim, total_dim}, 0.1);
+
+        Feature2DEncrypted A_enc(&this->context, init_level);
+        A_enc.shape = {m, head_dim};
+        A_enc.matmul_block_size = d;
+        A_enc.par_block_col_major_pack(A_mat, d, n_heads, false, default_scale);
+
+        ParBlockColMajorCPMM cpmm(this->context.get_parameter(), {m, head_dim}, W_mat, d, n_heads, init_level);
+        cpmm.precompute_diagonals();
+        Feature2DEncrypted result_enc = cpmm.run(this->context, A_enc);
+
+        auto result = result_enc.par_block_col_major_unpack(m, head_dim, d, n_heads);
+
+        Array<double, 2> expected({(uint64_t)m, (uint64_t)total_dim});
+        for (uint32_t i = 0; i < m; i++) {
+            for (uint32_t j = 0; j < total_dim; j++) {
+                double sum = 0.0;
+                for (uint32_t k = 0; k < total_dim; k++) {
+                    sum += A_mat.get(i, k) * W_mat.get(k, j);
+                }
+                expected.set(i, j, sum);
+            }
+        }
+
+        print_double_message(result.to_array_1d().data(), "cpmm_output", 10);
+        print_double_message(expected.to_array_1d().data(), "cpmm_expected", 10);
+
+        auto compare_result = compare(expected, result);
+        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+        REQUIRE(compare_result.max_error < 0.05 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 0.01 * compare_result.rms);
+    };
+
+    SECTION("G=1: m=53, n_heads=3, head_dim=16") {
+        run_square_test(53, 3, 16, 2);
+    }
+
+    SECTION("G=2: m=83, n_heads=3, head_dim=64") {
+        // n_slot=8192, d=64, d^2=4096, n_h_padded=4, n_h_padded*d^2=16384 > 8192
+        // S=8192/4096=2, G=4/2=2
+        run_square_test(83, 3, 64, 2);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_cpmm_expand_reduce", "", HeteroProcessors) {
+    double default_scale = this->context.get_parameter().get_default_scale();
+
+    auto run_expand_reduce_test = [&](uint32_t m, uint32_t n_heads, uint32_t head_dim, uint32_t K, int init_level) {
+        uint32_t d = head_dim;
+        uint32_t total_dim = n_heads * head_dim;
+        uint32_t expanded_dim = K * total_dim;
+
+        Array<double, 2> A_mat = gen_random_array<2>({m, total_dim}, 0.5);
+        Array<double, 2> W1_mat = gen_random_array<2>({total_dim, expanded_dim}, 0.1);
+        Array<double, 2> W2_mat = gen_random_array<2>({expanded_dim, total_dim}, 0.1);
+
+        Feature2DEncrypted A_enc(&this->context, init_level);
+        A_enc.shape = {m, head_dim};
+        A_enc.matmul_block_size = d;
+        A_enc.par_block_col_major_pack(A_mat, d, n_heads, false, default_scale);
+
+        // Expand: A @ W1
+        ParBlockColMajorCPMM expand_cpmm(this->context.get_parameter(), {m, head_dim}, W1_mat, d, n_heads, init_level);
+        expand_cpmm.precompute_diagonals();
+        Feature2DEncrypted mid_enc = expand_cpmm.run(this->context, A_enc);
+
+        // Reduce: (A @ W1) @ W2
+        ParBlockColMajorCPMM reduce_cpmm(this->context.get_parameter(), {m, head_dim}, W2_mat, d, n_heads,
+                                         mid_enc.level);
+        reduce_cpmm.precompute_diagonals();
+        Feature2DEncrypted result_enc = reduce_cpmm.run(this->context, mid_enc);
+
+        auto result = result_enc.par_block_col_major_unpack(m, head_dim, d, n_heads);
+
+        // Expected: (A @ W1) @ W2
+        Array<double, 2> expected({(uint64_t)m, (uint64_t)total_dim});
+        std::vector<double> mid(m * expanded_dim, 0.0);
+        for (uint32_t i = 0; i < m; i++) {
+            for (uint32_t j = 0; j < expanded_dim; j++) {
+                double sum = 0.0;
+                for (uint32_t k = 0; k < total_dim; k++) {
+                    sum += A_mat.get(i, k) * W1_mat.get(k, j);
+                }
+                mid[i * expanded_dim + j] = sum;
+            }
+        }
+        for (uint32_t i = 0; i < m; i++) {
+            for (uint32_t j = 0; j < total_dim; j++) {
+                double sum = 0.0;
+                for (uint32_t k = 0; k < expanded_dim; k++) {
+                    sum += mid[i * expanded_dim + k] * W2_mat.get(k, j);
+                }
+                expected.set(i, j, sum);
+            }
+        }
+
+        print_double_message(result.to_array_1d().data(), "mlp_output", 10);
+        print_double_message(expected.to_array_1d().data(), "mlp_expected", 10);
+
+        auto compare_result = compare(expected, result);
+        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+        REQUIRE(compare_result.max_error < 0.05 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 0.01 * compare_result.rms);
+    };
+
+    SECTION("G=1: m=53, n_heads=3, head_dim=16, K=4") {
+        run_expand_reduce_test(53, 3, 16, 4, 4);
+    }
+
+    // SECTION("G=2: m=83, n_heads=3, head_dim=64, K=4") {
+    //     // n_slot=8192, d=64, d^2=4096, n_h_padded=4, n_h_padded*d^2=16384 > 8192
+    //     // S=8192/4096=2, G=4/2=2
+    //     run_expand_reduce_test(83, 3, 64, 4, 4);
+    // }
 }
