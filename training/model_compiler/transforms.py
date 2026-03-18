@@ -417,8 +417,8 @@ def infer_shapes_and_skips(graph: LayerAbstractGraph):
             for i in range(preds[0].dim):
                 succ.shape[i] = preds[0].shape[i]
                 graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
-        if preds[0].shape[0] > config.fhe_param.block_shape[0] or preds[0].shape[1] > config.fhe_param.block_shape[1]:
-            graph.dag.nodes[succ]['skip'] = [1, 1]
+        if any(preds[0].shape[i] > config.fhe_param.block_shape[i] for i in range(preds[0].dim)):
+            graph.dag.nodes[succ]['skip'] = [1] * preds[0].dim
 
 
 def combine_convs_with_upsamples(graph: LayerAbstractGraph):
@@ -507,10 +507,7 @@ def set_level_costs(graph: LayerAbstractGraph):
                     compute_node.is_adaptive_avgpool = False
         elif compute_node.layer_type == config.approx_poly_type:
             graph.dag.nodes[compute_node]['level_cost'] = math.ceil(math.log2(compute_node.order)) + 1
-            if (
-                preds[0].shape[0] > config.fhe_param.block_shape[0]
-                or preds[0].shape[1] > config.fhe_param.block_shape[1]
-            ):
+            if any(preds[0].shape[i] > config.fhe_param.block_shape[i] for i in range(preds[0].dim)):
                 compute_node.is_big_size = True
         elif isinstance(compute_node, UpsampleComputeNode):
             if compute_node.upsample_factor[0] == 1 and compute_node.upsample_factor[1] == 1:

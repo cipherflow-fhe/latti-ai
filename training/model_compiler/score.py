@@ -24,12 +24,11 @@ from components import (
     FeatureNode,
     LayerAbstractGraph,
     config,
-    single_thread,
 )
 
 
 def get_multithread_rate_for_btp(task_num: int):
-    if single_thread:
+    if config.single_thread:
         return 1
     if task_num == 1:
         return 1
@@ -42,7 +41,7 @@ def get_multithread_rate_for_btp(task_num: int):
 
 
 def get_multithread_rate(task_num: int):
-    if single_thread:
+    if config.single_thread:
         return 1
     if task_num == 1:
         return 1
@@ -59,7 +58,7 @@ def get_multithread_rate(task_num: int):
 
 
 def get_multithread_rate_for_block_rotation(task_num: int):
-    if single_thread:
+    if config.single_thread:
         return 1
     if task_num == 1:
         return 1
@@ -76,7 +75,7 @@ def get_multithread_rate_for_block_rotation(task_num: int):
 
 
 def get_multithread_rate_for_kernel_rotation(task_num: int):
-    if single_thread:
+    if config.single_thread:
         return 1
     if task_num == 1:
         return 1
@@ -93,7 +92,7 @@ def get_multithread_rate_for_kernel_rotation(task_num: int):
 
 
 def get_multithread_rate_for_weight_ops(task_num: int):
-    if single_thread:
+    if config.single_thread:
         return 1
     if task_num == 1:
         return 1
@@ -452,10 +451,10 @@ class MpcScoreParam:
         self.preds = preds
         self.succs = succs
         self.compute_node = compute_node
-        self.input_coeff_mod = param[preds[0].ckks_parameter_id].coeff_modulus_bit_length
-        self.output_coeff_mod = param[succs[0].ckks_parameter_id].coeff_modulus_bit_length
-        self.input_special_mod = param[preds[0].ckks_parameter_id].special_prime_bit_length
-        self.output_special_mod = param[succs[0].ckks_parameter_id].special_prime_bit_length
+        self.input_coeff_mod = param[preds[0].ckks_parameter_id].log_default_scale
+        self.output_coeff_mod = param[succs[0].ckks_parameter_id].log_default_scale
+        self.input_special_mod = param[preds[0].ckks_parameter_id].log_default_scale
+        self.output_special_mod = param[succs[0].ckks_parameter_id].log_default_scale
         self.input_mult_level = graph.dag.nodes[preds[0]]['level']
         self.output_mult_level = graph.dag.nodes[succs[0]]['level']
         self.input_degree = param[preds[0].ckks_parameter_id].poly_modulus_degree

@@ -65,9 +65,9 @@ def _calc_pack_num(dag: nx.DiGraph, feature_node, slot_num: int, use_skip: bool 
             )
         )
     else:
-        denom = feature_node.shape[0] * feature_node.shape[1]
+        denom = math.prod(feature_node.shape)
         if use_skip:
-            denom *= attrs['skip'][0] * attrs['skip'][1]
+            denom *= math.prod(attrs['skip'])
         return math.ceil(slot_num / denom)
 
 
@@ -171,7 +171,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 'depth': node.depth,
                 'pack_num': graph.dag.nodes[node]['pack_num'],
             }
-        elif node.dim == 2:
+        elif node.dim in (1, 2):
             param_dict[node.node_id] = {
                 'dim': node.dim,
                 'channel': node.channel,

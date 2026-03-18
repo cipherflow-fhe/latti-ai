@@ -18,26 +18,10 @@
 from pathlib import Path
 
 import components
-from components import LayerAbstractGraph, config
+from components import LayerAbstractGraph, config, PN13QP218, PN14QP438, PN15QP880, PN16QP1761, N16QP1546H192H32
 import processor
 from processor import *
 from graph_partition_dp import *
-
-
-def init_config_with_args(style=None, graph_type=None):
-    """
-    Initialize configuration based on command line arguments
-
-    Args:
-        style: Computation style (STYLE)
-        graph_type: Graph type (GRAPH_TYPE)
-    """
-    if style is not None:
-        config.style = style
-    if graph_type is not None:
-        config.graph_type = graph_type
-
-    print(f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}')
 
 
 def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
@@ -80,13 +64,7 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
     """
     print('Step 2: Trying no-BTP mode...')
 
-    # not btp style, set max level for polyrelu
-    no_btp_params = [
-        components.FheParameter(8192, 5, 30, [64, 64]),
-        components.FheParameter(16384, 9, 34, [64, 64]),
-        components.FheParameter(32768, 17, 40, [128, 128]),
-        components.FheParameter(65536, 33, 45, [128, 256]),
-    ]
+    no_btp_params = [PN13QP218, PN14QP438, PN15QP880, PN16QP1761]
 
     for params in no_btp_params:
         config.fhe_param = params
@@ -125,9 +103,7 @@ def try_btp(
     temperature: float,
     num_workers: int,
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
-    btp_param_list = [
-        components.FheParameter(65536, 9, 45, [128, 128]),
-    ]
+    btp_param_list = [N16QP1546H192H32]
     valid_results = []
     for params in btp_param_list:
         config.fhe_param = params
@@ -176,7 +152,6 @@ def run_btp_compilation(
     # Run compilations in parallel
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         results = list(executor.map(run_single_compile, args_list))
-    # results = [run_single_compile(*args_list)]
 
     # Filter out failed results
     valid_results = [(score, graph) for score, graph in results if graph is not None]
@@ -255,6 +230,8 @@ def run_pipeline(
     output_dir: Path,
     temperature: float = 0.0,
     num_workers: int = 16,
+    style: str | None = None,
+    graph_type: str | None = None,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -268,10 +245,16 @@ def run_pipeline(
         output_dir: Output directory (will contain erg0.json, task_config.json)
         temperature: Temperature parameter for randomization
         num_workers: Number of parallel worker processes
+        style: Computation style (STYLE)
+        graph_type: Graph type (GRAPH_TYPE)
     """
-    print(f'Starting compilation...')
+    if style is not None:
+        config.style = style
+    if graph_type is not None:
+        config.graph_type = graph_type
+    print(f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}')
 
-    raw_graph = LayerAbstractGraph.from_json(str(input_file_path))
+    raw_graph = LayerAbstractGraph.from_json(input_file_path)
 
     use_btp = False
     succeeded, graph, score = try_no_btp(raw_graph)

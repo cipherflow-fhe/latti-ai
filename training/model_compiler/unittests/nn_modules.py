@@ -14,6 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import torch.nn as nn
 import sys
 from pathlib import Path
@@ -35,7 +36,27 @@ class SingleConv(nn.Module):
         return x
 
 
+class SingleConv1d(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv1d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
 class SingleAct(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu0 = RangeNormPoly2d(num_features=32)
+
+    def forward(self, x):
+        x = self.relu0(x)
+        return x
+
+
+class SingleAct1d(nn.Module):
     def __init__(self):
         super().__init__()
         self.relu0 = RangeNormPoly2d(num_features=32)

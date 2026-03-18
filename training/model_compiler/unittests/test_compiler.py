@@ -25,7 +25,7 @@ sys.path.append(str(script_dir.parent.parent))
 
 from nn_tools.export import export_to_onnx
 from model_export.onnx_to_json import onnx_to_json
-from pipeline import init_config_with_args, run_pipeline
+from pipeline import run_pipeline
 from components import (
     LayerAbstractGraph,
     FeatureNode,
@@ -179,18 +179,19 @@ class CompilerTestBase(unittest.TestCase):
             **export_kwargs,
         )
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, style)
-        init_config_with_args(style=style, graph_type=graph_type)
         graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
             temperature=0.0,
             num_workers=1,
+            style=style,
+            graph_type=graph_type,
         )
         return graph, score
 
 
-class TestCompiler(CompilerTestBase):
+class TestSingleLayer(CompilerTestBase):
     def test_single_conv(self):
         model = nn_modules.SingleConv()
         graph, score = self._export_and_compile(model, (1, 32, 64, 64))
@@ -199,9 +200,25 @@ class TestCompiler(CompilerTestBase):
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 1
         )
 
+    def test_single_conv1d(self):
+        model = nn_modules.SingleConv1d()
+        graph, score = self._export_and_compile(model, (1, 32, 64))
+
+        self.assertEqual(
+            max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 1
+        )
+
     def test_single_act(self):
         model = nn_modules.SingleAct()
         graph, score = self._export_and_compile(model, (1, 32, 64, 64))
+
+        self.assertEqual(
+            max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 3
+        )
+
+    def test_single_act1d(self):
+        model = nn_modules.SingleAct1d()
+        graph, score = self._export_and_compile(model, (1, 32, 64))
 
         self.assertEqual(
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 3
@@ -238,6 +255,21 @@ class TestCompiler(CompilerTestBase):
         model = nn_modules.SingleAdd()
         graph, score = self._export_and_compile(model, [(1, 32, 64, 64), (1, 32, 64, 64)], input_names=['x0', 'x1'])
 
+    def test_single_conv_with_stride_big_size(self):
+        model = nn_modules.SingleConv(2)
+        graph, score = self._export_and_compile(model, (1, 32, 256, 256), style='multiplexed')
+        res = None
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode):
+                input = list(graph.dag.predecessors(node))[0]
+                output = list(graph.dag.successors(node))[0]
+                if graph.dag.nodes[output]['skip'] == [1, 1]:
+                    res = True
+                    break
+        self.assertEqual(res, True)
+
+
+class TestLayerInteraction(CompilerTestBase):
     def test_conv_with_batchnorms(self):
         model = nn_modules.ConvWithBatchNorms()
         graph, score = self._export_and_compile(model, (1, 32, 64, 64))
@@ -246,6 +278,74 @@ class TestCompiler(CompilerTestBase):
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 1
         )
 
+    def test_mismatched_scale(self):
+        model = nn_modules.MismatchedScale()
+        graph, score = self._export_and_compile(model, (1, 32, 64, 64))
+
+    def test_conv_and_convtranspose(self):
+        model = nn_modules.ConvAndConvTransposeBlock()
+        graph, score = self._export_and_compile(model, (1, 32, 16, 16), style='multiplexed')
+        self.assertTrue(
+            any(node.upsample_factor_in == [2, 2] for node in graph.dag.nodes if isinstance(node, ConvComputeNode))
+        )
+        self.assertTrue(
+            any(node.zero_skip == [2, 2] for node in graph.dag.nodes if isinstance(node, ActivationComputeNode))
+        )
+
+    def test_conv_and_convtranspose_big_size(self):
+        model = nn_modules.ConvAndConvTransposeBlock()
+        graph, score = self._export_and_compile(model, (1, 32, 256, 256), style='multiplexed')
+        self.assertFalse(
+            any(node.upsample_factor_in == [2, 2] for node in graph.dag.nodes if isinstance(node, ConvComputeNode))
+        )
+        self.assertTrue(any(node.is_big_size for node in graph.dag.nodes if isinstance(node, ConvComputeNode)))
+
+    def test_conv_and_upsample(self):
+        model = nn_modules.ConvAndUpsample()
+        graph, score = self._export_and_compile(model, (1, 32, 64, 64), style='multiplexed', do_constant_folding=True)
+        res = False
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode) and node.layer_type == 'resize':
+                input = list(graph.dag.predecessors(node))[0]
+                output = list(graph.dag.successors(node))[0]
+                if graph.dag.nodes[output]['skip'][0] == graph.dag.nodes[input]['skip'][0] / node.upsample_factor[0]:
+                    res = True
+        self.assertEqual(res, True)
+
+    def test_conv_reshape_dense(self):
+        model = nn_modules.ConvReshapeAndDense()
+        graph, score = self._export_and_compile(model, (1, 3, 32, 32), do_constant_folding=True)
+        res = None
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode) and node.layer_type == 'reshape':
+                input = list(graph.dag.predecessors(node))[0]
+                output = list(graph.dag.successors(node))[0]
+                if (
+                    graph.dag.nodes[output]['virtual_shape'][0] == 16
+                    and graph.dag.nodes[output]['virtual_skip'][0] == 2
+                ):
+                    res = True
+                    break
+        self.assertEqual(res, True)
+
+    def test_conv_avgpool_reshape_dense(self):
+        model = nn_modules.ConvAvgpoolReshapeAndDense()
+        graph, score = self._export_and_compile(model, (1, 3, 64, 64), style='multiplexed', do_constant_folding=True)
+        res = None
+        from components import PoolComputeNode
+
+        for node in graph.dag.nodes:
+            if isinstance(node, PoolComputeNode):
+                input = list(graph.dag.predecessors(node))[0]
+                output = list(graph.dag.successors(node))[0]
+                if output.shape == input.shape and graph.dag.nodes[output]['skip'] == graph.dag.nodes[input]['skip']:
+                    res = True
+                    break
+        self.assertEqual(res, True)
+        self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
+
+
+class TestCompiler(CompilerTestBase):
     def test_conv_series(self):
         model = nn_modules.ConvSeries()
         graph, score = self._export_and_compile(model, (1, 32, 64, 64))
@@ -334,21 +434,18 @@ class TestCompiler(CompilerTestBase):
         )
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
 
-        init_config_with_args(style='multiplexed', graph_type='btp')
         graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
             output_dir=script_dir,
             temperature=0.0,
             num_workers=1,
+            style='multiplexed',
+            graph_type='btp',
         )
         self.assertEqual(check_level_cost(graph), True)
         self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
-
-    def test_mismatched_scale(self):
-        model = nn_modules.MismatchedScale()
-        graph, score = self._export_and_compile(model, (1, 32, 64, 64))
 
     def test_intertwined(self):
         model = nn_modules.Intertwined()
@@ -435,89 +532,15 @@ class TestCompiler(CompilerTestBase):
         )
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
 
-        init_config_with_args(style='ordinary', graph_type='btp')
         from pipeline import prepare_graph
         from transforms import split_graph_to_linear_subgraph
 
+        config.style = 'ordinary'
+        config.graph_type = 'btp'
         raw_graph = LayerAbstractGraph.from_json(self.temp_json_path)
         pt_graph = prepare_graph(raw_graph)
         subs = split_graph_to_linear_subgraph(pt_graph.dag)
         self.assertEqual(len(subs), 2)
-
-    def test_conv_and_convtranspose(self):
-        model = nn_modules.ConvAndConvTransposeBlock()
-        graph, score = self._export_and_compile(model, (1, 32, 16, 16), style='multiplexed')
-        self.assertTrue(
-            any(node.upsample_factor_in == [2, 2] for node in graph.dag.nodes if isinstance(node, ConvComputeNode))
-        )
-        self.assertTrue(
-            any(node.zero_skip == [2, 2] for node in graph.dag.nodes if isinstance(node, ActivationComputeNode))
-        )
-
-    def test_conv_and_convtranspose_big_size(self):
-        model = nn_modules.ConvAndConvTransposeBlock()
-        graph, score = self._export_and_compile(model, (1, 32, 256, 256), style='multiplexed')
-        self.assertFalse(
-            any(node.upsample_factor_in == [2, 2] for node in graph.dag.nodes if isinstance(node, ConvComputeNode))
-        )
-        self.assertTrue(any(node.is_big_size for node in graph.dag.nodes if isinstance(node, ConvComputeNode)))
-
-    def test_conv_and_upsample(self):
-        model = nn_modules.ConvAndUpsample()
-        graph, score = self._export_and_compile(model, (1, 32, 64, 64), style='multiplexed', do_constant_folding=True)
-        res = False
-        for node in graph.dag.nodes:
-            if isinstance(node, ComputeNode) and node.layer_type == 'resize':
-                input = list(graph.dag.predecessors(node))[0]
-                output = list(graph.dag.successors(node))[0]
-                if graph.dag.nodes[output]['skip'][0] == graph.dag.nodes[input]['skip'][0] / node.upsample_factor[0]:
-                    res = True
-        self.assertEqual(res, True)
-
-    def test_conv_reshape_dense(self):
-        model = nn_modules.ConvReshapeAndDense()
-        graph, score = self._export_and_compile(model, (1, 3, 32, 32), do_constant_folding=True)
-        res = None
-        for node in graph.dag.nodes:
-            if isinstance(node, ComputeNode) and node.layer_type == 'reshape':
-                input = list(graph.dag.predecessors(node))[0]
-                output = list(graph.dag.successors(node))[0]
-                if (
-                    graph.dag.nodes[output]['virtual_shape'][0] == 16
-                    and graph.dag.nodes[output]['virtual_skip'][0] == 2
-                ):
-                    res = True
-                    break
-        self.assertEqual(res, True)
-
-    def test_conv_avgpool_reshape_dense(self):
-        model = nn_modules.ConvAvgpoolReshapeAndDense()
-        graph, score = self._export_and_compile(model, (1, 3, 64, 64), style='multiplexed', do_constant_folding=True)
-        res = None
-        from components import PoolComputeNode
-
-        for node in graph.dag.nodes:
-            if isinstance(node, PoolComputeNode):
-                input = list(graph.dag.predecessors(node))[0]
-                output = list(graph.dag.successors(node))[0]
-                if output.shape == input.shape and graph.dag.nodes[output]['skip'] == graph.dag.nodes[input]['skip']:
-                    res = True
-                    break
-        self.assertEqual(res, True)
-        self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
-
-    def test_single_conv_with_stride_big_size(self):
-        model = nn_modules.SingleConv(2)
-        graph, score = self._export_and_compile(model, (1, 32, 256, 256), style='multiplexed')
-        res = None
-        for node in graph.dag.nodes:
-            if isinstance(node, ComputeNode):
-                input = list(graph.dag.predecessors(node))[0]
-                output = list(graph.dag.successors(node))[0]
-                if graph.dag.nodes[output]['skip'] == [1, 1]:
-                    res = True
-                    break
-        self.assertEqual(res, True)
 
 
 class TestCompilerErrors(CompilerTestBase):
@@ -550,7 +573,6 @@ class TestCompilerErrors(CompilerTestBase):
     def test_unreplaced_relu(self):
         self._export_only(nn_modules.SingleRelu(), (1, 32, 64, 64))
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
-        init_config_with_args(style='ordinary', graph_type='btp')
         with self.assertRaisesRegex(ValueError, r'Relu2d is not supported in current mode'):
             run_pipeline(
                 num_experiments=1,
@@ -558,6 +580,8 @@ class TestCompilerErrors(CompilerTestBase):
                 output_dir=script_dir,
                 temperature=0.0,
                 num_workers=1,
+                style='ordinary',
+                graph_type='btp',
             )
 
 
