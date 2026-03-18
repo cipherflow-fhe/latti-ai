@@ -125,9 +125,9 @@ def gen_conv_mega_ag(
     inputx = torch.randn(1, n_in_channel, input_shape[0], input_shape[1])
 
     export_to_onnx(model, inputx, ['output'], f'{task_server_path}/0.onnx')
-    onnx_to_json(f'{task_server_path}/0.onnx', f'{task_server_path}/erg0.json', style)
+    onnx_to_json(f'{task_server_path}/0.onnx', f'{task_server_path}/nn_layers_ct_0.json', style)
 
-    with open(f'{task_server_path}/erg0.json') as f:
+    with open(f'{task_server_path}/nn_layers_ct_0.json') as f:
         model_json = json.load(f)
 
     model_json['feature']['input_0']['level'] = init_level
@@ -138,7 +138,7 @@ def gen_conv_mega_ag(
     model_json['feature']['output']['pack_num'] = math.ceil(
         8192 / (input_shape[0] * input_shape[1]) * (stride[0] * stride[1])
     )
-    with open(f'{task_server_path}/erg0.json', 'w') as f:
+    with open(f'{task_server_path}/nn_layers_ct_0.json', 'w') as f:
         json.dump(
             {
                 'feature': model_json['feature'],
@@ -162,10 +162,10 @@ def gen_conv_mega_ag(
         'task_input_param': model_json['feature']['input_0'],
         'task_output_param': model_json['feature']['output'],
     }
-    with open(f'{task_path}/task_config.json', 'w') as f:
+    with open(f'{task_server_path}/task_config.json', 'w') as f:
         json.dump(task_config, f, indent=4, ensure_ascii=False)
 
-    with open(os.path.join(task_path, 'task_config.json'), 'r', encoding='utf-8') as file:
+    with open(os.path.join(task_server_path, 'task_config.json'), 'r', encoding='utf-8') as file:
         config = json.load(file)
 
     for _ in range(len(config['server_task'])):
