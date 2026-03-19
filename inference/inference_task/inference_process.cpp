@@ -450,7 +450,6 @@ void InitInferenceProcess::load_model_prepare() {
     json config_json = read_json(project_path / "task_config.json");
     for (auto& layer : json_layers.items()) {
         const string& key = layer.key();
-        cout << "key=" << key << endl;
         const json& value = layer.value();
         const string& layer_type = value["type"].get<string>();
         if (layer_type == "conv2d") {
