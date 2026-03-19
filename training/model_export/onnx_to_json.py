@@ -62,9 +62,9 @@ def gen_data_nodes(value_infos) -> dict[str, FeatureNode]:
         else:
             shape = tensor_shape[2::]
             channel = tensor_shape[1]
-            dim = 2
+            dim = len(tensor_shape) - 2
         scale = 1
-        skip = [1, 1]
+        skip = [1] * max(dim, 1)
         ckks_parameter_id = 'param0'
         node = FeatureNode(key, dim, channel, scale, skip, ckks_parameter_id, shape)
         data_nodes[key] = node

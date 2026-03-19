@@ -35,16 +35,13 @@ BlockColMajorTranspose::BlockColMajorTranspose(const CkksParameter& param_in,
     m_ = m;
     n_ = n;
 
-    assert(m % d_ == 0 && "m must be divisible by block_size");
-    assert(n % d_ == 0 && "n must be divisible by block_size");
-
     n_slot_ = param_.get_n() / 2;
     chunk_size_ = d_ * d_;
     assert(n_slot_ % chunk_size_ == 0 && "n_slot must be divisible by d^2");
     num_chunks_ = n_slot_ / chunk_size_;
 
-    num_block_rows_ = m / d_;
-    num_block_cols_ = n / d_;
+    num_block_rows_ = div_ceil(m, d_);
+    num_block_cols_ = div_ceil(n, d_);
 }
 
 BlockColMajorTranspose::~BlockColMajorTranspose() {}

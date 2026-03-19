@@ -38,7 +38,7 @@ def process_levels(graph: LayerAbstractGraph):
         for node in graph.dag.nodes:
             if isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping':
                 succ = next(graph.dag.successors(node))
-                graph.dag.nodes[succ]['level'] = config.max_level
+                graph.dag.nodes[succ]['level'] = config.fhe_param.max_level
 
     transforms.insert_drop_level_layers(graph)
 
@@ -65,9 +65,9 @@ def _calc_pack_num(dag: nx.DiGraph, feature_node, slot_num: int, use_skip: bool 
             )
         )
     else:
-        denom = feature_node.shape[0] * feature_node.shape[1]
+        denom = math.prod(feature_node.shape)
         if use_skip:
-            denom *= attrs['skip'][0] * attrs['skip'][1]
+            denom *= math.prod(attrs['skip'])
         return math.ceil(slot_num / denom)
 
 
@@ -86,7 +86,7 @@ def populate_pack_num(dag: nx.DiGraph, node, slot_num: int):
                 dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num)
 
 
-def update_subgraph_node_param(dag, param_dict: dict[str, EncryptParameterNode], param_id, print_flag=False):
+def update_subgraph_node_param(dag, param_dict: dict[str, FheParameter], param_id, print_flag=False):
     all_nodes_in_topo_sort = list(nx.topological_sort(dag))
     compute_nodes_in_topo_sort = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)]
     for node in dag.nodes:
@@ -104,27 +104,6 @@ def update_subgraph_node_param(dag, param_dict: dict[str, EncryptParameterNode],
         populate_pack_num(dag, compute_node, slot_num)
 
 
-def add_btp_layer(graph: LayerAbstractGraph, feature: FeatureNode):
-    refreshed_feature = copy.deepcopy(feature)
-
-    refreshed_feature.node_id = f'{feature.node_id}_refreshed'
-    feature_attrs = graph.dag.nodes[feature].copy() if feature in graph.dag.nodes else {}
-    graph.dag.add_node(refreshed_feature, **feature_attrs)
-    for s in list(graph.dag.successors(feature)):
-        graph.dag.remove_edge(feature, s)
-        graph.dag.add_edge(refreshed_feature, s)
-
-    btp_node = ComputeNode(
-        layer_id=f'{feature.node_id}_bootstrap',
-        layer_type='bootstrapping',
-        channel_input=feature.channel,
-        channel_output=refreshed_feature.channel,
-    )
-    graph.dag.add_node(btp_node)
-    graph.dag.add_edge(feature, btp_node)
-    graph.dag.add_edge(btp_node, refreshed_feature)
-
-
 def sync_node_attributes(source_graph: LayerAbstractGraph, target_graph: LayerAbstractGraph):
     """
     Synchronize node attributes from source_graph to the same nodes in target_graph
@@ -138,7 +117,7 @@ def sync_node_attributes(source_graph: LayerAbstractGraph, target_graph: LayerAb
             target_graph.dag.nodes[node].update(source_graph.dag.nodes[node])
 
 
-def set_param(sub: LayerAbstractGraph, param_dict: dict[str, EncryptParameterNode], param_id: str, is_print=False):
+def set_param(sub: LayerAbstractGraph, param_dict: dict[str, FheParameter], param_id: str, is_print=False):
     update_subgraph_node_param(sub, param_dict, param_id, is_print)
 
 
@@ -160,9 +139,6 @@ def substitute_layers_for_btp(subgraph: LayerAbstractGraph):
         if compute.layer_type == 'relu2d' or compute.layer_type == 'simple_polyrelu':
             compute.layer_type = config.approx_poly_type
             subgraph.dag.nodes[compute]['level_cost'] = math.ceil(math.log2(compute.order)) + 1
-
-
-mpc_scale = 1
 
 
 def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = True):
@@ -195,7 +171,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 'depth': node.depth,
                 'pack_num': graph.dag.nodes[node]['pack_num'],
             }
-        elif node.dim == 2:
+        elif node.dim in (1, 2):
             param_dict[node.node_id] = {
                 'dim': node.dim,
                 'channel': node.channel,
@@ -214,7 +190,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
         'task_num': 1,
         'server_start_id': 0,
         'server_end_id': 0,
-        'block_shape': config.block_shape,
+        'block_shape': config.fhe_param.block_shape,
         'is_absorb_polyrelu': False,
         'pack_style': config.style,
         'task_input_id': [str(n.node_id) for n in input_roots],
@@ -243,7 +219,7 @@ def change_conv_transpose_shape(graph: LayerAbstractGraph):
             if isinstance(c_node, ConvComputeNode):
                 if c_node.is_conv_transpose:
                     target_c_node = find_layer_in_linear_graph(graph, c_node, 'conv2d', 'up')
-                    if target_c_node:
+                    if target_c_node is not None:
                         f_in = list(graph.dag.predecessors(target_c_node))[0]
                         f_out = list(graph.dag.successors(target_c_node))[0]
                         target_c_node.upsample_factor_in[0] = c_node.upsample_factor_in[0]
@@ -266,8 +242,8 @@ def change_conv_transpose_shape(graph: LayerAbstractGraph):
 def check_conv_upsample_factor(graph: LayerAbstractGraph, c_node: ConvComputeNode):
     if c_node.upsample_factor_in[0] != 1:
         f_in = list(graph.dag.predecessors(c_node))[0]
-        if f_in.shape[0] * c_node.upsample_factor_in[0] > config.block_shape[0] or (
-            f_in.shape[1] * c_node.upsample_factor_in[1] > config.block_shape[1]
+        if f_in.shape[0] * c_node.upsample_factor_in[0] > config.fhe_param.block_shape[0] or (
+            f_in.shape[1] * c_node.upsample_factor_in[1] > config.fhe_param.block_shape[1]
         ):
             c_node.upsample_factor_in[0] = 1
             c_node.upsample_factor_in[1] = 1
@@ -333,7 +309,10 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
             if config.style == 'ordinary':
                 graph.dag.nodes[compute_node]['level_cost'] = 1
                 continue
-            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+            if (
+                preds[0].shape[0] > config.fhe_param.block_shape[0]
+                or preds[0].shape[1] > config.fhe_param.block_shape[1]
+            ):
                 compute_node.is_big_size = True
                 graph.dag.nodes[compute_node]['level_cost'] = 1
             else:
@@ -349,7 +328,10 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
                         graph.dag.nodes[compute_node]['level_cost'] = 2
 
         elif compute_node.layer_type == 'avgpool2d':
-            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+            if (
+                preds[0].shape[0] > config.fhe_param.block_shape[0]
+                or preds[0].shape[1] > config.fhe_param.block_shape[1]
+            ):
                 graph.dag.nodes[compute_node]['level_cost'] = 0
                 compute_node.is_big_size = True
                 compute_node.is_adaptive_avgpool = False
@@ -364,7 +346,10 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
                     compute_node.is_adaptive_avgpool = False
         elif compute_node.layer_type == config.approx_poly_type:
             graph.dag.nodes[compute_node]['level_cost'] = math.ceil(math.log2(compute_node.order)) + 1
-            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+            if (
+                preds[0].shape[0] > config.fhe_param.block_shape[0]
+                or preds[0].shape[1] > config.fhe_param.block_shape[1]
+            ):
                 compute_node.is_big_size = True
 
 
@@ -421,7 +406,10 @@ def update_skip_for_btp(graph: LayerAbstractGraph, print_flag=False):
             graph.dag.nodes[succs[0]]['skip'][1] = (
                 graph.dag.nodes[preds[0]]['skip'][1] * compute_node.stride[1] / compute_node.upsample_factor_in[1]
             )
-            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+            if (
+                preds[0].shape[0] > config.fhe_param.block_shape[0]
+                or preds[0].shape[1] > config.fhe_param.block_shape[1]
+            ):
                 graph.dag.nodes[succs[0]]['skip'] = [1, 1]
 
         if 'upsample' == compute_node.layer_type:
@@ -453,7 +441,10 @@ def update_skip_for_btp(graph: LayerAbstractGraph, print_flag=False):
             else:
                 graph.dag.nodes[succs[0]]['skip'][0] = graph.dag.nodes[preds[0]]['skip'][0] * compute_node.stride[0]
                 graph.dag.nodes[succs[0]]['skip'][1] = graph.dag.nodes[preds[0]]['skip'][1] * compute_node.stride[1]
-            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+            if (
+                preds[0].shape[0] > config.fhe_param.block_shape[0]
+                or preds[0].shape[1] > config.fhe_param.block_shape[1]
+            ):
                 graph.dag.nodes[succs[0]]['skip'] = [1, 1]
         if 'resize' == compute_node.layer_type:
             if (
@@ -538,99 +529,6 @@ def change_skip_for_graph(graph: LayerAbstractGraph):
             for f_node in check_res:
                 c_node = list(graph.dag.predecessors(f_node))[0]
                 add_mpc_refresh_mult_scalar(graph, c_node)
-
-
-def check_level_cost(graph: LayerAbstractGraph) -> bool:
-    """
-    Check that for each compute node: output_level - input_level == level_cost.
-
-    Returns True if all compute nodes satisfy the constraint, False otherwise.
-    """
-    result = True
-    for node in graph.dag.nodes:
-        if not isinstance(node, ComputeNode) or node.layer_type in ['drop_level', 'bootstrapping']:
-            continue
-        level_cost = graph.dag.nodes[node].get('level_cost')
-        if level_cost is None:
-            continue
-        preds: list[FeatureNode] = list(graph.dag.predecessors(node))
-        succs: list[FeatureNode] = list(graph.dag.successors(node))
-        if not preds or not succs:
-            continue
-        input_level = max(graph.dag.nodes[p]['level'] for p in preds)
-        output_level = graph.dag.nodes[succs[0]]['level']
-        if input_level - output_level != level_cost:
-            print(
-                f'[check_level_cost] FAIL: {node.layer_id} ({node.layer_type}): '
-                f'input_level({input_level}) - output_level({output_level}) = '
-                f'{input_level - output_level}, expected level_cost={level_cost}'
-            )
-            result = False
-    return result
-
-
-def check_multi_input_level_skip_aligned(graph: LayerAbstractGraph) -> bool:
-    """
-    Check that for each compute node with multiple input FeatureNodes,
-    all inputs have the same skip and level.
-
-    Returns True if all such nodes satisfy the constraint, False otherwise.
-    """
-    result = True
-    for node in graph.dag.nodes:
-        if not isinstance(node, ComputeNode):
-            continue
-        preds: list[FeatureNode] = list(graph.dag.predecessors(node))
-        if len(preds) < 2:
-            continue
-        base_level = graph.dag.nodes[preds[0]]['level']
-        base_skip = graph.dag.nodes[preds[0]]['skip'][:2]
-        for p in preds[1:]:
-            p_level = graph.dag.nodes[p]['level']
-            p_skip = graph.dag.nodes[p]['skip'][:2]
-            if p_level != base_level:
-                print(
-                    f'[check_multi_input_consistency] FAIL level: {node.layer_id} ({node.layer_type}): '
-                    f'{preds[0].node_id} level={base_level} vs {p.node_id} level={p_level}'
-                )
-                result = False
-            if p_skip != base_skip:
-                print(
-                    f'[check_multi_input_consistency] FAIL skip: {node.layer_id} ({node.layer_type}): '
-                    f'{preds[0].node_id} skip={base_skip} vs {p.node_id} skip={p_skip}'
-                )
-                result = False
-    return result
-
-
-def check_feature_scale(graph: LayerAbstractGraph):
-    all_nodes_in_topo_sort = list(nx.topological_sort(graph.dag))
-    for node in all_nodes_in_topo_sort:
-        if not isinstance(node, ComputeNode):
-            continue
-        preds = list(graph.dag.predecessors(node))
-        succs = list(graph.dag.successors(node))
-        if not preds or not succs:
-            continue
-        assert all(p.scale == preds[0].scale for p in preds), (
-            f'[calculate_feture_scale_for_test] preds scale mismatch at {node.layer_id}: {[p.scale for p in preds]}'
-        )
-        f_node = preds[0]
-        out_node = succs[0]
-        if node.layer_type in config.absorbable_layers:
-            out_node.scale = f_node.scale * node.weight_scale
-        elif node.layer_type == 'mult_coeff':
-            out_node.scale = f_node.scale * (1 / node.coeff)
-        elif node.layer_type == 'avgpool2d':
-            if (not node.is_adaptive_avgpool) and (not node.is_big_size):
-                out_node.scale = f_node.scale
-            else:
-                out_node.scale = f_node.scale * (node.kernel_shape[0] * node.kernel_shape[1])
-        else:
-            out_node.scale = f_node.scale
-
-    output_nodes = [node for node, out_deg in graph.dag.out_degree() if out_deg == 0 and isinstance(node, FeatureNode)]
-    return all(math.isclose(node.scale, 1.0) for node in output_nodes)
 
 
 def set_depth_for_graph(graph: LayerAbstractGraph):

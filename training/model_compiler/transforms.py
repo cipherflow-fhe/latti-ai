@@ -75,6 +75,65 @@ def _insert_layer_after_feature(
     dag.add_edge(new_compute, new_feature)
 
 
+def _insert_layer_after_compute(
+    dag: nx.DiGraph,
+    old_compute: ComputeNode,
+    new_feature: FeatureNode,
+    new_compute: ComputeNode,
+    *,
+    new_feature_args: dict | None = None,
+    new_compute_args: dict | None = None,
+):
+    if new_compute_args is None:
+        new_compute_args = dict()
+    if new_feature_args is None:
+        new_feature_args = dict()
+    dag.add_node(new_feature, **new_feature_args)
+    dag.add_node(new_compute, **new_compute_args)
+
+    old_feature_list = list(dag.successors(old_compute))
+    if len(old_feature_list) != 1:
+        raise ValueError(
+            f'Expected exactly one output feature for compute node {old_compute.layer_id}, got {len(old_feature_list)}'
+        )
+    old_feature = old_feature_list[0]
+
+    dag.remove_edge(old_compute, old_feature)
+    dag.add_edge(old_compute, new_feature)
+    dag.add_edge(new_feature, new_compute)
+    dag.add_edge(new_compute, old_feature)
+
+
+def _delete_layer(
+    dag: nx.DiGraph,
+    compute: ComputeNode,
+):
+    """Remove *compute* and its output FeatureNode, rewiring the predecessor
+    feature directly to all downstream compute nodes.
+
+    Before: feature_in -> compute -> feature_out -> downstream_compute(s)
+    After:  feature_in -> downstream_compute(s)
+    """
+    pred_list = list(dag.predecessors(compute))
+    if len(pred_list) != 1:
+        raise ValueError(f'Expected exactly one predecessor for compute node {compute.layer_id}, got {len(pred_list)}')
+    feature_in = pred_list[0]
+
+    feature_out_list = list(dag.successors(compute))
+    if len(feature_out_list) != 1:
+        raise ValueError(
+            f'Expected exactly one output feature for compute node {compute.layer_id}, got {len(feature_out_list)}'
+        )
+    feature_out = feature_out_list[0]
+
+    downstream_computes = list(dag.successors(feature_out))
+
+    dag.remove_node(feature_out)
+    dag.remove_node(compute)
+    for dc in downstream_computes:
+        dag.add_edge(feature_in, dc)
+
+
 def init_levels(graph: LayerAbstractGraph):
     for node in graph.dag.nodes:
         if isinstance(node, FeatureNode):
@@ -206,70 +265,69 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
 
 
 def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: ComputeNode) -> ComputeNode:
-    f_node = list(graph.dag.successors(compute_node))[0]
+    old_output_feature = next(graph.dag.successors(compute_node))
 
-    skip = list(graph.dag.nodes[f_node]['skip'])
-    virtual_shape = list(graph.dag.nodes[f_node]['virtual_shape'])
-    virtual_skip = list(graph.dag.nodes[f_node]['virtual_skip'])
-    # level = graph.dag.nodes[f_node]['level']
-    # pack_num = graph.dag.nodes[f_node]['pack_num']
+    skip = list(graph.dag.nodes[old_output_feature]['skip'])
+    virtual_shape = list(graph.dag.nodes[old_output_feature]['virtual_shape'])
+    virtual_skip = list(graph.dag.nodes[old_output_feature]['virtual_skip'])
 
-    added_f_node = copy.deepcopy(f_node)
-    f_node.node_id = f_node.node_id + '_mult_scalar_output'
-    f_node.scale = 1.0
+    mult_scalar_output = copy.deepcopy(old_output_feature)
+    old_output_feature.node_id = old_output_feature.node_id + '_mult_scalar_output'
+    old_output_feature.scale = 1.0
 
-    added_c_node = MultScalarComputeNode(
+    mult_scalar_node = MultScalarComputeNode(
         compute_node.layer_id + '_mult_scalar_', 'mult_scalar', compute_node.channel_input, compute_node.channel_output
     )
 
-    graph.dag.remove_edge(compute_node, f_node)
-    graph.dag.add_node(
-        added_f_node,
-        name=added_f_node.node_id,
-        skip=skip,
-        virtual_shape=virtual_shape,
-        virtual_skip=virtual_skip,
-        # level=level,
-        # pack_num=pack_num,
+    _insert_layer_after_compute(
+        graph.dag,
+        compute_node,
+        mult_scalar_output,
+        mult_scalar_node,
+        new_feature_args={
+            'name': mult_scalar_output.node_id,
+            'skip': skip,
+            'virtual_shape': virtual_shape,
+            'virtual_skip': virtual_skip,
+        },
+        new_compute_args={'name': mult_scalar_node.layer_id, 'level_cost': 1},
     )
-    graph.dag.add_node(added_c_node, name=added_c_node.layer_id)
-    graph.dag.nodes[added_c_node]['level_cost'] = 1
-    graph.dag.add_edge(compute_node, added_f_node)
-    graph.dag.add_edge(added_f_node, added_c_node)
-    graph.dag.add_edge(added_c_node, f_node)
-
-    return added_c_node
 
 
-def find_layer_in_linear_graph(graph: LayerAbstractGraph, c_node: ComputeNode, target_layer_type: str, direction: str):
-    if direction == 'up':
-        preds = list(graph.dag.predecessors(c_node))
-        if len(preds) == 0 or len(preds) > 1:
-            return False
-        start_node = preds[0]
-        while True:
-            if isinstance(start_node, ComputeNode) and start_node.layer_type == target_layer_type:
-                return start_node
-            else:
-                start_preds = list(graph.dag.predecessors(start_node))
-                if len(start_preds) == 0 or len(start_preds) > 1:
-                    return False
-                start_node = start_preds[0]
-                continue
-    else:
-        succs = list(graph.dag.successors(c_node))
-        if len(succs) == 0 or len(succs) > 1:
-            return False
-        start_node = succs[0]
-        while True:
-            if isinstance(start_node, ComputeNode) and start_node.layer_type == target_layer_type:
-                return start_node
-            else:
-                start_succs = list(graph.dag.successors(start_node))
-                if len(start_succs) == 0 or len(start_succs) > 1:
-                    return False
-                start_node = start_succs[0]
-                continue
+def find_layer_in_linear_graph(
+    graph: LayerAbstractGraph, c_node: ComputeNode, target_layer_type: str, direction: str
+) -> ComputeNode | None:
+    node = c_node
+    while True:
+        if direction == 'up':
+            if graph.dag.in_degree(node) != 1:
+                return None
+            node = next(graph.dag.predecessors(node))
+        else:
+            if graph.dag.out_degree(node) != 1:
+                return None
+            node = next(graph.dag.successors(node))
+
+        if isinstance(node, ComputeNode) and node.layer_type == target_layer_type:
+            return node
+
+
+def find_absorbable_layer_in_linear_subgraph(
+    subgraph: nx.DiGraph, c_node: ComputeNode, direction: Direction
+) -> ComputeNode | None:
+    node = c_node
+    while True:
+        if direction == Direction.UP:
+            if subgraph.in_degree(node) != 1:
+                return None
+            node = next(subgraph.predecessors(node))
+        else:
+            if subgraph.out_degree(node) != 1:
+                return None
+            node = next(subgraph.successors(node))
+
+        if isinstance(node, ComputeNode) and node.layer_type in config.absorbable_layers:
+            return node
 
 
 def split_upsampling_layers(graph: LayerAbstractGraph):
@@ -314,7 +372,33 @@ def infer_shapes_and_skips(graph: LayerAbstractGraph):
     for compute_node in sorted_compute_nodes:
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
         succ: FeatureNode = next(graph.dag.successors(compute_node))
-        graph.dag.nodes[succ]['skip'] = [1, 1]
+        graph.dag.nodes[succ]['skip'] = [1] * succ.dim
+        if 'reshape' == compute_node.layer_type:
+            graph.dag.nodes[succ]['virtual_shape'] = preds[0].shape
+            graph.dag.nodes[succ]['virtual_skip'] = graph.dag.nodes[preds[0]]['skip']
+            skip = (
+                preds[0].shape[0]
+                * preds[0].shape[1]
+                * graph.dag.nodes[preds[0]]['skip'][0]
+                * graph.dag.nodes[preds[0]]['skip'][1]
+            )
+            graph.dag.nodes[succ]['skip'] = [skip]
+            continue
+        if isinstance(compute_node, PoolComputeNode):
+            for i in range(2):
+                if not compute_node.is_adaptive_avgpool:
+                    succ.shape[i] = preds[0].shape[i] / compute_node.stride[i]
+                    graph.dag.nodes[succ]['skip'][0] = graph.dag.nodes[preds[0]]['skip'][0] * compute_node.stride[0]
+                    graph.dag.nodes[succ]['skip'][1] = graph.dag.nodes[preds[0]]['skip'][1] * compute_node.stride[1]
+                else:
+                    succ.shape[i] = preds[0].shape[i]
+                    graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip']
+            continue
+        if preds[0].dim == 0 and succ.dim == 0:
+            graph.dag.nodes[succ]['virtual_skip'] = graph.dag.nodes[preds[0]]['virtual_skip']
+            graph.dag.nodes[succ]['virtual_shape'] = graph.dag.nodes[preds[0]]['virtual_shape']
+            graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip']
+            continue
         if isinstance(compute_node, SpatialComputeNode):
             for i in range(compute_node.dim):
                 succ.shape[i] = (
@@ -333,6 +417,8 @@ def infer_shapes_and_skips(graph: LayerAbstractGraph):
             for i in range(preds[0].dim):
                 succ.shape[i] = preds[0].shape[i]
                 graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
+        if any(preds[0].shape[i] > config.fhe_param.block_shape[i] for i in range(preds[0].dim)):
+            graph.dag.nodes[succ]['skip'] = [1] * preds[0].dim
 
 
 def combine_convs_with_upsamples(graph: LayerAbstractGraph):
@@ -340,23 +426,23 @@ def combine_convs_with_upsamples(graph: LayerAbstractGraph):
         if not isinstance(upsample_node, UpsampleComputeNode):
             continue
         conv_node = find_layer_in_linear_graph(graph, upsample_node, 'conv2d', 'up')
-        if conv_node is False:
+        if conv_node is None:
             raise ValueError('Cannot find a conv node above the upsampling node.')
         conv_out = next(graph.dag.successors(conv_node))
+        dim = upsample_node.dim
 
-        if (
-            conv_out.shape[0] * upsample_node.upsample_factor[0] > config.block_shape[0]
-            or conv_out.shape[1] * upsample_node.upsample_factor[1] > config.block_shape[1]
+        if any(
+            conv_out.shape[i] * upsample_node.upsample_factor[i] > config.fhe_param.block_shape[i] for i in range(dim)
         ):
             continue
 
-        for i in range(conv_node.dim):
+        for i in range(dim):
             conv_node.upsample_factor_in[i] *= upsample_node.upsample_factor[i]
 
         cur_compute_node = conv_node
         while True:
             cur_feature_node = next(graph.dag.successors(cur_compute_node))
-            for i in range(cur_feature_node.dim):
+            for i in range(dim):
                 cur_feature_node.shape[i] *= upsample_node.upsample_factor[i]
                 graph.dag.nodes[cur_feature_node]['skip'][i] //= upsample_node.upsample_factor[i]
 
@@ -364,10 +450,10 @@ def combine_convs_with_upsamples(graph: LayerAbstractGraph):
             if cur_compute_node == upsample_node:
                 break
             if cur_compute_node.layer_type in ('relu2d', 'simple_polyrelu'):
-                for i in range(cur_feature_node.dim):
+                for i in range(dim):
                     cur_compute_node.zero_skip[i] *= upsample_node.upsample_factor[i]
 
-        upsample_node.upsample_factor = [1, 1]
+        _delete_layer(graph.dag, upsample_node)
 
 
 def set_level_costs(graph: LayerAbstractGraph):
@@ -382,7 +468,10 @@ def set_level_costs(graph: LayerAbstractGraph):
             if config.style == 'ordinary':
                 graph.dag.nodes[compute_node]['level_cost'] = 1
             elif config.style == 'multiplexed':
-                if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+                if (
+                    preds[0].shape[0] > config.fhe_param.block_shape[0]
+                    or preds[0].shape[1] > config.fhe_param.block_shape[1]
+                ):
                     compute_node.is_big_size = True
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                 else:
@@ -400,7 +489,10 @@ def set_level_costs(graph: LayerAbstractGraph):
                 raise ValueError('Unsupported config.style')
 
         elif compute_node.layer_type == 'avgpool2d':
-            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+            if (
+                preds[0].shape[0] > config.fhe_param.block_shape[0]
+                or preds[0].shape[1] > config.fhe_param.block_shape[1]
+            ):
                 graph.dag.nodes[compute_node]['level_cost'] = 0
                 compute_node.is_big_size = True
                 compute_node.is_adaptive_avgpool = False
@@ -415,7 +507,7 @@ def set_level_costs(graph: LayerAbstractGraph):
                     compute_node.is_adaptive_avgpool = False
         elif compute_node.layer_type == config.approx_poly_type:
             graph.dag.nodes[compute_node]['level_cost'] = math.ceil(math.log2(compute_node.order)) + 1
-            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+            if any(preds[0].shape[i] > config.fhe_param.block_shape[i] for i in range(preds[0].dim)):
                 compute_node.is_big_size = True
         elif isinstance(compute_node, UpsampleComputeNode):
             if compute_node.upsample_factor[0] == 1 and compute_node.upsample_factor[1] == 1:
@@ -458,83 +550,54 @@ def insert_drop_level_layers(graph: LayerAbstractGraph):
                 graph.dag.nodes[succ_sub]['level'] = pred_level - graph.dag.nodes[drop_level_layer]['level_cost']
 
 
-def split_graph_to_linear_subgraph(graph: LayerAbstractGraph) -> list[LayerAbstractGraph]:
-    dag_of_linear_subgraphs = graph.dag.copy()
-    for node in graph.dag.nodes:
-        if graph.dag.in_degree(node) > 1:
-            for node_in in graph.dag.predecessors(node):
+def split_graph_to_linear_subgraph(dag: nx.DiGraph) -> list[nx.DiGraph]:
+    dag_of_linear_subgraphs = dag.copy()
+    for node in dag.nodes:
+        if dag.in_degree(node) > 1:
+            for node_in in dag.predecessors(node):
                 if dag_of_linear_subgraphs.has_edge(node_in, node):
                     dag_of_linear_subgraphs.remove_edge(node_in, node)
-        if graph.dag.out_degree(node) > 1:
-            for node_out in graph.dag.successors(node):
+        if dag.out_degree(node) > 1:
+            for node_out in dag.successors(node):
                 if dag_of_linear_subgraphs.has_edge(node, node_out):
                     dag_of_linear_subgraphs.remove_edge(node, node_out)
 
     components = list(nx.weakly_connected_components(dag_of_linear_subgraphs))
-    subgraphs = list()
-    for component in components:
-        # A single feature_node does not constitute a subgraph
-        if len(component) <= 1:
-            continue
-        sub = LayerAbstractGraph()
-        sub.dag = dag_of_linear_subgraphs.subgraph(component).copy()
-        subgraphs.append(sub)
-
-    return subgraphs
+    return [dag_of_linear_subgraphs.subgraph(component).copy() for component in components if len(component) > 1]
 
 
-def find_linear_fhe_layer(
-    compute_node: ComputeNode, graph: LayerAbstractGraph, direction: Direction
-) -> tuple[bool, ComputeNode]:
-    node = compute_node
-    while True:
-        if direction == Direction.UP:
-            node_list = list(graph.dag.predecessors(node))
-        else:
-            node_list = list(graph.dag.successors(node))
-        if not node_list:
-            return [False, None]
-
-        if isinstance(node_list[0], FeatureNode):
-            node = node_list[0]
-            continue
-
-        if node_list[0].layer_type in config.absorbable_layers:
-            return [True, node_list[0]]
-
-        node = node_list[0]
-
-
-def handle_valid_poly_subgraph(subgraph: LayerAbstractGraph, use_mpc_refresh: bool = False):
+def handle_valid_poly_subgraph(subgraph: nx.DiGraph, use_mpc_refresh: bool = False):
     """Handle poly nodes that can be absorbed in the current subgraph"""
 
     if not use_mpc_refresh:
-        for node in subgraph.dag.nodes:
+        for node in subgraph.nodes:
             if isinstance(node, ComputeNode):
                 if node.layer_type == 'simple_polyrelu' or node.layer_type == 'relu2d':
-                    find, res_node = find_linear_fhe_layer(node, subgraph, Direction.UP)
-                    if find:
+                    res_node = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.UP)
+                    if res_node is not None:
                         node.up_scale_str.append(res_node.layer_id)
                 elif node.layer_type in {'avgpool2d', 'mult_coeff'}:
-                    find_down, res_node_down = find_linear_fhe_layer(node, subgraph, Direction.DOWN)
-                    if find_down and res_node_down.layer_type != 'simple_polyrelu':
+                    res_node_down = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.DOWN)
+                    if res_node_down is not None and res_node_down.layer_type != 'simple_polyrelu':
                         node.down_scale_str.append(res_node_down.layer_id)
 
                         continue
-                    find_up, res_node_up = find_linear_fhe_layer(node, subgraph, Direction.UP)
-                    if find_up:
+                    res_node_up = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.UP)
+                    if res_node_up is not None:
                         node.up_scale_str.append(res_node_up.layer_id)
     else:
         candidates = {}
 
-        for node in subgraph.dag.nodes:
+        for node in subgraph.nodes:
             if isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping':
-                find_down, res_node_down = find_linear_fhe_layer(node, subgraph, Direction.DOWN)
-                find_up, res_node_up = find_linear_fhe_layer(node, subgraph, Direction.UP)
+                res_node_down = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.DOWN)
+                res_node_up = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.UP)
 
                 candidates[node] = {
-                    'down': res_node_down if (find_down and res_node_down.layer_type != 'simple_polyrelu') else None,
-                    'up': res_node_up if find_up else None,
+                    'down': res_node_down
+                    if (res_node_down is not None and res_node_down.layer_type != 'simple_polyrelu')
+                    else None,
+                    'up': res_node_up,
                 }
 
         initial_assignment = {}
@@ -581,7 +644,7 @@ def handle_valid_poly_subgraph(subgraph: LayerAbstractGraph, use_mpc_refresh: bo
 
 
 def set_graph_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
-    subgraphs = split_graph_to_linear_subgraph(graph)
+    subgraphs = split_graph_to_linear_subgraph(graph.dag)
     for sub in subgraphs:
         handle_valid_poly_subgraph(sub, use_mpc_refresh)
 
@@ -629,61 +692,48 @@ def set_feature_scales(graph: LayerAbstractGraph):
             node_out = set_scale_for_node(graph, compute, scale)
 
 
-def check_subgraph_validity(subgraph: LayerAbstractGraph, invalid_list: list = None, use_mpc_refresh: bool = False):
+def linear_subgraph_can_absorb_scale(subgraph: nx.DiGraph, use_mpc_refresh: bool = False):
     """Check if nodes in the linear subgraph can be absorbed"""
-
     if use_mpc_refresh:
         layers_to_absorb = ['bootstrapping']
     else:
         layers_to_absorb = ['avgpool2d', 'mult_coeff']
-    valid_flag = True
 
-    for node in subgraph.dag.nodes:
+    for node in subgraph.nodes:
         if isinstance(node, ComputeNode):
             if node.layer_type in layers_to_absorb:
                 if isinstance(node, PoolComputeNode) and (not node.is_adaptive_avgpool) and (not node.is_big_size):
                     continue
-                is_find_dwon, target_node_down = find_linear_fhe_layer(node, subgraph, Direction.DOWN)
-                is_find_up, target_node_up = find_linear_fhe_layer(node, subgraph, Direction.UP)
-                if (not is_find_dwon) and (not is_find_up):
+                target_node_down = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.DOWN)
+                target_node_up = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.UP)
+                if target_node_down is None and target_node_up is None:
                     return False
-                elif (not is_find_up) and is_find_dwon and target_node_down.layer_type == 'simple_polyrelu':
+                elif (
+                    target_node_up is None
+                    and target_node_down is not None
+                    and target_node_down.layer_type == 'simple_polyrelu'
+                ):
                     return False
+                else:
+                    continue
 
-    return valid_flag
+    return True
 
 
-def handle_invalid_poly_subgraph(
-    graph, subgraph_index, subs_ordered, subgraph_invalid_poly_dict, use_mpc_refresh: bool = False
-):
-    """Handle poly nodes that cannot be absorbed in the current subgraph, return the layer_id of the added mult_scalar"""
-    current_sub = subs_ordered[subgraph_index]
-    all_nodes_in_topo_sort = list(nx.topological_sort(current_sub.dag))
-    first_node = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)][0]
-    mult_scalar_layer = add_mult_scalar_behind_node(graph, first_node)
-
-    return mult_scalar_layer.layer_id
+def insert_mult_scalar_in_linear_subgraph(graph, subgraph: nx.DiGraph):
+    first_compute_node = next(node for node in nx.topological_sort(subgraph) if isinstance(node, ComputeNode))
+    add_mult_scalar_behind_node(graph, first_compute_node)
 
 
 def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
-    subgraphs = split_graph_to_linear_subgraph(graph)
+    subgraphs = split_graph_to_linear_subgraph(graph.dag)
 
-    index = 0
-    invalid_index = []
-    subgraph_invalid_poly_dict = dict()
-    added_mult_scalar_ids = []
+    unchangable_subgraphs = list()
+    for subgraph in subgraphs:
+        if not linear_subgraph_can_absorb_scale(subgraph, use_mpc_refresh):
+            unchangable_subgraphs.append(subgraph)
 
-    for sub_in in subgraphs:
-        invalid_poly_nodes = []
-        if not check_subgraph_validity(sub_in, invalid_poly_nodes, use_mpc_refresh):
-            invalid_index.append(index)
-        subgraph_invalid_poly_dict[index] = invalid_poly_nodes
-        index = index + 1
-
-    for i in range(len(subgraphs)):
-        if i in invalid_index:
-            added_id = handle_invalid_poly_subgraph(graph, i, subgraphs, subgraph_invalid_poly_dict, use_mpc_refresh)
-            if added_id:
-                added_mult_scalar_ids.append(added_id)
+    for subgraph in unchangable_subgraphs:
+        insert_mult_scalar_in_linear_subgraph(graph, subgraph)
 
     return graph

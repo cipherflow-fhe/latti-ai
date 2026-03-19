@@ -14,6 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import torch.nn as nn
 import sys
 from pathlib import Path
@@ -26,9 +27,19 @@ from nn_tools.activations import RangeNormPoly2d
 
 
 class SingleConv(nn.Module):
+    def __init__(self, stride=1):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=stride)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
+class SingleConv1d(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.conv0 = nn.Conv1d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
 
     def forward(self, x):
         x = self.conv0(x)
@@ -36,6 +47,16 @@ class SingleConv(nn.Module):
 
 
 class SingleAct(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.relu0 = RangeNormPoly2d(num_features=32)
+
+    def forward(self, x):
+        x = self.relu0(x)
+        return x
+
+
+class SingleAct1d(nn.Module):
     def __init__(self):
         super().__init__()
         self.relu0 = RangeNormPoly2d(num_features=32)
@@ -383,4 +404,162 @@ class ConvAndUpsample(nn.Module):
     def forward(self, x):
         x = self.conv0(x)
         x = self.resize(x)
+        return x
+
+
+class ConvReshapeAndDense(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, bias=False, padding=1, stride=2)
+        self.dense0 = nn.Linear(in_features=768, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = x.view(x.size(0), -1)
+        x = self.dense0(x)
+        return x
+
+
+# ── Poly-degree targeting modules ─────────────────────────────────────────────
+#
+# Level costs (ordinary style):
+#   Conv (stride=1, ordinary): 1
+#   Activation (RangeNormPoly2d, order=4): ceil(log2(4)) + 1 = 3
+#
+# The no-BTP pipeline tries poly_n values in order [8192, 16384, 32768, 65536]
+# with max_level [5, 9, 17, 33].  The input feature level equals the sum of
+# level_cost along the critical path, so:
+#
+#   PolyDegreeN8192  : 1 Conv + 1 Act = 4 levels  → fits 8192  (max 5)
+#   PolyDegreeN16384 : 3 Conv + 1 Act = 6 levels  → exceeds 8192, fits 16384 (max 9)
+#   PolyDegreeN32768 : 4 Conv + 2 Act = 10 levels → exceeds 16384, fits 32768 (max 17)
+#   PolyDegreeN65536 : 6 Conv + 4 Act = 18 levels → exceeds 32768, fits 65536 (max 33)
+#   PolyDegreeNBtp   : 4 Conv + 10 Act = 34 levels → exceeds all non-BTP limits → BTP
+
+
+class PolyDegreeN8192(nn.Module):
+    """1 Conv + 1 Act = 4 levels total; fits poly_n=8192 (max_level=5)."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.act0 = RangeNormPoly2d(num_features=32)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = self.act0(x)
+        return x
+
+
+class PolyDegreeN16384(nn.Module):
+    """3 Conv + 1 Act = 6 levels total; exceeds poly_n=8192 (max 5), fits poly_n=16384 (max 9)."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.conv1 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.act0 = RangeNormPoly2d(num_features=32)
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = self.conv1(x)
+        x = self.act0(x)
+        x = self.conv2(x)
+        return x
+
+
+class PolyDegreeN32768(nn.Module):
+    """4 Conv + 2 Act = 10 levels total; exceeds poly_n=16384 (max 9), fits poly_n=32768 (max 17)."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.act0 = RangeNormPoly2d(num_features=32)
+        self.conv1 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.act1 = RangeNormPoly2d(num_features=32)
+        self.conv3 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = self.act0(x)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.act1(x)
+        x = self.conv3(x)
+        return x
+
+
+class PolyDegreeN65536NoBtp(nn.Module):
+    """6 Conv + 4 Act = 18 levels total; exceeds poly_n=32768 (max 17), fits poly_n=65536 non-BTP (max 33)."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.act0 = RangeNormPoly2d(num_features=32)
+        self.conv1 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.act1 = RangeNormPoly2d(num_features=32)
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.conv3 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.act2 = RangeNormPoly2d(num_features=32)
+        self.conv4 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+        self.act3 = RangeNormPoly2d(num_features=32)
+        self.conv5 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = self.act0(x)
+        x = self.conv1(x)
+        x = self.act1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = self.act2(x)
+        x = self.conv4(x)
+        x = self.act3(x)
+        x = self.conv5(x)
+        return x
+
+
+class PolyDegreeNBtp(nn.Module):
+    """4 Conv + 10 Act = 34 levels total; exceeds all non-BTP limits (max 33) → forces BTP mode."""
+
+    def __init__(self):
+        super().__init__()
+        self.n_acts = 10
+        self.n_convs = 4
+        self.acts = nn.ModuleList([RangeNormPoly2d(num_features=32) for _ in range(self.n_acts)])
+        self.convs = nn.ModuleList(
+            [
+                nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
+                for _ in range(self.n_convs)
+            ]
+        )
+
+    def forward(self, x):
+        # Interleave: act, act, conv, act, act, conv, act, act, conv, act, act, conv, act, act
+        for i in range(self.n_convs):
+            x = self.acts[2 * i](x)
+            x = self.acts[2 * i + 1](x)
+            x = self.convs[i](x)
+        x = self.acts[8](x)
+        x = self.acts[9](x)
+        return x
+
+
+# ── End poly-degree targeting modules ─────────────────────────────────────────
+
+
+class ConvAvgpoolReshapeAndDense(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, bias=False, padding=1, stride=2)
+        self.pool0 = nn.AvgPool2d(kernel_size=8, stride=8, padding=0)
+        self.dense0 = nn.Linear(in_features=48, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = self.pool0(x)
+        x = x.view(x.size(0), -1)
+        x = self.dense0(x)
         return x

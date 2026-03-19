@@ -8,120 +8,145 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    runs-on: [self-hosted, linux, gpu]
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: localhost:5000/latti-ai-ci:latest
+      options: --gpus all
+      volumes:
+        - /opt/heongpu-cache:/opt/heongpu-cache
+        - /opt/go-mod-cache:/root/go/pkg/mod
+    timeout-minutes: 120
 
     steps:
+      - name: Configure git proxy
+        run: git config --global url."https://ghfast.top/https://github.com/".insteadOf "https://github.com/"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install dependencies
+      - name: Verify prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            gcc-12 \
-            g++-12 \
-            cmake \
-            libhdf5-dev \
-            libhdf5-cpp-103 \
-            libomp-dev \
-            libssl-dev \
-            zlib1g-dev
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+          echo "=== Tool versions ==="
+          gcc --version | head -1
+          g++ --version | head -1
+          cmake --version | head -1
+          go version
+          python3 --version
+          echo "=== GPU ==="
+          nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24.0'
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install Python dependencies
+      - name: Configure git mirrors
         run: |
-          pip install -r training/requirements.txt
+          git config --global url."https://gitee.com/mirrors/cccl.git".insteadOf "https://github.com/nvidia/cccl.git"
 
-      - name: Build (CPU mode)
+      - name: Build HEonGPU (cached)
+        run: |
+          HEONGPU_COMMIT=$(git -C inference/lattisense/HEonGPU rev-parse HEAD)
+          CACHE_DIR="/opt/heongpu-cache/${HEONGPU_COMMIT}"
+          if [ -d "${CACHE_DIR}/install/lib" ]; then
+            echo "Using cached HEonGPU (${HEONGPU_COMMIT:0:8})"
+            cp -a "${CACHE_DIR}/install" inference/lattisense/HEonGPU/install
+            cp -a "${CACHE_DIR}/build" inference/lattisense/HEonGPU/build
+          else
+            echo "Building HEonGPU from scratch"
+            cd inference/lattisense/HEonGPU
+            cmake -S . -B build \
+              -DCMAKE_CUDA_ARCHITECTURES=86 \
+              -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
+              -DCMAKE_INSTALL_PREFIX=$(pwd)/install
+            cmake --build build -j$(nproc)
+            cmake --install build
+            cd $GITHUB_WORKSPACE
+            mkdir -p "${CACHE_DIR}"
+            cp -a inference/lattisense/HEonGPU/install "${CACHE_DIR}/"
+            cp -a inference/lattisense/HEonGPU/build "${CACHE_DIR}/"
+            # Keep only the 3 most recent caches
+            ls -dt /opt/heongpu-cache/*/ 2>/dev/null | tail -n +4 | xargs rm -rf 2>/dev/null || true
+          fi
+
+      - name: Build (GPU mode)
         run: |
           mkdir -p build && cd build
-          cmake ..
+          cmake .. -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=86
           make -j$(nproc)
 
       - name: Generate test data
         run: |
           cd build/inference/unittests
-          python test_gen_layers.py TestLayerExport.test_sq
+          python3 test_gen_layers.py
 
-      - name: Run unit tests
+      - name: Run tests (CPU + GPU)
         timeout-minutes: 30
         run: |
           cd build/inference/unittests
           ./test_data_structs
-          ./test_fhe_layers_hetero "sq*"
+          ./test_fhe_layers_hetero
 
       - name: Run compiler tests
         run: |
-          python -m pytest training/model_compiler/unittests/test_compiler.py -v
+          python3 -m pytest training/model_compiler/unittests/test_compiler.py -v
+
+      - name: Generate example instructions
+        run: |
+          python3 inference/interface/gen_mega_ag.py --task-dir examples/test_mnist/task
+          python3 inference/interface/gen_mega_ag.py --task-dir examples/test_cifar10/task
+
+      - name: Run example tests
+        timeout-minutes: 60
+        run: |
+          cd build
+          ctest -L example -E imagenet -V
+
   build-docker:
-    runs-on: ubuntu-22.04
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, linux, gpu]
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: localhost:5000/latti-ai-ci:latest
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock
     needs: build-and-test
-    timeout-minutes: 120
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
 
     steps:
+      - name: Configure git proxy
+        run: git config --global url."https://ghfast.top/https://github.com/".insteadOf "https://github.com/"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          load: true
-          tags: latti-ai:dev
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        run: docker build -t latti-ai:latest .
 
       - name: Verify Docker image (CPU mode)
         timeout-minutes: 30
         run: |
-          docker run --rm latti-ai:dev bash -c "
+          docker run --rm latti-ai:latest bash -c "
             cd /workspace/build
             cmake ..
             make -j\$(nproc)
@@ -133,13 +158,16 @@ jobs:
             python -m pytest training/model_compiler/unittests/test_compiler.py -v
           "
 
-      - name: Push Docker image
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Tag and push
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          docker tag latti-ai:latest "${IMAGE}:latest"
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            docker tag latti-ai:latest "${IMAGE}:${{ github.ref_name }}"
+            docker push "${IMAGE}:${{ github.ref_name }}"
+          fi
+          docker push "${IMAGE}:latest"
+
+      - name: Cleanup
+        if: always()
+        run: docker image prune -f

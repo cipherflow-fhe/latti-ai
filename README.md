@@ -182,14 +182,12 @@ Next, compile the adapted model into an **FHE Model Graph**. This step performs 
 python training/run_compile.py \
   --input=./runs/cifar10/model/trained_poly.onnx \
   --output=./runs/cifar10/ \
-  --poly_n=65536 \
   --style=multiplexed
 ```
 
 - `--input`: the exported adapted model in ONNX format from the previous step.
 - `--output`: root output directory; the compiler generates `task/server/` and `task/client/` subdirectories underneath.
-- `--poly_n`: polynomial modulus degree for CKKS (determines the number of ciphertext slots and security level). `65536` provides 128-bit security with 32768 slots.
-- `--style`: packing style — `multiplexed` (channel-multiplexed packing for higher slot utilization) or `ordinary` (one channel per ciphertext).
+- `--style`: packing style — `multiplexed` (channel-multiplexed packing for higher slot utilization) or `ordinary` (one channel per ciphertext). Default: `multiplexed`.
 
 **Output:**
 
