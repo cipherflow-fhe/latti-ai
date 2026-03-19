@@ -271,10 +271,10 @@ class FheScoreParam:
             self.input_skip = dag.nodes[preds[0]]['skip']
             self.output_skip = dag.nodes[succs[0]]['skip']
         else:
-            self.input_shape = dag.nodes[preds[0]]['virtual_shape']
-            self.output_shape = dag.nodes[succs[0]]['virtual_shape']
-            self.input_skip = dag.nodes[preds[0]]['virtual_skip']
-            self.output_skip = dag.nodes[succs[0]]['virtual_skip']
+            self.input_shape = preds[0].sp_info['skip']
+            self.output_shape = succs[0].sp_info['skip']
+            self.input_skip = preds[0].sp_info['invalid_fill']
+            self.output_skip = succs[0].sp_info['invalid_fill']
 
         self.pack = dag.nodes[preds[0]]['pack_num']
         self.pack_out = dag.nodes[succs[0]]['pack_num']
@@ -474,10 +474,10 @@ class MpcScoreParam:
             input_skip = graph.dag.nodes[preds[0]]['skip']
             output_skip = graph.dag.nodes[succs[0]]['skip']
         else:
-            input_shape = graph.dag.nodes[preds[0]]['virtual_shape']
-            output_shape = graph.dag.nodes[succs[0]]['virtual_shape']
-            input_skip = graph.dag.nodes[preds[0]]['virtual_skip']
-            output_skip = graph.dag.nodes[succs[0]]['virtual_skip']
+            self.input_shape = preds[0].sp_info['skip']
+            self.output_shape = succs[0].sp_info['skip']
+            self.input_skip = preds[0].sp_info['invalid_fill']
+            self.output_skip = succs[0].sp_info['invalid_fill']
 
         self.input_channel = compute_node.channel_input
         self.output_channel = compute_node.channel_output
