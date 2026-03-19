@@ -425,6 +425,10 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
         if preds[0].dim == 0 and succ.dim == 0:
             graph.dag.nodes[succ]['virtual_skip'] = graph.dag.nodes[preds[0]]['virtual_skip']
             graph.dag.nodes[succ]['virtual_shape'] = graph.dag.nodes[preds[0]]['virtual_shape']
+            graph.dag.nodes[preds[0]]['skip'] = [
+                math.prod(graph.dag.nodes[preds[0]]['virtual_skip'])
+                * math.prod(graph.dag.nodes[preds[0]]['virtual_shape'])
+            ]
             graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip']
             continue
         if isinstance(compute_node, SpatialComputeNode):
