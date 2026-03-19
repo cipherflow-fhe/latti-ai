@@ -20,16 +20,15 @@ import networkx as nx
 
 from components import (
     ComputeNode,
-    EncryptParameterNode,
+    FheParameter,
     FeatureNode,
     LayerAbstractGraph,
     config,
-    single_thread,
 )
 
 
 def get_multithread_rate_for_btp(task_num: int):
-    if single_thread:
+    if config.single_thread:
         return 1
     if task_num == 1:
         return 1
@@ -42,7 +41,7 @@ def get_multithread_rate_for_btp(task_num: int):
 
 
 def get_multithread_rate(task_num: int):
-    if single_thread:
+    if config.single_thread:
         return 1
     if task_num == 1:
         return 1
@@ -59,7 +58,7 @@ def get_multithread_rate(task_num: int):
 
 
 def get_multithread_rate_for_block_rotation(task_num: int):
-    if single_thread:
+    if config.single_thread:
         return 1
     if task_num == 1:
         return 1
@@ -76,7 +75,7 @@ def get_multithread_rate_for_block_rotation(task_num: int):
 
 
 def get_multithread_rate_for_kernel_rotation(task_num: int):
-    if single_thread:
+    if config.single_thread:
         return 1
     if task_num == 1:
         return 1
@@ -93,7 +92,7 @@ def get_multithread_rate_for_kernel_rotation(task_num: int):
 
 
 def get_multithread_rate_for_weight_ops(task_num: int):
-    if single_thread:
+    if config.single_thread:
         return 1
     if task_num == 1:
         return 1
@@ -250,9 +249,7 @@ ct_trans_rate = 1 / 10
 
 
 class FheScoreParam:
-    def __init__(
-        self, dag: nx.DiGraph, compute_node: ComputeNode, param: dict[str, EncryptParameterNode], level
-    ) -> None:
+    def __init__(self, dag: nx.DiGraph, compute_node: ComputeNode, param: dict[str, FheParameter], level) -> None:
         preds: list[FeatureNode] = list(dag.predecessors(compute_node))
         succs: list[FeatureNode] = list(dag.successors(compute_node))
 
@@ -329,8 +326,8 @@ class FheScoreParam:
             else:
                 x_size = (
                     math.ceil(self.input_channel / self.pack)
-                    * math.ceil(self.input_shape[0] / config.block_shape[0])
-                    * math.ceil(self.input_shape[1] / config.block_shape[1])
+                    * math.ceil(self.input_shape[0] / config.fhe_param.block_shape[0])
+                    * math.ceil(self.input_shape[1] / config.fhe_param.block_shape[1])
                 )
 
                 n_block_per_ct = math.ceil(self.pack / (self.input_skip[0] * self.input_skip[1]))
@@ -443,7 +440,7 @@ class MpcScoreParam:
         self,
         dag: LayerAbstractGraph,
         compute_node: ComputeNode,
-        param: dict[str, EncryptParameterNode],
+        param: dict[str, FheParameter],
         bit_len=44,
         mpc_scale=16,
     ) -> None:
@@ -454,10 +451,10 @@ class MpcScoreParam:
         self.preds = preds
         self.succs = succs
         self.compute_node = compute_node
-        self.input_coeff_mod = param[preds[0].ckks_parameter_id].coeff_modulus_bit_length
-        self.output_coeff_mod = param[succs[0].ckks_parameter_id].coeff_modulus_bit_length
-        self.input_special_mod = param[preds[0].ckks_parameter_id].special_prime_bit_length
-        self.output_special_mod = param[succs[0].ckks_parameter_id].special_prime_bit_length
+        self.input_coeff_mod = param[preds[0].ckks_parameter_id].log_default_scale
+        self.output_coeff_mod = param[succs[0].ckks_parameter_id].log_default_scale
+        self.input_special_mod = param[preds[0].ckks_parameter_id].log_default_scale
+        self.output_special_mod = param[succs[0].ckks_parameter_id].log_default_scale
         self.input_mult_level = graph.dag.nodes[preds[0]]['level']
         self.output_mult_level = graph.dag.nodes[succs[0]]['level']
         self.input_degree = param[preds[0].ckks_parameter_id].poly_modulus_degree
@@ -512,7 +509,7 @@ class MpcScoreParam:
 
 
 class BtpScoreParam:
-    def __init__(self, dag: nx.DiGraph, compute_node: ComputeNode, param: dict[str, EncryptParameterNode]) -> None:
+    def __init__(self, dag: nx.DiGraph, compute_node: ComputeNode, param: dict[str, FheParameter]) -> None:
         graph = LayerAbstractGraph()
         graph.dag = dag
         pred = list(graph.dag.predecessors(compute_node))[0]

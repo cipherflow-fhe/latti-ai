@@ -82,7 +82,6 @@ class ConvComputeNode(ComputeNode):
 
         layer_id = format_id(x.name)
         log.debug('%s', x)
-        layer_type = 'conv2d'
         feature_input = [features_nodes[format_id(x.input[0])]]
         feature_output = [features_nodes[format_id(x.output[0])]]
 
@@ -95,7 +94,8 @@ class ConvComputeNode(ComputeNode):
         weight_shape = numpy_helper.to_array(weight_tensor).shape
         out_channels = weight_shape[0]
         in_channels = weight_shape[1] * groups
-        kernel_shape = weight_shape[2:4]
+        spatial_dims = len(weight_shape) - 2  # 1 for Conv1d, 2 for Conv2d
+        kernel_shape = list(weight_shape[2:])
 
         # Update channel for feature_input and feature_output
         feature_input[0].channel = in_channels
@@ -103,13 +103,19 @@ class ConvComputeNode(ComputeNode):
 
         log.debug('Dynamically inferred Conv channel: input=%s, output=%s', in_channels, out_channels)
 
-        if dilations != [1, 1]:
+        layer_type = f'conv{spatial_dims}d'
+        if dilations != [1] * spatial_dims:
             raise ValueError('Unsupported dilation value: ' + str(dilations))
         # Make sure the relation "feature_output.shape = feature_input.shape // stride" holds
-        if (not 0 <= pads[0] + pads[2] - dilations[0] * (kernel_shape[0] - 1) - 1 + stride[0] < stride[0]) or (
-            not 0 <= pads[1] + pads[3] - dilations[1] * (kernel_shape[1] - 1) - 1 + stride[1] < stride[1]
-        ):
-            raise ValueError('Unsupported padding value: ' + str(pads))
+        # ONNX pads format: [pad_begin_0, ..., pad_begin_N, pad_end_0, ..., pad_end_N]
+        for i in range(spatial_dims):
+            if (
+                not 0
+                <= pads[i] + pads[i + spatial_dims] - dilations[i] * (kernel_shape[i] - 1) - 1 + stride[i]
+                < stride[i]
+            ):
+                raise ValueError('Unsupported padding value: ' + str(pads))
+
         if (groups != 1) and (groups != in_channels):
             raise ValueError('Unsupported groups value: ' + str(groups))
 

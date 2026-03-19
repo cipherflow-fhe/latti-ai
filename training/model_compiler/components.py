@@ -17,9 +17,10 @@
 
 # Class hierarchy overview:
 #
-#   GlobalConfig                      – singleton for compiler configuration
+#   FheParameter                      – CKKS encryption parameters (degree, modulus, …); held by GlobalConfig
 #
-#   EncryptParameterNode              – CKKS encryption parameters (degree, modulus, …)
+#   GlobalConfig                      – singleton for compiler configuration; exposes fhe_param,
+#                                       poly_n, and block_shape (the latter two as properties)
 #
 #   FeatureNode                       – a ciphertext tensor (node between compute layers)
 #
@@ -41,14 +42,225 @@
 #                                       and to_json for the task config format
 
 import json
-from typing import Optional
 import math
-from ordered_set import OrderedSet
-import numpy as np
 import networkx as nx
-from enum import Enum
 import os
-import copy
+
+
+class FheParameter:
+    def __init__(
+        self,
+        poly_modulus_degree: int,
+        max_level: int,
+        log_default_scale: int,
+        block_shape: list | None = None,
+        name: str = '',
+        q: list[int] | None = None,
+        p: list[int] | None = None,
+        num_slots: int = 0,
+    ):
+        self.poly_modulus_degree = poly_modulus_degree
+        self.max_level = max_level
+        self.log_default_scale = log_default_scale
+        self.block_shape = block_shape
+        self.name = name
+        self.q = q or []
+        self.p = p or []
+        self.num_slots = num_slots
+
+    def to_dict(self) -> dict:
+        return {
+            'poly_modulus_degree': self.poly_modulus_degree,
+            'n_mult_level': self.max_level,
+            'log_default_scale': self.log_default_scale,
+            'block_shape': self.block_shape,
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f'FheParameter(poly_modulus_degree={self.poly_modulus_degree}, '
+            f'n_mult_level={self.max_level}, '
+            f'log_default_scale={self.log_default_scale}, '
+            f'block_shape={self.block_shape})'
+        )
+
+
+# Candidate FHE parameter sets sourced from:
+#   inference/lattisense/fhe_ops_lib/lattigo/ckks/params.go              (no-BTP)
+#   inference/lattisense/fhe_ops_lib/lattigo/ckks/bootstrapping/default_params.go  (BTP)
+#
+# No-BTP sets (PN13QP218 … PN16QP1761): standard 128-bit-secure CKKS parameters.
+#   poly_modulus_degree = 2^LogN
+#   max_level           = len(Q) - 1  (number of multiplicative levels)
+#   log_default_scale = log2(DefaultScale), the bit-length of the per-level scale modulus
+#
+# BTP set (N16QP1546H192H32): bootstrapping parameters with H=192 sparse secret.
+#   The Q chain has 25 primes; the first 10 are the residual (usable) levels;
+#   the remaining 15 are consumed by the bootstrapping circuit itself.
+#   max_level = 9  (residual levels after bootstrapping overhead)
+
+# PN13QP218: LogN=13, logQP=218, 128-bit classic security
+# Q: 1×33-bit + 5×30-bit, P: 1×35-bit, LogSlots=12
+PN13QP218 = FheParameter(
+    poly_modulus_degree=8192,
+    max_level=5,
+    log_default_scale=30,
+    block_shape=[64, 64],
+    name='PN13QP218',
+    q=[0x1FFFEC001, 0x3FFF4001, 0x3FFE8001, 0x40020001, 0x40038001, 0x3FFC0001],
+    p=[0x800004001],
+    num_slots=1 << 12,
+)
+
+# PN14QP438: LogN=14, logQP=438, 128-bit classic security
+# Q: 1×45-bit + 9×34-bit, P: 2×43-bit, LogSlots=13
+PN14QP438 = FheParameter(
+    poly_modulus_degree=16384,
+    max_level=9,
+    log_default_scale=34,
+    block_shape=[64, 64],
+    name='PN14QP438',
+    q=[
+        0x200000008001,
+        0x400018001,
+        0x3FFFD0001,
+        0x400060001,
+        0x400068001,
+        0x3FFF90001,
+        0x400080001,
+        0x4000A8001,
+        0x400108001,
+        0x3FFEB8001,
+    ],
+    p=[0x7FFFFFD8001, 0x7FFFFFC8001],
+    num_slots=1 << 13,
+)
+
+# PN15QP880: LogN=15, logQP=880, 128-bit classic security
+# Q: 1×50-bit + 17×40-bit, P: 3×50-bit, LogSlots=14
+PN15QP880 = FheParameter(
+    poly_modulus_degree=32768,
+    max_level=17,
+    log_default_scale=40,
+    block_shape=[128, 128],
+    name='PN15QP880',
+    q=[
+        0x4000000120001,
+        0x10000140001,
+        0xFFFFE80001,
+        0x10000290001,
+        0xFFFFC40001,
+        0x100003E0001,
+        0x10000470001,
+        0x100004B0001,
+        0xFFFFB20001,
+        0x10000500001,
+        0x10000650001,
+        0xFFFF940001,
+        0xFFFF8A0001,
+        0xFFFF820001,
+        0xFFFF780001,
+        0x10000890001,
+        0xFFFF750001,
+        0x10000960001,
+    ],
+    p=[0x40000001B0001, 0x3FFFFFFDF0001, 0x4000000270001],
+    num_slots=1 << 14,
+)
+
+# PN16QP1761: LogN=16, logQP=1761, 128-bit classic security
+# Q: 1×55-bit + 33×45-bit, P: 4×55-bit, LogSlots=15
+PN16QP1761 = FheParameter(
+    poly_modulus_degree=65536,
+    max_level=33,
+    log_default_scale=45,
+    block_shape=[128, 256],
+    name='PN16QP1761',
+    q=[
+        0x80000000080001,
+        0x2000000A0001,
+        0x2000000E0001,
+        0x1FFFFFC20001,
+        0x200000440001,
+        0x200000500001,
+        0x200000620001,
+        0x1FFFFF980001,
+        0x2000006A0001,
+        0x1FFFFF7E0001,
+        0x200000860001,
+        0x200000A60001,
+        0x200000AA0001,
+        0x200000B20001,
+        0x200000C80001,
+        0x1FFFFF360001,
+        0x200000E20001,
+        0x1FFFFF060001,
+        0x200000FE0001,
+        0x1FFFFEDE0001,
+        0x1FFFFECA0001,
+        0x1FFFFEB40001,
+        0x200001520001,
+        0x1FFFFE760001,
+        0x2000019A0001,
+        0x1FFFFE640001,
+        0x200001A00001,
+        0x1FFFFE520001,
+        0x200001E80001,
+        0x1FFFFE0C0001,
+        0x1FFFFDEE0001,
+        0x200002480001,
+        0x1FFFFDB60001,
+        0x200002560001,
+    ],
+    p=[0x80000000440001, 0x7FFFFFFFBA0001, 0x80000000500001, 0x7FFFFFFFAA0001],
+    num_slots=1 << 15,
+)
+
+# N16QP1546H192H32: LogN=16, logQP≈1546, sparse secret H=192, ephemeral H=32
+# Q: 1×60-bit Q0 + 9×40-bit residual + 15 bootstrapping primes, P: 5×61-bit
+# Residual Q : 420 bits. Precision : 26.6 bits for 2^15 slots.
+N16QP1546H192H32 = FheParameter(
+    poly_modulus_degree=65536,
+    max_level=9,
+    log_default_scale=40,
+    block_shape=[128, 128],
+    name='N16QP1546H192H32',
+    q=[
+        0x10000000006E0001,  # 60  Q0
+        0x10000140001,  # 40  residual
+        0xFFFFE80001,  # 40  residual
+        0xFFFFC40001,  # 40  residual
+        0x100003E0001,  # 40  residual
+        0xFFFFB20001,  # 40  residual
+        0x10000500001,  # 40  residual
+        0xFFFF940001,  # 40  residual
+        0xFFFF8A0001,  # 40  residual
+        0xFFFF820001,  # 40  residual
+        0x7FFFE60001,  # 39  StC
+        0x7FFFE40001,  # 39  StC
+        0x7FFFE00001,  # 39  StC
+        0xFFFFFFFFF840001,  # 60  Sine (double angle)
+        0x1000000000860001,  # 60  Sine (double angle)
+        0xFFFFFFFFF6A0001,  # 60  Sine
+        0x1000000000980001,  # 60  Sine
+        0xFFFFFFFFF5A0001,  # 60  Sine
+        0x1000000000B00001,  # 60  Sine
+        0x1000000000CE0001,  # 60  Sine
+        0xFFFFFFFFF2A0001,  # 60  Sine
+        0x100000000060001,  # 56  CtS
+        0xFFFFFFFFF00001,  # 56  CtS
+        0xFFFFFFFFD80001,  # 56  CtS
+        0x1000000002A0001,  # 56  CtS
+    ],
+    p=[
+        0x1FFFFFFFFFE00001,
+        0x1FFFFFFFFFC80001,
+        0x1FFFFFFFFFB40001,
+        0x1FFFFFFFFF500001,
+        0x1FFFFFFFFF420001,
+    ],
+    num_slots=1 << 15,
+)
 
 
 class GlobalConfig:
@@ -61,14 +273,20 @@ class GlobalConfig:
             config_path = os.path.join(os.path.dirname(__file__), 'config.json')
             with open(config_path, 'r', encoding='utf8') as f:
                 config_dict = json.load(f)
-            cls._instance.poly_n = config_dict.get('POLY_N', 65536)
-            cls._instance.block_shape = config_dict.get('block_shape', (1, 1))
+            # fhe_param will be overwritten by initialize_config() before first use
+            cls._instance.fhe_param = FheParameter(
+                poly_modulus_degree=65536,
+                max_level=0,
+                log_default_scale=0,
+                block_shape=(1, 1),
+            )
             cls._instance.graph_type = config_dict.get('GRAPH_TYPE', 'btp')
             cls._instance.style = config_dict.get('STYLE', 'multiplexed')
             cls._instance.mpc_refresh = config_dict.get('MPC_REFRESH', False)
             cls._instance.approx_poly_type = config_dict.get('APPROX_POLY_TYPE', 'simple_polyrelu')
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
             cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'simple_polyrelu']
+            cls._instance.single_thread = config_dict.get('SINGLE_THREAD', False)
 
         return cls._instance
 
@@ -76,34 +294,10 @@ class GlobalConfig:
 config = GlobalConfig()
 
 
-f_name_index_dict = dict()
-concat_dict = dict()
 IS_ABSORB_POLYRELU = False
 YOLO_TYPE = True
 IS_BALANCE = False
 DEFAULT_SCALE = 1
-single_thread = False
-
-
-class EncryptParameterNode:
-    def __init__(
-        self,
-        poly_modulus_degree: int,
-        coeff_modulus_bit_length: int,
-        special_prime_bit_length: int,
-    ):
-        self.poly_modulus_degree = poly_modulus_degree
-        self.coeff_modulus_bit_length = coeff_modulus_bit_length
-        self.special_prime_bit_length = special_prime_bit_length
-
-    def __repr__(self) -> str:
-        return (
-            f'poly_modulus_degree: {self.poly_modulus_degree}, '
-            + f'mult_level: {self.mult_level}, '
-            + f'coeff_modulus_bit_length: {self.coeff_modulus_bit_length}, '
-            + f'special_prime_bit_length: {self.special_prime_bit_length}, '
-            + f'pack_num: {self.pack_num}'
-        )
 
 
 class FeatureNode:
@@ -140,14 +334,14 @@ class FeatureNode:
         info['dim'] = self.dim
         info['channel'] = self.channel
         info['scale'] = self.scale
-        if self.dim == 2:
+        if self.dim in (1, 2):
             info['shape'] = self.shape
 
         if self.dim == 0:
             virtual_shape = getattr(self, 'virtual_shape', [1, 1])
             virtual_skip = getattr(self, 'virtual_skip', [1, 1])
             info['skip'] = virtual_shape[0] * virtual_shape[1] * virtual_skip[0] * virtual_skip[1]
-            info['pack_num'] = math.ceil(config.poly_n / 2 / info['skip'])
+            info['pack_num'] = math.ceil(config.fhe_param.poly_modulus_degree / 2 / info['skip'])
 
         info['ckks_parameter_id'] = self.ckks_parameter_id
         info['level'] = int(self.level)
@@ -238,6 +432,7 @@ class ConvComputeNode(SpatialComputeNode):
             layer_type,
             channel_input,
             channel_output,
+            dim=dim,
             stride=stride,
             upsample_factor=upsample_factor,
             upsample_factor_in=upsample_factor_in,
@@ -427,15 +622,8 @@ class ActivationComputeNode(ComputeNode):
 
 
 class LayerAbstractGraph:
-    def __init__(self, parent_graph: Optional['LayerAbstractGraph'] = None):
-        self.parent_graph = parent_graph
+    def __init__(self):
         self.dag = nx.DiGraph()
-        self.graph_id = None
-        self.parent_graph_id = None
-
-        self.order_key: dict[str, int] = dict()
-        self.list_layer_name: list[str] = list()
-        self.layer_order_list: list[str] = list()
         self.is_mpc = False
 
     def __repr__(self):
@@ -462,13 +650,6 @@ class LayerAbstractGraph:
                     leading_feature_nodes.append(node)
         return leading_feature_nodes
 
-    def get_output_feature_nodes(self) -> list[FeatureNode]:
-        outputs = []
-        for node, out_degree in self.dag.out_degree():
-            if out_degree == 0 and isinstance(node, FeatureNode):
-                outputs.append(node)
-        return outputs
-
     @staticmethod
     def from_json(json_path, is_fpga=False) -> 'LayerAbstractGraph':
         with open(json_path, 'r', encoding='utf8') as f:
@@ -482,11 +663,11 @@ class LayerAbstractGraph:
             channel = feature_json['channel']
             scale = 1.0
             ckks_parameter_id = feature_json['ckks_parameter_id']
-            if dim == 2:
+            if dim in (1, 2):
                 shape = feature_json['shape']
-                skip = [1, 1]
-                virtual_skip = [1, 1]
-                virtual_shape = [1, 1]
+                skip = [1] * dim
+                virtual_skip = [1] * dim
+                virtual_shape = [1] * dim
                 node = FeatureNode(key, dim, channel, scale, ckks_parameter_id, DEFAULT_SCALE, shape)
             elif dim == 0:
                 shape = [0, 0]
@@ -498,13 +679,11 @@ class LayerAbstractGraph:
                 raise ValueError(f'Unsupported feature dim: {dim}')
             node.node_index = f_index
 
-            f_name_index_dict[node.node_id] = f_index
             graph_info.dag.add_node(node, name=key, skip=skip, virtual_shape=virtual_shape, virtual_skip=virtual_skip)
             feature_dict[key] = node
             f_index = f_index + 1
 
         for key, layer_json in graph_json['layer'].items():
-            graph_info.layer_order_list.append(key)
             layer_type = layer_json['type']
             channel_input = layer_json['channel_input']
             channel_output = layer_json['channel_output']
@@ -539,7 +718,8 @@ class LayerAbstractGraph:
                 kernel_shape = layer_json['kernel_shape']
                 stride = layer_json['stride']
                 groups = layer_json['groups']
-                upsample_factor = layer_json.get('upsample_factor', [1, 1])
+                dim = feature_input[0].dim
+                upsample_factor = layer_json.get('upsample_factor', [1] * dim)
                 is_conv_transpose = False
                 if 'upsample_factor' in layer_json and layer_json['upsample_factor'][0] != 1:
                     upsample_factor = layer_json['upsample_factor']
@@ -550,6 +730,7 @@ class LayerAbstractGraph:
                     layer_type,
                     channel_input,
                     channel_output,
+                    dim=dim,
                     groups=groups,
                     stride=stride,
                     kernel_shape=kernel_shape,
@@ -625,12 +806,6 @@ class LayerAbstractGraph:
 
             else:
                 compute_node = ComputeNode(key, layer_type, channel_input, channel_output)
-                if 'concat2d' == layer_type:
-                    concat_input_index_list = list()
-                    for name in feature_input:
-                        concat_input_index_list.append(f_name_index_dict[name.node_id])
-
-                    concat_dict.update({key: concat_input_index_list})
 
             graph_info.dag.add_node(compute_node, name=key)
             graph_info.dag.add_edges_from([(node, compute_node) for node in feature_input])
@@ -649,25 +824,13 @@ class LayerAbstractGraph:
 
     def to_json(
         self,
-        param: dict[str, EncryptParameterNode],
+        param: dict[str, FheParameter],
         output_path: str | None,
         is_last_mpc=False,
         score=0.0,
     ) -> None:
         param_dict = dict()
-        poly_to_mod = {8192: 30, 16384: 34, 32768: 40, 65536: 45}
-        mod_bits = poly_to_mod.get(config.poly_n, 41)
-        param_dict.update(
-            {
-                'param0': {
-                    'poly_modulus_degree': config.poly_n,
-                    'n_mult_level': config.max_level,
-                    'coeff_modulus_bit_length': mod_bits,
-                    'special_prime_bit_length': mod_bits,
-                    'pack_num': 4,
-                }
-            }
-        )
+        param_dict['param0'] = {**config.fhe_param.to_dict(), 'pack_num': 4}
         layers = dict()
 
         compute_list: list[ComputeNode] = list()
@@ -684,12 +847,7 @@ class LayerAbstractGraph:
                 compute_list.append(node)
 
         conv_num = 0
-        conv_list = list()
-        conv_name = ''
-        last_relu_id = ''
         mpc_refresh_ids = []
-
-        i = 0
 
         for layer in compute_list:
             preds = list(self.dag.predecessors(layer))
@@ -719,14 +877,9 @@ class LayerAbstractGraph:
                 or 'concat2d' == layer_type
                 or 'identity' == layer_type
             ):
-                odrder_id = list()
                 if 'concat2d' == layer_type:
-                    for value in concat_dict[layer_id]:
-                        for node in preds:
-                            if isinstance(node, FeatureNode):
-                                if node.node_index == value:
-                                    odrder_id.append(node.node_id)
-                    input_feature_ids = odrder_id
+                    # The ordering of concat2d inputs is recovered from node_index on the FeatureNodes, which is set at parse time.
+                    input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: n.node_index)]
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,
@@ -764,7 +917,6 @@ class LayerAbstractGraph:
 
                 base_string = layer.parameter_paths['weight'].rsplit('.', 1)[0] + '.bias'
                 conv_num = conv_num + 1
-                conv_name = layer.layer_id
 
                 absorb_type = list()
                 absorb_path = list()
@@ -918,12 +1070,9 @@ class LayerAbstractGraph:
                 }
 
             if 'maxpool' == layer_type:
-                last_relu_id = layer_id
                 layers[layer_id]['is_end'] = False
 
             if 'relu2d' == layer_type:
-                last_relu_id = layer_id
-                conv_list.append(conv_name)
                 layers[layer_id] = {
                     'type': layer_type,
                     'is_end': False,
@@ -995,7 +1144,6 @@ class LayerAbstractGraph:
 
         features = dict()
         all_nodes_in_topo_sort = list(nx.topological_sort(self.dag))
-        f_index = 0
         for feature in all_nodes_in_topo_sort:
             if isinstance(feature, FeatureNode):
                 key = feature.node_id
@@ -1033,7 +1181,7 @@ class LayerAbstractGraph:
                         'depth': depth,
                         'pack_num': pack_num,
                     }
-                elif dim == 2:
+                elif dim in (1, 2):
                     features[key] = {
                         'dim': dim,
                         'channel': channel,

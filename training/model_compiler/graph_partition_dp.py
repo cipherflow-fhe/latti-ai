@@ -42,11 +42,10 @@ import components
 import processor
 import transforms
 
-# Import required functions and classes from processor
 from processor import (
     substitute_layers_for_btp,
     process_levels,
-    EncryptParameterNode,
+    FheParameter,
     BtpScoreParam,
     MpcScoreParam,
     FheScoreParam,
@@ -56,8 +55,6 @@ from processor import (
     set_is_adaptive_avgpool,
     graph_to_task_config,
 )
-
-from typing import Callable
 
 
 def update_bd_node_in_sub(node: FeatureNode, subgraph: nx.DiGraph, remaining_dag: nx.DiGraph) -> FeatureNode:
@@ -80,16 +77,14 @@ def update_bd_node_in_sub(node: FeatureNode, subgraph: nx.DiGraph, remaining_dag
 
 def generate_param_dict_for_graph():
     param_dict = dict()
-    poly_to_mod = {8192: 30, 16384: 34, 32768: 40, 65536: 45}
-    poly_n = config.poly_n
-    mod_bits = poly_to_mod.get(poly_n, 41)
-    param_dict[f'param0'] = EncryptParameterNode(poly_n, mod_bits, mod_bits)
-
+    param_dict['param0'] = FheParameter(
+        config.fhe_param.poly_modulus_degree, config.fhe_param.max_level, config.fhe_param.log_default_scale
+    )
     return param_dict
 
 
 def calculate_compute_score_for_graph(
-    enclosing_graph: nx.DiGraph, grow: nx.DiGraph, param_dict: dict[str, EncryptParameterNode]
+    enclosing_graph: nx.DiGraph, grow: nx.DiGraph, param_dict: dict[str, FheParameter]
 ) -> float:
     compute_score = 0.0
     for compute in grow.nodes:
@@ -146,7 +141,7 @@ class GraphPartitioner:
                         input_feature_lv.append(level_dict[feat] + subgraph.nodes[c]['level_cost'])
 
                 level_dict[node] = max(input_feature_lv)
-                if level_dict[node] > config.max_level:
+                if level_dict[node] > config.fhe_param.max_level:
                     return False, -1, level_dict
 
             max_level = max(max_level, level_dict[node])
