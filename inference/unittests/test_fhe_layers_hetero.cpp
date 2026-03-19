@@ -31,6 +31,7 @@
 #include "data_structs/feature.h"
 #include "fhe_layers/conv2d_packed_layer.h"
 #include "fhe_layers/poly_relu2d.h"
+#include "fhe_layers/poly_relu_base.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer_depthwise.h"
 #include "fhe_layers/activation_layer.h"
@@ -849,8 +850,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_cyclic", "", HeteroProcessors)
                                   "_" + to_string(input_shape[1]) + "/level_" + to_string(init_level) + "/server/";
             this->run(project_path, cxx_args);
 
-            DecryptType dec_type = DecryptType::SPARSE;
-            auto output_mg = output_feature.unpack(dec_type);
+            auto output_mg = output_feature.unpack();
             Array<double, 1> plain_output = fc_layer.plaintext_call(x_mg);
 
             print_double_message(output_mg.to_array_1d().data(), "output_mg", 128);
@@ -882,8 +882,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip", "", HeteroProcessors) {
                                       init_level, 0);
             fc_layer.prepare_weight1();
             Feature0DEncrypted x_ct(&this->context, init_level);
-            x_ct.skip = skip[0] * skip[1];
-            x_ct.pack_skip(input_array, false);
+            x_ct.pack(input_array, false, this->param.get_default_scale(), skip[0] * skip[1]);
 
             Feature0DEncrypted output_feature(&this->context, init_level - 1);
             output_feature.skip = x_ct.skip;
@@ -905,8 +904,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip", "", HeteroProcessors) {
                                   to_string(skip[1]) + "/level_" + to_string(init_level) + "/server/";
             this->run(project_path, cxx_args);
 
-            DecryptType dec_type = DecryptType::SPARSE;
-            auto output_mg = output_feature.unpack(dec_type);
+            auto output_mg = output_feature.unpack();
 
             auto plain_output = fc_layer.plaintext_call(input_array);
 
@@ -974,7 +972,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
 
     this->run(project_path, cxx_args);
 
-    Array<double, 1> output_mg = output_feature.unpack(DecryptType::SPARSE);
+    Array<double, 1> output_mg = output_feature.unpack();
 
     Array<double, 1> output_plain_0 = dense.plaintext_call(input);
     Array<double, 1> output_plain_1 = dense1.plaintext_call(output_plain_0);
@@ -1064,16 +1062,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature0d", "", HeteroP
 
                     // Pack into Feature0DEncrypted
                     Feature0DEncrypted input_feature(&this->context, init_level);
-                    input_feature.skip = skip_val;
                     input_feature.n_channel = n_channel;
-                    input_feature.pack_skip(input_array, false);
+                    input_feature.pack(input_array, false, this->param.get_default_scale(), skip_val);
 
-                    // Create PolyRelu for Feature0D: input_shape={1,1}, skip={skip_val, 1}
-                    Duo input_shape = {1, 1};
-                    Duo skip = {skip_val, 1};
-                    PolyRelu polyx(this->context.get_parameter(), input_shape, order, weight, skip, n_channel_per_ct,
-                                   init_level, {1, 1}, {1, 1}, true);
-                    polyx.prepare_weight_for_feature0d();
+                    // Create PolyRelu0D for Feature0D
+                    PolyRelu0D polyx(this->context.get_parameter(), weight, n_channel_per_ct, init_level, order,
+                                     skip_val);
+                    polyx.prepare_weight();
 
                     int output_level = init_level - level_cost;
                     uint32_t n_packed_ct = div_ceil(n_channel, n_channel_per_ct);
@@ -1100,8 +1095,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature0d", "", HeteroP
 
                     this->run(project_path, cxx_args);
 
-                    auto output_mg = output_feature.unpack(DecryptType::SPARSE);
-                    auto output_mg_expected = polyx.run_plaintext_for_non_absorb_case_0d(input_array);
+                    auto output_mg = output_feature.unpack();
+                    auto output_mg_expected = polyx.run_plaintext(input_array);
 
                     INFO("order=" << order << " skip=" << skip_val);
                     print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);

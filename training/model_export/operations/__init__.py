@@ -211,7 +211,13 @@ def get_op_id(op: str):
         output = 'RangeNorm2d'
     elif op == 'RangeNorm' or op == 'range_norm':
         output = 'RangeNorm'
-    elif op == 'Simple_Polyrelu' or op == 'simple_polyrelu' or op == 'SimplePolyrelu' or op == 'RangeNormPoly2d':
+    elif (
+        op == 'Simple_Polyrelu'
+        or op == 'simple_polyrelu'
+        or op == 'SimplePolyrelu'
+        or op == 'RangeNormPoly2d'
+        or op == 'RangeNormPoly1d'
+    ):
         output = 'Simple_Polyrelu'
     elif op == 'Split' or op == 'split':
         output = 'Split'

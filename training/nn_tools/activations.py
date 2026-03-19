@@ -196,6 +196,45 @@ class Simple_Polyrelu(nn.Module):
         )
 
 
+class _RangeNormPoly1dExport(torch.autograd.Function):
+    """ONNX export helper: emit RangeNormPoly1d as a single custom op."""
+
+    @staticmethod
+    def forward(ctx, x, running_max, upper_bound, degree, eps, activation):
+        # running_max is (1, C, 1) but x may be (B, C) — squeeze to match
+        # if x.dim() == 2:
+        #     running_max = running_max.squeeze(2)
+        scale_factor = running_max / upper_bound + eps
+        x_norm = x / scale_factor
+
+        if activation == 'relu':
+            coeffs = Simple_Polyrelu._RELU_COEFF
+        else:
+            coeffs = Simple_Polyrelu._SILU_COEFF
+        a0, a1, a2, a3, a4 = coeffs[degree]
+
+        if degree == 2:
+            poly_out = a0 + (a1 + a2 * x_norm) * x_norm - a2
+        elif degree == 4:
+            poly_out = a0 + a1 * x_norm + a2 * (x_norm**2 - 1) + a4 * (x_norm**4 - 6 * x_norm**2 + 3)
+        else:
+            raise ValueError(f'Unsupported degree: {degree}')
+
+        return scale_factor * poly_out
+
+    @staticmethod
+    def symbolic(g, x, running_max, upper_bound, degree, eps, activation):
+        return g.op(
+            'nn_tools::RangeNormPoly1d',
+            x,
+            running_max,
+            upper_bound_f=upper_bound,
+            degree_i=degree,
+            eps_f=eps,
+            activation_s=activation,
+        ).setType(x.type())
+
+
 class _RangeNormPoly2dExport(torch.autograd.Function):
     """ONNX export helper: emit RangeNormPoly2d as a single custom op."""
 
@@ -278,3 +317,137 @@ class RangeNormPoly2d(nn.Module):
             f'num_features={self.num_features}, upper_bound={self.upper_bound}, '
             f'degree={self.degree}, activation={self.activation}'
         )
+
+
+class RangeNorm1d(nn.Module):
+    """
+    Range Normalization for 1D feature maps.
+
+    Normalizes input to a specific range using running statistics.
+    Expects input with shape (B, C, L).
+    """
+
+    def __init__(self, num_features=0, upper_bound=3.0, eps=1e-3, momentum=0.1):
+        """
+        Args:
+            num_features: Number of channels (C), 0 for lazy initialization
+            upper_bound: Upper bound for normalization
+            eps: Small constant for numerical stability
+            momentum: Momentum for running statistics
+        """
+        super(RangeNorm1d, self).__init__()
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.upper_bound = upper_bound
+        self.scale_factor = 1.0
+
+        if num_features > 0:
+            self.register_buffer('running_max', torch.ones(1, num_features))
+            self.register_buffer('num_batches_tracked', torch.tensor(0, dtype=torch.long))
+        else:
+            self.register_buffer('running_max', None)
+            self.register_buffer('num_batches_tracked', None)
+
+    def _lazy_init(self, x: torch.Tensor):
+        self.num_features = x.shape[1]
+        self.running_max = torch.ones(1, self.num_features, device=x.device, dtype=x.dtype)
+        self.num_batches_tracked = torch.tensor(0, dtype=torch.long, device=x.device)
+
+    def forward(self, x):
+        """
+        Args:
+            x: Input tensor of shape (B, C, L) or (B, C)
+
+        Returns:
+            Normalized x
+        """
+        if self.running_max is None:
+            self._lazy_init(x)
+
+        if self.training:
+            abs_max = x.abs().amax(dim=(0), keepdim=True)
+            if self.num_batches_tracked == 0:
+                self.running_max.copy_(abs_max.detach())
+            else:
+                # torch.maximum(self.running_max, abs_max.detach(), out=self.running_max)
+                self.running_max.mul_(1 - self.momentum).add_(self.momentum * abs_max.detach())
+            self.num_batches_tracked.add_(1)
+        else:
+            abs_max = self.running_max
+
+        self.scale_factor = abs_max / self.upper_bound + self.eps
+        return x / self.scale_factor
+
+
+class RangeNormPoly1d(nn.Module):
+    """Combined range normalization + polynomial activation.
+
+    Applies per-channel range normalization, then a polynomial activation,
+    and rescales back. Exported as a single ``nn_tools::RangeNormPoly2d``
+    custom op in ONNX.
+
+    Supports lazy initialization: pass ``num_features=0`` (default) to defer
+    buffer creation until the first forward call.
+
+    Args:
+        num_features: Number of channels (0 for lazy initialization).
+        upper_bound:  Normalization upper bound.
+        degree:       Polynomial degree (2 or 4).
+        activation:   Target activation ('relu' or 'silu').
+    """
+
+    def __init__(self, num_features=0, upper_bound=3.0, degree=4, activation='relu'):
+        super().__init__()
+        self.num_features = num_features
+        self.upper_bound = upper_bound
+        self.degree = degree
+        self.activation = activation
+
+        self.rangenorm = RangeNorm1d(num_features, upper_bound=upper_bound, eps=1e-3, momentum=0.1)
+        self.poly = Simple_Polyrelu(degree=degree, activation=activation)
+
+    def forward(self, x):
+        if torch.onnx.is_in_onnx_export():
+            return _RangeNormPoly1dExport.apply(
+                x,
+                self.rangenorm.running_max,
+                self.upper_bound,
+                self.degree,
+                self.rangenorm.eps,
+                self.activation,
+            )
+        x = self.rangenorm(x)
+        x = self.rangenorm.scale_factor * self.poly(x)
+        return x
+
+    def extra_repr(self):
+        return (
+            f'num_features={self.num_features}, upper_bound={self.upper_bound}, '
+            f'degree={self.degree}, activation={self.activation}'
+        )
+
+
+class PolyBN(nn.Module):
+    """
+    Fused BatchNorm1D + degree-2 Hermite polynomial activation.
+
+    BN normalizes x to ~N(0,1), then computes:
+      a0 + a1 * x_norm + a2 * (x_norm^2 - 1) / sqrt(2)
+
+    Since BN is fused internally, standalone BatchNorm1D layers should be
+    removed when using this as act_layer (signaled by fuses_bn = True).
+    """
+
+    fuses_bn = True
+
+    def __init__(self, num_features):
+        super().__init__()
+        self.bn = nn.BatchNorm1d(num_features)
+        self.a0 = 0.39894228
+        self.a1 = 0.5
+        self.a2 = 0.28209479 / np.sqrt(2)
+
+    def forward(self, x):
+        x_norm = self.bn(x)
+        return self.a0 + self.a1 * x_norm + self.a2 * (x_norm**2 - 1)

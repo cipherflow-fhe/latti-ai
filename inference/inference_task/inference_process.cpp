@@ -365,8 +365,6 @@ void InitInferenceProcess::init_poly_relu2d_layer(const string& key,
                                                   const Duo& block_shape_in) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
-    Duo block_expansion = {div_ceil(feature_input.shape[0], block_shape_in[0]),
-                           div_ceil(feature_input.shape[1], block_shape_in[1])};
     Duo zero_skip_in = {layer["zero_skip"][0], layer["zero_skip"][1]};
     uint32_t order = layer["order"];
     Array<double, 2> weight;
@@ -378,23 +376,39 @@ void InitInferenceProcess::init_poly_relu2d_layer(const string& key,
     }
 
     CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
-    auto layer_poly_relu = make_unique<PolyRelu>(param, feature_input.shape, order, weight, feature_input.skip,
-                                                 feature_input.pack_channel_per_ciphertext, feature_input.level,
-                                                 zero_skip_in, block_expansion, pack_style != "multiplexed");
-    if (is_absorb) {
+
+    if (feature_input.dim == 0) {
+        int ciphertext_skip = feature_input.virtual_shape[0] * feature_input.virtual_shape[1];
+        cout << "feature0d ciphertext_skip=" << ciphertext_skip << endl;
+        auto layer_poly_relu = make_unique<PolyRelu0D>(param, weight, feature_input.pack_channel_per_ciphertext,
+                                                       feature_input.level, order, ciphertext_skip);
         if (is_lazy) {
             layer_poly_relu->prepare_weight_lazy();
         } else {
             layer_poly_relu->prepare_weight();
         }
+        ckks_poly_relu_0d[key] = move(layer_poly_relu);
     } else {
-        if (is_lazy) {
-            layer_poly_relu->prepare_weight_bsgs_lazy();
+        Duo block_expansion = {div_ceil(feature_input.shape[0], block_shape_in[0]),
+                               div_ceil(feature_input.shape[1], block_shape_in[1])};
+        auto layer_poly_relu = make_unique<PolyRelu>(param, feature_input.shape, order, weight, feature_input.skip,
+                                                     feature_input.pack_channel_per_ciphertext, feature_input.level,
+                                                     zero_skip_in, block_expansion, pack_style != "multiplexed");
+        if (is_absorb) {
+            if (is_lazy) {
+                layer_poly_relu->prepare_weight_lazy();
+            } else {
+                layer_poly_relu->prepare_weight();
+            }
         } else {
-            layer_poly_relu->prepare_weight_bsgs();
+            if (is_lazy) {
+                layer_poly_relu->prepare_weight_bsgs_lazy();
+            } else {
+                layer_poly_relu->prepare_weight_bsgs();
+            }
         }
+        ckks_poly_relu[key] = move(layer_poly_relu);
     }
-    ckks_poly_relu[key] = move(layer_poly_relu);
 }
 
 void InitInferenceProcess::init_fhe_avgpool_layer(const string& key,
@@ -436,6 +450,7 @@ void InitInferenceProcess::load_model_prepare() {
     json config_json = read_json(project_path / "task_config.json");
     for (auto& layer : json_layers.items()) {
         const string& key = layer.key();
+        cout << "key=" << key << endl;
         const json& value = layer.value();
         const string& layer_type = value["type"].get<string>();
         if (layer_type == "conv2d") {
@@ -733,8 +748,11 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     } else {
                         result = make_unique<Feature2DEncrypted>(fp->ckks_poly_relu[key]->run_bsgs(context, input2D));
                     }
+                } else if (feature_node.dim == 0) {
+                    const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
+                    result = make_unique<Feature0DEncrypted>(fp->ckks_poly_relu_0d[key]->run(context, input0D));
                 } else {
-                    throw runtime_error("input is not available, expect Feature2DEncrypted");
+                    throw runtime_error("input is not available, expect Feature2DEncrypted or Feature0DEncrypted");
                 }
                 fhe_timer.stop();
             }
@@ -862,9 +880,17 @@ void InferenceProcess::run_task(bool is_mpc) {
                 throw runtime_error("input is not available, expect Feature2DEncrypted");
             }
         } else if (layer_type == "poly_relu2d" || layer_type == "simple_polyrelu") {
-            for (int i = 0; i < fp->ckks_poly_relu.at(key)->weight_pt.size(); i++) {
-                cxx_args.push_back(CxxVectorArgument{"poly_reluw_" + key + "_" + to_string(i),
-                                                     &(fp->ckks_poly_relu.at(key)->weight_pt[i])});
+            FeatureNode d_input_node(json_features[feature_input[0]]);
+            if (d_input_node.dim == 0) {
+                for (int i = 0; i < fp->ckks_poly_relu_0d.at(key)->weight_pt.size(); i++) {
+                    cxx_args.push_back(CxxVectorArgument{"poly_reluw_" + key + "_" + to_string(i),
+                                                         &(fp->ckks_poly_relu_0d.at(key)->weight_pt[i])});
+                }
+            } else {
+                for (int i = 0; i < fp->ckks_poly_relu.at(key)->weight_pt.size(); i++) {
+                    cxx_args.push_back(CxxVectorArgument{"poly_reluw_" + key + "_" + to_string(i),
+                                                         &(fp->ckks_poly_relu.at(key)->weight_pt[i])});
+                }
             }
         } else if (layer_type == "mult_scalar") {
             cxx_args.push_back(CxxVectorArgument{"mult_scalar_" + key, &(fp->ckks_mult_scalar.at(key)->weight_pt)});
@@ -1049,11 +1075,19 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 result = fp->ckks_adds[key]->run_plaintext(input0, input1);
             }
             if (layer_type == "poly_relu2d" || layer_type == "simple_polyrelu") {
-                const Array<double, 3>& input0 = p_feature2d_x[feature_input[0]];
-                if (fp->is_absorb_polyrelu) {
-                    result = fp->ckks_poly_relu[key]->run_plaintext_absorb_case(input0);
+                FeatureNode feature_input0(json_features[feature_input[0]]);
+                if (feature_input0.dim == 0) {
+                    auto& input0 = p_feature0d_x[feature_input[0]];
+                    result0d = fp->ckks_poly_relu_0d[key]
+                                   ->run_plaintext(Array<double, 1>::from_array_1d(input0))
+                                   .to_array_1d();
                 } else {
-                    result = fp->ckks_poly_relu[key]->run_plaintext_for_non_absorb_case(input0);
+                    const Array<double, 3>& input0 = p_feature2d_x[feature_input[0]];
+                    if (fp->is_absorb_polyrelu) {
+                        result = fp->ckks_poly_relu[key]->run_plaintext_absorb_case(input0);
+                    } else {
+                        result = fp->ckks_poly_relu[key]->run_plaintext_for_non_absorb_case(input0);
+                    }
                 }
             }
             if (layer_type == "fc0" || layer_type == "fc1") {

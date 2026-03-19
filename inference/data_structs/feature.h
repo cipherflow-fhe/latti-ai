@@ -61,10 +61,12 @@ public:
     std::vector<CkksCompressedCiphertext> data_compressed;
 
     Feature0DEncrypted(CkksContext* context_in, int ct_level);
-    void pack(const Array<double, 1>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
+    void pack(const Array<double, 1>& feature_mg,
+              bool is_symmetric = false,
+              double scale_in = DEFAULT_SCALE,
+              uint32_t skip_in = 1);
     void pack_cyclic(const std::vector<double>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
-    void pack_skip(const Array<double, 1>& feature_mg, bool is_symmetric = false);
-    Array<double, 1> unpack(DecryptType dec_type) const;
+    Array<double, 1> unpack() const;
 
     void to_share(Feature0DEncrypted* share0, Feature0DShare* share1) const;
     Array<uint64_t, 1> encrypt_from_share(const Feature0DShare& share, int n_channel);

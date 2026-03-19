@@ -161,6 +161,8 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
                 compute_node = ConvTransposeComputeNode.from_onnx_node(n, features_nodes)
             case 'RangeNormPoly2d':
                 compute_node = Simple_PolyreluComputeNode.from_onnx_node(n, features_nodes)
+            case 'RangeNormPoly1d':
+                compute_node = Simple_PolyreluComputeNode.from_onnx_node(n, features_nodes)
             case 'Simple_Polyrelu':
                 compute_node = Simple_PolyreluComputeNode.from_onnx_node(n, features_nodes)
             case _:
