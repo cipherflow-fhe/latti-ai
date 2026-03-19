@@ -80,7 +80,7 @@ Examples:
     parser.add_argument('--num_workers', type=int, default=16, help='Number of parallel worker processes (default: 16)')
 
     parser.add_argument(
-        '--temperature', type=float, default=0.0, help='Temperature parameter for randomization (default: 0.0)'
+        '--temperature', type=float, default=1.0, help='Temperature parameter for randomization (default: 0.0)'
     )
 
     args = parser.parse_args()
