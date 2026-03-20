@@ -325,7 +325,7 @@ class FeatureNode:
         self.is_total_graph_leading_node = False
         self.scale_up = 1
         self.scale_down = 1
-        self.sp_info = {'skip': [1, 1], 'invalid_fill': [1, 1]}
+        self.sp_info = {'skip': [1, 1], 'invalid_fill': [1, 1], 'shape': [1, 1]}
 
     def __repr__(self) -> str:
         return f'{self.node_id}'
@@ -668,8 +668,9 @@ class LayerAbstractGraph:
                 node = FeatureNode(key, dim, channel, scale, ckks_parameter_id, DEFAULT_SCALE, shape)
             elif dim == 0:
                 shape = [0, 0]
-                skip = [feature_json.get('skip', 1)]
-                sp_info = feature_json.get('special_info', {'skip': [1, 1], 'invalid_fill': [1, 1]})
+
+                sp_info = feature_json.get('special_info', {'skip': [1, 1], 'invalid_fill': [1, 1], 'shape': [1, 1]})
+                skip = [math.prod(sp_info['skip'])]
                 node = FeatureNode(key, dim, channel, scale, ckks_parameter_id, DEFAULT_SCALE, shape)
                 node.sp_info = sp_info
             else:
