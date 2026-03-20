@@ -69,9 +69,10 @@ def export_to_onnx(model, inputs, output_names, onnx_path, dynamic_axes=None, op
 
 
 def gen_conv_mega_ag(
-    model, n_in_channel, n_out_channel, input_shape, kernel_shape, stride, skip, groups, init_level, style='ordinary'
+    n_in_channel, n_out_channel, input_shape, kernel_shape, stride, skip, groups, init_level, style='ordinary'
 ):
     set_param(n=16384)
+    model = SimpleCNN()
     conv = nn.Conv2d(
         n_in_channel, n_out_channel, kernel_shape[0], stride[0], padding=int(kernel_shape[0] / 2), groups=groups
     )
@@ -173,7 +174,7 @@ class TestLayerExport(unittest.TestCase):
         N = 16384
         set_param(n=N)
         n_in_level = 2
-        shapes = {16, 32, 64}
+        shapes = [16, 32, 64]
         for s in shapes:
             print(f'sub-test: s={s}')
             input_ct = [CkksCiphertextNode(f'input_ct_{i}', n_in_level) for i in range(int(np.ceil(s * s * 1 / 8192)))]
@@ -195,15 +196,13 @@ class TestLayerExport(unittest.TestCase):
         groups = 1
         init_level = 2
 
-        input_shapes = {(4, 4), (8, 8), (16, 16), (32, 32), (64, 64)}
-        kernel_shapes = {(1, 1), (3, 3), (5, 5)}
+        input_shapes = [(4, 4), (8, 8), (16, 16), (32, 32), (64, 64)]
+        kernel_shapes = [(1, 1), (3, 3), (5, 5)]
 
-        model = SimpleCNN()
         for input_shape in input_shapes:
             for kernel_shape in kernel_shapes:
                 print(f'sub-test: input_shape={input_shape}, kernel_shape={kernel_shape}')
                 gen_conv_mega_ag(
-                    model,
                     n_in_channel,
                     n_out_channel,
                     input_shape,
@@ -225,12 +224,10 @@ class TestLayerExport(unittest.TestCase):
         input_shapes = [(4, 4), (8, 8), (16, 16), (32, 32), (64, 64)]
         kernel_shapes = [(1, 1), (3, 3), (5, 5)]
 
-        model = SimpleCNN()
         for input_shape in input_shapes:
             for kernel_shape in kernel_shapes:
                 print(f'sub-test: input_shape={input_shape}, kernel_shape={kernel_shape}')
                 gen_conv_mega_ag(
-                    model,
                     n_in_channel,
                     n_out_channel,
                     input_shape,
@@ -251,12 +248,10 @@ class TestLayerExport(unittest.TestCase):
         groups = 1
         init_level = 2
 
-        model = SimpleCNN()
         for n_in_channel in n_in_channels:
             for n_out_channel in n_out_channels:
                 print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
                 gen_conv_mega_ag(
-                    model,
                     n_in_channel,
                     n_out_channel,
                     input_shape,
@@ -277,12 +272,10 @@ class TestLayerExport(unittest.TestCase):
         groups = 1
         init_level = 2
 
-        model = SimpleCNN()
         for n_in_channel in n_in_channels:
             for n_out_channel in n_out_channels:
                 print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
                 gen_conv_mega_ag(
-                    model,
                     n_in_channel,
                     n_out_channel,
                     input_shape,
@@ -303,10 +296,7 @@ class TestLayerExport(unittest.TestCase):
         groups = 1
         init_level = 5
 
-        model = SimpleCNN()
-
         gen_conv_mega_ag(
-            model,
             n_in_channel,
             n_out_channel,
             input_shape,
@@ -327,10 +317,7 @@ class TestLayerExport(unittest.TestCase):
         init_level = 5
         groups = n_in_channel
 
-        model = SimpleCNN()
-
         gen_conv_mega_ag(
-            model,
             n_in_channel,
             n_out_channel,
             input_shape,
@@ -341,61 +328,31 @@ class TestLayerExport(unittest.TestCase):
             init_level,
         )
 
-    def test_mux_conv_s1_32x32_k3(self):
+    def test_mux_conv_varied_stride(self):
         n_in_channels = [4, 8, 32]
         n_out_channels = [4, 8, 32]
         input_shape = (32, 32)
         kernel_shape = (3, 3)
-        stride = (1, 1)
+        strides = [(1, 1), (2, 2)]
         skip = (1, 1)
         init_level = 5
 
-        for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
-            groups = 1
+        for stride in strides:
+            for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
+                groups = 1
 
-            model = SimpleCNN()
-
-            print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
-            gen_conv_mega_ag(
-                model,
-                n_in_channel,
-                n_out_channel,
-                input_shape,
-                kernel_shape,
-                stride,
-                skip,
-                groups,
-                init_level,
-                'multiplexed',
-            )
-
-    def test_mux_conv_s2_32x32_k3(self):
-        n_in_channels = [4, 8, 32]
-        n_out_channels = [4, 8, 32]
-        input_shape = (32, 32)
-        kernel_shape = (3, 3)
-        stride = (2, 2)
-        skip = (1, 1)
-        init_level = 5
-
-        for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
-            groups = 1
-
-            model = SimpleCNN()
-
-            print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
-            gen_conv_mega_ag(
-                model,
-                n_in_channel,
-                n_out_channel,
-                input_shape,
-                kernel_shape,
-                stride,
-                skip,
-                groups,
-                init_level,
-                'multiplexed',
-            )
+                print(f'sub-test: stride={stride}, n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
+                gen_conv_mega_ag(
+                    n_in_channel,
+                    n_out_channel,
+                    input_shape,
+                    kernel_shape,
+                    stride,
+                    skip,
+                    groups,
+                    init_level,
+                    'multiplexed',
+                )
 
     def test_mux_conv_varied_input_shape(self):
         n_in_channel = 32
@@ -406,11 +363,9 @@ class TestLayerExport(unittest.TestCase):
         skip = (1, 1)
         init_level = 5
 
-        model = SimpleCNN()
         for input_shape in input_shapes:
             print(f'sub-test: input_shape={input_shape}')
             gen_conv_mega_ag(
-                model,
                 n_in_channel,
                 n_out_channel,
                 input_shape,
@@ -431,11 +386,9 @@ class TestLayerExport(unittest.TestCase):
         skip = (1, 1)
         init_level = 5
 
-        model = SimpleCNN()
         for kernel_shape in kernel_shapes:
             print(f'sub-test: kernel_shape={kernel_shape}')
             gen_conv_mega_ag(
-                model,
                 n_in_channel,
                 n_out_channel,
                 input_shape,
@@ -457,12 +410,10 @@ class TestLayerExport(unittest.TestCase):
         groups = 1
         init_level = 5
 
-        model = SimpleCNN()
         for n_in_channel in n_in_channels:
             for n_out_channel in n_out_channels:
                 print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
                 gen_conv_mega_ag(
-                    model,
                     n_in_channel,
                     n_out_channel,
                     input_shape,
@@ -486,11 +437,8 @@ class TestLayerExport(unittest.TestCase):
         for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
             groups = n_in_channel
 
-            model = SimpleCNN()
-
             print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
             gen_conv_mega_ag(
-                model,
                 n_in_channel,
                 n_out_channel,
                 input_shape,
