@@ -96,10 +96,8 @@ def gen_custom_task(task_path, n=16384, use_gpu=True, style='ordinary'):
         n_packed_in_channel = math.ceil(n_in_channel / pack)
         n_packed_out_channel = math.ceil(n_out_channel / pack)
         if 'fc' in layer_config['type']:
-            virtual_shape = config_info['feature'][layer_input_feature_ids[0]]['virtual_shape']
-            virtual_skip = config_info['feature'][layer_input_feature_ids[0]]['virtual_skip']
-            virtual_shape_out = config_info['feature'][layer_output_feature_ids[0]]['virtual_shape']
-            virtual_skip_out = config_info['feature'][layer_output_feature_ids[0]]['virtual_skip']
+            virtual_shape = config_info['feature'][layer_input_feature_ids[0]]['special_info']['shape']
+            virtual_skip = config_info['feature'][layer_input_feature_ids[0]]['special_info']['skip']
             n_packed_in_channel = math.ceil(n_in_channel / 8192)
             n_packed_out_channel = math.ceil(n_out_channel / pack)
 

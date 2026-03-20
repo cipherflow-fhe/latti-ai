@@ -825,9 +825,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_cyclic", "", HeteroProcessors)
         Duo input_shape = {s, s};
         uint32_t n_channel_per_ct = div_ceil(this->n_slot, input_shape[0] * input_shape[1]);
         SECTION("input_shape=" + str(input_shape)) {
-            DensePackedLayer fc_layer(this->context.get_parameter(), input_shape, skip, weight, bias, n_channel_per_ct,
-                                      init_level, 0);
-            fc_layer.prepare_weight1();
+            DensePackedLayer fc_layer(this->context.get_parameter(), weight, bias, n_channel_per_ct, init_level, 0);
+            fc_layer.prepare_weight1(input_shape, skip);
 
             Feature0DEncrypted x_ct(&this->context, init_level);
             x_ct.skip = input_shape[0] * input_shape[1];
@@ -881,9 +880,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip", "", HeteroProcessors) {
         Duo skip = {s, s};
         SECTION("skip=" + str(skip)) {
             uint32_t n_channel_per_ct = div_ceil(this->n_slot, skip[0] * skip[1]);
-            DensePackedLayer fc_layer(this->context.get_parameter(), input_shape, skip, weight, bias, n_channel_per_ct,
-                                      init_level, 0);
-            fc_layer.prepare_weight1();
+            DensePackedLayer fc_layer(this->context.get_parameter(), weight, bias, n_channel_per_ct, init_level, 0);
+            fc_layer.prepare_weight1(input_shape, skip);
             Feature0DEncrypted x_ct(&this->context, init_level);
             x_ct.pack(input_array, false, this->param.get_default_scale(), skip[0] * skip[1]);
 
@@ -949,13 +947,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
     input_feature.n_channel = input_channel;
     input_feature.n_channel_per_ct = div_ceil(this->n_slot, dense_shape[0] * dense_shape[1]);
 
-    DensePackedLayer dense(this->context.get_parameter(), dense_shape, skip, weight0, bias0,
-                           input_feature.n_channel_per_ct, init_level, 0);
-    dense.prepare_weight1();
+    DensePackedLayer dense(this->context.get_parameter(), weight0, bias0, input_feature.n_channel_per_ct, init_level,
+                           0);
+    dense.prepare_weight1(dense_shape, skip);
 
-    DensePackedLayer dense1(this->context.get_parameter(), dense_shape1, skip1, weight1, bias1,
-                            input_feature.n_channel_per_ct, init_level - 1, 0);
-    dense1.prepare_weight1();
+    DensePackedLayer dense1(this->context.get_parameter(), weight1, bias1, input_feature.n_channel_per_ct,
+                            init_level - 1, 0);
+    dense1.prepare_weight1(dense_shape1, skip1);
 
     Feature0DEncrypted output_feature(&this->context, init_level - 2);
     output_feature.skip = skip1[0] * skip1[1];
