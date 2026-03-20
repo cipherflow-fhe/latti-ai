@@ -217,8 +217,8 @@ class TestLayerExport(unittest.TestCase):
     def test_conv_1ch_s2(self):
         n_in_channel = 1
         n_out_channel = 1
-        stride = [2, 2]
-        skip = [1, 1]
+        stride = (2, 2)
+        skip = (1, 1)
         groups = 1
         init_level = 2
 
@@ -242,12 +242,12 @@ class TestLayerExport(unittest.TestCase):
                 )
 
     def test_conv_mch_s1(self):
-        n_in_channels = {1, 3, 4, 16, 17}
-        n_out_channels = {1, 3, 4, 32, 33}
-        stride = [1, 1]
-        skip = [1, 1]
-        input_shape = [32, 32]
-        kernel_shape = [3, 3]
+        n_in_channels = [1, 3, 4, 16, 17]
+        n_out_channels = [1, 3, 4, 32, 33]
+        stride = (1, 1)
+        skip = (1, 1)
+        input_shape = (32, 32)
+        kernel_shape = (3, 3)
         groups = 1
         init_level = 2
 
@@ -268,12 +268,12 @@ class TestLayerExport(unittest.TestCase):
                 )
 
     def test_conv_mch_s2(self):
-        n_in_channels = {1, 3, 4, 16, 17}
-        n_out_channels = {1, 3, 4, 32, 33}
-        stride = [2, 2]
-        skip = [1, 1]
-        input_shape = [32, 32]
-        kernel_shape = [3, 3]
+        n_in_channels = [1, 3, 4, 16, 17]
+        n_out_channels = [1, 3, 4, 32, 33]
+        stride = (2, 2)
+        skip = (1, 1)
+        input_shape = (32, 32)
+        kernel_shape = (3, 3)
         groups = 1
         init_level = 2
 
@@ -296,10 +296,10 @@ class TestLayerExport(unittest.TestCase):
     def test_dw_32ch_s1_32x32_k3(self):
         n_in_channel = 32
         n_out_channel = 32
-        input_shape = [32, 32]
-        kernel_shape = [3, 3]
-        stride = [1, 1]
-        skip = [1, 1]
+        input_shape = (32, 32)
+        kernel_shape = (3, 3)
+        stride = (1, 1)
+        skip = (1, 1)
         groups = 1
         init_level = 5
 
@@ -320,10 +320,10 @@ class TestLayerExport(unittest.TestCase):
     def test_dw_4ch_s2_32x32_k3(self):
         n_in_channel = 4
         n_out_channel = 4
-        input_shape = [32, 32]
-        kernel_shape = [3, 3]
-        stride = [2, 2]
-        skip = [1, 1]
+        input_shape = (32, 32)
+        kernel_shape = (3, 3)
+        stride = (2, 2)
+        skip = (1, 1)
         init_level = 5
         groups = n_in_channel
 
@@ -342,12 +342,12 @@ class TestLayerExport(unittest.TestCase):
         )
 
     def test_mux_conv_s1_32x32_k3(self):
-        n_in_channels = {4, 8, 32}
-        n_out_channels = {4, 8, 32}
-        input_shape = [32, 32]
-        kernel_shape = [3, 3]
-        stride = [1, 1]
-        skip = [1, 1]
+        n_in_channels = [4, 8, 32]
+        n_out_channels = [4, 8, 32]
+        input_shape = (32, 32)
+        kernel_shape = (3, 3)
+        stride = (1, 1)
+        skip = (1, 1)
         init_level = 5
 
         for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
@@ -370,12 +370,12 @@ class TestLayerExport(unittest.TestCase):
             )
 
     def test_mux_conv_s2_32x32_k3(self):
-        n_in_channels = {4, 8, 32}
-        n_out_channels = {4, 8, 32}
-        input_shape = [32, 32]
-        kernel_shape = [3, 3]
-        stride = [2, 2]
-        skip = [1, 1]
+        n_in_channels = [4, 8, 32]
+        n_out_channels = [4, 8, 32]
+        input_shape = (32, 32)
+        kernel_shape = (3, 3)
+        stride = (2, 2)
+        skip = (1, 1)
         init_level = 5
 
         for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
@@ -397,13 +397,90 @@ class TestLayerExport(unittest.TestCase):
                 'multiplexed',
             )
 
+    def test_mux_conv_varied_input_shape(self):
+        n_in_channel = 32
+        n_out_channel = 32
+        input_shapes = [(2, 2), (4, 4), (8, 8), (16, 16), (32, 32), (64, 64)]
+        kernel_shape = (3, 3)
+        stride = (1, 1)
+        skip = (1, 1)
+        init_level = 5
+
+        model = SimpleCNN()
+        for input_shape in input_shapes:
+            print(f'sub-test: input_shape={input_shape}')
+            gen_conv_mega_ag(
+                model,
+                n_in_channel,
+                n_out_channel,
+                input_shape,
+                kernel_shape,
+                stride,
+                skip,
+                1,
+                init_level,
+                'multiplexed',
+            )
+
+    def test_mux_conv_varied_kernel_shape(self):
+        n_in_channel = 32
+        n_out_channel = 32
+        input_shape = (32, 32)
+        kernel_shapes = [(1, 1), (3, 3), (5, 5)]
+        stride = (1, 1)
+        skip = (1, 1)
+        init_level = 5
+
+        model = SimpleCNN()
+        for kernel_shape in kernel_shapes:
+            print(f'sub-test: kernel_shape={kernel_shape}')
+            gen_conv_mega_ag(
+                model,
+                n_in_channel,
+                n_out_channel,
+                input_shape,
+                kernel_shape,
+                stride,
+                skip,
+                1,
+                init_level,
+                'multiplexed',
+            )
+
+    def test_mux_conv_varied_input_channels_and_output_channels(self):
+        n_in_channels = [1, 3, 4, 16, 17]
+        n_out_channels = [1, 3, 4, 32, 33]
+        stride = (1, 1)
+        skip = (1, 1)
+        input_shape = (32, 32)
+        kernel_shape = (3, 3)
+        groups = 1
+        init_level = 5
+
+        model = SimpleCNN()
+        for n_in_channel in n_in_channels:
+            for n_out_channel in n_out_channels:
+                print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
+                gen_conv_mega_ag(
+                    model,
+                    n_in_channel,
+                    n_out_channel,
+                    input_shape,
+                    kernel_shape,
+                    stride,
+                    skip,
+                    groups,
+                    init_level,
+                    'multiplexed',
+                )
+
     def test_mux_dw_s2_64x64_k3(self):
-        n_in_channels = {4, 8, 32}
-        n_out_channels = {4, 8, 32}
-        input_shape = [64, 64]
-        kernel_shape = [3, 3]
-        stride = [2, 2]
-        skip = [1, 1]
+        n_in_channels = [4, 8, 32]
+        n_out_channels = [4, 8, 32]
+        input_shape = (64, 64)
+        kernel_shape = (3, 3)
+        stride = (2, 2)
+        skip = (1, 1)
         init_level = 5
 
         for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
@@ -429,8 +506,8 @@ class TestLayerExport(unittest.TestCase):
         N = 16384
         set_param(n=N)
         n_in_channel = 32
-        input_shape = [32, 32]
-        skip = [1, 1]
+        input_shape = (32, 32)
+        skip = (1, 1)
         n_in_channel_per_ct = int(np.floor(N / 2 / (input_shape[0] * input_shape[1])))
         n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
         orders = [2, 4, 6, 8, 10, 12, 16, 32, 64]
@@ -570,7 +647,7 @@ class TestLayerExport(unittest.TestCase):
         input_channel = 1024
         output_channel = 1024
         dense_shape = [4, 4]
-        skip = [1, 1]
+        skip = (1, 1)
 
         output_channel1 = 128
         dense_shape1 = [1, 1]
@@ -691,8 +768,8 @@ class TestLayerExport(unittest.TestCase):
         N = 16384
         set_param(n=N)
         n_in_channel = 32
-        input_shape = [32, 32]
-        skip = [1, 1]
+        input_shape = (32, 32)
+        skip = (1, 1)
         n_in_channel_per_ct = int(np.floor(N / 2 / (input_shape[0] * input_shape[1])))
         n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
         order0 = 7
