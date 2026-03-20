@@ -1158,7 +1158,7 @@ class LayerAbstractGraph:
                 depth = feature.depth
                 pack_num = self.dag.nodes[feature]['pack_num']
                 if dim == 0:
-                    features[key] = {
+                    feature_dict = {
                         'dim': dim,
                         'channel': channel,
                         'scale': scale,
@@ -1168,8 +1168,11 @@ class LayerAbstractGraph:
                         'level': level,
                         'depth': depth,
                         'pack_num': pack_num,
-                        'special_info': feature.sp_info,
                     }
+                    pred_compute = next(self.dag.predecessors(feature), None)
+                    if isinstance(pred_compute, ReshapeComputeNode):
+                        feature_dict['special_info'] = feature.sp_info
+                    features[key] = feature_dict
                 elif dim in (1, 2):
                     features[key] = {
                         'dim': dim,
