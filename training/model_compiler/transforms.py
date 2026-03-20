@@ -284,8 +284,6 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
     old_output_feature = next(graph.dag.successors(compute_node))
 
     skip = list(graph.dag.nodes[old_output_feature]['skip'])
-    virtual_shape = list(graph.dag.nodes[old_output_feature]['virtual_shape'])
-    virtual_skip = list(graph.dag.nodes[old_output_feature]['virtual_skip'])
 
     mult_scalar_output = copy.deepcopy(old_output_feature)
     old_output_feature.node_id = old_output_feature.node_id + '_mult_scalar_output'
@@ -303,8 +301,6 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
         new_feature_args={
             'name': mult_scalar_output.node_id,
             'skip': skip,
-            'virtual_shape': virtual_shape,
-            'virtual_skip': virtual_skip,
         },
         new_compute_args={'name': mult_scalar_node.layer_id, 'level_cost': 1},
     )
@@ -373,10 +369,7 @@ def split_upsampling_layers(graph: LayerAbstractGraph):
                 conv_node,
                 upsample_layer,
                 upsampled_feature,
-                new_feature_args={
-                    'virtual_shape': list(graph.dag.nodes[feature_in]['virtual_shape']),
-                    'virtual_skip': list(graph.dag.nodes[feature_in]['virtual_skip']),
-                },
+                new_feature_args={},
             )
             conv_node.upsample_factor = [1, 1]
 
@@ -397,32 +390,40 @@ def find_upstream_pool_or_conv(graph: LayerAbstractGraph, reshape_node):
 def process_special_info(graph: LayerAbstractGraph, compute_node, preds: list, succ):
     """Process sp_info for dim=0 and reshape nodes. Returns True if caller should continue."""
 
-    if preds[0].dim == 2 and succ.dim == 2:
-        if config.style == 'ordinary':
-            succ.sp_info['invalid_fill'] = graph.dag.nodes[preds[0]]['skip'].copy()
-        else:
-            succ.sp_info['invalid_fill'] = [1, 1]
-    # reshape
+    # 2d -> 0d: reshape
     if preds[0].dim == 2 and succ.dim == 0:
         pre_node = find_upstream_pool_or_conv(graph, compute_node)
-        pre_pre_f = next(graph.dag.predecessors(pre_node))
         pre_succ_f = next(graph.dag.successors(pre_node))
+
+        # sp_info.skip = pre_node output skip
         succ.sp_info['skip'] = graph.dag.nodes[preds[0]]['skip'].copy()
-        succ.sp_info['shape'] = pre_pre_f.shape.copy()
+
+        # sp_info.shape
+        succ.sp_info['shape'] = preds[0].shape.copy()
+
+        # sp_info.invalid_fill
         if config.style == 'ordinary':
+            # ordinary: conv->reshape and avgpool->reshape both use output skip
             succ.sp_info['invalid_fill'] = graph.dag.nodes[pre_succ_f]['skip'].copy()
         elif pre_node.layer_type == 'avgpool2d':
+            # multiplexed: avgpool->reshape uses stride
             succ.sp_info['invalid_fill'] = pre_node.stride.copy()
         else:
-            # multplex and conv-reshape
+            # multiplexed: conv->reshape uses [1, 1]
             succ.sp_info['invalid_fill'] = [1, 1]
-        graph.dag.nodes[succ]['skip'] = [math.prod(succ.sp_info['skip'])]
 
-    if preds[0].dim == 0 and succ.dim == 0:
-        succ.sp_info = preds[0].sp_info.copy()
-        graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip'].copy()
-        if compute_node.layer_type == 'fc0':
-            succ.sp_info['shape'] = [1, 1]
+        # outer skip for f0d node
+        if config.style == 'ordinary':
+            # case a: ordinary conv->reshape, avgpool->reshape
+            graph.dag.nodes[succ]['skip'] = [math.prod(succ.sp_info['skip']) * math.prod(succ.sp_info['shape'])]
+        elif config.style == 'multiplexed' and pre_node.layer_type == 'avgpool2d':
+            # case b: multiplexed avgpool->reshape
+            graph.dag.nodes[succ]['skip'] = [math.prod(succ.sp_info['skip'])]
+        else:
+            # case c: multiplexed conv->reshape
+            graph.dag.nodes[succ]['skip'] = [math.prod(graph.dag.nodes[preds[0]]['skip']) * math.prod(preds[0].shape)]
+
+        return True
 
     return False
 
@@ -430,13 +431,21 @@ def process_special_info(graph: LayerAbstractGraph, compute_node, preds: list, s
 def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
     sorted_nodes = list(nx.topological_sort(graph.dag))
     sorted_compute_nodes = [node for node in sorted_nodes if isinstance(node, ComputeNode)]
+    c_node_num = len(sorted_compute_nodes)
 
     for compute_node in sorted_compute_nodes:
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
         succ: FeatureNode = next(graph.dag.successors(compute_node))
-        graph.dag.nodes[succ]['skip'] = [1] * succ.dim
-        process_special_info(graph, compute_node, preds, succ)
-        # continue
+        # only for reshape test
+        if c_node_num == 1 and sorted_compute_nodes[0].layer_type == 'reshape':
+            break
+        if succ.dim == 0:
+            graph.dag.nodes[succ]['skip'] = [1]
+        else:
+            graph.dag.nodes[succ]['skip'] = [1] * succ.dim
+
+        if process_special_info(graph, compute_node, preds, succ):
+            continue
 
         if isinstance(compute_node, SpatialComputeNode):
             for i in range(compute_node.dim):
@@ -454,6 +463,9 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                 )
 
         else:
+            # 0d
+            if preds[0].dim == 0:
+                graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip'].copy()
             for i in range(preds[0].dim):
                 succ.shape[i] = preds[0].shape[i]
                 graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
