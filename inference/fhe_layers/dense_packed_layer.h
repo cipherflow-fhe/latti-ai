@@ -68,8 +68,8 @@ public:
     CkksPlaintextRingt generate_bias_pt_mult_pack_for_index(CkksContext& ctx, int packed_out_feature_idx) const;
 
 protected:
-    uint32_t input_shape[2];
-    uint32_t skip[2];
+    Duo input_shape = {0, 0};
+    Duo skip = {0, 0};
     uint32_t n_out_feature;
     uint32_t n_in_feature;
     Array<double, 2> weight;
