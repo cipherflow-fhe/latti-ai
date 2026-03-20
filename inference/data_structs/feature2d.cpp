@@ -773,3 +773,141 @@ Array<double, 2> Feature2DEncrypted::block_col_major_unpack(uint32_t m, uint32_t
     });
     return result;
 }
+
+static uint32_t next_power_of_2(uint32_t x) {
+    uint32_t p = 1;
+    while (p < x)
+        p *= 2;
+    return p;
+}
+
+void Feature2DEncrypted::par_block_col_major_pack(const Array<double, 2>& matrix,
+                                                  uint32_t d,
+                                                  uint32_t n_heads,
+                                                  bool is_symmetric,
+                                                  double scale_in) {
+    uint32_t m = matrix.get_shape()[0];
+    uint32_t total_cols = matrix.get_shape()[1];
+    uint32_t cols_per_head = total_cols / n_heads;
+    uint32_t n_h_padded = next_power_of_2(n_heads);
+    int n_slot = context->get_parameter().get_n() / 2;
+    const int N_THREAD = 4;
+
+    // Determine chunk sizing and n_blocks_per_chunk(S)
+    uint32_t S, chunk_size, n_cts_per_block_idx;
+    if ((uint32_t)n_slot >= n_h_padded * d * d) {
+        S = n_h_padded;
+        chunk_size = n_h_padded * d * d;
+        n_cts_per_block_idx = 1;
+    } else {
+        S = n_slot / (d * d);
+        chunk_size = n_slot;
+        n_cts_per_block_idx = n_h_padded / S;
+    }
+    uint32_t num_chunks = n_slot / chunk_size;
+
+    uint32_t num_block_rows = div_ceil(m, d);
+    uint32_t num_block_cols = div_ceil(cols_per_head, d);
+    uint32_t total_vecs = num_block_rows * num_block_cols * n_cts_per_block_idx;
+
+    vector<vector<double>> block_vecs(total_vecs);
+
+    // Column-major block order: for bj, for bi, for g (group number of cts for the same block idx)
+    for (uint32_t bj = 0; bj < num_block_cols; bj++) {
+        for (uint32_t bi = 0; bi < num_block_rows; bi++) {
+            for (uint32_t g = 0; g < n_cts_per_block_idx; g++) {
+                uint32_t vec_idx = (bi + num_block_rows * bj) * n_cts_per_block_idx + g;
+                vector<double> vec(n_slot, 0.0);
+
+                for (uint32_t h_local = 0; h_local < S; h_local++) {
+                    uint32_t h = g * S + h_local;  // global head index
+                    for (uint32_t col = 0; col < d; col++) {
+                        for (uint32_t row = 0; row < d; row++) {
+                            uint32_t r = bi * d + row;
+                            uint32_t c = bj * d + col;
+                            double val = 0.0;
+                            if (h < n_heads && r < m && c < cols_per_head) {
+                                val = matrix.get(r, h * cols_per_head + c);
+                            }
+                            uint32_t base_slot = (row + d * col) * S + h_local;
+                            for (uint32_t ci = 0; ci < num_chunks; ci++) {
+                                vec[ci * chunk_size + base_slot] = val;
+                            }
+                        }
+                    }
+                }
+                block_vecs[vec_idx] = move(vec);
+            }
+        }
+    }
+
+    data.clear();
+    data_compress.clear();
+    if (is_symmetric) {
+        data_compress.resize(total_vecs);
+    } else {
+        data.resize(total_vecs);
+    }
+
+    parallel_for(total_vecs, N_THREAD, *context, [&](CkksContext& ctx_copy, int idx) {
+        auto enc = ctx_copy.encode(block_vecs[idx], level, scale_in);
+        if (is_symmetric) {
+            data_compress[idx] = ctx_copy.encrypt_symmetric_compressed(enc);
+        } else {
+            data[idx] = ctx_copy.encrypt_symmetric(enc);
+        }
+    });
+}
+
+Array<double, 2>
+Feature2DEncrypted::par_block_col_major_unpack(uint32_t m, uint32_t n_per_head, uint32_t d, uint32_t n_heads) const {
+    uint32_t n_h_padded = next_power_of_2(n_heads);
+    int n_slot = context->get_parameter().get_n() / 2;
+    const int N_THREAD = 4;
+
+    uint32_t S, chunk_size, n_cts_per_block_idx;
+    if ((uint32_t)n_slot >= n_h_padded * d * d) {
+        S = n_h_padded;
+        chunk_size = n_h_padded * d * d;
+        n_cts_per_block_idx = 1;
+    } else {
+        S = n_slot / (d * d);
+        chunk_size = n_slot;
+        n_cts_per_block_idx = n_h_padded / S;
+    }
+
+    uint32_t num_block_rows = div_ceil(m, d);
+    uint32_t num_block_cols = div_ceil(n_per_head, d);
+    uint32_t total_vecs = num_block_rows * num_block_cols * n_cts_per_block_idx;
+    uint32_t total_cols = n_heads * n_per_head;
+
+    Array<double, 2> result({(uint64_t)m, (uint64_t)total_cols});
+
+    parallel_for(total_vecs, N_THREAD, *context, [&](CkksContext& ctx_copy, int vec_idx) {
+        // Recover bi, bj, g from vec_idx
+        uint32_t block_idx = vec_idx / n_cts_per_block_idx;
+        uint32_t g = vec_idx % n_cts_per_block_idx;
+        uint32_t bi = block_idx % num_block_rows;
+        uint32_t bj = block_idx / num_block_rows;
+
+        CkksPlaintext x_pt = ctx_copy.decrypt(data[vec_idx]);
+        Array1D x_mg = ctx_copy.decode(x_pt);
+
+        for (uint32_t h_local = 0; h_local < S; h_local++) {
+            uint32_t h = g * S + h_local;
+            if (h >= n_heads)
+                continue;
+            for (uint32_t col = 0; col < d; col++) {
+                for (uint32_t row = 0; row < d; row++) {
+                    uint32_t r = bi * d + row;
+                    uint32_t c = bj * d + col;
+                    if (r < m && c < n_per_head) {
+                        uint32_t slot = (row + d * col) * S + h_local;
+                        result.set(r, h * n_per_head + c, x_mg[slot]);
+                    }
+                }
+            }
+        }
+    });
+    return result;
+}

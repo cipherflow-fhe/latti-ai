@@ -14,12 +14,16 @@ add_library(fhe_layers
   multiplexed_conv2d_pack_layer.cpp
   multiplexed_conv2d_pack_layer_depthwise.cpp
   poly_relu2d.cpp
+  poly_relu_base.cpp
   mult_scaler.cpp
   conv1d_packed_layer.cpp
   multiplexed_conv1d_pack_layer.cpp
   block_col_major_ccmm.cpp
   block_col_major_cpmm.cpp
   block_col_major_transpose.cpp
+  par_block_col_major_transpose.cpp
+  par_block_col_major_ccmm.cpp
+  par_block_col_major_cpmm.cpp
   ../data_structs/feature.cpp
   ../data_structs/feature1d.cpp
   ../data_structs/feature2d.cpp

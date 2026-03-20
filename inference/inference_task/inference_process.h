@@ -26,6 +26,7 @@
 #include "fhe_layers/reshape_layer.h"
 #include "util.h"
 #include "fhe_layers/poly_relu2d.h"
+#include "fhe_layers/poly_relu_base.h"
 #include "fhe_layers/activation_layer.h"
 #include "fhe_layers/add_layer.h"
 #include "fhe_layers/avgpool2d_layer.h"
@@ -181,6 +182,7 @@ public:
     std::map<std::string, std::unique_ptr<ReshapeLayer>> ckks_reshape;
     std::map<std::string, std::unique_ptr<Avgpool2DLayer>> ckks_avgpool;
     std::map<std::string, std::unique_ptr<PolyRelu>> ckks_poly_relu;
+    std::map<std::string, std::unique_ptr<PolyRelu0D>> ckks_poly_relu_0d;
     std::map<std::string, std::unique_ptr<ParMultiplexedConv2DPackedLayer>> ckks_multiplexed_conv2ds;
     std::map<std::string, std::unique_ptr<InverseMultiplexedConv2DLayer>> ckks_big_conv2ds;
     std::map<std::string, std::unique_ptr<ParMultiplexedConv2DPackedLayerDepthwise>> ckks_multiplexed_dw_conv2ds;
