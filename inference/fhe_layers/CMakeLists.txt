@@ -14,6 +14,7 @@ add_library(fhe_layers
   multiplexed_conv2d_pack_layer.cpp
   multiplexed_conv2d_pack_layer_depthwise.cpp
   poly_relu2d.cpp
+  poly_relu_base.cpp
   mult_scaler.cpp
   conv1d_packed_layer.cpp
   multiplexed_conv1d_pack_layer.cpp

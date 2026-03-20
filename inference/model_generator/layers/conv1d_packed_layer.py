@@ -73,6 +73,7 @@ class Conv1DPackedLayer:
         for i in range(-filter_center, n_rotation - filter_center):
             if i != 0:
                 steps.append(i * unit)
+
         r_temp = rotate_cols(x, steps)
         result: list[CkksCiphertextNode] = list()
         result += list(r_temp[0:filter_center])

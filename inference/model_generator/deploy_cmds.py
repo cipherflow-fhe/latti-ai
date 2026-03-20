@@ -350,10 +350,17 @@ def gen_custom_task(task_path, n=16384, use_gpu=True, style='ordinary'):
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         if 'poly_relu' in layer_config['type'] or 'simple_polyrelu' in layer_config['type']:
-            input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
-            level = config_info['feature'][layer_input_feature_ids[0]]['level']
-            order = layer_config['order']
-            n_pack_in_channel = int(np.ceil(n_in_channel / pack))
+            if config_info['feature'][layer_input_feature_ids[0]]['dim'] == 0:
+                input_shape = [1, 1]
+                level = config_info['feature'][layer_input_feature_ids[0]]['level']
+                order = layer_config['order']
+                n_pack_in_channel = int(np.ceil(n_in_channel / pack))
+                skip = [1, 1]
+            else:
+                input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
+                level = config_info['feature'][layer_input_feature_ids[0]]['level']
+                order = layer_config['order']
+                n_pack_in_channel = int(np.ceil(n_in_channel / pack))
             if order == 4:
                 level_order = [level - 3, level - 2, level - 2, level - 2, level - 1]
                 weight_pt = [
@@ -371,7 +378,10 @@ def gen_custom_task(task_path, n=16384, use_gpu=True, style='ordinary'):
 
             if level < feature_id_in_nodes[0].level:
                 feature_id_in_nodes = [drop_level(node, drop_level_n) for node in feature_id_in_nodes]
-            layer_output_nodes = polyrelu.call_bsgs(feature_id_in_nodes, weight_pt)
+            if config_info['feature'][layer_input_feature_ids[0]]['dim'] == 0:
+                layer_output_nodes = polyrelu.call_bsgs_feature0d(feature_id_in_nodes, weight_pt)
+            else:
+                layer_output_nodes = polyrelu.call_bsgs(feature_id_in_nodes, weight_pt)
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
             for i in range(len(weight_pt)):
                 input_args.append(Argument(f'poly_reluw_{layer_id}_{i}', weight_pt[i]))
