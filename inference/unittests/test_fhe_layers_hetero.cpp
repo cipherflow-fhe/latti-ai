@@ -26,6 +26,7 @@
 #include <chrono>
 #include <fstream>
 #include <sstream>
+#include <filesystem>
 #include <iomanip>
 
 #include "data_structs/feature.h"
@@ -50,11 +51,12 @@
 
 using namespace cxx_sdk_v2;
 using namespace std;
+namespace fs = std::filesystem;
 
-string base_path = "../hetero";
+fs::path base_path = "../hetero";
 
-static vector<string> read_arg_names(const string& project_path) {
-    ifstream f(project_path + "task_signature.json");
+static vector<string> read_arg_names(const fs::path& project_path) {
+    ifstream f(project_path / "task_signature.json");
     auto sig = nlohmann::json::parse(f);
     vector<string> names;
     for (const auto& entry : sig["online"]) {
@@ -71,10 +73,9 @@ struct TaskMetrics {
     double execution_time_ms;
 };
 
-std::string extract_task_config(const string& project_path, const string& base_path) {
-    string config = project_path.substr(base_path.length() + 1);
-    config = config.substr(0, config.length() - 8);
-    return config;
+std::string extract_task_config(const fs::path& project_path, const fs::path& base_path) {
+    auto rel = fs::relative(project_path, base_path);
+    return rel.parent_path().string();  // removes the trailing "server" component
 }
 
 class MetricsCollector {
@@ -131,19 +132,19 @@ public:
         MetricsCollector::save_to_csv("hetero_performance_results.csv");
     }
 
-    uint64_t run(const string& project_path, const vector<CxxVectorArgument>& cxx_args) {
+    uint64_t run(const fs::path& project_path, const vector<CxxVectorArgument>& cxx_args) {
         auto start_time = std::chrono::high_resolution_clock::now();
         uint64_t result;
         std::string processor_type;
 
         if constexpr (is_same_v<T, ProcessorCpu>) {
             processor_type = "CPU";
-            FheTaskCpu fhe_task(project_path);
+            FheTaskCpu fhe_task(project_path.string());
             result = fhe_task.run(&context, cxx_args);
 #ifdef INFERENCE_SDK_ENABLE_GPU
         } else if constexpr (is_same_v<T, ProcessorGpu>) {
             processor_type = "GPU";
-            FheTaskGpu fhe_task(project_path);
+            FheTaskGpu fhe_task(project_path.string());
             result = fhe_task.run(&context, cxx_args);
 #endif
         }
@@ -201,8 +202,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "sq", "", HeteroProcessors) {
                     this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
             }
 
-            string project_path = base_path + "/CKKS_square_" + to_string(input_shape[0]) + "_" +
-                                  to_string(input_shape[1]) + "/level_" + to_string(init_level) + "/server/";
+            fs::path project_path = base_path /
+                                    ("CKKS_square_" + to_string(input_shape[0]) + "_" + to_string(input_shape[1])) /
+                                    ("level_" + to_string(init_level)) / "server";
             cout << "project_path=" << project_path << endl;
             auto arg_names = read_arg_names(project_path);
             vector<CxxVectorArgument> cxx_args = {
@@ -274,11 +276,12 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_1ch_s1", "", HeteroProcessor
                             this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
                     }
 
-                    string project_path = base_path + "/CKKS_conv2d_" + to_string(n_in_channel) + "_in_" +
-                                          to_string(n_out_channel) + "_out_channel_1_stride_" +
-                                          to_string(input_shape[0]) + "_" + to_string(input_shape[1]) + "_" +
-                                          to_string(kernel_shape[0]) + "_" + to_string(kernel_shape[1]) + "/level_" +
-                                          to_string(init_level) + "/server/";
+                    fs::path project_path =
+                        base_path / "CKKS_conv2d" / ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                        ("kernel_shape_" + to_string(kernel_shape[0]) + "_" + to_string(kernel_shape[1])) /
+                        ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                        ("input_shape_" + to_string(input_shape[0]) + "_" + to_string(input_shape[1])) /
+                        ("level_" + to_string(init_level)) / "server";
 
                     auto arg_names = read_arg_names(project_path);
                     vector<CxxVectorArgument> cxx_args;
@@ -354,10 +357,12 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_1ch_s2", "", HeteroProcessor
                             this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
                     }
 
-                    string project_path = base_path + "/CKKS_conv2d_1_in_1_out_channel_2_stride_" +
-                                          to_string(input_shape[0]) + "_" + to_string(input_shape[1]) + "_" +
-                                          to_string(kernel_shape[0]) + "_" + to_string(kernel_shape[1]) + "/level_" +
-                                          to_string(init_level) + "/server/";
+                    fs::path project_path =
+                        base_path / "CKKS_conv2d" / ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                        ("kernel_shape_" + to_string(kernel_shape[0]) + "_" + to_string(kernel_shape[1])) /
+                        "cin_1_cout_1" /
+                        ("input_shape_" + to_string(input_shape[0]) + "_" + to_string(input_shape[1])) /
+                        ("level_" + to_string(init_level)) / "server";
 
                     auto arg_names = read_arg_names(project_path);
                     vector<CxxVectorArgument> cxx_args;
@@ -425,9 +430,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_mch_s1", "", HeteroProcessor
                             this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
                     }
 
-                    string project_path = base_path + "/CKKS_conv2d_" + to_string(n_in_channel) + "_in_" +
-                                          to_string(n_out_channel) + "_out_channel_1_stride_32_32_3_3/level_" +
-                                          to_string(init_level) + "/server/";
+                    fs::path project_path =
+                        base_path / "CKKS_conv2d" / ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                        "kernel_shape_3_3" / ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                        "input_shape_32_32" / ("level_" + to_string(init_level)) / "server";
 
                     auto arg_names = read_arg_names(project_path);
                     vector<CxxVectorArgument> cxx_args;
@@ -495,9 +501,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_mch_s2", "", HeteroProcessor
                             this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
                     }
 
-                    string project_path = base_path + "/CKKS_conv2d_" + to_string(n_in_channel) + +"_in_" +
-                                          to_string(n_out_channel) + "_out_channel_2_stride_32_32_3_3/level_" +
-                                          to_string(init_level) + "/server/";
+                    fs::path project_path =
+                        base_path / "CKKS_conv2d" / ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                        "kernel_shape_3_3" / ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                        "input_shape_32_32" / ("level_" + to_string(init_level)) / "server";
 
                     auto arg_names = read_arg_names(project_path);
                     vector<CxxVectorArgument> cxx_args;
@@ -559,8 +566,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "dw_32ch_s1_32x32_k3", "", HeteroP
         output_feature.data.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
     }
 
-    string project_path =
-        base_path + "/CKKS_dw_conv2d_4_in_4_out_channel_2_stride_32_32_3_3/level_" + to_string(init_level) + "/server/";
+    fs::path project_path = base_path / "CKKS_dw_conv2d" /
+                            ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) / "kernel_shape_3_3" /
+                            "cin_4_cout_4" / "input_shape_32_32" / ("level_" + to_string(init_level)) / "server";
 
     auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args;
@@ -621,8 +629,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "dw_4ch_s2_32x32_k3", "", HeteroPr
         output_feature.data.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
     }
 
-    string project_path =
-        base_path + "/CKKS_dw_conv2d_4_in_4_out_channel_2_stride_32_32_3_3/level_" + to_string(init_level) + "/server/";
+    fs::path project_path = base_path / "CKKS_dw_conv2d" /
+                            ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) / "kernel_shape_3_3" /
+                            "cin_4_cout_4" / "input_shape_32_32" / ("level_" + to_string(init_level)) / "server";
 
     auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args;
@@ -693,9 +702,11 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv_s1_32x32_k3", "", Hetero
                             this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
                     }
 
-                    string project_path = base_path + "/CKKS_multiplexed_conv2d_" + to_string(n_in_channel) + "_in_" +
-                                          to_string(n_out_channel) + "_out_channel_1_stride_32_32_3_3/level_" +
-                                          to_string(init_level) + "/server/";
+                    fs::path project_path = base_path / "CKKS_multiplexed_conv2d" /
+                                            ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                                            "kernel_shape_3_3" /
+                                            ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                                            "input_shape_32_32" / ("level_" + to_string(init_level)) / "server";
 
                     auto arg_names = read_arg_names(project_path);
                     vector<CxxVectorArgument> cxx_args;
@@ -767,9 +778,11 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv_s2_32x32_k3", "", Hetero
                             this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
                     }
 
-                    string project_path = base_path + "/CKKS_multiplexed_conv2d_" + to_string(n_in_channel) + "_in_" +
-                                          to_string(n_out_channel) + "_out_channel_2_stride_32_32_3_3/level_" +
-                                          to_string(init_level) + "/server/";
+                    fs::path project_path = base_path / "CKKS_multiplexed_conv2d" /
+                                            ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                                            "kernel_shape_3_3" /
+                                            ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                                            "input_shape_32_32" / ("level_" + to_string(init_level)) / "server";
 
                     auto arg_names = read_arg_names(project_path);
                     vector<CxxVectorArgument> cxx_args;
@@ -843,9 +856,11 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_dw_s2_64x64_k3", "", HeteroPr
                             this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
                     }
 
-                    string project_path = base_path + "/CKKS_multiplexed_dw_conv2d_" + to_string(n_in_channel) +
-                                          "_in_" + to_string(n_out_channel) + "_out_channel_2_stride_64_64_3_3/level_" +
-                                          to_string(init_level) + "/server/";
+                    fs::path project_path = base_path / "CKKS_multiplexed_dw_conv2d" /
+                                            ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                                            "kernel_shape_3_3" /
+                                            ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                                            "input_shape_64_64" / ("level_" + to_string(init_level)) / "server";
 
                     auto arg_names = read_arg_names(project_path);
                     vector<CxxVectorArgument> cxx_args;
@@ -908,8 +923,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_cyclic", "", HeteroProcessors)
                     this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
             }
 
-            string project_path = base_path + "/CKKS_fc_prepare_weight1_1D_pack_cyclic_" + to_string(input_shape[0]) +
-                                  "_" + to_string(input_shape[1]) + "/level_" + to_string(init_level) + "/server/";
+            fs::path project_path = base_path /
+                                    ("CKKS_fc_prepare_weight1_1D_pack_cyclic_" + to_string(input_shape[0]) + "_" +
+                                     to_string(input_shape[1])) /
+                                    ("level_" + to_string(init_level)) / "server";
             auto arg_names = read_arg_names(project_path);
             vector<CxxVectorArgument> cxx_args = {
                 {arg_names[0], &x_ct.data},
@@ -964,8 +981,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip", "", HeteroProcessors) {
                     this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
             }
 
-            string project_path = base_path + "/CKKS_fc_prepare_weight1_1D_pack_skip_" + to_string(skip[0]) + "_" +
-                                  to_string(skip[1]) + "/level_" + to_string(init_level) + "/server/";
+            fs::path project_path =
+                base_path / ("CKKS_fc_prepare_weight1_1D_pack_skip_" + to_string(skip[0]) + "_" + to_string(skip[1])) /
+                ("level_" + to_string(init_level)) / "server";
             auto arg_names = read_arg_names(project_path);
             vector<CxxVectorArgument> cxx_args = {
                 {arg_names[0], &x_ct.data},
@@ -1034,8 +1052,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
         output_feature.data.push_back(this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
     }
 
-    string project_path = base_path + "/CKKS_fc_fc_" + to_string(input_channel) + "_" + to_string(output_channel) +
-                          "_" + to_string(output_channel1) + "/level_" + to_string(init_level) + "/server/";
+    fs::path project_path = base_path /
+                            ("CKKS_fc_fc_" + to_string(input_channel) + "_" + to_string(output_channel) + "_" +
+                             to_string(output_channel1)) /
+                            ("level_" + to_string(init_level)) / "server";
     auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args = {
         {arg_names[0], &input_feature.data}, {arg_names[1], &dense.weight_pt}, {arg_names[2], &dense.bias_pt},
@@ -1087,8 +1107,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs", "", HeteroProcessors)
                     this->context.new_ciphertext(output_level, this->param.get_default_scale()));
             }
 
-            string project_path = base_path + "/CKKS_poly_relu_bsgs_" + to_string(n_channel) + "_channel_order_" +
-                                  to_string(order) + "/level_" + to_string(init_level);
+            fs::path project_path =
+                base_path / ("CKKS_poly_relu_bsgs_" + to_string(n_channel) + "_channel_order_" + to_string(order)) /
+                ("level_" + to_string(init_level));
 
             auto arg_names = read_arg_names(project_path);
             vector<CxxVectorArgument> cxx_args;
@@ -1159,9 +1180,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature0d", "", HeteroP
                             this->context.new_ciphertext(output_level, this->param.get_default_scale()));
                     }
 
-                    string project_path = base_path + "/CKKS_poly_relu_bsgs_feature0d_" + to_string(n_channel) +
-                                          "_channel_order_" + to_string(order) + "_skip_" + to_string(skip_val) +
-                                          "/level_" + to_string(init_level);
+                    fs::path project_path = base_path /
+                                            ("CKKS_poly_relu_bsgs_feature0d_" + to_string(n_channel) +
+                                             "_channel_order_" + to_string(order) + "_skip_" + to_string(skip_val)) /
+                                            ("level_" + to_string(init_level));
 
                     auto arg_names = read_arg_names(project_path);
                     vector<CxxVectorArgument> cxx_args;
@@ -1426,8 +1448,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs", "", HeteroProces
         output_feature.data.push_back(this->context.new_ciphertext(output_level, this->param.get_default_scale()));
     }
 
-    string project_path = base_path + "/CKKS_poly_relu_bsgs_" + to_string(n_channel) + "_channel_order_" +
-                          to_string(order0) + "_" + to_string(order1) + "/level_" + to_string(init_level);
+    fs::path project_path = base_path /
+                            ("CKKS_poly_relu_bsgs_" + to_string(n_channel) + "_channel_order_" + to_string(order0) +
+                             "_" + to_string(order1)) /
+                            ("level_" + to_string(init_level));
 
     auto arg_names = read_arg_names(project_path);
     // Build cxx_args matching Python naming: poly0_weight_pt{i}, poly1_weight_pt{i}
@@ -1518,10 +1542,11 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv1d", "", HeteroProcessors) {
                                             init_level - 1, this->param.get_default_scale()));
                                     }
 
-                                    string project_path = base_path + "/conv1d_input_shape_" + to_string(input_shape) +
-                                                          "_kernel_shape_" + to_string(kernel_shape) + "_skip_" +
-                                                          to_string(skip) + "_stride_" + to_string(stride) + "/level_" +
-                                                          to_string(init_level) + "/server/";
+                                    fs::path project_path = base_path /
+                                                            ("conv1d_input_shape_" + to_string(input_shape) +
+                                                             "_kernel_shape_" + to_string(kernel_shape) + "_skip_" +
+                                                             to_string(skip) + "_stride_" + to_string(stride)) /
+                                                            ("level_" + to_string(init_level)) / "server";
 
                                     auto arg_names = read_arg_names(project_path);
                                     vector<CxxVectorArgument> cxx_args;
@@ -1613,10 +1638,12 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
                                         select_pt_subset.push_back(move(conv0_layer.block_select_pt[i]));
                                     }
 
-                                    string project_path =
-                                        base_path + "/multiplexed_conv1d_input_shape_" + to_string(input_shape) +
-                                        "_kernel_shape_" + to_string(kernel_shape) + "_skip_" + to_string(skip) +
-                                        "_stride_" + to_string(stride) + "/level_" + to_string(init_level) + "/server/";
+                                    fs::path project_path =
+                                        base_path /
+                                        ("multiplexed_conv1d_input_shape_" + to_string(input_shape) + "_kernel_shape_" +
+                                         to_string(kernel_shape) + "_skip_" + to_string(skip) + "_stride_" +
+                                         to_string(stride)) /
+                                        ("level_" + to_string(init_level)) / "server";
 
                                     auto arg_names = read_arg_names(project_path);
                                     vector<CxxVectorArgument> cxx_args;

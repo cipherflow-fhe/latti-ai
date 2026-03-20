@@ -86,16 +86,24 @@ def gen_conv_mega_ag(
         stride = tuple(stride)
 
     if style == 'multiplexed':
-        if groups != 1:  # dw
-            task_name = f'CKKS_multiplexed_dw_conv2d_{n_in_channel}_in_{n_out_channel}_out_channel_{stride[0]}_stride_{input_shape[0]}_{input_shape[1]}_{kernel_shape[0]}_{kernel_shape[1]}'
+        if groups != 1:
+            task_name = 'CKKS_multiplexed_dw_conv2d'
         else:
-            task_name = f'CKKS_multiplexed_conv2d_{n_in_channel}_in_{n_out_channel}_out_channel_{stride[0]}_stride_{input_shape[0]}_{input_shape[1]}_{kernel_shape[0]}_{kernel_shape[1]}'
+            task_name = 'CKKS_multiplexed_conv2d'
     else:
-        if groups != 1:  # dw
-            task_name = f'CKKS_dw_conv2d_{n_in_channel}_in_{n_out_channel}_out_channel_{stride[0]}_stride_{input_shape[0]}_{input_shape[1]}_{kernel_shape[0]}_{kernel_shape[1]}'
+        if groups != 1:
+            task_name = 'CKKS_dw_conv2d'
         else:
-            task_name = f'CKKS_conv2d_{n_in_channel}_in_{n_out_channel}_out_channel_{stride[0]}_stride_{input_shape[0]}_{input_shape[1]}_{kernel_shape[0]}_{kernel_shape[1]}'
-    task_path = base_path / task_name / f'level_{init_level}'
+            task_name = 'CKKS_conv2d'
+    task_path = (
+        base_path
+        / task_name
+        / f'stride_{stride[0]}_{stride[1]}'
+        / f'kernel_shape_{kernel_shape[0]}_{kernel_shape[1]}'
+        / f'cin_{n_in_channel}_cout_{n_out_channel}'
+        / f'input_shape_{input_shape[0]}_{input_shape[1]}'
+        / f'level_{init_level}'
+    )
     task_path.mkdir(parents=True, exist_ok=True)
     task_server_path = task_path / 'server'
     task_server_path.mkdir(parents=True, exist_ok=True)
