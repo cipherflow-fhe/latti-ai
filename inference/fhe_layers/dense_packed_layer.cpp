@@ -26,8 +26,6 @@
 using namespace std;
 
 DensePackedLayer::DensePackedLayer(const CkksParameter& param_in,
-                                   const Duo& input_shape_in,
-                                   const Duo& skip_in,
                                    const Array<double, 2>& weight_in,
                                    const Array<double, 1>& bias_in,
                                    uint32_t pack_in,
@@ -35,20 +33,6 @@ DensePackedLayer::DensePackedLayer(const CkksParameter& param_in,
                                    int mark_in,
                                    double residual_scale)
     : param(param_in.copy()) {
-    input_shape[0] = input_shape_in[0];
-    input_shape[1] = input_shape_in[1];
-    skip[0] = skip_in[0];
-    skip[1] = skip_in[1];
-
-    if ((input_shape[0] & (input_shape[0] - 1)) != 0 || (input_shape[1] & (input_shape[1] - 1)) != 0) {
-        throw std::invalid_argument("input_shape must be powers of 2, got: [" + std::to_string(input_shape[0]) + ", " +
-                                    std::to_string(input_shape[1]) + "]");
-    }
-    if ((skip[0] & (skip[0] - 1)) != 0 || (skip[1] & (skip[1] - 1)) != 0) {
-        throw std::invalid_argument("skip must be powers of 2, got: [" + std::to_string(skip[0]) + ", " +
-                                    std::to_string(skip[1]) + "]");
-    }
-
     auto weight_shape = weight_in.get_shape();
     n_out_feature = weight_shape[0];
     n_in_feature = weight_shape[1];
@@ -64,7 +48,19 @@ DensePackedLayer::DensePackedLayer(const CkksParameter& param_in,
 
 DensePackedLayer::~DensePackedLayer() {}
 
-void DensePackedLayer::prepare_weight1() {
+void DensePackedLayer::prepare_weight1(const Duo& input_shape_in, const Duo& skip_in) {
+    input_shape[0] = input_shape_in[0];
+    input_shape[1] = input_shape_in[1];
+    skip[0] = skip_in[0];
+    skip[1] = skip_in[1];
+    if ((input_shape[0] & (input_shape[0] - 1)) != 0 || (input_shape[1] & (input_shape[1] - 1)) != 0) {
+        throw std::invalid_argument("input_shape must be powers of 2, got: [" + std::to_string(input_shape[0]) + ", " +
+                                    std::to_string(input_shape[1]) + "]");
+    }
+    if ((skip[0] & (skip[0] - 1)) != 0 || (skip[1] & (skip[1] - 1)) != 0) {
+        throw std::invalid_argument("skip must be powers of 2, got: [" + std::to_string(skip[0]) + ", " +
+                                    std::to_string(skip[1]) + "]");
+    }
     CkksContext ctx = CkksContext::create_empty_context(this->param);
     weight_pt.clear();
     uint32_t input_shape_ct[2];
@@ -127,7 +123,11 @@ void DensePackedLayer::prepare_weight1() {
     }
 }
 
-void DensePackedLayer::prepare_weight1_lazy() {
+void DensePackedLayer::prepare_weight1_lazy(const Duo& input_shape_in, const Duo& skip_in) {
+    input_shape[0] = input_shape_in[0];
+    input_shape[1] = input_shape_in[1];
+    skip[0] = skip_in[0];
+    skip[1] = skip_in[1];
     cached_input_shape_ct_1[0] = input_shape[0] * skip[0];
     cached_input_shape_ct_1[1] = input_shape[1] * skip[1];
     cached_per_channel_num = (cached_input_shape_ct_1[0] / skip[0]) * (cached_input_shape_ct_1[1] / skip[1]);
@@ -187,7 +187,11 @@ CkksPlaintextRingt DensePackedLayer::generate_bias1_pt_for_index(CkksContext& ct
     return ctx.encode_ringt(b, ctx.get_parameter().get_default_scale());
 }
 
-void DensePackedLayer::prepare_weight_for_mult_pack_lazy() {
+void DensePackedLayer::prepare_weight_for_mult_pack_lazy(const Duo& input_shape_in, const Duo& skip_in) {
+    input_shape[0] = input_shape_in[0];
+    input_shape[1] = input_shape_in[1];
+    skip[0] = skip_in[0];
+    skip[1] = skip_in[1];
     CkksContext ctx = CkksContext::create_empty_context(this->param);
     cached_input_shape_ct_mult[0] = input_shape[0] * skip[0];
     cached_input_shape_ct_mult[1] = input_shape[1] * skip[1];
@@ -242,7 +246,11 @@ CkksPlaintextRingt DensePackedLayer::generate_bias_pt_mult_pack_for_index(CkksCo
     return ctx.encode_ringt(b, ctx.get_parameter().get_default_scale());
 }
 
-void DensePackedLayer::prepare_weight_for_mult_pack() {
+void DensePackedLayer::prepare_weight_for_mult_pack(const Duo& input_shape_in, const Duo& skip_in) {
+    input_shape[0] = input_shape_in[0];
+    input_shape[1] = input_shape_in[1];
+    skip[0] = skip_in[0];
+    skip[1] = skip_in[1];
     CkksContext ctx = CkksContext::create_empty_context(this->param);
     uint32_t input_shape_ct[2];
     input_shape_ct[0] = input_shape[0] * skip[0];
@@ -257,23 +265,36 @@ void DensePackedLayer::prepare_weight_for_mult_pack() {
     parallel_for(
         n_packed_out_feature_for_mult_apck, th_nums, ctx, [&](CkksContext& ctx_copy, int packed_out_feature_idx) {
             weight_pt[packed_out_feature_idx].resize(n_block_input);
+
+            // Encode bias once (independent of n_block_input_idx)
+            int N_half = ctx_copy.get_parameter().get_n() / 2;
+            vector<double> b(N_half, 0);
+            for (int i = 0; i < N_half; i++) {
+                int block_i = packed_out_feature_idx * n_num_pre_ct + i / (input_shape_ct[0] * input_shape_ct[1]);
+                int shape_linear = i % (input_shape_ct[0] * input_shape_ct[1]);
+                int shape_i = shape_linear / input_shape_ct[1];
+                int shape_j = shape_linear % input_shape_ct[1];
+                if (shape_i < skip[0] && shape_j < skip[1] && block_i < n_out_feature) {
+                    if (shape_i == 0 && shape_j == 0) {
+                        b[i] = bias.get(block_i);
+                    }
+                }
+            }
+            bias_pt[packed_out_feature_idx] = ctx_copy.encode_ringt(b, param.get_default_scale());
+
             for (int n_block_input_idx = 0; n_block_input_idx < n_block_input; n_block_input_idx++) {
-                vector<double> w(ctx_copy.get_parameter().get_n() / 2, 0);
-                vector<double> b(ctx_copy.get_parameter().get_n() / 2, 0);
-                for (int i = 0; i < ctx_copy.get_parameter().get_n() / 2; i++) {
+                vector<double> w(N_half, 0);
+                for (int i = 0; i < N_half; i++) {
                     int block_i = packed_out_feature_idx * n_num_pre_ct + i / (input_shape_ct[0] * input_shape_ct[1]);
                     int shape_linear = i % (input_shape_ct[0] * input_shape_ct[1]);
                     int shape_i = shape_linear / input_shape_ct[1];
                     int shape_j = shape_linear % input_shape_ct[1];
                     if (shape_i < skip[0] && shape_j < skip[1] && block_i < n_out_feature) {
-                        if (shape_i == 0 && shape_j == 0) {
-                            b[i] = bias.get(block_i);
-                        }
-                        int line_i = ((n_block_input_idx + i / (input_shape_ct[0] * input_shape_ct[1]) + n_num_pre_ct) %
-                                          n_num_pre_ct +
-                                      int(n_block_input_idx / n_num_pre_ct) * n_num_pre_ct) *
-                                         (skip[0] * skip[1]) +
-                                     shape_i * skip[1] + shape_j;
+                        int local_block = i / (input_shape_ct[0] * input_shape_ct[1]);
+                        int group = n_block_input_idx / n_num_pre_ct;
+                        int offset = n_block_input_idx % n_num_pre_ct;
+                        int rotated_block = (offset + local_block) % n_num_pre_ct + group * n_num_pre_ct;
+                        int line_i = rotated_block * (skip[0] * skip[1]) + shape_i * skip[1] + shape_j;
                         if (line_i >= n_in_feature or block_i > n_out_feature) {
                             w[i] = 0;
                         } else {
@@ -283,7 +304,6 @@ void DensePackedLayer::prepare_weight_for_mult_pack() {
                 }
                 weight_pt[packed_out_feature_idx][n_block_input_idx] =
                     ctx_copy.encode_ringt(w, param.get_default_scale());
-                bias_pt[packed_out_feature_idx] = ctx_copy.encode_ringt(b, param.get_default_scale());
             }
         });
 }
@@ -377,9 +397,9 @@ vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, co
     input_shape_ct[0] = input_shape[0] * skip[0];
     input_shape_ct[1] = input_shape[1] * skip[1];
     uint32_t x_size = x.size();
-    int n_pack = div_ceil(ctx.get_parameter().get_n() / 2, input_shape[0] * input_shape[1]);
-    int n_block_input = div_ceil(n_pack, skip[0] * skip[1]);
-    int n_num_pre_ct = div_ceil(ctx.get_parameter().get_n() / 2, input_shape_ct[0] * input_shape_ct[1]);
+    int N_half = ctx.get_parameter().get_n() / 2;
+    int n_num_pre_ct = div_ceil(N_half, input_shape_ct[0] * input_shape_ct[1]);
+    int n_block_input = div_ceil(n_in_feature * input_shape[0] * input_shape[1], N_half) * n_num_pre_ct;
     int n_packed_out_feature_for_mult_pack = div_ceil(n_out_feature, n_num_pre_ct);
     vector<vector<CkksCiphertext>> rotated_tmp(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {

@@ -25,8 +25,6 @@ using namespace cxx_sdk_v2;
 class DensePackedLayer {
 public:
     DensePackedLayer(const CkksParameter& param_in,
-                     const Duo& input_shape_in,
-                     const Duo& skip_in,
                      const Array<double, 2>& weight_in,
                      const Array<double, 1>& bias_in,
                      uint32_t pack_in,
@@ -34,10 +32,10 @@ public:
                      int mark_in,
                      double residual_scale = 1.0);
     ~DensePackedLayer();
-    virtual void prepare_weight1();
-    virtual void prepare_weight1_lazy();
-    virtual void prepare_weight_for_mult_pack();
-    virtual void prepare_weight_for_mult_pack_lazy();
+    virtual void prepare_weight1(const Duo& input_shape_in, const Duo& skip_in);
+    virtual void prepare_weight1_lazy(const Duo& input_shape_in, const Duo& skip_in);
+    virtual void prepare_weight_for_mult_pack(const Duo& input_shape_in, const Duo& skip_in);
+    virtual void prepare_weight_for_mult_pack_lazy(const Duo& input_shape_in, const Duo& skip_in);
     virtual std::vector<CkksCiphertext> call(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
     virtual Feature0DEncrypted call(CkksContext& ctx, const Feature2DEncrypted& x);
     virtual Feature0DEncrypted call(CkksContext& ctx, const Feature0DEncrypted& x);

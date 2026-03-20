@@ -152,20 +152,20 @@ void InitInferenceProcess::init_dense_layer(const string& key, const json& layer
     CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
     double residual_scale = 1.0;
 
-    auto dense = make_unique<DensePackedLayer>(
-        *ckks_parameters.at(feature_input.ckks_parameter_id), feature_input.virtual_shape, feature_input.virtual_skip,
-        weight, bias, feature_input.pack_channel_per_ciphertext, feature_input.level, 0, residual_scale);
+    auto dense = make_unique<DensePackedLayer>(*ckks_parameters.at(feature_input.ckks_parameter_id), weight, bias,
+                                               feature_input.pack_channel_per_ciphertext, feature_input.level, 0,
+                                               residual_scale);
     if (pack_style == "multiplexed") {
         if (is_lazy) {
-            dense->prepare_weight_for_mult_pack_lazy();
+            dense->prepare_weight_for_mult_pack_lazy(feature_input.shape, feature_input.special_skip);
         } else {
-            dense->prepare_weight_for_mult_pack();
+            dense->prepare_weight_for_mult_pack(feature_input.shape, feature_input.special_skip);
         }
     } else {
         if (is_lazy) {
-            dense->prepare_weight1_lazy();
+            dense->prepare_weight1_lazy(feature_input.shape, feature_input.special_skip);
         } else {
-            dense->prepare_weight1();
+            dense->prepare_weight1(feature_input.shape, feature_input.special_skip);
         }
     }
     ckks_denses[key] = move(dense);
@@ -378,7 +378,7 @@ void InitInferenceProcess::init_poly_relu2d_layer(const string& key,
     CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
 
     if (feature_input.dim == 0) {
-        int ciphertext_skip = feature_input.virtual_shape[0] * feature_input.virtual_shape[1];
+        int ciphertext_skip = feature_input.skip[0];
         cout << "feature0d ciphertext_skip=" << ciphertext_skip << endl;
         auto layer_poly_relu = make_unique<PolyRelu0D>(param, weight, feature_input.pack_channel_per_ciphertext,
                                                        feature_input.level, order, ciphertext_skip);
@@ -450,6 +450,7 @@ void InitInferenceProcess::load_model_prepare() {
     json config_json = read_json(project_path / "task_config.json");
     for (auto& layer : json_layers.items()) {
         const string& key = layer.key();
+        cout << "key=" << key << endl;
         const json& value = layer.value();
         const string& layer_type = value["type"].get<string>();
         if (layer_type == "conv2d") {
