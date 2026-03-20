@@ -155,17 +155,25 @@ void InitInferenceProcess::init_dense_layer(const string& key, const json& layer
     auto dense = make_unique<DensePackedLayer>(*ckks_parameters.at(feature_input.ckks_parameter_id), weight, bias,
                                                feature_input.pack_channel_per_ciphertext, feature_input.level, 0,
                                                residual_scale);
-    if (pack_style == "multiplexed") {
+    if (feature_input.dim == 0) {
+        dense->prepare_weight_0d(feature_input.skip[0]);
+    } else if (pack_style == "multiplexed") {
+        Duo input_shape;
+        input_shape[0] = feature_input.shape[0] * feature_input.invalid_fill[0];
+        input_shape[1] = feature_input.shape[1] * feature_input.invalid_fill[1];
+        Duo input_skip;
+        input_skip[0] = feature_input.special_skip[0] / input_shape[0];
+        input_skip[1] = feature_input.special_skip[1] / input_shape[1];
         if (is_lazy) {
-            dense->prepare_weight_for_mult_pack_lazy(feature_input.shape, feature_input.special_skip);
+            dense->prepare_weight_for_mult_pack_lazy(input_shape, input_skip);
         } else {
-            dense->prepare_weight_for_mult_pack(feature_input.shape, feature_input.special_skip);
+            dense->prepare_weight_for_mult_pack(input_shape, input_skip);
         }
     } else {
         if (is_lazy) {
-            dense->prepare_weight1_lazy(feature_input.shape, feature_input.special_skip);
+            dense->prepare_weight_for_ord_pack_lazy(feature_input.shape, feature_input.special_skip);
         } else {
-            dense->prepare_weight1(feature_input.shape, feature_input.special_skip);
+            dense->prepare_weight_for_ord_pack(feature_input.shape, feature_input.special_skip);
         }
     }
     ckks_denses[key] = move(dense);
