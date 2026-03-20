@@ -34,9 +34,38 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
     std::string ckks_param_id = input_param["ckks_parameter_id"];
     int poly_modulus_degree = ckks_config[ckks_param_id]["poly_modulus_degree"].get<int>();
     needs_btp_ = (poly_modulus_degree > 16384);
-    channel_ = input_param["channel"];
-    height_ = input_param["shape"][0];
-    width_ = input_param["shape"][1];
+
+    // Store all input keys and per-input parameters
+    for (auto& [name, param] : task_config["task_input_param"].items()) {
+        input_keys_.push_back(name);
+        InputParam ip;
+        ip.dim = param["dim"];
+        ip.level = param["level"];
+        ip.channel = param["channel"];
+        if (ip.dim == 2) {
+            ip.height = param["shape"][0];
+            ip.width = param["shape"][1];
+        } else if (ip.dim == 0) {
+            ip.skip = param.value("skip", 1);
+        }
+        ip.pack_num = param.value("pack_num", 0);
+        input_params_[name] = ip;
+    }
+
+    // Store all output keys and per-output parameters
+    for (auto& [name, param] : task_config["task_output_param"].items()) {
+        output_keys_.push_back(name);
+        OutputParam op;
+        op.dim = param["dim"];
+        op.channel = param["channel"];
+        if (op.dim == 0) {
+            op.skip = param["skip"];
+        } else if (op.dim == 2) {
+            op.height = param["shape"][0];
+            op.width = param["shape"][1];
+        }
+        output_params_[name] = op;
+    }
 
     std::cout << "[Server] Importing evaluation context..." << std::endl;
     std::cout << "[Server] Bootstrapping: " << (needs_btp_ ? "Yes" : "No") << std::endl;
@@ -61,7 +90,9 @@ void InferenceServer::load_model() {
     init_->load_model_prepare();
 
     fp_ = std::make_unique<InferenceProcess>(init_.get(), true);
-    fp_->available_keys.push_back("input");
+    for (auto& key : input_keys_) {
+        fp_->available_keys.push_back(key);
+    }
 
     // Transfer eval context directly to inference engine (no shallow_copy)
     std::map<std::string, std::unique_ptr<CkksContext>> context_map;
@@ -76,11 +107,25 @@ void InferenceServer::load_model() {
     std::cout << "[Server] Done." << std::endl;
 }
 
-Bytes InferenceServer::evaluate(const Bytes& encrypted_input) {
-    // Deserialize input ciphertext
-    Feature2DEncrypted input_ct(context_ptr_, 0);
-    input_ct.deserialize(encrypted_input);
-    fp_->set_feature("input", std::make_unique<Feature2DEncrypted>(std::move(input_ct)));
+std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::string, Bytes>& encrypted_inputs) {
+    // Deserialize and set all input ciphertexts
+    for (auto& [name, bytes] : encrypted_inputs) {
+        auto it = input_params_.find(name);
+        if (it == input_params_.end()) {
+            throw std::runtime_error("[Server] Unknown input name: " + name);
+        }
+        const auto& param = it->second;
+
+        if (param.dim == 0) {
+            auto input_ct = std::make_unique<Feature0DEncrypted>(context_ptr_, 0);
+            input_ct->deserialize(bytes);
+            fp_->set_feature(name, std::move(input_ct));
+        } else {
+            auto input_ct = std::make_unique<Feature2DEncrypted>(context_ptr_, 0);
+            input_ct->deserialize(bytes);
+            fp_->set_feature(name, std::move(input_ct));
+        }
+    }
 
     // Run encrypted inference
     fp_->compute_device = use_gpu_ ? ComputeDevice::GPU : ComputeDevice::CPU;
@@ -93,14 +138,49 @@ Bytes InferenceServer::evaluate(const Bytes& encrypted_input) {
     timer.print("Encrypted inference time");
     std::cout << "[Server] Done." << std::endl;
 
-    // Serialize output ciphertext
-    auto encrypted_output = fp_->get_ciphertext_output_feature0D("output");
-    return encrypted_output.serialize();
+    // Serialize output ciphertexts
+    std::map<std::string, Bytes> encrypted_outputs;
+    for (auto& [name, param] : output_params_) {
+        if (param.dim == 0) {
+            auto output_ct = fp_->get_ciphertext_output_feature0D(name);
+            encrypted_outputs[name] = output_ct.serialize();
+        } else {
+            auto output_ct = fp_->get_ciphertext_output_feature2D(name);
+            encrypted_outputs[name] = output_ct.serialize();
+        }
+    }
+    return encrypted_outputs;
 }
 
-std::vector<double> InferenceServer::evaluate_plaintext(const std::string& input_csv) {
-    auto input_array = csv_to_array<3>(input_csv, {(uint64_t)channel_, (uint64_t)height_, (uint64_t)width_});
-    fp_->p_feature2d_x["input"] = std::move(input_array);
+std::map<std::string, std::vector<double>>
+InferenceServer::evaluate_plaintext(const std::map<std::string, std::string>& input_csvs) {
+    for (auto& [name, csv_path] : input_csvs) {
+        auto it = input_params_.find(name);
+        if (it == input_params_.end()) {
+            throw std::runtime_error("[Server] Unknown input name: " + name);
+        }
+        const auto& param = it->second;
+
+        if (param.dim == 0) {
+            auto input_array = csv_to_array<1>(csv_path);
+            fp_->p_feature0d_x[name] = input_array.to_array_1d();
+        } else {
+            auto input_array =
+                csv_to_array<3>(csv_path, {(uint64_t)param.channel, (uint64_t)param.height, (uint64_t)param.width});
+            fp_->p_feature2d_x[name] = std::move(input_array.copy());
+        }
+    }
     fp_->run_task_plaintext();
-    return fp_->p_feature0d_x["output"];
+
+    std::map<std::string, std::vector<double>> results;
+    for (auto& [name, param] : output_params_) {
+        if (param.dim == 0) {
+            results[name] = fp_->p_feature0d_x[name];
+        } else {
+            auto& arr = fp_->p_feature2d_x[name];
+            auto arr_1d = arr.to_array_1d();
+            results[name] = std::vector<double>(arr_1d.data(), arr_1d.data() + arr_1d.size());
+        }
+    }
+    return results;
 }

@@ -235,7 +235,7 @@ Array<uint64_t, 1> Feature0DEncrypted::encrypt_from_share(const Feature0DShare& 
 }
 
 void Feature0DEncrypted::decrypt_to_share(Feature0DShare* share, int n_channel) {
-    Array<double, 1> x_double_vec = this->unpack(DecryptType::SPARSE);
+    Array<double, 1> x_double_vec = this->unpack();
     share->data = array_double_to_uint64(x_double_vec, share->scale_ord, share->ring_mod);
 }
 

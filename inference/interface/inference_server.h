@@ -19,12 +19,14 @@
 #pragma once
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <string>
 
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include "data_structs/feature.h"
 #include "inference_task/inference_process.h"
+#include "interface/inference_client.h"
 #include "util.h"
 
 using namespace cxx_sdk_v2;
@@ -55,21 +57,23 @@ public:
     /// Load model weights and computation graph.
     void load_model();
 
-    /// Run encrypted inference on serialized ciphertext input.
-    /// Returns serialized ciphertext output.
-    Bytes evaluate(const Bytes& encrypted_input);
+    /// Run encrypted inference on serialized ciphertext inputs.
+    /// @param encrypted_inputs  Map of input name -> serialized ciphertext bytes.
+    /// Returns map of output name -> serialized ciphertext bytes.
+    std::map<std::string, Bytes> evaluate(const std::map<std::string, Bytes>& encrypted_inputs);
 
-    /// Run plaintext inference on a CSV input file (for verification).
-    std::vector<double> evaluate_plaintext(const std::string& input_csv);
+    /// Run plaintext inference on CSV input files (for verification).
+    std::map<std::string, std::vector<double>> evaluate_plaintext(const std::map<std::string, std::string>& input_csvs);
 
 private:
     std::filesystem::path server_dir_;
     bool use_gpu_;
     bool needs_btp_ = false;
-    int channel_ = 0;
-    int height_ = 0;
-    int width_ = 0;
 
+    std::vector<std::string> input_keys_;
+    std::map<std::string, InputParam> input_params_;
+    std::vector<std::string> output_keys_;
+    std::map<std::string, OutputParam> output_params_;
     CkksContext* context_ptr_ = nullptr;
     std::unique_ptr<CkksContext> eval_context_;
     std::unique_ptr<CkksBtpContext> eval_btp_context_;
