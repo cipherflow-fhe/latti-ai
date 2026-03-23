@@ -1140,7 +1140,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_mult_pack", "", HeteroProcesso
     };
     vector<TestConfig> configs = {
         {{1, 1}, {2, 2}, {1, 1}},   {{1, 1}, {4, 4}, {1, 1}},   {{1, 1}, {8, 8}, {1, 1}},
-        {{1, 1}, {32, 32}, {8, 8}}, {{1, 1}, {16, 16}, {4, 4}},
+        {{1, 1}, {32, 32}, {8, 8}}, {{1, 1}, {16, 16}, {4, 4}}, {{2, 2}, {4, 4}, {4, 4}},
     };
 
     for (auto& cfg : configs) {

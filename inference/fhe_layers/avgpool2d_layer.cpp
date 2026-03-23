@@ -92,9 +92,13 @@ Feature2DEncrypted Avgpool2DLayer::run_adaptive_avgpool(CkksContext& ctx, const 
         }
     });
     result.n_channel = x.n_channel;
-    result.n_channel_per_ct = x.n_channel_per_ct;
-    result.skip = x.skip;
-    result.shape = x.shape;
+    result.n_channel_per_ct = x.n_channel_per_ct * stride[0] * stride[1];
+    result.skip[0] = x.skip[0] * stride[0];
+    result.skip[1] = x.skip[1] * stride[1];
+    result.invalid_fill[0] = x.invalid_fill[0] * stride[0];
+    result.invalid_fill[1] = x.invalid_fill[1] * stride[1];
+    result.shape[0] = x.shape[0] / stride[0];
+    result.shape[1] = x.shape[1] / stride[1];
     result.level = x.level;
     return result;
 }
