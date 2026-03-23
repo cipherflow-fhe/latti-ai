@@ -45,6 +45,7 @@
 #include "fhe_layers/par_block_col_major_cpmm.h"
 #include "fhe_layers/conv1d_packed_layer.h"
 #include "fhe_layers/multiplexed_conv1d_pack_layer.h"
+#include "fhe_layers/inverse_multiplexed_conv2d_layer.h"
 #include "ut_util.h"
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 
@@ -1132,13 +1133,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_ccmm_matmul", "", HeteroPro
                                             Array<double, 2> A_mat = gen_random_array<2>({m, n}, 1.0);
                                             Array<double, 2> B_mat = gen_random_array<2>({n, p}, 1.0);
 
-                                            Feature2DEncrypted A_enc(&this->context, init_level);
+                                            FeatureMatEncrypted A_enc(&this->context, init_level);
                                             A_enc.shape = {m, n};
                                             A_enc.matmul_block_size = d;
                                             A_enc.block_col_major_pack(
                                                 A_mat, d, false, this->context.get_parameter().get_default_scale());
 
-                                            Feature2DEncrypted B_enc(&this->context, init_level);
+                                            FeatureMatEncrypted B_enc(&this->context, init_level);
                                             B_enc.shape = {n, p};
                                             B_enc.matmul_block_size = d;
                                             B_enc.block_col_major_pack(
@@ -1148,7 +1149,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_ccmm_matmul", "", HeteroPro
                                                                    B_enc.shape, A_enc.matmul_block_size,
                                                                    B_enc.matmul_block_size, A_enc.level, B_enc.level);
                                             ccmm.precompute_diagonals();
-                                            Feature2DEncrypted C_enc = ccmm.run(this->context, A_enc, B_enc);
+                                            FeatureMatEncrypted C_enc = ccmm.run(this->context, A_enc, B_enc);
 
                                             auto C_result = C_enc.block_col_major_unpack(C_enc.shape[0], C_enc.shape[1],
                                                                                          C_enc.matmul_block_size);
@@ -1201,7 +1202,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_cpmm_matmul", "", HeteroPro
                                             Array<double, 2> A_mat = gen_random_array<2>({m, n}, 1.0);
                                             Array<double, 2> B_mat = gen_random_array<2>({n, p}, 1.0);
 
-                                            Feature2DEncrypted A_enc(&this->context, init_level);
+                                            FeatureMatEncrypted A_enc(&this->context, init_level);
                                             A_enc.shape = {m, n};
                                             A_enc.matmul_block_size = d;
                                             A_enc.block_col_major_pack(
@@ -1210,7 +1211,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_cpmm_matmul", "", HeteroPro
                                             BlockColMajorCPMM cpmm(this->context.get_parameter(), A_enc.shape, {n, p},
                                                                    B_mat, d, A_enc.level);
                                             cpmm.precompute_diagonals();
-                                            Feature2DEncrypted C_enc = cpmm.run(this->context, A_enc);
+                                            FeatureMatEncrypted C_enc = cpmm.run(this->context, A_enc);
 
                                             auto C_result = C_enc.block_col_major_unpack(C_enc.shape[0], C_enc.shape[1],
                                                                                          C_enc.matmul_block_size);
@@ -1260,7 +1261,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_transpose", "", HeteroProce
                                 SECTION("n=" + to_string(n)) {
                                     Array<double, 2> A_mat = gen_random_array<2>({m, n}, 1.0);
 
-                                    Feature2DEncrypted A_enc(&this->context, init_level);
+                                    FeatureMatEncrypted A_enc(&this->context, init_level);
                                     A_enc.shape = {m, n};
                                     A_enc.matmul_block_size = d;
                                     A_enc.block_col_major_pack(A_mat, d, false,
@@ -1269,7 +1270,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_transpose", "", HeteroProce
                                     BlockColMajorTranspose bt(this->context.get_parameter(), A_enc.shape,
                                                               A_enc.matmul_block_size, A_enc.level);
                                     bt.precompute_diagonals();
-                                    Feature2DEncrypted AT_enc = bt.run(this->context, A_enc);
+                                    FeatureMatEncrypted AT_enc = bt.run(this->context, A_enc);
 
                                     auto AT_result = AT_enc.block_col_major_unpack(AT_enc.shape[0], AT_enc.shape[1],
                                                                                    AT_enc.matmul_block_size);
@@ -1584,17 +1585,17 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_qkt_v_attention", "", H
         Array<double, 2> V_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
 
         // Pack Q, K, V using par_block_col_major_pack
-        Feature2DEncrypted Q_enc(&this->context, init_level);
+        FeatureMatEncrypted Q_enc(&this->context, init_level);
         Q_enc.shape = {seq_len, head_dim};
         Q_enc.matmul_block_size = d;
         Q_enc.par_block_col_major_pack(Q_mat, d, n_heads, false, default_scale);
 
-        Feature2DEncrypted K_enc(&this->context, init_level);
+        FeatureMatEncrypted K_enc(&this->context, init_level);
         K_enc.shape = {seq_len, head_dim};
         K_enc.matmul_block_size = d;
         K_enc.par_block_col_major_pack(K_mat, d, n_heads, false, default_scale);
 
-        Feature2DEncrypted V_enc(&this->context, init_level);
+        FeatureMatEncrypted V_enc(&this->context, init_level);
         V_enc.shape = {seq_len, head_dim};
         V_enc.matmul_block_size = d;
         V_enc.par_block_col_major_pack(V_mat, d, n_heads, false, default_scale);
@@ -1603,29 +1604,29 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_qkt_v_attention", "", H
         ParBlockColMajorTranspose kt_transpose(this->context.get_parameter(), {seq_len, head_dim}, d, n_heads,
                                                init_level);
         kt_transpose.precompute_diagonals();
-        Feature2DEncrypted KT_enc = kt_transpose.run(this->context, K_enc);
+        FeatureMatEncrypted KT_enc = kt_transpose.run(this->context, K_enc);
         // KT_enc at level init_level - 1, shape = {head_dim, seq_len}
 
         // Step 2: Drop Q to match K^T level
-        Feature2DEncrypted Q_dropped = Q_enc.drop_level(1);
+        FeatureMatEncrypted Q_dropped = Q_enc.drop_level(1);
         Q_dropped.matmul_block_size = d;
 
         // Step 3: Q * K^T  (per head: seq_len x head_dim @ head_dim x seq_len = seq_len x seq_len)
         ParBlockColMajorCCMM qkt_ccmm(this->context.get_parameter(), {seq_len, head_dim}, {head_dim, seq_len}, d,
                                       n_heads, init_level - 1);
         qkt_ccmm.precompute_diagonals();
-        Feature2DEncrypted attn_enc = qkt_ccmm.run(this->context, Q_dropped, KT_enc);
+        FeatureMatEncrypted attn_enc = qkt_ccmm.run(this->context, Q_dropped, KT_enc);
         // attn_enc at level init_level - 4, shape = {seq_len, seq_len}
 
         // Step 4: Drop V to match attention scores level
-        Feature2DEncrypted V_dropped = V_enc.drop_level(4);
+        FeatureMatEncrypted V_dropped = V_enc.drop_level(4);
         V_dropped.matmul_block_size = d;
 
         // Step 5: attn_scores * V  (per head: seq_len x seq_len @ seq_len x head_dim = seq_len x head_dim)
         ParBlockColMajorCCMM attnv_ccmm(this->context.get_parameter(), {seq_len, seq_len}, {seq_len, head_dim}, d,
                                         n_heads, init_level - 4);
         attnv_ccmm.precompute_diagonals();
-        Feature2DEncrypted result_enc = attnv_ccmm.run(this->context, attn_enc, V_dropped);
+        FeatureMatEncrypted result_enc = attnv_ccmm.run(this->context, attn_enc, V_dropped);
         // result_enc at level init_level - 7 = 0, shape = {seq_len, head_dim}
 
         // Unpack result
@@ -1682,14 +1683,14 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_cpmm_square", "", HeteroProce
         Array<double, 2> A_mat = gen_random_array<2>({m, total_dim}, 0.5);
         Array<double, 2> W_mat = gen_random_array<2>({total_dim, total_dim}, 0.1);
 
-        Feature2DEncrypted A_enc(&this->context, init_level);
+        FeatureMatEncrypted A_enc(&this->context, init_level);
         A_enc.shape = {m, head_dim};
         A_enc.matmul_block_size = d;
         A_enc.par_block_col_major_pack(A_mat, d, n_heads, false, default_scale);
 
         ParBlockColMajorCPMM cpmm(this->context.get_parameter(), {m, head_dim}, W_mat, d, n_heads, init_level);
         cpmm.precompute_diagonals();
-        Feature2DEncrypted result_enc = cpmm.run(this->context, A_enc);
+        FeatureMatEncrypted result_enc = cpmm.run(this->context, A_enc);
 
         auto result = result_enc.par_block_col_major_unpack(m, head_dim, d, n_heads);
 
@@ -1737,7 +1738,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_cpmm_expand_reduce", "", Hete
         Array<double, 2> W1_mat = gen_random_array<2>({total_dim, expanded_dim}, 0.1);
         Array<double, 2> W2_mat = gen_random_array<2>({expanded_dim, total_dim}, 0.1);
 
-        Feature2DEncrypted A_enc(&this->context, init_level);
+        FeatureMatEncrypted A_enc(&this->context, init_level);
         A_enc.shape = {m, head_dim};
         A_enc.matmul_block_size = d;
         A_enc.par_block_col_major_pack(A_mat, d, n_heads, false, default_scale);
@@ -1745,13 +1746,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_cpmm_expand_reduce", "", Hete
         // Expand: A @ W1
         ParBlockColMajorCPMM expand_cpmm(this->context.get_parameter(), {m, head_dim}, W1_mat, d, n_heads, init_level);
         expand_cpmm.precompute_diagonals();
-        Feature2DEncrypted mid_enc = expand_cpmm.run(this->context, A_enc);
+        FeatureMatEncrypted mid_enc = expand_cpmm.run(this->context, A_enc);
 
         // Reduce: (A @ W1) @ W2
         ParBlockColMajorCPMM reduce_cpmm(this->context.get_parameter(), {m, head_dim}, W2_mat, d, n_heads,
                                          mid_enc.level);
         reduce_cpmm.precompute_diagonals();
-        Feature2DEncrypted result_enc = reduce_cpmm.run(this->context, mid_enc);
+        FeatureMatEncrypted result_enc = reduce_cpmm.run(this->context, mid_enc);
 
         auto result = result_enc.par_block_col_major_unpack(m, head_dim, d, n_heads);
 
