@@ -302,8 +302,8 @@ std::vector<CkksCiphertext> ParBlockColMajorCPMM::run_core(CkksContext& ctx,
     return C_cts;
 }
 
-Feature2DEncrypted ParBlockColMajorCPMM::run(CkksContext& ctx, const Feature2DEncrypted& A) {
-    Feature2DEncrypted result(&ctx, A.level);
+FeatureMatEncrypted ParBlockColMajorCPMM::run(CkksContext& ctx, const FeatureMatEncrypted& A) {
+    FeatureMatEncrypted result(&ctx, A.level);
     result.level = A.level - 2;  // block_mult (1 level) + mask (1 level)
     result.shape = {m_, n_per_head_};
     result.matmul_block_size = d_;
