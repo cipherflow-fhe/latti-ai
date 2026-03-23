@@ -27,8 +27,8 @@ public:
     virtual void pack(Array<double, 2>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
     virtual Array<double, 2> unpack() const;
     virtual void
-    par_mult_pack(const Array<double, 2>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
-    virtual Array<double, 2> par_mult_unpack() const;
+    pack_multiplexed(const Array<double, 2>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
+    virtual Array<double, 2> unpack_multiplexed() const;
     uint32_t shape = 0;
     uint32_t skip = 0;
     std::vector<CkksCiphertext> data;

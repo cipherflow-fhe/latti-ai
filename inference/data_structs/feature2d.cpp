@@ -201,21 +201,11 @@ void Feature2DEncrypted::single_pack(const Array<double, 3>& feature_mg, bool is
     }
 }
 
-void Feature2DEncrypted::mult_pack(const Array<double, 3>& feature_mg, bool is_sysmmetric, double scale_in) {
-    auto pack_type = PackType::MultiplexedPack;
-    vector<vector<double>> feature_tmp_pack = pack_feature(pack_type, feature_mg);
-
-    for (int i = 0; i < feature_tmp_pack.size(); i++) {
-        auto enc = context->encode(feature_tmp_pack[i], level, scale_in);
-        data.push_back(context->encrypt_asymmetric(enc));
-    }
-}
-
-void Feature2DEncrypted::split_with_stride_pack(const Array<double, 3>& feature_mg,
-                                                const Duo& block_shape,
-                                                const Duo& stride,
-                                                bool is_sysmmetric,
-                                                double scale_in) {
+void Feature2DEncrypted::pack_interleaved(const Array<double, 3>& feature_mg,
+                                          const Duo& block_shape,
+                                          const Duo& stride,
+                                          bool is_sysmmetric,
+                                          double scale_in) {
     auto pack_type = PackType::InterleavedDecompositionPack;
     vector<vector<double>> feature_tmp_pack = pack_feature(pack_type, feature_mg, block_shape, stride);
 
@@ -355,7 +345,7 @@ Array<double, 3> Feature2DEncrypted::split_with_overlap_unpack(const Duo& block_
     return result;
 }
 
-void Feature2DEncrypted::par_mult_pack(const Array<double, 3>& feature_mg, bool is_sysmmetric, double scale_in) {
+void Feature2DEncrypted::pack_multiplexed(const Array<double, 3>& feature_mg, bool is_sysmmetric, double scale_in) {
     auto pack_type = PackType::ParMultiplexedPack;
     vector<vector<double>> feature_tmp_pack = pack_feature(pack_type, feature_mg);
 
@@ -368,46 +358,6 @@ void Feature2DEncrypted::par_mult_pack(const Array<double, 3>& feature_mg, bool 
             auto image_flat_ct = context->encrypt_symmetric(enc);
             data.push_back(move(image_flat_ct));
         }
-    }
-}
-
-void Feature2DEncrypted::zero_inserted_mult_pack(const Array<double, 3>& feature_mg,
-                                                 const Duo stride,
-                                                 bool is_sysmmetric,
-                                                 double scale_in) {
-    auto input_shape = feature_mg.get_shape();
-    n_channel = input_shape[0];
-    shape[0] = input_shape[1];
-    shape[1] = input_shape[2];
-    Duo zero_inserted_shape = {shape[0] * stride[0], shape[1] * stride[1]};
-    Duo zero_inserted_skip = {skip[0] / stride[0], skip[1] / stride[1]};
-    n_channel_per_ct = context->get_parameter().get_n() / 2 / (zero_inserted_shape[0] * zero_inserted_shape[1]);
-
-    int n_mult_pack_per_ct = n_channel_per_ct / (zero_inserted_skip[0] * zero_inserted_skip[1]);
-    int f_ct_num = div_ceil(n_channel, n_channel_per_ct);
-    vector<vector<double>> feature_tmp_pack(f_ct_num);
-
-    for (int i = 0; i < f_ct_num; i++) {
-        feature_tmp_pack[i].resize(context->get_parameter().get_n() / 2);
-        for (int j = 0; j < n_mult_pack_per_ct; j++) {
-            for (int h = 0; h < shape[0] * skip[0]; h++) {
-                for (int k = 0; k < shape[1] * skip[1]; k++) {
-                    int channel = i * n_channel_per_ct + j * zero_inserted_skip[0] * zero_inserted_skip[1] +
-                                  (zero_inserted_skip[1] * (h % zero_inserted_skip[0]) + k % zero_inserted_skip[1]);
-                    if (channel >= n_channel || (h % skip[0]) >= zero_inserted_skip[0] ||
-                        (k % skip[1]) >= zero_inserted_skip[1]) {
-                        continue;
-                    }
-                    feature_tmp_pack[i][j * shape[0] * skip[0] * shape[1] * skip[1] + (h * shape[0] * skip[0] + k)] =
-                        feature_mg.get(channel, h / skip[0], k / skip[1]);
-                }
-            }
-        }
-    }
-
-    for (int i = 0; i < f_ct_num; i++) {
-        auto enc = context->encode(feature_tmp_pack[i], level, scale_in);
-        data.push_back(context->encrypt_asymmetric(enc));
     }
 }
 
@@ -528,29 +478,7 @@ Array<double, 3> Feature2DEncrypted::single_unpack() const {
     return result;
 }
 
-Array<double, 3> Feature2DEncrypted::mult_unpack() const {
-    const int N_THREAD = 4;
-    int n_ct = data.size();
-    Duo pre_skip_shape = {shape[0] * skip[0], shape[1] * skip[1]};
-    Array<double, 3> result({n_channel, shape[0], shape[1]});
-
-    parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
-        CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_idx]);
-        Array1D x_mg = ctx_copy.decode(x_pt);
-        for (int j = 0; j < pre_skip_shape[0]; j++) {
-            for (int k = 0; k < pre_skip_shape[1]; k++) {
-                int channel_idx = ct_idx * n_channel_per_ct + j % skip[0] * skip[1] + k % skip[0];
-                if (channel_idx >= n_channel) {
-                    continue;
-                }
-                result.set(channel_idx, j / skip[0], k / skip[0], x_mg[j * pre_skip_shape[0] + k]);
-            }
-        }
-    });
-    return result;
-}
-
-Array<double, 3> Feature2DEncrypted::par_mult_unpack() const {
+Array<double, 3> Feature2DEncrypted::unpack_multiplexed() const {
     const int N_THREAD = 4;
     int n_ct = data.size();
     Array<double, 3> result({n_channel, shape[0], shape[1]});
@@ -588,7 +516,7 @@ Array<double, 3> Feature2DEncrypted::par_mult_unpack() const {
     return result;
 }
 
-Array<double, 3> Feature2DEncrypted::split_with_stride_unpack(const Duo& block_shape, const Duo& stride) const {
+Array<double, 3> Feature2DEncrypted::unpack_interleaved(const Duo& block_shape, const Duo& stride) const {
     const int N_THREAD = 4;
     int n_ct = data.size();
     Array<double, 3> result({n_channel, shape[0], shape[1]});
@@ -604,34 +532,6 @@ Array<double, 3> Feature2DEncrypted::split_with_stride_unpack(const Duo& block_s
             for (int k = 0; k < block_shape[1]; k++) {
                 result.set(channel_idx, j * stride[0] + seg_row_idx, k * stride[1] + seg_col_idx,
                            x_mg[j * block_shape[1] + k]);
-            }
-        }
-    });
-    return result;
-}
-
-Array<double, 3> Feature2DEncrypted::zero_inserted_mult_unpack(const Duo stride_next) const {
-    const int N_THREAD = 4;
-    int n_ct = data.size();
-    Duo pre_skip_shape = {shape[0] * skip[0], shape[1] * skip[1]};
-    Array<double, 3> result({n_channel, shape[0], shape[1]});
-    Duo next_skip = {skip[0] / stride_next[0], skip[1] / stride_next[1]};
-    int n_mult_pack_per_ct = n_channel_per_ct / (next_skip[0] * next_skip[1]);
-
-    parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
-        CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_idx]);
-        Array1D x_mg = ctx_copy.decode(x_pt);
-        for (int i = 0; i < n_mult_pack_per_ct; i++) {
-            for (int j = 0; j < pre_skip_shape[0]; j++) {
-                for (int k = 0; k < pre_skip_shape[1]; k++) {
-                    int channel_idx = i * next_skip[0] * next_skip[1] + ct_idx * n_channel_per_ct +
-                                      (j % next_skip[0]) * next_skip[1] + k % next_skip[1];
-                    if (channel_idx >= n_channel || (j % skip[0]) >= next_skip[0] || (k % skip[1]) >= next_skip[1]) {
-                        continue;
-                    }
-                    result.set(channel_idx, j / skip[0], k / skip[1],
-                               x_mg[i * pre_skip_shape[0] * pre_skip_shape[1] + j * pre_skip_shape[1] + k]);
-                }
             }
         }
     });
@@ -1169,13 +1069,13 @@ void Feature2DEncrypted::decrypt_to_share(Feature2DShare* share, PackType pack_t
     share->shape = shape;
     Array<double, 3> x_double_matrix;
     if (pack_type == PackType::ParMultiplexedPack) {
-        x_double_matrix = this->par_mult_unpack();
+        x_double_matrix = this->unpack_multiplexed();
     } else if (pack_type == PackType::SinglePack) {
         x_double_matrix = this->unpack();
     } else if (pack_type == PackType::InterleavedDecompositionPack) {
         Duo block_expansion = {(uint32_t)ceil(shape[0] / (double)BLOCK_SHAPE[0]),
                                (uint32_t)ceil(shape[1] / (double)BLOCK_SHAPE[1])};
-        x_double_matrix = this->split_with_stride_unpack(BLOCK_SHAPE, block_expansion);
+        x_double_matrix = this->unpack_interleaved(BLOCK_SHAPE, block_expansion);
     }
 
     share->data = array_double_to_uint64(x_double_matrix, share->scale_ord, share->ring_mod).reshape<1>({0});
@@ -1203,13 +1103,13 @@ Array<uint64_t, 1> Feature2DEncrypted::encrypt_from_share(const Feature2DShare& 
 
     Array<double, 3> y3 = y0_sub_mod_div_s.reshape<3>({uint64_t(n_channel), input_shape[0], input_shape[1]});
     if (pack_type == PackType::ParMultiplexedPack) {
-        this->par_mult_pack(y3, true, DEFAULT_SCALE);
+        this->pack_multiplexed(y3, true, DEFAULT_SCALE);
     } else if (pack_type == PackType::SinglePack) {
         this->pack(y3, true, DEFAULT_SCALE);
     } else if (pack_type == PackType::InterleavedDecompositionPack) {
         Duo block_expansion = {(uint32_t)ceil(input_shape[0] / (double)BLOCK_SHAPE[0]),
                                (uint32_t)ceil(input_shape[1] / (double)BLOCK_SHAPE[1])};
-        this->split_with_stride_pack(y3, BLOCK_SHAPE, block_expansion, true);
+        this->pack_interleaved(y3, BLOCK_SHAPE, block_expansion, true);
     }
 
     return y0_add_mod;
