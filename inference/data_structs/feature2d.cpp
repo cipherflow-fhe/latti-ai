@@ -42,7 +42,7 @@ vector<vector<double>> Feature2DEncrypted::pack_feature(PackType& packtype,
     shape[0] = input_shape[1];
     shape[1] = input_shape[2];
 
-    if (packtype == PackType::MultChannelPack) {
+    if (packtype == PackType::MultChannelPacking) {
         skip[0] = 1;
         skip[1] = 1;
         n_channel_per_ct = n_slot / (shape[0] * shape[1]);
@@ -84,26 +84,7 @@ vector<vector<double>> Feature2DEncrypted::pack_feature(PackType& packtype,
                 }
             }
         }
-    } else if (packtype == PackType::MultiplexedPack) {
-        n_channel_per_ct = n_slot / (shape[0] * shape[1]);
-
-        int f_ct_num = div_ceil(n_channel, skip[0] * skip[1]);
-        feature_tmp_pack.resize(f_ct_num);
-
-#pragma omp parallel for num_threads(N_THREAD)
-        for (int i = 0; i < f_ct_num; i++) {
-            feature_tmp_pack[i].resize(n_slot);
-            for (int h = 0; h < shape[0] * skip[0]; h++) {
-                for (int k = 0; k < shape[1] * skip[1]; k++) {
-                    if ((skip[0] * skip[1] * i + skip[0] * (h % skip[0]) + k % skip[0]) >= n_channel) {
-                        continue;
-                    }
-                    feature_tmp_pack[i][h * shape[0] * skip[0] + k] = feature_mg.get(
-                        skip[0] * skip[1] * i + skip[0] * (h % skip[0]) + k % skip[0], h / skip[0], k / skip[1]);
-                }
-            }
-        }
-    } else if (packtype == PackType::ParMultiplexedPack) {
+    } else if (packtype == PackType::MultiplexedPacking) {
         int n_channel_per_block = (skip[0] * skip[1]) / (invalid_fill[0] * invalid_fill[1]);
         int n_channel_per_block_col = skip[1] / invalid_fill[1];
         n_channel_per_ct = n_slot / (shape[0] * shape[1]) / (invalid_fill[0] * invalid_fill[1]);
@@ -136,7 +117,7 @@ vector<vector<double>> Feature2DEncrypted::pack_feature(PackType& packtype,
                 }
             }
         }
-    } else if (packtype == PackType::InterleavedDecompositionPack) {
+    } else if (packtype == PackType::InterleavedPacking) {
         n_segment[0] = stride[0];
         n_segment[1] = stride[1];
         n_channel_per_ct = 1;
@@ -166,7 +147,7 @@ vector<vector<double>> Feature2DEncrypted::pack_feature(PackType& packtype,
 }
 
 void Feature2DEncrypted::pack(const Array<double, 3>& feature_mg, bool is_symmetric, double scale_in) {
-    auto pack_type = PackType::MultChannelPack;
+    auto pack_type = PackType::MultChannelPacking;
     vector<vector<double>> feature_tmp_pack = pack_feature(pack_type, feature_mg);
     uint32_t n_ct = feature_tmp_pack.size();
     const int N_THREAD = 4;
@@ -206,7 +187,7 @@ void Feature2DEncrypted::pack_interleaved(const Array<double, 3>& feature_mg,
                                           const Duo& stride,
                                           bool is_sysmmetric,
                                           double scale_in) {
-    auto pack_type = PackType::InterleavedDecompositionPack;
+    auto pack_type = PackType::InterleavedPacking;
     vector<vector<double>> feature_tmp_pack = pack_feature(pack_type, feature_mg, block_shape, stride);
 
     int N_THREAD = 4;
@@ -346,7 +327,7 @@ Array<double, 3> Feature2DEncrypted::split_with_overlap_unpack(const Duo& block_
 }
 
 void Feature2DEncrypted::pack_multiplexed(const Array<double, 3>& feature_mg, bool is_sysmmetric, double scale_in) {
-    auto pack_type = PackType::ParMultiplexedPack;
+    auto pack_type = PackType::MultiplexedPacking;
     vector<vector<double>> feature_tmp_pack = pack_feature(pack_type, feature_mg);
 
     for (int i = 0; i < feature_tmp_pack.size(); i++) {
@@ -1068,11 +1049,11 @@ void Feature2DEncrypted::decrypt_to_share(Feature2DShare* share, PackType pack_t
     int n_slot = context->get_parameter().get_n() / 2;
     share->shape = shape;
     Array<double, 3> x_double_matrix;
-    if (pack_type == PackType::ParMultiplexedPack) {
+    if (pack_type == PackType::MultiplexedPacking) {
         x_double_matrix = this->unpack_multiplexed();
     } else if (pack_type == PackType::SinglePack) {
         x_double_matrix = this->unpack();
-    } else if (pack_type == PackType::InterleavedDecompositionPack) {
+    } else if (pack_type == PackType::InterleavedPacking) {
         Duo block_expansion = {(uint32_t)ceil(shape[0] / (double)BLOCK_SHAPE[0]),
                                (uint32_t)ceil(shape[1] / (double)BLOCK_SHAPE[1])};
         x_double_matrix = this->unpack_interleaved(BLOCK_SHAPE, block_expansion);
@@ -1102,11 +1083,11 @@ Array<uint64_t, 1> Feature2DEncrypted::encrypt_from_share(const Feature2DShare& 
     }
 
     Array<double, 3> y3 = y0_sub_mod_div_s.reshape<3>({uint64_t(n_channel), input_shape[0], input_shape[1]});
-    if (pack_type == PackType::ParMultiplexedPack) {
+    if (pack_type == PackType::MultiplexedPacking) {
         this->pack_multiplexed(y3, true, DEFAULT_SCALE);
     } else if (pack_type == PackType::SinglePack) {
         this->pack(y3, true, DEFAULT_SCALE);
-    } else if (pack_type == PackType::InterleavedDecompositionPack) {
+    } else if (pack_type == PackType::InterleavedPacking) {
         Duo block_expansion = {(uint32_t)ceil(input_shape[0] / (double)BLOCK_SHAPE[0]),
                                (uint32_t)ceil(input_shape[1] / (double)BLOCK_SHAPE[1])};
         this->pack_interleaved(y3, BLOCK_SHAPE, block_expansion, true);
