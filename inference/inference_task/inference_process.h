@@ -26,6 +26,7 @@
 #include "fhe_layers/reshape_layer.h"
 #include "util.h"
 #include "fhe_layers/poly_relu2d.h"
+#include "fhe_layers/poly_relu_base.h"
 #include "fhe_layers/activation_layer.h"
 #include "fhe_layers/add_layer.h"
 #include "fhe_layers/avgpool2d_layer.h"
@@ -64,8 +65,8 @@ public:
     double scale;
     Duo shape = {0, 0};
     Duo skip = {1, 1};
-    Duo virtual_shape = {0, 0};
-    Duo virtual_skip = {0, 0};
+    Duo special_skip = {1, 1};  // 0D from special_info.skip
+    Duo invalid_fill = {0, 0};  // 0D from special_info，2D
     string ckks_parameter_id;
     int pack_channel_per_ciphertext;
     int level;
@@ -80,13 +81,25 @@ public:
             shape[1] = json_data["shape"][1];
             skip[0] = json_data["skip"][0];
             skip[1] = json_data["skip"][1];
+            if (json_data.contains("invalid_fill")) {
+                invalid_fill[0] = json_data["invalid_fill"][0];
+                invalid_fill[1] = json_data["invalid_fill"][1];
+            }
         }
         if (dim == 0) {
             skip[0] = json_data["skip"];
-            virtual_shape[0] = json_data["virtual_shape"][0];
-            virtual_shape[1] = json_data["virtual_shape"][1];
-            virtual_skip[0] = json_data["virtual_skip"][0];
-            virtual_skip[1] = json_data["virtual_skip"][1];
+            if (json_data.contains("special_info")) {
+                auto& si = json_data["special_info"];
+                skip[0] = json_data["skip"];
+                if (si.contains("shape")) {
+                    shape[0] = si["shape"][0];
+                    shape[1] = si["shape"][1];
+                }
+                special_skip[0] = si["skip"][0];
+                special_skip[1] = si["skip"][1];
+                invalid_fill[0] = si["invalid_fill"][0];
+                invalid_fill[1] = si["invalid_fill"][1];
+            }
         }
     }
 };
@@ -181,6 +194,7 @@ public:
     std::map<std::string, std::unique_ptr<ReshapeLayer>> ckks_reshape;
     std::map<std::string, std::unique_ptr<Avgpool2DLayer>> ckks_avgpool;
     std::map<std::string, std::unique_ptr<PolyRelu>> ckks_poly_relu;
+    std::map<std::string, std::unique_ptr<PolyRelu0D>> ckks_poly_relu_0d;
     std::map<std::string, std::unique_ptr<ParMultiplexedConv2DPackedLayer>> ckks_multiplexed_conv2ds;
     std::map<std::string, std::unique_ptr<InverseMultiplexedConv2DLayer>> ckks_big_conv2ds;
     std::map<std::string, std::unique_ptr<ParMultiplexedConv2DPackedLayerDepthwise>> ckks_multiplexed_dw_conv2ds;

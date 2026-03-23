@@ -19,6 +19,7 @@
 #pragma once
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -33,6 +34,26 @@ using namespace cxx_sdk_v2;
 struct DecryptedOutput {
     std::vector<double> output;
     int num_outputs;
+};
+
+/// Per-output parameters read from task_config.json.
+struct OutputParam {
+    int dim = 0;
+    int channel = 0;
+    int skip = 1;    // dim=0 only (scalar skip)
+    int height = 0;  // dim=2 only
+    int width = 0;   // dim=2 only
+};
+
+/// Per-input parameters read from task_config.json.
+struct InputParam {
+    int dim = 0;
+    int level = 0;
+    int channel = 0;
+    int height = 0;    // dim=2 only
+    int width = 0;     // dim=2 only
+    int skip = 1;      // dim=0 only
+    int pack_num = 0;  // n_channel_per_ct
 };
 
 /// Client-side encrypted inference interface.
@@ -61,25 +82,25 @@ public:
     /// The server uses this to perform encrypted computation without the secret key.
     Bytes export_eval_context() const;
 
-    /// Encrypt input from a CSV file and return serialized ciphertext.
-    Bytes encrypt(const std::string& input_csv) const;
+    /// Encrypt inputs from CSV files and return serialized ciphertexts.
+    /// @param input_csvs  Map of input name -> CSV file path.
+    /// @return Map of input name -> serialized ciphertext bytes.
+    std::map<std::string, Bytes> encrypt(const std::map<std::string, std::string>& input_csvs) const;
 
-    /// Decrypt serialized encrypted output from the server.
-    DecryptedOutput decrypt(const Bytes& encrypted_output) const;
+    /// Decrypt serialized encrypted outputs from the server.
+    std::map<std::string, DecryptedOutput> decrypt(const std::map<std::string, Bytes>& encrypted_outputs) const;
 
 private:
     std::filesystem::path client_dir_;
 
-    int level_ = 0;
     int output_skip_ = 0;
-    int channel_ = 0;
-    int height_ = 0;
-    int width_ = 0;
+    std::map<std::string, OutputParam> output_params_;
     int n_slots_ = 0;
     int poly_modulus_degree_ = 0;
     bool needs_btp_ = false;
     std::string pack_style_;
     nlohmann::ordered_json task_config_;
+    std::map<std::string, InputParam> input_params_;
 
     std::unique_ptr<CkksParameter> ckks_param_;
     std::unique_ptr<CkksBtpParameter> btp_param_;
