@@ -116,25 +116,30 @@
 #include <iostream>
 
 class Feature2DShare;
-class Feature3DShare;
 
 class Feature2DEncrypted : public FeatureEncrypted {
 public:
     Duo shape;
     Duo skip;
     Duo invalid_fill;
+    PackType packing_type;
 
     std::vector<std::vector<int>> segment_valid_range;
     Duo n_segment;
     std::vector<CkksCiphertext> data;
     std::vector<CkksCompressedCiphertext> data_compress;
 
-    Feature2DEncrypted(CkksContext* context_in, int ct_level, Duo skip_in = {1, 1}, Duo invalid_fill_in = {1, 1});
+    Feature2DEncrypted(CkksContext* context_in,
+                       int ct_level,
+                       Duo skip_in = {1, 1},
+                       Duo invalid_fill_in = {1, 1},
+                       PackType packing_type_in = PackType::MultiplexedPacking);
 
-    virtual vector<vector<double>>
-    pack_feature(PackType& packtype, const Array<double, 3>& feature_mg, const Duo& block_shape, const Duo& stride);
-
-    virtual void pack(const Array<double, 3>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
+    virtual void pack_multiple_channel(const Array<double, 3>& feature_mg,
+                                       bool is_symmetric = false,
+                                       double scale_in = DEFAULT_SCALE);
+    virtual vector<CkksPlaintext> encode_multiple_channel(const Array<double, 3>& feature_mg,
+                                                          double scale_in = DEFAULT_SCALE);
     virtual void
     column_pack(const Array<double, 2>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
     virtual void
@@ -142,18 +147,20 @@ public:
 
     virtual void
     single_pack(const Array<double, 3>& feature_mg, bool is_sysmmetric = false, double scale_in = DEFAULT_SCALE);
+    virtual vector<CkksPlaintext> encode_single(const Array<double, 3>& feature_mg, double scale_in = DEFAULT_SCALE);
     virtual Array<double, 3> single_unpack() const;
 
-    virtual void split_with_overlap_pack(const Array<double, 3>& feature_mg,
-                                         const Duo& block_shape,
-                                         const Duo& n_overlap,
-                                         bool is_sysmmetric = false,
-                                         double scale_in = DEFAULT_SCALE);
     virtual void pack_interleaved(const Array<double, 3>& feature_mg,
                                   const Duo& block_shape,
                                   const Duo& stride,
                                   bool is_sysmmetric = false,
                                   double scale_in = DEFAULT_SCALE);
+    virtual vector<CkksPlaintext> encode_interleaved(const Array<double, 3>& feature_mg,
+                                                     const Duo& block_shape,
+                                                     const Duo& stride,
+                                                     double scale_in = DEFAULT_SCALE);
+    virtual vector<CkksPlaintext> encode_multiplexed(const Array<double, 3>& feature_mg,
+                                                     double scale_in = DEFAULT_SCALE);
     virtual void
     pack_multiplexed(const Array<double, 3>& feature_mg, bool is_sysmmetric = false, double scale_in = DEFAULT_SCALE);
 
@@ -211,13 +218,6 @@ public:
 class Feature2DShare : public FeatureShare {
 public:
     Feature2DShare(uint64_t q, int s);
-
-    Duo shape;
-};
-
-class Feature3DShare : public FeatureShare {
-public:
-    Feature3DShare(uint64_t q, int s);
 
     Duo shape;
 };
