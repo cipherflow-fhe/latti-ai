@@ -325,6 +325,8 @@ class FeatureNode:
         self.is_total_graph_leading_node = False
         self.scale_up = 1
         self.scale_down = 1
+        self.invalid_fill = [1, 1]
+        self.sp_info = {'skip': [1, 1], 'invalid_fill': [1, 1], 'shape': [1, 1]}
 
     def __repr__(self) -> str:
         return f'{self.node_id}'
@@ -338,9 +340,7 @@ class FeatureNode:
             info['shape'] = self.shape
 
         if self.dim == 0:
-            virtual_shape = getattr(self, 'virtual_shape', [1, 1])
-            virtual_skip = getattr(self, 'virtual_skip', [1, 1])
-            info['skip'] = virtual_shape[0] * virtual_shape[1] * virtual_skip[0] * virtual_skip[1]
+            info['skip'] = math.prod(self.sp_info['skip']) * math.prod(self.sp_info['invalid_fill'])
             info['pack_num'] = math.ceil(config.fhe_param.poly_modulus_degree / 2 / info['skip'])
 
         info['ckks_parameter_id'] = self.ckks_parameter_id
@@ -666,20 +666,19 @@ class LayerAbstractGraph:
             if dim in (1, 2):
                 shape = feature_json['shape']
                 skip = [1] * dim
-                virtual_skip = [1] * dim
-                virtual_shape = [1] * dim
                 node = FeatureNode(key, dim, channel, scale, ckks_parameter_id, DEFAULT_SCALE, shape)
             elif dim == 0:
                 shape = [0, 0]
-                skip = [1, 0]
-                virtual_skip = feature_json['virtual_skip']
-                virtual_shape = feature_json['virtual_shape']
+
+                sp_info = feature_json.get('special_info', {'skip': [1, 1], 'invalid_fill': [1, 1], 'shape': [1, 1]})
+                skip = [math.prod(sp_info['skip'])]
                 node = FeatureNode(key, dim, channel, scale, ckks_parameter_id, DEFAULT_SCALE, shape)
+                node.sp_info = sp_info
             else:
                 raise ValueError(f'Unsupported feature dim: {dim}')
             node.node_index = f_index
 
-            graph_info.dag.add_node(node, name=key, skip=skip, virtual_shape=virtual_shape, virtual_skip=virtual_skip)
+            graph_info.dag.add_node(node, name=key, skip=skip)
             feature_dict[key] = node
             f_index = f_index + 1
 
@@ -1154,33 +1153,27 @@ class LayerAbstractGraph:
                 ckks_scale = feature.ckks_scale
                 shape = [int(item) for item in feature.shape]
                 skip = [int(item) for item in self.dag.nodes[feature]['skip']]
-                try:
-                    virtual_shape = [int(item) for item in self.dag.nodes[feature]['virtual_shape']]
-                    virtual_skip = [int(item) for item in self.dag.nodes[feature]['virtual_skip']]
-                except Exception as e:
-                    print(
-                        f'Failed to get node virtual_skip attribute! Node ID: {feature.node_id}, Error type: {type(e).__name__}, Details: {e}'
-                    )
-                    raise
 
                 ckks_parameter_id = feature.ckks_parameter_id
                 level = self.dag.nodes[feature]['level']
                 depth = feature.depth
                 pack_num = self.dag.nodes[feature]['pack_num']
                 if dim == 0:
-                    features[key] = {
+                    feature_dict = {
                         'dim': dim,
                         'channel': channel,
                         'scale': scale,
                         'ckks_scale': ckks_scale,
                         'skip': skip[0],
                         'ckks_parameter_id': ckks_parameter_id,
-                        'virtual_shape': virtual_shape,
-                        'virtual_skip': virtual_skip,
                         'level': level,
                         'depth': depth,
                         'pack_num': pack_num,
                     }
+                    pred_compute = next(self.dag.predecessors(feature), None)
+                    if isinstance(pred_compute, ReshapeComputeNode):
+                        feature_dict['special_info'] = feature.sp_info
+                    features[key] = feature_dict
                 elif dim in (1, 2):
                     features[key] = {
                         'dim': dim,
@@ -1193,6 +1186,7 @@ class LayerAbstractGraph:
                         'level': level,
                         'depth': depth,
                         'pack_num': pack_num,
+                        'invalid_fill': feature.invalid_fill,
                     }
                 else:
                     raise ValueError('Unsupported dim value.')

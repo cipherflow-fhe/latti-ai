@@ -26,6 +26,7 @@
 #include <chrono>
 #include <fstream>
 #include <sstream>
+#include <filesystem>
 #include <iomanip>
 
 #include "data_structs/feature.h"
@@ -48,11 +49,23 @@
 #include "fhe_layers/inverse_multiplexed_conv2d_layer.h"
 #include "ut_util.h"
 #include <cxx_sdk_v2/cxx_fhe_task.h>
+#include <lattisense/lib/nlohmann/json.hpp>
 
 using namespace cxx_sdk_v2;
 using namespace std;
+namespace fs = std::filesystem;
 
-string base_path = "../hetero";
+fs::path base_path = "../hetero";
+
+static vector<string> read_arg_names(const fs::path& project_path) {
+    ifstream f(project_path / "task_signature.json");
+    auto sig = nlohmann::json::parse(f);
+    vector<string> names;
+    for (const auto& entry : sig["online"]) {
+        names.push_back(entry["id"].get<string>());
+    }
+    return names;
+}
 
 struct TaskMetrics {
     std::string test_name;
@@ -62,10 +75,9 @@ struct TaskMetrics {
     double execution_time_ms;
 };
 
-std::string extract_task_config(const string& project_path, const string& base_path) {
-    string config = project_path.substr(base_path.length() + 1);
-    config = config.substr(0, config.length() - 8);
-    return config;
+std::string extract_task_config(const fs::path& project_path, const fs::path& base_path) {
+    auto rel = fs::relative(project_path, base_path);
+    return rel.parent_path().string();  // removes the trailing "server" component
 }
 
 class MetricsCollector {
@@ -122,19 +134,19 @@ public:
         MetricsCollector::save_to_csv("hetero_performance_results.csv");
     }
 
-    uint64_t run(const string& project_path, const vector<CxxVectorArgument>& cxx_args) {
+    uint64_t run(const fs::path& project_path, const vector<CxxVectorArgument>& cxx_args) {
         auto start_time = std::chrono::high_resolution_clock::now();
         uint64_t result;
         std::string processor_type;
 
         if constexpr (is_same_v<T, ProcessorCpu>) {
             processor_type = "CPU";
-            FheTaskCpu fhe_task(project_path);
+            FheTaskCpu fhe_task(project_path.string());
             result = fhe_task.run(&context, cxx_args);
 #ifdef INFERENCE_SDK_ENABLE_GPU
         } else if constexpr (is_same_v<T, ProcessorGpu>) {
             processor_type = "GPU";
-            FheTaskGpu fhe_task(project_path);
+            FheTaskGpu fhe_task(project_path.string());
             result = fhe_task.run(&context, cxx_args);
 #endif
         }
@@ -192,14 +204,15 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "sq", "", HeteroProcessors) {
                     this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
             }
 
-            vector<CxxVectorArgument> cxx_args = {
-                CxxVectorArgument{"input_node", &input_feature.data},
-                CxxVectorArgument{"output_ct", &output_feature.data},
-            };
-
-            string project_path = base_path + "/CKKS_square_" + to_string(input_shape[0]) + "_" +
-                                  to_string(input_shape[1]) + "/level_" + to_string(init_level) + "/server/";
+            fs::path project_path = base_path /
+                                    ("CKKS_square_" + to_string(input_shape[0]) + "_" + to_string(input_shape[1])) /
+                                    ("level_" + to_string(init_level)) / "server";
             cout << "project_path=" << project_path << endl;
+            auto arg_names = read_arg_names(project_path);
+            vector<CxxVectorArgument> cxx_args = {
+                {arg_names[0], &input_feature.data},
+                {arg_names[1], &output_feature.data},
+            };
             this->run(project_path, cxx_args);
 
             output_feature.skip = {1, 1};
@@ -265,18 +278,25 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_1ch_s1", "", HeteroProcessor
                             this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
                     }
 
-                    vector<CxxVectorArgument> cxx_args = {
-                        CxxVectorArgument{"input_0", &input_feature.data},
-                        CxxVectorArgument{"convw__conv1_Conv", &conv0_layer.weight_pt_},
-                        CxxVectorArgument{"convb__conv1_Conv", &conv0_layer.bias_pt_},
-                        CxxVectorArgument{"output", &output_feature.data},
-                    };
+                    fs::path project_path =
+                        base_path / "CKKS_conv2d" / ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                        ("kernel_shape_" + to_string(kernel_shape[0]) + "_" + to_string(kernel_shape[1])) /
+                        ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                        ("input_shape_" + to_string(input_shape[0]) + "_" + to_string(input_shape[1])) /
+                        ("level_" + to_string(init_level)) / "server";
 
-                    string project_path = base_path + "/CKKS_conv2d_" + to_string(n_in_channel) + "_in_" +
-                                          to_string(n_out_channel) + "_out_channel_1_stride_" +
-                                          to_string(input_shape[0]) + "_" + to_string(input_shape[1]) + "_" +
-                                          to_string(kernel_shape[0]) + "_" + to_string(kernel_shape[1]) + "/level_" +
-                                          to_string(init_level) + "/server/";
+                    auto arg_names = read_arg_names(project_path);
+                    vector<CxxVectorArgument> cxx_args;
+                    for (const auto& name : arg_names) {
+                        if (name.rfind("input", 0) == 0)
+                            cxx_args.push_back({name, &input_feature.data});
+                        else if (name.rfind("convw_", 0) == 0)
+                            cxx_args.push_back({name, &conv0_layer.weight_pt_});
+                        else if (name.rfind("convb_", 0) == 0)
+                            cxx_args.push_back({name, &conv0_layer.bias_pt_});
+                        else if (name.rfind("output", 0) == 0)
+                            cxx_args.push_back({name, &output_feature.data});
+                    }
 
                     this->run(project_path, cxx_args);
 
@@ -339,17 +359,25 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_1ch_s2", "", HeteroProcessor
                             this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
                     }
 
-                    vector<CxxVectorArgument> cxx_args = {
-                        CxxVectorArgument{"input_0", &input_feature.data},
-                        CxxVectorArgument{"convw__conv1_Conv", &conv0_layer.weight_pt_},
-                        CxxVectorArgument{"convb__conv1_Conv", &conv0_layer.bias_pt_},
-                        CxxVectorArgument{"output", &output_feature.data},
-                    };
+                    fs::path project_path =
+                        base_path / "CKKS_conv2d" / ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                        ("kernel_shape_" + to_string(kernel_shape[0]) + "_" + to_string(kernel_shape[1])) /
+                        "cin_1_cout_1" /
+                        ("input_shape_" + to_string(input_shape[0]) + "_" + to_string(input_shape[1])) /
+                        ("level_" + to_string(init_level)) / "server";
 
-                    string project_path = base_path + "/CKKS_conv2d_1_in_1_out_channel_2_stride_" +
-                                          to_string(input_shape[0]) + "_" + to_string(input_shape[1]) + "_" +
-                                          to_string(kernel_shape[0]) + "_" + to_string(kernel_shape[1]) + "/level_" +
-                                          to_string(init_level) + "/server/";
+                    auto arg_names = read_arg_names(project_path);
+                    vector<CxxVectorArgument> cxx_args;
+                    for (const auto& name : arg_names) {
+                        if (name.rfind("input", 0) == 0)
+                            cxx_args.push_back({name, &input_feature.data});
+                        else if (name.rfind("convw_", 0) == 0)
+                            cxx_args.push_back({name, &conv0_layer.weight_pt_});
+                        else if (name.rfind("convb_", 0) == 0)
+                            cxx_args.push_back({name, &conv0_layer.bias_pt_});
+                        else if (name.rfind("output", 0) == 0)
+                            cxx_args.push_back({name, &output_feature.data});
+                    }
 
                     this->run(project_path, cxx_args);
 
@@ -404,16 +432,23 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_mch_s1", "", HeteroProcessor
                             this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
                     }
 
-                    vector<CxxVectorArgument> cxx_args = {
-                        CxxVectorArgument{"input_0", &input_feature.data},
-                        CxxVectorArgument{"convw__conv1_Conv", &conv_layer.weight_pt_},
-                        CxxVectorArgument{"convb__conv1_Conv", &conv_layer.bias_pt_},
-                        CxxVectorArgument{"output", &output_feature.data},
-                    };
+                    fs::path project_path =
+                        base_path / "CKKS_conv2d" / ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                        "kernel_shape_3_3" / ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                        "input_shape_32_32" / ("level_" + to_string(init_level)) / "server";
 
-                    string project_path = base_path + "/CKKS_conv2d_" + to_string(n_in_channel) + "_in_" +
-                                          to_string(n_out_channel) + "_out_channel_1_stride_32_32_3_3/level_" +
-                                          to_string(init_level) + "/server/";
+                    auto arg_names = read_arg_names(project_path);
+                    vector<CxxVectorArgument> cxx_args;
+                    for (const auto& name : arg_names) {
+                        if (name.rfind("input", 0) == 0)
+                            cxx_args.push_back({name, &input_feature.data});
+                        else if (name.rfind("convw_", 0) == 0)
+                            cxx_args.push_back({name, &conv_layer.weight_pt_});
+                        else if (name.rfind("convb_", 0) == 0)
+                            cxx_args.push_back({name, &conv_layer.bias_pt_});
+                        else if (name.rfind("output", 0) == 0)
+                            cxx_args.push_back({name, &output_feature.data});
+                    }
 
                     this->run(project_path, cxx_args);
 
@@ -468,16 +503,23 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_mch_s2", "", HeteroProcessor
                             this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
                     }
 
-                    vector<CxxVectorArgument> cxx_args = {
-                        CxxVectorArgument{"input_0", &input_feature.data},
-                        CxxVectorArgument{"convw__conv1_Conv", &conv_layer.weight_pt_},
-                        CxxVectorArgument{"convb__conv1_Conv", &conv_layer.bias_pt_},
-                        CxxVectorArgument{"output", &output_feature.data},
-                    };
+                    fs::path project_path =
+                        base_path / "CKKS_conv2d" / ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                        "kernel_shape_3_3" / ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                        "input_shape_32_32" / ("level_" + to_string(init_level)) / "server";
 
-                    string project_path = base_path + "/CKKS_conv2d_" + to_string(n_in_channel) + +"_in_" +
-                                          to_string(n_out_channel) + "_out_channel_2_stride_32_32_3_3/level_" +
-                                          to_string(init_level) + "/server/";
+                    auto arg_names = read_arg_names(project_path);
+                    vector<CxxVectorArgument> cxx_args;
+                    for (const auto& name : arg_names) {
+                        if (name.rfind("input", 0) == 0)
+                            cxx_args.push_back({name, &input_feature.data});
+                        else if (name.rfind("convw_", 0) == 0)
+                            cxx_args.push_back({name, &conv_layer.weight_pt_});
+                        else if (name.rfind("convb_", 0) == 0)
+                            cxx_args.push_back({name, &conv_layer.bias_pt_});
+                        else if (name.rfind("output", 0) == 0)
+                            cxx_args.push_back({name, &output_feature.data});
+                    }
 
                     this->run(project_path, cxx_args);
 
@@ -526,15 +568,22 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "dw_32ch_s1_32x32_k3", "", HeteroP
         output_feature.data.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
     }
 
-    vector<CxxVectorArgument> cxx_args = {
-        CxxVectorArgument{"input_0", &f2d.data},
-        CxxVectorArgument{"convw__conv1_Conv", &conv.weight_pt_},
-        CxxVectorArgument{"convb__conv1_Conv", &conv.bias_pt_},
-        CxxVectorArgument{"output", &output_feature.data},
-    };
+    fs::path project_path = base_path / "CKKS_dw_conv2d" /
+                            ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) / "kernel_shape_3_3" /
+                            "cin_4_cout_4" / "input_shape_32_32" / ("level_" + to_string(init_level)) / "server";
 
-    string project_path =
-        base_path + "/CKKS_dw_conv2d_4_in_4_out_channel_2_stride_32_32_3_3/level_" + to_string(init_level) + "/server/";
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name.rfind("input", 0) == 0)
+            cxx_args.push_back({name, &f2d.data});
+        else if (name.rfind("convw_", 0) == 0)
+            cxx_args.push_back({name, &conv.weight_pt_});
+        else if (name.rfind("convb_", 0) == 0)
+            cxx_args.push_back({name, &conv.bias_pt_});
+        else if (name.rfind("output", 0) == 0)
+            cxx_args.push_back({name, &output_feature.data});
+    }
 
     this->run(project_path, cxx_args);
 
@@ -582,15 +631,22 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "dw_4ch_s2_32x32_k3", "", HeteroPr
         output_feature.data.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
     }
 
-    vector<CxxVectorArgument> cxx_args = {
-        CxxVectorArgument{"input_0", &f2d.data},
-        CxxVectorArgument{"convw__conv1_Conv", &conv.weight_pt_},
-        CxxVectorArgument{"convb__conv1_Conv", &conv.bias_pt_},
-        CxxVectorArgument{"output", &output_feature.data},
-    };
+    fs::path project_path = base_path / "CKKS_dw_conv2d" /
+                            ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) / "kernel_shape_3_3" /
+                            "cin_4_cout_4" / "input_shape_32_32" / ("level_" + to_string(init_level)) / "server";
 
-    string project_path =
-        base_path + "/CKKS_dw_conv2d_4_in_4_out_channel_2_stride_32_32_3_3/level_" + to_string(init_level) + "/server/";
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name.rfind("input", 0) == 0)
+            cxx_args.push_back({name, &f2d.data});
+        else if (name.rfind("convw_", 0) == 0)
+            cxx_args.push_back({name, &conv.weight_pt_});
+        else if (name.rfind("convb_", 0) == 0)
+            cxx_args.push_back({name, &conv.bias_pt_});
+        else if (name.rfind("output", 0) == 0)
+            cxx_args.push_back({name, &output_feature.data});
+    }
 
     this->run(project_path, cxx_args);
 
@@ -605,137 +661,85 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "dw_4ch_s2_32x32_k3", "", HeteroPr
     REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
 }
 
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv_s1_32x32_k3", "", HeteroProcessors) {
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv_varied_stride", "", HeteroProcessors) {
     Duo input_shape = {32, 32};
     Duo kernel_shape = {3, 3};
-    Duo stride = {1, 1};
     Duo skip = {1, 1};
     uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
     int init_level = 5;
 
+    vector<Duo> strides = {{1, 1}, {2, 2}};
     vector<uint32_t> nc_ins = {4, 8, 32};
     vector<uint32_t> nc_outs = {4, 8, 32};
 
-    for (uint32_t n_in_channel : nc_ins) {
-        SECTION("n_in_channel=" + to_string(n_in_channel)) {
-            for (uint32_t n_out_channel : nc_outs) {
-                if (n_in_channel != n_out_channel)
-                    continue;
-                SECTION("n_out_channel=" + to_string(n_out_channel)) {
-                    Array<double, 4> conv0_weight =
-                        gen_random_array<4>({n_out_channel, n_in_channel, kernel_shape[0], kernel_shape[1]}, 0.1);
-                    Array<double, 1> conv0_bias = gen_random_array<1>({n_out_channel}, 0.1);
-                    Array<double, 3> input_array =
-                        gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
+    for (const Duo& stride : strides) {
+        SECTION("stride=" + str(stride)) {
+            int output_level = (stride[0] == 1) ? init_level - 1 : init_level - 2;
+            for (uint32_t n_in_channel : nc_ins) {
+                SECTION("n_in_channel=" + to_string(n_in_channel)) {
+                    for (uint32_t n_out_channel : nc_outs) {
+                        if (n_in_channel != n_out_channel)
+                            continue;
+                        SECTION("n_out_channel=" + to_string(n_out_channel)) {
+                            Array<double, 4> conv0_weight = gen_random_array<4>(
+                                {n_out_channel, n_in_channel, kernel_shape[0], kernel_shape[1]}, 0.1);
+                            Array<double, 1> conv0_bias = gen_random_array<1>({n_out_channel}, 0.1);
+                            Array<double, 3> input_array =
+                                gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
 
-                    ParMultiplexedConv2DPackedLayer conv_layer(this->context.get_parameter(), input_shape, conv0_weight,
-                                                               conv0_bias, stride, skip, n_channel_per_ct, init_level,
-                                                               1.0);
-                    conv_layer.prepare_weight_for_post_skip_rotation();
+                            ParMultiplexedConv2DPackedLayer conv_layer(this->context.get_parameter(), input_shape,
+                                                                       conv0_weight, conv0_bias, stride, skip,
+                                                                       n_channel_per_ct, init_level, 1.0);
+                            conv_layer.prepare_weight_for_post_skip_rotation();
 
-                    Feature2DEncrypted input_feature(&this->context, init_level, skip);
-                    input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
+                            Feature2DEncrypted input_feature(&this->context, init_level, skip);
+                            input_feature.pack_multiplexed(input_array, false,
+                                                           this->context.get_parameter().get_default_scale());
 
-                    Feature2DEncrypted output_feature(&this->context, init_level - 1);
-                    output_feature.shape[0] = input_shape[0] / stride[0];
-                    output_feature.shape[1] = input_shape[1] / stride[1];
-                    output_feature.skip[0] = skip[0] * stride[0];
-                    output_feature.skip[1] = skip[1] * stride[1];
-                    output_feature.n_channel = n_out_channel;
-                    output_feature.n_channel_per_ct = (n_channel_per_ct * stride[0] * stride[1]);
-                    for (int i = 0; i < div_ceil(n_out_channel, (n_channel_per_ct * stride[0] * stride[1])); i++) {
-                        output_feature.data.push_back(
-                            this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+                            Feature2DEncrypted output_feature(&this->context, output_level);
+                            output_feature.shape[0] = input_shape[0] / stride[0];
+                            output_feature.shape[1] = input_shape[1] / stride[1];
+                            output_feature.skip[0] = skip[0] * stride[0];
+                            output_feature.skip[1] = skip[1] * stride[1];
+                            output_feature.n_channel = n_out_channel;
+                            output_feature.n_channel_per_ct = (n_channel_per_ct * stride[0] * stride[1]);
+                            for (int i = 0; i < div_ceil(n_out_channel, (n_channel_per_ct * stride[0] * stride[1]));
+                                 i++) {
+                                output_feature.data.push_back(
+                                    this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+                            }
+
+                            fs::path project_path =
+                                base_path / "CKKS_multiplexed_conv2d" /
+                                ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) / "kernel_shape_3_3" /
+                                ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                                "input_shape_32_32" / ("level_" + to_string(init_level)) / "server";
+
+                            auto arg_names = read_arg_names(project_path);
+                            vector<CxxVectorArgument> cxx_args;
+                            for (const auto& name : arg_names) {
+                                if (name.rfind("input", 0) == 0)
+                                    cxx_args.push_back({name, &input_feature.data});
+                                else if (name.rfind("convm_", 0) == 0)
+                                    cxx_args.push_back({name, &conv_layer.mask_pt});
+                                else if (name.rfind("convw_", 0) == 0)
+                                    cxx_args.push_back({name, &conv_layer.weight_pt});
+                                else if (name.rfind("convb_", 0) == 0)
+                                    cxx_args.push_back({name, &conv_layer.bias_pt});
+                                else if (name.rfind("output", 0) == 0)
+                                    cxx_args.push_back({name, &output_feature.data});
+                            }
+
+                            this->run(project_path, cxx_args);
+
+                            auto y_mg = output_feature.unpack_multiplexed();
+                            auto y_expected = conv_layer.run_plaintext(input_array);
+
+                            auto compare_result = compare(y_expected, y_mg);
+                            REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+                            REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                        }
                     }
-
-                    vector<CxxVectorArgument> cxx_args = {
-                        CxxVectorArgument{"input_0", &input_feature.data},
-                        CxxVectorArgument{"convw__conv1_Conv", &conv_layer.weight_pt},
-                        CxxVectorArgument{"convb__conv1_Conv", &conv_layer.bias_pt},
-                        CxxVectorArgument{"output", &output_feature.data},
-                    };
-
-                    string project_path = base_path + "/CKKS_multiplexed_conv2d_" + to_string(n_in_channel) + "_in_" +
-                                          to_string(n_out_channel) + "_out_channel_1_stride_32_32_3_3/level_" +
-                                          to_string(init_level) + "/server/";
-
-                    this->run(project_path, cxx_args);
-
-                    auto y_mg = output_feature.par_mult_unpack();
-                    auto y_expected = conv_layer.run_plaintext(input_array);
-
-                    auto compare_result = compare(y_expected, y_mg);
-                    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
-                    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
-                }
-            }
-        }
-    }
-}
-
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv_s2_32x32_k3", "", HeteroProcessors) {
-    Duo input_shape = {32, 32};
-    Duo kernel_shape = {3, 3};
-    Duo stride = {2, 2};
-    Duo skip = {1, 1};
-    uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
-    int init_level = 5;
-
-    vector<uint32_t> nc_ins = {4, 8, 32};
-    vector<uint32_t> nc_outs = {4, 8, 32};
-
-    for (uint32_t n_in_channel : nc_ins) {
-        SECTION("n_in_channel=" + to_string(n_in_channel)) {
-            for (uint32_t n_out_channel : nc_outs) {
-                if (n_in_channel != n_out_channel)
-                    continue;
-                SECTION("n_out_channel=" + to_string(n_out_channel)) {
-                    Array<double, 4> conv0_weight =
-                        gen_random_array<4>({n_out_channel, n_in_channel, kernel_shape[0], kernel_shape[1]}, 0.1);
-                    Array<double, 1> conv0_bias = gen_random_array<1>({n_out_channel}, 0.1);
-                    Array<double, 3> input_array =
-                        gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
-
-                    ParMultiplexedConv2DPackedLayer conv_layer(this->context.get_parameter(), input_shape, conv0_weight,
-                                                               conv0_bias, stride, skip, n_channel_per_ct, init_level,
-                                                               1.0);
-                    conv_layer.prepare_weight_for_post_skip_rotation();
-
-                    Feature2DEncrypted input_feature(&this->context, init_level, skip);
-                    input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
-
-                    Feature2DEncrypted output_feature(&this->context, init_level - 2);
-                    output_feature.shape[0] = input_shape[0] / stride[0];
-                    output_feature.shape[1] = input_shape[1] / stride[1];
-                    output_feature.skip[0] = skip[0] * stride[0];
-                    output_feature.skip[1] = skip[1] * stride[1];
-                    output_feature.n_channel = n_out_channel;
-                    output_feature.n_channel_per_ct = (n_channel_per_ct * stride[0] * stride[1]);
-                    for (int i = 0; i < div_ceil(n_out_channel, (n_channel_per_ct * stride[0] * stride[1])); i++) {
-                        output_feature.data.push_back(
-                            this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
-                    }
-
-                    vector<CxxVectorArgument> cxx_args = {
-                        CxxVectorArgument{"input_0", &input_feature.data},
-                        CxxVectorArgument{"convm__conv1_Conv", &conv_layer.mask_pt},
-                        CxxVectorArgument{"convw__conv1_Conv", &conv_layer.weight_pt},
-                        CxxVectorArgument{"convb__conv1_Conv", &conv_layer.bias_pt},
-                        CxxVectorArgument{"output", &output_feature.data},
-                    };
-
-                    string project_path = base_path + "/CKKS_multiplexed_conv2d_" + to_string(n_in_channel) + "_in_" +
-                                          to_string(n_out_channel) + "_out_channel_2_stride_32_32_3_3/level_" +
-                                          to_string(init_level) + "/server/";
-
-                    this->run(project_path, cxx_args);
-
-                    auto y_mg = output_feature.par_mult_unpack();
-                    auto y_expected = conv_layer.run_plaintext(input_array);
-
-                    auto compare_result = compare(y_expected, y_mg);
-                    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
-                    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
                 }
             }
         }
@@ -771,7 +775,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_dw_s2_64x64_k3", "", HeteroPr
                     dw_conv_layer.prepare_weight();
 
                     Feature2DEncrypted input_feature(&this->context, init_level, skip);
-                    input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
+                    input_feature.pack_multiplexed(input_array, false,
+                                                   this->context.get_parameter().get_default_scale());
 
                     Feature2DEncrypted output_feature(&this->context, init_level - 2);
                     output_feature.shape[0] = input_shape[0] / stride[0];
@@ -785,22 +790,241 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_dw_s2_64x64_k3", "", HeteroPr
                             this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
                     }
 
-                    vector<CxxVectorArgument> cxx_args = {
-                        CxxVectorArgument{"input_0", &input_feature.data},
-                        CxxVectorArgument{"convm__conv1_Conv", &dw_conv_layer.mask_pt},
-                        CxxVectorArgument{"convw__conv1_Conv", &dw_conv_layer.weight_pt},
-                        CxxVectorArgument{"convb__conv1_Conv", &dw_conv_layer.bias_pt},
-                        CxxVectorArgument{"output", &output_feature.data},
-                    };
+                    fs::path project_path = base_path / "CKKS_multiplexed_dw_conv2d" /
+                                            ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                                            "kernel_shape_3_3" /
+                                            ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                                            "input_shape_64_64" / ("level_" + to_string(init_level)) / "server";
 
-                    string project_path = base_path + "/CKKS_multiplexed_dw_conv2d_" + to_string(n_in_channel) +
-                                          "_in_" + to_string(n_out_channel) + "_out_channel_2_stride_64_64_3_3/level_" +
-                                          to_string(init_level) + "/server/";
+                    auto arg_names = read_arg_names(project_path);
+                    vector<CxxVectorArgument> cxx_args;
+                    for (const auto& name : arg_names) {
+                        if (name.rfind("input", 0) == 0)
+                            cxx_args.push_back({name, &input_feature.data});
+                        else if (name.rfind("convm_", 0) == 0)
+                            cxx_args.push_back({name, &dw_conv_layer.mask_pt});
+                        else if (name.rfind("convw_", 0) == 0)
+                            cxx_args.push_back({name, &dw_conv_layer.weight_pt});
+                        else if (name.rfind("convb_", 0) == 0)
+                            cxx_args.push_back({name, &dw_conv_layer.bias_pt});
+                        else if (name.rfind("output", 0) == 0)
+                            cxx_args.push_back({name, &output_feature.data});
+                    }
 
                     this->run(project_path, cxx_args);
 
-                    auto y_mg = output_feature.par_mult_unpack();
+                    auto y_mg = output_feature.unpack_multiplexed();
                     auto y_expected = dw_conv_layer.run_plaintext(input_array);
+
+                    auto compare_result = compare(y_expected, y_mg);
+                    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+                    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                }
+            }
+        }
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv_varied_input_shape", "", HeteroProcessors) {
+    uint32_t n_in_channel = 32;
+    uint32_t n_out_channel = 32;
+    Duo kernel_shape = {3, 3};
+    Duo stride = {1, 1};
+    Duo skip = {1, 1};
+    int init_level = 5;
+
+    vector<uint32_t> input_shapes = {/*2, */ 4, 8, 16, 32, 64};
+
+    for (uint32_t s : input_shapes) {
+        Duo input_shape = {s, s};
+        uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
+        SECTION("input_shape=" + str(input_shape)) {
+            Array<double, 4> conv0_weight =
+                gen_random_array<4>({n_out_channel, n_in_channel, kernel_shape[0], kernel_shape[1]}, 0.1);
+            Array<double, 1> conv0_bias = gen_random_array<1>({n_out_channel}, 0.1);
+            Array<double, 3> input_array = gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
+
+            ParMultiplexedConv2DPackedLayer conv_layer(this->context.get_parameter(), input_shape, conv0_weight,
+                                                       conv0_bias, stride, skip, n_channel_per_ct, init_level, 1.0);
+            conv_layer.prepare_weight_for_post_skip_rotation();
+
+            Feature2DEncrypted input_feature(&this->context, init_level, skip);
+            input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
+
+            Feature2DEncrypted output_feature(&this->context, init_level - 1);
+            output_feature.shape[0] = input_shape[0] / stride[0];
+            output_feature.shape[1] = input_shape[1] / stride[1];
+            output_feature.skip[0] = skip[0] * stride[0];
+            output_feature.skip[1] = skip[1] * stride[1];
+            output_feature.n_channel = n_out_channel;
+            output_feature.n_channel_per_ct = (n_channel_per_ct * stride[0] * stride[1]);
+            for (int i = 0; i < div_ceil(n_out_channel, (n_channel_per_ct * stride[0] * stride[1])); i++) {
+                output_feature.data.push_back(
+                    this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+            }
+
+            fs::path project_path = base_path / "CKKS_multiplexed_conv2d" / "stride_1_1" / "kernel_shape_3_3" /
+                                    "cin_32_cout_32" / ("input_shape_" + to_string(s) + "_" + to_string(s)) /
+                                    ("level_" + to_string(init_level)) / "server";
+
+            auto arg_names = read_arg_names(project_path);
+            vector<CxxVectorArgument> cxx_args;
+            for (const auto& name : arg_names) {
+                if (name.rfind("input", 0) == 0)
+                    cxx_args.push_back({name, &input_feature.data});
+                else if (name.rfind("convw_", 0) == 0)
+                    cxx_args.push_back({name, &conv_layer.weight_pt});
+                else if (name.rfind("convb_", 0) == 0)
+                    cxx_args.push_back({name, &conv_layer.bias_pt});
+                else if (name.rfind("output", 0) == 0)
+                    cxx_args.push_back({name, &output_feature.data});
+            }
+
+            this->run(project_path, cxx_args);
+
+            auto y_mg = output_feature.unpack_multiplexed();
+            auto y_expected = conv_layer.run_plaintext(input_array);
+
+            auto compare_result = compare(y_expected, y_mg);
+            REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+            REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+        }
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv_varied_kernel_shape", "", HeteroProcessors) {
+    uint32_t n_in_channel = 32;
+    uint32_t n_out_channel = 32;
+    Duo input_shape = {32, 32};
+    Duo stride = {1, 1};
+    Duo skip = {1, 1};
+    uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
+    int init_level = 5;
+
+    vector<uint32_t> kernel_shapes = {1, 3, 5};
+
+    for (uint32_t k : kernel_shapes) {
+        Duo kernel_shape = {k, k};
+        SECTION("kernel_shape=" + str(kernel_shape)) {
+            Array<double, 4> conv0_weight =
+                gen_random_array<4>({n_out_channel, n_in_channel, kernel_shape[0], kernel_shape[1]}, 0.1);
+            Array<double, 1> conv0_bias = gen_random_array<1>({n_out_channel}, 0.1);
+            Array<double, 3> input_array = gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
+
+            ParMultiplexedConv2DPackedLayer conv_layer(this->context.get_parameter(), input_shape, conv0_weight,
+                                                       conv0_bias, stride, skip, n_channel_per_ct, init_level, 1.0);
+            conv_layer.prepare_weight_for_post_skip_rotation();
+
+            Feature2DEncrypted input_feature(&this->context, init_level, skip);
+            input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
+
+            Feature2DEncrypted output_feature(&this->context, init_level - 1);
+            output_feature.shape[0] = input_shape[0] / stride[0];
+            output_feature.shape[1] = input_shape[1] / stride[1];
+            output_feature.skip[0] = skip[0] * stride[0];
+            output_feature.skip[1] = skip[1] * stride[1];
+            output_feature.n_channel = n_out_channel;
+            output_feature.n_channel_per_ct = (n_channel_per_ct * stride[0] * stride[1]);
+            for (int i = 0; i < div_ceil(n_out_channel, (n_channel_per_ct * stride[0] * stride[1])); i++) {
+                output_feature.data.push_back(
+                    this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+            }
+
+            fs::path project_path = base_path / "CKKS_multiplexed_conv2d" / "stride_1_1" /
+                                    ("kernel_shape_" + to_string(k) + "_" + to_string(k)) / "cin_32_cout_32" /
+                                    "input_shape_32_32" / ("level_" + to_string(init_level)) / "server";
+
+            auto arg_names = read_arg_names(project_path);
+            vector<CxxVectorArgument> cxx_args;
+            for (const auto& name : arg_names) {
+                if (name.rfind("input", 0) == 0)
+                    cxx_args.push_back({name, &input_feature.data});
+                else if (name.rfind("convw_", 0) == 0)
+                    cxx_args.push_back({name, &conv_layer.weight_pt});
+                else if (name.rfind("convb_", 0) == 0)
+                    cxx_args.push_back({name, &conv_layer.bias_pt});
+                else if (name.rfind("output", 0) == 0)
+                    cxx_args.push_back({name, &output_feature.data});
+            }
+
+            this->run(project_path, cxx_args);
+
+            auto y_mg = output_feature.unpack_multiplexed();
+            auto y_expected = conv_layer.run_plaintext(input_array);
+
+            auto compare_result = compare(y_expected, y_mg);
+            REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+            REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+        }
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "mux_conv_varied_input_channels_and_output_channels",
+                               "",
+                               HeteroProcessors) {
+    Duo input_shape = {32, 32};
+    Duo kernel_shape = {3, 3};
+    Duo stride = {1, 1};
+    Duo skip = {1, 1};
+    uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
+    int init_level = 5;
+
+    vector<uint32_t> nc_ins = {1, 3, 4, 16, 17};
+    vector<uint32_t> nc_outs = {1, 3, 4, 32, 33};
+
+    for (uint32_t n_in_channel : nc_ins) {
+        SECTION("n_in_channel=" + to_string(n_in_channel)) {
+            for (uint32_t n_out_channel : nc_outs) {
+                SECTION("n_out_channel=" + to_string(n_out_channel)) {
+                    Array<double, 4> conv0_weight =
+                        gen_random_array<4>({n_out_channel, n_in_channel, kernel_shape[0], kernel_shape[1]}, 0.1);
+                    Array<double, 1> conv0_bias = gen_random_array<1>({n_out_channel}, 0.1);
+                    Array<double, 3> input_array =
+                        gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
+
+                    ParMultiplexedConv2DPackedLayer conv_layer(this->context.get_parameter(), input_shape, conv0_weight,
+                                                               conv0_bias, stride, skip, n_channel_per_ct, init_level,
+                                                               1.0);
+                    conv_layer.prepare_weight_for_post_skip_rotation();
+
+                    Feature2DEncrypted input_feature(&this->context, init_level, skip);
+                    input_feature.pack_multiplexed(input_array, false,
+                                                   this->context.get_parameter().get_default_scale());
+
+                    Feature2DEncrypted output_feature(&this->context, init_level - 1);
+                    output_feature.shape[0] = input_shape[0] / stride[0];
+                    output_feature.shape[1] = input_shape[1] / stride[1];
+                    output_feature.skip[0] = skip[0] * stride[0];
+                    output_feature.skip[1] = skip[1] * stride[1];
+                    output_feature.n_channel = n_out_channel;
+                    output_feature.n_channel_per_ct = (n_channel_per_ct * stride[0] * stride[1]);
+                    for (int i = 0; i < div_ceil(n_out_channel, (n_channel_per_ct * stride[0] * stride[1])); i++) {
+                        output_feature.data.push_back(
+                            this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+                    }
+
+                    fs::path project_path = base_path / "CKKS_multiplexed_conv2d" / "stride_1_1" / "kernel_shape_3_3" /
+                                            ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                                            "input_shape_32_32" / ("level_" + to_string(init_level)) / "server";
+
+                    auto arg_names = read_arg_names(project_path);
+                    vector<CxxVectorArgument> cxx_args;
+                    for (const auto& name : arg_names) {
+                        if (name.rfind("input", 0) == 0)
+                            cxx_args.push_back({name, &input_feature.data});
+                        else if (name.rfind("convw_", 0) == 0)
+                            cxx_args.push_back({name, &conv_layer.weight_pt});
+                        else if (name.rfind("convb_", 0) == 0)
+                            cxx_args.push_back({name, &conv_layer.bias_pt});
+                        else if (name.rfind("output", 0) == 0)
+                            cxx_args.push_back({name, &output_feature.data});
+                    }
+
+                    this->run(project_path, cxx_args);
+
+                    auto y_mg = output_feature.unpack_multiplexed();
+                    auto y_expected = conv_layer.run_plaintext(input_array);
 
                     auto compare_result = compare(y_expected, y_mg);
                     REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
@@ -826,9 +1050,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_cyclic", "", HeteroProcessors)
         Duo input_shape = {s, s};
         uint32_t n_channel_per_ct = div_ceil(this->n_slot, input_shape[0] * input_shape[1]);
         SECTION("input_shape=" + str(input_shape)) {
-            DensePackedLayer fc_layer(this->context.get_parameter(), input_shape, skip, weight, bias, n_channel_per_ct,
-                                      init_level, 0);
-            fc_layer.prepare_weight1();
+            DensePackedLayer fc_layer(this->context.get_parameter(), weight, bias, n_channel_per_ct, init_level, 0);
+            fc_layer.prepare_weight_for_ord_pack(input_shape, skip);
 
             Feature0DEncrypted x_ct(&this->context, init_level);
             x_ct.skip = input_shape[0] * input_shape[1];
@@ -843,15 +1066,17 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_cyclic", "", HeteroProcessors)
                     this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
             }
 
+            fs::path project_path = base_path /
+                                    ("CKKS_fc_prepare_weight1_1D_pack_cyclic_" + to_string(input_shape[0]) + "_" +
+                                     to_string(input_shape[1])) /
+                                    ("level_" + to_string(init_level)) / "server";
+            auto arg_names = read_arg_names(project_path);
             vector<CxxVectorArgument> cxx_args = {
-                CxxVectorArgument{"input_node", &x_ct.data},
-                CxxVectorArgument{"weight_pt", &fc_layer.weight_pt},
-                CxxVectorArgument{"bias_pt", &fc_layer.bias_pt},
-                CxxVectorArgument{"output_ct", &output_feature.data},
+                {arg_names[0], &x_ct.data},
+                {arg_names[1], &fc_layer.weight_pt},
+                {arg_names[2], &fc_layer.bias_pt},
+                {arg_names[3], &output_feature.data},
             };
-
-            string project_path = base_path + "/CKKS_fc_prepare_weight1_1D_pack_cyclic_" + to_string(input_shape[0]) +
-                                  "_" + to_string(input_shape[1]) + "/level_" + to_string(init_level) + "/server/";
             this->run(project_path, cxx_args);
 
             auto output_mg = output_feature.unpack();
@@ -882,9 +1107,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip", "", HeteroProcessors) {
         Duo skip = {s, s};
         SECTION("skip=" + str(skip)) {
             uint32_t n_channel_per_ct = div_ceil(this->n_slot, skip[0] * skip[1]);
-            DensePackedLayer fc_layer(this->context.get_parameter(), input_shape, skip, weight, bias, n_channel_per_ct,
-                                      init_level, 0);
-            fc_layer.prepare_weight1();
+            DensePackedLayer fc_layer(this->context.get_parameter(), weight, bias, n_channel_per_ct, init_level, 0);
+            fc_layer.prepare_weight_for_ord_pack(input_shape, skip);
             Feature0DEncrypted x_ct(&this->context, init_level);
             x_ct.pack(input_array, false, this->param.get_default_scale(), skip[0] * skip[1]);
 
@@ -897,15 +1121,16 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip", "", HeteroProcessors) {
                     this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
             }
 
+            fs::path project_path =
+                base_path / ("CKKS_fc_prepare_weight1_1D_pack_skip_" + to_string(skip[0]) + "_" + to_string(skip[1])) /
+                ("level_" + to_string(init_level)) / "server";
+            auto arg_names = read_arg_names(project_path);
             vector<CxxVectorArgument> cxx_args = {
-                CxxVectorArgument{"input_node", &x_ct.data},
-                CxxVectorArgument{"weight_pt", &fc_layer.weight_pt},
-                CxxVectorArgument{"bias_pt", &fc_layer.bias_pt},
-                CxxVectorArgument{"output_ct", &output_feature.data},
+                {arg_names[0], &x_ct.data},
+                {arg_names[1], &fc_layer.weight_pt},
+                {arg_names[2], &fc_layer.bias_pt},
+                {arg_names[3], &output_feature.data},
             };
-
-            string project_path = base_path + "/CKKS_fc_prepare_weight1_1D_pack_skip_" + to_string(skip[0]) + "_" +
-                                  to_string(skip[1]) + "/level_" + to_string(init_level) + "/server/";
             this->run(project_path, cxx_args);
 
             auto output_mg = output_feature.unpack();
@@ -950,13 +1175,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
     input_feature.n_channel = input_channel;
     input_feature.n_channel_per_ct = div_ceil(this->n_slot, dense_shape[0] * dense_shape[1]);
 
-    DensePackedLayer dense(this->context.get_parameter(), dense_shape, skip, weight0, bias0,
-                           input_feature.n_channel_per_ct, init_level, 0);
-    dense.prepare_weight1();
+    DensePackedLayer dense(this->context.get_parameter(), weight0, bias0, input_feature.n_channel_per_ct, init_level,
+                           0);
+    dense.prepare_weight_for_ord_pack(dense_shape, skip);
 
-    DensePackedLayer dense1(this->context.get_parameter(), dense_shape1, skip1, weight1, bias1,
-                            input_feature.n_channel_per_ct, init_level - 1, 0);
-    dense1.prepare_weight1();
+    DensePackedLayer dense1(this->context.get_parameter(), weight1, bias1, input_feature.n_channel_per_ct,
+                            init_level - 1, 0);
+    dense1.prepare_weight_for_ord_pack(dense_shape1, skip1);
 
     Feature0DEncrypted output_feature(&this->context, init_level - 2);
     output_feature.skip = skip1[0] * skip1[1];
@@ -966,13 +1191,15 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
         output_feature.data.push_back(this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
     }
 
+    fs::path project_path = base_path /
+                            ("CKKS_fc_fc_" + to_string(input_channel) + "_" + to_string(output_channel) + "_" +
+                             to_string(output_channel1)) /
+                            ("level_" + to_string(init_level)) / "server";
+    auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args = {
-        CxxVectorArgument{"input_node", &input_feature.data}, CxxVectorArgument{"weight_pt0", &dense.weight_pt},
-        CxxVectorArgument{"bias_pt0", &dense.bias_pt},        CxxVectorArgument{"weight_pt1", &dense1.weight_pt},
-        CxxVectorArgument{"bias_pt1", &dense1.bias_pt},       CxxVectorArgument{"output_ct", &output_feature.data}};
-
-    string project_path = base_path + "/CKKS_fc_fc_" + to_string(input_channel) + "_" + to_string(output_channel) +
-                          "_" + to_string(output_channel1) + "/level_" + to_string(init_level) + "/server/";
+        {arg_names[0], &input_feature.data}, {arg_names[1], &dense.weight_pt}, {arg_names[2], &dense.bias_pt},
+        {arg_names[3], &dense1.weight_pt},   {arg_names[4], &dense1.bias_pt},  {arg_names[5], &output_feature.data},
+    };
 
     this->run(project_path, cxx_args);
 
@@ -1002,7 +1229,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs", "", HeteroProcessors)
             auto weight = gen_random_array<2>({order + 1, n_channel}, 1.0);
 
             Feature2DEncrypted input_feature(&this->context, init_level, skip);
-            input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
+            input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
 
             PolyRelu polyx(this->context.get_parameter(), {input_shape[0], input_shape[1]}, order, weight, skip,
                            n_channel_per_ct, init_level);
@@ -1019,19 +1246,22 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs", "", HeteroProcessors)
                     this->context.new_ciphertext(output_level, this->param.get_default_scale()));
             }
 
-            vector<CxxVectorArgument> cxx_args;
-            cxx_args.push_back(CxxVectorArgument{"input_node", &input_feature.data});
-            for (int i = 0; i <= order; i++) {
-                cxx_args.push_back(CxxVectorArgument{"weight_pt" + to_string(i), &polyx.weight_pt[i]});
-            }
-            cxx_args.push_back(CxxVectorArgument{"output_ct", &output_feature.data});
+            fs::path project_path =
+                base_path / ("CKKS_poly_relu_bsgs_" + to_string(n_channel) + "_channel_order_" + to_string(order)) /
+                ("level_" + to_string(init_level));
 
-            string project_path = base_path + "/CKKS_poly_relu_bsgs_" + to_string(n_channel) + "_channel_order_" +
-                                  to_string(order) + "/level_" + to_string(init_level);
+            auto arg_names = read_arg_names(project_path);
+            vector<CxxVectorArgument> cxx_args;
+            int idx = 0;
+            cxx_args.push_back({arg_names[idx++], &input_feature.data});
+            for (int i = 0; i <= order; i++) {
+                cxx_args.push_back({arg_names[idx++], &polyx.weight_pt[i]});
+            }
+            cxx_args.push_back({arg_names[idx++], &output_feature.data});
 
             this->run(project_path, cxx_args);
 
-            auto output_mg = output_feature.par_mult_unpack();
+            auto output_mg = output_feature.unpack_multiplexed();
             auto output_mg_expected = polyx.run_plaintext_for_non_absorb_case(input_array);
 
             INFO("order=" << order);
@@ -1086,16 +1316,19 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature0d", "", HeteroP
                             this->context.new_ciphertext(output_level, this->param.get_default_scale()));
                     }
 
-                    vector<CxxVectorArgument> cxx_args;
-                    cxx_args.push_back(CxxVectorArgument{"input_node", &input_feature.data});
-                    for (int i = 0; i <= (int)order; i++) {
-                        cxx_args.push_back(CxxVectorArgument{"weight_pt" + to_string(i), &polyx.weight_pt[i]});
-                    }
-                    cxx_args.push_back(CxxVectorArgument{"output_ct", &output_feature.data});
+                    fs::path project_path = base_path /
+                                            ("CKKS_poly_relu_bsgs_feature0d_" + to_string(n_channel) +
+                                             "_channel_order_" + to_string(order) + "_skip_" + to_string(skip_val)) /
+                                            ("level_" + to_string(init_level));
 
-                    string project_path = base_path + "/CKKS_poly_relu_bsgs_feature0d_" + to_string(n_channel) +
-                                          "_channel_order_" + to_string(order) + "_skip_" + to_string(skip_val) +
-                                          "/level_" + to_string(init_level);
+                    auto arg_names = read_arg_names(project_path);
+                    vector<CxxVectorArgument> cxx_args;
+                    int idx = 0;
+                    cxx_args.push_back({arg_names[idx++], &input_feature.data});
+                    for (int i = 0; i <= (int)order; i++) {
+                        cxx_args.push_back({arg_names[idx++], &polyx.weight_pt[i]});
+                    }
+                    cxx_args.push_back({arg_names[idx++], &output_feature.data});
 
                     this->run(project_path, cxx_args);
 
@@ -1329,7 +1562,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs", "", HeteroProces
         {0.0, 2.40085652217597, 0.0, -2.63125454261783, 0.0, 1.54912674773593, 0.0, -3.31172956504304e-1}, n_channel);
 
     Feature2DEncrypted input_feature(&this->context, init_level, skip);
-    input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
+    input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
 
     // Layer 0: p0(x)
     PolyRelu poly0(this->context.get_parameter(), input_shape, order0, weight0, skip, n_channel_per_ct, init_level);
@@ -1351,23 +1584,25 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs", "", HeteroProces
         output_feature.data.push_back(this->context.new_ciphertext(output_level, this->param.get_default_scale()));
     }
 
+    fs::path project_path = base_path /
+                            ("CKKS_poly_relu_bsgs_" + to_string(n_channel) + "_channel_order_" + to_string(order0) +
+                             "_" + to_string(order1)) /
+                            ("level_" + to_string(init_level));
+
+    auto arg_names = read_arg_names(project_path);
     // Build cxx_args matching Python naming: poly0_weight_pt{i}, poly1_weight_pt{i}
     vector<CxxVectorArgument> cxx_args;
-    cxx_args.push_back(CxxVectorArgument{"input_node", &input_feature.data});
-    for (int i = 0; i <= order0; i++) {
-        cxx_args.push_back(CxxVectorArgument{"poly0_weight_pt" + to_string(i), &poly0.weight_pt[i]});
-    }
-    for (int i = 0; i <= order1; i++) {
-        cxx_args.push_back(CxxVectorArgument{"poly1_weight_pt" + to_string(i), &poly1.weight_pt[i]});
-    }
-    cxx_args.push_back(CxxVectorArgument{"output_ct", &output_feature.data});
-
-    string project_path = base_path + "/CKKS_poly_relu_bsgs_" + to_string(n_channel) + "_channel_order_" +
-                          to_string(order0) + "_" + to_string(order1) + "/level_" + to_string(init_level);
+    int idx = 0;
+    cxx_args.push_back({arg_names[idx++], &input_feature.data});
+    for (int i = 0; i <= order0; i++)
+        cxx_args.push_back({arg_names[idx++], &poly0.weight_pt[i]});
+    for (int i = 0; i <= order1; i++)
+        cxx_args.push_back({arg_names[idx++], &poly1.weight_pt[i]});
+    cxx_args.push_back({arg_names[idx++], &output_feature.data});
 
     this->run(project_path, cxx_args);
 
-    auto output_mg = output_feature.par_mult_unpack();
+    auto output_mg = output_feature.unpack_multiplexed();
 
     // Plaintext reference: result = x + sign(x) * x
     auto p0_plain = poly0.run_plaintext_for_non_absorb_case(input_array);
@@ -1443,16 +1678,18 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv1d", "", HeteroProcessors) {
                                             init_level - 1, this->param.get_default_scale()));
                                     }
 
-                                    vector<CxxVectorArgument> cxx_args;
-                                    cxx_args.push_back(CxxVectorArgument{"input_node", &input_feature.data});
-                                    cxx_args.push_back(CxxVectorArgument{"weight_pt", &conv0_layer.weight_pt});
-                                    cxx_args.push_back(CxxVectorArgument{"bias_pt", &conv0_layer.bias_pt});
-                                    cxx_args.push_back(CxxVectorArgument{"output_ct", &output_feature.data});
+                                    fs::path project_path = base_path /
+                                                            ("conv1d_input_shape_" + to_string(input_shape) +
+                                                             "_kernel_shape_" + to_string(kernel_shape) + "_skip_" +
+                                                             to_string(skip) + "_stride_" + to_string(stride)) /
+                                                            ("level_" + to_string(init_level)) / "server";
 
-                                    string project_path = base_path + "/conv1d_input_shape_" + to_string(input_shape) +
-                                                          "_kernel_shape_" + to_string(kernel_shape) + "_skip_" +
-                                                          to_string(skip) + "_stride_" + to_string(stride) + "/level_" +
-                                                          to_string(init_level) + "/server/";
+                                    auto arg_names = read_arg_names(project_path);
+                                    vector<CxxVectorArgument> cxx_args;
+                                    cxx_args.push_back({arg_names[0], &input_feature.data});
+                                    cxx_args.push_back({arg_names[1], &conv0_layer.weight_pt});
+                                    cxx_args.push_back({arg_names[2], &conv0_layer.bias_pt});
+                                    cxx_args.push_back({arg_names[3], &output_feature.data});
 
                                     this->run(project_path, cxx_args);
 
@@ -1508,7 +1745,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
                                         gen_random_array<2>({n_in_channel, input_shape}, 1.0);
 
                                     Feature1DEncrypted input_feature(&this->context, init_level, skip);
-                                    input_feature.par_mult_pack(input_array, false, this->param.get_default_scale());
+                                    input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
                                     ParMultiplexedConv1DPackedLayer conv0_layer(
                                         this->context.get_parameter(), input_shape, conv0_weight, conv0_bias, stride,
                                         skip, n_channel_per_ct, init_level);
@@ -1537,23 +1774,27 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
                                         select_pt_subset.push_back(move(conv0_layer.block_select_pt[i]));
                                     }
 
-                                    vector<CxxVectorArgument> cxx_args;
-                                    cxx_args.push_back(CxxVectorArgument{"input_node", &input_feature.data});
-                                    cxx_args.push_back(CxxVectorArgument{"weight_pt", &conv0_layer.weight_pt});
-                                    cxx_args.push_back(CxxVectorArgument{"bias_pt", &conv0_layer.bias_pt});
-                                    if (needs_rearrange) {
-                                        cxx_args.push_back(CxxVectorArgument{"block_select_pt", &select_pt_subset});
-                                    }
-                                    cxx_args.push_back(CxxVectorArgument{"output_ct", &output_feature.data});
+                                    fs::path project_path =
+                                        base_path /
+                                        ("multiplexed_conv1d_input_shape_" + to_string(input_shape) + "_kernel_shape_" +
+                                         to_string(kernel_shape) + "_skip_" + to_string(skip) + "_stride_" +
+                                         to_string(stride)) /
+                                        ("level_" + to_string(init_level)) / "server";
 
-                                    string project_path =
-                                        base_path + "/multiplexed_conv1d_input_shape_" + to_string(input_shape) +
-                                        "_kernel_shape_" + to_string(kernel_shape) + "_skip_" + to_string(skip) +
-                                        "_stride_" + to_string(stride) + "/level_" + to_string(init_level) + "/server/";
+                                    auto arg_names = read_arg_names(project_path);
+                                    vector<CxxVectorArgument> cxx_args;
+                                    int idx = 0;
+                                    cxx_args.push_back({arg_names[idx++], &input_feature.data});
+                                    cxx_args.push_back({arg_names[idx++], &conv0_layer.weight_pt});
+                                    cxx_args.push_back({arg_names[idx++], &conv0_layer.bias_pt});
+                                    if (needs_rearrange) {
+                                        cxx_args.push_back({arg_names[idx++], &select_pt_subset});
+                                    }
+                                    cxx_args.push_back({arg_names[idx++], &output_feature.data});
 
                                     this->run(project_path, cxx_args);
 
-                                    Array<double, 2> output_mg = output_feature.par_mult_unpack();
+                                    Array<double, 2> output_mg = output_feature.unpack_multiplexed();
                                     Array<double, 2> plain_output = conv0_layer.plaintext_call(input_array);
 
                                     print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
@@ -1723,6 +1964,50 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_cpmm_square", "", HeteroProce
         // n_slot=8192, d=64, d^2=4096, n_h_padded=4, n_h_padded*d^2=16384 > 8192
         // S=8192/4096=2, G=4/2=2
         run_square_test(83, 3, 64, 2);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "dense_0d", "", HeteroProcessors) {
+    int init_level = 8;
+
+    vector<uint32_t> n_ins = {32, 64};
+    vector<uint32_t> n_outs = {10, 32, 64};
+    vector<uint32_t> skips = {1, 2, 128, 256};
+
+    for (uint32_t n_in_channel : n_ins) {
+        SECTION("n_in=" + to_string(n_in_channel)) {
+            for (uint32_t n_out_channel : n_outs) {
+                SECTION("n_out=" + to_string(n_out_channel)) {
+                    for (uint32_t skip_0d : skips) {
+                        uint32_t n_channel_per_ct = this->n_slot / skip_0d;
+                        SECTION("skip=" + to_string(skip_0d)) {
+                            auto input_array = gen_random_array<1>({n_in_channel}, 1.0);
+                            auto weight = gen_random_array<2>({n_out_channel, n_in_channel}, 0.5);
+                            auto bias_array = gen_random_array<1>({n_out_channel}, 0.1);
+
+                            Feature0DEncrypted input_feature(&this->context, init_level);
+                            input_feature.pack(input_array, false, this->param.get_default_scale(), skip_0d);
+
+                            DensePackedLayer dense(this->context.get_parameter(), weight, bias_array, n_channel_per_ct,
+                                                   init_level, 0);
+                            dense.prepare_weight_0d(skip_0d);
+
+                            Feature0DEncrypted output_feature = dense.run_0d(this->context, input_feature);
+
+                            Array<double, 1> output_mg = output_feature.unpack();
+                            Array<double, 1> plain_output = dense.plaintext_call(input_array);
+
+                            print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+                            print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
+
+                            auto compare_result = compare(plain_output, output_mg);
+                            REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+                            REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
