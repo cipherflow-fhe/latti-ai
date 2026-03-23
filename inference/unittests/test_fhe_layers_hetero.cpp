@@ -1157,7 +1157,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
 
     Array<double, 1> output_mg = output_feature1.unpack();
 
-    Array<double, 1> output_plain_0 = dense.plaintext_call(input);
+    Array<double, 1> output_plain_0 = dense0.plaintext_call(input);
     Array<double, 1> output_plain_1 = dense1.plaintext_call(output_plain_0);
 
     print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
