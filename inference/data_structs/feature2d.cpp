@@ -17,10 +17,13 @@
  */
 
 #include "feature2d.h"
+#include "util.h"
+#include <sstream>
 
 using namespace std;
 
-Feature2DEncrypted::Feature2DEncrypted(CkksContext* context_in, int ct_level, Duo skip_in) : skip(skip_in) {
+Feature2DEncrypted::Feature2DEncrypted(CkksContext* context_in, int ct_level, Duo skip_in, Duo invalid_fill_in)
+    : skip(skip_in), invalid_fill(invalid_fill_in) {
     dim = 2;
     context = context_in;
     level = ct_level;
@@ -39,7 +42,7 @@ vector<vector<double>> Feature2DEncrypted::pack_feature(PackType& packtype,
     shape[0] = input_shape[1];
     shape[1] = input_shape[2];
 
-    if (packtype == PackType::MultChannelPack) {
+    if (packtype == PackType::MultChannelPacking) {
         skip[0] = 1;
         skip[1] = 1;
         n_channel_per_ct = n_slot / (shape[0] * shape[1]);
@@ -81,52 +84,40 @@ vector<vector<double>> Feature2DEncrypted::pack_feature(PackType& packtype,
                 }
             }
         }
-    } else if (packtype == PackType::MultiplexedPack) {
-        n_channel_per_ct = n_slot / (shape[0] * shape[1]);
-
-        int f_ct_num = div_ceil(n_channel, skip[0] * skip[1]);
-        feature_tmp_pack.resize(f_ct_num);
-
-#pragma omp parallel for num_threads(N_THREAD)
-        for (int i = 0; i < f_ct_num; i++) {
-            feature_tmp_pack[i].resize(n_slot);
-            for (int h = 0; h < shape[0] * skip[0]; h++) {
-                for (int k = 0; k < shape[1] * skip[1]; k++) {
-                    if ((skip[0] * skip[1] * i + skip[0] * (h % skip[0]) + k % skip[0]) >= n_channel) {
-                        continue;
-                    }
-                    feature_tmp_pack[i][h * shape[0] * skip[0] + k] = feature_mg.get(
-                        skip[0] * skip[1] * i + skip[0] * (h % skip[0]) + k % skip[0], h / skip[0], k / skip[1]);
-                }
-            }
-        }
-    } else if (packtype == PackType::ParMultiplexedPack) {
-        n_channel_per_ct = n_slot / (shape[0] * shape[1]);
-
-        int n_mult_pack_per_ct = n_channel_per_ct / (skip[0] * skip[1]);
+    } else if (packtype == PackType::MultiplexedPacking) {
+        int n_channel_per_block = (skip[0] * skip[1]) / (invalid_fill[0] * invalid_fill[1]);
+        int n_channel_per_block_col = skip[1] / invalid_fill[1];
+        n_channel_per_ct = n_slot / (shape[0] * shape[1]) / (invalid_fill[0] * invalid_fill[1]);
+        int n_block_per_ct = n_channel_per_ct / n_channel_per_block;
 
         int f_ct_num = div_ceil(n_channel, n_channel_per_ct);
         feature_tmp_pack.resize(f_ct_num);
 
         for (int i = 0; i < f_ct_num; i++) {
-            feature_tmp_pack[i].resize(context->get_parameter().get_n() / 2);
+            feature_tmp_pack[i].resize(n_slot);
 #pragma omp parallel for num_threads(N_THREAD)
-            for (int j = 0; j < n_mult_pack_per_ct; j++) {
-                for (int h = 0; h < shape[0] * skip[0]; h++) {
-                    for (int k = 0; k < shape[1] * skip[1]; k++) {
-                        int channel =
-                            i * n_channel_per_ct + j * skip[0] * skip[1] + (skip[1] * (h % skip[0]) + k % skip[1]);
-                        if (channel >= n_channel) {
-                            continue;
+            for (int j = 0; j < n_block_per_ct; j++) {
+                for (int x = 0; x < (int)shape[0]; x++) {
+                    for (int y = 0; y < (int)shape[1]; y++) {
+                        for (int channel_idx_in_block = 0; channel_idx_in_block < n_channel_per_block;
+                             channel_idx_in_block++) {
+                            int channel_idx = i * n_channel_per_ct + j * n_channel_per_block + channel_idx_in_block;
+                            if (channel_idx >= (int)n_channel) {
+                                continue;
+                            }
+                            int channel_x_offset = channel_idx_in_block / n_channel_per_block_col;
+                            int channel_y_offset = channel_idx_in_block % n_channel_per_block_col;
+                            int x_in_block = x * skip[0] + channel_x_offset;
+                            int y_in_block = y * skip[1] + channel_y_offset;
+                            int slot = j * (shape[0] * skip[0]) * (shape[1] * skip[1]) +
+                                       x_in_block * (shape[1] * skip[1]) + y_in_block;
+                            feature_tmp_pack[i][slot] = feature_mg.get(channel_idx, x, y);
                         }
-                        feature_tmp_pack[i]
-                                        [j * shape[0] * skip[0] * shape[1] * skip[1] + (h * shape[1] * skip[1] + k)] =
-                                            feature_mg.get(channel, h / skip[0], k / skip[1]);
                     }
                 }
             }
         }
-    } else if (packtype == PackType::InterleavedDecompositionPack) {
+    } else if (packtype == PackType::InterleavedPacking) {
         n_segment[0] = stride[0];
         n_segment[1] = stride[1];
         n_channel_per_ct = 1;
@@ -156,7 +147,7 @@ vector<vector<double>> Feature2DEncrypted::pack_feature(PackType& packtype,
 }
 
 void Feature2DEncrypted::pack(const Array<double, 3>& feature_mg, bool is_symmetric, double scale_in) {
-    auto pack_type = PackType::MultChannelPack;
+    auto pack_type = PackType::MultChannelPacking;
     vector<vector<double>> feature_tmp_pack = pack_feature(pack_type, feature_mg);
     uint32_t n_ct = feature_tmp_pack.size();
     const int N_THREAD = 4;
@@ -191,22 +182,12 @@ void Feature2DEncrypted::single_pack(const Array<double, 3>& feature_mg, bool is
     }
 }
 
-void Feature2DEncrypted::mult_pack(const Array<double, 3>& feature_mg, bool is_sysmmetric, double scale_in) {
-    auto pack_type = PackType::MultiplexedPack;
-    vector<vector<double>> feature_tmp_pack = pack_feature(pack_type, feature_mg);
-
-    for (int i = 0; i < feature_tmp_pack.size(); i++) {
-        auto enc = context->encode(feature_tmp_pack[i], level, scale_in);
-        data.push_back(context->encrypt_asymmetric(enc));
-    }
-}
-
-void Feature2DEncrypted::split_with_stride_pack(const Array<double, 3>& feature_mg,
-                                                const Duo& block_shape,
-                                                const Duo& stride,
-                                                bool is_sysmmetric,
-                                                double scale_in) {
-    auto pack_type = PackType::InterleavedDecompositionPack;
+void Feature2DEncrypted::pack_interleaved(const Array<double, 3>& feature_mg,
+                                          const Duo& block_shape,
+                                          const Duo& stride,
+                                          bool is_sysmmetric,
+                                          double scale_in) {
+    auto pack_type = PackType::InterleavedPacking;
     vector<vector<double>> feature_tmp_pack = pack_feature(pack_type, feature_mg, block_shape, stride);
 
     int N_THREAD = 4;
@@ -345,8 +326,8 @@ Array<double, 3> Feature2DEncrypted::split_with_overlap_unpack(const Duo& block_
     return result;
 }
 
-void Feature2DEncrypted::par_mult_pack(const Array<double, 3>& feature_mg, bool is_sysmmetric, double scale_in) {
-    auto pack_type = PackType::ParMultiplexedPack;
+void Feature2DEncrypted::pack_multiplexed(const Array<double, 3>& feature_mg, bool is_sysmmetric, double scale_in) {
+    auto pack_type = PackType::MultiplexedPacking;
     vector<vector<double>> feature_tmp_pack = pack_feature(pack_type, feature_mg);
 
     for (int i = 0; i < feature_tmp_pack.size(); i++) {
@@ -358,46 +339,6 @@ void Feature2DEncrypted::par_mult_pack(const Array<double, 3>& feature_mg, bool 
             auto image_flat_ct = context->encrypt_symmetric(enc);
             data.push_back(move(image_flat_ct));
         }
-    }
-}
-
-void Feature2DEncrypted::zero_inserted_mult_pack(const Array<double, 3>& feature_mg,
-                                                 const Duo stride,
-                                                 bool is_sysmmetric,
-                                                 double scale_in) {
-    auto input_shape = feature_mg.get_shape();
-    n_channel = input_shape[0];
-    shape[0] = input_shape[1];
-    shape[1] = input_shape[2];
-    Duo zero_inserted_shape = {shape[0] * stride[0], shape[1] * stride[1]};
-    Duo zero_inserted_skip = {skip[0] / stride[0], skip[1] / stride[1]};
-    n_channel_per_ct = context->get_parameter().get_n() / 2 / (zero_inserted_shape[0] * zero_inserted_shape[1]);
-
-    int n_mult_pack_per_ct = n_channel_per_ct / (zero_inserted_skip[0] * zero_inserted_skip[1]);
-    int f_ct_num = div_ceil(n_channel, n_channel_per_ct);
-    vector<vector<double>> feature_tmp_pack(f_ct_num);
-
-    for (int i = 0; i < f_ct_num; i++) {
-        feature_tmp_pack[i].resize(context->get_parameter().get_n() / 2);
-        for (int j = 0; j < n_mult_pack_per_ct; j++) {
-            for (int h = 0; h < shape[0] * skip[0]; h++) {
-                for (int k = 0; k < shape[1] * skip[1]; k++) {
-                    int channel = i * n_channel_per_ct + j * zero_inserted_skip[0] * zero_inserted_skip[1] +
-                                  (zero_inserted_skip[1] * (h % zero_inserted_skip[0]) + k % zero_inserted_skip[1]);
-                    if (channel >= n_channel || (h % skip[0]) >= zero_inserted_skip[0] ||
-                        (k % skip[1]) >= zero_inserted_skip[1]) {
-                        continue;
-                    }
-                    feature_tmp_pack[i][j * shape[0] * skip[0] * shape[1] * skip[1] + (h * shape[0] * skip[0] + k)] =
-                        feature_mg.get(channel, h / skip[0], k / skip[1]);
-                }
-            }
-        }
-    }
-
-    for (int i = 0; i < f_ct_num; i++) {
-        auto enc = context->encode(feature_tmp_pack[i], level, scale_in);
-        data.push_back(context->encrypt_asymmetric(enc));
     }
 }
 
@@ -518,48 +459,37 @@ Array<double, 3> Feature2DEncrypted::single_unpack() const {
     return result;
 }
 
-Array<double, 3> Feature2DEncrypted::mult_unpack() const {
+Array<double, 3> Feature2DEncrypted::unpack_multiplexed() const {
     const int N_THREAD = 4;
     int n_ct = data.size();
-    Duo pre_skip_shape = {shape[0] * skip[0], shape[1] * skip[1]};
     Array<double, 3> result({n_channel, shape[0], shape[1]});
+    int n_channel_per_block = (skip[0] * skip[1]) / (invalid_fill[0] * invalid_fill[1]);
+    int n_channel_per_block_col = skip[1] / invalid_fill[1];
+    int n_block_per_ct = n_channel_per_ct / n_channel_per_block;
 
     parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_idx]);
         Array1D x_mg = ctx_copy.decode(x_pt);
-        for (int j = 0; j < pre_skip_shape[0]; j++) {
-            for (int k = 0; k < pre_skip_shape[1]; k++) {
-                int channel_idx = ct_idx * n_channel_per_ct + j % skip[0] * skip[1] + k % skip[0];
-                if (channel_idx >= n_channel) {
-                    continue;
-                }
-                result.set(channel_idx, j / skip[0], k / skip[0], x_mg[j * pre_skip_shape[0] + k]);
-            }
-        }
-    });
-    return result;
-}
-
-Array<double, 3> Feature2DEncrypted::par_mult_unpack() const {
-    const int N_THREAD = 4;
-    int n_ct = data.size();
-    Duo pre_skip_shape = {shape[0] * skip[0], shape[1] * skip[1]};
-    Array<double, 3> result({n_channel, shape[0], shape[1]});
-    int n_mult_pack_per_ct = n_channel_per_ct / (skip[0] * skip[1]);
-
-    parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
-        CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_idx]);
-        Array1D x_mg = ctx_copy.decode(x_pt);
-        for (int i = 0; i < n_mult_pack_per_ct; i++) {
-            for (int j = 0; j < pre_skip_shape[0]; j++) {
-                for (int k = 0; k < pre_skip_shape[1]; k++) {
-                    int channel_idx =
-                        i * skip[0] * skip[1] + ct_idx * n_channel_per_ct + (j % skip[0]) * skip[1] + k % skip[1];
-                    if (channel_idx >= n_channel) {
+        for (int j = 0; j < n_block_per_ct; j++) {
+            for (int x_in_block = 0; x_in_block < (int)(shape[0] * skip[0]); x_in_block++) {
+                for (int y_in_block = 0; y_in_block < (int)(shape[1] * skip[1]); y_in_block++) {
+                    int channel_x_offset = x_in_block % skip[0];
+                    int channel_y_offset = y_in_block % skip[1];
+                    // skip invalid slots: valid offsets are within [0, skip[d]/invalid_fill[d])
+                    if (channel_x_offset >= (int)(skip[0] / invalid_fill[0]) ||
+                        channel_y_offset >= (int)(skip[1] / invalid_fill[1])) {
                         continue;
                     }
-                    result.set(channel_idx, j / skip[0], k / skip[1],
-                               x_mg[i * pre_skip_shape[0] * pre_skip_shape[1] + j * pre_skip_shape[1] + k]);
+                    int channel_idx_in_block = channel_x_offset * n_channel_per_block_col + channel_y_offset;
+                    int channel_idx = ct_idx * n_channel_per_ct + j * n_channel_per_block + channel_idx_in_block;
+                    if (channel_idx >= (int)n_channel) {
+                        continue;
+                    }
+                    int x = x_in_block / skip[0];
+                    int y = y_in_block / skip[1];
+                    int slot = j * (shape[0] * skip[0]) * (shape[1] * skip[1]) + x_in_block * (shape[1] * skip[1]) +
+                               y_in_block;
+                    result.set(channel_idx, x, y, x_mg[slot]);
                 }
             }
         }
@@ -567,7 +497,7 @@ Array<double, 3> Feature2DEncrypted::par_mult_unpack() const {
     return result;
 }
 
-Array<double, 3> Feature2DEncrypted::split_with_stride_unpack(const Duo& block_shape, const Duo& stride) const {
+Array<double, 3> Feature2DEncrypted::unpack_interleaved(const Duo& block_shape, const Duo& stride) const {
     const int N_THREAD = 4;
     int n_ct = data.size();
     Array<double, 3> result({n_channel, shape[0], shape[1]});
@@ -583,34 +513,6 @@ Array<double, 3> Feature2DEncrypted::split_with_stride_unpack(const Duo& block_s
             for (int k = 0; k < block_shape[1]; k++) {
                 result.set(channel_idx, j * stride[0] + seg_row_idx, k * stride[1] + seg_col_idx,
                            x_mg[j * block_shape[1] + k]);
-            }
-        }
-    });
-    return result;
-}
-
-Array<double, 3> Feature2DEncrypted::zero_inserted_mult_unpack(const Duo stride_next) const {
-    const int N_THREAD = 4;
-    int n_ct = data.size();
-    Duo pre_skip_shape = {shape[0] * skip[0], shape[1] * skip[1]};
-    Array<double, 3> result({n_channel, shape[0], shape[1]});
-    Duo next_skip = {skip[0] / stride_next[0], skip[1] / stride_next[1]};
-    int n_mult_pack_per_ct = n_channel_per_ct / (next_skip[0] * next_skip[1]);
-
-    parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
-        CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_idx]);
-        Array1D x_mg = ctx_copy.decode(x_pt);
-        for (int i = 0; i < n_mult_pack_per_ct; i++) {
-            for (int j = 0; j < pre_skip_shape[0]; j++) {
-                for (int k = 0; k < pre_skip_shape[1]; k++) {
-                    int channel_idx = i * next_skip[0] * next_skip[1] + ct_idx * n_channel_per_ct +
-                                      (j % next_skip[0]) * next_skip[1] + k % next_skip[1];
-                    if (channel_idx >= n_channel || (j % skip[0]) >= next_skip[0] || (k % skip[1]) >= next_skip[1]) {
-                        continue;
-                    }
-                    result.set(channel_idx, j / skip[0], k / skip[1],
-                               x_mg[i * pre_skip_shape[0] * pre_skip_shape[1] + j * pre_skip_shape[1] + k]);
-                }
             }
         }
     });
@@ -689,4 +591,355 @@ Feature2DEncrypted Feature2DEncrypted::copy() const {
         result.data.push_back(data[i].copy());
     }
     return result;
+}
+
+Feature2DShare::Feature2DShare(uint64_t q, int s) : FeatureShare{q, s} {}
+
+Feature3DShare::Feature3DShare(uint64_t q, int s) : FeatureShare{q, s} {}
+
+void Feature2DEncrypted::split_to_shares(Feature2DEncrypted* share0, Feature2DShare* share1) const {
+    int n_slot = context->get_parameter().get_n() / 2;
+    double share_scale = ENC_TO_SHARE_SCALE;
+    int feature_bitlength = ENC_TO_SHARE_SCALE_BIT + 1;
+    int sigma = SIGMA;
+
+    Duo pre_skip_shape = {shape[0] * skip[0], shape[1] * skip[1]};
+    size_t n_share_feature = n_channel * shape[0] * shape[1];
+    size_t n_mask = n_channel * pre_skip_shape[0] * pre_skip_shape[1];
+
+    vector<double> mask_d(n_mask);
+    vector<int64_t> r(n_mask);
+    for (int i = 0; i < n_mask; i++) {
+        r[i] = int64_t(gen_random_uint(feature_bitlength + sigma)) - int64_t(1ull << (feature_bitlength + sigma - 1));
+        mask_d[i] = double(r[i]) / share_scale;
+    }
+
+    share0->n_channel = n_channel;
+    share0->n_channel_per_ct = n_channel_per_ct;
+    share0->shape = shape;
+    share0->skip = skip;
+    share0->level = level;
+    share0->data.clear();
+    vector<double> mask_d_span(mask_d);
+    for (int i = 0; i < data.size(); i++) {
+        size_t start = i * n_slot;
+        size_t length = i == data.size() - 1 ? (mask_d_span.size() - start) : n_slot;
+        std::vector<double> mask_mg_vec(mask_d_span.begin() + start, mask_d_span.begin() + start + length);
+        CkksPlaintext mask_pt = context->encode(mask_mg_vec, level, ENC_TO_SHARE_SCALE);
+        CkksCiphertext share0_ct = context->add_plain(data[i], mask_pt);
+        share0->data.push_back(move(share0_ct));
+    }
+
+    share1->shape = shape;
+    share1->data.resize({n_share_feature});
+    double scale = pow(2, share1->scale_ord);
+    for (int i = 0; i < n_channel; i++) {
+        for (int j = 0; j < shape[0]; j++) {
+            for (int k = 0; k < shape[1]; k++) {
+                int skipped_index = i * shape[0] * shape[1] + j * shape[1] + k;
+                int pre_skip_index =
+                    i * pre_skip_shape[0] * pre_skip_shape[1] + j * pre_skip_shape[1] * skip[0] + k * skip[1];
+                share1->data[skipped_index] =
+                    (-int64_t(r[pre_skip_index]) % share1->ring_mod + share1->ring_mod) % share1->ring_mod;
+            }
+        }
+    }
+}
+
+static vector<CkksPlaintext> multi_pack_to_pt(const Array<double, 3>& feature_mg,
+                                              Feature2DEncrypted& f2d,
+                                              int n_channel,
+                                              Duo shape,
+                                              Duo skip,
+                                              CkksContext& context,
+                                              int level,
+                                              double scale_in,
+                                              PackType pack_type) {
+    vector<vector<double>> packed;
+    Duo block_expansion = {(uint32_t)ceil(shape[0] / (double)BLOCK_SHAPE[0]),
+                           (uint32_t)ceil(shape[1] / (double)BLOCK_SHAPE[1])};
+    packed = f2d.pack_feature(pack_type, feature_mg, BLOCK_SHAPE, block_expansion);
+
+    vector<CkksPlaintext> pt_vec;
+    for (auto& vec : packed) {
+        pt_vec.push_back(context.encode(vec, level, scale_in));
+    }
+    return pt_vec;
+}
+
+void Feature2DEncrypted::split_to_shares_for_multi_channel_pack(Feature2DEncrypted* share0,
+                                                                Feature2DShare* share1,
+                                                                PackType pack_type_in) const {
+    int n_slot = context->get_parameter().get_n() / 2;
+    double share_scale = ENC_TO_SHARE_SCALE;
+    int feature_bitlength = ENC_TO_SHARE_SCALE_BIT + 1;
+    int sigma = SIGMA;
+    Duo pre_skip_shape = {shape[0] * skip[0], shape[1] * skip[1]};
+    // cppcheck-suppress duplicateAssignExpression
+    size_t n_share_feature = n_channel * shape[0] * shape[1];
+    size_t n_mask = n_channel * shape[0] * shape[1];
+
+    vector<double> mask_d(n_mask);
+    vector<int64_t> r(n_mask);
+    for (int i = 0; i < n_mask; i++) {
+        r[i] = int64_t(gen_random_uint(feature_bitlength + sigma)) - int64_t(1ull << (feature_bitlength + sigma - 1));
+        mask_d[i] = double(r[i]) / share_scale;
+    }
+    share0->n_channel = n_channel;
+    share0->n_channel_per_ct = n_channel_per_ct;
+    share0->shape = shape;
+    share0->skip = skip;
+    share0->level = level;
+    share0->data.clear();
+    auto mask_d_array = Array<double, 1>::from_array_1d(mask_d).reshape<3>({n_channel, shape[0], shape[1]});
+    auto mask_pt =
+        multi_pack_to_pt(mask_d_array, *share0, n_channel, shape, skip, *context, level, DEFAULT_SCALE, pack_type_in);
+    for (int i = 0; i < data.size(); i++) {
+        CkksCiphertext share0_ct = context->add_plain(data[i], mask_pt[i]);
+        share0->data.push_back(move(share0_ct));
+    }
+
+    share1->shape = shape;
+    share1->data.resize({n_mask});
+    double scale = pow(2, share1->scale_ord);
+    for (int i = 0; i < n_mask; i++) {
+        share1->data[i] = (-int64_t(r[i]) % share1->ring_mod + share1->ring_mod) % share1->ring_mod;
+    }
+}
+
+Feature2DEncrypted Feature2DEncrypted::combine_with_share(const Feature2DShare& share) const {
+    const int N_THREAD = 4;
+    int n_slot = context->get_parameter().get_n() / 2;
+    Feature2DEncrypted result(this->context, this->level);
+    result.n_channel = this->n_channel;
+    result.n_channel_per_ct = this->n_channel_per_ct;
+    result.shape = this->shape;
+    result.skip = this->skip;
+    double scale = pow(2, share.scale_ord);
+    int n_ct = this->data.size();
+
+    result.data.clear();
+    result.data.resize(n_ct);
+    parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int i) {
+        vector<double> mask_d(n_slot);
+        for (int j = 0; j < n_slot; j++) {
+            uint64_t v;
+            if (i * n_slot + j >= share.data.get_size()) {
+                v = share.data.get((i * n_slot + j) % share.data.get_size());
+            } else {
+                v = share.data.get(i * n_slot + j);
+            }
+            mask_d[j] = uint64_to_double(v, scale, share.ring_mod);
+        }
+        CkksPlaintext mask_pt = ctx_copy.encode(mask_d, level, ctx_copy.get_parameter().get_default_scale());
+        result.data[i] = ctx_copy.add_plain(data[i], mask_pt);
+    });
+    return result;
+}
+
+Feature2DEncrypted Feature2DEncrypted::combine_with_share_new_protocol(const Feature2DShare& share,
+                                                                       const Feature2DEncrypted& f2d,
+                                                                       const Bytes& b1) const {
+    const int N_THREAD = 8;
+    int n_slot = context->get_parameter().get_n() / 2;
+    Feature2DEncrypted result(this->context, this->level);
+    result.n_channel = this->n_channel;
+    result.n_channel_per_ct = this->n_channel_per_ct;
+    result.shape = this->shape;
+    result.skip = this->skip;
+    double scale = ENC_TO_SHARE_SCALE;
+    double encode_scale = pow(2, DEFAULT_SCALE_BIT);
+    int n_ct = this->data.size();
+
+    result.data.clear();
+    result.data.resize(n_ct);
+
+    parallel_for_with_extra_level_context(
+        n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, CkksContext& extra_level_ctx_copy, int i) {
+            vector<double> mask_d(n_slot, 0);
+            vector<double> b1_value(n_slot, 0);
+            for (int j = 0; j < n_slot; j++) {
+                int mg_idx = (i * n_slot + j) % share.data.get_size();
+                b1_value[j] = 2 * b1[mg_idx] - 1;
+                int64_t mask_value = int64_t(share.data.get(mg_idx)) - int64_t(b1[mg_idx] * share.ring_mod);
+                mask_d[j] = double(mask_value) / scale;
+            }
+            CkksPlaintext mask_pt = ctx_copy.encode(mask_d, level, encode_scale);
+            result.data[i] = ctx_copy.add_plain(data[i], mask_pt);
+
+            CkksPlaintext b1_pt =
+                extra_level_ctx_copy.encode(b1_value, level + 1, extra_level_ctx_copy.get_parameter().get_q(level + 1));
+
+            auto f2d_mult = extra_level_ctx_copy.mult_plain(f2d.data[i], b1_pt);
+            f2d_mult = extra_level_ctx_copy.rescale(f2d_mult, encode_scale);
+
+            result.data[i] = ctx_copy.add(result.data[i], f2d_mult);
+        });
+    return result;
+}
+
+Feature2DEncrypted Feature2DEncrypted::combine_with_share_new_protocol_for_multi_pack(const Feature2DShare& share,
+                                                                                      const Feature2DEncrypted& f2d,
+                                                                                      const Bytes& b1,
+                                                                                      PackType pack_type) const {
+    const int N_THREAD = 8;
+    int n_slot = context->get_parameter().get_n() / 2;
+    Feature2DEncrypted result(this->context, this->level);
+    result.n_channel = this->n_channel;
+    result.n_channel_per_ct = this->n_channel_per_ct;
+    result.shape = this->shape;
+    result.skip = this->skip;
+    double scale = ENC_TO_SHARE_SCALE;
+    double encode_scale = pow(2, DEFAULT_SCALE_BIT);
+    int n_ct = this->data.size();
+
+    result.data.clear();
+    result.data.resize(n_ct);
+
+    Array<double, 1> mask_d({share.data.get_size()});
+    for (int i = 0; i < share.data.get_size(); i++) {
+        int64_t mask_value = int64_t(share.data.get(i)) - int64_t(b1[i] * share.ring_mod);
+        mask_d.set(i, (mask_value) / scale);
+    }
+    auto f2d_copy = f2d.copy();
+    Array<double, 3> mask_d_3d = mask_d.reshape<3>({this->n_channel, this->shape[0], this->shape[1]});
+    auto mask_pt = multi_pack_to_pt(mask_d_3d, f2d_copy, this->n_channel, this->shape, this->skip, *context, level,
+                                    DEFAULT_SCALE, pack_type);
+    Array<double, 1> b1_value({b1.size()});
+    for (int i = 0; i < b1.size(); i++) {
+        b1_value.set(i, 2 * b1[i] - 1);
+    }
+    Array<double, 3> b1_value_3d = b1_value.reshape<3>({this->n_channel, this->shape[0], this->shape[1]});
+    CkksContext& extra_level_context = context->get_extra_level_context();
+    auto mask_b1 =
+        multi_pack_to_pt(b1_value_3d, f2d_copy, this->n_channel, this->shape, this->skip, extra_level_context,
+                         level + 1, extra_level_context.get_parameter().get_q(level + 1), pack_type);
+    for (int i = 0; i < data.size(); i++) {
+        auto f2d_mult = extra_level_context.mult_plain(f2d.data[i], mask_b1[i]);
+        f2d_mult = extra_level_context.rescale(f2d_mult, encode_scale);
+        result.data[i] = (*context).add_plain(data[i], mask_pt[i]);
+        result.data[i] = (*context).add(result.data[i], f2d_mult);
+    }
+    return result;
+}
+
+void Feature2DEncrypted::decrypt_to_share(Feature2DShare* share, PackType pack_type) const {
+    uint64_t ring_mod = RING_MOD;
+    int n_slot = context->get_parameter().get_n() / 2;
+    share->shape = shape;
+    Array<double, 3> x_double_matrix;
+    if (pack_type == PackType::MultiplexedPacking) {
+        x_double_matrix = this->unpack_multiplexed();
+    } else if (pack_type == PackType::SinglePack) {
+        x_double_matrix = this->unpack();
+    } else if (pack_type == PackType::InterleavedPacking) {
+        Duo block_expansion = {(uint32_t)ceil(shape[0] / (double)BLOCK_SHAPE[0]),
+                               (uint32_t)ceil(shape[1] / (double)BLOCK_SHAPE[1])};
+        x_double_matrix = this->unpack_interleaved(BLOCK_SHAPE, block_expansion);
+    }
+
+    share->data = array_double_to_uint64(x_double_matrix, share->scale_ord, share->ring_mod).reshape<1>({0});
+}
+
+Array<uint64_t, 1> Feature2DEncrypted::encrypt_from_share(const Feature2DShare& share,
+                                                          int n_channel,
+                                                          const Duo& input_shape,
+                                                          PackType pack_type) {
+    int n_slot = context->get_parameter().get_n() / 2;
+    if (pack_type == PackType::SinglePack) {
+        this->skip = {1, 1};
+    }
+
+    this->shape = input_shape;
+    Array<double, 1> y0_sub_mod_div_s(share.data.get_shape());
+    Array<uint64_t, 1> y0_add_mod(share.data.get_shape());
+    double scale = ENC_TO_SHARE_SCALE;
+    for (int i = 0; i < share.data.get_size(); i++) {
+        uint64_t y0_add_mod_value = (share.data[i] + (share.ring_mod / 2)) % share.ring_mod;
+        y0_add_mod.set(i, y0_add_mod_value);
+        double y0_sub = double(int64_t(y0_add_mod_value) - int64_t(share.ring_mod / 2)) / scale;
+        y0_sub_mod_div_s.set(i, y0_sub);
+    }
+
+    Array<double, 3> y3 = y0_sub_mod_div_s.reshape<3>({uint64_t(n_channel), input_shape[0], input_shape[1]});
+    if (pack_type == PackType::MultiplexedPacking) {
+        this->pack_multiplexed(y3, true, DEFAULT_SCALE);
+    } else if (pack_type == PackType::SinglePack) {
+        this->pack(y3, true, DEFAULT_SCALE);
+    } else if (pack_type == PackType::InterleavedPacking) {
+        Duo block_expansion = {(uint32_t)ceil(input_shape[0] / (double)BLOCK_SHAPE[0]),
+                               (uint32_t)ceil(input_shape[1] / (double)BLOCK_SHAPE[1])};
+        this->pack_interleaved(y3, BLOCK_SHAPE, block_expansion, true);
+    }
+
+    return y0_add_mod;
+}
+
+void Feature2DEncrypted::decompress() {
+    assert(data.size() == 0 && data_compress.size() > 0);
+    size_t n_ct = data_compress.size();
+    for (int i = 0; i < n_ct; i++) {
+        data.push_back(context->compressed_ciphertext_to_ciphertext(data_compress[i]));
+    }
+    data_compress.clear();
+}
+
+Bytes Feature2DEncrypted::serialize() const {
+    stringstream ss;
+    ss_write(ss, dim);
+    ss_write(ss, n_channel);
+    ss_write(ss, n_channel_per_ct);
+    ss_write(ss, level);
+    for (int i = 0; i < 2; i++) {
+        ss_write(ss, shape[i]);
+    }
+    for (int i = 0; i < 2; i++) {
+        ss_write(ss, skip[i]);
+    }
+    uint32_t n_ct = data.size();
+    ss_write(ss, n_ct);
+    for (const CkksCiphertext& ct : data) {
+        Bytes ct_data = ct.serialize(context->get_parameter());
+        ss_write_vector(ss, ct_data);
+    }
+    uint32_t n_cct = data_compress.size();
+    ss_write(ss, n_cct);
+    for (const CkksCompressedCiphertext& cct : data_compress) {
+        Bytes cct_data = cct.serialize(context->get_parameter());
+        ss_write_vector(ss, cct_data);
+    }
+
+    Bytes bytes = ss_to_bytes(ss);
+    return bytes;
+}
+
+void Feature2DEncrypted::deserialize(const Bytes& bytes) {
+    stringstream ss;
+    bytes_to_ss(bytes, ss);
+    ss_read(ss, &dim);
+    ss_read(ss, &n_channel);
+    ss_read(ss, &n_channel_per_ct);
+    ss_read(ss, &level);
+    for (int i = 0; i < 2; i++) {
+        ss_read(ss, &shape[i]);
+    }
+    for (int i = 0; i < 2; i++) {
+        ss_read(ss, &skip[i]);
+    }
+    uint32_t n_ct;
+    ss_read(ss, &n_ct);
+    for (int i = 0; i < n_ct; i++) {
+        Bytes ct_data;
+        ss_read_vector(ss, &ct_data);
+        auto y_ct = CkksCiphertext::deserialize(ct_data);
+        data.push_back(move(y_ct));
+    }
+    uint32_t n_cct;
+    ss_read(ss, &n_cct);
+    for (int i = 0; i < n_cct; i++) {
+        Bytes cct_data;
+        ss_read_vector(ss, &cct_data);
+        auto y_ct = CkksCompressedCiphertext::deserialize(cct_data);
+        data_compress.push_back(move(y_ct));
+    }
 }

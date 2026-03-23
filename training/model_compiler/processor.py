@@ -131,8 +131,6 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 'ckks_scale': node.ckks_scale,
                 'skip': int(graph.dag.nodes[node]['skip'][0]),
                 'ckks_parameter_id': node.ckks_parameter_id,
-                'virtual_shape': [int(x) for x in graph.dag.nodes[node]['virtual_shape']],
-                'virtual_skip': [int(x) for x in graph.dag.nodes[node]['virtual_skip']],
                 'level': graph.dag.nodes[node]['level'],
                 'depth': node.depth,
                 'pack_num': graph.dag.nodes[node]['pack_num'],
@@ -184,7 +182,7 @@ def change_conv_transpose_shape(graph: LayerAbstractGraph):
         if isinstance(c_node, ComputeNode):
             if isinstance(c_node, ConvComputeNode):
                 if c_node.is_conv_transpose:
-                    target_c_node = find_layer_in_linear_graph(graph, c_node, 'conv2d', 'up')
+                    target_c_node = transforms.find_layer_in_linear_graph(graph, c_node, 'conv2d', 'up')
                     if target_c_node is not None:
                         f_in = list(graph.dag.predecessors(target_c_node))[0]
                         f_out = list(graph.dag.successors(target_c_node))[0]

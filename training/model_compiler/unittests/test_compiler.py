@@ -320,10 +320,7 @@ class TestLayerInteraction(CompilerTestBase):
             if isinstance(node, ComputeNode) and node.layer_type == 'reshape':
                 input = list(graph.dag.predecessors(node))[0]
                 output = list(graph.dag.successors(node))[0]
-                if (
-                    graph.dag.nodes[output]['virtual_shape'][0] == 16
-                    and graph.dag.nodes[output]['virtual_skip'][0] == 2
-                ):
+                if output.sp_info['skip'][0] == 2:
                     res = True
                     break
         self.assertEqual(res, True)
@@ -338,7 +335,10 @@ class TestLayerInteraction(CompilerTestBase):
             if isinstance(node, PoolComputeNode):
                 input = list(graph.dag.predecessors(node))[0]
                 output = list(graph.dag.successors(node))[0]
-                if output.shape == input.shape and graph.dag.nodes[output]['skip'] == graph.dag.nodes[input]['skip']:
+                if (
+                    output.shape[0] == input.shape[0] / node.stride[0]
+                    and graph.dag.nodes[output]['skip'][0] == graph.dag.nodes[input]['skip'][0] * node.stride[0]
+                ):
                     res = True
                     break
         self.assertEqual(res, True)
