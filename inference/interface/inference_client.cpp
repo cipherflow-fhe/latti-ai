@@ -145,9 +145,9 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
                 Duo block_shape = {task_config_["block_shape"][0], task_config_["block_shape"][1]};
                 Duo channel_packing_factor = {(uint32_t)(param.height / block_shape[0]),
                                               (uint32_t)(param.width / block_shape[1])};
-                input_ct.split_with_stride_pack(input_array, block_shape, channel_packing_factor, false, scale);
+                input_ct.pack_interleaved(input_array, block_shape, channel_packing_factor, false, scale);
             } else {
-                input_ct.par_mult_pack(input_array, false, scale);
+                input_ct.pack_multiplexed(input_array, false, scale);
             }
             result[name] = input_ct.serialize();
         }

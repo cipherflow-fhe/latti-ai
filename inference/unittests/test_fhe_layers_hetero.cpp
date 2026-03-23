@@ -692,8 +692,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv_varied_stride", "", Hete
                             conv_layer.prepare_weight_for_post_skip_rotation();
 
                             Feature2DEncrypted input_feature(&this->context, init_level, skip);
-                            input_feature.par_mult_pack(input_array, false,
-                                                        this->context.get_parameter().get_default_scale());
+                            input_feature.pack_multiplexed(input_array, false,
+                                                           this->context.get_parameter().get_default_scale());
 
                             Feature2DEncrypted output_feature(&this->context, output_level);
                             output_feature.shape[0] = input_shape[0] / stride[0];
@@ -731,7 +731,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv_varied_stride", "", Hete
 
                             this->run(project_path, cxx_args);
 
-                            auto y_mg = output_feature.par_mult_unpack();
+                            auto y_mg = output_feature.unpack_multiplexed();
                             auto y_expected = conv_layer.run_plaintext(input_array);
 
                             auto compare_result = compare(y_expected, y_mg);
@@ -774,7 +774,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_dw_s2_64x64_k3", "", HeteroPr
                     dw_conv_layer.prepare_weight();
 
                     Feature2DEncrypted input_feature(&this->context, init_level, skip);
-                    input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
+                    input_feature.pack_multiplexed(input_array, false,
+                                                   this->context.get_parameter().get_default_scale());
 
                     Feature2DEncrypted output_feature(&this->context, init_level - 2);
                     output_feature.shape[0] = input_shape[0] / stride[0];
@@ -811,7 +812,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_dw_s2_64x64_k3", "", HeteroPr
 
                     this->run(project_path, cxx_args);
 
-                    auto y_mg = output_feature.par_mult_unpack();
+                    auto y_mg = output_feature.unpack_multiplexed();
                     auto y_expected = dw_conv_layer.run_plaintext(input_array);
 
                     auto compare_result = compare(y_expected, y_mg);
@@ -847,7 +848,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv_varied_input_shape", "",
             conv_layer.prepare_weight_for_post_skip_rotation();
 
             Feature2DEncrypted input_feature(&this->context, init_level, skip);
-            input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
+            input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
 
             Feature2DEncrypted output_feature(&this->context, init_level - 1);
             output_feature.shape[0] = input_shape[0] / stride[0];
@@ -880,7 +881,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv_varied_input_shape", "",
 
             this->run(project_path, cxx_args);
 
-            auto y_mg = output_feature.par_mult_unpack();
+            auto y_mg = output_feature.unpack_multiplexed();
             auto y_expected = conv_layer.run_plaintext(input_array);
 
             auto compare_result = compare(y_expected, y_mg);
@@ -914,7 +915,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv_varied_kernel_shape", ""
             conv_layer.prepare_weight_for_post_skip_rotation();
 
             Feature2DEncrypted input_feature(&this->context, init_level, skip);
-            input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
+            input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
 
             Feature2DEncrypted output_feature(&this->context, init_level - 1);
             output_feature.shape[0] = input_shape[0] / stride[0];
@@ -947,7 +948,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv_varied_kernel_shape", ""
 
             this->run(project_path, cxx_args);
 
-            auto y_mg = output_feature.par_mult_unpack();
+            auto y_mg = output_feature.unpack_multiplexed();
             auto y_expected = conv_layer.run_plaintext(input_array);
 
             auto compare_result = compare(y_expected, y_mg);
@@ -987,7 +988,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
                     conv_layer.prepare_weight_for_post_skip_rotation();
 
                     Feature2DEncrypted input_feature(&this->context, init_level, skip);
-                    input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
+                    input_feature.pack_multiplexed(input_array, false,
+                                                   this->context.get_parameter().get_default_scale());
 
                     Feature2DEncrypted output_feature(&this->context, init_level - 1);
                     output_feature.shape[0] = input_shape[0] / stride[0];
@@ -1020,7 +1022,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
                     this->run(project_path, cxx_args);
 
-                    auto y_mg = output_feature.par_mult_unpack();
+                    auto y_mg = output_feature.unpack_multiplexed();
                     auto y_expected = conv_layer.run_plaintext(input_array);
 
                     auto compare_result = compare(y_expected, y_mg);
@@ -1254,7 +1256,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs", "", HeteroProcessors)
             auto weight = gen_random_array<2>({order + 1, n_channel}, 1.0);
 
             Feature2DEncrypted input_feature(&this->context, init_level, skip);
-            input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
+            input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
 
             PolyRelu polyx(this->context.get_parameter(), {input_shape[0], input_shape[1]}, order, weight, skip,
                            n_channel_per_ct, init_level);
@@ -1286,7 +1288,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs", "", HeteroProcessors)
 
             this->run(project_path, cxx_args);
 
-            auto output_mg = output_feature.par_mult_unpack();
+            auto output_mg = output_feature.unpack_multiplexed();
             auto output_mg_expected = polyx.run_plaintext_for_non_absorb_case(input_array);
 
             INFO("order=" << order);
@@ -1587,7 +1589,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs", "", HeteroProces
         {0.0, 2.40085652217597, 0.0, -2.63125454261783, 0.0, 1.54912674773593, 0.0, -3.31172956504304e-1}, n_channel);
 
     Feature2DEncrypted input_feature(&this->context, init_level, skip);
-    input_feature.par_mult_pack(input_array, false, this->context.get_parameter().get_default_scale());
+    input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
 
     // Layer 0: p0(x)
     PolyRelu poly0(this->context.get_parameter(), input_shape, order0, weight0, skip, n_channel_per_ct, init_level);
@@ -1627,7 +1629,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs", "", HeteroProces
 
     this->run(project_path, cxx_args);
 
-    auto output_mg = output_feature.par_mult_unpack();
+    auto output_mg = output_feature.unpack_multiplexed();
 
     // Plaintext reference: result = x + sign(x) * x
     auto p0_plain = poly0.run_plaintext_for_non_absorb_case(input_array);
@@ -1770,7 +1772,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
                                         gen_random_array<2>({n_in_channel, input_shape}, 1.0);
 
                                     Feature1DEncrypted input_feature(&this->context, init_level, skip);
-                                    input_feature.par_mult_pack(input_array, false, this->param.get_default_scale());
+                                    input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
                                     ParMultiplexedConv1DPackedLayer conv0_layer(
                                         this->context.get_parameter(), input_shape, conv0_weight, conv0_bias, stride,
                                         skip, n_channel_per_ct, init_level);
@@ -1819,7 +1821,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
 
                                     this->run(project_path, cxx_args);
 
-                                    Array<double, 2> output_mg = output_feature.par_mult_unpack();
+                                    Array<double, 2> output_mg = output_feature.unpack_multiplexed();
                                     Array<double, 2> plain_output = conv0_layer.plaintext_call(input_array);
 
                                     print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
