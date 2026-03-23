@@ -194,7 +194,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "sq", "", HeteroProcessors) {
             Array<double, 3> input_array = gen_random_array<3>({1, input_shape[0], input_shape[1]}, 1.0);
 
             Feature2DEncrypted input_feature(&this->context, init_level);
-            input_feature.pack(input_array, false, this->param.get_default_scale());
+            input_feature.pack_multiple_channel(input_array, false, this->param.get_default_scale());
 
             Feature2DEncrypted output_feature(&this->context, init_level);
 
@@ -258,7 +258,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_1ch_s1", "", HeteroProcessor
                     uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
 
                     Feature2DEncrypted input_feature(&this->context, init_level);
-                    input_feature.pack(input_array, false, this->param.get_default_scale());
+                    input_feature.pack_multiple_channel(input_array, false, this->param.get_default_scale());
 
                     Conv2DPackedLayer conv0_layer(this->context.get_parameter(), input_shape, conv0_weight, conv0_bias,
                                                   stride, skip, n_channel_per_ct, init_level);
@@ -340,7 +340,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_1ch_s2", "", HeteroProcessor
                     uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
 
                     Feature2DEncrypted input_feature(&this->context, init_level);
-                    input_feature.pack(input_array, false, this->param.get_default_scale());
+                    input_feature.pack_multiple_channel(input_array, false, this->param.get_default_scale());
 
                     Conv2DPackedLayer conv0_layer(this->context.get_parameter(), input_shape, conv0_weight, conv0_bias,
                                                   stride, skip, n_channel_per_ct, init_level);
@@ -417,7 +417,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_mch_s1", "", HeteroProcessor
                     conv_layer.prepare_weight();
 
                     Feature2DEncrypted input_feature(&this->context, init_level);
-                    input_feature.pack(x_mg, false, this->param.get_default_scale());
+                    input_feature.pack_multiple_channel(x_mg, false, this->param.get_default_scale());
 
                     Feature2DEncrypted output_feature(&this->context, init_level - 1);
                     output_feature.shape[0] = input_shape[0] / stride[0];
@@ -488,7 +488,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_mch_s2", "", HeteroProcessor
                     conv_layer.prepare_weight();
 
                     Feature2DEncrypted input_feature(&this->context, init_level);
-                    input_feature.pack(x_mg, false, this->param.get_default_scale());
+                    input_feature.pack_multiple_channel(x_mg, false, this->param.get_default_scale());
 
                     Feature2DEncrypted output_feature(&this->context, init_level - 1);
                     output_feature.shape[0] = input_shape[0] / stride[0];
@@ -554,7 +554,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "dw_32ch_s1_32x32_k3", "", HeteroP
     conv.prepare_weight();
 
     Feature2DEncrypted f2d(&this->context, init_level);
-    f2d.pack(input, false, this->param.get_default_scale());
+    f2d.pack_multiple_channel(input, false, this->param.get_default_scale());
 
     Feature2DEncrypted output_feature(&this->context, init_level - 1);
     output_feature.shape[0] = input_shape[0] / stride[0];
@@ -613,7 +613,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "dw_4ch_s2_32x32_k3", "", HeteroPr
     auto conv0_bias = gen_random_array<1>({n_out_channel}, 0);
 
     Feature2DEncrypted f2d(&this->context, init_level);
-    f2d.pack(input, false, this->param.get_default_scale());
+    f2d.pack_multiple_channel(input, false, this->param.get_default_scale());
 
     Conv2DPackedDepthwiseLayer conv(this->context.get_parameter(), input_shape, conv0_weight, conv0_bias, stride, skip,
                                     n_channel_per_ct, init_level);
