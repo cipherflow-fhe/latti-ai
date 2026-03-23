@@ -24,6 +24,7 @@ sys.path.insert(0, mega_ag_generator_dir)
 
 from frontend.custom_task import *
 
+import math
 import numpy as np
 
 op_class = 'DensePackedLayer'
@@ -185,6 +186,115 @@ class DensePackedLayer:
                     y = add(y, rotated)
                 n_term = int(n_term / 2)
             result.append(y)
+        return result
+
+    def call_0d(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, skip_0d: int):
+        bsgs_bs = int(math.ceil(math.sqrt(self.pack)))
+        bsgs_gs = int(math.ceil(self.pack / bsgs_bs))
+
+        # Baby-step rotations for each input CT
+        baby_rots = []
+        for ct in x:
+            if bsgs_bs > 1:
+                steps = [b * skip_0d for b in range(1, bsgs_bs)]
+                rots = [ct] + rotate_cols(ct, steps)
+            else:
+                rots = [ct]
+            baby_rots.append(rots)
+
+        result = []
+        for out_idx in range(self.n_packed_out_feature):
+            total = None
+            for ct_in in range(len(x)):
+                for g in range(bsgs_gs):
+                    # Inner sum over baby-steps
+                    x_ct_list = []
+                    w_pt_list = []
+                    b_end = min(bsgs_bs, self.pack - g * bsgs_bs)
+                    for b in range(b_end):
+                        d = g * bsgs_bs + b
+                        weight_idx = ct_in * self.pack + d
+                        x_ct_list.append(baby_rots[ct_in][b])
+                        w_pt_list.append(weight_pt[out_idx][weight_idx])
+
+                    inner = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+
+                    # Giant-step rotation (g=0 needs no rotation)
+                    if g > 0:
+                        inner = rotate_cols(inner, [g * bsgs_bs * skip_0d])[0]
+
+                    if total is None:
+                        total = inner
+                    else:
+                        total = add(total, inner)
+
+            total = rescale(total)
+            total = add(total, bias_pt[out_idx])
+            result.append(total)
+        return result
+
+    def call_0d_custom_compute(self, x: list[CkksCiphertextNode], dense_data_source, skip_0d: int):
+        bsgs_bs = int(math.ceil(math.sqrt(self.pack)))
+        bsgs_gs = int(math.ceil(self.pack / bsgs_bs))
+
+        # Baby-step rotations for each input CT
+        baby_rots = []
+        for ct in x:
+            if bsgs_bs > 1:
+                steps = [b * skip_0d for b in range(1, bsgs_bs)]
+                rots = [ct] + rotate_cols(ct, steps)
+            else:
+                rots = [ct]
+            baby_rots.append(rots)
+
+        result = []
+        for out_idx in range(self.n_packed_out_feature):
+            total = None
+            for ct_in in range(len(x)):
+                for g in range(bsgs_gs):
+                    # Inner sum over baby-steps
+                    x_ct_list = []
+                    w_pt_list = []
+                    b_end = min(bsgs_bs, self.pack - g * bsgs_bs)
+                    for b in range(b_end):
+                        d = g * bsgs_bs + b
+                        weight_idx = ct_in * self.pack + d
+                        w_pt = CkksPlaintextRingtNode(f'encode_pt_{out_idx}_{weight_idx}')
+                        custom_compute(
+                            inputs=[dense_data_source],
+                            output=w_pt,
+                            type='encode_pt',
+                            attributes={
+                                'op_class': op_class,
+                                'type': 'weight_pt',
+                                'i': out_idx,
+                                'j': weight_idx,
+                            },
+                        )
+                        x_ct_list.append(baby_rots[ct_in][b])
+                        w_pt_list.append(w_pt)
+
+                    inner = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+
+                    # Giant-step rotation (g=0 needs no rotation)
+                    if g > 0:
+                        inner = rotate_cols(inner, [g * bsgs_bs * skip_0d])[0]
+
+                    if total is None:
+                        total = inner
+                    else:
+                        total = add(total, inner)
+
+            total = rescale(total)
+            b_pt = CkksPlaintextRingtNode(f'encode_pt_{out_idx}')
+            custom_compute(
+                inputs=[dense_data_source],
+                output=b_pt,
+                type='encode_pt',
+                attributes={'op_class': op_class, 'type': 'bias_pt', 'i': out_idx},
+            )
+            total = add(total, b_pt)
+            result.append(total)
         return result
 
     def call_mult_pack_custom_compute(self, x: list[DataNode], dense_data_source, n):
