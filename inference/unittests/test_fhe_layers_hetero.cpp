@@ -1090,49 +1090,77 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_cyclic", "", HeteroProcessors)
 }
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip", "", HeteroProcessors) {
-    Duo input_shape = {1, 1};
-    Duo w_shape = {10, 4096};
-    Duo b_shape = {10, 1};
-    uint32_t init_level = 2;
+    uint32_t n_in_channel = 64;
+    uint32_t n_out_channel = 10;
+    int init_level = 3;
 
-    Array<double, 1> input_array = gen_random_array<1>({w_shape[1]}, 0.1);
-    Array<double, 2> weight = gen_random_array<2>({w_shape[0], w_shape[1]}, 1);
-    Array<double, 1> bias = gen_random_array<1>({b_shape[0]}, 1);
+    auto input_1d = gen_random_array<1>({n_in_channel}, 0.1);
+    auto weight = gen_random_array<2>({n_out_channel, n_in_channel}, 0.5);
+    auto bias = gen_random_array<1>({n_out_channel}, 0.1);
 
-    vector<uint32_t> skip_shapes = {2, 4, 8, 16};
+    vector<uint32_t> skip_shapes = {2, 4, 8};
     for (uint32_t s : skip_shapes) {
-        Duo skip = {s, s};
-        SECTION("skip=" + str(skip)) {
-            uint32_t n_channel_per_ct = div_ceil(this->n_slot, skip[0] * skip[1]);
-            DensePackedLayer fc_layer(this->context.get_parameter(), weight, bias, n_channel_per_ct, init_level, 0);
-            fc_layer.prepare_weight_for_ord_pack(input_shape, skip);
-            Feature0DEncrypted x_ct(&this->context, init_level);
-            x_ct.pack(input_array, false, this->param.get_default_scale(), skip[0] * skip[1]);
+        uint32_t skip_0d = s * s;
+        SECTION("skip=" + to_string(skip_0d)) {
+            uint32_t n_channel_per_ct = this->n_slot / skip_0d;
 
-            Feature0DEncrypted output_feature(&this->context, init_level - 1);
-            output_feature.skip = x_ct.skip;
-            output_feature.n_channel = w_shape[0];
-            output_feature.n_channel_per_ct = n_channel_per_ct;
-            for (int i = 0; i < div_ceil(output_feature.n_channel, n_channel_per_ct); i++) {
-                output_feature.data.push_back(
-                    this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
-            }
+            Feature0DEncrypted input_feature(&this->context, init_level);
+            input_feature.pack(input_1d, false, this->param.get_default_scale(), skip_0d);
 
-            fs::path project_path =
-                base_path / ("CKKS_fc_prepare_weight1_1D_pack_skip_" + to_string(skip[0]) + "_" + to_string(skip[1])) /
-                ("level_" + to_string(init_level)) / "server";
-            auto arg_names = read_arg_names(project_path);
-            vector<CxxVectorArgument> cxx_args = {
-                {arg_names[0], &x_ct.data},
-                {arg_names[1], &fc_layer.weight_pt},
-                {arg_names[2], &fc_layer.bias_pt},
-                {arg_names[3], &output_feature.data},
-            };
-            this->run(project_path, cxx_args);
+            DensePackedLayer dense(this->context.get_parameter(), weight, bias, n_channel_per_ct, init_level, 0);
+            dense.prepare_weight_0d(skip_0d);
 
-            auto output_mg = output_feature.unpack();
+            Feature0DEncrypted output_feature = dense.run_0d(this->context, input_feature);
 
-            auto plain_output = fc_layer.plaintext_call(input_array);
+            Array<double, 1> output_mg = output_feature.unpack();
+            Array<double, 1> plain_output = dense.plaintext_call(input_1d);
+
+            print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+            print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
+
+            auto compare_result = compare(plain_output, output_mg);
+            REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+            REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+        }
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_mult_pack", "", HeteroProcessors) {
+    int init_level = 3;
+    uint32_t n_in_channel = 64;
+    uint32_t n_out_channel = 10;
+
+    auto weight = gen_random_array<2>({n_out_channel, n_in_channel}, 0.5);
+    auto bias = gen_random_array<1>({n_out_channel}, 0.1);
+
+    struct TestConfig {
+        Duo shape;
+        Duo skip;
+        Duo invalid_fill;
+    };
+    vector<TestConfig> configs = {
+        {{1, 1}, {2, 2}, {1, 1}},   {{1, 1}, {4, 4}, {1, 1}},   {{1, 1}, {8, 8}, {1, 1}},
+        {{1, 1}, {32, 32}, {8, 8}}, {{1, 1}, {16, 16}, {4, 4}},
+    };
+
+    for (auto& cfg : configs) {
+        SECTION("shape=" + str(cfg.shape) + " skip=" + str(cfg.skip) + " inv=" + str(cfg.invalid_fill)) {
+            auto input_3d = gen_random_array<3>({n_in_channel, cfg.shape[0], cfg.shape[1]}, 0.1);
+            auto input_1d = Array<double, 1>::from_array_1d(input_3d.to_array_1d());
+
+            Feature2DEncrypted input_feature(&this->context, init_level, cfg.skip, cfg.invalid_fill);
+            input_feature.par_mult_pack(input_3d, false, this->param.get_default_scale());
+
+            uint32_t block_size = (cfg.shape[0] * cfg.skip[0]) * (cfg.shape[1] * cfg.skip[1]);
+            uint32_t n_blocks_per_ct = div_ceil((uint32_t)this->n_slot, block_size);
+
+            DensePackedLayer dense(this->context.get_parameter(), weight, bias, n_blocks_per_ct, init_level, 0);
+            dense.prepare_weight_for_mult_pack(cfg.shape, cfg.skip, cfg.invalid_fill);
+
+            Feature0DEncrypted output_feature = dense.run_mult_park(this->context, input_feature);
+
+            Array<double, 1> output_mg = output_feature.unpack();
+            Array<double, 1> plain_output = dense.plaintext_call(input_1d);
 
             print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
             print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);

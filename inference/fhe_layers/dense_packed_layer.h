@@ -36,8 +36,11 @@ public:
     virtual void prepare_weight_0d_lazy(uint32_t skip_0d);
     virtual void prepare_weight_for_ord_pack(const Duo& input_shape_in, const Duo& skip_in);
     virtual void prepare_weight_for_ord_pack_lazy(const Duo& input_shape_in, const Duo& skip_in);
-    virtual void prepare_weight_for_mult_pack(const Duo& input_shape_in, const Duo& skip_in);
-    virtual void prepare_weight_for_mult_pack_lazy(const Duo& input_shape_in, const Duo& skip_in);
+    virtual void
+    prepare_weight_for_mult_pack(const Duo& input_shape_in, const Duo& skip_in, const Duo& invalid_fill_in = {1, 1});
+    virtual void prepare_weight_for_mult_pack_lazy(const Duo& input_shape_in,
+                                                   const Duo& skip_in,
+                                                   const Duo& invalid_fill_in = {1, 1});
     virtual std::vector<CkksCiphertext> call(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
     virtual Feature0DEncrypted call(CkksContext& ctx, const Feature2DEncrypted& x);
     virtual Feature0DEncrypted call(CkksContext& ctx, const Feature0DEncrypted& x);
@@ -98,6 +101,7 @@ protected:
     int cached_n_num_pre_ct = 0;
     int cached_n_block_input = 0;
     int cached_N_half = 0;
+    Duo cached_invalid_fill = {1, 1};
 
     // 0D specific
     uint32_t skip_0d_val = 0;

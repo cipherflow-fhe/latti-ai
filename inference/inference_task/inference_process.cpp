@@ -158,16 +158,15 @@ void InitInferenceProcess::init_dense_layer(const string& key, const json& layer
     if (feature_input.dim == 0) {
         dense->prepare_weight_0d(feature_input.skip[0]);
     } else if (pack_style == "multiplexed") {
-        Duo input_shape;
-        input_shape[0] = feature_input.shape[0] * feature_input.invalid_fill[0];
-        input_shape[1] = feature_input.shape[1] * feature_input.invalid_fill[1];
+        Duo input_shape = feature_input.shape;
         Duo input_skip;
         input_skip[0] = feature_input.special_skip[0] / input_shape[0];
         input_skip[1] = feature_input.special_skip[1] / input_shape[1];
+        Duo invalid_fill = feature_input.invalid_fill;
         if (is_lazy) {
-            dense->prepare_weight_for_mult_pack_lazy(input_shape, input_skip);
+            dense->prepare_weight_for_mult_pack_lazy(input_shape, input_skip, invalid_fill);
         } else {
-            dense->prepare_weight_for_mult_pack(input_shape, input_skip);
+            dense->prepare_weight_for_mult_pack(input_shape, input_skip, invalid_fill);
         }
     } else {
         if (is_lazy) {
