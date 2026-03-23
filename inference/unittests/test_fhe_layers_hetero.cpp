@@ -32,6 +32,7 @@
 #include "data_structs/feature.h"
 #include "fhe_layers/conv2d_packed_layer.h"
 #include "fhe_layers/poly_relu2d.h"
+#include "fhe_layers/poly_relu_base.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer_depthwise.h"
 #include "fhe_layers/activation_layer.h"
@@ -1046,9 +1047,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_cyclic", "", HeteroProcessors)
         Duo input_shape = {s, s};
         uint32_t n_channel_per_ct = div_ceil(this->n_slot, input_shape[0] * input_shape[1]);
         SECTION("input_shape=" + str(input_shape)) {
-            DensePackedLayer fc_layer(this->context.get_parameter(), input_shape, skip, weight, bias, n_channel_per_ct,
-                                      init_level, 0);
-            fc_layer.prepare_weight1();
+            DensePackedLayer fc_layer(this->context.get_parameter(), weight, bias, n_channel_per_ct, init_level, 0);
+            fc_layer.prepare_weight_for_ord_pack(input_shape, skip);
 
             Feature0DEncrypted x_ct(&this->context, init_level);
             x_ct.skip = input_shape[0] * input_shape[1];
@@ -1076,8 +1076,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_cyclic", "", HeteroProcessors)
             };
             this->run(project_path, cxx_args);
 
-            DecryptType dec_type = DecryptType::SPARSE;
-            auto output_mg = output_feature.unpack(dec_type);
+            auto output_mg = output_feature.unpack();
             Array<double, 1> plain_output = fc_layer.plaintext_call(x_mg);
 
             print_double_message(output_mg.to_array_1d().data(), "output_mg", 128);
@@ -1105,12 +1104,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip", "", HeteroProcessors) {
         Duo skip = {s, s};
         SECTION("skip=" + str(skip)) {
             uint32_t n_channel_per_ct = div_ceil(this->n_slot, skip[0] * skip[1]);
-            DensePackedLayer fc_layer(this->context.get_parameter(), input_shape, skip, weight, bias, n_channel_per_ct,
-                                      init_level, 0);
-            fc_layer.prepare_weight1();
+            DensePackedLayer fc_layer(this->context.get_parameter(), weight, bias, n_channel_per_ct, init_level, 0);
+            fc_layer.prepare_weight_for_ord_pack(input_shape, skip);
             Feature0DEncrypted x_ct(&this->context, init_level);
-            x_ct.skip = skip[0] * skip[1];
-            x_ct.pack_skip(input_array, false);
+            x_ct.pack(input_array, false, this->param.get_default_scale(), skip[0] * skip[1]);
 
             Feature0DEncrypted output_feature(&this->context, init_level - 1);
             output_feature.skip = x_ct.skip;
@@ -1133,8 +1130,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip", "", HeteroProcessors) {
             };
             this->run(project_path, cxx_args);
 
-            DecryptType dec_type = DecryptType::SPARSE;
-            auto output_mg = output_feature.unpack(dec_type);
+            auto output_mg = output_feature.unpack();
 
             auto plain_output = fc_layer.plaintext_call(input_array);
 
@@ -1176,13 +1172,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
     input_feature.n_channel = input_channel;
     input_feature.n_channel_per_ct = div_ceil(this->n_slot, dense_shape[0] * dense_shape[1]);
 
-    DensePackedLayer dense(this->context.get_parameter(), dense_shape, skip, weight0, bias0,
-                           input_feature.n_channel_per_ct, init_level, 0);
-    dense.prepare_weight1();
+    DensePackedLayer dense(this->context.get_parameter(), weight0, bias0, input_feature.n_channel_per_ct, init_level,
+                           0);
+    dense.prepare_weight_for_ord_pack(dense_shape, skip);
 
-    DensePackedLayer dense1(this->context.get_parameter(), dense_shape1, skip1, weight1, bias1,
-                            input_feature.n_channel_per_ct, init_level - 1, 0);
-    dense1.prepare_weight1();
+    DensePackedLayer dense1(this->context.get_parameter(), weight1, bias1, input_feature.n_channel_per_ct,
+                            init_level - 1, 0);
+    dense1.prepare_weight_for_ord_pack(dense_shape1, skip1);
 
     Feature0DEncrypted output_feature(&this->context, init_level - 2);
     output_feature.skip = skip1[0] * skip1[1];
@@ -1204,7 +1200,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
 
     this->run(project_path, cxx_args);
 
-    Array<double, 1> output_mg = output_feature.unpack(DecryptType::SPARSE);
+    Array<double, 1> output_mg = output_feature.unpack();
 
     Array<double, 1> output_plain_0 = dense.plaintext_call(input);
     Array<double, 1> output_plain_1 = dense1.plaintext_call(output_plain_0);
@@ -1297,16 +1293,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature0d", "", HeteroP
 
                     // Pack into Feature0DEncrypted
                     Feature0DEncrypted input_feature(&this->context, init_level);
-                    input_feature.skip = skip_val;
                     input_feature.n_channel = n_channel;
-                    input_feature.pack_skip(input_array, false);
+                    input_feature.pack(input_array, false, this->param.get_default_scale(), skip_val);
 
-                    // Create PolyRelu for Feature0D: input_shape={1,1}, skip={skip_val, 1}
-                    Duo input_shape = {1, 1};
-                    Duo skip = {skip_val, 1};
-                    PolyRelu polyx(this->context.get_parameter(), input_shape, order, weight, skip, n_channel_per_ct,
-                                   init_level, {1, 1}, {1, 1}, true);
-                    polyx.prepare_weight_for_feature0d();
+                    // Create PolyRelu0D for Feature0D
+                    PolyRelu0D polyx(this->context.get_parameter(), weight, n_channel_per_ct, init_level, order,
+                                     skip_val);
+                    polyx.prepare_weight();
 
                     int output_level = init_level - level_cost;
                     uint32_t n_packed_ct = div_ceil(n_channel, n_channel_per_ct);
@@ -1336,8 +1329,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature0d", "", HeteroP
 
                     this->run(project_path, cxx_args);
 
-                    auto output_mg = output_feature.unpack(DecryptType::SPARSE);
-                    auto output_mg_expected = polyx.run_plaintext_for_non_absorb_case_0d(input_array);
+                    auto output_mg = output_feature.unpack();
+                    auto output_mg_expected = polyx.run_plaintext(input_array);
 
                     INFO("order=" << order << " skip=" << skip_val);
                     print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
@@ -1968,6 +1961,50 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_cpmm_square", "", HeteroProce
         // n_slot=8192, d=64, d^2=4096, n_h_padded=4, n_h_padded*d^2=16384 > 8192
         // S=8192/4096=2, G=4/2=2
         run_square_test(83, 3, 64, 2);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "dense_0d", "", HeteroProcessors) {
+    int init_level = 8;
+
+    vector<uint32_t> n_ins = {32, 64};
+    vector<uint32_t> n_outs = {10, 32, 64};
+    vector<uint32_t> skips = {1, 2, 128, 256};
+
+    for (uint32_t n_in_channel : n_ins) {
+        SECTION("n_in=" + to_string(n_in_channel)) {
+            for (uint32_t n_out_channel : n_outs) {
+                SECTION("n_out=" + to_string(n_out_channel)) {
+                    for (uint32_t skip_0d : skips) {
+                        uint32_t n_channel_per_ct = this->n_slot / skip_0d;
+                        SECTION("skip=" + to_string(skip_0d)) {
+                            auto input_array = gen_random_array<1>({n_in_channel}, 1.0);
+                            auto weight = gen_random_array<2>({n_out_channel, n_in_channel}, 0.5);
+                            auto bias_array = gen_random_array<1>({n_out_channel}, 0.1);
+
+                            Feature0DEncrypted input_feature(&this->context, init_level);
+                            input_feature.pack(input_array, false, this->param.get_default_scale(), skip_0d);
+
+                            DensePackedLayer dense(this->context.get_parameter(), weight, bias_array, n_channel_per_ct,
+                                                   init_level, 0);
+                            dense.prepare_weight_0d(skip_0d);
+
+                            Feature0DEncrypted output_feature = dense.run_0d(this->context, input_feature);
+
+                            Array<double, 1> output_mg = output_feature.unpack();
+                            Array<double, 1> plain_output = dense.plaintext_call(input_array);
+
+                            print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+                            print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
+
+                            auto compare_result = compare(plain_output, output_mg);
+                            REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+                            REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

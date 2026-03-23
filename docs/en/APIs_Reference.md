@@ -969,12 +969,15 @@ Encrypted fully-connected (dense) layer with packed ciphertext layout. Supports 
 
 **Key methods:**
 
-- `void prepare_weight1()` — Pre-encode weights for single-pack mode
-- `void prepare_weight1_lazy()` — Defer single-pack weight encoding until first use
-- `void prepare_weight_for_mult_pack()` — Pre-encode weights for mult-pack mode
-- `void prepare_weight_for_mult_pack_lazy()` — Defer mult-pack weight encoding until first use
+- `void prepare_weight_for_ord_pack(const Duo& input_shape_in, const Duo& skip_in)` — Pre-encode weights for single-pack mode
+- `void prepare_weight_for_ord_pack_lazy(const Duo& input_shape_in, const Duo& skip_in)` — Defer single-pack weight encoding until first use
+- `void prepare_weight_0d(uint32_t skip_0d)` — Pre-encode weights for 0D packing with BSGS optimization
+- `void prepare_weight_0d_lazy(uint32_t skip_0d)` — Defer 0D weight encoding until first use
+- `void prepare_weight_for_mult_pack(const Duo& input_shape_in, const Duo& skip_in)` — Pre-encode weights for mult-pack mode
+- `void prepare_weight_for_mult_pack_lazy(const Duo& input_shape_in, const Duo& skip_in)` — Defer mult-pack weight encoding until first use
 - `Feature0DEncrypted call(CkksContext& ctx, const Feature2DEncrypted& x)` — Execute on 2D encrypted input (single-pack)
 - `Feature0DEncrypted call(CkksContext& ctx, const Feature0DEncrypted& x)` — Execute on 0D encrypted input (single-pack)
+- `Feature0DEncrypted run_0d(CkksContext& ctx, const Feature0DEncrypted& x)` — Execute on 0D encrypted input (0D packing with BSGS)
 - `Feature0DEncrypted run_mult_park(CkksContext& ctx, const Feature2DEncrypted& x)` — Execute on 2D encrypted input (mult-pack)
 - `Feature0DEncrypted run_mult_park(CkksContext& ctx, const Feature0DEncrypted& x)` — Execute on 0D encrypted input (mult-pack)
 - `Array<double, 1> plaintext_call(const Array<double, 1>& x, double multiplier = 1.0)` — Execute on plaintext input (for debugging)

@@ -34,11 +34,13 @@ public:
                                     const Duo& upsample_factor_in = {1, 1});
 
     ~ParMultiplexedConv2DPackedLayer();
+    virtual void prepare_weight_for_reduct_rot();
     virtual void prepare_weight_for_post_skip_rotation();
     virtual void prepare_weight_for_post_skip_rotation_lazy();
 
     virtual Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
     virtual Feature2DEncrypted run_for_post_skip_rotation(CkksContext& ctx, const Feature2DEncrypted& x);
+    virtual Feature2DEncrypted run_for_reduct_rot(CkksContext& ctx, const Feature2DEncrypted& x);
     virtual vector<double> select_tensor(int num) const;
 
     std::vector<std::vector<std::vector<CkksPlaintextRingt>>> weight_pt;
@@ -57,6 +59,7 @@ public:
 private:
     std::vector<CkksCiphertext> run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
     std::vector<CkksCiphertext> run_core_for_post_skip_rotation(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
+    std::vector<CkksCiphertext> run_core_for_reduct_rot(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
 
     int N;
     uint32_t n_channel_per_ct;
