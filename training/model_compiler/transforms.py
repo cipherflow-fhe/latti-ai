@@ -401,11 +401,8 @@ def process_special_info(
         graph.dag.nodes[succ]['skip'] = [math.prod(succ.sp_info['skip']) * math.prod(succ.sp_info['shape'])]
         return True
 
-    # 0d -> 0d: reshape
+    # 0d -> 0d
     if preds[0].dim == 0 and succ.dim == 0:
-        succ.sp_info['skip'] = [x * y for x, y in zip(preds[0].sp_info['shape'], preds[0].sp_info['skip'])]
-        succ.sp_info['shape'] = [1, 1]
-        succ.sp_info['invalid_fill'] = succ.sp_info['skip'].copy()
         graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip'].copy()
         return True
 
