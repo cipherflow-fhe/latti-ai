@@ -48,7 +48,7 @@ DensePackedLayer::DensePackedLayer(const CkksParameter& param_in,
 
 DensePackedLayer::~DensePackedLayer() {}
 
-void DensePackedLayer::prepare_weight_0d(uint32_t skip_0d) {
+void DensePackedLayer::prepare_weight_skip_0d(uint32_t skip_0d) {
     skip_0d_val = skip_0d;
 
     // BSGS decomposition: pack = bs * gs, bs ≈ √pack
@@ -111,7 +111,7 @@ void DensePackedLayer::prepare_weight_0d(uint32_t skip_0d) {
     }
 }
 
-void DensePackedLayer::prepare_weight_0d_lazy(uint32_t skip_0d) {
+void DensePackedLayer::prepare_weight_skip_0d_lazy(uint32_t skip_0d) {
     skip_0d_val = skip_0d;
     bsgs_bs = (uint32_t)ceil(sqrt((double)pack));
     bsgs_gs = div_ceil(pack, bsgs_bs);
@@ -159,91 +159,6 @@ CkksPlaintextRingt DensePackedLayer::generate_bias_0d_pt_for_index(CkksContext& 
         bv.insert(bv.end(), skip_0d_val - 1, 0.0);
     }
     return ctx.encode_ringt(bv, bias_scale);
-}
-
-void DensePackedLayer::prepare_weight_for_ord_pack(const Duo& input_shape_in, const Duo& skip_in) {
-    input_shape[0] = input_shape_in[0];
-    input_shape[1] = input_shape_in[1];
-    skip[0] = skip_in[0];
-    skip[1] = skip_in[1];
-    if ((input_shape[0] & (input_shape[0] - 1)) != 0 || (input_shape[1] & (input_shape[1] - 1)) != 0) {
-        throw std::invalid_argument("input_shape must be powers of 2, got: [" + std::to_string(input_shape[0]) + ", " +
-                                    std::to_string(input_shape[1]) + "]");
-    }
-    if ((skip[0] & (skip[0] - 1)) != 0 || (skip[1] & (skip[1] - 1)) != 0) {
-        throw std::invalid_argument("skip must be powers of 2, got: [" + std::to_string(skip[0]) + ", " +
-                                    std::to_string(skip[1]) + "]");
-    }
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
-    weight_pt.clear();
-    uint32_t input_shape_ct[2];
-    input_shape_ct[0] = input_shape[0] * skip[0];
-    input_shape_ct[1] = input_shape[1] * skip[1];
-    int per_channel_num = (input_shape_ct[0] / skip[0]) * (input_shape_ct[1] / skip[1]);
-    double encode_pt_scale = modified_scale;
-    double bias_scale = param.get_default_scale();
-
-    for (int packed_out_feature_idx = 0; packed_out_feature_idx < n_packed_out_feature; packed_out_feature_idx++) {
-        vector<CkksPlaintextRingt> a1;
-        for (int packed_in_feature_idx = 0; packed_in_feature_idx < div_ceil(n_packed_in_feature, per_channel_num);
-             packed_in_feature_idx++) {
-            for (int rotate_idx = 0; rotate_idx < pack; rotate_idx++) {
-                vector<double> w;
-                for (int pack_idx = 0; pack_idx < pack; pack_idx++) {
-                    int out_feature_idx = packed_out_feature_idx * pack + pack_idx;
-                    int in_feature_idx = packed_in_feature_idx * pack + (rotate_idx + pack_idx + pack) % pack;
-                    if (in_feature_idx < n_in_feature && out_feature_idx < n_out_feature) {
-                        int start = in_feature_idx * per_channel_num;
-                        int end = (in_feature_idx + 1) * per_channel_num;
-                        int T = 0;
-                        for (int k = 0; k < input_shape_ct[0]; k++) {
-                            for (int m = 0; m < input_shape_ct[1]; m++) {
-                                if (k % skip[0] == 0 && m % skip[1] == 0 && start + T < n_in_feature) {
-                                    int out = start + T;
-                                    w.push_back(weight.get(out_feature_idx, out));
-                                    T += 1;
-                                } else {
-                                    w.push_back(0);
-                                }
-                            }
-                        }
-                    } else {
-                        w.insert(w.end(), input_shape_ct[0] * input_shape_ct[1], 0);
-                    }
-                }
-                auto w_pt = ctx.encode_ringt(w, encode_pt_scale);
-                a1.push_back(move(w_pt));
-            }
-        }
-        weight_pt.push_back(move(a1));
-
-        vector<double> b;
-        for (int pack_idx = 0; pack_idx < pack; pack_idx++) {
-            int out_feature_idx = packed_out_feature_idx * pack + pack_idx;
-            if (out_feature_idx >= n_out_feature) {
-                break;
-            }
-            for (int k = 0; k < input_shape_ct[0] * input_shape_ct[1]; k++) {
-                if (k == 0) {
-                    b.push_back(bias[out_feature_idx] * 1);
-                } else {
-                    b.push_back(0);
-                }
-            }
-        }
-        auto b_pt = ctx.encode_ringt(b, bias_scale);
-        bias_pt.push_back(move(b_pt));
-    }
-}
-
-void DensePackedLayer::prepare_weight_for_ord_pack_lazy(const Duo& input_shape_in, const Duo& skip_in) {
-    input_shape[0] = input_shape_in[0];
-    input_shape[1] = input_shape_in[1];
-    skip[0] = skip_in[0];
-    skip[1] = skip_in[1];
-    cached_input_shape_ct_1[0] = input_shape[0] * skip[0];
-    cached_input_shape_ct_1[1] = input_shape[1] * skip[1];
-    cached_per_channel_num = (cached_input_shape_ct_1[0] / skip[0]) * (cached_input_shape_ct_1[1] / skip[1]);
 }
 
 CkksPlaintextRingt DensePackedLayer::generate_weight1_pt_for_indices(CkksContext& ctx,
@@ -300,9 +215,9 @@ CkksPlaintextRingt DensePackedLayer::generate_bias1_pt_for_index(CkksContext& ct
     return ctx.encode_ringt(b, ctx.get_parameter().get_default_scale());
 }
 
-void DensePackedLayer::prepare_weight_for_mult_pack_lazy(const Duo& input_shape_in,
-                                                         const Duo& skip_in,
-                                                         const Duo& invalid_fill_in) {
+void DensePackedLayer::prepare_weight_for_multiplexed_lazy(const Duo& input_shape_in,
+                                                           const Duo& skip_in,
+                                                           const Duo& invalid_fill_in) {
     input_shape[0] = input_shape_in[0];
     input_shape[1] = input_shape_in[1];
     skip[0] = skip_in[0];
@@ -376,9 +291,9 @@ CkksPlaintextRingt DensePackedLayer::generate_bias_pt_mult_pack_for_index(CkksCo
     return ctx.encode_ringt(b, ctx.get_parameter().get_default_scale());
 }
 
-void DensePackedLayer::prepare_weight_for_mult_pack(const Duo& input_shape_in,
-                                                    const Duo& skip_in,
-                                                    const Duo& invalid_fill_in) {
+void DensePackedLayer::prepare_weight_for_multiplexed(const Duo& input_shape_in,
+                                                      const Duo& skip_in,
+                                                      const Duo& invalid_fill_in) {
     input_shape[0] = input_shape_in[0];
     input_shape[1] = input_shape_in[1];
     skip[0] = skip_in[0];
@@ -452,89 +367,6 @@ void DensePackedLayer::prepare_weight_for_mult_pack(const Duo& input_shape_in,
                     ctx_copy.encode_ringt(w, param.get_default_scale());
             }
         });
-}
-
-vector<CkksCiphertext> DensePackedLayer::call(CkksContext& ctx, const vector<CkksCiphertext>& x) {
-    chrono::high_resolution_clock::time_point time_start, time_end;
-    chrono::microseconds time_diff;
-    time_start = chrono::high_resolution_clock::now();
-    vector<CkksCiphertext> input_rotated_x;
-    uint32_t input_shape_ct[2];
-    input_shape_ct[0] = input_shape[0] * skip[0];
-    input_shape_ct[1] = input_shape[1] * skip[1];
-    uint32_t x_size = x.size();
-    vector<vector<CkksCiphertext>> rotated_tmp(x_size);
-    parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
-        rotated_tmp[x_id] =
-            Conv2DLayer::populate_rotations_1_side(ctx_copy, x[x_id], pack - 1, input_shape_ct[0] * input_shape_ct[1]);
-    });
-    for (auto& y : rotated_tmp) {
-        move(y.begin(), y.end(), back_inserter(input_rotated_x));
-    }
-
-    vector<CkksCiphertext> result;
-    result.resize(n_packed_out_feature);
-
-    parallel_for(n_packed_out_feature, th_nums, ctx, [&](CkksContext& ctx_copy, int packed_out_feature_idx) {
-        CkksCiphertext s(0);
-        for (int in_feature_idx = 0; in_feature_idx < input_rotated_x.size(); in_feature_idx++) {
-            auto& x_ct = input_rotated_x[in_feature_idx];
-
-            if (weight_pt.empty()) {
-                auto w_pt_rt = generate_weight1_pt_for_indices(ctx_copy, packed_out_feature_idx, in_feature_idx);
-                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level);
-                auto p = ctx_copy.mult_plain_mul(x_ct, w_pt);
-                if (in_feature_idx == 0) {
-                    s = move(p);
-                } else {
-                    s = ctx_copy.add(s, p);
-                }
-            } else {
-                auto& w_pt_rt = weight_pt[packed_out_feature_idx][in_feature_idx];
-                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level);
-                auto p = ctx_copy.mult_plain_mul(x_ct, w_pt);
-                if (in_feature_idx == 0) {
-                    s = move(p);
-                } else {
-                    s = ctx_copy.add(s, p);
-                }
-            }
-        }
-
-        s = move(ctx_copy.rescale(s, ctx_copy.get_parameter().get_default_scale()));
-
-        if (bias_pt.empty()) {
-            auto b_pt = generate_bias1_pt_for_index(ctx_copy, packed_out_feature_idx);
-            s = ctx_copy.add_plain_ringt(s, b_pt);
-        } else {
-            auto& b_pt = bias_pt[packed_out_feature_idx];
-            s = ctx_copy.add_plain_ringt(s, b_pt);
-        }
-
-        uint32_t n_term = input_shape_ct[0] * input_shape_ct[1];
-        while (n_term > 1) {
-            CkksCiphertext rotated = ctx_copy.rotate(s, n_term / 2);
-            s = ctx_copy.add(s, rotated);
-            n_term /= 2;
-        }
-        result[packed_out_feature_idx] = move(s);
-    });
-    time_end = chrono::high_resolution_clock::now();
-    time_diff = chrono::duration_cast<chrono::microseconds>(time_end - time_start);
-    return result;
-}
-
-Feature0DEncrypted DensePackedLayer::call(CkksContext& ctx, const Feature2DEncrypted& x) {
-    Feature0DEncrypted result(x.context, x.level);
-    result.data = move(call(ctx, x.data));
-    result.skip = (x.shape[0] * x.skip[0]) * (x.shape[1] * x.skip[1]);
-    result.pack_type = 0;
-    result.n_channel = n_out_feature;
-    result.dim = x.dim;
-    result.n_channel_per_ct = x.n_channel_per_ct;
-    result.level = x.level - 1;
-
-    return result;
 }
 
 vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, const vector<CkksCiphertext>& x) {
@@ -612,18 +444,7 @@ vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, co
     return result;
 }
 
-Feature0DEncrypted DensePackedLayer::run_mult_park(CkksContext& ctx, const Feature2DEncrypted& x) {
-    Feature0DEncrypted result(x.context, x.level);
-    result.data = move(run_core_mult_pack(ctx, x.data));
-    result.skip = (x.shape[0] * x.skip[0]) * (x.shape[1] * x.skip[1]);
-    result.n_channel = n_out_feature;
-    result.dim = x.dim;
-    result.n_channel_per_ct = ctx.get_parameter().get_n() / 2 / result.skip;
-    result.level = x.level - 1;
-    return result;
-}
-
-Feature0DEncrypted DensePackedLayer::run_mult_park(CkksContext& ctx, const Feature0DEncrypted& x) {
+Feature0DEncrypted DensePackedLayer::run_multiplexed(CkksContext& ctx, const Feature0DEncrypted& x) {
     Feature0DEncrypted result(x.context, x.level);
     result.data = move(run_core_mult_pack(ctx, x.data));
     result.skip = x.skip;
@@ -710,20 +531,9 @@ vector<CkksCiphertext> DensePackedLayer::run_core_0d(CkksContext& ctx, const vec
     return result;
 }
 
-Feature0DEncrypted DensePackedLayer::run_0d(CkksContext& ctx, const Feature0DEncrypted& x) {
+Feature0DEncrypted DensePackedLayer::run_skip_0d(CkksContext& ctx, const Feature0DEncrypted& x) {
     Feature0DEncrypted result(x.context, x.level);
     result.data = move(run_core_0d(ctx, x.data));
-    result.skip = x.skip;
-    result.n_channel = n_out_feature;
-    result.dim = x.dim;
-    result.n_channel_per_ct = x.n_channel_per_ct;
-    result.level = x.level - 1;
-    return result;
-}
-
-Feature0DEncrypted DensePackedLayer::call(CkksContext& ctx, const Feature0DEncrypted& x) {
-    Feature0DEncrypted result(x.context, x.level);
-    result.data = move(call(ctx, x.data));
     result.skip = x.skip;
     result.n_channel = n_out_feature;
     result.dim = x.dim;

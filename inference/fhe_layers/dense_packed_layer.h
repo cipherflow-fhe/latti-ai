@@ -32,24 +32,19 @@ public:
                      int mark_in,
                      double residual_scale = 1.0);
     ~DensePackedLayer();
-    virtual void prepare_weight_0d(uint32_t skip_0d);
-    virtual void prepare_weight_0d_lazy(uint32_t skip_0d);
-    virtual void prepare_weight_for_ord_pack(const Duo& input_shape_in, const Duo& skip_in);
-    virtual void prepare_weight_for_ord_pack_lazy(const Duo& input_shape_in, const Duo& skip_in);
+    virtual void prepare_weight_skip_0d(uint32_t skip_0d);
+    virtual void prepare_weight_skip_0d_lazy(uint32_t skip_0d);
     virtual void
-    prepare_weight_for_mult_pack(const Duo& input_shape_in, const Duo& skip_in, const Duo& invalid_fill_in = {1, 1});
-    virtual void prepare_weight_for_mult_pack_lazy(const Duo& input_shape_in,
-                                                   const Duo& skip_in,
-                                                   const Duo& invalid_fill_in = {1, 1});
-    virtual std::vector<CkksCiphertext> call(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
-    virtual Feature0DEncrypted call(CkksContext& ctx, const Feature2DEncrypted& x);
-    virtual Feature0DEncrypted call(CkksContext& ctx, const Feature0DEncrypted& x);
+    prepare_weight_for_multiplexed(const Duo& input_shape_in, const Duo& skip_in, const Duo& invalid_fill_in = {1, 1});
+    virtual void prepare_weight_for_multiplexed_lazy(const Duo& input_shape_in,
+                                                     const Duo& skip_in,
+                                                     const Duo& invalid_fill_in = {1, 1});
     virtual std::vector<CkksCiphertext> run_core_0d(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
-    virtual Feature0DEncrypted run_0d(CkksContext& ctx, const Feature0DEncrypted& x);
+    virtual Feature0DEncrypted run_skip_0d(CkksContext& ctx, const Feature0DEncrypted& x);
     virtual std::vector<CkksCiphertext> run_core_mult_pack(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
-    virtual Feature0DEncrypted run_mult_park(CkksContext& ctx, const Feature2DEncrypted& x);
-    virtual Feature0DEncrypted run_mult_park(CkksContext& ctx, const Feature0DEncrypted& x);
+    virtual Feature0DEncrypted run_multiplexed(CkksContext& ctx, const Feature0DEncrypted& x);
     Array<double, 1> plaintext_call(const Array<double, 1>& x, double multiplier = 1.0);
+
     std::vector<std::vector<CkksPlaintextRingt>> weight_pt;
     std::vector<CkksPlaintextRingt> bias_pt;
 
