@@ -137,8 +137,8 @@ std::vector<CkksCiphertext> BlockColMajorTranspose::run_core(CkksContext& ctx, c
     return result_cts;
 }
 
-Feature2DEncrypted BlockColMajorTranspose::run(CkksContext& ctx, const Feature2DEncrypted& input) {
-    Feature2DEncrypted result(&ctx, input.level);
+FeatureMatEncrypted BlockColMajorTranspose::run(CkksContext& ctx, const FeatureMatEncrypted& input) {
+    FeatureMatEncrypted result(&ctx, input.level);
     result.data = run_core(ctx, input.data);
     result.level = input.level - 1;  // transpose consumes 1 level
     result.shape = {n_, m_};         // transposed shape

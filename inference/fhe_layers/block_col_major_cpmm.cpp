@@ -161,8 +161,8 @@ std::vector<CkksCiphertext> BlockColMajorCPMM::run_core(CkksContext& ctx, const 
     return C_cts;
 }
 
-Feature2DEncrypted BlockColMajorCPMM::run(CkksContext& ctx, const Feature2DEncrypted& A) {
-    Feature2DEncrypted result(&ctx, A.level);
+FeatureMatEncrypted BlockColMajorCPMM::run(CkksContext& ctx, const FeatureMatEncrypted& A) {
+    FeatureMatEncrypted result(&ctx, A.level);
     result.data = run_core(ctx, A.data);
     result.level = A.level - 1;  // block_mult_cpmm consumes 1 level
     result.shape = {m_, p_};
