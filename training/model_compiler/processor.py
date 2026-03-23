@@ -131,8 +131,6 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 'ckks_scale': node.ckks_scale,
                 'skip': int(graph.dag.nodes[node]['skip'][0]),
                 'ckks_parameter_id': node.ckks_parameter_id,
-                'virtual_shape': [int(x) for x in graph.dag.nodes[node]['virtual_shape']],
-                'virtual_skip': [int(x) for x in graph.dag.nodes[node]['virtual_skip']],
                 'level': graph.dag.nodes[node]['level'],
                 'depth': node.depth,
                 'pack_num': graph.dag.nodes[node]['pack_num'],
