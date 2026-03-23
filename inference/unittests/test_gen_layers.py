@@ -17,41 +17,20 @@
 import math
 import unittest
 import json
-import os
-import sys
-
+from pathlib import Path
 import torch
 from torch import nn
 
-import sys
-import os
+script_dir = Path(__file__).resolve().parent
+project_root = script_dir.parent.parent
+base_path = project_root / 'build' / 'inference' / 'hetero'
 
-# Add mega_ag_generator to path for importing frontend module
-script_dir = os.path.dirname(os.path.abspath(__file__))
-
-# Find project root by walking up until we find the 'training' directory.
-_dir = script_dir
-while _dir != os.path.dirname(_dir):
-    if os.path.isdir(os.path.join(_dir, 'training')):
-        break
-    _dir = os.path.dirname(_dir)
-project_root = _dir
-
-sys.path.insert(0, project_root)
-sys.path.insert(0, os.path.join(project_root, 'inference', 'lattisense'))
-
-from frontend.custom_task import *
-
-# examples directory is at project_root/examples
-examples_root = os.path.join(project_root, 'examples')
-
+from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.deploy_cmds import *  # noqa: E402
 from training.model_export.onnx_to_json import *  # noqa: E402
 
-base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'hetero')
 
-
-def export_to_onnx(model, inputs, output_names, onnx_path, dynamic_axes=None, opset_version=11):
+def export_to_onnx(model, inputs, output_names, onnx_path, dynamic_axes=None, opset_version=18):
     """
     Export the PyTorch model to ONNX format.
 
@@ -90,13 +69,15 @@ def export_to_onnx(model, inputs, output_names, onnx_path, dynamic_axes=None, op
 
 
 def gen_conv_mega_ag(
-    model, n_in_channel, n_out_channel, input_shape, kernel_shape, stride, skip, groups, init_level, style='ordinary'
+    n_in_channel, n_out_channel, input_shape, kernel_shape, stride, skip, groups, init_level, style='ordinary'
 ):
     set_param(n=16384)
+    model = SimpleCNN()
     conv = nn.Conv2d(
         n_in_channel, n_out_channel, kernel_shape[0], stride[0], padding=int(kernel_shape[0] / 2), groups=groups
     )
     model.conv1 = conv
+    model.eval()
 
     if isinstance(input_shape, (list, set)):
         input_shape = tuple(input_shape)
@@ -106,21 +87,27 @@ def gen_conv_mega_ag(
         stride = tuple(stride)
 
     if style == 'multiplexed':
-        if groups != 1:  # dw
-            task_name = f'CKKS_multiplexed_dw_conv2d_{n_in_channel}_in_{n_out_channel}_out_channel_{stride[0]}_stride_{input_shape[0]}_{input_shape[1]}_{kernel_shape[0]}_{kernel_shape[1]}'
+        if groups != 1:
+            task_name = 'CKKS_multiplexed_dw_conv2d'
         else:
-            task_name = f'CKKS_multiplexed_conv2d_{n_in_channel}_in_{n_out_channel}_out_channel_{stride[0]}_stride_{input_shape[0]}_{input_shape[1]}_{kernel_shape[0]}_{kernel_shape[1]}'
+            task_name = 'CKKS_multiplexed_conv2d'
     else:
-        if groups != 1:  # dw
-            task_name = f'CKKS_dw_conv2d_{n_in_channel}_in_{n_out_channel}_out_channel_{stride[0]}_stride_{input_shape[0]}_{input_shape[1]}_{kernel_shape[0]}_{kernel_shape[1]}'
+        if groups != 1:
+            task_name = 'CKKS_dw_conv2d'
         else:
-            task_name = f'CKKS_conv2d_{n_in_channel}_in_{n_out_channel}_out_channel_{stride[0]}_stride_{input_shape[0]}_{input_shape[1]}_{kernel_shape[0]}_{kernel_shape[1]}'
-    task_path = os.path.join(base_path, task_name, f'level_{init_level}')
-    if not os.path.exists(task_path):
-        os.makedirs(task_path)
-    task_server_path = os.path.join(task_path, 'server')
-    if not os.path.exists(task_server_path):
-        os.makedirs(task_server_path)
+            task_name = 'CKKS_conv2d'
+    task_path = (
+        base_path
+        / task_name
+        / f'stride_{stride[0]}_{stride[1]}'
+        / f'kernel_shape_{kernel_shape[0]}_{kernel_shape[1]}'
+        / f'cin_{n_in_channel}_cout_{n_out_channel}'
+        / f'input_shape_{input_shape[0]}_{input_shape[1]}'
+        / f'level_{init_level}'
+    )
+    task_path.mkdir(parents=True, exist_ok=True)
+    task_server_path = task_path / 'server'
+    task_server_path.mkdir(parents=True, exist_ok=True)
 
     inputx = torch.randn(1, n_in_channel, input_shape[0], input_shape[1])
 
@@ -169,7 +156,7 @@ def gen_conv_mega_ag(
         config = json.load(file)
 
     for _ in range(len(config['server_task'])):
-        gen_custom_task(os.path.join(task_server_path), use_gpu=True, style=style)
+        gen_custom_task(str(task_server_path), use_gpu=True, style=style)
 
 
 class SimpleCNN(nn.Module):
@@ -187,8 +174,9 @@ class TestLayerExport(unittest.TestCase):
         N = 16384
         set_param(n=N)
         n_in_level = 2
-        shapes = {16, 32, 64}
+        shapes = [16, 32, 64]
         for s in shapes:
+            print(f'sub-test: s={s}')
             input_ct = [CkksCiphertextNode(f'input_ct_{i}', n_in_level) for i in range(int(np.ceil(s * s * 1 / 8192)))]
             square = Square_layer(level=n_in_level)
             output_ct = square.call(input_ct)
@@ -197,9 +185,7 @@ class TestLayerExport(unittest.TestCase):
             process_custom_task(
                 input_args=input_args,
                 output_args=[Argument('output_ct', output_ct)],
-                output_instruction_path=os.path.join(
-                    base_path, f'CKKS_square_{s}_{s}', f'level_{n_in_level}', 'server'
-                ),
+                output_instruction_path=base_path / f'CKKS_square_{s}_{s}' / f'level_{n_in_level}' / 'server',
             )
 
     def test_conv_1ch_s1(self):
@@ -210,14 +196,13 @@ class TestLayerExport(unittest.TestCase):
         groups = 1
         init_level = 2
 
-        input_shapes = {(4, 4), (8, 8), (16, 16), (32, 32), (64, 64)}
-        kernel_shapes = {(1, 1), (3, 3), (5, 5)}
+        input_shapes = [(4, 4), (8, 8), (16, 16), (32, 32), (64, 64)]
+        kernel_shapes = [(1, 1), (3, 3), (5, 5)]
 
-        model = SimpleCNN()
         for input_shape in input_shapes:
             for kernel_shape in kernel_shapes:
+                print(f'sub-test: input_shape={input_shape}, kernel_shape={kernel_shape}')
                 gen_conv_mega_ag(
-                    model,
                     n_in_channel,
                     n_out_channel,
                     input_shape,
@@ -231,19 +216,18 @@ class TestLayerExport(unittest.TestCase):
     def test_conv_1ch_s2(self):
         n_in_channel = 1
         n_out_channel = 1
-        stride = [2, 2]
-        skip = [1, 1]
+        stride = (2, 2)
+        skip = (1, 1)
         groups = 1
         init_level = 2
 
         input_shapes = [(4, 4), (8, 8), (16, 16), (32, 32), (64, 64)]
         kernel_shapes = [(1, 1), (3, 3), (5, 5)]
 
-        model = SimpleCNN()
         for input_shape in input_shapes:
             for kernel_shape in kernel_shapes:
+                print(f'sub-test: input_shape={input_shape}, kernel_shape={kernel_shape}')
                 gen_conv_mega_ag(
-                    model,
                     n_in_channel,
                     n_out_channel,
                     input_shape,
@@ -255,20 +239,19 @@ class TestLayerExport(unittest.TestCase):
                 )
 
     def test_conv_mch_s1(self):
-        n_in_channels = {1, 3, 4, 16, 17}
-        n_out_channels = {1, 3, 4, 32, 33}
-        stride = [1, 1]
-        skip = [1, 1]
-        input_shape = [32, 32]
-        kernel_shape = [3, 3]
+        n_in_channels = [1, 3, 4, 16, 17]
+        n_out_channels = [1, 3, 4, 32, 33]
+        stride = (1, 1)
+        skip = (1, 1)
+        input_shape = (32, 32)
+        kernel_shape = (3, 3)
         groups = 1
         init_level = 2
 
-        model = SimpleCNN()
         for n_in_channel in n_in_channels:
             for n_out_channel in n_out_channels:
+                print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
                 gen_conv_mega_ag(
-                    model,
                     n_in_channel,
                     n_out_channel,
                     input_shape,
@@ -280,20 +263,19 @@ class TestLayerExport(unittest.TestCase):
                 )
 
     def test_conv_mch_s2(self):
-        n_in_channels = {1, 3, 4, 16, 17}
-        n_out_channels = {1, 3, 4, 32, 33}
-        stride = [2, 2]
-        skip = [1, 1]
-        input_shape = [32, 32]
-        kernel_shape = [3, 3]
+        n_in_channels = [1, 3, 4, 16, 17]
+        n_out_channels = [1, 3, 4, 32, 33]
+        stride = (2, 2)
+        skip = (1, 1)
+        input_shape = (32, 32)
+        kernel_shape = (3, 3)
         groups = 1
         init_level = 2
 
-        model = SimpleCNN()
         for n_in_channel in n_in_channels:
             for n_out_channel in n_out_channels:
+                print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
                 gen_conv_mega_ag(
-                    model,
                     n_in_channel,
                     n_out_channel,
                     input_shape,
@@ -307,17 +289,14 @@ class TestLayerExport(unittest.TestCase):
     def test_dw_32ch_s1_32x32_k3(self):
         n_in_channel = 32
         n_out_channel = 32
-        input_shape = [32, 32]
-        kernel_shape = [3, 3]
-        stride = [1, 1]
-        skip = [1, 1]
+        input_shape = (32, 32)
+        kernel_shape = (3, 3)
+        stride = (1, 1)
+        skip = (1, 1)
         groups = 1
         init_level = 5
 
-        model = SimpleCNN()
-
         gen_conv_mega_ag(
-            model,
             n_in_channel,
             n_out_channel,
             input_shape,
@@ -331,17 +310,14 @@ class TestLayerExport(unittest.TestCase):
     def test_dw_4ch_s2_32x32_k3(self):
         n_in_channel = 4
         n_out_channel = 4
-        input_shape = [32, 32]
-        kernel_shape = [3, 3]
-        stride = [2, 2]
-        skip = [1, 1]
+        input_shape = (32, 32)
+        kernel_shape = (3, 3)
+        stride = (2, 2)
+        skip = (1, 1)
         init_level = 5
         groups = n_in_channel
 
-        model = SimpleCNN()
-
         gen_conv_mega_ag(
-            model,
             n_in_channel,
             n_out_channel,
             input_shape,
@@ -352,76 +328,117 @@ class TestLayerExport(unittest.TestCase):
             init_level,
         )
 
-    def test_mux_conv_s1_32x32_k3(self):
-        n_in_channels = {4, 8, 32}
-        n_out_channels = {4, 8, 32}
-        input_shape = [32, 32]
-        kernel_shape = [3, 3]
-        stride = [1, 1]
-        skip = [1, 1]
+    def test_mux_conv_varied_stride(self):
+        n_in_channels = [4, 8, 32]
+        n_out_channels = [4, 8, 32]
+        input_shape = (32, 32)
+        kernel_shape = (3, 3)
+        strides = [(1, 1), (2, 2)]
+        skip = (1, 1)
         init_level = 5
 
-        for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
-            groups = 1
+        for stride in strides:
+            for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
+                groups = 1
 
-            model = SimpleCNN()
+                print(f'sub-test: stride={stride}, n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
+                gen_conv_mega_ag(
+                    n_in_channel,
+                    n_out_channel,
+                    input_shape,
+                    kernel_shape,
+                    stride,
+                    skip,
+                    groups,
+                    init_level,
+                    'multiplexed',
+                )
 
+    def test_mux_conv_varied_input_shape(self):
+        n_in_channel = 32
+        n_out_channel = 32
+        input_shapes = [(2, 2), (4, 4), (8, 8), (16, 16), (32, 32), (64, 64)]
+        kernel_shape = (3, 3)
+        stride = (1, 1)
+        skip = (1, 1)
+        init_level = 5
+
+        for input_shape in input_shapes:
+            print(f'sub-test: input_shape={input_shape}')
             gen_conv_mega_ag(
-                model,
                 n_in_channel,
                 n_out_channel,
                 input_shape,
                 kernel_shape,
                 stride,
                 skip,
-                groups,
+                1,
                 init_level,
                 'multiplexed',
             )
 
-    def test_mux_conv_s2_32x32_k3(self):
-        n_in_channels = {4, 8, 32}
-        n_out_channels = {4, 8, 32}
-        input_shape = [32, 32]
-        kernel_shape = [3, 3]
-        stride = [2, 2]
-        skip = [1, 1]
+    def test_mux_conv_varied_kernel_shape(self):
+        n_in_channel = 32
+        n_out_channel = 32
+        input_shape = (32, 32)
+        kernel_shapes = [(1, 1), (3, 3), (5, 5)]
+        stride = (1, 1)
+        skip = (1, 1)
         init_level = 5
 
-        for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
-            groups = 1
-
-            model = SimpleCNN()
-
+        for kernel_shape in kernel_shapes:
+            print(f'sub-test: kernel_shape={kernel_shape}')
             gen_conv_mega_ag(
-                model,
                 n_in_channel,
                 n_out_channel,
                 input_shape,
                 kernel_shape,
                 stride,
                 skip,
-                groups,
+                1,
                 init_level,
                 'multiplexed',
             )
+
+    def test_mux_conv_varied_input_channels_and_output_channels(self):
+        n_in_channels = [1, 3, 4, 16, 17]
+        n_out_channels = [1, 3, 4, 32, 33]
+        stride = (1, 1)
+        skip = (1, 1)
+        input_shape = (32, 32)
+        kernel_shape = (3, 3)
+        groups = 1
+        init_level = 5
+
+        for n_in_channel in n_in_channels:
+            for n_out_channel in n_out_channels:
+                print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
+                gen_conv_mega_ag(
+                    n_in_channel,
+                    n_out_channel,
+                    input_shape,
+                    kernel_shape,
+                    stride,
+                    skip,
+                    groups,
+                    init_level,
+                    'multiplexed',
+                )
 
     def test_mux_dw_s2_64x64_k3(self):
-        n_in_channels = {4, 8, 32}
-        n_out_channels = {4, 8, 32}
-        input_shape = [64, 64]
-        kernel_shape = [3, 3]
-        stride = [2, 2]
-        skip = [1, 1]
+        n_in_channels = [4, 8, 32]
+        n_out_channels = [4, 8, 32]
+        input_shape = (64, 64)
+        kernel_shape = (3, 3)
+        stride = (2, 2)
+        skip = (1, 1)
         init_level = 5
 
         for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
             groups = n_in_channel
 
-            model = SimpleCNN()
-
+            print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
             gen_conv_mega_ag(
-                model,
                 n_in_channel,
                 n_out_channel,
                 input_shape,
@@ -437,14 +454,15 @@ class TestLayerExport(unittest.TestCase):
         N = 16384
         set_param(n=N)
         n_in_channel = 32
-        input_shape = [32, 32]
-        skip = [1, 1]
+        input_shape = (32, 32)
+        skip = (1, 1)
         n_in_channel_per_ct = int(np.floor(N / 2 / (input_shape[0] * input_shape[1])))
         n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
         orders = [2, 4, 6, 8, 10, 12, 16, 32, 64]
         level = 8
 
         for order in orders:
+            print(f'sub-test: order={order}')
             input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
             weight_pt = [
                 [CkksPlaintextRingtNode(f'polyw_{1}_{i}_{j}') for j in range(n_pack_in_channel)]
@@ -462,9 +480,9 @@ class TestLayerExport(unittest.TestCase):
             process_custom_task(
                 input_args=input_args,
                 output_args=[Argument('output_ct', output_ct)],
-                output_instruction_path=os.path.join(
-                    base_path, f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order}', f'level_{level}'
-                ),
+                output_instruction_path=base_path
+                / f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order}'
+                / f'level_{level}',
             )
 
     def test_fc_cyclic(self):
@@ -476,6 +494,7 @@ class TestLayerExport(unittest.TestCase):
         virtual_skip = [1, 1]
 
         for s in shapes:
+            print(f'sub-test: s={s}')
             n_in_channel = w_shapes[1]
             n_out_channel = w_shapes[0]
             virtual_shape = [s, s]
@@ -510,9 +529,10 @@ class TestLayerExport(unittest.TestCase):
             process_custom_task(
                 input_args=input_args,
                 output_args=[Argument('output_ct', output_ct)],
-                output_instruction_path=os.path.join(
-                    base_path, f'CKKS_fc_prepare_weight1_1D_pack_cyclic_{s}_{s}', f'level_{level}', 'server'
-                ),
+                output_instruction_path=base_path
+                / f'CKKS_fc_prepare_weight1_1D_pack_cyclic_{s}_{s}'
+                / f'level_{level}'
+                / 'server',
             )
 
     def test_fc_pack_skip(self):
@@ -524,6 +544,7 @@ class TestLayerExport(unittest.TestCase):
 
         skips = [2, 4, 8, 16]
         for s in skips:
+            print(f'sub-test: skip={s}')
             n_in_channel = w_shape[1]
             n_out_channel = w_shape[0]
             virtual_skip = [s, s]
@@ -560,9 +581,10 @@ class TestLayerExport(unittest.TestCase):
             process_custom_task(
                 input_args=input_args,
                 output_args=[Argument('output_ct', output_ct)],
-                output_instruction_path=os.path.join(
-                    base_path, f'CKKS_fc_prepare_weight1_1D_pack_skip_{s}_{s}', f'level_{level}', 'server'
-                ),
+                output_instruction_path=base_path
+                / f'CKKS_fc_prepare_weight1_1D_pack_skip_{s}_{s}'
+                / f'level_{level}'
+                / 'server',
             )
 
     def test_fc_fc(self):
@@ -573,7 +595,7 @@ class TestLayerExport(unittest.TestCase):
         input_channel = 1024
         output_channel = 1024
         dense_shape = [4, 4]
-        skip = [1, 1]
+        skip = (1, 1)
 
         output_channel1 = 128
         dense_shape1 = [1, 1]
@@ -633,12 +655,10 @@ class TestLayerExport(unittest.TestCase):
         process_custom_task(
             input_args=input_args,
             output_args=[Argument('output_ct', output_ct)],
-            output_instruction_path=os.path.join(
-                base_path,
-                f'CKKS_fc_fc_{input_channel}_{output_channel}_{output_channel1}',
-                f'level_{init_level}',
-                'server',
-            ),
+            output_instruction_path=base_path
+            / f'CKKS_fc_fc_{input_channel}_{output_channel}_{output_channel1}'
+            / f'level_{init_level}'
+            / 'server',
         )
 
     def test_dense_mult_pack(self):
@@ -650,6 +670,7 @@ class TestLayerExport(unittest.TestCase):
         virtual_skip = [4, 4]
 
         for s in shapes:
+            print(f'sub-test: s={s}')
             n_in_channel = w_shapes[1]
             n_out_channel = w_shapes[0]
             virtual_shape = [s, s]
@@ -685,17 +706,18 @@ class TestLayerExport(unittest.TestCase):
             process_custom_task(
                 input_args=input_args,
                 output_args=[Argument('output_ct', output_ct)],
-                output_instruction_path=os.path.join(
-                    base_path, f'CKKS_fc_prepare_weight_pack_cyclic_{s}_{s}_mult_apck', f'level_{level}', 'server'
-                ),
+                output_instruction_path=base_path
+                / f'CKKS_fc_prepare_weight_pack_cyclic_{s}_{s}_mult_apck'
+                / f'level_{level}'
+                / 'server',
             )
 
     def test_poly_relu_bsgs(self):
         N = 16384
         set_param(n=N)
         n_in_channel = 32
-        input_shape = [32, 32]
-        skip = [1, 1]
+        input_shape = (32, 32)
+        skip = (1, 1)
         n_in_channel_per_ct = int(np.floor(N / 2 / (input_shape[0] * input_shape[1])))
         n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
         order0 = 7
@@ -737,9 +759,9 @@ class TestLayerExport(unittest.TestCase):
         process_custom_task(
             input_args=input_args,
             output_args=[Argument('output_ct', output_ct)],
-            output_instruction_path=os.path.join(
-                base_path, f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order0}_{order1}', f'level_{level}'
-            ),
+            output_instruction_path=base_path
+            / f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order0}_{order1}'
+            / f'level_{level}',
         )
 
     def test_poly_bsgs_feature0d(self):
@@ -759,6 +781,7 @@ class TestLayerExport(unittest.TestCase):
                 if level < level_cost:
                     continue
 
+                print(f'sub-test: skip={skip_val}, order={order}')
                 input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
                 weight_pt = [
                     [CkksPlaintextRingtNode(f'polyw_0d_{i}_{j}') for j in range(n_pack_in_channel)]
@@ -776,11 +799,9 @@ class TestLayerExport(unittest.TestCase):
                 process_custom_task(
                     input_args=input_args,
                     output_args=[Argument('output_ct', output_ct)],
-                    output_instruction_path=os.path.join(
-                        base_path,
-                        f'CKKS_poly_relu_bsgs_feature0d_{n_in_channel}_channel_order_{order}_skip_{skip_val}',
-                        f'level_{level}',
-                    ),
+                    output_instruction_path=base_path
+                    / f'CKKS_poly_relu_bsgs_feature0d_{n_in_channel}_channel_order_{order}_skip_{skip_val}'
+                    / f'level_{level}',
                 )
 
     def test_conv1d_layer(self):
@@ -799,6 +820,9 @@ class TestLayerExport(unittest.TestCase):
             for kernel_shape in kernel_shapes:
                 for skip in skips:
                     for stride in strides:
+                        print(
+                            f'sub-test: input_shape={input_shape}, kernel_shape={kernel_shape}, skip={skip}, stride={stride}'
+                        )
                         n_channel_per_ct = int(N / 2 / input_shape / skip)
                         n_pack_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
                         n_packed_out_channel = math.ceil(n_out_channel / (n_channel_per_ct * stride))
@@ -834,12 +858,10 @@ class TestLayerExport(unittest.TestCase):
                         process_custom_task(
                             input_args=input_args,
                             output_args=[Argument('output_ct', output_ct)],
-                            output_instruction_path=os.path.join(
-                                base_path,
-                                f'conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}',
-                                f'level_{init_level}',
-                                'server',
-                            ),
+                            output_instruction_path=base_path
+                            / f'conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}'
+                            / f'level_{init_level}'
+                            / 'server',
                         )
 
     def test_mux_conv1d_layer(self):
@@ -859,6 +881,9 @@ class TestLayerExport(unittest.TestCase):
             for kernel_shape in kernel_shapes:
                 for skip in skips:
                     for stride in strides:
+                        print(
+                            f'sub-test: input_shape={input_shape}, kernel_shape={kernel_shape}, skip={skip}, stride={stride}'
+                        )
                         n_channel_per_ct = math.ceil(N / 2 / input_shape)
                         n_packed_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
                         n_packed_out_channel = math.ceil(n_out_channel / n_channel_per_ct)
@@ -898,12 +923,10 @@ class TestLayerExport(unittest.TestCase):
                         process_custom_task(
                             input_args=input_args,
                             output_args=[Argument('output_ct', output_ct)],
-                            output_instruction_path=os.path.join(
-                                base_path,
-                                f'multiplexed_conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}',
-                                f'level_{init_level}',
-                                'server',
-                            ),
+                            output_instruction_path=base_path
+                            / f'multiplexed_conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}'
+                            / f'level_{init_level}'
+                            / 'server',
                         )
 
 
