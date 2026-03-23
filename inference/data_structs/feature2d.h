@@ -24,15 +24,22 @@
  * to a flat vector of CKKS slots.
  *
  * ----------------------------------------------------------------------------
- * MultChannelPack  (pack / unpack)
+ * MultChannelPacking  (pack / unpack)
  * ----------------------------------------------------------------------------
- * Multiple channels are concatenated sequentially into each ciphertext.
+ * Multiple channels are concatenated sequentially into each ciphertext,
+ * stored in row-major order within each channel.
  *
  *   n_channel_per_ct = n_slot / (shape[0] * shape[1])
  *   n_ct             = ceil(n_channel / n_channel_per_ct)
  *
- *   ct[ct_idx][ k * shape[0]*shape[1] + h * shape[1] + w ]
- *       = feature[ ct_idx*n_channel_per_ct + k, h, w ]
+ * Pack mapping — for all channel_idx in [0, n_channel),
+ *                x in [0, shape[0]), y in [0, shape[1]):
+ *
+ *   ct_idx           = channel_idx / n_channel_per_ct
+ *   channel_idx_in_ct = channel_idx % n_channel_per_ct
+ *
+ *   ct[ct_idx][ channel_idx_in_ct * shape[0]*shape[1] + x * shape[1] + y ]
+ *       = feature[channel_idx, x, y]
  *
  * ----------------------------------------------------------------------------
  * MultiplexedPacking  (pack_multiplexed / unpack_multiplexed)
@@ -83,21 +90,21 @@
  * InterleavedPacking  (pack_interleaved / unpack_interleaved)
  * ----------------------------------------------------------------------------
  * Each channel's 2-D feature map is decomposed into stride[0]*stride[1]
- * interleaved sub-grids, one per ciphertext. Sub-grid (row_seg, col_seg)
- * contains the elements at positions (x, y) where x%stride[0]==row_seg and
- * y%stride[1]==col_seg, stored in row-major order over the reduced grid.
+ * interleaved sub-grids, one per ciphertext. Sub-grid (grid_x, grid_y)
+ * contains the elements at positions (x, y) where x%stride[0]==grid_x and
+ * y%stride[1]==grid_y, stored in row-major order over the reduced grid.
  *
  *   n_ct             = n_channel * stride[0] * stride[1]
  *
  * Pack mapping — for all channel_idx in [0, n_channel),
  *                x in [0, shape[0]), y in [0, shape[1]):
  *
- *   seg_idx     = (x % stride[0]) * stride[1] + (y % stride[1])
- *   ct_idx      = channel_idx * stride[0] * stride[1] + seg_idx
- *   block_row   = x / stride[0]
- *   block_col   = y / stride[1]
+ *   grid_idx    = (x % stride[0]) * stride[1] + (y % stride[1])
+ *   ct_idx      = channel_idx * stride[0] * stride[1] + grid_idx
+ *   x_in_ct     = x / stride[0]
+ *   y_in_ct     = y / stride[1]
  *
- *   ct[ct_idx][ block_row * (shape[1]/stride[1]) + block_col ]
+ *   ct[ct_idx][ x_in_ct * (shape[1]/stride[1]) + y_in_ct ]
  *       = feature[channel_idx, x, y]
  *
  */
@@ -179,7 +186,7 @@ public:
     void split_to_shares(Feature2DEncrypted* share0, Feature2DShare* share1) const;
     void split_to_shares_for_multi_channel_pack(Feature2DEncrypted* share0,
                                                 Feature2DShare* share1,
-                                                PackType pack_type_in = PackType::ParMultiplexedPack) const;
+                                                PackType pack_type_in = PackType::MultiplexedPacking) const;
     Feature2DEncrypted combine_with_share(const Feature2DShare& share) const;
     Feature2DEncrypted
     combine_with_share_new_protocol(const Feature2DShare& share, const Feature2DEncrypted& f2d, const Bytes& b1) const;
@@ -187,7 +194,7 @@ public:
     combine_with_share_new_protocol_for_multi_pack(const Feature2DShare& share,
                                                    const Feature2DEncrypted& f2d,
                                                    const Bytes& b1,
-                                                   PackType pack_type = PackType::ParMultiplexedPack) const;
+                                                   PackType pack_type = PackType::MultiplexedPacking) const;
     void decrypt_to_share(Feature2DShare* share, PackType pack_type = PackType::SinglePack) const;
     Array<uint64_t, 1> encrypt_from_share(const Feature2DShare& share,
                                           int n_channel,
