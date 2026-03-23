@@ -35,7 +35,7 @@
  *       = feature[ ct_idx*n_channel_per_ct + k, h, w ]
  *
  * ----------------------------------------------------------------------------
- * MultiplexedPack  (mult_pack / mult_unpack)
+ * MultiplexedPacking  (pack_multiplexed / unpack_multiplexed)
  * ----------------------------------------------------------------------------
  * Channels are packed with a spatial multiplexed pattern that enables
  * downsampling and upsampling operations with few rotations and minimal
@@ -80,22 +80,25 @@
  *       = feature[channel_idx, x, y]
  *
  * ----------------------------------------------------------------------------
- * InterleavedDecompositionPack  (split_with_stride_pack / split_with_stride_unpack)
+ * InterleavedPacking  (pack_interleaved / unpack_interleaved)
  * ----------------------------------------------------------------------------
- * The spatial grid is decomposed into stride[0]*stride[1] interleaved
- * sub-grids, each stored in a separate ciphertext. Used to implement
- * strided convolutions without data movement.
+ * Each channel's 2-D feature map is decomposed into stride[0]*stride[1]
+ * interleaved sub-grids, one per ciphertext. Sub-grid (row_seg, col_seg)
+ * contains the elements at positions (x, y) where x%stride[0]==row_seg and
+ * y%stride[1]==col_seg, stored in row-major order over the reduced grid.
  *
- *   n_channel_per_ct = 1
  *   n_ct             = n_channel * stride[0] * stride[1]
  *
- *   For ciphertext i = channel_idx * stride[0]*stride[1] + seg_idx,
- *   where seg_idx = row_seg*stride[1] + col_seg:
+ * Pack mapping — for all channel_idx in [0, n_channel),
+ *                x in [0, shape[0]), y in [0, shape[1]):
  *
- *   ct[i][ block_row * block_shape[1] + block_col ]
- *       = feature[ channel_idx,
- *                  block_row * stride[0] + row_seg,
- *                  block_col * stride[1] + col_seg ]
+ *   seg_idx     = (x % stride[0]) * stride[1] + (y % stride[1])
+ *   ct_idx      = channel_idx * stride[0] * stride[1] + seg_idx
+ *   block_row   = x / stride[0]
+ *   block_col   = y / stride[1]
+ *
+ *   ct[ct_idx][ block_row * (shape[1]/stride[1]) + block_col ]
+ *       = feature[channel_idx, x, y]
  *
  */
 
@@ -134,31 +137,22 @@ public:
     single_pack(const Array<double, 3>& feature_mg, bool is_sysmmetric = false, double scale_in = DEFAULT_SCALE);
     virtual Array<double, 3> single_unpack() const;
 
-    virtual void
-    mult_pack(const Array<double, 3>& feature_mg, bool is_sysmmetric = false, double scale_in = DEFAULT_SCALE);
-
     virtual void split_with_overlap_pack(const Array<double, 3>& feature_mg,
                                          const Duo& block_shape,
                                          const Duo& n_overlap,
                                          bool is_sysmmetric = false,
                                          double scale_in = DEFAULT_SCALE);
-    virtual void split_with_stride_pack(const Array<double, 3>& feature_mg,
-                                        const Duo& block_shape,
-                                        const Duo& stride,
-                                        bool is_sysmmetric = false,
-                                        double scale_in = DEFAULT_SCALE);
-    virtual void zero_inserted_mult_pack(const Array<double, 3>& feature_mg,
-                                         const Duo stride,
-                                         bool is_sysmmetric = false,
-                                         double scale_in = DEFAULT_SCALE);
-    virtual Array<double, 3> zero_inserted_mult_unpack(const Duo stride_next) const;
+    virtual void pack_interleaved(const Array<double, 3>& feature_mg,
+                                  const Duo& block_shape,
+                                  const Duo& stride,
+                                  bool is_sysmmetric = false,
+                                  double scale_in = DEFAULT_SCALE);
     virtual void
-    par_mult_pack(const Array<double, 3>& feature_mg, bool is_sysmmetric = false, double scale_in = DEFAULT_SCALE);
+    pack_multiplexed(const Array<double, 3>& feature_mg, bool is_sysmmetric = false, double scale_in = DEFAULT_SCALE);
 
-    virtual Array<double, 3> par_mult_unpack() const;
-    virtual Array<double, 3> mult_unpack() const;
+    virtual Array<double, 3> unpack_multiplexed() const;
     virtual Array<double, 3> split_with_overlap_unpack(const Duo& block_shape) const;
-    virtual Array<double, 3> split_with_stride_unpack(const Duo& block_shape, const Duo& stride) const;
+    virtual Array<double, 3> unpack_interleaved(const Duo& block_shape, const Duo& stride) const;
     Feature2DEncrypted refresh_ciphertext() const;
     virtual Array<double, 3> unpack() const;
     virtual Array<double, 2> unpack_column() const;
