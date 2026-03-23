@@ -52,6 +52,28 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     return pt_graph
 
 
+def set_block_shape(params, raw_graph: LayerAbstractGraph):
+    """Set params.block_shape based on the input graph's leading feature node shape and N.
+
+    Rules:
+      (1) If shape0 * shape1 < N / 2, block_shape = [shape0, shape1]
+      (2) Otherwise, divide both shape0 and shape1 by 2, 4, 8, 16, ...
+          until shape0 * shape1 < N / 2
+    """
+    leading_nodes = raw_graph.get_leading_feature_nodes()
+    if not leading_nodes:
+        return
+    shape0, shape1 = leading_nodes[0].shape[0], leading_nodes[0].shape[1]
+    N = params.poly_modulus_degree // 2
+    threshold = N / 2
+    divisor = 1
+    while shape0 * shape1 >= threshold:
+        divisor *= 2
+        s0, s1 = shape0 // divisor, shape1 // divisor
+        shape0, shape1 = s0, s1
+    params.block_shape = [shape0, shape1]
+
+
 def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph | None, float]:
     """
     Try no-BTP mode compilation with prepared graph
@@ -68,6 +90,7 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
 
     for params in no_btp_params:
         config.fhe_param = params
+        set_block_shape(config.fhe_param, raw_graph)
         print(f'Trying FheParam = {config.fhe_param}')
 
         # (1) Pre-process
@@ -107,6 +130,7 @@ def try_btp(
     valid_results = []
     for params in btp_param_list:
         config.fhe_param = params
+        set_block_shape(config.fhe_param, raw_graph)
 
         # (1) Pre-process
         pt_graph = prepare_graph(raw_graph)
