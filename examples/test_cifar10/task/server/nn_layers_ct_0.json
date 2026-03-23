@@ -2213,14 +2213,11 @@
             "ckks_scale": 1,
             "skip": 1024,
             "ckks_parameter_id": "param0",
-            "virtual_shape": [
-                8,
-                8
-            ],
-            "virtual_skip": [
-                4,
-                4
-            ],
+            "special_info":{
+                "skip": [4, 4],
+                "shape": [8, 8],
+                "invalid_fill": [4, 4]
+            },
             "level": 1,
             "depth": 9,
             "pack_num": 32
@@ -2232,14 +2229,11 @@
             "ckks_scale": 1,
             "skip": 1024,
             "ckks_parameter_id": "param0",
-            "virtual_shape": [
-                1.0,
-                1.0
-            ],
-            "virtual_skip": [
-                32.0,
-                32.0
-            ],
+            "special_info":{
+                "skip": [4, 4],
+                "shape": [8, 8],
+                "invalid_fill": [4, 4]
+            },
             "level": 0,
             "depth": 9,
             "pack_num": 32
