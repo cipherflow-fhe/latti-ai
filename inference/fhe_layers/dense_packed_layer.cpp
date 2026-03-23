@@ -300,23 +300,34 @@ CkksPlaintextRingt DensePackedLayer::generate_bias1_pt_for_index(CkksContext& ct
     return ctx.encode_ringt(b, ctx.get_parameter().get_default_scale());
 }
 
-void DensePackedLayer::prepare_weight_for_mult_pack_lazy(const Duo& input_shape_in, const Duo& skip_in) {
+void DensePackedLayer::prepare_weight_for_mult_pack_lazy(const Duo& input_shape_in,
+                                                         const Duo& skip_in,
+                                                         const Duo& invalid_fill_in) {
     input_shape[0] = input_shape_in[0];
     input_shape[1] = input_shape_in[1];
     skip[0] = skip_in[0];
     skip[1] = skip_in[1];
+    cached_invalid_fill[0] = invalid_fill_in[0];
+    cached_invalid_fill[1] = invalid_fill_in[1];
     CkksContext ctx = CkksContext::create_empty_context(this->param);
     cached_input_shape_ct_mult[0] = input_shape[0] * skip[0];
     cached_input_shape_ct_mult[1] = input_shape[1] * skip[1];
     cached_N_half = ctx.get_parameter().get_n() / 2;
     cached_n_num_pre_ct = div_ceil(cached_N_half, cached_input_shape_ct_mult[0] * cached_input_shape_ct_mult[1]);
-    cached_n_block_input =
-        div_ceil(n_in_feature * input_shape[0] * input_shape[1], cached_N_half) * cached_n_num_pre_ct;
+    int valid_skip_0 = skip[0] / invalid_fill_in[0];
+    int valid_skip_1 = skip[1] / invalid_fill_in[1];
+    int n_channel_per_block = valid_skip_0 * valid_skip_1;
+    cached_n_block_input = div_ceil(n_in_feature, cached_n_num_pre_ct * n_channel_per_block) * cached_n_num_pre_ct;
 }
 
 CkksPlaintextRingt DensePackedLayer::generate_weight_pt_mult_pack_for_indices(CkksContext& ctx,
                                                                               int packed_out_feature_idx,
                                                                               int n_block_input_idx) const {
+    int valid_skip_0 = skip[0] / cached_invalid_fill[0];
+    int valid_skip_1 = skip[1] / cached_invalid_fill[1];
+    int n_channel_per_block = valid_skip_0 * valid_skip_1;
+    int n_channel_per_block_col = valid_skip_1;
+
     vector<double> w(cached_N_half, 0);
     for (int i = 0; i < cached_N_half; i++) {
         int block_i = packed_out_feature_idx * cached_n_num_pre_ct +
@@ -324,13 +335,13 @@ CkksPlaintextRingt DensePackedLayer::generate_weight_pt_mult_pack_for_indices(Ck
         int shape_linear = i % (cached_input_shape_ct_mult[0] * cached_input_shape_ct_mult[1]);
         int shape_i = shape_linear / cached_input_shape_ct_mult[1];
         int shape_j = shape_linear % cached_input_shape_ct_mult[1];
-        if (shape_i < skip[0] && shape_j < skip[1] && block_i < n_out_feature) {
+        if (shape_i < valid_skip_0 && shape_j < valid_skip_1 && block_i < n_out_feature) {
             int line_i = ((n_block_input_idx + i / (cached_input_shape_ct_mult[0] * cached_input_shape_ct_mult[1]) +
                            cached_n_num_pre_ct) %
                               cached_n_num_pre_ct +
                           int(n_block_input_idx / cached_n_num_pre_ct) * cached_n_num_pre_ct) *
-                             (skip[0] * skip[1]) +
-                         shape_i * skip[1] + shape_j;
+                             n_channel_per_block +
+                         shape_i * n_channel_per_block_col + shape_j;
             if (line_i >= n_in_feature || block_i > n_out_feature) {
                 w[i] = 0;
             } else {
@@ -343,6 +354,9 @@ CkksPlaintextRingt DensePackedLayer::generate_weight_pt_mult_pack_for_indices(Ck
 
 CkksPlaintextRingt DensePackedLayer::generate_bias_pt_mult_pack_for_index(CkksContext& ctx,
                                                                           int packed_out_feature_idx) const {
+    int valid_skip_0 = skip[0] / cached_invalid_fill[0];
+    int valid_skip_1 = skip[1] / cached_invalid_fill[1];
+
     vector<double> b(cached_N_half, 0);
     for (int i = 0; i < cached_N_half; i++) {
         int block_i = packed_out_feature_idx * cached_n_num_pre_ct +
@@ -350,7 +364,7 @@ CkksPlaintextRingt DensePackedLayer::generate_bias_pt_mult_pack_for_index(CkksCo
         int shape_linear = i % (cached_input_shape_ct_mult[0] * cached_input_shape_ct_mult[1]);
         int shape_i = shape_linear / cached_input_shape_ct_mult[1];
         int shape_j = shape_linear % cached_input_shape_ct_mult[1];
-        if (shape_i < skip[0] && shape_j < skip[1] && block_i < n_out_feature) {
+        if (shape_i < valid_skip_0 && shape_j < valid_skip_1 && block_i < n_out_feature) {
             if (shape_i == 0 && shape_j == 0) {
                 b[i] = bias.get(block_i);
             }
@@ -359,35 +373,45 @@ CkksPlaintextRingt DensePackedLayer::generate_bias_pt_mult_pack_for_index(CkksCo
     return ctx.encode_ringt(b, ctx.get_parameter().get_default_scale());
 }
 
-void DensePackedLayer::prepare_weight_for_mult_pack(const Duo& input_shape_in, const Duo& skip_in) {
+void DensePackedLayer::prepare_weight_for_mult_pack(const Duo& input_shape_in,
+                                                    const Duo& skip_in,
+                                                    const Duo& invalid_fill_in) {
     input_shape[0] = input_shape_in[0];
     input_shape[1] = input_shape_in[1];
     skip[0] = skip_in[0];
     skip[1] = skip_in[1];
+    cached_invalid_fill[0] = invalid_fill_in[0];
+    cached_invalid_fill[1] = invalid_fill_in[1];
     CkksContext ctx = CkksContext::create_empty_context(this->param);
     uint32_t input_shape_ct[2];
     input_shape_ct[0] = input_shape[0] * skip[0];
     input_shape_ct[1] = input_shape[1] * skip[1];
-    int n_num_pre_ct = div_ceil(ctx.get_parameter().get_n() / 2, input_shape_ct[0] * input_shape_ct[1]);
+    int N_half = ctx.get_parameter().get_n() / 2;
+    int n_num_pre_ct = div_ceil(N_half, input_shape_ct[0] * input_shape_ct[1]);
+
+    // ParMultiplexedPack: valid channels per mini-block
+    int valid_skip_0 = skip[0] / invalid_fill_in[0];
+    int valid_skip_1 = skip[1] / invalid_fill_in[1];
+    int n_channel_per_block = valid_skip_0 * valid_skip_1;
+    int n_channel_per_block_col = valid_skip_1;
+
     int n_packed_out_feature_for_mult_apck = div_ceil(n_out_feature, n_num_pre_ct);
     weight_pt.resize(n_packed_out_feature_for_mult_apck);
     bias_pt.resize(n_packed_out_feature_for_mult_apck);
-    int n_block_input =
-        div_ceil(n_in_feature * input_shape[0] * input_shape[1], ctx.get_parameter().get_n() / 2) * n_num_pre_ct;
+    int n_block_input = div_ceil(n_in_feature, n_num_pre_ct * n_channel_per_block) * n_num_pre_ct;
 
     parallel_for(
         n_packed_out_feature_for_mult_apck, th_nums, ctx, [&](CkksContext& ctx_copy, int packed_out_feature_idx) {
             weight_pt[packed_out_feature_idx].resize(n_block_input);
 
             // Encode bias once (independent of n_block_input_idx)
-            int N_half = ctx_copy.get_parameter().get_n() / 2;
             vector<double> b(N_half, 0);
             for (int i = 0; i < N_half; i++) {
                 int block_i = packed_out_feature_idx * n_num_pre_ct + i / (input_shape_ct[0] * input_shape_ct[1]);
                 int shape_linear = i % (input_shape_ct[0] * input_shape_ct[1]);
                 int shape_i = shape_linear / input_shape_ct[1];
                 int shape_j = shape_linear % input_shape_ct[1];
-                if (shape_i < skip[0] && shape_j < skip[1] && block_i < n_out_feature) {
+                if (shape_i < valid_skip_0 && shape_j < valid_skip_1 && block_i < n_out_feature) {
                     if (shape_i == 0 && shape_j == 0) {
                         b[i] = bias.get(block_i);
                     }
@@ -402,12 +426,12 @@ void DensePackedLayer::prepare_weight_for_mult_pack(const Duo& input_shape_in, c
                     int shape_linear = i % (input_shape_ct[0] * input_shape_ct[1]);
                     int shape_i = shape_linear / input_shape_ct[1];
                     int shape_j = shape_linear % input_shape_ct[1];
-                    if (shape_i < skip[0] && shape_j < skip[1] && block_i < n_out_feature) {
+                    if (shape_i < valid_skip_0 && shape_j < valid_skip_1 && block_i < n_out_feature) {
                         int local_block = i / (input_shape_ct[0] * input_shape_ct[1]);
                         int group = n_block_input_idx / n_num_pre_ct;
                         int offset = n_block_input_idx % n_num_pre_ct;
                         int rotated_block = (offset + local_block) % n_num_pre_ct + group * n_num_pre_ct;
-                        int line_i = rotated_block * (skip[0] * skip[1]) + shape_i * skip[1] + shape_j;
+                        int line_i = rotated_block * n_channel_per_block + shape_i * n_channel_per_block_col + shape_j;
                         if (line_i >= n_in_feature or block_i > n_out_feature) {
                             w[i] = 0;
                         } else {
@@ -512,7 +536,10 @@ vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, co
     uint32_t x_size = x.size();
     int N_half = ctx.get_parameter().get_n() / 2;
     int n_num_pre_ct = div_ceil(N_half, input_shape_ct[0] * input_shape_ct[1]);
-    int n_block_input = div_ceil(n_in_feature * input_shape[0] * input_shape[1], N_half) * n_num_pre_ct;
+    int valid_skip_0 = skip[0] / cached_invalid_fill[0];
+    int valid_skip_1 = skip[1] / cached_invalid_fill[1];
+    int n_channel_per_block = valid_skip_0 * valid_skip_1;
+    int n_block_input = div_ceil(n_in_feature, n_num_pre_ct * n_channel_per_block) * n_num_pre_ct;
     int n_packed_out_feature_for_mult_pack = div_ceil(n_out_feature, n_num_pre_ct);
     vector<vector<CkksCiphertext>> rotated_tmp(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
@@ -581,7 +608,7 @@ Feature0DEncrypted DensePackedLayer::run_mult_park(CkksContext& ctx, const Featu
     result.skip = (x.shape[0] * x.skip[0]) * (x.shape[1] * x.skip[1]);
     result.n_channel = n_out_feature;
     result.dim = x.dim;
-    result.n_channel_per_ct = x.n_channel_per_ct;
+    result.n_channel_per_ct = ctx.get_parameter().get_n() / 2 / result.skip;
     result.level = x.level - 1;
     return result;
 }
@@ -592,7 +619,7 @@ Feature0DEncrypted DensePackedLayer::run_mult_park(CkksContext& ctx, const Featu
     result.skip = x.skip;
     result.n_channel = n_out_feature;
     result.dim = x.dim;
-    result.n_channel_per_ct = x.n_channel_per_ct;
+    result.n_channel_per_ct = ctx.get_parameter().get_n() / 2 / result.skip;
     result.level = x.level - 1;
     return result;
 }
