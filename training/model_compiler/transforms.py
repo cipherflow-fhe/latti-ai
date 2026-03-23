@@ -374,58 +374,40 @@ def split_upsampling_layers(graph: LayerAbstractGraph):
             conv_node.upsample_factor = [1, 1]
 
 
-def find_upstream_pool_or_conv(graph: LayerAbstractGraph, reshape_node):
-    node = reshape_node
-    while True:
-        # Step to predecessor FeatureNode
-        feature = next(graph.dag.predecessors(node))
-        if graph.dag.in_degree(feature) != 1:
-            raise ValueError(f'avgpool or conv not found, encountered a bifurcation or indegree 0 at feature {feature}')
-        # Step to predecessor ComputeNode
-        node = next(graph.dag.predecessors(feature))
-        if node.layer_type in ['avgpool2d', 'conv2d']:
-            return node
-
-
-def process_special_info(graph: LayerAbstractGraph, compute_node, preds: list, succ):
+def process_special_info(
+    graph: LayerAbstractGraph, compute_node: ComputeNode, preds: list[FeatureNode], succ: FeatureNode
+):
     """Process sp_info for dim=0 and reshape nodes. Returns True if caller should continue."""
 
+    if preds[0].dim == 2 and succ.dim == 2:
+        if config.style == 'ordinary':
+            succ.invalid_fill = graph.dag.nodes[preds[0]]['skip'].copy()
+        else:
+            if isinstance(compute_node, PoolComputeNode):
+                if compute_node.is_adaptive_avgpool:
+                    succ.invalid_fill = compute_node.stride.copy()
+                else:
+                    succ.invalid_fill = [1, 1]
+            elif isinstance(compute_node, ConvComputeNode):
+                succ.invalid_fill = [1, 1]
+            else:
+                succ.invalid_fill = preds[0].invalid_fill
+        return False
     # 2d -> 0d: reshape
     if preds[0].dim == 2 and succ.dim == 0:
-        pre_node = find_upstream_pool_or_conv(graph, compute_node)
-        pre_succ_f = next(graph.dag.successors(pre_node))
-
-        # sp_info.skip = pre_node output skip
         succ.sp_info['skip'] = graph.dag.nodes[preds[0]]['skip'].copy()
-
-        # sp_info.shape
-        succ.sp_info['shape'] = preds[0].shape.copy()
-
-        # sp_info.invalid_fill
-        if config.style == 'ordinary':
-            # ordinary: conv->reshape and avgpool->reshape both use output skip
-            succ.sp_info['invalid_fill'] = graph.dag.nodes[pre_succ_f]['skip'].copy()
-        elif pre_node.layer_type == 'avgpool2d':
-            # multiplexed: avgpool->reshape uses stride
-            succ.sp_info['invalid_fill'] = pre_node.stride.copy()
-        else:
-            # multiplexed: conv->reshape uses [1, 1]
-            succ.sp_info['invalid_fill'] = [1, 1]
-
-        # outer skip for f0d node
-        if config.style == 'ordinary':
-            # case a: ordinary conv->reshape, avgpool->reshape
-            graph.dag.nodes[succ]['skip'] = [math.prod(succ.sp_info['skip']) * math.prod(succ.sp_info['shape'])]
-        elif config.style == 'multiplexed' and pre_node.layer_type == 'avgpool2d':
-            # case b: multiplexed avgpool->reshape
-            graph.dag.nodes[succ]['skip'] = [math.prod(succ.sp_info['skip'])]
-        else:
-            # case c: multiplexed conv->reshape
-            graph.dag.nodes[succ]['skip'] = [math.prod(graph.dag.nodes[preds[0]]['skip']) * math.prod(preds[0].shape)]
-
+        succ.sp_info['shape'] = preds[0].shape
+        succ.sp_info['invalid_fill'] = preds[0].invalid_fill
+        graph.dag.nodes[succ]['skip'] = [math.prod(succ.sp_info['skip']) * math.prod(succ.sp_info['shape'])]
         return True
 
-    return False
+    # 0d -> 0d: reshape
+    if preds[0].dim == 0 and succ.dim == 0:
+        succ.sp_info['skip'] = [x * y for x, y in zip(preds[0].sp_info['shape'], preds[0].sp_info['skip'])]
+        succ.sp_info['shape'] = [1, 1]
+        succ.sp_info['invalid_fill'] = succ.sp_info['skip'].copy()
+        graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip'].copy()
+        return True
 
 
 def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
@@ -436,15 +418,14 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
     for compute_node in sorted_compute_nodes:
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
         succ: FeatureNode = next(graph.dag.successors(compute_node))
-        # only for reshape test
-        if c_node_num == 1 and sorted_compute_nodes[0].layer_type == 'reshape':
-            break
+        # init skip
         if succ.dim == 0:
             graph.dag.nodes[succ]['skip'] = [1]
         else:
             graph.dag.nodes[succ]['skip'] = [1] * succ.dim
 
         if process_special_info(graph, compute_node, preds, succ):
+            populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)
             continue
 
         if isinstance(compute_node, SpatialComputeNode):
@@ -463,9 +444,6 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                 )
 
         else:
-            # 0d
-            if preds[0].dim == 0:
-                graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip'].copy()
             for i in range(preds[0].dim):
                 succ.shape[i] = preds[0].shape[i]
                 graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]

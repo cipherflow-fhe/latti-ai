@@ -325,6 +325,7 @@ class FeatureNode:
         self.is_total_graph_leading_node = False
         self.scale_up = 1
         self.scale_down = 1
+        self.invalid_fill = [1, 1]
         self.sp_info = {'skip': [1, 1], 'invalid_fill': [1, 1], 'shape': [1, 1]}
 
     def __repr__(self) -> str:
@@ -1185,7 +1186,7 @@ class LayerAbstractGraph:
                         'level': level,
                         'depth': depth,
                         'pack_num': pack_num,
-                        'invalid_fill': feature.sp_info['invalid_fill'],
+                        'invalid_fill': feature.invalid_fill,
                     }
                 else:
                     raise ValueError('Unsupported dim value.')
