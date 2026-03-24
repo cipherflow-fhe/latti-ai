@@ -35,6 +35,7 @@ from components import (
     UpsampleComputeNode,
     SpatialComputeNode,
     ActivationComputeNode,
+    PoolComputeNode,
 )
 import nn_modules
 import networkx as nx
@@ -153,6 +154,98 @@ def check_dropped_levels_per_subgraph(graph: LayerAbstractGraph) -> bool:
             print(
                 f'[check_dropped_levels_per_subgraph] FAIL: subgraph total dropped levels '
                 f'{total_dropped} > config.fhe_param.max_level + 2 = {config.fhe_param.max_level + 2}'
+            )
+            result = False
+    return result
+
+
+def check_reshape_sp_info_propagation(graph: LayerAbstractGraph) -> bool:
+    """
+    Check that every 2D->0D reshape node correctly propagates sp_info from its input:
+      output.sp_info.skip[i]         == input node's skip[i]
+      output.sp_info.shape[i]        == input node's shape[i]
+      output.sp_info.invalid_fill[i] == input node's invalid_fill[i]
+
+    Returns True if all reshape nodes satisfy the constraint, False otherwise.
+    """
+    result = True
+    for node in graph.dag.nodes:
+        if not (isinstance(node, ComputeNode) and node.layer_type == 'reshape'):
+            continue
+        inp = list(graph.dag.predecessors(node))[0]
+        out = list(graph.dag.successors(node))[0]
+        if not (inp.dim == 2 and out.dim == 0):
+            continue
+        if out.sp_info['skip'] != graph.dag.nodes[inp]['skip']:
+            print(
+                f'[check_reshape_sp_info_propagation] FAIL skip: {node.layer_id}: '
+                f'output sp_info.skip={out.sp_info["skip"]} != input skip={graph.dag.nodes[inp]["skip"]}'
+            )
+            result = False
+        if out.sp_info['shape'] != inp.shape:
+            print(
+                f'[check_reshape_sp_info_propagation] FAIL shape: {node.layer_id}: '
+                f'output sp_info.shape={out.sp_info["shape"]} != input shape={inp.shape}'
+            )
+            result = False
+        if out.sp_info['invalid_fill'] != inp.invalid_fill:
+            print(
+                f'[check_reshape_sp_info_propagation] FAIL invalid_fill: {node.layer_id}: '
+                f'output sp_info.invalid_fill={out.sp_info["invalid_fill"]} != input invalid_fill={inp.invalid_fill}'
+            )
+            result = False
+        expected_skip = [math.prod(out.sp_info['skip']) * math.prod(out.sp_info['shape'])]
+        if graph.dag.nodes[out]['skip'] != expected_skip:
+            print(
+                f'[check_reshape_sp_info_propagation] FAIL output skip: {node.layer_id}: '
+                f'output skip={graph.dag.nodes[out]["skip"]} != '
+                f'prod(sp_info.skip)*prod(sp_info.shape)={expected_skip}'
+            )
+            result = False
+    return result
+
+
+def check_2d_invalid_fill_propagation(graph: LayerAbstractGraph) -> bool:
+    """
+    Check that every 2D->2D compute node sets the output invalid_fill correctly:
+
+    ordinary packing:
+      output.invalid_fill == graph.dag.nodes[input]['skip']
+
+    multiplexed packing:
+      - ConvComputeNode or non-adaptive PoolComputeNode: output.invalid_fill == [1, 1]
+      - adaptive PoolComputeNode:                        output.invalid_fill == compute_node.stride
+      - other (e.g. simple poly):                        output.invalid_fill == input.invalid_fill
+
+    Returns True if all such nodes satisfy the constraint, False otherwise.
+    """
+    result = True
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode):
+            continue
+        preds: list[FeatureNode] = list(graph.dag.predecessors(node))
+        succs: list[FeatureNode] = list(graph.dag.successors(node))
+        if not preds or not succs:
+            continue
+        inp, out = preds[0], succs[0]
+        if not (inp.dim == 2 and out.dim == 2):
+            continue
+
+        if config.style == 'ordinary':
+            expected = graph.dag.nodes[inp]['skip']
+        elif isinstance(node, (ConvComputeNode,)) or (
+            isinstance(node, PoolComputeNode) and not node.is_adaptive_avgpool
+        ):
+            expected = [1, 1]
+        elif isinstance(node, PoolComputeNode) and node.is_adaptive_avgpool:
+            expected = node.stride
+        else:
+            expected = inp.invalid_fill
+
+        if out.invalid_fill != expected:
+            print(
+                f'[check_2d_invalid_fill_propagation] FAIL: {node.layer_id} ({node.layer_type}): '
+                f'output.invalid_fill={out.invalid_fill} != expected={expected}'
             )
             result = False
     return result
@@ -318,12 +411,30 @@ class TestLayerInteraction(CompilerTestBase):
         res = None
         for node in graph.dag.nodes:
             if isinstance(node, ComputeNode) and node.layer_type == 'reshape':
-                input = list(graph.dag.predecessors(node))[0]
                 output = list(graph.dag.successors(node))[0]
                 if output.sp_info['skip'][0] == 2:
                     res = True
                     break
         self.assertEqual(res, True)
+        self.assertEqual(check_reshape_sp_info_propagation(graph), True)
+        self.assertEqual(check_2d_invalid_fill_propagation(graph), True)
+
+    def test_conv_reshape_two_dense(self):
+        model = nn_modules.ConvReshapeAndTwoDense()
+        graph, score = self._export_and_compile(model, (1, 3, 32, 32), do_constant_folding=True)
+        self.assertEqual(check_reshape_sp_info_propagation(graph), True)
+        self.assertEqual(check_2d_invalid_fill_propagation(graph), True)
+        # Verify 0D -> 0D propagation: the feature between dense0 and dense1 inherits skip
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode) and node.layer_type == 'fc0':
+                inp = list(graph.dag.predecessors(node))[0]
+                out = list(graph.dag.successors(node))[0]
+
+                self.assertEqual(
+                    graph.dag.nodes[out]['skip'],
+                    graph.dag.nodes[inp]['skip'],
+                    '0D -> 0D: dense output skip should equal input skip',
+                )
 
     def test_conv_avgpool_reshape_dense(self):
         model = nn_modules.ConvAvgpoolReshapeAndDense()
@@ -343,6 +454,8 @@ class TestLayerInteraction(CompilerTestBase):
                     break
         self.assertEqual(res, True)
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
+        self.assertEqual(check_reshape_sp_info_propagation(graph), True)
+        self.assertEqual(check_2d_invalid_fill_propagation(graph), True)
 
 
 class TestCompiler(CompilerTestBase):
