@@ -65,33 +65,45 @@ void DensePackedLayer::prepare_weight_0d_skip(uint32_t skip_0d) {
         bias_scale = param.get_default_scale();
     }
 
-    for (uint32_t packed_out_idx = 0; packed_out_idx < n_packed_out_feature; packed_out_idx++) {
-        vector<CkksPlaintextRingt> a1;
-        for (uint32_t packed_in_idx = 0; packed_in_idx < n_packed_in_feature; packed_in_idx++) {
-            for (uint32_t d = 0; d < n_channel_per_ct; d++) {
-                uint32_t g = d / bsgs_bs;
-                uint32_t b = d % bsgs_bs;
+    // Pre-allocate: weight_pt[packed_out][packed_in * n_channel_per_ct + d]
+    weight_pt.resize(n_packed_out_feature);
+    bias_pt.resize(n_packed_out_feature);
+    for (uint32_t i = 0; i < n_packed_out_feature; i++) {
+        weight_pt[i].resize(n_packed_in_feature * n_channel_per_ct);
+    }
 
-                vector<double> w;
-                for (uint32_t j = 0; j < n_channel_per_ct; j++) {
-                    uint32_t out_local = (j - g * bsgs_bs + n_channel_per_ct) % n_channel_per_ct;
-                    uint32_t in_local = (j + b) % n_channel_per_ct;
-                    uint32_t out_ch = packed_out_idx * n_channel_per_ct + out_local;
-                    uint32_t in_ch = packed_in_idx * n_channel_per_ct + in_local;
-                    if (in_ch < n_in_feature && out_ch < n_out_feature) {
-                        w.push_back(weight.get(out_ch, in_ch));
-                    } else {
-                        w.push_back(0.0);
-                    }
-                    w.insert(w.end(), skip_0d - 1, 0.0);
+    // Parallelize over (packed_out_idx, packed_in_idx) pairs
+    uint32_t total_pairs = n_packed_out_feature * n_packed_in_feature;
+    parallel_for(total_pairs, th_nums, ctx, [&](CkksContext& ctx_copy, int flat_idx) {
+        uint32_t packed_out_idx = flat_idx / n_packed_in_feature;
+        uint32_t packed_in_idx = flat_idx % n_packed_in_feature;
+        uint32_t base = packed_in_idx * n_channel_per_ct;
+
+        for (uint32_t d = 0; d < n_channel_per_ct; d++) {
+            uint32_t g = d / bsgs_bs;
+            uint32_t b = d % bsgs_bs;
+
+            vector<double> w;
+            w.reserve(n_channel_per_ct * skip_0d);
+            for (uint32_t j = 0; j < n_channel_per_ct; j++) {
+                uint32_t out_local = (j - g * bsgs_bs + n_channel_per_ct) % n_channel_per_ct;
+                uint32_t in_local = (j + b) % n_channel_per_ct;
+                uint32_t out_ch = packed_out_idx * n_channel_per_ct + out_local;
+                uint32_t in_ch = packed_in_idx * n_channel_per_ct + in_local;
+                if (in_ch < n_in_feature && out_ch < n_out_feature) {
+                    w.push_back(weight.get(out_ch, in_ch));
+                } else {
+                    w.push_back(0.0);
                 }
-                auto w_pt = ctx.encode_ringt(w, modified_scale);
-                a1.push_back(move(w_pt));
+                w.insert(w.end(), skip_0d - 1, 0.0);
             }
+            weight_pt[packed_out_idx][base + d] = ctx_copy.encode_ringt(w, modified_scale);
         }
-        weight_pt.push_back(move(a1));
+    });
 
+    parallel_for(n_packed_out_feature, th_nums, ctx, [&](CkksContext& ctx_copy, int packed_out_idx) {
         vector<double> bv;
+        bv.reserve(n_channel_per_ct * skip_0d);
         for (uint32_t j = 0; j < n_channel_per_ct; j++) {
             uint32_t out_ch = packed_out_idx * n_channel_per_ct + j;
             if (out_ch < n_out_feature) {
@@ -101,9 +113,8 @@ void DensePackedLayer::prepare_weight_0d_skip(uint32_t skip_0d) {
             }
             bv.insert(bv.end(), skip_0d - 1, 0.0);
         }
-        auto b_pt = ctx.encode_ringt(bv, bias_scale);
-        bias_pt.push_back(move(b_pt));
-    }
+        bias_pt[packed_out_idx] = ctx_copy.encode_ringt(bv, bias_scale);
+    });
 }
 
 void DensePackedLayer::prepare_weight_0d_skip_lazy(uint32_t skip_0d) {
