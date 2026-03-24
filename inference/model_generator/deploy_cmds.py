@@ -442,6 +442,7 @@ def gen_custom_task(task_path, n=16384, use_gpu=True, style='ordinary'):
             if 'special_info' not in config_info['feature'][layer_input_feature_ids[0]]:
                 virtual_shape = [1, 1]
                 virtual_skip = [0, 0]
+                skip = config_info['feature'][layer_input_feature_ids[0]]['skip']
                 if use_gpu:
                     weight_pt = [
                         [
@@ -472,7 +473,7 @@ def gen_custom_task(task_path, n=16384, use_gpu=True, style='ordinary'):
                 input_args.append(Argument(f'densew_{layer_id}', weight_pt))
                 input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
                 layer_output_nodes = fc_layer.call_skip_0d(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, virtual_skip[0]
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, skip
                 )
             else:
                 special_shape = config_info['feature'][layer_input_feature_ids[0]]['special_info']['shape']
