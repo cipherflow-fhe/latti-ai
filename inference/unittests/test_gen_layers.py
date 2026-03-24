@@ -178,7 +178,7 @@ class TestLayerExport(unittest.TestCase):
         for s in shapes:
             print(f'sub-test: s={s}')
             input_ct = [CkksCiphertextNode(f'input_ct_{i}', n_in_level) for i in range(int(np.ceil(s * s * 1 / 8192)))]
-            square = Square_layer(level=n_in_level)
+            square = SquareLayer(level=n_in_level)
             output_ct = square.call(input_ct)
             input_args = list()
             input_args.append(Argument('input_node', input_ct))
@@ -469,7 +469,7 @@ class TestLayerExport(unittest.TestCase):
                 for i in range(order + 1)
             ]
 
-            poly_layer = PolyReluLayer(input_shape, order, skip, n_in_channel_per_ct)
+            poly_layer = PolyRelu(input_shape, order, skip, n_in_channel_per_ct)
             output_ct = poly_layer.call_bsgs(input_ct, weight_pt)
 
             input_args = list()
@@ -485,56 +485,6 @@ class TestLayerExport(unittest.TestCase):
                 / f'level_{level}',
             )
 
-    def test_fc_cyclic(self):
-        N = 16384
-        set_param(n=N)
-        level = 2
-        w_shapes = [128, 512]
-        shapes = [1, 2, 4, 8, 16]
-        virtual_skip = [1, 1]
-
-        for s in shapes:
-            print(f'sub-test: s={s}')
-            n_in_channel = w_shapes[1]
-            n_out_channel = w_shapes[0]
-            virtual_shape = [s, s]
-            n_channel_per_ct = int(np.ceil(8192 / (s * s)))
-            n_packed_out_feature = int(np.ceil(w_shapes[0] / n_channel_per_ct))
-            n_packed_in_feature = int(np.ceil(w_shapes[1] / n_channel_per_ct))
-            per_channel_num = int((virtual_shape[0] / virtual_skip[0]) * (virtual_shape[1] / virtual_skip[1]))
-            weight_pt_size = int(np.ceil(n_packed_in_feature / per_channel_num)) * n_channel_per_ct
-            input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(int(np.ceil(w_shapes[1] / 8192)))]
-            weight_pt = [
-                [CkksPlaintextRingtNode(f'weight_pt_{i}_{j}') for j in range(weight_pt_size)]
-                for i in range(n_packed_out_feature)
-            ]
-            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_feature)]
-
-            dense = DensePackedLayer(
-                n_out_channel,
-                n_in_channel,
-                virtual_shape,
-                virtual_skip,
-                n_channel_per_ct,
-                n_packed_in_feature,
-                n_packed_out_feature,
-            )
-            output_ct = dense.call(input_ct, weight_pt, bias_pt)
-
-            input_args = list()
-            input_args.append(Argument('input_node', input_ct))
-            input_args.append(Argument(f'weight_pt', weight_pt))
-            input_args.append(Argument(f'bias_pt', bias_pt))
-
-            process_custom_task(
-                input_args=input_args,
-                output_args=[Argument('output_ct', output_ct)],
-                output_instruction_path=base_path
-                / f'CKKS_fc_prepare_weight1_1D_pack_cyclic_{s}_{s}'
-                / f'level_{level}'
-                / 'server',
-            )
-
     def test_fc_pack_skip(self):
         N = 16384
         set_param(n=N)
@@ -548,7 +498,9 @@ class TestLayerExport(unittest.TestCase):
             n_in_channel = w_shape[1]
             n_out_channel = w_shape[0]
             virtual_skip = [s, s]
-            n_channel_per_ct = int(np.ceil(8192 / (s * s)))
+            skip_0d = s * s  # ciphertext_skip = skip[0] * skip[1]
+            n_channel_per_ct = int(N / 2 / skip_0d)
+            pack = n_channel_per_ct
             n_packed_out_feature = int(np.ceil(n_out_channel / n_channel_per_ct))
             n_packed_in_feature = int(np.ceil(n_in_channel / n_channel_per_ct))
             dense = DensePackedLayer(
@@ -556,12 +508,12 @@ class TestLayerExport(unittest.TestCase):
                 n_in_channel,
                 virtual_shape,
                 virtual_skip,
-                n_channel_per_ct,
+                pack,
                 n_packed_in_feature,
                 n_packed_out_feature,
             )
-            per_channel_num = 1
-            weight_pt_size = min(int(np.ceil(n_packed_in_feature / per_channel_num)) * n_channel_per_ct, n_in_channel)
+            bsgs_bs = int(np.ceil(np.sqrt(pack)))
+            weight_pt_size = n_packed_in_feature * pack
             input_ct = [
                 CkksCiphertextNode(f'input_ct_{i}', level) for i in range(int(np.ceil(n_in_channel / n_channel_per_ct)))
             ]
@@ -571,7 +523,7 @@ class TestLayerExport(unittest.TestCase):
             ]
             bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_feature)]
 
-            output_ct = dense.call(input_ct, weight_pt, bias_pt)
+            output_ct = dense.call_skip_0d(input_ct, weight_pt, bias_pt, skip_0d)
 
             input_args = list()
             input_args.append(Argument('input_node', input_ct))
@@ -601,49 +553,58 @@ class TestLayerExport(unittest.TestCase):
         dense_shape1 = [1, 1]
         skip1 = [dense_shape[0] * skip[0], dense_shape[1] * skip[1]]
 
-        n_channel_per_ct = int(np.floor(n_slot / (dense_shape[0] * dense_shape[1])))
-        n_packed_in_feature = int(np.floor(input_channel / n_channel_per_ct))
-        n_packed_out_feature = int(np.floor(output_channel / n_channel_per_ct))
-        per_channel_num = int((dense_shape[0] / skip[0]) * (dense_shape[1] / skip[1]))
-        weight_pt_size = int(np.ceil(n_packed_in_feature / per_channel_num)) * n_channel_per_ct
+        # --- Layer 0: multiplexed (2D spatial layout) ---
+        input_ct_shape0 = [dense_shape[0] * skip[0], dense_shape[1] * skip[1]]
+        n_num_pre_ct0 = int(np.ceil(n_slot / (input_ct_shape0[0] * input_ct_shape0[1])))
+        n_packed_out_feature0 = int(np.ceil(output_channel / n_num_pre_ct0))
+
+        valid_skip_0 = skip[0]
+        valid_skip_1 = skip[1]
+        n_channel_per_block = valid_skip_0 * valid_skip_1
+        n_channel0 = input_channel // (dense_shape[0] * dense_shape[1])
+        n_block_input0 = int(np.ceil(n_channel0 / (n_num_pre_ct0 * n_channel_per_block))) * n_num_pre_ct0
+
         input_ct = [
             CkksCiphertextNode(f'input_ct0_{i}', init_level) for i in range(int(np.ceil(input_channel / n_slot)))
         ]
         weight_pt0 = [
-            [CkksPlaintextRingtNode(f'weight_pt0_{i}_{j}') for j in range(weight_pt_size)]
-            for i in range(n_packed_out_feature)
+            [CkksPlaintextRingtNode(f'weight_pt0_{i}_{j}') for j in range(n_block_input0)]
+            for i in range(n_packed_out_feature0)
         ]
-        bias_pt0 = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_feature)]
+        bias_pt0 = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_feature0)]
         dense0 = DensePackedLayer(
-            input_channel,
             output_channel,
+            input_channel,
             dense_shape,
             skip,
-            n_channel_per_ct,
-            n_packed_in_feature,
-            n_packed_out_feature,
+            n_num_pre_ct0,
+            int(np.ceil(input_channel / n_num_pre_ct0)),
+            n_packed_out_feature0,
         )
-        res0 = dense0.call(input_ct, weight_pt0, bias_pt0)
+        res0 = dense0.call_multiplexed(input_ct, weight_pt0, bias_pt0, N)
 
-        n_channel_per_ct = int(np.floor(n_slot / (skip1[0] * skip1[1])))
-        n_packed_in_feature = int(np.ceil(output_channel / n_channel_per_ct))
-        n_packed_out_feature = int(np.ceil(output_channel1 / n_channel_per_ct))
-        weight_pt_size = n_packed_in_feature * n_channel_per_ct
+        # --- Layer 1: skip_0d ---
+        skip_0d1 = skip1[0] * skip1[1]
+        n_channel_per_ct1 = int(N / 2 / skip_0d1)
+        pack1 = n_channel_per_ct1
+        n_packed_in_feature1 = int(np.ceil(output_channel / n_channel_per_ct1))
+        n_packed_out_feature1 = int(np.ceil(output_channel1 / n_channel_per_ct1))
+        weight_pt_size1 = n_packed_in_feature1 * pack1
         weight_pt1 = [
-            [CkksPlaintextRingtNode(f'weight_pt1_{i}_{j}') for j in range(weight_pt_size)]
-            for i in range(n_packed_out_feature)
+            [CkksPlaintextRingtNode(f'weight_pt1_{i}_{j}') for j in range(weight_pt_size1)]
+            for i in range(n_packed_out_feature1)
         ]
-        bias_pt1 = [CkksPlaintextRingtNode(f'bias_pt1_{i}') for i in range(n_packed_out_feature)]
+        bias_pt1 = [CkksPlaintextRingtNode(f'bias_pt1_{i}') for i in range(n_packed_out_feature1)]
         dense1 = DensePackedLayer(
-            input_channel,
+            output_channel1,
             output_channel,
             dense_shape1,
             skip1,
-            n_channel_per_ct,
-            n_packed_in_feature,
-            n_packed_out_feature,
+            pack1,
+            n_packed_in_feature1,
+            n_packed_out_feature1,
         )
-        output_ct = dense1.call(res0, weight_pt1, bias_pt1)
+        output_ct = dense1.call_skip_0d(res0, weight_pt1, bias_pt1, skip_0d1)
 
         input_args = list()
         input_args.append(Argument('input_node', input_ct))
@@ -696,7 +657,7 @@ class TestLayerExport(unittest.TestCase):
                 n_in_channel,
                 n_out_channel,
             )
-            output_ct = dense.call_mult_pack(input_ct, weight_pt, bias_pt, n=N)
+            output_ct = dense.call_multiplexed(input_ct, weight_pt, bias_pt, n=N)
 
             input_args = list()
             input_args.append(Argument('input_node', input_ct))
@@ -712,6 +673,68 @@ class TestLayerExport(unittest.TestCase):
                 / 'server',
             )
 
+    def test_fc_multiplexed(self):
+        N = 16384
+        set_param(n=N)
+        level = 3
+        n_in_channel = 64
+        n_out_channel = 10
+
+        configs = [
+            ([1, 1], [2, 2], [1, 1]),
+            ([1, 1], [4, 4], [1, 1]),
+            ([1, 1], [8, 8], [1, 1]),
+            ([1, 1], [32, 32], [8, 8]),
+            ([1, 1], [16, 16], [4, 4]),
+            ([2, 2], [4, 4], [4, 4]),
+        ]
+
+        for shape, skip, invalid_fill in configs:
+            input_ct_shape = [shape[0] * skip[0], shape[1] * skip[1]]
+            n_num_per_ct = int(np.ceil(N / 2 / (input_ct_shape[0] * input_ct_shape[1])))
+            n_packed_out = int(np.ceil(n_out_channel / n_num_per_ct))
+            valid_skip_0 = skip[0] // invalid_fill[0]
+            valid_skip_1 = skip[1] // invalid_fill[1]
+            n_channel_per_block = valid_skip_0 * valid_skip_1
+            n_channel = n_in_channel // (shape[0] * shape[1])
+            n_block_input = int(np.ceil(n_channel / (n_num_per_ct * n_channel_per_block))) * n_num_per_ct
+            n_input_ct = max(1, int(np.ceil(n_in_channel * shape[0] * shape[1] * (N / 2) ** (-1))))
+
+            input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_input_ct)]
+            weight_pt = [
+                [CkksPlaintextRingtNode(f'weight_pt_{i}_{j}') for j in range(n_block_input)]
+                for i in range(n_packed_out)
+            ]
+            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out)]
+
+            dense = DensePackedLayer(
+                n_out_channel,
+                n_in_channel,
+                shape,
+                skip,
+                n_num_per_ct,
+                n_in_channel,
+                n_out_channel,
+                invalid_fill=invalid_fill,
+            )
+            output_ct = dense.call_multiplexed(input_ct, weight_pt, bias_pt, N)
+
+            path_name = (
+                f'CKKS_fc_multiplexed'
+                f'_shape{shape[0]}x{shape[1]}'
+                f'_skip{skip[0]}x{skip[1]}'
+                f'_inv{invalid_fill[0]}x{invalid_fill[1]}'
+            )
+            process_custom_task(
+                input_args=[
+                    Argument('input_node', input_ct),
+                    Argument('weight_pt', weight_pt),
+                    Argument('bias_pt', bias_pt),
+                ],
+                output_args=[Argument('output_ct', output_ct)],
+                output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
+            )
+
     def test_poly_relu_bsgs(self):
         N = 16384
         set_param(n=N)
@@ -722,21 +745,21 @@ class TestLayerExport(unittest.TestCase):
         n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
         order0 = 7
         order1 = 7
-        level_cost0 = PolyReluLayer.compute_bsgs_level_cost(order0)
-        level_cost1 = PolyReluLayer.compute_bsgs_level_cost(order1)
+        level_cost0 = PolyRelu.compute_bsgs_level_cost(order0)
+        level_cost1 = PolyRelu.compute_bsgs_level_cost(order1)
         level = level_cost0 + level_cost1 + 1  # +1 for sign(x)*x multiplication
 
         input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
         weight_pt0 = [
             [CkksPlaintextRingtNode(f'poly0w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order0 + 1)
         ]
-        poly_layer0 = PolyReluLayer(input_shape, order0, skip, n_in_channel_per_ct)
+        poly_layer0 = PolyRelu(input_shape, order0, skip, n_in_channel_per_ct)
         output_ct0 = poly_layer0.call_bsgs(input_ct, weight_pt0)
 
         weight_pt1 = [
             [CkksPlaintextRingtNode(f'poly1w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order1 + 1)
         ]
-        poly_layer1 = PolyReluLayer(input_shape, order1, skip, n_in_channel_per_ct)
+        poly_layer1 = PolyRelu(input_shape, order1, skip, n_in_channel_per_ct)
         output_ct1 = poly_layer1.call_bsgs(output_ct0, weight_pt1)
 
         output_ct = list()
@@ -777,7 +800,7 @@ class TestLayerExport(unittest.TestCase):
             level = 8
 
             for order in orders:
-                level_cost = PolyReluLayer.compute_bsgs_level_cost(order)
+                level_cost = PolyRelu.compute_bsgs_level_cost(order)
                 if level < level_cost:
                     continue
 
@@ -788,7 +811,7 @@ class TestLayerExport(unittest.TestCase):
                     for i in range(order + 1)
                 ]
 
-                poly_layer = PolyReluLayer.create_for_feature0d(order, skip_val, n_channel_per_ct)
+                poly_layer = PolyRelu.create_for_feature0d(order, skip_val, n_channel_per_ct)
                 output_ct = poly_layer.call_bsgs_feature0d(input_ct, weight_pt)
 
                 input_args = list()
