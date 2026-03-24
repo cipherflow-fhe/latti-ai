@@ -24,10 +24,10 @@
 class FeatureMatEncrypted : public FeatureEncrypted {
 public:
     Duo shape;  // {rows (L), cols (C)}
-    std::vector<CkksCiphertext> data;
-    std::vector<CkksCompressedCiphertext> data_compress;
+    std::vector<ls::CkksCiphertext> data;
+    std::vector<ls::CkksCompressedCiphertext> data_compress;
 
-    FeatureMatEncrypted(CkksContext* context_in, int ct_level);
+    FeatureMatEncrypted(ls::CkksContext* context_in, int ct_level);
 
     // Block column-major packing: each d*d block -> one ciphertext
     void block_col_major_pack(const Array<double, 2>& matrix,

@@ -21,6 +21,7 @@
 #include <cmath>
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 static uint32_t next_pow2_cpmm(uint32_t x) {
     uint32_t p = 1;

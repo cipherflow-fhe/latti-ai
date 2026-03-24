@@ -22,6 +22,9 @@
 #include "multiplexed_conv2d_pack_layer.h"
 #include "multiplexed_conv2d_pack_layer_depthwise.h"
 
+using namespace std;
+using namespace cxx_sdk_v2;
+
 ParMultiplexedConv2DPackedLayerDepthwise::ParMultiplexedConv2DPackedLayerDepthwise(const CkksParameter& param_in,
                                                                                    const Duo& input_shape_in,
                                                                                    const Array<double, 4>& weight_in,

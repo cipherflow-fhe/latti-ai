@@ -17,13 +17,16 @@
  */
 
 #pragma once
+
+#include <cxx_sdk_v2/cxx_fhe_task.h>
 #include "common.h"
-#include "data_structs/feature.h"
+
+namespace ls = cxx_sdk_v2;
 
 class Layer {
 public:
     Layer() = default;
-    explicit Layer(const CkksParameter& param) : param_(param.copy()) {}
+    explicit Layer(const ls::CkksParameter& param) : param_(param.copy()) {}
     virtual ~Layer() = default;
 
     Layer(const Layer&) = delete;
@@ -32,6 +35,6 @@ public:
     Layer& operator=(Layer&&) noexcept = default;
 
 protected:
-    CkksParameter param_;
+    ls::CkksParameter param_;
     uint32_t level_ = 0;
 };

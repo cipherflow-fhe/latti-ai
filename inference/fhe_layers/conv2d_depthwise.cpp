@@ -30,6 +30,9 @@
 #include "conv2d_depthwise.h"
 #include "util.h"
 
+using namespace std;
+using namespace cxx_sdk_v2;
+
 Conv2DPackedDepthwiseLayer::Conv2DPackedDepthwiseLayer(const CkksParameter& param,
                                                        const Duo& input_shape,
                                                        const Array<double, 4>& weight,

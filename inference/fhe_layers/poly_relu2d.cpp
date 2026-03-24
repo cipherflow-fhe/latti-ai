@@ -22,6 +22,9 @@
 #include <limits>
 #include <functional>
 
+using namespace std;
+using namespace cxx_sdk_v2;
+
 PolyRelu::PolyRelu(const CkksParameter& param_in,
                    const Duo& input_shape_in,
                    const int order_in,

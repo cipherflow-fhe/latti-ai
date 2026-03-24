@@ -25,7 +25,7 @@
 
 class MultScalarLayer : public Layer {
 public:
-    MultScalarLayer(const CkksParameter& param_in,
+    MultScalarLayer(const ls::CkksParameter& param_in,
                     const Duo& input_shape_in,
                     const Array<double, 1>& weight_in,
                     const Duo& skip_in,
@@ -34,8 +34,8 @@ public:
                     const Duo& upsample_factor_in = {1, 1},
                     const Duo& block_expansion_in = {1, 1});
     virtual void prepare_weight();
-    std::vector<CkksCiphertext> run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
-    Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
+    std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
+    Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     virtual Array<double, 3> run_plaintext(const Array<double, 3>& x);
 
     Duo input_shape;
@@ -47,5 +47,5 @@ public:
     Array<double, 1> weight;
     uint32_t n_channel_per_ct;
     uint32_t n_block_per_ct;
-    vector<CkksPlaintextRingt> weight_pt;
+    std::vector<ls::CkksPlaintextRingt> weight_pt;
 };
