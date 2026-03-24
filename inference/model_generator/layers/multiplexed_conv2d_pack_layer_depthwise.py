@@ -29,7 +29,7 @@ import numpy as np
 op_class = 'MultConv2DPackedDepthwiseLayer'
 
 
-class MultConv2DPackedDepthwiseLayer:
+class ParMultiplexedConv2DPackedLayerDepthwise:
     rotate_num = 0
     add_num = 0
     mult_num = 0

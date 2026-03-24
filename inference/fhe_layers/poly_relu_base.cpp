@@ -442,13 +442,13 @@ std::vector<CkksCiphertext> PolyReluBase::run_core_bsgs(CkksContext& ctx, const 
 
 PolyRelu0D::PolyRelu0D(const CkksParameter& param_in,
                        const Array<double, 2>& weight_in,
-                       uint32_t n_channel_per_ct_in,
                        uint32_t level_in,
                        int order_in,
                        int ciphertext_skip_in)
-    : PolyReluBase(param_in, weight_in, n_channel_per_ct_in, level_in, order_in), ciphertext_skip(ciphertext_skip_in) {}
+    : PolyReluBase(param_in, weight_in, param_in.get_n() / 2 / ciphertext_skip_in, level_in, order_in),
+      ciphertext_skip(ciphertext_skip_in) {}
 
-void PolyRelu0D::prepare_weight() {
+void PolyRelu0D::prepare_weight_0d_skip() {
     init_bsgs();
 
     int channel = weight.get_shape()[1];
@@ -472,12 +472,15 @@ void PolyRelu0D::prepare_weight() {
     });
 }
 
-void PolyRelu0D::prepare_weight_lazy() {
+void PolyRelu0D::prepare_weight_0d_skip_lazy() {
     init_bsgs();
+    is_multiplexed = false;
     weight_pt.clear();
 }
 
-CkksPlaintextRingt PolyRelu0D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int ct_idx) const {
+// ---- Mode 1: direct 0D skip pack ----
+
+CkksPlaintextRingt PolyRelu0D::generate_weight_pt_skip0d(CkksContext& ctx, int idx, int ct_idx) const {
     vector<double> feature_tmp_pack(N / 2, 0.0);
     for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
         int channel_idx = ct_idx * n_channel_per_ct + ch;
@@ -487,6 +490,70 @@ CkksPlaintextRingt PolyRelu0D::generate_weight_pt_for_bsgs(CkksContext& ctx, int
     }
     double pack_scale = cached_bsgs_coeff_scale.at(idx);
     return ctx.encode_ringt(feature_tmp_pack, pack_scale);
+}
+
+// ---- Mode 2: from reshape of 2D with shape>1 ----
+// Weight is broadcast to all H*W spatial positions within each channel block.
+// Slot layout (mirrors 2D ordinary pack in PolyRelu::prepare_weight_bsgs):
+//   channel ch in CT at block ch, position (h,k):
+//   slot = ch * block_size + h * W * s0 * s1 + k * s1
+
+CkksPlaintextRingt PolyRelu0D::generate_weight_pt_multiplexed(CkksContext& ctx, int idx, int ct_idx) const {
+    vector<double> feature_tmp_pack(N / 2, 0.0);
+    int H = special_input_shape[0], W = special_input_shape[1];
+    int s0 = special_skip[0], s1 = special_skip[1];
+    for (int ch = 0; ch < n_channel_per_ct_mux; ch++) {
+        int channel_idx = ct_idx * n_channel_per_ct_mux + ch;
+        if (channel_idx >= cached_channel)
+            continue;
+        double w = weight.get(idx, channel_idx);
+        int block_start = ch * block_size;
+        for (int h = 0; h < H; h++) {
+            for (int k = 0; k < W; k++) {
+                int slot = block_start + h * W * s0 * s1 + k * s1;
+                feature_tmp_pack[slot] = w;
+            }
+        }
+    }
+    double pack_scale = cached_bsgs_coeff_scale.at(idx);
+    return ctx.encode_ringt(feature_tmp_pack, pack_scale);
+}
+
+void PolyRelu0D::prepare_weight_2d_multiplexed(const Duo& input_shape_in, const Duo& skip_in) {
+    init_bsgs();
+    is_multiplexed = true;
+    special_input_shape = input_shape_in;
+    special_skip = skip_in;
+    block_size = input_shape_in[0] * skip_in[0] * input_shape_in[1] * skip_in[1];
+    n_channel_per_ct_mux = (N / 2) / block_size;
+
+    int channel = weight.get_shape()[1];
+    int n_packed_out_channel = div_ceil(channel, n_channel_per_ct_mux);
+    weight_pt.resize(order + 1);
+
+    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    ctx.resize_copies(order + 1);
+    parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
+        for (int ct_idx = 0; ct_idx < n_packed_out_channel; ct_idx++) {
+            weight_pt[idx].push_back(generate_weight_pt_multiplexed(ctx_copy, idx, ct_idx));
+        }
+    });
+}
+
+void PolyRelu0D::prepare_weight_2d_multiplexed_lazy(const Duo& input_shape_in, const Duo& skip_in) {
+    init_bsgs();
+    is_multiplexed = true;
+    special_input_shape = input_shape_in;
+    special_skip = skip_in;
+    block_size = input_shape_in[0] * skip_in[0] * input_shape_in[1] * skip_in[1];
+    n_channel_per_ct_mux = (N / 2) / block_size;
+    weight_pt.clear();
+}
+
+CkksPlaintextRingt PolyRelu0D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int ct_idx) const {
+    if (is_multiplexed)
+        return generate_weight_pt_multiplexed(ctx, idx, ct_idx);
+    return generate_weight_pt_skip0d(ctx, idx, ct_idx);
 }
 
 Feature0DEncrypted PolyRelu0D::run(CkksContext& ctx, const Feature0DEncrypted& x) {
