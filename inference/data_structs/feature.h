@@ -28,7 +28,7 @@
 using namespace std;
 using namespace cxx_sdk_v2;
 
-enum class PackType { MultChannelPacking, SinglePack, MultiplexedPacking, InterleavedPacking };
+enum class PackType { MultipleChannelPacking, SinglePack, MultiplexedPacking, InterleavedPacking };
 
 enum class DecryptType { RESHAPE, SPARSE };
 enum class ExecuteType { FPGA, SDK };
