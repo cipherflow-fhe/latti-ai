@@ -1184,8 +1184,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_multiplexed", "", HeteroProces
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
     int init_level = 2;
-
-    // fc0: multiplexed — 1024-in -> 1024-out, spatial shape [4,4], skip (1,1)
+    // fc0: multiplexed, dense_shape=[4,4], skip=(1,1), 1024->1024
+    // fc1: skip_0d, skip1=[4,4], 1024->128
     uint32_t input_channel = 1024;
     uint32_t output_channel = 1024;
     Duo dense_shape = {4, 4};
@@ -1201,20 +1201,15 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
     Array<double, 2> weight1 = gen_random_array<2>({output_channel1, output_channel}, 1);
     Array<double, 1> bias1 = gen_random_array<1>({output_channel1}, 1);
 
-    // Input: 2D multiplexed feature -> reshape to 0D
-    auto input_3d = gen_random_array<3>({input_channel, (uint64_t)dense_shape[0], (uint64_t)dense_shape[1]}, 0.1);
-    auto input_1d = Array<double, 1>::from_array_1d(input_3d.to_array_1d());
+    // Input: direct 0D pack — ceil(1024/8192)=1 CT, skip=1 (matches Python)
+    Array<double, 1> input_1d = gen_random_array<1>({input_channel}, 0.1);
+    Feature0DEncrypted input_feature(&this->context, init_level);
+    input_feature.pack(input_1d, false, this->param.get_default_scale(), /*skip=*/1);
 
-    Feature2DEncrypted input_2d(&this->context, init_level, skip0);
-    input_2d.pack_multiplexed(input_3d, false, this->param.get_default_scale());
-
-    ReshapeLayer reshape(this->param);
-    Feature0DEncrypted input_0d = reshape.call(this->context, input_2d);
-
-    // Build layers for weight/bias plaintext preparation
+    // fc0: multiplexed — block=[4*1]*[4*1]=16 slots, n_num_pre_ct=ceil(8192/16)=512
     uint32_t block_size0 = (dense_shape[0] * skip0[0]) * (dense_shape[1] * skip0[1]);
-    uint32_t n_blocks_per_ct0 = div_ceil((uint32_t)this->n_slot, block_size0);
-    DensePackedLayer dense0(this->context.get_parameter(), weight0, bias0, n_blocks_per_ct0, init_level, 0);
+    uint32_t n_num_pre_ct0 = div_ceil((uint32_t)this->n_slot, block_size0);
+    DensePackedLayer dense0(this->context.get_parameter(), weight0, bias0, n_num_pre_ct0, init_level, 0);
     dense0.prepare_weight_for_2d_multiplexed(dense_shape, skip0);
 
     uint32_t skip_0d1 = skip1[0] * skip1[1];
