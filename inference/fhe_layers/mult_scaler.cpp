@@ -26,7 +26,7 @@ MultScalarLayer::MultScalarLayer(const CkksParameter& param_in,
                                  uint32_t level_in,
                                  const Duo& upsample_factor_in,
                                  const Duo& block_expansion_in)
-    : param(param_in.copy()), input_shape(input_shape_in), weight(weight_in.copy()), skip(skip_in) {
+    : Layer(param_in), input_shape(input_shape_in), weight(weight_in.copy()), skip(skip_in) {
     if ((input_shape[0] & (input_shape[0] - 1)) != 0 || (input_shape[1] & (input_shape[1] - 1)) != 0) {
         throw std::invalid_argument("input_shape must be powers of 2, got: [" + std::to_string(input_shape[0]) + ", " +
                                     std::to_string(input_shape[1]) + "]");
@@ -59,7 +59,7 @@ void MultScalarLayer::prepare_weight() {
     int n_packed_out_channel = div_ceil(channel, n_channel_per_ct) * block_expansion[0] * block_expansion[1];
     weight_pt.clear();
 
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     ctx.resize_copies(n_packed_out_channel);
     weight_pt.resize(n_packed_out_channel);
     double pack_scale = ctx.get_parameter().get_q(level_);

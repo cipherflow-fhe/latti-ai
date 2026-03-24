@@ -42,7 +42,6 @@ private:
 
     static int get_block_index(int bi, int bj, int num_block_rows);
 
-    CkksParameter param_;
     uint32_t m_, n_;  // per-head matrix dimensions
     uint32_t d_;      // block size
     uint32_t n_slot_;

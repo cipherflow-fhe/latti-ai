@@ -75,7 +75,6 @@ private:
     uint32_t K_;                              // megablock count (1 for square)
     std::vector<Array<double, 2>> W_padded_;  // K padded sub-weights
 
-    CkksParameter param_;
     uint32_t m_;               // rows of A (and result)
     uint32_t n_per_head_;      // columns per head in A
     uint32_t n_total_per_mb_;  // total columns per megablock = n_heads * n_per_head

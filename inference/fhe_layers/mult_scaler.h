@@ -38,7 +38,6 @@ public:
     Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
     virtual Array<double, 3> run_plaintext(const Array<double, 3>& x);
 
-    CkksParameter param;
     Duo input_shape;
     Duo skip;
     Duo pre_skip;

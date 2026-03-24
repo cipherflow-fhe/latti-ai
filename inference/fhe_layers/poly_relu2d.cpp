@@ -69,7 +69,7 @@ void PolyRelu::prepare_weight() {
     int n_packed_out_channel = div_ceil(channel, n_channel_per_ct) * block_expansion[0] * block_expansion[1];
     weight_pt.resize(order);
 
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     ctx.resize_copies(order);
     parallel_for(order, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int n_packed_out_channel_idx = 0; n_packed_out_channel_idx < n_packed_out_channel;
@@ -92,12 +92,12 @@ void PolyRelu::prepare_weight() {
                 feature_tmp_pack[index] = weight.get(idx, channel_idx);
             }
 
-            double pack_scale = param.get_default_scale();
+            double pack_scale = param_.get_default_scale();
             if (idx == order - 1) {
-                pack_scale = param.get_default_scale();
+                pack_scale = param_.get_default_scale();
             } else {
                 for (int k = 0; k < order - idx - 1; k++) {
-                    pack_scale = pack_scale * param.get_default_scale() / param.get_q(level_ - k);
+                    pack_scale = pack_scale * param_.get_default_scale() / param_.get_q(level_ - k);
                 }
             }
             weight_pt[idx].push_back(ctx_copy.encode_ringt(feature_tmp_pack, pack_scale));
@@ -128,12 +128,12 @@ PolyRelu::generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_packed
         feature_tmp_pack[index] = weight.get(idx, channel_idx);
     }
 
-    double pack_scale = param.get_default_scale();
+    double pack_scale = param_.get_default_scale();
     if (idx == order - 1) {
-        pack_scale = param.get_default_scale();
+        pack_scale = param_.get_default_scale();
     } else {
         for (int k = 0; k < order - idx - 1; k++) {
-            pack_scale = pack_scale * param.get_default_scale() / param.get_q(level_ - k);
+            pack_scale = pack_scale * param_.get_default_scale() / param_.get_q(level_ - k);
         }
     }
 
@@ -178,13 +178,13 @@ PolyRelu::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, i
 
     if (order != 4) {
         if (idx == 0) {
-            pack_scale = pack_scale * param.get_default_scale();
+            pack_scale = pack_scale * param_.get_default_scale();
         } else {
             for (int k = 0; k < idx; k++) {
                 if (k == idx - 1) {
-                    pack_scale = pack_scale * param.get_q(level_ - (order - k - 1));
+                    pack_scale = pack_scale * param_.get_q(level_ - (order - k - 1));
                 } else {
-                    pack_scale = param.get_q(level_ - (order - k - 1)) / param.get_default_scale() * pack_scale;
+                    pack_scale = param_.get_q(level_ - (order - k - 1)) / param_.get_default_scale() * pack_scale;
                 }
             }
         }
@@ -286,7 +286,7 @@ void PolyRelu::prepare_weight_bsgs() {
     int n_packed_out_channel = div_ceil(channel, n_channel_per_ct) * block_expansion[0] * block_expansion[1];
     weight_pt.resize(order + 1);
 
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     ctx.resize_copies(order + 1);
 
     parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
@@ -344,7 +344,7 @@ void PolyRelu::prepare_weight_hornor() {
     int channel = weight.get_shape()[1];
     int n_packed_out_channel = div_ceil(channel, n_channel_per_ct) * block_expansion[0] * block_expansion[1];
     weight_pt.resize(order + 1);
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
 
     parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int n_packed_out_channel_idx = 0; n_packed_out_channel_idx < n_packed_out_channel;
@@ -385,13 +385,13 @@ void PolyRelu::prepare_weight_hornor() {
 
             double pack_scale = 1;
             if (idx == 0) {
-                pack_scale = pack_scale * param.get_default_scale();
+                pack_scale = pack_scale * param_.get_default_scale();
             } else {
                 for (int k = 0; k < idx; k++) {
                     if (k == idx - 1) {
-                        pack_scale = pack_scale * param.get_q(level_ - (order - k - 1));
+                        pack_scale = pack_scale * param_.get_q(level_ - (order - k - 1));
                     } else {
-                        pack_scale = param.get_q(level_ - (order - k - 1)) / param.get_default_scale() * pack_scale;
+                        pack_scale = param_.get_q(level_ - (order - k - 1)) / param_.get_default_scale() * pack_scale;
                     }
                 }
             }

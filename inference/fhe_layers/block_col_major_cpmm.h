@@ -39,7 +39,6 @@ private:
     std::vector<double> build_block_diagonal(int bj, int bp, int k) const;
     static int get_block_index(int bi, int bj, int num_block_rows);
 
-    CkksParameter param_;
     Array<double, 2> B_mat_;
     uint32_t m_, n_, p_;
     uint32_t d_;  // block size (d×d blocks)

@@ -33,6 +33,4 @@ public:
     template <int dim> Array<double, dim> run_plaintext(const Array<double, dim>& x) {
         return x.apply([](double e) { return e * e; });
     }
-
-    CkksParameter param;
 };

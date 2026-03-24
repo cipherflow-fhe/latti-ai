@@ -35,7 +35,7 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
                                            uint32_t block_size,
                                            uint32_t n_heads,
                                            uint32_t level_A)
-    : param_(param_in.copy()) {
+    : Layer(param_in) {
     level_ = level_A;
     d_ = block_size;
     n_heads_ = n_heads;

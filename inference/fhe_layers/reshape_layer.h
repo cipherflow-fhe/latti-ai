@@ -24,6 +24,5 @@
 class ReshapeLayer : public Layer {
 public:
     ReshapeLayer(const CkksParameter& param_in);
-    CkksParameter param;
     virtual Feature0DEncrypted call(CkksContext& ctx, const Feature2DEncrypted& x);
 };

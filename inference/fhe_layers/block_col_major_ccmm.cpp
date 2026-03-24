@@ -29,7 +29,7 @@ BlockColMajorCCMM::BlockColMajorCCMM(const CkksParameter& param_in,
                                      uint32_t block_size_B,
                                      uint32_t level_A,
                                      uint32_t level_B)
-    : param_(param_in.copy()) {
+    : Layer(param_in) {
     assert(level_A == level_B && "level of A and B must match");
     assert(block_size_A == block_size_B && "matmul_block_size of A and B must match");
     assert(shape_A[1] == shape_B[0] && "inner dimensions must match: shape_A[1] != shape_B[0]");

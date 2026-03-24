@@ -33,7 +33,6 @@ public:
                   const int& level_in,
                   const int& n_channel_in,
                   const int& n_channel_per_ct_in);
-    CkksParameter param;
     virtual void prepare_data();
     Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
     Array<double, 3> upsample_with_zero(const Array<double, 3>& x);

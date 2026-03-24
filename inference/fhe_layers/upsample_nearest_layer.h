@@ -42,7 +42,6 @@ public:
     // Helper function to generate select_tensor plaintext on-demand
     CkksPlaintextRingt generate_select_tensor_pt_for_index(CkksContext& ctx, int idx) const;
 
-    CkksParameter param;
     std::vector<CkksPlaintextRingt> select_tensor_pt;
     Duo upsample_factor;
     Duo shape;

@@ -30,14 +30,14 @@ Conv1DPackedLayer::Conv1DPackedLayer(const CkksParameter& param_in,
                                      uint32_t pack_in,
                                      uint32_t level_in,
                                      double residual_scale)
-    : param(param_in.copy()), weight(weight_in.copy()), bias(bias_in.copy()) {
+    : Layer(param_in), weight(weight_in.copy()), bias(bias_in.copy()) {
     input_shape = input_shape_in;
     skip = skip_in;
 
     n_channel_per_ct = pack_in;
     level_ = level_in;
     stride = stride_in;
-    weight_scale = param.get_q(level_) * residual_scale;
+    weight_scale = param_.get_q(level_) * residual_scale;
     n_channel_out = weight.get_shape()[0];
     n_channel_in = weight.get_shape()[1];
     kernel_shape = weight.get_shape()[2];
@@ -48,7 +48,7 @@ Conv1DPackedLayer::Conv1DPackedLayer(const CkksParameter& param_in,
 void Conv1DPackedLayer::prepare_weight() {
     uint32_t shape_ct = input_shape * skip;
     uint32_t half_kernel_shape = kernel_shape / 2;
-    uint32_t slot_count = div_ceil(param.get_n(), 2);
+    uint32_t slot_count = div_ceil(param_.get_n(), 2);
     vector<vector<double>> kernel_mask(kernel_shape);
 
     for (int i = 0; i < kernel_shape; i++) {
@@ -127,7 +127,7 @@ void Conv1DPackedLayer::prepare_weight() {
         }
     }
 
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     for (int i = 0; i < n_packed_out_channel; i++) {
         for (int j = 0; j < rot_n_channel_per_ct; j++) {
             for (int k = 0; k < kernel_shape; k++) {
@@ -185,7 +185,7 @@ CkksPlaintextRingt Conv1DPackedLayer::generate_weight_pt_for_indices(CkksContext
     const double encode_pt_scale = weight_scale;
 
     std::vector<double> packed_weights;
-    packed_weights.reserve(param.get_n() / 2);
+    packed_weights.reserve(param_.get_n() / 2);
 
     for (int pack_idx = 0; pack_idx < n_channel_per_ct; pack_idx++) {
         int out_channel_idx = ct_idx * n_channel_per_ct + pack_idx;
@@ -207,7 +207,7 @@ CkksPlaintextRingt Conv1DPackedLayer::generate_weight_pt_for_indices(CkksContext
 
 CkksPlaintextRingt Conv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const {
     uint32_t shape_ct = input_shape * skip;
-    const double bias_scale = param.get_default_scale();
+    const double bias_scale = param_.get_default_scale();
 
     std::vector<double> packed_bias;
     for (int pack_idx = 0; pack_idx < n_channel_per_ct; pack_idx++) {
