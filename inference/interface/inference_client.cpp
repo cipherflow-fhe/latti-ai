@@ -140,7 +140,7 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
             Feature2DEncrypted input_ct(context_ptr_, param.level, Duo{1, 1});
 
             if (pack_style_ == "ordinary") {
-                input_ct.pack(input_array, false, scale);
+                input_ct.pack_multiple_channel(input_array, false, scale);
             } else if (param.height * param.width > n_slots_) {
                 Duo block_shape = {task_config_["block_shape"][0], task_config_["block_shape"][1]};
                 Duo channel_packing_factor = {(uint32_t)(param.height / block_shape[0]),

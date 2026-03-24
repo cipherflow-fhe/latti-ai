@@ -17,7 +17,7 @@
  */
 
 #pragma once
-#include "../data_structs/feature.h"
+#include "../data_structs/feature_mat.h"
 
 using namespace cxx_sdk_v2;
 
@@ -33,7 +33,7 @@ public:
 
     void precompute_diagonals();
 
-    Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& A, const Feature2DEncrypted& B);
+    FeatureMatEncrypted run(CkksContext& ctx, const FeatureMatEncrypted& A, const FeatureMatEncrypted& B);
 
 private:
     std::vector<CkksCiphertext>
