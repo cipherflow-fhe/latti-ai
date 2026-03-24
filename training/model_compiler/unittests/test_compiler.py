@@ -15,15 +15,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import unittest
+import json
 import math
+import shutil
 import sys
 from pathlib import Path
 
+import numpy as np
+
 script_dir = Path(__file__).parent.resolve()
+project_root = script_dir.parent.parent.parent
 sys.path.append(str(script_dir.parent))
 sys.path.append(str(script_dir.parent.parent))
 
-from nn_tools.export import export_to_onnx
+from nn_tools.export import export_to_onnx, fuse_and_export_h5
 from model_export.onnx_to_json import onnx_to_json
 from pipeline import run_pipeline
 from components import (
@@ -161,6 +166,7 @@ def check_dropped_levels_per_subgraph(graph: LayerAbstractGraph) -> bool:
 class CompilerTestBase(unittest.TestCase):
     temp_onnx_path = script_dir / 'temp.onnx'
     temp_json_path = script_dir / 'temp.json'
+    e2e_base_path = project_root / 'build' / 'inference' / 'hetero_e2e'
 
     def _export_and_compile(
         self,
@@ -188,6 +194,95 @@ class CompilerTestBase(unittest.TestCase):
             style=style,
             graph_type=graph_type,
         )
+        return graph, score
+
+    def _export_compile_and_deploy(
+        self,
+        model,
+        input_size,
+        test_name,
+        style='ordinary',
+        **export_kwargs,
+    ):
+        """Full E2E pipeline: compile model and generate all files for C++ inference test.
+
+        Produces a complete task directory at e2e_base_path/test_name/task/ containing:
+          - client/: ckks_parameter.json, task_config.json, input CSV(s)
+          - server/: ckks_parameter.json, task_config.json, nn_layers_ct_0.json,
+                     model_parameters.h5, mega_ag.json, ergs/, task_signature.json
+        """
+        output_dir = self.e2e_base_path / test_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        temp_onnx = output_dir / 'temp.onnx'
+        temp_json = output_dir / 'temp.json'
+
+        # Step 1: Export PyTorch → ONNX (no h5 yet)
+        export_to_onnx(
+            model,
+            save_path=temp_onnx,
+            input_size=input_size,
+            dynamic_batch=False,
+            save_h5=False,
+            **export_kwargs,
+        )
+
+        # Step 2: ONNX → JSON
+        onnx_to_json(temp_onnx, temp_json, style)
+
+        # Step 3: Compile (produces task/server/ and task/client/)
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=temp_json,
+            output_dir=output_dir,
+            temperature=0.0,
+            num_workers=1,
+            style=style,
+            graph_type='btp',
+        )
+
+        server_dir = output_dir / 'task' / 'server'
+        client_dir = output_dir / 'task' / 'client'
+
+        # Step 4: Export model weights to h5
+        h5_path = server_dir / 'model_parameters.h5'
+        fuse_and_export_h5(model, str(h5_path), verbose=False)
+
+        # Step 5: Read n from ckks_parameter.json
+        with open(client_dir / 'ckks_parameter.json', 'r') as f:
+            ckks_config = json.load(f)
+        n = next(iter(ckks_config.values()))['poly_modulus_degree']
+
+        # Step 6: Read pack_style from task_config.json
+        with open(client_dir / 'task_config.json', 'r') as f:
+            task_config = json.load(f)
+        pack_style = task_config.get('pack_style', style)
+
+        # Step 7: Generate mega_ag instructions
+        sys.path.insert(0, str(project_root / 'inference'))
+        sys.path.insert(0, str(project_root / 'inference' / 'lattisense'))
+        from model_generator.deploy_cmds import gen_custom_task
+
+        gen_custom_task(str(server_dir), n=n, use_gpu=True, style=pack_style)
+
+        # Step 8: Generate random input CSV(s)
+        for input_name, input_param in task_config['task_input_param'].items():
+            dim = input_param['dim']
+            channel = input_param['channel']
+            csv_path = client_dir / f'{input_name}.csv'
+            if dim == 2:
+                h, w = input_param['shape']
+                data = np.random.uniform(-1, 1, (channel, h * w))
+                np.savetxt(csv_path, data, delimiter=',', fmt='%.6f')
+            elif dim == 0:
+                data = np.random.uniform(-1, 1, (channel,))
+                np.savetxt(csv_path, data.reshape(1, -1), delimiter=',', fmt='%.6f')
+
+        # Cleanup temp files
+        temp_onnx.unlink(missing_ok=True)
+        temp_json.unlink(missing_ok=True)
+
+        print(f'  [E2E] {test_name} -> {server_dir}')
         return graph, score
 
 
@@ -647,6 +742,29 @@ class TestPolyDegree(CompilerTestBase):
         # BTP mode must insert bootstrapping nodes.
         self.assertTrue(any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes))
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
+
+
+class TestE2E(CompilerTestBase):
+    """Generate E2E test data for C++ inference tests.
+
+    Each test compiles a model and produces a complete task directory
+    (h5 weights, mega_ag instructions, input CSVs) under
+    build/inference/hetero_e2e/<test_name>/.
+
+    Run the C++ test_e2e binary afterwards to verify encrypted vs plaintext
+    inference consistency.
+
+    Note: gen_custom_task only supports poly_n=16384 and poly_n=65536,
+    so models must require at least 6 levels (to exceed poly_n=8192 max_level=5).
+    """
+
+    def test_e2e_conv_act(self):
+        model = nn_modules.PolyDegreeN16384()
+        self._export_compile_and_deploy(model, (1, 32, 8, 8), 'conv_act')
+
+    def test_e2e_resnet_basic_block(self):
+        model = nn_modules.ResNetBasicBlock(32, 32)
+        self._export_compile_and_deploy(model, (1, 32, 8, 8), 'resnet_basic_block')
 
 
 if __name__ == '__main__':

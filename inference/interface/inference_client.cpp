@@ -30,7 +30,10 @@ void InferenceClient::read_configuration() {
     needs_btp_ = task_config_["use_btp"];
 
     auto& output_param = task_config_["task_output_param"].begin().value();
-    output_skip_ = output_param["skip"];
+    int first_output_dim = output_param["dim"];
+    if (first_output_dim == 0) {
+        output_skip_ = output_param["skip"];
+    }
 
     // Read per-output parameters
     for (auto& [name, param] : task_config_["task_output_param"].items()) {
