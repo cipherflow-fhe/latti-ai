@@ -35,7 +35,7 @@ TEST_CASE("Feature2DEncrypted serialization", "") {
 
     auto x_mg = gen_random_array<3>({4, shape[0], shape[1]}, 1);
     Feature2DEncrypted x_e(&context, 1);
-    x_e.pack(x_mg);
+    x_e.pack_multiple_channel(x_mg);
 
     auto ss = x_e.serialize();
     Feature2DEncrypted y_e(&context, 1);
