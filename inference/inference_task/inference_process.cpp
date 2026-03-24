@@ -155,25 +155,18 @@ void InitInferenceProcess::init_dense_layer(const string& key, const json& layer
     auto dense = make_unique<DensePackedLayer>(*ckks_parameters.at(feature_input.ckks_parameter_id), weight, bias,
                                                feature_input.pack_channel_per_ciphertext, feature_input.level, 0,
                                                residual_scale);
-    if (feature_input.dim == 0) {
-        dense->prepare_weight_0d(feature_input.skip[0]);
-    } else if (pack_style == "multiplexed") {
-        Duo input_shape;
-        input_shape[0] = feature_input.shape[0] * feature_input.invalid_fill[0];
-        input_shape[1] = feature_input.shape[1] * feature_input.invalid_fill[1];
+    if (feature_input.invalid_fill[0] == 0 | feature_input.invalid_fill[1] == 0) {
+        dense->prepare_weight_skip_0d(feature_input.skip[0]);
+    } else {
+        Duo input_shape = feature_input.shape;
         Duo input_skip;
         input_skip[0] = feature_input.special_skip[0] / input_shape[0];
         input_skip[1] = feature_input.special_skip[1] / input_shape[1];
+        Duo invalid_fill = feature_input.invalid_fill;
         if (is_lazy) {
-            dense->prepare_weight_for_mult_pack_lazy(input_shape, input_skip);
+            dense->prepare_weight_for_multiplexed_lazy(input_shape, input_skip, invalid_fill);
         } else {
-            dense->prepare_weight_for_mult_pack(input_shape, input_skip);
-        }
-    } else {
-        if (is_lazy) {
-            dense->prepare_weight_for_ord_pack_lazy(feature_input.shape, feature_input.special_skip);
-        } else {
-            dense->prepare_weight_for_ord_pack(feature_input.shape, feature_input.special_skip);
+            dense->prepare_weight_for_multiplexed(input_shape, input_skip, invalid_fill);
         }
     }
     ckks_denses[key] = move(dense);
@@ -660,13 +653,15 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 }
             } else if (layer_type == "fc0" || layer_type == "fc1") {
                 fhe_timer.start();
+                FeatureNode d_input_node(json_features[feature_input[0]]);
                 const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
                 if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
-                    if (fp->pack_style == "multiplexed") {
-                        result = make_unique<Feature0DEncrypted>(fp->ckks_denses[key]->run_mult_park(context, input0D));
+                    if (d_input_node.invalid_fill[0] == 0 | d_input_node.invalid_fill[1] == 0) {
+                        result =
+                            make_unique<Feature0DEncrypted>(fp->ckks_denses[key]->run_multiplexed(context, input0D));
                     } else {
-                        result = make_unique<Feature0DEncrypted>(fp->ckks_denses[key]->call(context, input0D));
+                        result = make_unique<Feature0DEncrypted>(fp->ckks_denses[key]->run_skip_0d(context, input0D));
                     }
                 } else {
                     throw runtime_error("input is not available, expect Feature0DEncrypted");
