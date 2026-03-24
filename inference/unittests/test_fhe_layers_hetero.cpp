@@ -122,14 +122,31 @@ class ProcessorGpu;
 
 class ProcessorFpga;
 
+struct SharedHeteroResources {
+    static SharedHeteroResources& get() {
+        static SharedHeteroResources instance;
+        return instance;
+    }
+    const int N = 16384;
+    const int n_slot = N / 2;
+    CkksParameter param;
+    CkksContext context;
+
+private:
+    SharedHeteroResources()
+        : param(CkksParameter::create_parameter(N)), context(CkksContext::create_random_context(param)) {
+        context.gen_rotation_keys();
+    }
+    SharedHeteroResources(const SharedHeteroResources&) = delete;
+    SharedHeteroResources& operator=(const SharedHeteroResources&) = delete;
+};
+
 template <typename T> class HeteroFixture {
 public:
     HeteroFixture()
-        : N{16384}, n_slot{N / 2}, param{CkksParameter::create_parameter(N)},
-          context{CkksContext::create_random_context(param)}, level(3), min_level{0}, max_level{param.get_max_level()},
-          default_scale{param.get_default_scale()} {
-        context.gen_rotation_keys();
-    }
+        : N{SharedHeteroResources::get().N}, n_slot{SharedHeteroResources::get().n_slot},
+          param{SharedHeteroResources::get().param}, context{SharedHeteroResources::get().context}, level(3),
+          min_level{0}, max_level{param.get_max_level()}, default_scale{param.get_default_scale()} {}
 
     ~HeteroFixture() {
         MetricsCollector::save_to_csv("hetero_performance_results.csv");
@@ -172,8 +189,8 @@ public:
 protected:
     int N;
     int n_slot;
-    CkksParameter param;
-    CkksContext context;
+    CkksParameter& param;
+    CkksContext& context;
     int level;
     int min_level;
     int max_level;
