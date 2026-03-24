@@ -1055,9 +1055,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip", "", HeteroProcessors) {
             input_feature.pack(input_1d, false, this->param.get_default_scale(), skip_0d);
 
             DensePackedLayer dense(this->context.get_parameter(), weight, bias, n_channel_per_ct, init_level, 0);
-            dense.prepare_weight_skip_0d(skip_0d);
+            dense.prepare_weight_0d_skip(skip_0d);
 
-            Feature0DEncrypted output_feature = dense.run_skip_0d(this->context, input_feature);
+            Feature0DEncrypted output_feature = dense.run_0d_skip(this->context, input_feature);
 
             Array<double, 1> output_mg = output_feature.unpack();
             Array<double, 1> plain_output = dense.plaintext_call(input_1d);
@@ -1106,9 +1106,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_multiplexed", "", HeteroProces
             uint32_t n_blocks_per_ct = div_ceil((uint32_t)this->n_slot, block_size);
 
             DensePackedLayer dense(this->context.get_parameter(), weight, bias, n_blocks_per_ct, init_level, 0);
-            dense.prepare_weight_for_multiplexed(cfg.shape, cfg.skip, cfg.invalid_fill);
+            dense.prepare_weight_for_2d_multiplexed(cfg.shape, cfg.skip, cfg.invalid_fill);
 
-            Feature0DEncrypted output_feature = dense.run_multiplexed(this->context, input_0d);
+            Feature0DEncrypted output_feature = dense.run_2d_multiplexed(this->context, input_0d);
 
             Array<double, 1> output_mg = output_feature.unpack();
             Array<double, 1> plain_output = dense.plaintext_call(input_1d);
@@ -1147,14 +1147,14 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
 
     DensePackedLayer dense0(this->context.get_parameter(), weight0, bias0, input_feature.n_channel_per_ct, init_level,
                             0);
-    dense0.prepare_weight_skip_0d(skip);
+    dense0.prepare_weight_0d_skip(skip);
 
     DensePackedLayer dense1(this->context.get_parameter(), weight1, bias1, input_feature.n_channel_per_ct,
                             init_level - 1, 0);
-    dense1.prepare_weight_skip_0d(skip);
+    dense1.prepare_weight_0d_skip(skip);
 
-    auto output_feature0 = dense0.run_skip_0d(this->context, input_feature);
-    auto output_feature1 = dense1.run_skip_0d(this->context, output_feature0);
+    auto output_feature0 = dense0.run_0d_skip(this->context, input_feature);
+    auto output_feature1 = dense1.run_0d_skip(this->context, output_feature0);
 
     Array<double, 1> output_mg = output_feature1.unpack();
 
@@ -1253,9 +1253,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature0d", "", HeteroP
                     input_feature.pack(input_array, false, this->param.get_default_scale(), skip_val);
 
                     // Create PolyRelu0D for Feature0D
-                    PolyRelu0D polyx(this->context.get_parameter(), weight, n_channel_per_ct, init_level, order,
-                                     skip_val);
-                    polyx.prepare_weight();
+                    PolyRelu0D polyx(this->context.get_parameter(), weight, init_level, order, skip_val);
+                    polyx.prepare_weight_0d_skip();
 
                     int output_level = init_level - level_cost;
                     uint32_t n_packed_ct = div_ceil(n_channel, n_channel_per_ct);
@@ -1943,9 +1942,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "dense_0d", "", HeteroProcessors) 
 
                             DensePackedLayer dense(this->context.get_parameter(), weight, bias_array, n_channel_per_ct,
                                                    init_level, 0);
-                            dense.prepare_weight_skip_0d(skip_0d);
+                            dense.prepare_weight_0d_skip(skip_0d);
 
-                            Feature0DEncrypted output_feature = dense.run_skip_0d(this->context, input_feature);
+                            Feature0DEncrypted output_feature = dense.run_0d_skip(this->context, input_feature);
 
                             Array<double, 1> output_mg = output_feature.unpack();
                             Array<double, 1> plain_output = dense.plaintext_call(input_array);
