@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include "layer.h"
 #include "../data_structs/feature.h"
 #include "data_structs/constants.h"
 
@@ -25,7 +26,7 @@
 #include <cstdint>
 #include <vector>
 
-class ParMultiplexedConv1DPackedLayer {
+class ParMultiplexedConv1DPackedLayer : public Layer {
 public:
     ParMultiplexedConv1DPackedLayer(const CkksParameter& param_in,
                                     uint32_t input_shape_in,
@@ -36,8 +37,6 @@ public:
                                     uint32_t n_channel_per_ct_in,
                                     uint32_t level_in,
                                     double residual_scale = 1.0);
-    ~ParMultiplexedConv1DPackedLayer();
-
     void prepare_weight();
     void prepare_weight_for_lazy();
 
@@ -62,7 +61,6 @@ public:
     uint32_t n_channel_in;
     uint32_t n_channel_out;
     uint32_t n_channel_per_ct;
-    uint32_t level;
     double weight_scale;
 
     Array<double, 3> weight;

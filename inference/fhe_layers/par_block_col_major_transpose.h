@@ -17,19 +17,18 @@
  */
 
 #pragma once
+#include "layer.h"
 #include "../data_structs/feature_mat.h"
 
 using namespace cxx_sdk_v2;
 
-class ParBlockColMajorTranspose {
+class ParBlockColMajorTranspose : public Layer {
 public:
     ParBlockColMajorTranspose(const CkksParameter& param_in,
                               const Duo& shape,  // per-head matrix shape (m, n_per_head)
                               uint32_t block_size,
                               uint32_t n_heads,
                               uint32_t level);
-    ~ParBlockColMajorTranspose();
-
     void precompute_diagonals();
 
     FeatureMatEncrypted run(CkksContext& ctx, const FeatureMatEncrypted& input);
@@ -50,7 +49,6 @@ private:
     uint32_t chunk_size_;  // S * d²
     uint32_t num_chunks_;
     uint32_t num_block_rows_, num_block_cols_;
-    uint32_t level_;
 
     // Multi-head interleaving parameters
     uint32_t n_heads_;              // actual heads

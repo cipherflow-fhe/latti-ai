@@ -35,17 +35,15 @@ Conv1DPackedLayer::Conv1DPackedLayer(const CkksParameter& param_in,
     skip = skip_in;
 
     n_channel_per_ct = pack_in;
-    level = level_in;
+    level_ = level_in;
     stride = stride_in;
-    weight_scale = param.get_q(level) * residual_scale;
+    weight_scale = param.get_q(level_) * residual_scale;
     n_channel_out = weight.get_shape()[0];
     n_channel_in = weight.get_shape()[1];
     kernel_shape = weight.get_shape()[2];
     n_packed_in_channel = div_ceil(n_channel_in, n_channel_per_ct);
     n_packed_out_channel = div_ceil(n_channel_out, n_channel_per_ct);
 }
-
-Conv1DPackedLayer::~Conv1DPackedLayer() {}
 
 void Conv1DPackedLayer::prepare_weight() {
     uint32_t shape_ct = input_shape * skip;
@@ -284,12 +282,12 @@ void Conv1DPackedLayer::mult_add(CkksContext* ctx,
                     // Lazy mode: generate weight on-demand
                     CkksPlaintextRingt w_pt_rt =
                         generate_weight_pt_for_indices(*ctx, packed_out_channel_idx, in_channel_idx, kernel_idx);
-                    auto w_pt = ctx->ringt_to_mul(w_pt_rt, level);
+                    auto w_pt = ctx->ringt_to_mul(w_pt_rt, level_);
                     product = ctx->mult_plain_mul(x_ct, w_pt);
                 } else {
                     // Normal mode: use pre-generated weight
                     const auto& w_pt_rt = weight_pt[packed_out_channel_idx][in_channel_idx][kernel_idx];
-                    auto w_pt = ctx->ringt_to_mul(w_pt_rt, level);
+                    auto w_pt = ctx->ringt_to_mul(w_pt_rt, level_);
                     product = ctx->mult_plain_mul(x_ct, w_pt);
                 }
 

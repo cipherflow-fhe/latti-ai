@@ -21,10 +21,11 @@
 #include <vector>
 #include <cstdint>
 #include <iostream>
+#include "layer.h"
 #include "common.h"
 #include "data_structs/feature2d.h"
 
-class ConcatLayer {
+class ConcatLayer : public Layer {
 public:
     ConcatLayer();
     Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x1, const Feature2DEncrypted& x2);

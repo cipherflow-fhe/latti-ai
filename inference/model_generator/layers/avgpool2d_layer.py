@@ -26,7 +26,7 @@ from frontend.custom_task import *
 import numpy as np
 
 
-class Avgpool_layer:
+class Avgpool2DLayer:
     def __init__(self, stride, shape, channel=1, skip=[1, 1]):
         self.stride = stride
         self.shape = shape

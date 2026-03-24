@@ -41,8 +41,10 @@ Conv2DPackedDepthwiseLayer::Conv2DPackedDepthwiseLayer(const CkksParameter& para
                                                        double residual_scale)
     : Conv2DLayer(param, input_shape, weight, bias, stride, skip), n_channel_per_ct_(n_channel_per_ct),
       n_packed_in_ct_(div_ceil(n_in_channel_, n_channel_per_ct)),
-      n_packed_out_ct_(div_ceil(n_out_channel_, n_channel_per_ct)), level_(level),
-      modified_scale_(param_.get_q(level) * residual_scale) {}
+      n_packed_out_ct_(div_ceil(n_out_channel_, n_channel_per_ct)) {
+    level_ = level;
+    modified_scale_ = param_.get_q(level_) * residual_scale;
+}
 
 void Conv2DPackedDepthwiseLayer::prepare_weight() {
     const std::array<uint32_t, 2> padding{kernel_shape_[0] / 2, kernel_shape_[1] / 2};

@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include "layer.h"
 #include "../data_structs/feature.h"
 #include "data_structs/constants.h"
 
@@ -25,7 +26,7 @@
 #include <cstdint>
 #include <vector>
 
-class Conv2DLayer {
+class Conv2DLayer : public Layer {
 public:
     Conv2DLayer(const CkksParameter& param,
                 const Duo& input_shape,
@@ -33,7 +34,6 @@ public:
                 const Array<double, 1>& bias,
                 const Duo& stride,
                 const Duo& skip);
-    virtual ~Conv2DLayer() = default;
 
     Array<double, 3> run_plaintext(const Array<double, 3>& x, double multiplier = 1.0);
 

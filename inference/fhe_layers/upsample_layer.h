@@ -21,10 +21,11 @@
 #include <vector>
 #include <cstdint>
 #include <iostream>
+#include "layer.h"
 #include "common.h"
 #include "data_structs/feature2d.h"
 
-class UpsampleLayer {
+class UpsampleLayer : public Layer {
 public:
     UpsampleLayer(const CkksParameter& param_in,
                   const Duo& stride_in,
@@ -32,7 +33,6 @@ public:
                   const int& level_in,
                   const int& n_channel_in,
                   const int& n_channel_per_ct_in);
-    ~UpsampleLayer();
     CkksParameter param;
     virtual void prepare_data();
     Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
@@ -41,7 +41,6 @@ public:
 protected:
     Duo stride;
     Duo upsample_factor;
-    int level;
     cxx_sdk_v2::CkksCiphertext zero_vector_encrypted;
     cxx_sdk_v2::CkksPlaintext zero_vector_encoded;
     int n_channel_per_ct;

@@ -181,7 +181,7 @@ InferenceClient::decrypt(const std::map<std::string, Bytes>& encrypted_outputs) 
         } else {
             Feature2DEncrypted output_ct(context_ptr_, 0, Duo{1, 1});
             output_ct.deserialize(bytes);
-            auto decrypted = output_ct.unpack();
+            auto decrypted = output_ct.unpack_multiple_channel();
             auto dec_1d = decrypted.to_array_1d();
             result.output = std::vector<double>(dec_1d.data(), dec_1d.data() + dec_1d.size());
         }

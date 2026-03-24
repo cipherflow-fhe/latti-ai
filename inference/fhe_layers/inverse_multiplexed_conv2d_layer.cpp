@@ -79,12 +79,10 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
 
     weight = weight_in.copy();
     bias = bias_in.copy();
-    level = level_in;
-    weight_scale = param.get_q(level) * residual_scale;
+    level_ = level_in;
+    weight_scale = param.get_q(level_) * residual_scale;
     N = param_in.get_n();
 }
-
-InverseMultiplexedConv2DLayer::~InverseMultiplexedConv2DLayer() {}
 
 void InverseMultiplexedConv2DLayer::prepare_weight() {
     int pad0 = static_cast<int>(padding_shape[0]);
@@ -405,7 +403,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
                     for (int k = 0; k < kernel_shape[0] * kernel_shape[1]; k++) {
                         if (weight_pt.empty()) {
                             auto w_pt_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, j, k + base_idx);
-                            auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level);
+                            auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
                             cxx_sdk_v2::CkksCiphertext one_mult_res =
                                 ctx_copy.mult_plain_mul(rotated_x[j][k + base_idx], w_pt);
                             if (j == 0 && k == 0) {
@@ -415,7 +413,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
                             }
                         } else {
                             cxx_sdk_v2::CkksPlaintextRingt& w_pt_rt = weight_pt[ct_idx][j][k + base_idx];
-                            cxx_sdk_v2::CkksPlaintextMul w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level);
+                            cxx_sdk_v2::CkksPlaintextMul w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
                             cxx_sdk_v2::CkksCiphertext one_mult_res =
                                 ctx_copy.mult_plain_mul(rotated_x[j][k + base_idx], w_pt);
                             if (j == 0 && k == 0) {

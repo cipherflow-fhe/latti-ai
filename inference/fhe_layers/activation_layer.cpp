@@ -24,8 +24,6 @@ using namespace std;
 
 SquareLayer::SquareLayer(const CkksParameter& param_in) : param(param_in.copy()) {}
 
-SquareLayer::~SquareLayer() {}
-
 vector<CkksCiphertext> SquareLayer::call(CkksContext& ctx, const vector<CkksCiphertext>& x) {
     int x_size = x.size();
     vector<CkksCiphertext> result;

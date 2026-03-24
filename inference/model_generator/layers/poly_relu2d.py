@@ -29,7 +29,7 @@ import numpy as np
 op_class = 'PolyReluLayer'
 
 
-class PolyReluLayer:
+class PolyRelu:
     def __init__(
         self, input_shape, order, skip, n_channel_per_ct, upsample_factor: list = [1, 1], block_expansion: list = [1, 1]
     ):
@@ -389,8 +389,8 @@ class PolyReluLayer:
             return 1
         baby_steps = int(np.ceil(np.sqrt(order + 1)))
         giant_steps = int(np.ceil((order + 1) / baby_steps))
-        power_info = PolyReluLayer._compute_power_info(order)
-        required, to_compute = PolyReluLayer._determine_required_powers(order, baby_steps, giant_steps, power_info)
+        power_info = PolyRelu._compute_power_info(order)
+        required, to_compute = PolyRelu._determine_required_powers(order, baby_steps, giant_steps, power_info)
         power_depth = {1: 0}
         for n in sorted(to_compute):
             if n <= 1:
