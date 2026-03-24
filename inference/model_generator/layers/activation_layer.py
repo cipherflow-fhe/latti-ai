@@ -25,7 +25,7 @@ sys.path.insert(0, mega_ag_generator_dir)
 from frontend.custom_task import *
 
 
-class Square_layer:
+class SquareLayer:
     def __init__(self, level):
         self.level = level
 
