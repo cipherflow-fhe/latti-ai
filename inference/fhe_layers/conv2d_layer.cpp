@@ -62,8 +62,6 @@ Conv2DLayer::Conv2DLayer(const CkksParameter& param,
     }
 }
 
-Conv2DLayer::~Conv2DLayer() = default;
-
 // ============================================================================
 // Rotation Generation
 // ============================================================================

@@ -27,6 +27,7 @@ add_library(fhe_layers
   ../data_structs/feature.cpp
   ../data_structs/feature1d.cpp
   ../data_structs/feature2d.cpp
+  ../data_structs/feature_mat.cpp
   ../data_structs/feature0d.cpp
   ../util.cpp
 )
