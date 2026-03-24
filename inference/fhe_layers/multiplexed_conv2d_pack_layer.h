@@ -17,6 +17,7 @@
  */
 
 #pragma once
+#include "layer.h"
 #include "conv2d_layer.h"
 #include "../data_structs/feature.h"
 
@@ -33,7 +34,6 @@ public:
                                     double residual_scale = 1.0,
                                     const Duo& upsample_factor_in = {1, 1});
 
-    ~ParMultiplexedConv2DPackedLayer();
     virtual void prepare_weight_for_reduct_rot();
     virtual void prepare_weight_for_post_skip_rotation();
     virtual void prepare_weight_for_post_skip_rotation_lazy();
@@ -66,7 +66,6 @@ private:
     uint32_t n_packed_in_channel;
     uint32_t n_packed_out_channel;
     uint32_t n_block_per_ct;
-    uint32_t level;
     int bias_level_down = 0;
     double weight_scale;
     Duo upsample_factor;

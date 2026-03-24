@@ -28,7 +28,7 @@
 using namespace std;
 using namespace cxx_sdk_v2;
 
-enum class PackType { MultipleChannelPacking, SinglePack, MultiplexedPacking, InterleavedPacking };
+enum class PackType { MultipleChannelPacking, MultiplexedPacking, InterleavedPacking };
 
 enum class DecryptType { RESHAPE, SPARSE };
 enum class ExecuteType { FPGA, SDK };
@@ -71,16 +71,6 @@ void parallel_for_with_extra_level_context(int n,
                                            int n_thread,
                                            CkksContext& context,
                                            const function<void(CkksContext&, CkksContext&, int)>& fn);
-
-inline CkksCiphertext drop_level_to(const CkksCiphertext& x, CkksContext& ctx, int level_pre, int level_next) {
-    int level_diff = level_pre - level_next;
-    assert(level_diff > 0);
-    CkksCiphertext res = ctx.drop_level(x);
-    for (int i = 1; i < level_diff; i++) {
-        res = ctx.drop_level(res);
-    }
-    return res;
-}
 
 // Include dimension-specific feature headers so that including "feature.h"
 // continues to provide all Feature*Encrypted and Feature*Share types.

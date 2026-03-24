@@ -156,7 +156,7 @@ void InitInferenceProcess::init_dense_layer(const string& key, const json& layer
                                                feature_input.pack_channel_per_ciphertext, feature_input.level, 0,
                                                residual_scale);
     if (feature_input.invalid_fill[0] == 0 | feature_input.invalid_fill[1] == 0) {
-        dense->prepare_weight_skip_0d(feature_input.skip[0]);
+        dense->prepare_weight_0d_skip(feature_input.skip[0]);
     } else {
         Duo input_shape = feature_input.shape;
         Duo input_skip;
@@ -164,9 +164,9 @@ void InitInferenceProcess::init_dense_layer(const string& key, const json& layer
         input_skip[1] = feature_input.special_skip[1] / input_shape[1];
         Duo invalid_fill = feature_input.invalid_fill;
         if (is_lazy) {
-            dense->prepare_weight_for_multiplexed_lazy(input_shape, input_skip, invalid_fill);
+            dense->prepare_weight_for_2d_multiplexed_lazy(input_shape, input_skip, invalid_fill);
         } else {
-            dense->prepare_weight_for_multiplexed(input_shape, input_skip, invalid_fill);
+            dense->prepare_weight_for_2d_multiplexed(input_shape, input_skip, invalid_fill);
         }
     }
     ckks_denses[key] = move(dense);
@@ -380,13 +380,25 @@ void InitInferenceProcess::init_poly_relu2d_layer(const string& key,
 
     if (feature_input.dim == 0) {
         int ciphertext_skip = feature_input.skip[0];
-        cout << "feature0d ciphertext_skip=" << ciphertext_skip << endl;
-        auto layer_poly_relu = make_unique<PolyRelu0D>(param, weight, feature_input.pack_channel_per_ciphertext,
-                                                       feature_input.level, order, ciphertext_skip);
-        if (is_lazy) {
-            layer_poly_relu->prepare_weight_lazy();
+        auto layer_poly_relu = make_unique<PolyRelu0D>(param, weight, feature_input.level, order, ciphertext_skip);
+        if (feature_input.invalid_fill[0] == 0 || feature_input.invalid_fill[1] == 0) {
+            // Mode 1: direct 0D pack — channel ch at slot ch * ciphertext_skip
+            if (is_lazy) {
+                layer_poly_relu->prepare_weight_0d_skip_lazy();
+            } else {
+                layer_poly_relu->prepare_weight_0d_skip();
+            }
         } else {
-            layer_poly_relu->prepare_weight();
+            // Mode 2: from reshape of 2D with shape>1 — mirrors DensePackedLayer multiplexed path
+            Duo input_shape = feature_input.shape;
+            Duo input_skip;
+            input_skip[0] = feature_input.special_skip[0] / input_shape[0];
+            input_skip[1] = feature_input.special_skip[1] / input_shape[1];
+            if (is_lazy) {
+                layer_poly_relu->prepare_weight_2d_multiplexed_lazy(input_shape, input_skip);
+            } else {
+                layer_poly_relu->prepare_weight_2d_multiplexed(input_shape, input_skip);
+            }
         }
         ckks_poly_relu_0d[key] = move(layer_poly_relu);
     } else {
@@ -658,10 +670,10 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
                     if (d_input_node.invalid_fill[0] == 0 | d_input_node.invalid_fill[1] == 0) {
-                        result =
-                            make_unique<Feature0DEncrypted>(fp->ckks_denses[key]->run_multiplexed(context, input0D));
+                        result = make_unique<Feature0DEncrypted>(fp->ckks_denses[key]->run_0d_skip(context, input0D));
                     } else {
-                        result = make_unique<Feature0DEncrypted>(fp->ckks_denses[key]->run_skip_0d(context, input0D));
+                        result =
+                            make_unique<Feature0DEncrypted>(fp->ckks_denses[key]->run_2d_multiplexed(context, input0D));
                     }
                 } else {
                     throw runtime_error("input is not available, expect Feature0DEncrypted");

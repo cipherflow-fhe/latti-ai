@@ -34,13 +34,6 @@ public:
                       uint32_t level,
                       double residual_scale = 1.0);
 
-    ~Conv2DPackedLayer() override = default;
-
-    Conv2DPackedLayer(const Conv2DPackedLayer&) = delete;
-    Conv2DPackedLayer& operator=(const Conv2DPackedLayer&) = delete;
-    Conv2DPackedLayer(Conv2DPackedLayer&&) noexcept = default;
-    Conv2DPackedLayer& operator=(Conv2DPackedLayer&&) noexcept = default;
-
     void prepare_weight();
     void prepare_weight_lazy();
 
@@ -68,8 +61,6 @@ private:
     uint32_t n_packed_ct_in_;
 
     uint32_t n_packed_ct_out_;
-
-    uint32_t level_;
 
     double weight_scale_;
 

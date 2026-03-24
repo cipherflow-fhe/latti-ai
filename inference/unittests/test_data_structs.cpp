@@ -40,7 +40,7 @@ TEST_CASE("Feature2DEncrypted serialization", "") {
     auto ss = x_e.serialize();
     Feature2DEncrypted y_e(&context, 1);
     y_e.deserialize(ss);
-    auto y_mg = y_e.unpack();
+    auto y_mg = y_e.unpack_multiple_channel();
 
     auto compare_res = compare(x_mg, y_mg);
     REQUIRE(compare_res.max_error < 1.0e-3 * compare_res.max_abs);

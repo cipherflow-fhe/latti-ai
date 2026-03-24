@@ -63,8 +63,6 @@ PolyRelu::PolyRelu(const CkksParameter& param_in,
     is_ordinary_pack = is_ordinary_pack_in;
 }
 
-PolyRelu::~PolyRelu() {}
-
 void PolyRelu::prepare_weight() {
     int skip_prod = skip[0] * skip[1];
     int channel = weight.get_shape()[1];
@@ -99,7 +97,7 @@ void PolyRelu::prepare_weight() {
                 pack_scale = param.get_default_scale();
             } else {
                 for (int k = 0; k < order - idx - 1; k++) {
-                    pack_scale = pack_scale * param.get_default_scale() / param.get_q(level - k);
+                    pack_scale = pack_scale * param.get_default_scale() / param.get_q(level_ - k);
                 }
             }
             weight_pt[idx].push_back(ctx_copy.encode_ringt(feature_tmp_pack, pack_scale));
@@ -135,7 +133,7 @@ PolyRelu::generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_packed
         pack_scale = param.get_default_scale();
     } else {
         for (int k = 0; k < order - idx - 1; k++) {
-            pack_scale = pack_scale * param.get_default_scale() / param.get_q(level - k);
+            pack_scale = pack_scale * param.get_default_scale() / param.get_q(level_ - k);
         }
     }
 
@@ -176,7 +174,7 @@ PolyRelu::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, i
     }
 
     double pack_scale = 1.0;
-    int target_level = level - (order - idx);
+    int target_level = level_ - (order - idx);
 
     if (order != 4) {
         if (idx == 0) {
@@ -184,9 +182,9 @@ PolyRelu::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, i
         } else {
             for (int k = 0; k < idx; k++) {
                 if (k == idx - 1) {
-                    pack_scale = pack_scale * param.get_q(level - (order - k - 1));
+                    pack_scale = pack_scale * param.get_q(level_ - (order - k - 1));
                 } else {
-                    pack_scale = param.get_q(level - (order - k - 1)) / param.get_default_scale() * pack_scale;
+                    pack_scale = param.get_q(level_ - (order - k - 1)) / param.get_default_scale() * pack_scale;
                 }
             }
         }
@@ -391,9 +389,9 @@ void PolyRelu::prepare_weight_hornor() {
             } else {
                 for (int k = 0; k < idx; k++) {
                     if (k == idx - 1) {
-                        pack_scale = pack_scale * param.get_q(level - (order - k - 1));
+                        pack_scale = pack_scale * param.get_q(level_ - (order - k - 1));
                     } else {
-                        pack_scale = param.get_q(level - (order - k - 1)) / param.get_default_scale() * pack_scale;
+                        pack_scale = param.get_q(level_ - (order - k - 1)) / param.get_default_scale() * pack_scale;
                     }
                 }
             }

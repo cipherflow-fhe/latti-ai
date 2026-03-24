@@ -17,13 +17,18 @@
  */
 
 #pragma once
-#include "layer.h"
-#include "data_structs/constants.h"
-#include "data_structs/feature.h"
+#include <cstdint>
 
-class ReshapeLayer : public Layer {
+class Layer {
 public:
-    ReshapeLayer(const CkksParameter& param_in);
-    CkksParameter param;
-    virtual Feature0DEncrypted call(CkksContext& ctx, const Feature2DEncrypted& x);
+    Layer() = default;
+    virtual ~Layer() = default;
+
+    Layer(const Layer&) = delete;
+    Layer& operator=(const Layer&) = delete;
+    Layer(Layer&&) noexcept = default;
+    Layer& operator=(Layer&&) noexcept = default;
+
+protected:
+    uint32_t level_ = 0;
 };
