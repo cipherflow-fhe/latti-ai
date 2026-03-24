@@ -26,3 +26,18 @@ endif()
 
 add_test(NAME test_fhe_layers_hetero COMMAND test_fhe_layers_hetero)
 
+# E2E test: compiler → inference closed loop
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_gen_e2e.py
+    ${CMAKE_CURRENT_BINARY_DIR}/test_gen_e2e.py
+    COPYONLY
+)
+
+add_executable(test_e2e test_e2e.cpp ut_util.cpp)
+target_link_libraries(test_e2e PUBLIC fhe_layers lattisense)
+
+if(INFERENCE_SDK_ENABLE_GPU)
+    target_compile_definitions(test_e2e PRIVATE INFERENCE_SDK_ENABLE_GPU)
+endif()
+
+add_test(NAME test_e2e COMMAND test_e2e)
