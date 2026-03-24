@@ -27,7 +27,7 @@ from frontend.custom_task import *
 op_class = 'Conv2DepthwiseLayer'
 
 
-class Conv2DepthwiseLayer:
+class Conv2DPackedDepthwiseLayer:
     rotate_num = 0
     add_num = 0
     mult_num = 0
