@@ -18,6 +18,9 @@
 
 #include "mult_scaler.h"
 
+using namespace std;
+using namespace cxx_sdk_v2;
+
 MultScalarLayer::MultScalarLayer(const CkksParameter& param_in,
                                  const Duo& input_shape_in,
                                  const Array<double, 1>& weight_in,

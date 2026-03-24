@@ -19,6 +19,7 @@
 #include "upsample_layer.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 UpsampleLayer::UpsampleLayer(const CkksParameter& param_in,
                              const Duo& stride_in,

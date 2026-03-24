@@ -21,6 +21,9 @@
 #include "../common.h"
 #include "multiplexed_conv2d_pack_layer.h"
 
+using namespace std;
+using namespace cxx_sdk_v2;
+
 CkksCiphertext sum_slot(CkksContext& ctx, CkksCiphertext& x, uint32_t m, uint32_t p) {
     CkksCiphertext result = x.copy();
     for (int j = 1; j < std::floor(log2(m)) + 1; j++) {

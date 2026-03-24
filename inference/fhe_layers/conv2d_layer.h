@@ -28,7 +28,7 @@
 
 class Conv2DLayer : public Layer {
 public:
-    Conv2DLayer(const CkksParameter& param,
+    Conv2DLayer(const ls::CkksParameter& param,
                 const Duo& input_shape,
                 const Array<double, 4>& weight,
                 const Array<double, 1>& bias,
@@ -37,11 +37,11 @@ public:
 
     Array<double, 3> run_plaintext(const Array<double, 3>& x, double multiplier = 1.0);
 
-    static std::vector<CkksCiphertext>
-    populate_rotations_1_side(CkksContext& ctx, const CkksCiphertext& x, int n_rotation, int unit);
+    static std::vector<ls::CkksCiphertext>
+    populate_rotations_1_side(ls::CkksContext& ctx, const ls::CkksCiphertext& x, int n_rotation, int unit);
 
-    static std::vector<CkksCiphertext>
-    populate_rotations_2_sides(CkksContext& ctx, const CkksCiphertext& x, int n_rotation, int unit);
+    static std::vector<ls::CkksCiphertext>
+    populate_rotations_2_sides(ls::CkksContext& ctx, const ls::CkksCiphertext& x, int n_rotation, int unit);
 
     Array<double, 4> weight_;
 

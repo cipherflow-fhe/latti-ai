@@ -20,8 +20,6 @@
 #include "layer.h"
 #include "../data_structs/feature_mat.h"
 
-using namespace cxx_sdk_v2;
-
 /**
  * ParBlockColMajorCPMM: Parallel (multi-head interleaved) ciphertext-plaintext
  * matrix multiplication for right-multiplying by a plaintext matrix W.
@@ -40,28 +38,32 @@ using namespace cxx_sdk_v2;
  */
 class ParBlockColMajorCPMM : public Layer {
 public:
-    ParBlockColMajorCPMM(const CkksParameter& param_in,
+    ParBlockColMajorCPMM(const ls::CkksParameter& param_in,
                          const Duo& shape_A,             // per-head shape of A (m, n_per_head)
                          const Array<double, 2>& W_mat,  // weight matrix: n×n, n×Kn, or Kn×n
                          uint32_t block_size,
                          uint32_t n_heads,
                          uint32_t level_A);
     void precompute_diagonals();
-    FeatureMatEncrypted run(CkksContext& ctx, const FeatureMatEncrypted& A);
+    FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A);
 
 private:
     enum class Mode { SQUARE, EXPAND, REDUCE };
 
     // Unified core: processes mb_indices megablocks, sums before mask
-    std::vector<CkksCiphertext>
-    run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& A_cts, const std::vector<uint32_t>& mb_indices);
+    std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx,
+                                             const std::vector<ls::CkksCiphertext>& A_cts,
+                                             const std::vector<uint32_t>& mb_indices);
 
     // Block CPMM: d rotations + d pt_muls + 1 rescale, Level L -> L-1
-    CkksCiphertext
-    block_mult_cpmm(CkksContext& ctx, const CkksCiphertext& a, uint32_t megablock, uint32_t g_input, int bp) const;
+    ls::CkksCiphertext block_mult_cpmm(ls::CkksContext& ctx,
+                                       const ls::CkksCiphertext& a,
+                                       uint32_t megablock,
+                                       uint32_t g_input,
+                                       int bp) const;
 
     // Cross-head sum: (S-1) rotations + (S-1) additions, no level consumed
-    CkksCiphertext head_sum(CkksContext& ctx, const CkksCiphertext& ct) const;
+    ls::CkksCiphertext head_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
     // Build per-head diagonal for megablock, input group g_input, output block column bp, rotation k
     std::vector<double> build_block_diagonal(uint32_t megablock, uint32_t g_input, int bp, int k) const;
@@ -91,8 +93,8 @@ private:
     uint32_t n_cts_per_block_idx_;
 
     // diag_pt_[mb][g][bp][k]: per-head diagonal for megablock mb, input group g, output block column bp, rotation k
-    std::vector<std::vector<std::vector<std::vector<CkksPlaintextRingt>>>> diag_pt_;
+    std::vector<std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>>> diag_pt_;
 
     // Mask plaintext for selecting h=0 after cross-head sum
-    CkksPlaintextRingt mask_h0_pt_;
+    ls::CkksPlaintextRingt mask_h0_pt_;
 };

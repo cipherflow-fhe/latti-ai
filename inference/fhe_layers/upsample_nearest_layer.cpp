@@ -19,6 +19,7 @@
 #include "upsample_nearest_layer.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 UpsampleNearestLayer::UpsampleNearestLayer(const CkksParameter& param_in,
                                            const Duo& shape_in,

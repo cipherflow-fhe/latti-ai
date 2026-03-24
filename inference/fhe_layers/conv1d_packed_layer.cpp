@@ -21,6 +21,9 @@
 #include "../common.h"
 #include "util.h"
 
+using namespace std;
+using namespace cxx_sdk_v2;
+
 Conv1DPackedLayer::Conv1DPackedLayer(const CkksParameter& param_in,
                                      const uint32_t input_shape_in,
                                      const Array<double, 3>& weight_in,

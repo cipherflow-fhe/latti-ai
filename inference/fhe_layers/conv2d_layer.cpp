@@ -25,6 +25,9 @@
 #include <map>
 #include <sstream>
 
+using namespace std;
+using namespace cxx_sdk_v2;
+
 #ifdef _OPENMP
 #    include <omp.h>
 #endif

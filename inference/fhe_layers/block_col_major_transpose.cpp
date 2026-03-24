@@ -21,6 +21,7 @@
 #include <cmath>
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 BlockColMajorTranspose::BlockColMajorTranspose(const CkksParameter& param_in,
                                                const Duo& shape,

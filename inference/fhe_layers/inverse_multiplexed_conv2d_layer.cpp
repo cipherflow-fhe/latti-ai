@@ -20,6 +20,9 @@
 #include "../common.h"
 #include "inverse_multiplexed_conv2d_layer.h"
 
+using namespace std;
+using namespace cxx_sdk_v2;
+
 InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter& param_in,
                                                              const Duo& input_shape_in,
                                                              const Array<double, 4>& weight_in,

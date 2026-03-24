@@ -124,23 +124,23 @@ public:
     Duo invalid_fill;
     PackType packing_type;
 
-    std::vector<CkksCiphertext> data;
-    std::vector<CkksCompressedCiphertext> data_compress;
+    std::vector<ls::CkksCiphertext> data;
+    std::vector<ls::CkksCompressedCiphertext> data_compress;
 
-    Feature2DEncrypted(CkksContext* context_in,
+    Feature2DEncrypted(ls::CkksContext* context_in,
                        int ct_level,
                        const Duo& skip_in = {1, 1},
                        const Duo& invalid_fill_in = {1, 1},
                        PackType packing_type_in = PackType::MultiplexedPacking);
 
-    virtual vector<CkksPlaintext> encode_multiple_channel(const Array<double, 3>& feature_mg,
-                                                          double scale_in = DEFAULT_SCALE);
-    virtual vector<CkksPlaintext> encode_interleaved(const Array<double, 3>& feature_mg,
-                                                     const Duo& block_shape,
-                                                     const Duo& stride,
-                                                     double scale_in = DEFAULT_SCALE);
-    virtual vector<CkksPlaintext> encode_multiplexed(const Array<double, 3>& feature_mg,
-                                                     double scale_in = DEFAULT_SCALE);
+    virtual std::vector<ls::CkksPlaintext> encode_multiple_channel(const Array<double, 3>& feature_mg,
+                                                                   double scale_in = DEFAULT_SCALE);
+    virtual std::vector<ls::CkksPlaintext> encode_interleaved(const Array<double, 3>& feature_mg,
+                                                              const Duo& block_shape,
+                                                              const Duo& stride,
+                                                              double scale_in = DEFAULT_SCALE);
+    virtual std::vector<ls::CkksPlaintext> encode_multiplexed(const Array<double, 3>& feature_mg,
+                                                              double scale_in = DEFAULT_SCALE);
 
     virtual void
     column_pack(const Array<double, 2>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
