@@ -43,11 +43,14 @@ public:
 
     std::vector<std::vector<std::vector<CkksPlaintextRingt>>> weight_pt;
     std::vector<CkksPlaintextRingt> bias_pt;
+    CkksPlaintextRingt repack_mask_pt;
     bool normal_conv = true;
     // Helper functions to generate weights/bias on-demand
     CkksPlaintextRingt
     generate_weight_pt_for_indices(CkksContext& ctx, int out_channel_idx, int in_channel_idx, int kernel_count) const;
     CkksPlaintextRingt generate_bias_pt_for_index(CkksContext& ctx, int out_channel_idx) const;
+    CkksPlaintextRingt generate_repack_mask_pt(CkksContext& ctx) const;
+    std::vector<uint32_t> get_used_input_indices() const;
 
 private:
     std::vector<CkksCiphertext> run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
@@ -62,6 +65,8 @@ private:
     Duo stride_next;
     Duo skip;
     Duo padding_shape;
+    Duo orig_stride;
+    bool need_repack = false;
     Array<double, 4> weight;
     Array<double, 1> bias;
     std::vector<std::vector<double>> kernel_masks;
