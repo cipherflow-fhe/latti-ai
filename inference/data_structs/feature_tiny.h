@@ -63,4 +63,3 @@ public:
     uint32_t skip;
     std::vector<CkksCiphertext> data_handle;
 };
-CkksCiphertext drop_level_to(CkksCiphertext& x, CkksContext& ctx, int level_pre, int level_next);

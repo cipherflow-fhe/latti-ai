@@ -17,6 +17,7 @@
  */
 
 #pragma once
+#include "layer.h"
 #include "../data_structs/feature.h"
 #include <map>
 #include <set>
@@ -30,7 +31,7 @@ struct PowerInfo {
     bool computed;
 };
 
-class PolyReluBase {
+class PolyReluBase : public Layer {
 public:
     PolyReluBase(const CkksParameter& param_in,
                  const Array<double, 2>& weight_in,
@@ -38,12 +39,9 @@ public:
                  uint32_t level_in,
                  int order_in);
 
-    virtual ~PolyReluBase();
-
     CkksParameter param;
     Array<double, 2> weight;
     uint32_t n_channel_per_ct;
-    uint32_t level;
     int order;
     vector<vector<CkksPlaintextRingt>> weight_pt;
 
@@ -91,8 +89,6 @@ public:
                uint32_t level_in,
                int order_in,
                int skip_in);
-
-    ~PolyRelu0D() override;
 
     // Mode 1: direct 0D pack — channel ch at slot ch*ciphertext_skip
     void prepare_weight_0d_skip();

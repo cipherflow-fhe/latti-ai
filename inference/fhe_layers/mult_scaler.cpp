@@ -37,7 +37,7 @@ MultScalarLayer::MultScalarLayer(const CkksParameter& param_in,
     }
 
     n_channel_per_ct = n_channel_per_ct_in;
-    level = level_in;
+    level_ = level_in;
     n_block_per_ct = std::floor(n_channel_per_ct / (skip[0] * skip[1]));
     upsample_factor[0] = upsample_factor_in[0];
     upsample_factor[1] = upsample_factor_in[1];
@@ -53,8 +53,6 @@ MultScalarLayer::MultScalarLayer(const CkksParameter& param_in,
     }
 }
 
-MultScalarLayer::~MultScalarLayer() {}
-
 void MultScalarLayer::prepare_weight() {
     int skip_prod = skip[0] * skip[1];
     int channel = weight.get_shape()[0];
@@ -64,7 +62,7 @@ void MultScalarLayer::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(this->param);
     ctx.resize_copies(n_packed_out_channel);
     weight_pt.resize(n_packed_out_channel);
-    double pack_scale = ctx.get_parameter().get_q(level);
+    double pack_scale = ctx.get_parameter().get_q(level_);
     parallel_for(n_packed_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int n_packed_out_channel_idx) {
         const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
         vector<double> feature_tmp_pack(ctx_copy.get_parameter().get_n() / 2);

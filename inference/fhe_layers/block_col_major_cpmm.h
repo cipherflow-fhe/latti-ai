@@ -17,11 +17,12 @@
  */
 
 #pragma once
+#include "layer.h"
 #include "../data_structs/feature_mat.h"
 
 using namespace cxx_sdk_v2;
 
-class BlockColMajorCPMM {
+class BlockColMajorCPMM : public Layer {
 public:
     BlockColMajorCPMM(const CkksParameter& param_in,
                       const Duo& shape_A,
@@ -29,8 +30,6 @@ public:
                       const Array<double, 2>& B_mat_in,
                       uint32_t block_size,
                       uint32_t level_A);
-    ~BlockColMajorCPMM();
-
     void precompute_diagonals();
     FeatureMatEncrypted run(CkksContext& ctx, const FeatureMatEncrypted& A);
 
@@ -49,7 +48,6 @@ private:
     uint32_t num_chunks_;  // n_slot_ / chunk_size_
     uint32_t num_block_rows_A_, num_block_cols_A_;
     uint32_t num_block_rows_B_, num_block_cols_B_;
-    uint32_t level_;
 
     // diag_pt_[b_block_idx][k], k=0..d-1
     std::vector<std::vector<CkksPlaintextRingt>> diag_pt_;

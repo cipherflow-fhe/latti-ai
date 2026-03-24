@@ -17,11 +17,12 @@
  */
 
 #pragma once
+#include "layer.h"
 #include "../data_structs/feature_mat.h"
 
 using namespace cxx_sdk_v2;
 
-class ParBlockColMajorCCMM {
+class ParBlockColMajorCCMM : public Layer {
 public:
     ParBlockColMajorCCMM(const CkksParameter& param_in,
                          const Duo& shape_A,  // per-head shape of A (m, n)
@@ -29,8 +30,6 @@ public:
                          uint32_t block_size,
                          uint32_t n_heads,
                          uint32_t level);
-    ~ParBlockColMajorCCMM();
-
     void precompute_diagonals();
 
     FeatureMatEncrypted run(CkksContext& ctx, const FeatureMatEncrypted& A, const FeatureMatEncrypted& B);
@@ -60,7 +59,6 @@ private:
     uint32_t num_chunks_;
     uint32_t num_block_rows_A_, num_block_cols_A_;
     uint32_t num_block_rows_B_, num_block_cols_B_;
-    uint32_t level_;
 
     // Multi-head interleaving parameters
     uint32_t n_heads_;

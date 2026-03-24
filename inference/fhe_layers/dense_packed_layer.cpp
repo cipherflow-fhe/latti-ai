@@ -41,12 +41,10 @@ DensePackedLayer::DensePackedLayer(const CkksParameter& param_in,
     n_channel_per_ct = pack_in;
     n_packed_in_feature = div_ceil(n_in_feature, n_channel_per_ct);
     n_packed_out_feature = div_ceil(n_out_feature, n_channel_per_ct);
-    level = level_in;
+    level_ = level_in;
     mark = mark_in;
-    modified_scale = param.get_q(level) * residual_scale;
+    modified_scale = param.get_q(level_) * residual_scale;
 }
-
-DensePackedLayer::~DensePackedLayer() {}
 
 void DensePackedLayer::prepare_weight_0d_skip(uint32_t skip_0d) {
     skip = skip_0d;
@@ -349,7 +347,7 @@ vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, co
                 } else {
                     w_ptr = &weight_pt[packed_out_feature_idx][in_feature_idx];
                 }
-                auto w_pt = ctx_copy.ringt_to_mul(*w_ptr, level);
+                auto w_pt = ctx_copy.ringt_to_mul(*w_ptr, level_);
                 auto p = ctx_copy.mult_plain_mul(x_ct, w_pt);
                 if (in_feature_idx == 0) {
                     s = move(p);
@@ -427,7 +425,7 @@ vector<CkksCiphertext> DensePackedLayer::run_core_0d(CkksContext& ctx, const vec
                     } else {
                         w_ptr = &weight_pt[out_idx][weight_idx];
                     }
-                    auto w_pt = ctx_copy.ringt_to_mul(*w_ptr, level);
+                    auto w_pt = ctx_copy.ringt_to_mul(*w_ptr, level_);
                     CkksCiphertext p = ctx_copy.mult_plain_mul(baby_rots[ct_in][b], w_pt);
 
                     if (!inner_init) {
