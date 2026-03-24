@@ -21,10 +21,11 @@
 #include <vector>
 #include <cstdint>
 #include <iostream>
+#include "layer.h"
 #include "common.h"
 #include "data_structs/feature2d.h"
 
-class Avgpool2DLayer {
+class Avgpool2DLayer : public Layer {
 public:
     Avgpool2DLayer(const Duo& shape_in, const Duo& stride_in);
     Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
@@ -44,5 +45,4 @@ public:
     Duo stride;
     Duo skip;
     uint32_t n_block_per_ct;
-    int level_;
 };

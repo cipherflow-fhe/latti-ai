@@ -20,7 +20,7 @@
 
 using namespace std;
 
-Avgpool2DLayer::Avgpool2DLayer(const Duo& shape_in, const Duo& stride_in) : n_block_per_ct(0), level_(0) {
+Avgpool2DLayer::Avgpool2DLayer(const Duo& shape_in, const Duo& stride_in) : n_block_per_ct(0) {
     shape[0] = shape_in[0];
     shape[1] = shape_in[1];
     stride[0] = stride_in[0];

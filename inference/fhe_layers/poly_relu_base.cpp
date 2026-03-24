@@ -31,16 +31,14 @@ PolyReluBase::PolyReluBase(const CkksParameter& param_in,
                            int order_in)
     : param(param_in.copy()), weight(weight_in.copy()) {
     order = order_in;
-    level = level_in;
+    level_ = level_in;
     n_channel_per_ct = n_channel_per_ct_in;
     N = param_in.get_n();
     cached_channel = weight.get_shape()[1];
 }
 
-PolyReluBase::~PolyReluBase() {}
-
 void PolyReluBase::compute_all_powers() {
-    powers[1] = {0, (int)level, param.get_default_scale(), 0, 0, true};
+    powers[1] = {0, (int)level_, param.get_default_scale(), 0, 0, true};
     for (int n = 2; n <= order; n++) {
         compute_power(n);
     }
@@ -183,7 +181,7 @@ void PolyReluBase::init_bsgs() {
     bsgs_giant_steps = (int)ceil((double)(order + 1) / baby_steps);
 
     modulus.clear();
-    for (int i = 0; i <= (int)level; i++) {
+    for (int i = 0; i <= (int)level_; i++) {
         modulus.push_back(param.get_q(i));
     }
     powers.clear();
@@ -214,7 +212,7 @@ void PolyReluBase::compute_coefficient_scales_bsgs(std::map<int, double>& coeff_
                                                    std::map<int, int>& level_order) {
     double S = param.get_default_scale();
 
-    int max_depth = 0, max_power_level = level;
+    int max_depth = 0, max_power_level = level_;
     for (int p : required_powers) {
         PowerInfo info = get_power_info(p);
         if (info.depth > max_depth) {
@@ -449,8 +447,6 @@ PolyRelu0D::PolyRelu0D(const CkksParameter& param_in,
                        int order_in,
                        int ciphertext_skip_in)
     : PolyReluBase(param_in, weight_in, n_channel_per_ct_in, level_in, order_in), ciphertext_skip(ciphertext_skip_in) {}
-
-PolyRelu0D::~PolyRelu0D() {}
 
 void PolyRelu0D::prepare_weight() {
     init_bsgs();

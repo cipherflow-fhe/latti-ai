@@ -75,8 +75,6 @@ Array<double, 3> AddLayer::run_plaintext(const Array<double, 3>& x0, const Array
 
 DropLevelLayer::DropLevelLayer() {}
 
-DropLevelLayer::~DropLevelLayer() {}
-
 void DropLevelLayer::run(CkksContext& ctx,
                          const Feature2DEncrypted& x0,
                          Feature2DEncrypted& result0,

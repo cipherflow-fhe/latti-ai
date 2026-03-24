@@ -65,8 +65,6 @@ ParBlockColMajorTranspose::ParBlockColMajorTranspose(const CkksParameter& param_
     num_block_cols_ = div_ceil(n, d_);
 }
 
-ParBlockColMajorTranspose::~ParBlockColMajorTranspose() {}
-
 int ParBlockColMajorTranspose::get_block_index(int bi, int bj, int num_block_rows) {
     return bi + num_block_rows * bj;
 }

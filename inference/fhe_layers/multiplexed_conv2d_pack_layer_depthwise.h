@@ -17,6 +17,7 @@
  */
 
 #pragma once
+#include "layer.h"
 #include "conv2d_layer.h"
 #include "../data_structs/feature.h"
 
@@ -32,7 +33,6 @@ public:
                                              uint32_t level_in,
                                              double residual_scale = 1.0);
 
-    ~ParMultiplexedConv2DPackedLayerDepthwise();
     virtual void prepare_weight();
     virtual void prepare_weight_lazy();
 
@@ -63,7 +63,6 @@ private:
     uint32_t n_packed_in_channel;
     uint32_t n_packed_out_channel;
     uint32_t n_block_per_ct;
-    uint32_t level;
     double weight_scale;
 
     // Cached values for on-demand generation

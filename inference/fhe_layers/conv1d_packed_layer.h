@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include "layer.h"
 #include "../data_structs/feature.h"
 #include "data_structs/constants.h"
 
@@ -25,7 +26,7 @@
 #include <cstdint>
 #include <vector>
 
-class Conv1DPackedLayer {
+class Conv1DPackedLayer : public Layer {
 public:
     Conv1DPackedLayer(const CkksParameter& param_in,
                       const uint32_t input_shape_in,
@@ -36,8 +37,6 @@ public:
                       uint32_t pack_in,
                       uint32_t level_in,
                       double residual_scale = 1.0);
-    ~Conv1DPackedLayer();
-
     virtual void prepare_weight();
     void prepare_weight_lazy();
 
@@ -71,7 +70,6 @@ private:
     uint32_t n_channel_per_ct;
     uint32_t n_packed_in_channel;
     uint32_t n_packed_out_channel;
-    uint32_t level;
     double weight_scale;
     std::vector<std::vector<double>> kernel_masks_;
 };
