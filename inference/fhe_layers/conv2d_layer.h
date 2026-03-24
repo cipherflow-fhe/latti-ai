@@ -33,7 +33,7 @@ public:
                 const Array<double, 1>& bias,
                 const Duo& stride,
                 const Duo& skip);
-    virtual ~Conv2DLayer();
+    virtual ~Conv2DLayer() = default;
 
     Array<double, 3> run_plaintext(const Array<double, 3>& x, double multiplier = 1.0);
 

@@ -131,8 +131,8 @@ public:
 
     Feature2DEncrypted(CkksContext* context_in,
                        int ct_level,
-                       Duo skip_in = {1, 1},
-                       Duo invalid_fill_in = {1, 1},
+                       const Duo& skip_in = {1, 1},
+                       const Duo& invalid_fill_in = {1, 1},
                        PackType packing_type_in = PackType::MultiplexedPacking);
 
     virtual void pack_multiple_channel(const Array<double, 3>& feature_mg,
@@ -203,9 +203,7 @@ public:
 inline void
 set_shape(Feature2DEncrypted& f2d, uint32_t n_channel, uint32_t n_channel_per_ct, const Duo& shape, const Duo& skip) {
     f2d.n_channel = n_channel;
-    f2d.shape[0] = shape[0];
-    f2d.shape[1] = shape[1];
-    f2d.skip[0] = skip[0];
-    f2d.skip[1] = skip[1];
+    f2d.shape = shape;
+    f2d.skip = skip;
     f2d.n_channel_per_ct = n_channel_per_ct;
 }
