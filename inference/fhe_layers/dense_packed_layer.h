@@ -70,7 +70,7 @@ protected:
     uint32_t n_in_feature;
     Array<double, 2> weight;
     Array<double, 1> bias;
-    uint32_t n_num_pre_ct;
+    uint32_t n_channel_per_ct;
     uint32_t n_packed_in_feature;
     uint32_t n_packed_out_feature;
     uint32_t level;
