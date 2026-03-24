@@ -72,8 +72,6 @@ ParBlockColMajorCCMM::ParBlockColMajorCCMM(const CkksParameter& param_in,
     num_block_cols_B_ = div_ceil(p, d_);
 }
 
-ParBlockColMajorCCMM::~ParBlockColMajorCCMM() {}
-
 int ParBlockColMajorCCMM::get_block_index(int bi, int bj, int num_block_rows) {
     return bi + num_block_rows * bj;
 }

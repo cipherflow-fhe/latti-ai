@@ -17,15 +17,14 @@
  */
 
 #pragma once
+#include "layer.h"
 #include "../data_structs/feature_mat.h"
 
 using namespace cxx_sdk_v2;
 
-class BlockColMajorTranspose {
+class BlockColMajorTranspose : public Layer {
 public:
     BlockColMajorTranspose(const CkksParameter& param_in, const Duo& shape, uint32_t block_size, uint32_t level);
-    ~BlockColMajorTranspose();
-
     void precompute_diagonals();
 
     FeatureMatEncrypted run(CkksContext& ctx, const FeatureMatEncrypted& input);
@@ -46,7 +45,6 @@ private:
     uint32_t chunk_size_;  // d*d
     uint32_t num_chunks_;
     uint32_t num_block_rows_, num_block_cols_;
-    uint32_t level_;
 
     // Precomputed: (2d-1) transpose diagonal plaintexts
     std::vector<CkksPlaintextRingt> transpose_diag_pt_;

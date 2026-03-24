@@ -18,11 +18,12 @@
 
 #pragma once
 #include <cstdint>
+#include "layer.h"
 #include "common.h"
 #include "data_structs/feature2d.h"
 #include "util.h"
 
-class AddLayer {
+class AddLayer : public Layer {
 public:
     AddLayer(const CkksParameter& param_in);
     CkksParameter param;
@@ -32,9 +33,8 @@ public:
     void add(CkksContext* ctx, const Feature2DEncrypted& x0, const Feature2DEncrypted& x1, Feature2DEncrypted& result);
 };
 
-class DropLevelLayer {
+class DropLevelLayer : public Layer {
 public:
     DropLevelLayer();
-    ~DropLevelLayer();
     void run(CkksContext& ctx, const Feature2DEncrypted& x, Feature2DEncrypted& result, int level_in, int level_out);
 };

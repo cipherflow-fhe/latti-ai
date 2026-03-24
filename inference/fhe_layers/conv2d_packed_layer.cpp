@@ -42,8 +42,10 @@ Conv2DPackedLayer::Conv2DPackedLayer(const CkksParameter& param,
                                      double residual_scale)
     : Conv2DLayer(param, input_shape, weight, bias, stride, skip), n_channel_per_ct_(n_channel_per_ct),
       n_packed_ct_in_(div_ceil(n_in_channel_, n_channel_per_ct)),
-      n_packed_ct_out_(div_ceil(n_out_channel_, n_channel_per_ct)), level_(level),
-      weight_scale_(param_.get_q(level) * residual_scale) {}
+      n_packed_ct_out_(div_ceil(n_out_channel_, n_channel_per_ct)),
+      weight_scale_(param_.get_q(level) * residual_scale) {
+    level_ = level;
+}
 
 // ============================================================================
 // Weight Preparation

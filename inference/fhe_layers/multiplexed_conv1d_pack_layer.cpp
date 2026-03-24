@@ -38,9 +38,9 @@ ParMultiplexedConv1DPackedLayer::ParMultiplexedConv1DPackedLayer(const CkksParam
     skip = skip_in;
     stride = stride_in;
     n_channel_per_ct = n_channel_per_ct_in;
-    level = level_in;
+    level_ = level_in;
 
-    weight_scale = param.get_q(level) * residual_scale;
+    weight_scale = param.get_q(level_) * residual_scale;
     n_channel_out = weight.get_shape()[0];
     n_channel_in = weight.get_shape()[1];
     kernel_shape = weight.get_shape()[2];
@@ -50,8 +50,6 @@ ParMultiplexedConv1DPackedLayer::ParMultiplexedConv1DPackedLayer(const CkksParam
     n_packed_out_channel = div_ceil(n_channel_out, n_channel_per_ct);
     cached_input_block_size = input_shape * skip;
 }
-
-ParMultiplexedConv1DPackedLayer::~ParMultiplexedConv1DPackedLayer() {}
 
 vector<double> ParMultiplexedConv1DPackedLayer::select_tensor(int num) const {
     uint32_t skip_out = skip * stride;
@@ -134,7 +132,7 @@ CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_bias_pt_for_index(C
                 }
             }
         }
-        return ctx.encode_ringt(bias_data, ctx.get_parameter().get_q(level - 1));
+        return ctx.encode_ringt(bias_data, ctx.get_parameter().get_q(level_ - 1));
     }
 }
 
@@ -145,7 +143,7 @@ CkksPlaintext ParMultiplexedConv1DPackedLayer::generate_select_tensor_pt_for_ind
         int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip;
         mask[slot_idx] = 1.0;
     }
-    return ctx.encode(mask, level - 1, ctx.get_parameter().get_q(level - 1));
+    return ctx.encode(mask, level_ - 1, ctx.get_parameter().get_q(level_ - 1));
 }
 
 void ParMultiplexedConv1DPackedLayer::prepare_weight() {
@@ -245,7 +243,7 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
                     }
                 }
             }
-            bias_pt[po] = ctx.encode_ringt(bias_data, ctx.get_parameter().get_q(level - 1));
+            bias_pt[po] = ctx.encode_ringt(bias_data, ctx.get_parameter().get_q(level_ - 1));
         }
 
         block_select_pt.resize(n_block_per_ct);
@@ -255,7 +253,7 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
                 int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip;
                 mask[slot_idx] = 1.0;
             }
-            block_select_pt[t] = ctx.encode_ringt(mask, ctx.get_parameter().get_q(level - 1));
+            block_select_pt[t] = ctx.encode_ringt(mask, ctx.get_parameter().get_q(level_ - 1));
         }
     }
 }
@@ -370,11 +368,11 @@ vector<CkksCiphertext> ParMultiplexedConv1DPackedLayer::run_core(CkksContext& ct
                     CkksCiphertext product;
                     if (weight_pt.empty()) {
                         auto w_rt = generate_weight_pt_for_indices(ctx_copy, wg, w_idx, k);
-                        auto w = ctx_copy.ringt_to_mul(w_rt, level);
+                        auto w = ctx_copy.ringt_to_mul(w_rt, level_);
                         product = ctx_copy.mult_plain_mul(to_mult, w);
                     } else {
                         const auto& w_rt = weight_pt[wg][w_idx][k];
-                        auto w = ctx_copy.ringt_to_mul(w_rt, level);
+                        auto w = ctx_copy.ringt_to_mul(w_rt, level_);
                         product = ctx_copy.mult_plain_mul(to_mult, w);
                     }
 
@@ -442,7 +440,7 @@ vector<CkksCiphertext> ParMultiplexedConv1DPackedLayer::run_core(CkksContext& ct
                 auto bs_pt = generate_select_tensor_pt_for_index(ctx_copy, t);
                 masked = ctx_copy.mult_plain(result[wg], bs_pt);
             } else {
-                auto bs_pt = ctx_copy.ringt_to_mul(block_select_pt[t], level - 1);
+                auto bs_pt = ctx_copy.ringt_to_mul(block_select_pt[t], level_ - 1);
                 masked = ctx_copy.mult_plain_mul(result[wg], bs_pt);
             }
             masked = ctx_copy.rescale(masked, ctx_copy.get_parameter().get_default_scale());

@@ -104,8 +104,6 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
     }
 }
 
-ParBlockColMajorCPMM::~ParBlockColMajorCPMM() {}
-
 int ParBlockColMajorCPMM::get_block_index(int bi, int bj, int num_block_rows) {
     return bi + num_block_rows * bj;
 }
