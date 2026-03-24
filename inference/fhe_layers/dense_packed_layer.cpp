@@ -38,9 +38,9 @@ DensePackedLayer::DensePackedLayer(const CkksParameter& param_in,
     n_in_feature = weight_shape[1];
     weight = weight_in.copy();
     bias = bias_in.copy();
-    n_num_pre_ct = pack_in;
-    n_packed_in_feature = div_ceil(n_in_feature, n_num_pre_ct);
-    n_packed_out_feature = div_ceil(n_out_feature, n_num_pre_ct);
+    n_channel_per_ct = pack_in;
+    n_packed_in_feature = div_ceil(n_in_feature, n_channel_per_ct);
+    n_packed_out_feature = div_ceil(n_out_feature, n_channel_per_ct);
     level = level_in;
     mark = mark_in;
     modified_scale = param.get_q(level) * residual_scale;
@@ -52,8 +52,8 @@ void DensePackedLayer::prepare_weight_0d_skip(uint32_t skip_0d) {
     skip = skip_0d;
 
     // BSGS decomposition: pack = bs * gs, bs ≈ √pack
-    bsgs_bs = (uint32_t)ceil(sqrt((double)n_num_pre_ct));
-    bsgs_gs = div_ceil(n_num_pre_ct, bsgs_bs);
+    bsgs_bs = (uint32_t)ceil(sqrt((double)n_channel_per_ct));
+    bsgs_gs = div_ceil(n_channel_per_ct, bsgs_bs);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param);
     weight_pt.clear();
@@ -70,19 +70,16 @@ void DensePackedLayer::prepare_weight_0d_skip(uint32_t skip_0d) {
     for (uint32_t packed_out_idx = 0; packed_out_idx < n_packed_out_feature; packed_out_idx++) {
         vector<CkksPlaintextRingt> a1;
         for (uint32_t packed_in_idx = 0; packed_in_idx < n_packed_in_feature; packed_in_idx++) {
-            // weight plaintext 按 diagonal d = g*bs + b 顺序排列
-            for (uint32_t d = 0; d < n_num_pre_ct; d++) {
+            for (uint32_t d = 0; d < n_channel_per_ct; d++) {
                 uint32_t g = d / bsgs_bs;
                 uint32_t b = d % bsgs_bs;
 
                 vector<double> w;
-                for (uint32_t j = 0; j < n_num_pre_ct; j++) {
-                    // BSGS: giant-step rotation 后 slot i 拿到 slot (i+g*bs)%pack
-                    // 因此 weight 在 slot j 需要对应 output channel (j - g*bs + pack) % pack
-                    uint32_t out_local = (j - g * bsgs_bs + n_num_pre_ct) % n_num_pre_ct;
-                    uint32_t in_local = (j + b) % n_num_pre_ct;
-                    uint32_t out_ch = packed_out_idx * n_num_pre_ct + out_local;
-                    uint32_t in_ch = packed_in_idx * n_num_pre_ct + in_local;
+                for (uint32_t j = 0; j < n_channel_per_ct; j++) {
+                    uint32_t out_local = (j - g * bsgs_bs + n_channel_per_ct) % n_channel_per_ct;
+                    uint32_t in_local = (j + b) % n_channel_per_ct;
+                    uint32_t out_ch = packed_out_idx * n_channel_per_ct + out_local;
+                    uint32_t in_ch = packed_in_idx * n_channel_per_ct + in_local;
                     if (in_ch < n_in_feature && out_ch < n_out_feature) {
                         w.push_back(weight.get(out_ch, in_ch));
                     } else {
@@ -97,8 +94,8 @@ void DensePackedLayer::prepare_weight_0d_skip(uint32_t skip_0d) {
         weight_pt.push_back(move(a1));
 
         vector<double> bv;
-        for (uint32_t j = 0; j < n_num_pre_ct; j++) {
-            uint32_t out_ch = packed_out_idx * n_num_pre_ct + j;
+        for (uint32_t j = 0; j < n_channel_per_ct; j++) {
+            uint32_t out_ch = packed_out_idx * n_channel_per_ct + j;
             if (out_ch < n_out_feature) {
                 bv.push_back(bias[out_ch]);
             } else {
@@ -113,8 +110,8 @@ void DensePackedLayer::prepare_weight_0d_skip(uint32_t skip_0d) {
 
 void DensePackedLayer::prepare_weight_0d_skip_lazy(uint32_t skip_0d) {
     skip = skip_0d;
-    bsgs_bs = (uint32_t)ceil(sqrt((double)n_num_pre_ct));
-    bsgs_gs = div_ceil(n_num_pre_ct, bsgs_bs);
+    bsgs_bs = (uint32_t)ceil(sqrt((double)n_channel_per_ct));
+    bsgs_gs = div_ceil(n_channel_per_ct, bsgs_bs);
 
     if (!normal_dense) {
         modified_scale = modified_scale * ENC_TO_SHARE_SCALE / param.get_default_scale();
@@ -124,17 +121,17 @@ void DensePackedLayer::prepare_weight_0d_skip_lazy(uint32_t skip_0d) {
 CkksPlaintextRingt DensePackedLayer::generate_weight_0d_pt_for_indices(CkksContext& ctx,
                                                                        uint32_t packed_out_idx,
                                                                        uint32_t weight_idx) const {
-    uint32_t packed_in_idx = weight_idx / n_num_pre_ct;
-    uint32_t d = weight_idx % n_num_pre_ct;
+    uint32_t packed_in_idx = weight_idx / n_channel_per_ct;
+    uint32_t d = weight_idx % n_channel_per_ct;
     uint32_t g = d / bsgs_bs;
     uint32_t b = d % bsgs_bs;
 
     vector<double> w;
-    for (uint32_t j = 0; j < n_num_pre_ct; j++) {
-        uint32_t out_local = (j - g * bsgs_bs + n_num_pre_ct) % n_num_pre_ct;
-        uint32_t in_local = (j + b) % n_num_pre_ct;
-        uint32_t out_ch = packed_out_idx * n_num_pre_ct + out_local;
-        uint32_t in_ch = packed_in_idx * n_num_pre_ct + in_local;
+    for (uint32_t j = 0; j < n_channel_per_ct; j++) {
+        uint32_t out_local = (j - g * bsgs_bs + n_channel_per_ct) % n_channel_per_ct;
+        uint32_t in_local = (j + b) % n_channel_per_ct;
+        uint32_t out_ch = packed_out_idx * n_channel_per_ct + out_local;
+        uint32_t in_ch = packed_in_idx * n_channel_per_ct + in_local;
         if (in_ch < n_in_feature && out_ch < n_out_feature) {
             w.push_back(weight.get(out_ch, in_ch));
         } else {
@@ -149,8 +146,8 @@ CkksPlaintextRingt DensePackedLayer::generate_bias_0d_pt_for_index(CkksContext& 
     double bias_scale = normal_dense ? param.get_default_scale() : ENC_TO_SHARE_SCALE;
 
     vector<double> bv;
-    for (uint32_t j = 0; j < n_num_pre_ct; j++) {
-        uint32_t out_ch = packed_out_idx * n_num_pre_ct + j;
+    for (uint32_t j = 0; j < n_channel_per_ct; j++) {
+        uint32_t out_ch = packed_out_idx * n_channel_per_ct + j;
         if (out_ch < n_out_feature) {
             bv.push_back(bias[out_ch]);
         } else {
@@ -248,7 +245,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_
     input_shape_ct[0] = special_input_shape[0] * special_skip[0];
     input_shape_ct[1] = special_input_shape[1] * special_skip[1];
     int N_half = ctx.get_parameter().get_n() / 2;
-    int n_num_pre_ct = div_ceil(N_half, input_shape_ct[0] * input_shape_ct[1]);
+    int n_block_pre_ct = div_ceil(N_half, input_shape_ct[0] * input_shape_ct[1]);
 
     // ParMultiplexedPack: valid channels per mini-block
     int valid_skip_0 = special_skip[0] / invalid_fill_in[0];
@@ -258,16 +255,15 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_
     int n_channel = n_in_feature / (special_input_shape[0] * special_input_shape[1]);
     int spatial_size = special_input_shape[0] * special_input_shape[1];
 
-    int n_packed_out_feature_for_mult_pack = div_ceil(n_out_feature, n_num_pre_ct);
+    int n_packed_out_feature_for_mult_pack = div_ceil(n_out_feature, n_block_pre_ct);
     weight_pt.resize(n_packed_out_feature_for_mult_pack);
     bias_pt.resize(n_packed_out_feature_for_mult_pack);
-    int n_block_input_local = div_ceil(n_channel, n_num_pre_ct * n_channel_per_block) * n_num_pre_ct;
+    int n_block_input_local = div_ceil(n_channel, n_block_pre_ct * n_channel_per_block) * n_block_pre_ct;
 
     // Sync cached members so run_core_mult_pack works correctly in eager mode too
     input_shape_ct_mult[0] = input_shape_ct[0];
     input_shape_ct_mult[1] = input_shape_ct[1];
     this->N_half = N_half;
-    n_block_pre_ct = n_num_pre_ct;
     n_block_input = n_block_input_local;
 
     parallel_for(
@@ -277,7 +273,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_
             // Encode bias once (independent of n_block_input_idx)
             vector<double> b(N_half, 0);
             for (int i = 0; i < N_half; i++) {
-                int block_i = packed_out_feature_idx * n_num_pre_ct + i / (input_shape_ct[0] * input_shape_ct[1]);
+                int block_i = packed_out_feature_idx * n_block_pre_ct + i / (input_shape_ct[0] * input_shape_ct[1]);
                 int shape_linear = i % (input_shape_ct[0] * input_shape_ct[1]);
                 int shape_i = shape_linear / input_shape_ct[1];
                 int shape_j = shape_linear % input_shape_ct[1];
@@ -290,7 +286,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_
             for (int n_block_input_idx = 0; n_block_input_idx < n_block_input; n_block_input_idx++) {
                 vector<double> w(N_half, 0);
                 for (int i = 0; i < N_half; i++) {
-                    int block_i = packed_out_feature_idx * n_num_pre_ct + i / (input_shape_ct[0] * input_shape_ct[1]);
+                    int block_i = packed_out_feature_idx * n_block_pre_ct + i / (input_shape_ct[0] * input_shape_ct[1]);
                     int shape_linear = i % (input_shape_ct[0] * input_shape_ct[1]);
                     int shape_i = shape_linear / input_shape_ct[1];
                     int shape_j = shape_linear % input_shape_ct[1];
@@ -301,9 +297,9 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_
                     if (cx < valid_skip_0 && cy < valid_skip_1 && x < (int)special_input_shape[0] &&
                         y < (int)special_input_shape[1] && block_i < n_out_feature) {
                         int local_block = i / (input_shape_ct[0] * input_shape_ct[1]);
-                        int group = n_block_input_idx / n_num_pre_ct;
-                        int offset = n_block_input_idx % n_num_pre_ct;
-                        int rotated_block = (offset + local_block) % n_num_pre_ct + group * n_num_pre_ct;
+                        int group = n_block_input_idx / n_block_pre_ct;
+                        int offset = n_block_input_idx % n_block_pre_ct;
+                        int rotated_block = (offset + local_block) % n_block_pre_ct + group * n_block_pre_ct;
                         int in_ch = rotated_block * n_channel_per_block + cx * n_channel_per_block_col + cy;
                         int line_i = in_ch * spatial_size + x * special_input_shape[1] + y;
                         if (line_i >= n_in_feature || block_i > n_out_feature) {
@@ -417,11 +413,11 @@ vector<CkksCiphertext> DensePackedLayer::run_core_0d(CkksContext& ctx, const vec
                 // Inner sum over baby-steps
                 CkksCiphertext inner(0);
                 bool inner_init = false;
-                uint32_t b_end = std::min(bsgs_bs, n_num_pre_ct - g * bsgs_bs);
+                uint32_t b_end = std::min(bsgs_bs, n_channel_per_ct - g * bsgs_bs);
 
                 for (uint32_t b = 0; b < b_end; b++) {
                     uint32_t d = g * bsgs_bs + b;
-                    uint32_t weight_idx = ct_in * n_num_pre_ct + d;
+                    uint32_t weight_idx = ct_in * n_channel_per_ct + d;
 
                     CkksPlaintextRingt w_pt_rt_owned;
                     const CkksPlaintextRingt* w_ptr;
@@ -479,7 +475,7 @@ Feature0DEncrypted DensePackedLayer::run_0d_skip(CkksContext& ctx, const Feature
     result.skip = skip;
     result.n_channel = n_out_feature;
     result.dim = x.dim;
-    result.n_channel_per_ct = n_num_pre_ct;
+    result.n_channel_per_ct = n_channel_per_ct;
     result.level = x.level - 1;
     return result;
 }
