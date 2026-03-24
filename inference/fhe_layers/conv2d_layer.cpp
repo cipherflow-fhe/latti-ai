@@ -39,10 +39,9 @@ Conv2DLayer::Conv2DLayer(const CkksParameter& param,
                          const Array<double, 1>& bias,
                          const Duo& stride,
                          const Duo& skip)
-    : param_(param.copy()), input_shape_{input_shape[0], input_shape[1]}, stride_{stride[0], stride[1]},
+    : Layer(param), input_shape_{input_shape[0], input_shape[1]}, stride_{stride[0], stride[1]},
       skip_{skip[0], skip[1]}, weight_(weight.copy()), bias_(bias.copy()) {
     const auto weight_shape = weight.get_shape();
-    n_slot_ = param_.get_n() / 2;
     n_out_channel_ = weight_shape[0];
     n_in_channel_ = weight_shape[1];
     kernel_shape_[0] = weight_shape[2];

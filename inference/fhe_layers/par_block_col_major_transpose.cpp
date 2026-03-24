@@ -34,7 +34,7 @@ ParBlockColMajorTranspose::ParBlockColMajorTranspose(const CkksParameter& param_
                                                      uint32_t block_size,
                                                      uint32_t n_heads,
                                                      uint32_t level)
-    : param_(param_in.copy()) {
+    : Layer(param_in) {
     level_ = level;
     d_ = block_size;
     n_heads_ = n_heads;

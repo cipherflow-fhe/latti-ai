@@ -33,7 +33,6 @@ public:
                                   const Duo& block_shape_in,
                                   uint32_t level_in,
                                   double residual_scale = 1.0);
-    CkksParameter param;
     virtual void prepare_weight();
     virtual void prepare_weight_lazy();
 

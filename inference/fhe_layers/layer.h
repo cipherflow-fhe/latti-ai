@@ -17,11 +17,13 @@
  */
 
 #pragma once
-#include <cstdint>
+#include "common.h"
+#include "data_structs/feature.h"
 
 class Layer {
 public:
     Layer() = default;
+    explicit Layer(const CkksParameter& param) : param_(param.copy()) {}
     virtual ~Layer() = default;
 
     Layer(const Layer&) = delete;
@@ -30,5 +32,6 @@ public:
     Layer& operator=(Layer&&) noexcept = default;
 
 protected:
+    CkksParameter param_;
     uint32_t level_ = 0;
 };

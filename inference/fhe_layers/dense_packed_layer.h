@@ -52,7 +52,6 @@ public:
     std::vector<std::vector<std::vector<double>>> weight_rearranged;
     std::vector<std::vector<double>> bias_rearranged;
 
-    CkksParameter param;
     bool normal_dense = true;
 
     // Helper functions for prepare_weight_0d_lazy

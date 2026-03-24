@@ -84,10 +84,6 @@ void Conv2DPackedDepthwiseLayer::prepare_weight() {
     input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
     input_rotate_units_.push_back(skip_[0] * 1);
 
-    input_rotate_ranges_.clear();
-    input_rotate_ranges_.push_back(padding[1]);
-    input_rotate_ranges_.push_back(padding[0]);
-
     weight_pt_.clear();
     bias_pt_.clear();
     weight_pt_.resize(n_packed_out_ct_);

@@ -48,8 +48,6 @@ public:
     Array<double, 1> bias_;
 
 protected:
-    CkksParameter param_;
-
     uint32_t n_out_channel_;
 
     uint32_t n_in_channel_;
@@ -62,17 +60,9 @@ protected:
 
     Duo skip_;
 
-    uint32_t n_slot_;
-
     std::vector<std::vector<double>> kernel_masks_;
 
-    std::vector<CkksPlaintextRingt> kernel_masks_pt_;
-
-    std::vector<int32_t> input_rotate_steps_;
-
     std::vector<int> input_rotate_units_;
-
-    std::vector<int> input_rotate_ranges_;
 
     void compute_output_element(Array<double, 3>& result,
                                 uint32_t out_ch,

@@ -75,9 +75,6 @@ void ParMultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
     input_rotate_units_.clear();
     input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
     input_rotate_units_.push_back(skip_[0] * 1);
-    input_rotate_ranges_.clear();
-    input_rotate_ranges_.push_back(padding_shape[1]);
-    input_rotate_ranges_.push_back(padding_shape[0]);
     weight_pt.clear();
     bias_pt.clear();
 
@@ -204,9 +201,6 @@ void ParMultiplexedConv2DPackedLayerDepthwise::prepare_weight_lazy() {
     input_rotate_units_.clear();
     input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
     input_rotate_units_.push_back(skip_[0] * 1);
-    input_rotate_ranges_.clear();
-    input_rotate_ranges_.push_back(padding_shape[1]);
-    input_rotate_ranges_.push_back(padding_shape[0]);
 
     int kernel_size = kernel_shape_[0] * kernel_shape_[1];
     int input_block_size = input_shape_ct[0] * input_shape_ct[1];

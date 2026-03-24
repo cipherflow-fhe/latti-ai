@@ -44,7 +44,7 @@ void AddLayer::add(CkksContext* ctx,
     });
 }
 
-AddLayer::AddLayer(const CkksParameter& param_in) : param(param_in.copy()) {}
+AddLayer::AddLayer(const CkksParameter& param_in) : Layer(param_in) {}
 
 Feature2DEncrypted AddLayer::run(CkksContext& ctx, const Feature2DEncrypted& x0, const Feature2DEncrypted& x1) {
     Feature2DEncrypted result(&ctx, x0.level);

@@ -65,7 +65,6 @@ public:
 
     Array<double, 3> weight;
     Array<double, 1> bias;
-    CkksParameter param;
 
 private:
     std::vector<CkksCiphertext> run_core(CkksContext& ctx, std::vector<CkksCiphertext>& x);

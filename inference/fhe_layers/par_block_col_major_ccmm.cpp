@@ -35,7 +35,7 @@ ParBlockColMajorCCMM::ParBlockColMajorCCMM(const CkksParameter& param_in,
                                            uint32_t block_size,
                                            uint32_t n_heads,
                                            uint32_t level)
-    : param_(param_in.copy()) {
+    : Layer(param_in) {
     assert(shape_A[1] == shape_B[0] && "inner dimensions must match: shape_A[1] != shape_B[0]");
 
     level_ = level;

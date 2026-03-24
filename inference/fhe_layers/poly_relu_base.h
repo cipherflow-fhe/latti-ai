@@ -39,7 +39,6 @@ public:
                  uint32_t level_in,
                  int order_in);
 
-    CkksParameter param;
     Array<double, 2> weight;
     uint32_t n_channel_per_ct;
     int order;
