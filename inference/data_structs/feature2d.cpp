@@ -16,9 +16,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "feature2d.h"
-#include "util.h"
 #include <sstream>
+#include "feature2d.h"
+#include "inference/util.h"
 
 using namespace std;
 
@@ -42,12 +42,10 @@ vector<CkksPlaintext> Feature2DEncrypted::encode_multiple_channel(const Array<do
     shape[0] = input_shape[1];
     shape[1] = input_shape[2];
 
-    skip[0] = 1;
-    skip[1] = 1;
+    skip = {1, 1};
     n_channel_per_ct = n_slot / (shape[0] * shape[1]);
     uint32_t n_ct = div_ceil(n_channel, n_channel_per_ct);
 
-    vector<vector<double>> feature_tmp_pack(n_ct);
     vector<CkksPlaintext> pt_vec(n_ct);
 #pragma omp parallel for num_threads(N_THREAD)
     for (int ct_idx = 0; ct_idx < (int)n_ct; ct_idx++) {
@@ -68,8 +66,7 @@ vector<CkksPlaintext> Feature2DEncrypted::encode_multiple_channel(const Array<do
                 }
             }
         }
-        feature_tmp_pack[ct_idx] = image_flat;
-        pt_vec[ct_idx] = context->encode(feature_tmp_pack[ct_idx], level, scale_in);
+        pt_vec[ct_idx] = context->encode(image_flat, level, scale_in);
     }
     return pt_vec;
 }
@@ -154,8 +151,7 @@ vector<CkksPlaintext> Feature2DEncrypted::encode_interleaved(const Array<double,
     shape[0] = input_shape[1];
     shape[1] = input_shape[2];
 
-    n_segment[0] = stride[0];
-    n_segment[1] = stride[1];
+    n_segment = stride;
     n_channel_per_ct = 1;
     int f_ct_num = n_channel * stride[0] * stride[1];
     vector<CkksPlaintext> pt_vec(f_ct_num);
@@ -182,7 +178,7 @@ vector<CkksPlaintext> Feature2DEncrypted::encode_interleaved(const Array<double,
 }
 
 void Feature2DEncrypted::pack_multiple_channel(const Array<double, 3>& feature_mg, bool is_symmetric, double scale_in) {
-    packing_type = PackType::MultChannelPacking;
+    packing_type = PackType::MultipleChannelPacking;
     vector<CkksPlaintext> pt_vec = encode_multiple_channel(feature_mg, scale_in);
     uint32_t n_ct = pt_vec.size();
     const int N_THREAD = 4;
@@ -204,7 +200,7 @@ void Feature2DEncrypted::pack_multiple_channel(const Array<double, 3>& feature_m
     });
 }
 
-void Feature2DEncrypted::single_pack(const Array<double, 3>& feature_mg, bool is_sysmmetric, double scale_in) {
+void Feature2DEncrypted::single_pack(const Array<double, 3>& feature_mg, bool is_symmetric, double scale_in) {
     packing_type = PackType::SinglePack;
     vector<CkksPlaintext> pt_vec = encode_single(feature_mg, scale_in);
 
@@ -216,7 +212,7 @@ void Feature2DEncrypted::single_pack(const Array<double, 3>& feature_mg, bool is
 void Feature2DEncrypted::pack_interleaved(const Array<double, 3>& feature_mg,
                                           const Duo& block_shape,
                                           const Duo& stride,
-                                          bool is_sysmmetric,
+                                          bool is_symmetric,
                                           double scale_in) {
     packing_type = PackType::InterleavedPacking;
     vector<CkksPlaintext> pt_vec = encode_interleaved(feature_mg, block_shape, stride, scale_in);
@@ -224,13 +220,13 @@ void Feature2DEncrypted::pack_interleaved(const Array<double, 3>& feature_mg,
     const int N_THREAD = 4;
     data.clear();
     data_compress.clear();
-    if (is_sysmmetric) {
+    if (is_symmetric) {
         data_compress.resize(pt_vec.size());
     } else {
         data.resize(pt_vec.size());
     }
     parallel_for(pt_vec.size(), N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
-        if (is_sysmmetric) {
+        if (is_symmetric) {
             data_compress[ct_idx] = ctx_copy.encrypt_symmetric_compressed(pt_vec[ct_idx]);
         } else {
             data[ct_idx] = ctx_copy.encrypt_symmetric(pt_vec[ct_idx]);
@@ -272,19 +268,25 @@ Array<double, 3> Feature2DEncrypted::split_with_overlap_unpack(const Duo& block_
     return result;
 }
 
-void Feature2DEncrypted::pack_multiplexed(const Array<double, 3>& feature_mg, bool is_sysmmetric, double scale_in) {
+void Feature2DEncrypted::pack_multiplexed(const Array<double, 3>& feature_mg, bool is_symmetric, double scale_in) {
     packing_type = PackType::MultiplexedPacking;
     vector<CkksPlaintext> pt_vec = encode_multiplexed(feature_mg, scale_in);
 
-    for (int i = 0; i < pt_vec.size(); i++) {
-        if (is_sysmmetric) {
-            auto image_flat_ct = context->encrypt_symmetric_compressed(pt_vec[i]);
-            data_compress.push_back(move(image_flat_ct));
-        } else {
-            auto image_flat_ct = context->encrypt_symmetric(pt_vec[i]);
-            data.push_back(move(image_flat_ct));
-        }
+    const int N_THREAD = 4;
+    data.clear();
+    data_compress.clear();
+    if (is_symmetric) {
+        data_compress.resize(pt_vec.size());
+    } else {
+        data.resize(pt_vec.size());
     }
+    parallel_for(pt_vec.size(), N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
+        if (is_symmetric) {
+            data_compress[ct_idx] = ctx_copy.encrypt_symmetric_compressed(pt_vec[ct_idx]);
+        } else {
+            data[ct_idx] = ctx_copy.encrypt_symmetric(pt_vec[ct_idx]);
+        }
+    });
 }
 
 void Feature2DEncrypted::column_pack(const Array<double, 2>& feature_mg, bool is_symmetric, double scale_in) {
@@ -598,7 +600,7 @@ static vector<CkksPlaintext> multi_pack_to_pt(const Array<double, 3>& feature_mg
                                               int level,
                                               double scale_in,
                                               PackType pack_type) {
-    if (pack_type == PackType::MultChannelPacking) {
+    if (pack_type == PackType::MultipleChannelPacking) {
         return f2d.encode_multiple_channel(feature_mg, scale_in);
     } else if (pack_type == PackType::SinglePack) {
         return f2d.encode_single(feature_mg, scale_in);
@@ -612,8 +614,8 @@ static vector<CkksPlaintext> multi_pack_to_pt(const Array<double, 3>& feature_mg
 }
 
 void Feature2DEncrypted::split_to_shares_for_multi_channel_pack(Feature2DEncrypted* share0,
-                                                                Feature2DShare* share1,
-                                                                PackType pack_type_in) const {
+                                                                Feature2DShare* share1) const {
+    assert(this->packing_type == PackType::MultipleChannelPacking);
     int n_slot = context->get_parameter().get_n() / 2;
     double share_scale = ENC_TO_SHARE_SCALE;
     int feature_bitlength = ENC_TO_SHARE_SCALE_BIT + 1;
@@ -637,7 +639,7 @@ void Feature2DEncrypted::split_to_shares_for_multi_channel_pack(Feature2DEncrypt
     share0->data.clear();
     auto mask_d_array = Array<double, 1>::from_array_1d(mask_d).reshape<3>({n_channel, shape[0], shape[1]});
     auto mask_pt =
-        multi_pack_to_pt(mask_d_array, *share0, n_channel, shape, skip, *context, level, DEFAULT_SCALE, pack_type_in);
+        multi_pack_to_pt(mask_d_array, *share0, n_channel, shape, skip, *context, level, DEFAULT_SCALE, packing_type);
     for (int i = 0; i < data.size(); i++) {
         CkksCiphertext share0_ct = context->add_plain(data[i], mask_pt[i]);
         share0->data.push_back(move(share0_ct));
@@ -724,8 +726,8 @@ Feature2DEncrypted Feature2DEncrypted::combine_with_share_new_protocol(const Fea
 
 Feature2DEncrypted Feature2DEncrypted::combine_with_share_new_protocol_for_multi_pack(const Feature2DShare& share,
                                                                                       const Feature2DEncrypted& f2d,
-                                                                                      const Bytes& b1,
-                                                                                      PackType pack_type) const {
+                                                                                      const Bytes& b1) const {
+    assert(this->packing_type == PackType::MultipleChannelPacking);
     const int N_THREAD = 8;
     int n_slot = context->get_parameter().get_n() / 2;
     Feature2DEncrypted result(this->context, this->level);
@@ -748,16 +750,16 @@ Feature2DEncrypted Feature2DEncrypted::combine_with_share_new_protocol_for_multi
     auto f2d_copy = f2d.copy();
     Array<double, 3> mask_d_3d = mask_d.reshape<3>({this->n_channel, this->shape[0], this->shape[1]});
     auto mask_pt = multi_pack_to_pt(mask_d_3d, f2d_copy, this->n_channel, this->shape, this->skip, *context, level,
-                                    DEFAULT_SCALE, pack_type);
+                                    DEFAULT_SCALE, PackType::MultipleChannelPacking);
     Array<double, 1> b1_value({b1.size()});
     for (int i = 0; i < b1.size(); i++) {
         b1_value.set(i, 2 * b1[i] - 1);
     }
     Array<double, 3> b1_value_3d = b1_value.reshape<3>({this->n_channel, this->shape[0], this->shape[1]});
     CkksContext& extra_level_context = context->get_extra_level_context();
-    auto mask_b1 =
-        multi_pack_to_pt(b1_value_3d, f2d_copy, this->n_channel, this->shape, this->skip, extra_level_context,
-                         level + 1, extra_level_context.get_parameter().get_q(level + 1), pack_type);
+    auto mask_b1 = multi_pack_to_pt(
+        b1_value_3d, f2d_copy, this->n_channel, this->shape, this->skip, extra_level_context, level + 1,
+        extra_level_context.get_parameter().get_q(level + 1), PackType::MultipleChannelPacking);
     for (int i = 0; i < data.size(); i++) {
         auto f2d_mult = extra_level_context.mult_plain(f2d.data[i], mask_b1[i]);
         f2d_mult = extra_level_context.rescale(f2d_mult, encode_scale);
