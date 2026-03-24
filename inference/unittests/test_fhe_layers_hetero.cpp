@@ -220,7 +220,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "sq", "", HeteroProcessors) {
             output_feature.n_channel = 1;
             output_feature.n_channel_per_ct = this->n_slot / (s * s);
             output_feature.shape = {s, s};
-            auto output_mg = output_feature.unpack();
+            auto output_mg = output_feature.unpack_multiple_channel();
 
             SquareLayer square_layer(this->param);
             auto plain_output = square_layer.run_plaintext(input_array);
@@ -301,7 +301,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_1ch_s1", "", HeteroProcessor
 
                     this->run(project_path, cxx_args);
 
-                    auto output_mg = output_feature.unpack();
+                    auto output_mg = output_feature.unpack_multiple_channel();
 
                     auto plain_output = conv0_layer.run_plaintext(input_array);
 
@@ -382,7 +382,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_1ch_s2", "", HeteroProcessor
 
                     this->run(project_path, cxx_args);
 
-                    Array<double, 3> output_array = output_feature.unpack();
+                    Array<double, 3> output_array = output_feature.unpack_multiple_channel();
                     Array<double, 3> output_array_plain_call = conv0_layer.run_plaintext(input_array);
 
                     auto compare_result = compare(output_array_plain_call, output_array);
@@ -453,7 +453,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_mch_s1", "", HeteroProcessor
 
                     this->run(project_path, cxx_args);
 
-                    auto y_mg = output_feature.unpack();
+                    auto y_mg = output_feature.unpack_multiple_channel();
                     auto y_expected = conv_layer.run_plaintext(x_mg);
 
                     auto compare_result = compare(y_expected, y_mg);
@@ -524,7 +524,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv_mch_s2", "", HeteroProcessor
 
                     this->run(project_path, cxx_args);
 
-                    auto y_mg = output_feature.unpack();
+                    auto y_mg = output_feature.unpack_multiple_channel();
                     auto y_expected = conv_layer.run_plaintext(x_mg);
 
                     auto compare_result = compare(y_expected, y_mg);
@@ -588,7 +588,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "dw_32ch_s1_32x32_k3", "", HeteroP
 
     this->run(project_path, cxx_args);
 
-    Array<double, 3> output_mg = output_feature.unpack();
+    Array<double, 3> output_mg = output_feature.unpack_multiple_channel();
     Array<double, 3> plain_output = conv.run_plaintext(input);
 
     print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
@@ -651,7 +651,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "dw_4ch_s2_32x32_k3", "", HeteroPr
 
     this->run(project_path, cxx_args);
 
-    auto output_mg = output_feature.unpack();
+    auto output_mg = output_feature.unpack_multiple_channel();
     auto plain_output = conv.run_plaintext(input);
 
     print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);

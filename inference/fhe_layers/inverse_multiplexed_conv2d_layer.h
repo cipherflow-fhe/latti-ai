@@ -17,9 +17,10 @@
  */
 
 #pragma once
+#include "layer.h"
 #include "../data_structs/feature.h"
 
-class InverseMultiplexedConv2DLayer {
+class InverseMultiplexedConv2DLayer : public Layer {
 public:
     InverseMultiplexedConv2DLayer(const CkksParameter& param_in,
                                   const Duo& input_shape_in,
@@ -33,7 +34,6 @@ public:
                                   uint32_t level_in,
                                   double residual_scale = 1.0);
     CkksParameter param;
-    ~InverseMultiplexedConv2DLayer();
     virtual void prepare_weight();
     virtual void prepare_weight_lazy();
 
@@ -68,7 +68,6 @@ private:
     std::vector<int32_t> input_rotate_steps;
     std::vector<int> input_rotate_units;
     std::vector<int> input_rotate_ranges;
-    uint32_t level;
     double weight_scale;
 
     // Cached values for on-demand generation

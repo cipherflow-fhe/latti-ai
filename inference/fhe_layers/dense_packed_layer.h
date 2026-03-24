@@ -17,12 +17,13 @@
  */
 
 #pragma once
+#include "layer.h"
 #include "common.h"
 #include "../data_structs/feature.h"
 
 using namespace cxx_sdk_v2;
 
-class DensePackedLayer {
+class DensePackedLayer : public Layer {
 public:
     DensePackedLayer(const CkksParameter& param_in,
                      const Array<double, 2>& weight_in,
@@ -31,7 +32,6 @@ public:
                      uint32_t level_in,
                      int mark_in,
                      double residual_scale = 1.0);
-    ~DensePackedLayer();
     virtual void prepare_weight_0d_skip(uint32_t skip_0d);
     virtual void prepare_weight_0d_skip_lazy(uint32_t skip_0d);
     virtual void prepare_weight_for_2d_multiplexed(const Duo& input_shape_in,
@@ -73,7 +73,6 @@ protected:
     uint32_t n_channel_per_ct;
     uint32_t n_packed_in_feature;
     uint32_t n_packed_out_feature;
-    uint32_t level;
     int mark;
     double modified_scale;
 
