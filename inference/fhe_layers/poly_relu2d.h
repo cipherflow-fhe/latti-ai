@@ -32,8 +32,6 @@ public:
              const Duo& block_expansion_in = {1, 1},
              bool is_ordinary_pack_in = false);
 
-    ~PolyRelu() override;
-
     void prepare_weight();
     void prepare_weight_lazy();
     void prepare_weight_bsgs();

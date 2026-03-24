@@ -34,14 +34,6 @@ public:
                                uint32_t level,
                                double residual_scale = 1.0);
 
-    ~Conv2DPackedDepthwiseLayer() override = default;
-
-    // Disable copy, enable move
-    Conv2DPackedDepthwiseLayer(const Conv2DPackedDepthwiseLayer&) = delete;
-    Conv2DPackedDepthwiseLayer& operator=(const Conv2DPackedDepthwiseLayer&) = delete;
-    Conv2DPackedDepthwiseLayer(Conv2DPackedDepthwiseLayer&&) noexcept = default;
-    Conv2DPackedDepthwiseLayer& operator=(Conv2DPackedDepthwiseLayer&&) noexcept = default;
-
     void prepare_weight();
     void prepare_weight_lazy();
 
@@ -77,8 +69,6 @@ private:
     uint32_t n_packed_in_ct_;
 
     uint32_t n_packed_out_ct_;
-
-    uint32_t level_;
 
     double modified_scale_;
 

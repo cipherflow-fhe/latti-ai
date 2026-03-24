@@ -65,8 +65,6 @@ BlockColMajorCPMM::BlockColMajorCPMM(const CkksParameter& param_in,
     }
 }
 
-BlockColMajorCPMM::~BlockColMajorCPMM() {}
-
 int BlockColMajorCPMM::get_block_index(int bi, int bj, int num_block_rows) {
     return bi + num_block_rows * bj;
 }

@@ -21,10 +21,11 @@
 #include <vector>
 #include <cstdint>
 #include <iostream>
+#include "layer.h"
 #include "common.h"
 #include "data_structs/feature2d.h"
 
-class UpsampleNearestLayer {
+class UpsampleNearestLayer : public Layer {
 public:
     UpsampleNearestLayer(const CkksParameter& param_in,
                          const Duo& shape_in,
@@ -46,7 +47,6 @@ public:
     Duo upsample_factor;
     Duo shape;
     Duo skip;
-    uint32_t level;
     uint32_t n_channel_per_ct;
     uint32_t n_block_per_ct;
 
