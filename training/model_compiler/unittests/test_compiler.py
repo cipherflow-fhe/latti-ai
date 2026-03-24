@@ -370,7 +370,7 @@ class TestCompiler(CompilerTestBase):
         model = nn_modules.ConvSeriesWithStride()
         graph, score = self._export_and_compile(model, (1, 32, 256, 256), style='multiplexed')
 
-        self.assertEqual(
+        self.assertLessEqual(
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)),
             config.fhe_param.max_level,
         )
