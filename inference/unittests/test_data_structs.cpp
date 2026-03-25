@@ -23,6 +23,7 @@
 #include "ut_util.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 TEST_CASE("Feature2DEncrypted serialization", "") {
     CkksParameter paramter = CkksParameter::create_parameter(8192);

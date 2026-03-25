@@ -16,10 +16,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "interface/inference_server.h"
-
 #include <iostream>
 #include <map>
+
+#include "interface/inference_server.h"
+
+using namespace cxx_sdk_v2;
 
 InferenceServer::InferenceServer(const std::string& server_dir, bool use_gpu)
     : server_dir_(server_dir), use_gpu_(use_gpu) {}

@@ -18,7 +18,7 @@
 
 #include <math.h>
 #include <set>
-#include "../common.h"
+#include "../util.h"
 #include "inverse_multiplexed_conv2d_layer.h"
 
 using namespace std;

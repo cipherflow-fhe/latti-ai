@@ -18,7 +18,6 @@
 
 #include "conv1d_packed_layer.h"
 #include "conv2d_layer.h"
-#include "../common.h"
 #include "util.h"
 
 using namespace std;
