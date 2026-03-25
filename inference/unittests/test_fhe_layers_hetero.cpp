@@ -52,8 +52,8 @@
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include <lattisense/lib/nlohmann/json.hpp>
 
-using namespace cxx_sdk_v2;
 using namespace std;
+using namespace cxx_sdk_v2;
 namespace fs = std::filesystem;
 
 fs::path base_path = "../hetero";

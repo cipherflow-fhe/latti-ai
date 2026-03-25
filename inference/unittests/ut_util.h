@@ -19,7 +19,7 @@
 #pragma once
 
 #include <vector>
-#include "common.h"
+#include "util.h"
 
 struct ArrayComparison {
     int dim;
