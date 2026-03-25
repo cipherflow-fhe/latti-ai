@@ -129,7 +129,7 @@ class ParMultiplexedConv2DPackedLayer:
         # 1. Block direction rotation
         block_rotations: list[CkksCiphertextNode] = list()
         for x_ct in x:
-            block_rotations += MultConv2DPackedLayer.populate_rotations_1_side(
+            block_rotations += ParMultiplexedConv2DPackedLayer.populate_rotations_1_side(
                 x_ct, self.n_block_per_ct - 1, self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
             )
         # 2. Kernel direction rotation
