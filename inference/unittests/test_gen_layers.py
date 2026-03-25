@@ -649,7 +649,7 @@ class TestLayerExport(unittest.TestCase):
             ]
 
             poly_layer = PolyRelu(input_shape, order, skip, n_in_channel_per_ct)
-            output_ct = poly_layer.call_bsgs(input_ct, weight_pt)
+            output_ct = poly_layer.call_bsgs_feature2d(input_ct, weight_pt)
 
             input_args = list()
             input_args.append(Argument('input_node', input_ct))
@@ -664,7 +664,7 @@ class TestLayerExport(unittest.TestCase):
                 / f'level_{level}',
             )
 
-    def test_fc_pack_skip(self):
+    def test_fc_pack_skip_feature0d(self):
         N = 16384
         set_param(n=N)
         w_shape = [10, 4096]
@@ -718,7 +718,7 @@ class TestLayerExport(unittest.TestCase):
                 / 'server',
             )
 
-    def test_fc_fc(self):
+    def test_fc_fc_feature0d(self):
         N = 16384
         set_param(n=N)
         n_slot = 8192
@@ -801,7 +801,7 @@ class TestLayerExport(unittest.TestCase):
             / 'server',
         )
 
-    def test_dense_mult_pack(self):
+    def test_dense_mult_pack_feature2d(self):
         N = 16384
         set_param(n=N)
         level = 6
@@ -852,7 +852,7 @@ class TestLayerExport(unittest.TestCase):
                 / 'server',
             )
 
-    def test_fc_multiplexed(self):
+    def test_fc_multiplexed_feature2d(self):
         N = 16384
         set_param(n=N)
         level = 3
@@ -914,7 +914,7 @@ class TestLayerExport(unittest.TestCase):
                 output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
             )
 
-    def test_poly_relu_bsgs(self):
+    def test_poly_relu_bsgs_feature2d(self):
         N = 16384
         set_param(n=N)
         n_in_channel = 32
@@ -933,13 +933,13 @@ class TestLayerExport(unittest.TestCase):
             [CkksPlaintextRingtNode(f'poly0w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order0 + 1)
         ]
         poly_layer0 = PolyRelu(input_shape, order0, skip, n_in_channel_per_ct)
-        output_ct0 = poly_layer0.call_bsgs(input_ct, weight_pt0)
+        output_ct0 = poly_layer0.call_bsgs_feature2d(input_ct, weight_pt0)
 
         weight_pt1 = [
             [CkksPlaintextRingtNode(f'poly1w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order1 + 1)
         ]
         poly_layer1 = PolyRelu(input_shape, order1, skip, n_in_channel_per_ct)
-        output_ct1 = poly_layer1.call_bsgs(output_ct0, weight_pt1)
+        output_ct1 = poly_layer1.call_bsgs_feature2d(output_ct0, weight_pt1)
 
         output_ct = list()
         for idx in range(len(output_ct1)):

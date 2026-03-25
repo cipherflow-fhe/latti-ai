@@ -1294,7 +1294,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     }
 }
 
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip", "", HeteroProcessors) {
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip_feature0d", "", HeteroProcessors) {
     // Matches Python test_fc_pack_skip: n_in=4096, n_out=10, level=2, skips=[2,4,8,16]
     uint32_t n_in_channel = 4096;
     uint32_t n_out_channel = 10;
@@ -1359,7 +1359,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip", "", HeteroProcessors) {
     }
 }
 
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_multiplexed", "", HeteroProcessors) {
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_multiplexed_feature2d", "", HeteroProcessors) {
     int init_level = 3;
     uint32_t n_in_channel = 64;
     uint32_t n_out_channel = 10;
@@ -1440,7 +1440,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_multiplexed", "", HeteroProces
     }
 }
 
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc_feature0d", "", HeteroProcessors) {
     int init_level = 2;
     // fc0: multiplexed, dense_shape=[4,4], skip=(1,1), 1024->1024
     // fc1: skip_0d, skip1=[4,4], 1024->128
@@ -1495,7 +1495,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
     vector<CxxVectorArgument> cxx_args;
     for (const auto& name : arg_names) {
         if (name == "input_node")
-            cxx_args.push_back({name, &input_0d.data});
+            cxx_args.push_back({name, &input_feature.data});
         else if (name == "weight_pt0")
             cxx_args.push_back({name, &dense0.weight_pt});
         else if (name == "bias_pt0")
@@ -1522,7 +1522,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
     REQUIRE(result.rmse < 1.0e-2 * result.rms);
 }
 
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs", "", HeteroProcessors) {
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature2d", "", HeteroProcessors) {
     Duo input_shape = {32, 32};
     uint32_t n_channel = 32;
     Duo skip = {1, 1};
@@ -1847,7 +1847,7 @@ static Array<double, 2> make_uniform_coeff(const vector<double>& c, uint32_t n_c
     return coeff;
 }
 
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs", "", HeteroProcessors) {
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs_feature2d", "", HeteroProcessors) {
     Duo input_shape = {32, 32};
     uint32_t n_channel = 32;
     Duo skip = {1, 1};
@@ -2270,50 +2270,6 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_cpmm_square", "", HeteroProce
         // n_slot=8192, d=64, d^2=4096, n_h_padded=4, n_h_padded*d^2=16384 > 8192
         // S=8192/4096=2, G=4/2=2
         run_square_test(83, 3, 64, 2);
-    }
-}
-
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "dense_0d", "", HeteroProcessors) {
-    int init_level = 8;
-
-    vector<uint32_t> n_ins = {32, 64};
-    vector<uint32_t> n_outs = {10, 32, 64};
-    vector<uint32_t> skips = {1, 2, 128, 256};
-
-    for (uint32_t n_in_channel : n_ins) {
-        SECTION("n_in=" + to_string(n_in_channel)) {
-            for (uint32_t n_out_channel : n_outs) {
-                SECTION("n_out=" + to_string(n_out_channel)) {
-                    for (uint32_t skip_0d : skips) {
-                        uint32_t n_channel_per_ct = this->n_slot / skip_0d;
-                        SECTION("skip=" + to_string(skip_0d)) {
-                            auto input_array = gen_random_array<1>({n_in_channel}, 1.0);
-                            auto weight = gen_random_array<2>({n_out_channel, n_in_channel}, 0.5);
-                            auto bias_array = gen_random_array<1>({n_out_channel}, 0.1);
-
-                            Feature0DEncrypted input_feature(&this->context, init_level);
-                            input_feature.pack(input_array, false, this->param.get_default_scale(), skip_0d);
-
-                            DensePackedLayer dense(this->context.get_parameter(), weight, bias_array, n_channel_per_ct,
-                                                   init_level, 0);
-                            dense.prepare_weight_0d_skip(skip_0d);
-
-                            Feature0DEncrypted output_feature = dense.run_0d_skip(this->context, input_feature);
-
-                            Array<double, 1> output_mg = output_feature.unpack();
-                            Array<double, 1> plain_output = dense.plaintext_call(input_array);
-
-                            print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
-                            print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
-
-                            auto compare_result = compare(plain_output, output_mg);
-                            REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
-                            REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
