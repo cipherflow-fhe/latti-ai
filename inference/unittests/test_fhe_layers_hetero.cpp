@@ -60,6 +60,7 @@
 
 using namespace cxx_sdk_v2;
 using namespace std;
+
 namespace fs = std::filesystem;
 
 fs::path base_path = "../hetero";
@@ -290,12 +291,12 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv2d_packed", "", HeteroProcess
                 this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
         }
 
-        fs::path project_path =
-            base_path / "CKKS_conv2d" / ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
-            ("kernel_shape_" + to_string(kernel_shape[0]) + "_" + to_string(kernel_shape[1])) /
-            ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
-            ("input_shape_" + to_string(input_shape[0]) + "_" + to_string(input_shape[1])) /
-            ("level_" + to_string(init_level)) / "server";
+        fs::path project_path = base_path / "CKKS_conv2d" /
+                                ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                                ("kernel_shape_" + to_string(kernel_shape[0]) + "_" + to_string(kernel_shape[1])) /
+                                ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                                ("input_shape_" + to_string(input_shape[0]) + "_" + to_string(input_shape[1])) /
+                                ("level_" + to_string(init_level)) / "server";
 
         auto arg_names = read_arg_names(project_path);
         vector<CxxVectorArgument> cxx_args;
@@ -424,13 +425,15 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv2d_depthwise", "", HeteroProc
                             for (uint32_t ks : kernel_sizes) {
                                 Duo kernel_shape = {ks, ks};
                                 SECTION("kernel=" + str(kernel_shape)) {
-                                    Array<double, 4> conv0_weight =
-                                        gen_random_array<4>({n_channel, n_channel, kernel_shape[0], kernel_shape[1]}, 0.1);
+                                    Array<double, 4> conv0_weight = gen_random_array<4>(
+                                        {n_channel, n_channel, kernel_shape[0], kernel_shape[1]}, 0.1);
                                     Array<double, 1> conv0_bias = gen_random_array<1>({n_channel}, 0);
-                                    Array<double, 3> input = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1);
+                                    Array<double, 3> input =
+                                        gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1);
 
-                                    Conv2DPackedDepthwiseLayer conv(this->context.get_parameter(), input_shape, conv0_weight,
-                                                                    conv0_bias, stride, skip, n_channel_per_ct, init_level);
+                                    Conv2DPackedDepthwiseLayer conv(this->context.get_parameter(), input_shape,
+                                                                    conv0_weight, conv0_bias, stride, skip,
+                                                                    n_channel_per_ct, init_level);
                                     conv.prepare_weight();
 
                                     Feature2DEncrypted f2d(&this->context, init_level);
@@ -444,8 +447,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv2d_depthwise", "", HeteroProc
                                     output_feature.n_channel = n_channel;
                                     output_feature.n_channel_per_ct = n_channel_per_ct;
                                     for (int i = 0; i < div_ceil(n_channel, n_channel_per_ct); i++) {
-                                        output_feature.data.push_back(
-                                            this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+                                        output_feature.data.push_back(this->context.new_ciphertext(
+                                            init_level - 1, this->param.get_default_scale()));
                                     }
 
                                     fs::path project_path =
@@ -504,8 +507,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv2d_packed", "", HeteroPro
         Array<double, 1> conv0_bias = gen_random_array<1>({n_out_channel}, 0.1);
         Array<double, 3> input_array = gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
 
-        ParMultiplexedConv2DPackedLayer conv_layer(this->context.get_parameter(), input_shape, conv0_weight,
-                                                   conv0_bias, stride, skip, n_channel_per_ct, init_level, 1.0);
+        ParMultiplexedConv2DPackedLayer conv_layer(this->context.get_parameter(), input_shape, conv0_weight, conv0_bias,
+                                                   stride, skip, n_channel_per_ct, init_level, 1.0);
         conv_layer.prepare_weight_for_post_skip_rotation();
 
         Feature2DEncrypted input_feature(&this->context, init_level, skip);
@@ -519,17 +522,15 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv2d_packed", "", HeteroPro
         output_feature.n_channel = n_out_channel;
         output_feature.n_channel_per_ct = (n_channel_per_ct * stride[0] * stride[1]);
         for (int i = 0; i < div_ceil(n_out_channel, (n_channel_per_ct * stride[0] * stride[1])); i++) {
-            output_feature.data.push_back(
-                this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+            output_feature.data.push_back(this->context.new_ciphertext(output_level, this->param.get_default_scale()));
         }
 
-        fs::path project_path =
-            base_path / "CKKS_multiplexed_conv2d" /
-            ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
-            ("kernel_shape_" + to_string(kernel_shape[0]) + "_" + to_string(kernel_shape[1])) /
-            ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
-            ("input_shape_" + to_string(input_shape[0]) + "_" + to_string(input_shape[1])) /
-            ("level_" + to_string(init_level)) / "server";
+        fs::path project_path = base_path / "CKKS_multiplexed_conv2d" /
+                                ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                                ("kernel_shape_" + to_string(kernel_shape[0]) + "_" + to_string(kernel_shape[1])) /
+                                ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                                ("input_shape_" + to_string(input_shape[0]) + "_" + to_string(input_shape[1])) /
+                                ("level_" + to_string(init_level)) / "server";
 
         auto arg_names = read_arg_names(project_path);
         vector<CxxVectorArgument> cxx_args;

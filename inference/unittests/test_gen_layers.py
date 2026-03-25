@@ -21,6 +21,7 @@ from pathlib import Path
 import torch
 from torch import nn
 
+
 script_dir = Path(__file__).resolve().parent
 project_root = script_dir.parent.parent
 base_path = project_root / 'build' / 'inference' / 'hetero'
@@ -208,13 +209,8 @@ class TestLayerExport(unittest.TestCase):
         for stride in [(1, 1), (2, 2)]:
             for n_in_channel in [1, 3, 4, 16, 17]:
                 for n_out_channel in [1, 3, 4, 32, 33]:
-                    print(
-                        f'sub-test: stride={stride}, n_in_channel={n_in_channel}, '
-                        f'n_out_channel={n_out_channel}'
-                    )
-                    gen_conv_mega_ag(
-                        n_in_channel, n_out_channel, (32, 32), (3, 3), stride, skip, groups, init_level
-                    )
+                    print(f'sub-test: stride={stride}, n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
+                    gen_conv_mega_ag(n_in_channel, n_out_channel, (32, 32), (3, 3), stride, skip, groups, init_level)
 
     def test_conv2d_depthwise(self):
         channels = [4, 8, 32]
@@ -264,7 +260,9 @@ class TestLayerExport(unittest.TestCase):
         for n_in_channel in [1, 3, 4, 16, 17]:
             for n_out_channel in [1, 3, 4, 32, 33]:
                 print(f'sub-test: varied_channels cin={n_in_channel}, cout={n_out_channel}')
-                gen_conv_mega_ag(n_in_channel, n_out_channel, (32, 32), (3, 3), (1, 1), skip, 1, init_level, 'multiplexed')
+                gen_conv_mega_ag(
+                    n_in_channel, n_out_channel, (32, 32), (3, 3), (1, 1), skip, 1, init_level, 'multiplexed'
+                )
 
     def test_mux_dw_s2_64x64_k3(self):
         n_in_channels = [4, 8, 32]
