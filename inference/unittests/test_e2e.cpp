@@ -70,16 +70,16 @@ static void run_e2e_test(const fs::path& test_dir, bool use_gpu) {
     using clock = chrono::high_resolution_clock;
     string test_name = test_dir.filename().string();
     string device_tag = use_gpu ? "GPU" : "CPU";
-    string client_dir = (test_dir / "task" / "client").string();
-    string server_dir = (test_dir / "task" / "server").string();
+    fs::path client_dir = test_dir / "task" / "client";
+    fs::path server_dir = test_dir / "task" / "server";
 
     // Read task_config to get input names and build CSV map
-    auto task_config = read_json(client_dir + "/task_config.json");
+    auto task_config = read_json((client_dir / "task_config.json").string());
     map<string, string> input_csvs;
     for (auto& [name, param] : task_config["task_input_param"].items()) {
-        string csv_path = client_dir + "/" + name + ".csv";
+        fs::path csv_path = client_dir / (name + ".csv");
         REQUIRE(fs::exists(csv_path));
-        input_csvs[name] = csv_path;
+        input_csvs[name] = csv_path.string();
     }
 
     // Timing records: label → duration in ms
@@ -103,13 +103,13 @@ static void run_e2e_test(const fs::path& test_dir, bool use_gpu) {
     };
 
     // Client: generate keys and encrypt input
-    InferenceClient client(client_dir);
+    InferenceClient client(client_dir.string());
     measure_void("Key generation", [&] { client.setup(); });
     auto eval_ctx = measure("Export eval context", [&] { return client.export_eval_context(); });
     auto encrypted_inputs = measure("Encrypt input", [&] { return client.encrypt(input_csvs); });
 
     // Server: import context, load model, run encrypted inference
-    InferenceServer server(server_dir, use_gpu);
+    InferenceServer server(server_dir.string(), use_gpu);
     measure_void("Import eval context", [&] { server.import_eval_context(eval_ctx); });
     measure_void("Load model", [&] { server.load_model(); });
     auto encrypted_outputs = measure("Evaluate (encrypted)", [&] { return server.evaluate(encrypted_inputs); });
@@ -140,7 +140,7 @@ static void run_e2e_test(const fs::path& test_dir, bool use_gpu) {
         REQUIRE(pt_it != plaintext_outputs.end());
         auto& pt_output = pt_it->second;
 
-        int count = min(result.num_outputs, (int)pt_output.size());
+        int count = min(result.num_outputs, static_cast<int>(pt_output.size()));
         REQUIRE(count > 0);
 
         double max_abs_err = 0.0;

@@ -22,15 +22,6 @@ import sys
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
-from inference.lattisense.frontend.custom_task import *
-from training.model_compiler.components import (
-    N16QP1546H192H32,
-    PN13QP218,
-    PN14QP438,
-    PN15QP880,
-    PN16QP1761,
-)
-
 from model_generator.layers.activation_layer import *
 from model_generator.layers.add_pack import *
 from model_generator.layers.avgpool2d_layer import *
@@ -46,6 +37,15 @@ from model_generator.layers.multiplexed_conv2d_pack_layer import *
 from model_generator.layers.multiplexed_conv2d_pack_layer_depthwise import *
 from model_generator.layers.poly_relu2d import *
 from model_generator.layers.upsample_layer import *
+
+from inference.lattisense.frontend.custom_task import *
+from training.model_compiler.components import (
+    N16QP1546H192H32,
+    PN13QP218,
+    PN14QP438,
+    PN15QP880,
+    PN16QP1761,
+)
 
 
 def read_config(config_path):
@@ -485,8 +485,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             else:
                 special_shape = config_info['feature'][layer_input_feature_ids[0]]['special_info']['shape']
                 special_skip = config_info['feature'][layer_input_feature_ids[0]]['special_info']['skip']
-                virtual_shape = special_shape
-                virtual_skip = special_skip
                 input_shape_ct = [special_shape[0] * special_skip[0], special_shape[1] * special_skip[1]]
                 n_num_per_ct = int(np.ceil(n / 2 / (input_shape_ct[0] * input_shape_ct[1])))
                 n_packed_out_feature_for_mult_apck = int(np.ceil(n_out_channel / n_num_per_ct))

@@ -391,9 +391,15 @@ class CompilerTestBase(unittest.TestCase):
                 h, w = input_param['shape']
                 data = np.random.uniform(-1, 1, (channel, h * w))
                 np.savetxt(csv_path, data, delimiter=',', fmt='%.6f')
+            elif dim == 1:
+                (length,) = input_param['shape']
+                data = np.random.uniform(-1, 1, (channel, length))
+                np.savetxt(csv_path, data, delimiter=',', fmt='%.6f')
             elif dim == 0:
                 data = np.random.uniform(-1, 1, (channel,))
                 np.savetxt(csv_path, data.reshape(1, -1), delimiter=',', fmt='%.6f')
+            else:
+                raise ValueError(f'Unsupported input dim={dim} for input "{input_name}"')
 
         # Cleanup temp files
         temp_onnx.unlink(missing_ok=True)
