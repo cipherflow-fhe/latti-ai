@@ -231,8 +231,8 @@ void InverseMultiplexedConv2DLayer::prepare_weight() {
                 mask_vec[row * block_shape[1] + col] = 1.0;
             }
         }
-        CkksContext ctx_tmp = CkksContext::create_empty_context(this->param);
-        repack_mask_pt = ctx_tmp.encode_ringt(mask_vec, ctx_tmp.get_parameter().get_q(level - 1));
+        CkksContext ctx_tmp = CkksContext::create_empty_context(this->param_);
+        repack_mask_pt = ctx_tmp.encode_ringt(mask_vec, ctx_tmp.get_parameter().get_q(level_ - 1));
     }
 }
 
@@ -306,8 +306,8 @@ void InverseMultiplexedConv2DLayer::prepare_weight_lazy() {
                 mask_vec[row * block_shape[1] + col] = 1.0;
             }
         }
-        CkksContext ctx_tmp = CkksContext::create_empty_context(this->param);
-        repack_mask_pt = ctx_tmp.encode_ringt(mask_vec, ctx_tmp.get_parameter().get_q(level - 1));
+        CkksContext ctx_tmp = CkksContext::create_empty_context(this->param_);
+        repack_mask_pt = ctx_tmp.encode_ringt(mask_vec, ctx_tmp.get_parameter().get_q(level_ - 1));
     }
 }
 
@@ -391,7 +391,7 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_repack_mask_pt(CkksCo
             mask_vec[row * block_shape[1] + col] = 1.0;
         }
     }
-    return ctx.encode_ringt(mask_vec, ctx.get_parameter().get_q(level - 1));
+    return ctx.encode_ringt(mask_vec, ctx.get_parameter().get_q(level_ - 1));
 }
 
 std::vector<uint32_t> InverseMultiplexedConv2DLayer::get_used_input_indices() const {
@@ -547,7 +547,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
 
         // Step 1: mask all channels with the shared repack mask
         parallel_for(n_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int c) {
-            auto mask_mul = ctx_copy.ringt_to_mul(repack_mask_pt, level - 1);
+            auto mask_mul = ctx_copy.ringt_to_mul(repack_mask_pt, level_ - 1);
             temp_res[c] = ctx_copy.mult_plain_mul(temp_res[c], mask_mul);
         });
 
