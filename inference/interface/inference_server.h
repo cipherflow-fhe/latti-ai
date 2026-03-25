@@ -29,8 +29,6 @@
 #include "interface/inference_client.h"
 #include "util.h"
 
-using namespace cxx_sdk_v2;
-
 /// Server-side encrypted inference interface.
 ///
 /// Holds the model and a public-only evaluation context.
@@ -74,9 +72,9 @@ private:
     std::map<std::string, InputParam> input_params_;
     std::vector<std::string> output_keys_;
     std::map<std::string, OutputParam> output_params_;
-    CkksContext* context_ptr_ = nullptr;
-    std::unique_ptr<CkksContext> eval_context_;
-    std::unique_ptr<CkksBtpContext> eval_btp_context_;
+    ls::CkksContext* context_ptr_ = nullptr;
+    std::unique_ptr<ls::CkksContext> eval_context_;
+    std::unique_ptr<ls::CkksBtpContext> eval_btp_context_;
 
     std::unique_ptr<InitInferenceProcess> init_;
     std::unique_ptr<InferenceProcess> fp_;

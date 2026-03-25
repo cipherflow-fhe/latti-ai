@@ -22,6 +22,7 @@
 #include "../util.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 Feature0DEncrypted::Feature0DEncrypted(CkksContext* context_in, int ct_level) {
     dim = 0;

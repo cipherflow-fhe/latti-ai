@@ -25,8 +25,7 @@
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include "../common.h"
 
-using namespace std;
-using namespace cxx_sdk_v2;
+namespace ls = cxx_sdk_v2;
 
 enum class PackType { MultipleChannelPacking, MultiplexedPacking, InterleavedPacking };
 
@@ -35,7 +34,7 @@ enum class ExecuteType { FPGA, SDK };
 
 class FeatureEncrypted {
 public:
-    CkksContext* context = nullptr;
+    ls::CkksContext* context = nullptr;
     uint32_t dim = 0;
     uint32_t n_channel = 0;
     uint32_t n_channel_per_ct = 0;
@@ -63,14 +62,17 @@ int64_t gen_random_for_share(int r_bitlength);
 double uint64_to_double(uint64_t input, double scale, uint64_t ring_mod);
 uint64_t double_to_uint64(double input, double scale, uint64_t ring_mod);
 
-void parallel_for(int n, int n_thread, CkksContext& context, const function<void(CkksContext&, int)>& fn);
+void parallel_for(int n, int n_thread, ls::CkksContext& context, const std::function<void(ls::CkksContext&, int)>& fn);
 
-void parallel_for(int n, int n_thread, CkksBtpContext& context, const function<void(CkksBtpContext&, int)>& fn);
+void parallel_for(int n,
+                  int n_thread,
+                  ls::CkksBtpContext& context,
+                  const std::function<void(ls::CkksBtpContext&, int)>& fn);
 
 void parallel_for_with_extra_level_context(int n,
                                            int n_thread,
-                                           CkksContext& context,
-                                           const function<void(CkksContext&, CkksContext&, int)>& fn);
+                                           ls::CkksContext& context,
+                                           const std::function<void(ls::CkksContext&, ls::CkksContext&, int)>& fn);
 
 // Include dimension-specific feature headers so that including "feature.h"
 // continues to provide all Feature*Encrypted and Feature*Share types.

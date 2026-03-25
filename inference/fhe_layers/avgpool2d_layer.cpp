@@ -19,6 +19,7 @@
 #include "avgpool2d_layer.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 Avgpool2DLayer::Avgpool2DLayer(const Duo& shape_in, const Duo& stride_in) : n_block_per_ct(0) {
     shape[0] = shape_in[0];
