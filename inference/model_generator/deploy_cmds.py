@@ -23,21 +23,21 @@ import sys
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
 
+from model_generator.layers.activation_layer import *
 from model_generator.layers.add_pack import *
 from model_generator.layers.avgpool2d_layer import *
+from model_generator.layers.concat_layer import *
+from model_generator.layers.conv1d_packed_layer import *
 from model_generator.layers.conv2d_depthwise import *
 from model_generator.layers.conv2d_packed_layer import *
 from model_generator.layers.dense_packed_layer import *
+from model_generator.layers.inverse_multiplexed_conv2d_layer import *
+from model_generator.layers.mult_scaler import *
+from model_generator.layers.multiplexed_conv1d_pack_layer import *
 from model_generator.layers.multiplexed_conv2d_pack_layer import *
 from model_generator.layers.multiplexed_conv2d_pack_layer_depthwise import *
-from model_generator.layers.mult_scaler import *
 from model_generator.layers.poly_relu2d import *
-from model_generator.layers.activation_layer import *
-from model_generator.layers.inverse_multiplexed_conv2d_layer import *
 from model_generator.layers.upsample_layer import *
-from model_generator.layers.concat_layer import *
-from model_generator.layers.conv1d_packed_layer import *
-from model_generator.layers.multiplexed_conv1d_pack_layer import *
 
 
 def read_config(config_path):
@@ -47,7 +47,11 @@ def read_config(config_path):
 
 
 def set_param(n=16384):
-    if n == 16384:
+    if n == 8192:
+        q = [0x1FFFEC001, 0x3FFF4001, 0x3FFE8001, 0x40020001, 0x40038001, 0x3FFC0001]
+        p = [0x800004001]
+        param = Param.create_ckks_custom_param(n=8192, p=p, q=q)
+    elif n == 16384:
         q = [
             0x200000008001,
             0x400018001,
@@ -62,6 +66,29 @@ def set_param(n=16384):
         ]
         p = [0x7FFFFFD8001, 0x7FFFFFC8001]
         param = Param.create_ckks_custom_param(n=16384, p=p, q=q)
+    elif n == 32768:
+        q = [
+            0x4000000120001,
+            0x10000140001,
+            0xFFFFE80001,
+            0x10000290001,
+            0xFFFFC40001,
+            0x100003E0001,
+            0x10000470001,
+            0x100004B0001,
+            0xFFFFB20001,
+            0x10000500001,
+            0x10000650001,
+            0xFFFF940001,
+            0xFFFF8A0001,
+            0xFFFF820001,
+            0xFFFF780001,
+            0x10000890001,
+            0xFFFF750001,
+            0x10000960001,
+        ]
+        p = [0x40000001B0001, 0x3FFFFFFDF0001, 0x4000000270001]
+        param = Param.create_ckks_custom_param(n=32768, p=p, q=q)
     elif n == 65536:
         param = CkksBtpParam.create_default_param()
     set_fhe_param(param)
@@ -478,6 +505,8 @@ def gen_custom_task(task_path, n=16384, use_gpu=True, style='ordinary'):
             else:
                 special_shape = config_info['feature'][layer_input_feature_ids[0]]['special_info']['shape']
                 special_skip = config_info['feature'][layer_input_feature_ids[0]]['special_info']['skip']
+                virtual_shape = special_shape
+                virtual_skip = special_skip
                 input_shape_ct = [special_shape[0] * special_skip[0], special_shape[1] * special_skip[1]]
                 n_num_per_ct = int(np.ceil(n / 2 / (input_shape_ct[0] * input_shape_ct[1])))
                 n_packed_out_feature_for_mult_apck = int(np.ceil(n_out_channel / n_num_per_ct))

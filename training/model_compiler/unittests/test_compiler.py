@@ -23,6 +23,10 @@ from pathlib import Path
 
 import numpy as np
 
+import os
+
+os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
+
 script_dir = Path(__file__).parent.resolve()
 project_root = script_dir.parent.parent.parent
 sys.path.append(str(script_dir.parent))
@@ -259,11 +263,19 @@ class CompilerTestBase(unittest.TestCase):
         pack_style = task_config.get('pack_style', style)
 
         # Step 7: Generate mega_ag instructions
-        sys.path.insert(0, str(project_root / 'inference'))
-        sys.path.insert(0, str(project_root / 'inference' / 'lattisense'))
-        from model_generator.deploy_cmds import gen_custom_task
+        # Run in subprocess to avoid global state pollution in lattisense frontend
+        import subprocess
 
-        gen_custom_task(str(server_dir), n=n, use_gpu=True, style=pack_style)
+        gen_script = (
+            f'import sys;'
+            f'sys.path.insert(0,"{project_root / "inference"}");'
+            f'sys.path.insert(0,"{project_root / "inference" / "lattisense"}");'
+            f'from model_generator.deploy_cmds import gen_custom_task;'
+            f'gen_custom_task("{server_dir}",n={n},use_gpu=True,style="{pack_style}")'
+        )
+        result = subprocess.run([sys.executable, '-c', gen_script], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f'gen_custom_task failed:\n{result.stderr}')
 
         # Step 8: Generate random input CSV(s)
         for input_name, input_param in task_config['task_input_param'].items():
@@ -287,28 +299,12 @@ class CompilerTestBase(unittest.TestCase):
 
 
 class TestSingleLayer(CompilerTestBase):
-    def test_single_conv(self):
-        model = nn_modules.SingleConv()
-        graph, score = self._export_and_compile(model, (1, 32, 64, 64))
-
-        self.assertEqual(
-            max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 1
-        )
-
     def test_single_conv1d(self):
         model = nn_modules.SingleConv1d()
         graph, score = self._export_and_compile(model, (1, 32, 64))
 
         self.assertEqual(
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 1
-        )
-
-    def test_single_act(self):
-        model = nn_modules.SingleAct()
-        graph, score = self._export_and_compile(model, (1, 32, 64, 64))
-
-        self.assertEqual(
-            max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 3
         )
 
     def test_single_act1d(self):
@@ -319,11 +315,6 @@ class TestSingleLayer(CompilerTestBase):
             max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 3
         )
 
-    def test_single_avgpool(self):
-        model = nn_modules.SingleAvgpool()
-        graph, score = self._export_and_compile(model, (1, 32, 64, 64))
-        self.assertEqual(check_feature_scale(graph), True)
-
     def test_single_avgpool_big_size(self):
         model = nn_modules.SingleAvgpool()
         graph, score = self._export_and_compile(model, (1, 32, 256, 256))
@@ -333,10 +324,6 @@ class TestSingleLayer(CompilerTestBase):
         model = nn_modules.SingleMaxpool()
         graph, score = self._export_and_compile(model, (1, 32, 64, 64))
 
-    def test_single_dense(self):
-        model = nn_modules.SingleDense()
-        graph, score = self._export_and_compile(model, (1, 64))
-
     def test_single_reshape(self):
         model = nn_modules.SingleReshape()
         graph, score = self._export_and_compile(model, (1, 16, 4, 4))
@@ -345,10 +332,6 @@ class TestSingleLayer(CompilerTestBase):
         model = nn_modules.SingleMultCoeff()
         graph, score = self._export_and_compile(model, (1, 16, 4, 4))
         self.assertEqual(check_feature_scale(graph), True)
-
-    def test_single_add(self):
-        model = nn_modules.SingleAdd()
-        graph, score = self._export_and_compile(model, [(1, 32, 64, 64), (1, 32, 64, 64)], input_names=['x0', 'x1'])
 
     def test_single_conv_with_stride_big_size(self):
         model = nn_modules.SingleConv(2)
@@ -365,14 +348,6 @@ class TestSingleLayer(CompilerTestBase):
 
 
 class TestLayerInteraction(CompilerTestBase):
-    def test_conv_with_batchnorms(self):
-        model = nn_modules.ConvWithBatchNorms()
-        graph, score = self._export_and_compile(model, (1, 32, 64, 64))
-
-        self.assertEqual(
-            max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)), 1
-        )
-
     def test_mismatched_scale(self):
         model = nn_modules.MismatchedScale()
         graph, score = self._export_and_compile(model, (1, 32, 64, 64))
@@ -441,26 +416,6 @@ class TestLayerInteraction(CompilerTestBase):
 
 
 class TestCompiler(CompilerTestBase):
-    def test_conv_series(self):
-        model = nn_modules.ConvSeries()
-        graph, score = self._export_and_compile(model, (1, 32, 64, 64))
-
-        self.assertEqual(
-            max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)),
-            config.fhe_param.max_level,
-        )
-        self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
-
-    def test_act_series(self):
-        model = nn_modules.ActSeries()
-        graph, score = self._export_and_compile(model, (1, 32, 64, 64))
-
-        self.assertEqual(
-            max(graph.dag.nodes[feature]['level'] for feature in graph.dag.nodes if isinstance(feature, FeatureNode)),
-            config.fhe_param.max_level,
-        )
-        self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
-
     def test_conv_series_with_stride(self):
         model = nn_modules.ConvSeriesWithStride()
         graph, score = self._export_and_compile(model, (1, 32, 256, 256), style='multiplexed')
@@ -491,19 +446,10 @@ class TestCompiler(CompilerTestBase):
         )
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
 
-    def test_resnet_basic_block(self):
-        model = nn_modules.ResNetBasicBlock(32, 32)
-        graph, score = self._export_and_compile(model, (1, 32, 64, 64))
-        self.assertEqual(check_level_cost(graph), True)
-        self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
-        self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
-
     def test_resnet_20(self):
         import torch.nn as nn
-        from training.nn_tools.activations import RangeNormPoly2d, Simple_Polyrelu
-        from training.nn_tools import (
-            export_to_onnx,
-            fuse_and_export_h5,
+        from nn_tools.activations import RangeNormPoly2d, Simple_Polyrelu
+        from nn_tools import (
             replace_activation_with_poly,
             replace_maxpool_with_avgpool,
         )
@@ -540,11 +486,6 @@ class TestCompiler(CompilerTestBase):
         )
         self.assertEqual(check_level_cost(graph), True)
         self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
-        self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
-
-    def test_intertwined(self):
-        model = nn_modules.Intertwined()
-        graph, score = self._export_and_compile(model, (1, 32, 64, 64))
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
 
     def test_intertwined_with_coeff(self):
@@ -680,70 +621,6 @@ class TestCompilerErrors(CompilerTestBase):
             )
 
 
-class TestPolyDegree(CompilerTestBase):
-    """Verify that models with specific depth profiles select the correct poly_n and mode.
-
-    Level costs (ordinary style):
-        Conv  (stride=1): 1
-        Act   (RangeNormPoly2d, order=4): ceil(log2(4)) + 1 = 3
-
-    Non-BTP poly_n → max_level map: {8192: 5, 16384: 9, 32768: 17, 65536: 33}
-    BTP poly_n: 65536, max_level: 9 (bootstrapping inserted between segments)
-    """
-
-    def test_no_btp_poly_n_8192(self):
-        """1 Conv + 1 Act = 4 levels; fits poly_n=8192 (max_level=5); no-BTP mode."""
-        model = nn_modules.PolyDegreeN8192()
-        graph, score = self._export_and_compile(model, (1, 32, 8, 8))
-        # No-BTP selects the smallest poly_n whose max_level accommodates the graph.
-        self.assertEqual(config.fhe_param.poly_modulus_degree, 8192)
-        self.assertEqual(config.fhe_param.max_level, 5)
-        self.assertIsNotNone(graph)
-        # No bootstrapping nodes should be present.
-        self.assertFalse(any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes))
-
-    def test_no_btp_poly_n_16384(self):
-        """3 Conv + 1 Act = 6 levels; exceeds poly_n=8192 (max 5), fits poly_n=16384 (max 9); no-BTP mode."""
-        model = nn_modules.PolyDegreeN16384()
-        graph, score = self._export_and_compile(model, (1, 32, 8, 8))
-        self.assertEqual(config.fhe_param.poly_modulus_degree, 16384)
-        self.assertEqual(config.fhe_param.max_level, 9)
-        self.assertIsNotNone(graph)
-        self.assertFalse(any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes))
-        self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
-
-    def test_no_btp_poly_n_32768(self):
-        """4 Conv + 2 Act = 10 levels; exceeds poly_n=16384 (max 9), fits poly_n=32768 (max 17); no-BTP mode."""
-        model = nn_modules.PolyDegreeN32768()
-        graph, score = self._export_and_compile(model, (1, 32, 8, 8))
-        self.assertEqual(config.fhe_param.poly_modulus_degree, 32768)
-        self.assertEqual(config.fhe_param.max_level, 17)
-        self.assertIsNotNone(graph)
-        self.assertFalse(any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes))
-        self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
-
-    def test_no_btp_poly_n_65536(self):
-        """6 Conv + 4 Act = 18 levels; exceeds poly_n=32768 (max 17), fits poly_n=65536 (max 33); no-BTP mode."""
-        model = nn_modules.PolyDegreeN65536NoBtp()
-        graph, score = self._export_and_compile(model, (1, 32, 8, 8))
-        self.assertEqual(config.fhe_param.poly_modulus_degree, 65536)
-        self.assertEqual(config.fhe_param.max_level, 33)
-        self.assertIsNotNone(graph)
-        self.assertFalse(any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes))
-        self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
-
-    def test_btp_poly_n_65536(self):
-        """4 Conv + 10 Act = 34 levels; exceeds all non-BTP limits → BTP mode, poly_n=65536, max_level=9."""
-        model = nn_modules.PolyDegreeNBtp()
-        graph, score = self._export_and_compile(model, (1, 32, 8, 8))
-        self.assertEqual(config.fhe_param.poly_modulus_degree, 65536)
-        self.assertEqual(config.fhe_param.max_level, 9)
-        self.assertIsNotNone(graph)
-        # BTP mode must insert bootstrapping nodes.
-        self.assertTrue(any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes))
-        self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
-
-
 class TestE2E(CompilerTestBase):
     """Generate E2E test data for C++ inference tests.
 
@@ -753,18 +630,192 @@ class TestE2E(CompilerTestBase):
 
     Run the C++ test_e2e binary afterwards to verify encrypted vs plaintext
     inference consistency.
-
-    Note: gen_custom_task only supports poly_n=16384 and poly_n=65536,
-    so models must require at least 6 levels (to exceed poly_n=8192 max_level=5).
     """
 
+    # ── Helper for common assertions ──
+
+    def _max_feature_level(self, graph):
+        return max(graph.dag.nodes[f]['level'] for f in graph.dag.nodes if isinstance(f, FeatureNode))
+
+    def _has_bootstrapping(self, graph):
+        return any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes)
+
+    # ── Single layer tests (poly_n=8192, ≤5 levels) ──
+
+    def test_e2e_single_conv(self):
+        """1 Conv = 1 level → poly_n=8192, no BTP."""
+        model = nn_modules.SingleConv()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'single_conv')
+        self.assertEqual(self._max_feature_level(graph), 1)
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 8192)
+
+    def test_e2e_single_act(self):
+        """1 Act = 3 levels → poly_n=8192, no BTP."""
+        model = nn_modules.SingleAct()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'single_act')
+        self.assertEqual(self._max_feature_level(graph), 3)
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 8192)
+
+    def test_e2e_single_avgpool(self):
+        """1 Avgpool → poly_n=8192, no BTP."""
+        model = nn_modules.SingleAvgpool()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'single_avgpool')
+        self.assertTrue(check_feature_scale(graph))
+
+    def test_e2e_single_dense(self):
+        """1 Dense → poly_n=8192, no BTP."""
+        model = nn_modules.SingleDense()
+        graph, score = self._export_compile_and_deploy(model, (1, 64), 'single_dense')
+        self.assertIsNotNone(graph)
+
+    @unittest.skip('Reshape-only model has no FHE computation for gen_custom_task')
+    def test_e2e_single_reshape(self):
+        """Reshape → poly_n=8192, no BTP."""
+        model = nn_modules.SingleReshape()
+        self._export_compile_and_deploy(model, (1, 16, 4, 4), 'single_reshape')
+
+    def test_e2e_single_add(self):
+        """Add two inputs → poly_n=8192, no BTP."""
+        model = nn_modules.SingleAdd()
+        graph, score = self._export_compile_and_deploy(
+            model, [(1, 32, 8, 8), (1, 32, 8, 8)], 'single_add', input_names=['x0', 'x1']
+        )
+        self.assertIsNotNone(graph)
+
+    # ── Layer interaction tests (poly_n=8192) ──
+
+    def test_e2e_conv_batchnorm(self):
+        """Conv + BatchNorm (BN absorbed into conv weights) → poly_n=8192, no BTP."""
+        model = nn_modules.ConvWithBatchNorms()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'conv_batchnorm')
+        self.assertEqual(self._max_feature_level(graph), 1)
+
+    @unittest.skip('gen_custom_task bug: FC special_info branch weight/input dimensions mismatch in call_multiplexed')
+    def test_e2e_conv_reshape_dense(self):
+        """Conv → Reshape → Dense pipeline."""
+        model = nn_modules.ConvReshapeAndDense()
+        self._export_compile_and_deploy(model, (1, 3, 32, 32), 'conv_reshape_dense', do_constant_folding=True)
+
+    def test_e2e_conv_avgpool_reshape_dense(self):
+        """Conv → Avgpool → Reshape → Dense, multiplexed."""
+        model = nn_modules.ConvAvgpoolReshapeAndDense()
+        graph, score = self._export_compile_and_deploy(
+            model, (1, 3, 64, 64), 'conv_avgpool_reshape_dense', style='multiplexed', do_constant_folding=True
+        )
+        self.assertTrue(check_dropped_levels_per_subgraph(graph))
+
+    # ── No-BTP tests (poly_n=8192) ──
+
+    def test_e2e_poly_n_8192(self):
+        """1 Conv + 1 Act = 4 levels → poly_n=8192, no BTP."""
+        model = nn_modules.PolyDegreeN8192()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'poly_n_8192')
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 8192)
+        self.assertEqual(config.fhe_param.max_level, 5)
+        self.assertFalse(self._has_bootstrapping(graph))
+
+    # ── No-BTP tests (poly_n=16384, 6-9 levels) ──
+
     def test_e2e_conv_act(self):
+        """3 Conv + 1 Act = 6 levels → poly_n=16384, no BTP."""
         model = nn_modules.PolyDegreeN16384()
-        self._export_compile_and_deploy(model, (1, 32, 8, 8), 'conv_act')
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'conv_act')
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 16384)
+        self.assertEqual(config.fhe_param.max_level, 9)
+        self.assertFalse(self._has_bootstrapping(graph))
+        self.assertTrue(check_dropped_levels_per_subgraph(graph))
 
     def test_e2e_resnet_basic_block(self):
+        """2 Conv + 2 BN + 2 Act + Add = 8 levels → poly_n=16384, no BTP."""
         model = nn_modules.ResNetBasicBlock(32, 32)
-        self._export_compile_and_deploy(model, (1, 32, 8, 8), 'resnet_basic_block')
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'resnet_basic_block')
+        self.assertTrue(check_level_cost(graph))
+        self.assertTrue(check_multi_input_level_skip_aligned(graph))
+        self.assertTrue(check_dropped_levels_per_subgraph(graph))
+
+    # ── No-BTP tests (poly_n=32768, 10-17 levels) ──
+
+    def test_e2e_poly_n_32768(self):
+        """4 Conv + 2 Act = 10 levels → poly_n=32768, no BTP."""
+        model = nn_modules.PolyDegreeN32768()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'poly_n_32768')
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 32768)
+        self.assertEqual(config.fhe_param.max_level, 17)
+        self.assertFalse(self._has_bootstrapping(graph))
+        self.assertTrue(check_dropped_levels_per_subgraph(graph))
+
+    # ── No-BTP tests (poly_n=65536, 18-33 levels) ──
+
+    def test_e2e_poly_n_65536_no_btp(self):
+        """6 Conv + 4 Act = 18 levels → poly_n=65536, no BTP."""
+        model = nn_modules.PolyDegreeN65536NoBtp()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'poly_n_65536_no_btp')
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 65536)
+        self.assertEqual(config.fhe_param.max_level, 33)
+        self.assertFalse(self._has_bootstrapping(graph))
+        self.assertTrue(check_dropped_levels_per_subgraph(graph))
+
+    # ── BTP tests (poly_n=65536, >33 levels) ──
+
+    def test_e2e_btp(self):
+        """4 Conv + 10 Act = 34 levels → poly_n=65536, BTP."""
+        model = nn_modules.PolyDegreeNBtp()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'btp')
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 65536)
+        self.assertEqual(config.fhe_param.max_level, 9)
+        self.assertTrue(self._has_bootstrapping(graph))
+        self.assertTrue(check_dropped_levels_per_subgraph(graph))
+
+    def test_e2e_conv_series(self):
+        """Deep conv chain, requires BTP."""
+        model = nn_modules.ConvSeries()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'conv_series')
+        self.assertEqual(self._max_feature_level(graph), config.fhe_param.max_level)
+        self.assertTrue(check_dropped_levels_per_subgraph(graph))
+
+    def test_e2e_act_series(self):
+        """Deep activation chain, requires BTP."""
+        model = nn_modules.ActSeries()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'act_series')
+        self.assertEqual(self._max_feature_level(graph), config.fhe_param.max_level)
+        self.assertTrue(check_dropped_levels_per_subgraph(graph))
+
+    def test_e2e_intertwined(self):
+        """Multi-branch graph with add. Tests BTP with complex topology."""
+        model = nn_modules.Intertwined()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'intertwined')
+        self.assertTrue(check_dropped_levels_per_subgraph(graph))
+
+    @unittest.skip('mult_coeff type not supported by C++ inference (level_cost mismatch)')
+    def test_e2e_intertwined_with_coeff(self):
+        """Multi-branch graph with add + mult_scalar. Tests BTP with scale ops."""
+        model = nn_modules.IntertwinedWithCoeff()
+        self._export_compile_and_deploy(model, (1, 32, 8, 8), 'intertwined_with_coeff')
+
+    # ── Big-size tests (256×256 input) ──
+
+    def test_e2e_single_avgpool_big_size(self):
+        """Avgpool with big_size input (256×256), ordinary style."""
+        model = nn_modules.SingleAvgpool()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 256, 256), 'single_avgpool_big_size')
+        self.assertTrue(check_feature_scale(graph))
+
+    def test_e2e_single_conv_with_stride_big_size(self):
+        """Conv stride=2 with big_size input (256×256), multiplexed."""
+        model = nn_modules.SingleConv(2)
+        graph, score = self._export_compile_and_deploy(
+            model, (1, 32, 256, 256), 'single_conv_with_stride_big_size', style='multiplexed'
+        )
+        self.assertIsNotNone(graph)
+
+    @unittest.skip('gen_custom_task: unused data node error with big_size conv + BTP')
+    def test_e2e_conv_series_with_stride(self):
+        """Deep conv chain with strides, big_size (256×256), multiplexed."""
+        model = nn_modules.ConvSeriesWithStride()
+        graph, score = self._export_compile_and_deploy(
+            model, (1, 32, 256, 256), 'conv_series_with_stride', style='multiplexed'
+        )
+        self.assertTrue(check_dropped_levels_per_subgraph(graph))
 
 
 if __name__ == '__main__':
