@@ -22,6 +22,14 @@ import sys
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
+from inference.lattisense.frontend.custom_task import *
+from training.model_compiler.components import (
+    N16QP1546H192H32,
+    PN13QP218,
+    PN14QP438,
+    PN15QP880,
+    PN16QP1761,
+)
 
 from model_generator.layers.add_pack import *
 from model_generator.layers.avgpool2d_layer import *
@@ -46,30 +54,29 @@ def read_config(config_path):
     return config_ctx
 
 
-def set_param(n=16384):
-    if n == 16384:
-        q = [
-            0x200000008001,
-            0x400018001,
-            0x3FFFD0001,
-            0x400060001,
-            0x400068001,
-            0x3FFF90001,
-            0x400080001,
-            0x4000A8001,
-            0x400108001,
-            0x3FFEB8001,
-        ]
-        p = [0x7FFFFFD8001, 0x7FFFFFC8001]
-        param = Param.create_ckks_custom_param(n=16384, p=p, q=q)
-    elif n == 65536:
+_FHE_PARAMS = {
+    'PN13QP218': PN13QP218,
+    'PN14QP438': PN14QP438,
+    'PN15QP880': PN15QP880,
+    'PN16QP1761': PN16QP1761,
+    'N16QP1546H192H32': N16QP1546H192H32,
+}
+
+
+def set_param(param_name):
+    if param_name not in _FHE_PARAMS:
+        raise ValueError(f'Unsupported FHE parameter name: {param_name!r}')
+    fhe = _FHE_PARAMS[param_name]
+    if param_name == 'N16QP1546H192H32':
         param = CkksBtpParam.create_default_param()
+    else:
+        param = Param.create_ckks_custom_param(n=fhe.poly_modulus_degree, p=fhe.p, q=fhe.q)
     set_fhe_param(param)
 
 
-def gen_custom_task(task_path, n=16384, use_gpu=True, style='ordinary'):
-    T_SCALE = 2**6
-    set_param(n=n)
+def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordinary'):
+    n = _FHE_PARAMS[param_name].poly_modulus_degree
+    set_param(param_name)
     task_config_info = read_config(os.path.join(task_path, 'task_config.json'))
     try:
         block_shape = task_config_info['block_shape']
