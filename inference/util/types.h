@@ -35,6 +35,9 @@ using Bytes = std::vector<uint8_t>;
 
 using Duo = std::array<uint32_t, 2>;
 
+inline std::string str(const Duo& x) {
+    return "(" + std::to_string(x[0]) + ',' + std::to_string(x[1]) + ')';
+}
 inline Duo operator+(const Duo& a, const Duo& b) {
     return {a[0] + b[0], a[1] + b[1]};
 }
