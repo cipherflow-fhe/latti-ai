@@ -22,6 +22,7 @@ message(STATUS "INFERENCE_SDK_ENABLE_GPU: ${INFERENCE_SDK_ENABLE_GPU}")
 # Configure lattisense options before add_subdirectory
 set(LATTISENSE_ENABLE_GPU ${INFERENCE_SDK_ENABLE_GPU} CACHE BOOL "Enable GPU in lattisense" FORCE)
 set(LATTISENSE_BUILD_MODE "SHARED" CACHE STRING "Lattisense build mode" FORCE)
+set(LATTISENSE_BUILD_TESTS OFF CACHE BOOL "Build lattisense unit tests" FORCE)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
