@@ -19,6 +19,7 @@
 #include "upsample_layer.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 UpsampleLayer::UpsampleLayer(const CkksParameter& param_in,
                              const Duo& stride_in,
@@ -26,7 +27,7 @@ UpsampleLayer::UpsampleLayer(const CkksParameter& param_in,
                              const int& level_in,
                              const int& n_channel_in,
                              const int& n_channel_per_ct_in)
-    : param(param_in.copy()) {
+    : Layer(param_in) {
     stride[0] = stride_in[0];
     stride[1] = stride_in[1];
     level_ = level_in;
@@ -37,7 +38,7 @@ UpsampleLayer::UpsampleLayer(const CkksParameter& param_in,
 }
 
 void UpsampleLayer::prepare_data() {
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     vector<double> zero_vector;
     zero_vector.resize(ctx.get_parameter().get_n() / 2);
     zero_vector_encoded = ctx.encode(zero_vector, level_, ctx.get_parameter().get_default_scale());

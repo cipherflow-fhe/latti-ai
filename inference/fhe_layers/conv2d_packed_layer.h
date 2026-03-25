@@ -24,7 +24,7 @@
 
 class Conv2DPackedLayer : public Conv2DLayer {
 public:
-    Conv2DPackedLayer(const CkksParameter& param,
+    Conv2DPackedLayer(const ls::CkksParameter& param,
                       const Duo& input_shape,
                       const Array<double, 4>& weight,
                       const Array<double, 1>& bias,
@@ -37,24 +37,24 @@ public:
     void prepare_weight();
     void prepare_weight_lazy();
 
-    virtual Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
+    virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
 
-    std::vector<std::vector<std::vector<CkksPlaintextRingt>>> weight_pt_;
+    std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> weight_pt_;
 
-    std::vector<CkksPlaintextRingt> bias_pt_;
+    std::vector<ls::CkksPlaintextRingt> bias_pt_;
 
     // Helper functions to generate weights/bias on-demand (for lazy mode)
-    CkksPlaintextRingt generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const;
-    CkksPlaintextRingt generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const;
+    ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
+    ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
 
 private:
-    std::vector<CkksCiphertext> run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
+    std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
 
-    void mult_add(CkksContext* ctx,
-                  std::vector<std::vector<CkksCiphertext>>& rotated_x,
+    void mult_add(ls::CkksContext* ctx,
+                  std::vector<std::vector<ls::CkksCiphertext>>& rotated_x,
                   uint32_t start,
                   uint32_t end,
-                  std::vector<CkksCiphertext>& result);
+                  std::vector<ls::CkksCiphertext>& result);
 
     uint32_t n_channel_per_ct_;
 

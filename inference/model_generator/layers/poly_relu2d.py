@@ -520,7 +520,7 @@ class PolyRelu:
 
         return result
 
-    def call_bsgs(self, x: list[CkksCiphertextNode], weight_pt):
+    def call_bsgs_feature2d(self, x: list[CkksCiphertextNode], weight_pt):
         """BSGS with pre-computed weight plaintexts (eager mode)."""
         return self._run_bsgs_core(x, lambda idx, x_idx: weight_pt[idx][x_idx])
 
