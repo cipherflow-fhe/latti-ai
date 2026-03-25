@@ -49,3 +49,8 @@
 ./test_e2e "e2e_gpu" -c "depthwise_conv_s1"
 ./test_e2e "e2e_gpu" -c "depthwise_conv_s2"
 ./test_e2e "e2e_gpu" -c "mux_conv_large_channel"
+
+# --- New layer migration (refactor/linghm) ---
+./test_e2e "e2e_gpu" -c "concat_e2e"
+./test_e2e "e2e_gpu" -c "conv_upsample_e2e"
+./test_e2e "e2e_gpu" -c "avgpool_stride4"

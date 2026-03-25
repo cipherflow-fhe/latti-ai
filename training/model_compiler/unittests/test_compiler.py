@@ -967,6 +967,28 @@ class TestE2E(CompilerTestBase):
         graph, score = self._export_compile_and_deploy(model, (1, 4, 64), 'conv1d_e2e')
         self.assertIsNotNone(graph)
 
+    # ── New layer migration from refactor/linghm ──
+
+    def test_e2e_concat(self):
+        """Two conv branches concatenated. Covers concat_layer."""
+        model = nn_modules.ConcatModel()
+        graph, score = self._export_compile_and_deploy(model, (1, 3, 32, 32), 'concat_e2e')
+        self.assertIsNotNone(graph)
+
+    def test_e2e_conv_upsample(self):
+        """Conv stride=2 + nearest upsample. Covers upsample_layer / upsample_nearest_layer."""
+        model = nn_modules.ConvUpsampleE2E()
+        graph, score = self._export_compile_and_deploy(
+            model, (1, 32, 64, 64), 'conv_upsample_e2e', style='multiplexed', do_constant_folding=True
+        )
+        self.assertIsNotNone(graph)
+
+    def test_e2e_avgpool_stride4(self):
+        """Avgpool with stride=4. Covers avgpool2d_layer varied strides."""
+        model = nn_modules.AvgpoolVariedStride(stride=4)
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 32, 32), 'avgpool_stride4')
+        self.assertIsNotNone(graph)
+
 
 if __name__ == '__main__':
     unittest.main()

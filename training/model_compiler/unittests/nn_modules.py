@@ -638,3 +638,44 @@ class SingleConv1dE2E(nn.Module):
     def forward(self, x):
         x = self.conv0(x)
         return x
+
+
+class ConcatModel(nn.Module):
+    """Two conv branches concatenated. Covers concat_layer."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=3, out_channels=8, kernel_size=3, bias=False, padding=1)
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=8, kernel_size=3, bias=False, padding=1)
+
+    def forward(self, x):
+        a = self.conv0(x)
+        b = self.conv1(x)
+        return torch.cat([a, b], dim=1)
+
+
+class ConvUpsampleE2E(nn.Module):
+    """Conv with stride=2 followed by nearest upsample. Covers upsample_layer / upsample_nearest_layer."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=2)
+        self.resize = nn.Upsample(scale_factor=2, mode='nearest')
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = self.resize(x)
+        return x
+
+
+class AvgpoolVariedStride(nn.Module):
+    """Avgpool with configurable stride. Covers avgpool2d_layer varied strides."""
+
+    def __init__(self, stride=2):
+        super().__init__()
+        self.pool = nn.AvgPool2d(kernel_size=stride, stride=stride)
+
+    def forward(self, x):
+        x = self.pool(x)
+        return x
+

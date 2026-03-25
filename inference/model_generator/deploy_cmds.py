@@ -431,6 +431,18 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 )
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
+        if 'concat2d' in layer_config['type']:
+            # concat is a runtime-only operation: just merge node lists from all inputs
+            layer_output_nodes = []
+            for input_fid in layer_input_feature_ids:
+                layer_output_nodes.extend(feature_id_to_nodes_map[input_fid])
+            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+
+        if 'upsample' in layer_config['type']:
+            # upsample/upsample_nearest handled at runtime by InferenceProcess
+            layer_output_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
+            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+
         if 'avgpool' in layer_config['type']:
             input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
             stride = layer_config['stride']
