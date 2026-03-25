@@ -21,6 +21,7 @@
 #include <cmath>
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 static uint32_t next_pow2_ccmm(uint32_t x) {
     uint32_t p = 1;
@@ -35,7 +36,7 @@ ParBlockColMajorCCMM::ParBlockColMajorCCMM(const CkksParameter& param_in,
                                            uint32_t block_size,
                                            uint32_t n_heads,
                                            uint32_t level)
-    : param_(param_in.copy()) {
+    : Layer(param_in) {
     assert(shape_A[1] == shape_B[0] && "inner dimensions must match: shape_A[1] != shape_B[0]");
 
     level_ = level;

@@ -21,12 +21,13 @@
 #include <cmath>
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 BlockColMajorTranspose::BlockColMajorTranspose(const CkksParameter& param_in,
                                                const Duo& shape,
                                                uint32_t block_size,
                                                uint32_t level)
-    : param_(param_in.copy()) {
+    : Layer(param_in) {
     level_ = level;
     d_ = block_size;
 

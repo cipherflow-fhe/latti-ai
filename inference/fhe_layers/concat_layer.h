@@ -28,8 +28,8 @@
 class ConcatLayer : public Layer {
 public:
     ConcatLayer();
-    Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x1, const Feature2DEncrypted& x2);
-    Feature2DEncrypted run_multiple_inputs(CkksContext& ctx, const std::vector<Feature2DEncrypted>& inputs);
+    Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x1, const Feature2DEncrypted& x2);
+    Feature2DEncrypted run_multiple_inputs(ls::CkksContext& ctx, const std::vector<Feature2DEncrypted>& inputs);
     Array<double, 3> concatenate_channels(const Array<double, 3>& x1, const Array<double, 3>& x2);
     Array<double, 3> concatenate_channels_multiple_inputs(const std::vector<Array<double, 3>>& inputs);
 };

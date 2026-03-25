@@ -27,10 +27,10 @@ class Feature0DEncrypted : public FeatureEncrypted {
 public:
     uint32_t pack_type = 0;
     uint32_t skip = 0;
-    std::vector<CkksCiphertext> data;
-    std::vector<CkksCompressedCiphertext> data_compressed;
+    std::vector<ls::CkksCiphertext> data;
+    std::vector<ls::CkksCompressedCiphertext> data_compressed;
 
-    Feature0DEncrypted(CkksContext* context_in, int ct_level);
+    Feature0DEncrypted(ls::CkksContext* context_in, int ct_level);
     void pack(const Array<double, 1>& feature_mg,
               bool is_symmetric = false,
               double scale_in = DEFAULT_SCALE,
