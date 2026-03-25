@@ -38,7 +38,7 @@ from model_generator.layers.multiplexed_conv2d_pack_layer_depthwise import *
 from model_generator.layers.poly_relu2d import *
 from model_generator.layers.upsample_layer import *
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from training.model_compiler.components import (
     N16QP1546H192H32,
     PN13QP218,

@@ -570,3 +570,71 @@ class ConvAvgpoolReshapeAndDense(nn.Module):
         x = x.view(x.size(0), -1)
         x = self.dense0(x)
         return x
+
+
+# ── Models for E2E migration of test_fhe_layers_hetero ────────────────────────
+
+
+class MultiChannelConv(nn.Module):
+    """Conv2d with different input/output channels. Covers conv_mch_s1/s2."""
+
+    def __init__(self, in_channels=3, out_channels=16, stride=1):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels, out_channels, kernel_size=3, bias=True, padding=1, stride=stride)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
+class DepthwiseConv(nn.Module):
+    """Depthwise Conv2d (groups=in_channels). Covers dw_*ch_s*."""
+
+    def __init__(self, channels=32, stride=1):
+        super().__init__()
+        self.conv0 = nn.Conv2d(channels, channels, kernel_size=3, bias=True, padding=1, stride=stride, groups=channels)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
+class ConvReshapeTwoFC(nn.Module):
+    """Conv → Flatten → Linear → Linear. Covers fc_fc_0d."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, bias=False, padding=1, stride=2)
+        self.dense0 = nn.Linear(in_features=768, out_features=128, bias=True)
+        self.dense1 = nn.Linear(in_features=128, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = x.view(x.size(0), -1)
+        x = self.dense0(x)
+        x = self.dense1(x)
+        return x
+
+
+class MuxConvLargeChannel(nn.Module):
+    """Large-channel conv to trigger multiplexed packing. Covers mux_conv_varied_*."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, bias=True, padding=1)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
+class SingleConv1dE2E(nn.Module):
+    """Conv1d for E2E test. Covers conv1d."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv1d(in_channels=4, out_channels=4, kernel_size=3, bias=True, padding=1)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x

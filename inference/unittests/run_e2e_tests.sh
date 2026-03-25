@@ -42,3 +42,10 @@
 # --- Big-size (256x256 input) ---
 ./test_e2e "e2e_gpu" -c "single_avgpool_big_size"
 ./test_e2e "e2e_gpu" -c "single_conv_with_stride_big_size"
+
+# --- Operator migration from test_fhe_layers_hetero ---
+./test_e2e "e2e_gpu" -c "conv_mch_s1"
+./test_e2e "e2e_gpu" -c "conv_mch_s2"
+./test_e2e "e2e_gpu" -c "depthwise_conv_s1"
+./test_e2e "e2e_gpu" -c "depthwise_conv_s2"
+./test_e2e "e2e_gpu" -c "mux_conv_large_channel"
