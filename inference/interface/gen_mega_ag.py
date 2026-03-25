@@ -57,12 +57,12 @@ def main():
     task_dir = os.path.abspath(args.task_dir)
     ergs_path = os.path.join(task_dir, 'server')
 
-    # Read poly_modulus_degree from ckks_parameter.json to determine n.
+    # Read param_name from ckks_parameter.json to identify the FHE parameter set.
     ckks_param_path = os.path.join(task_dir, 'client', 'ckks_parameter.json')
     with open(ckks_param_path, 'r', encoding='utf-8') as f:
         ckks_config = json.load(f)
     first_param = next(iter(ckks_config.values()))
-    n = first_param['poly_modulus_degree']
+    param_name = first_param.get('param_name', '')
 
     # Read pack_style from task_config.json.
     task_config_path = os.path.join(task_dir, 'client', 'task_config.json')
@@ -77,7 +77,7 @@ def main():
 
     for erg_name, erg_config in server_config['server_task'].items():
         if erg_config['enable_fpga']:
-            gen_custom_task(ergs_path, use_gpu=True, n=n, style=style)
+            gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style)
 
     print(f'Done: mega_ag generated for {task_dir}.')
 
