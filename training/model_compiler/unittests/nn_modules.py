@@ -420,6 +420,21 @@ class ConvReshapeAndDense(nn.Module):
         return x
 
 
+class ConvReshapeAndTwoDense(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, bias=False, padding=1, stride=2)
+        self.dense0 = nn.Linear(in_features=768, out_features=64, bias=True)
+        self.dense1 = nn.Linear(in_features=64, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = x.view(x.size(0), -1)
+        x = self.dense0(x)
+        x = self.dense1(x)
+        return x
+
+
 # ── Poly-degree targeting modules ─────────────────────────────────────────────
 #
 # Level costs (ordinary style):

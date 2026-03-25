@@ -494,8 +494,8 @@ def gen_custom_task(task_path, n=16384, use_gpu=True, style='ordinary'):
                 dense = DensePackedLayer(
                     n_out_channel,
                     n_in_channel,
-                    virtual_shape,
-                    virtual_skip,
+                    special_shape,
+                    special_skip,
                     n_num_per_ct,
                     n_in_channel,
                     n_out_channel,
