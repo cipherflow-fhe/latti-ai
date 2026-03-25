@@ -436,6 +436,22 @@ class TestLayerInteraction(CompilerTestBase):
                     '0D -> 0D: dense output skip should equal input skip',
                 )
 
+    def test_two_dense(self):
+        """FC-FC: graph input is 0d; all feature node skips should equal 2**floor(log2(N)/2)."""
+        model = nn_modules.TwoDense()
+        graph, score = self._export_and_compile(model, (1, 64), do_constant_folding=True)
+
+        N = config.fhe_param.poly_modulus_degree
+        expected_skip = 2 ** math.floor(math.log2(N) / 2)
+
+        for node in graph.dag.nodes:
+            if isinstance(node, FeatureNode):
+                self.assertEqual(
+                    graph.dag.nodes[node]['skip'],
+                    [expected_skip],
+                    f'Feature node {node} skip should be [{expected_skip}], got {graph.dag.nodes[node]["skip"]}',
+                )
+
     def test_conv_avgpool_reshape_dense(self):
         model = nn_modules.ConvAvgpoolReshapeAndDense()
         graph, score = self._export_and_compile(model, (1, 3, 64, 64), style='multiplexed', do_constant_folding=True)

@@ -412,13 +412,17 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
     sorted_compute_nodes = [node for node in sorted_nodes if isinstance(node, ComputeNode)]
     c_node_num = len(sorted_compute_nodes)
 
+    N = config.fhe_param.poly_modulus_degree
+    leading_skip = 2 ** math.floor(math.log2(N) / 2)
+    for node in sorted_nodes:
+        if isinstance(node, FeatureNode) and graph.dag.in_degree(node) == 0 and node.dim == 0:
+            graph.dag.nodes[node]['skip'] = [leading_skip]
+
     for compute_node in sorted_compute_nodes:
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
         succ: FeatureNode = next(graph.dag.successors(compute_node))
         # init skip
-        if succ.dim == 0:
-            graph.dag.nodes[succ]['skip'] = [1]
-        else:
+        if succ.dim != 0:
             graph.dag.nodes[succ]['skip'] = [1] * succ.dim
 
         if process_special_info(graph, compute_node, preds, succ):
