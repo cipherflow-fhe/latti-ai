@@ -377,7 +377,7 @@ def gen_custom_task(task_path, n=16384, use_gpu=True, style='ordinary'):
             if config_info['feature'][layer_input_feature_ids[0]]['dim'] == 0:
                 layer_output_nodes = polyrelu.call_bsgs_feature0d(feature_id_in_nodes, weight_pt)
             else:
-                layer_output_nodes = polyrelu.call_bsgs(feature_id_in_nodes, weight_pt)
+                layer_output_nodes = polyrelu.call_bsgs_feature2d(feature_id_in_nodes, weight_pt)
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
             for i in range(len(weight_pt)):
                 input_args.append(Argument(f'poly_reluw_{layer_id}_{i}', weight_pt[i]))
