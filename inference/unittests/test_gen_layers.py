@@ -21,12 +21,16 @@ from pathlib import Path
 import torch
 from torch import nn
 
+
 script_dir = Path(__file__).resolve().parent
 project_root = script_dir.parent.parent
 base_path = project_root / 'build' / 'inference' / 'hetero'
 
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.deploy_cmds import *  # noqa: E402
+from inference.model_generator.layers.add_pack import AddLayer  # noqa: E402
+from inference.model_generator.layers.avgpool2d_layer import Avgpool2DLayer  # noqa: E402
+from inference.model_generator.layers.mult_scaler import MultScalarLayer  # noqa: E402
 from training.model_export.onnx_to_json import *  # noqa: E402
 
 
@@ -188,241 +192,79 @@ class TestLayerExport(unittest.TestCase):
                 output_instruction_path=base_path / f'CKKS_square_{s}_{s}' / f'level_{n_in_level}' / 'server',
             )
 
-    def test_conv_1ch_s1(self):
-        n_in_channel = 1
-        n_out_channel = 1
-        stride = (1, 1)
-        skip = (1, 1)
+    def test_conv2d_packed(self):
         groups = 1
+        skip = (1, 1)
         init_level = 2
 
-        input_shapes = [(4, 4), (8, 8), (16, 16), (32, 32), (64, 64)]
+        # Single-channel tests (cin=1, cout=1)
+        for stride in [(1, 1), (2, 2)]:
+            input_shapes = [(4, 4), (8, 8), (16, 16), (32, 32), (64, 64)] if stride == (1, 1) else [(32, 32), (64, 64)]
+            for input_shape in input_shapes:
+                for kernel_shape in [(1, 1), (3, 3), (5, 5)]:
+                    print(
+                        f'sub-test: stride={stride}, input_shape={input_shape}, kernel_shape={kernel_shape}, '
+                        f'cin=1, cout=1'
+                    )
+                    gen_conv_mega_ag(1, 1, input_shape, kernel_shape, stride, skip, groups, init_level)
+
+        # Multi-channel tests (various cin x cout)
+        for stride in [(1, 1), (2, 2)]:
+            for n_in_channel in [1, 3, 4, 16, 17]:
+                for n_out_channel in [1, 3, 4, 32, 33]:
+                    print(f'sub-test: stride={stride}, n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
+                    gen_conv_mega_ag(n_in_channel, n_out_channel, (32, 32), (3, 3), stride, skip, groups, init_level)
+
+    def test_conv2d_depthwise(self):
+        channels = [4, 8, 32]
+        input_shapes = [(16, 16), (32, 32)]
         kernel_shapes = [(1, 1), (3, 3), (5, 5)]
-
-        for input_shape in input_shapes:
-            for kernel_shape in kernel_shapes:
-                print(f'sub-test: input_shape={input_shape}, kernel_shape={kernel_shape}')
-                gen_conv_mega_ag(
-                    n_in_channel,
-                    n_out_channel,
-                    input_shape,
-                    kernel_shape,
-                    stride,
-                    skip,
-                    groups,
-                    init_level,
-                )
-
-    def test_conv_1ch_s2(self):
-        n_in_channel = 1
-        n_out_channel = 1
-        stride = (2, 2)
-        skip = (1, 1)
-        groups = 1
-        init_level = 2
-
-        input_shapes = [(4, 4), (8, 8), (16, 16), (32, 32), (64, 64)]
-        kernel_shapes = [(1, 1), (3, 3), (5, 5)]
-
-        for input_shape in input_shapes:
-            for kernel_shape in kernel_shapes:
-                print(f'sub-test: input_shape={input_shape}, kernel_shape={kernel_shape}')
-                gen_conv_mega_ag(
-                    n_in_channel,
-                    n_out_channel,
-                    input_shape,
-                    kernel_shape,
-                    stride,
-                    skip,
-                    groups,
-                    init_level,
-                )
-
-    def test_conv_mch_s1(self):
-        n_in_channels = [1, 3, 4, 16, 17]
-        n_out_channels = [1, 3, 4, 32, 33]
-        stride = (1, 1)
-        skip = (1, 1)
-        input_shape = (32, 32)
-        kernel_shape = (3, 3)
-        groups = 1
-        init_level = 2
-
-        for n_in_channel in n_in_channels:
-            for n_out_channel in n_out_channels:
-                print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
-                gen_conv_mega_ag(
-                    n_in_channel,
-                    n_out_channel,
-                    input_shape,
-                    kernel_shape,
-                    stride,
-                    skip,
-                    groups,
-                    init_level,
-                )
-
-    def test_conv_mch_s2(self):
-        n_in_channels = [1, 3, 4, 16, 17]
-        n_out_channels = [1, 3, 4, 32, 33]
-        stride = (2, 2)
-        skip = (1, 1)
-        input_shape = (32, 32)
-        kernel_shape = (3, 3)
-        groups = 1
-        init_level = 2
-
-        for n_in_channel in n_in_channels:
-            for n_out_channel in n_out_channels:
-                print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
-                gen_conv_mega_ag(
-                    n_in_channel,
-                    n_out_channel,
-                    input_shape,
-                    kernel_shape,
-                    stride,
-                    skip,
-                    groups,
-                    init_level,
-                )
-
-    def test_dw_32ch_s1_32x32_k3(self):
-        n_in_channel = 32
-        n_out_channel = 32
-        input_shape = (32, 32)
-        kernel_shape = (3, 3)
-        stride = (1, 1)
-        skip = (1, 1)
-        groups = 1
-        init_level = 5
-
-        gen_conv_mega_ag(
-            n_in_channel,
-            n_out_channel,
-            input_shape,
-            kernel_shape,
-            stride,
-            skip,
-            groups,
-            init_level,
-        )
-
-    def test_dw_4ch_s2_32x32_k3(self):
-        n_in_channel = 4
-        n_out_channel = 4
-        input_shape = (32, 32)
-        kernel_shape = (3, 3)
-        stride = (2, 2)
-        skip = (1, 1)
-        init_level = 5
-        groups = n_in_channel
-
-        gen_conv_mega_ag(
-            n_in_channel,
-            n_out_channel,
-            input_shape,
-            kernel_shape,
-            stride,
-            skip,
-            groups,
-            init_level,
-        )
-
-    def test_mux_conv_varied_stride(self):
-        n_in_channels = [4, 8, 32]
-        n_out_channels = [4, 8, 32]
-        input_shape = (32, 32)
-        kernel_shape = (3, 3)
         strides = [(1, 1), (2, 2)]
         skip = (1, 1)
         init_level = 5
 
-        for stride in strides:
-            for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
-                groups = 1
+        for n_channel in channels:
+            for input_shape in input_shapes:
+                for kernel_shape in kernel_shapes:
+                    for stride in strides:
+                        print(f'sub-test: ch={n_channel}, input={input_shape}, kernel={kernel_shape}, stride={stride}')
+                        gen_conv_mega_ag(
+                            n_channel,
+                            n_channel,
+                            input_shape,
+                            kernel_shape,
+                            stride,
+                            skip,
+                            n_channel,  # groups = n_channel for depthwise
+                            init_level,
+                        )
 
-                print(f'sub-test: stride={stride}, n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
+    def test_mux_conv2d_packed(self):
+        skip = (1, 1)
+        init_level = 5
+
+        # Varied stride tests (cin=cout only)
+        for stride in [(1, 1), (2, 2)]:
+            for n_channel in [4, 8, 32]:
+                print(f'sub-test: varied_stride stride={stride}, ch={n_channel}')
+                gen_conv_mega_ag(n_channel, n_channel, (32, 32), (3, 3), stride, skip, 1, init_level, 'multiplexed')
+
+        # Varied input shape tests
+        for input_shape in [(4, 4), (8, 8), (16, 16), (32, 32), (64, 64)]:
+            print(f'sub-test: varied_input_shape input={input_shape}')
+            gen_conv_mega_ag(32, 32, input_shape, (3, 3), (1, 1), skip, 1, init_level, 'multiplexed')
+
+        # Varied kernel shape tests
+        for kernel_shape in [(1, 1), (3, 3), (5, 5)]:
+            print(f'sub-test: varied_kernel kernel={kernel_shape}')
+            gen_conv_mega_ag(32, 32, (32, 32), kernel_shape, (1, 1), skip, 1, init_level, 'multiplexed')
+
+        # Varied channels tests
+        for n_in_channel in [1, 3, 4, 16, 17]:
+            for n_out_channel in [1, 3, 4, 32, 33]:
+                print(f'sub-test: varied_channels cin={n_in_channel}, cout={n_out_channel}')
                 gen_conv_mega_ag(
-                    n_in_channel,
-                    n_out_channel,
-                    input_shape,
-                    kernel_shape,
-                    stride,
-                    skip,
-                    groups,
-                    init_level,
-                    'multiplexed',
-                )
-
-    def test_mux_conv_varied_input_shape(self):
-        n_in_channel = 32
-        n_out_channel = 32
-        input_shapes = [(2, 2), (4, 4), (8, 8), (16, 16), (32, 32), (64, 64)]
-        kernel_shape = (3, 3)
-        stride = (1, 1)
-        skip = (1, 1)
-        init_level = 5
-
-        for input_shape in input_shapes:
-            print(f'sub-test: input_shape={input_shape}')
-            gen_conv_mega_ag(
-                n_in_channel,
-                n_out_channel,
-                input_shape,
-                kernel_shape,
-                stride,
-                skip,
-                1,
-                init_level,
-                'multiplexed',
-            )
-
-    def test_mux_conv_varied_kernel_shape(self):
-        n_in_channel = 32
-        n_out_channel = 32
-        input_shape = (32, 32)
-        kernel_shapes = [(1, 1), (3, 3), (5, 5)]
-        stride = (1, 1)
-        skip = (1, 1)
-        init_level = 5
-
-        for kernel_shape in kernel_shapes:
-            print(f'sub-test: kernel_shape={kernel_shape}')
-            gen_conv_mega_ag(
-                n_in_channel,
-                n_out_channel,
-                input_shape,
-                kernel_shape,
-                stride,
-                skip,
-                1,
-                init_level,
-                'multiplexed',
-            )
-
-    def test_mux_conv_varied_input_channels_and_output_channels(self):
-        n_in_channels = [1, 3, 4, 16, 17]
-        n_out_channels = [1, 3, 4, 32, 33]
-        stride = (1, 1)
-        skip = (1, 1)
-        input_shape = (32, 32)
-        kernel_shape = (3, 3)
-        groups = 1
-        init_level = 5
-
-        for n_in_channel in n_in_channels:
-            for n_out_channel in n_out_channels:
-                print(f'sub-test: n_in_channel={n_in_channel}, n_out_channel={n_out_channel}')
-                gen_conv_mega_ag(
-                    n_in_channel,
-                    n_out_channel,
-                    input_shape,
-                    kernel_shape,
-                    stride,
-                    skip,
-                    groups,
-                    init_level,
-                    'multiplexed',
+                    n_in_channel, n_out_channel, (32, 32), (3, 3), (1, 1), skip, 1, init_level, 'multiplexed'
                 )
 
     def test_mux_dw_s2_64x64_k3(self):
@@ -503,7 +345,7 @@ class TestLayerExport(unittest.TestCase):
                             ]
                             bias_pt = [CkksPlaintextRingtNode(f'convb__conv1_{i}') for i in range(n_out_channel)]
 
-                            big_conv = InverseMultiplexedConv2d(
+                            big_conv = InverseMultiplexedConv2DLayer(
                                 n_out_channel,
                                 n_in_channel,
                                 input_shape,
@@ -568,7 +410,7 @@ class TestLayerExport(unittest.TestCase):
                         f'cin={n_in_channel}, cout={n_out_channel}'
                     )
 
-                    big_conv = InverseMultiplexedConv2d(
+                    big_conv = InverseMultiplexedConv2DLayer(
                         n_out_channel,
                         n_in_channel,
                         input_shape,
@@ -800,57 +642,6 @@ class TestLayerExport(unittest.TestCase):
             / f'level_{init_level}'
             / 'server',
         )
-
-    def test_dense_mult_pack_feature2d(self):
-        N = 16384
-        set_param(n=N)
-        level = 6
-        w_shapes = [10, 64]
-        shapes = [8]
-        virtual_skip = [4, 4]
-
-        for s in shapes:
-            print(f'sub-test: s={s}')
-            n_in_channel = w_shapes[1]
-            n_out_channel = w_shapes[0]
-            virtual_shape = [s, s]
-            input_shape_ct = [s * virtual_skip[0], s * virtual_skip[1]]
-            n_num_per_ct = int(np.ceil(8192 / (input_shape_ct[0] * input_shape_ct[1])))
-            n_packed_out_feature_for_mult_apck = int(np.ceil(n_out_channel / n_num_per_ct))
-            n_block_input = int(np.ceil(n_in_channel * s * s / (N / 2))) * n_num_per_ct
-            input_ct = [
-                CkksCiphertextNode(f'input_ct_{i}', level) for i in range(int(np.ceil(w_shapes[1] * s * s / 8192)))
-            ]
-            weight_pt = [
-                [CkksPlaintextRingtNode(f'weight_pt_{i}_{j}') for j in range(n_block_input)]
-                for i in range(n_packed_out_feature_for_mult_apck)
-            ]
-            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_feature_for_mult_apck)]
-
-            dense = DensePackedLayer(
-                n_out_channel,
-                n_in_channel,
-                virtual_shape,
-                virtual_skip,
-                n_num_per_ct,
-                n_in_channel,
-                n_out_channel,
-            )
-            output_ct = dense.call_multiplexed(input_ct, weight_pt, bias_pt, n=N)
-
-            input_args = list()
-            input_args.append(Argument('input_node', input_ct))
-            input_args.append(Argument(f'weight_pt', weight_pt))
-            input_args.append(Argument(f'bias_pt', bias_pt))
-
-            process_custom_task(
-                input_args=input_args,
-                output_args=[Argument('output_ct', output_ct)],
-                output_instruction_path=base_path
-                / f'CKKS_fc_prepare_weight_pack_cyclic_{s}_{s}_mult_apck'
-                / f'level_{level}'
-                / 'server',
-            )
 
     def test_fc_multiplexed_feature2d(self):
         N = 16384
@@ -1130,6 +921,96 @@ class TestLayerExport(unittest.TestCase):
                             / f'level_{init_level}'
                             / 'server',
                         )
+
+    def test_add_layer(self):
+        N = 16384
+        set_param(n=N)
+        level = 2
+        skip = (1, 1)
+        shapes = [16, 32]
+        channels = [4, 32]
+        for n_channel in channels:
+            for s in shapes:
+                print(f'sub-test: n_channel={n_channel}, s={s}')
+                n_ct = int(np.ceil(n_channel / (N / 2 / (s * s))))
+                input_ct1 = [CkksCiphertextNode(f'input_ct1_{i}', level) for i in range(n_ct)]
+                input_ct2 = [CkksCiphertextNode(f'input_ct2_{i}', level) for i in range(n_ct)]
+                add_layer = AddLayer()
+                output_ct = add_layer.call(input_ct1, input_ct2)
+                input_args = list()
+                input_args.append(Argument('input_node1', input_ct1))
+                input_args.append(Argument('input_node2', input_ct2))
+                process_custom_task(
+                    input_args=input_args,
+                    output_args=[Argument('output_ct', output_ct)],
+                    output_instruction_path=base_path
+                    / f'CKKS_add_layer/ch_{n_channel}_shape_{s}_{s}'
+                    / f'level_{level}'
+                    / 'server',
+                )
+
+    def test_avgpool2d_layer(self):
+        N = 16384
+        set_param(n=N)
+        level = 3
+        skip = (1, 1)
+        shapes = [8, 16, 32, 64]
+        channels = [4, 10, 15, 32, 37]
+        strides = [(2, 2), (4, 4), (8, 8)]
+        for stride in strides:
+            for n_channel in channels:
+                for s in shapes:
+                    if s < stride[0]:
+                        continue  # shape must be >= stride
+                    print(f'sub-test: stride={stride[0]}, n_channel={n_channel}, s={s}')
+                    n_channel_per_ct = int(np.ceil(N / 2 / (s * s)))
+                    n_ct = int(np.ceil(n_channel / n_channel_per_ct))
+                    input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+                    out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
+                    n_select_pt = min(n_channel, out_channels_per_ct)
+                    select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
+                    avgpool = Avgpool2DLayer(stride=list(stride), shape=[s, s], channel=n_channel, skip=[1, 1])
+                    output_ct = avgpool.call_multiplexed_avgpool(
+                        input_ct, select_tensor_pt, n_channel, n_channel_per_ct
+                    )
+                    input_args = list()
+                    input_args.append(Argument('input_node', input_ct))
+                    input_args.append(Argument('select_tensor_pt', select_tensor_pt))
+                    process_custom_task(
+                        input_args=input_args,
+                        output_args=[Argument('output_ct', output_ct)],
+                        output_instruction_path=base_path
+                        / f'CKKS_avgpool2d/stride_{stride[0]}_{stride[1]}'
+                        / f'ch_{n_channel}_shape_{s}_{s}'
+                        / f'level_{level}'
+                        / 'server',
+                    )
+
+    def test_mult_scalar_layer(self):
+        N = 16384
+        set_param(n=N)
+        level = 3
+        skip = (1, 1)
+        s = 32
+        n_channel = 32
+        print(f'sub-test: n_channel={n_channel}, s={s}')
+        n_channel_per_ct = int(np.ceil(N / 2 / (s * s)))
+        n_ct = int(np.ceil(n_channel / n_channel_per_ct))
+        input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+        weight_pt = [CkksPlaintextRingtNode(f'weight_pt_{i}') for i in range(n_ct)]
+        mult_layer = MultScalarLayer()
+        output_ct = mult_layer.call(input_ct, weight_pt)
+        input_args = list()
+        input_args.append(Argument('input_node', input_ct))
+        input_args.append(Argument('weight_pt', weight_pt))
+        process_custom_task(
+            input_args=input_args,
+            output_args=[Argument('output_ct', output_ct)],
+            output_instruction_path=base_path
+            / f'CKKS_mult_scalar/ch_{n_channel}_shape_{s}_{s}'
+            / f'level_{level}'
+            / 'server',
+        )
 
 
 if __name__ == '__main__':
