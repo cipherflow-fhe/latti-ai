@@ -162,6 +162,55 @@ def replace_maxpool_with_avgpool(model: nn.Module) -> nn.Module:
     return model
 
 
+def prepare_for_fhe(
+    model: nn.Module,
+    poly_module=RangeNormPoly2d,
+    upper_bound: float = 3.0,
+    degree: int = 4,
+    input_size: tuple = None,
+) -> nn.Module:
+    """Convert a standard PyTorch model to be FHE-compatible.
+
+    Performs two in-place replacements:
+
+    1. ``nn.MaxPool2d`` → ``nn.AvgPool2d``
+    2. ``nn.ReLU`` → *poly_module* (default ``RangeNormPoly2d``)
+
+    When *input_size* is provided, a dummy forward pass is run to trigger
+    lazy initialization of ``RangeNormPoly2d`` buffers (required before
+    ONNX export).
+
+    Args:
+        model:       PyTorch model (modified in-place).
+        poly_module: Polynomial activation constructor (default ``RangeNormPoly2d``).
+        upper_bound: Normalization upper bound for the polynomial activation.
+        degree:      Polynomial degree.
+        input_size:  Input tensor shape (e.g. ``(1, 3, 32, 32)``).
+                     If provided, runs a dummy forward pass after replacement.
+
+    Returns:
+        The same model with activations and pooling layers replaced.
+
+    Example::
+
+        >>> model = resnet20()
+        >>> prepare_for_fhe(model, input_size=(1, 3, 32, 32))
+    """
+    import torch
+
+    replace_maxpool_with_avgpool(model)
+    replace_activation_with_poly(model, new_module_factory=poly_module, upper_bound=upper_bound, degree=degree)
+
+    if input_size is not None:
+        has_lazy = any(isinstance(m, RangeNormPoly2d) and m.rangenorm.running_max is None for m in model.modules())
+        if has_lazy:
+            model.eval()
+            with torch.no_grad():
+                model(torch.randn(*input_size))
+
+    return model
+
+
 def count_activations(module: nn.Module, activation_cls: Type[nn.Module] = nn.ReLU) -> int:
     """Count the number of *activation_cls* instances in *module*.
 
