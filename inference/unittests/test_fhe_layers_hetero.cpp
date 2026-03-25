@@ -1495,7 +1495,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc", "", HeteroProcessors) {
     vector<CxxVectorArgument> cxx_args;
     for (const auto& name : arg_names) {
         if (name == "input_node")
-            cxx_args.push_back({name, &input_0d.data});
+            cxx_args.push_back({name, &input_feature.data});
         else if (name == "weight_pt0")
             cxx_args.push_back({name, &dense0.weight_pt});
         else if (name == "bias_pt0")
