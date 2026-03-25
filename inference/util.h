@@ -17,31 +17,53 @@
  */
 
 #pragma once
+#include <array>
+#include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
 #include <vector>
-#include <array>
+
+#include "util/array_io.h"
+#include "util/numeric.h"
+#include "util/ndarray.h"
+#include "util/serial.h"
+#include "util/timer.h"
+#include "util/types.h"
+
 #include "lattisense/lib/nlohmann/json.hpp"
-#include "common.h"
 
 using json = nlohmann::ordered_json;
 
-struct SplitInfo {
-    Array4D result;
-    std::vector<std::vector<int>> patch_x_start_end;
-    std::vector<std::vector<int>> patch_y_start_end;
-};
+#define th_nums 16
 
-extern double total_num;
-extern double mpc_num;
-extern double mpc_fpga_num;
+const int SIGMA = 32;
+const int ENC_TO_SHARE_SCALE_BIT = 31;
+const double ENC_TO_SHARE_SCALE = pow(2, ENC_TO_SHARE_SCALE_BIT);
+
+const int DEFAULT_SCALE_BIT = 34;
+const double DEFAULT_SCALE = pow(2, DEFAULT_SCALE_BIT);
+
+const int RING_MOD_BIT = 44;
+const uint64_t RING_MOD = 1UL << RING_MOD_BIT;
+
+const Duo BLOCK_SHAPE = {64, 64};
+
+inline uint64_t gen_random_uint(int n_bit) {
+    uint64_t result = 0;
+    for (int i = 0; i < n_bit; i++) {
+        result = result * 2 + (random() % 2 == 0 ? 0 : 1);
+    }
+    return result;
+}
 
 json read_json(std::string filename);
 
-uint64_t mod_sub(uint64_t x, uint64_t y, uint64_t mod, bool is_print = false);
+uint64_t mod_sub(uint64_t x, uint64_t y, uint64_t mod);
 
 void vec_to_share(Array1D& vec, Array1DUint& share1, Array1DUint& share2, int scale_ord, uint64_t ring_mod);
 
@@ -57,15 +79,6 @@ inline Array1D L2_normal(const Array1D& x) {
     }
     return res;
 };
-
-inline bool f_equal(double a, double b) {
-    const double eps = 1e-8;
-    if (fabs(b) < eps) {
-        return fabs(a - b) < eps;
-    } else {
-        return fabs((a - b) / b) < eps;
-    }
-}
 
 uint64_t double_to_uint64(double input, double scale, uint64_t ring_mod);
 
@@ -83,9 +96,5 @@ Array<uint64_t, dim> array_double_to_uint64(const Array<double, dim>& x, int sca
 }
 
 Array<double, 4> transpose_weight(const Array<double, 4>& weight);
-
-void print_array(const Array<double, 3>& arr, std::ostream& out = std::cout);
-
-void print_array_to_file(const Array<double, 3>& arr, const std::string& filename, bool append = true);
 
 Array<double, 3> upsample_with_zero(const Array<double, 3>& x, const Duo& stride);

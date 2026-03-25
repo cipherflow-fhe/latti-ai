@@ -18,7 +18,6 @@
 
 #include "multiplexed_conv1d_pack_layer.h"
 #include "conv2d_layer.h"
-#include "../common.h"
 #include "util.h"
 #include <cmath>
 

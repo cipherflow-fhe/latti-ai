@@ -31,6 +31,7 @@
 #include "interface/inference_server.h"
 
 using namespace std;
+using namespace fhe_ops_lib;
 
 int main(int argc, char* argv[]) {
     string task_dir;
