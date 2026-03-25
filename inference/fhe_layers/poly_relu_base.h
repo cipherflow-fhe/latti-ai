@@ -33,24 +33,23 @@ struct PowerInfo {
 
 class PolyReluBase : public Layer {
 public:
-    PolyReluBase(const CkksParameter& param_in,
+    PolyReluBase(const ls::CkksParameter& param_in,
                  const Array<double, 2>& weight_in,
                  uint32_t n_channel_per_ct_in,
                  uint32_t level_in,
                  int order_in);
 
-    CkksParameter param;
     Array<double, 2> weight;
     uint32_t n_channel_per_ct;
     int order;
-    vector<vector<CkksPlaintextRingt>> weight_pt;
+    std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt;
 
     int baby_steps = 0;
     int bsgs_giant_steps = 0;
 
     static int compute_bsgs_level_cost(int order);
 
-    virtual CkksPlaintextRingt generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int ct_idx) const = 0;
+    virtual ls::CkksPlaintextRingt generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int ct_idx) const = 0;
 
 protected:
     int N;
@@ -65,7 +64,7 @@ protected:
     void determine_required_powers_bsgs();
     void compute_coefficient_scales_bsgs(std::map<int, double>& coeff_scale, std::map<int, int>& level_order);
 
-    std::vector<CkksCiphertext> run_core_bsgs(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
+    std::vector<ls::CkksCiphertext> run_core_bsgs(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
 
     std::vector<double> modulus;
     std::map<int, PowerInfo> powers;
@@ -84,7 +83,7 @@ public:
     // This matches both encoding cases:
     //   Case 1 (Feature0DEncrypted::pack): n_channel_per_ct = N/2 / skip
     //   Case 2 (ReshapeLayer):             n_channel_per_ct = N/2 / (shape[0]*skip2d[0]*shape[1]*skip2d[1])
-    PolyRelu0D(const CkksParameter& param_in,
+    PolyRelu0D(const ls::CkksParameter& param_in,
                const Array<double, 2>& weight_in,
                uint32_t level_in,
                int order_in,
@@ -100,9 +99,9 @@ public:
     void prepare_weight_2d_multiplexed(const Duo& input_shape_in, const Duo& skip_in);
     void prepare_weight_2d_multiplexed_lazy(const Duo& input_shape_in, const Duo& skip_in);
 
-    CkksPlaintextRingt generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int ct_idx) const override;
+    ls::CkksPlaintextRingt generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int ct_idx) const override;
 
-    Feature0DEncrypted run(CkksContext& ctx, const Feature0DEncrypted& x);
+    Feature0DEncrypted run(ls::CkksContext& ctx, const Feature0DEncrypted& x);
     Array<double, 1> run_plaintext(const Array<double, 1>& x);
 
     int ciphertext_skip;
@@ -110,10 +109,10 @@ public:
 
 private:
     // Helper for Mode 1 lazy generation
-    CkksPlaintextRingt generate_weight_pt_skip0d(CkksContext& ctx, int idx, int ct_idx) const;
+    ls::CkksPlaintextRingt generate_weight_pt_skip0d(ls::CkksContext& ctx, int idx, int ct_idx) const;
 
     // Helper for Mode 2 lazy generation
-    CkksPlaintextRingt generate_weight_pt_multiplexed(CkksContext& ctx, int idx, int ct_idx) const;
+    ls::CkksPlaintextRingt generate_weight_pt_multiplexed(ls::CkksContext& ctx, int idx, int ct_idx) const;
 
     // Cached values for Mode 2 (multiplexed)
     Duo special_input_shape = {0, 0};  // [H, W]

@@ -28,19 +28,19 @@
 class Avgpool2DLayer : public Layer {
 public:
     Avgpool2DLayer(const Duo& shape_in, const Duo& stride_in);
-    Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
-    Feature2DEncrypted run_adaptive_avgpool(CkksContext& ctx, const Feature2DEncrypted& x);
+    Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
+    Feature2DEncrypted run_adaptive_avgpool(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     Array<double, 3> plaintext_call(const Array<double, 3>& x);
     Array<double, 3> plaintext_call_multiplexed(const Array<double, 3>& x);
-    vector<double> select_tensor(int num);
-    void prepare_weight(const CkksParameter& param_in,
+    std::vector<double> select_tensor(int num);
+    void prepare_weight(const ls::CkksParameter& param_in,
                         int n_channel_per_ct,
                         int level,
                         const Duo& skip_in,
                         const Duo& shape_in);
-    Feature2DEncrypted run_multiplexed_avgpool(CkksContext& ctx, const Feature2DEncrypted& x);
-    Feature2DEncrypted run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x, const Duo block_expansion);
-    std::vector<CkksPlaintextRingt> select_tensor_pt;
+    Feature2DEncrypted run_multiplexed_avgpool(ls::CkksContext& ctx, const Feature2DEncrypted& x);
+    Feature2DEncrypted run_split_avgpool(ls::CkksContext& ctx, const Feature2DEncrypted& x, const Duo block_expansion);
+    std::vector<ls::CkksPlaintextRingt> select_tensor_pt;
     Duo shape;
     Duo stride;
     Duo skip;

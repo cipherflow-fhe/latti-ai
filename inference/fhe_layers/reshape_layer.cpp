@@ -20,8 +20,9 @@
 #include "util.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
-ReshapeLayer::ReshapeLayer(const CkksParameter& param_in) : param(param_in.copy()) {}
+ReshapeLayer::ReshapeLayer(const CkksParameter& param_in) : Layer(param_in) {}
 
 Feature0DEncrypted ReshapeLayer::call(CkksContext& ctx, const Feature2DEncrypted& x) {
     Feature0DEncrypted result(&ctx, x.level);
@@ -32,6 +33,6 @@ Feature0DEncrypted ReshapeLayer::call(CkksContext& ctx, const Feature2DEncrypted
     result.skip = (x.shape[0] * x.skip[0]) * (x.shape[1] * x.skip[1]);
     result.level = x.level;
     result.n_channel = x.n_channel;
-    result.n_channel_per_ct = div_ceil(param.get_n() / 2, (x.shape[0] * x.skip[0]) * (x.shape[1] * x.skip[1]));
+    result.n_channel_per_ct = div_ceil(param_.get_n() / 2, (x.shape[0] * x.skip[0]) * (x.shape[1] * x.skip[1]));
     return result;
 }

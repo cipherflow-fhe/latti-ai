@@ -28,8 +28,6 @@
 #include "data_structs/feature.h"
 #include "util.h"
 
-using namespace cxx_sdk_v2;
-
 /// Result of decrypting an encrypted inference output.
 struct DecryptedOutput {
     std::vector<double> output;
@@ -102,11 +100,11 @@ private:
     nlohmann::ordered_json task_config_;
     std::map<std::string, InputParam> input_params_;
 
-    std::unique_ptr<CkksParameter> ckks_param_;
-    std::unique_ptr<CkksBtpParameter> btp_param_;
-    CkksContext* context_ptr_ = nullptr;
-    std::unique_ptr<CkksContext> ckks_context_;
-    std::unique_ptr<CkksBtpContext> btp_context_;
+    std::unique_ptr<ls::CkksParameter> ckks_param_;
+    std::unique_ptr<ls::CkksBtpParameter> btp_param_;
+    ls::CkksContext* context_ptr_ = nullptr;
+    std::unique_ptr<ls::CkksContext> ckks_context_;
+    std::unique_ptr<ls::CkksBtpContext> btp_context_;
 
     void read_configuration();
     void create_crypto_context();

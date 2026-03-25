@@ -23,6 +23,7 @@
 #include <cmath>
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 ParMultiplexedConv1DPackedLayer::ParMultiplexedConv1DPackedLayer(const CkksParameter& param_in,
                                                                  uint32_t input_shape_in,
@@ -33,14 +34,14 @@ ParMultiplexedConv1DPackedLayer::ParMultiplexedConv1DPackedLayer(const CkksParam
                                                                  uint32_t n_channel_per_ct_in,
                                                                  uint32_t level_in,
                                                                  double residual_scale)
-    : param(param_in.copy()), weight(weight_in.copy()), bias(bias_in.copy()) {
+    : Layer(param_in), weight(weight_in.copy()), bias(bias_in.copy()) {
     input_shape = input_shape_in;
     skip = skip_in;
     stride = stride_in;
     n_channel_per_ct = n_channel_per_ct_in;
     level_ = level_in;
 
-    weight_scale = param.get_q(level_) * residual_scale;
+    weight_scale = param_.get_q(level_) * residual_scale;
     n_channel_out = weight.get_shape()[0];
     n_channel_in = weight.get_shape()[1];
     kernel_shape = weight.get_shape()[2];
@@ -81,7 +82,7 @@ CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_weight_pt_for_indic
     int base_channel_in = packed_in_idx * n_channel_per_ct;
 
     const auto& mask = kernel_masks_[kernel_idx];
-    vector<double> w(param.get_n() / 2, 0.0);
+    vector<double> w(param_.get_n() / 2, 0.0);
 
     for (int linear_idx = 0; linear_idx < n_block_per_ct * (int)input_block_size; linear_idx++) {
         int t = linear_idx / (int)input_block_size;
@@ -104,7 +105,7 @@ CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_bias_pt_for_index(C
     bool needs_rearrange = (skip > 1 || stride > 1);
     int n_block_per_ct = div_ceil(n_channel_per_ct, skip);
     uint32_t input_block_size = cached_input_block_size;
-    vector<double> bias_data(param.get_n() / 2, 0.0);
+    vector<double> bias_data(param_.get_n() / 2, 0.0);
 
     if (!needs_rearrange) {
         // Simple case: idx = wg (weight group index)
@@ -138,7 +139,7 @@ CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_bias_pt_for_index(C
 
 CkksPlaintext ParMultiplexedConv1DPackedLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int t) const {
     uint32_t input_block_size = cached_input_block_size;
-    vector<double> mask(param.get_n() / 2, 0.0);
+    vector<double> mask(param_.get_n() / 2, 0.0);
     for (int out_idx = 0; out_idx < (int)(input_shape / stride); out_idx++) {
         int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip;
         mask[slot_idx] = 1.0;
@@ -167,7 +168,7 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
         }
     }
 
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
 
     int n_block_per_ct = div_ceil(n_channel_per_ct, skip);
     uint32_t n_weight_pt = div_ceil(n_channel_out, n_block_per_ct);
@@ -185,7 +186,7 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
                 int w_idx = packed_in_idx * n_block_per_ct + block_idx;
                 weight_pt[out_ch][w_idx].resize(kernel_shape);
                 for (int kernel_idx = 0; kernel_idx < (int)kernel_shape; kernel_idx++) {
-                    vector<double> w(param.get_n() / 2, 0.0);
+                    vector<double> w(param_.get_n() / 2, 0.0);
 
                     for (int linear_idx = 0; linear_idx < n_block_per_ct * input_block_size; linear_idx++) {
                         int t = linear_idx / input_block_size;
@@ -213,7 +214,7 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
     if (!needs_rearrange) {
         bias_pt.resize(n_weight_pt);
         for (int wg = 0; wg < (int)n_weight_pt; wg++) {
-            vector<double> bias_data(param.get_n() / 2, 0.0);
+            vector<double> bias_data(param_.get_n() / 2, 0.0);
             for (int t = 0; t < n_block_per_ct; t++) {
                 int out_ch_idx = wg * n_block_per_ct + t;
                 if (out_ch_idx < (int)n_channel_out) {
@@ -231,7 +232,7 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
 
         bias_pt.resize(n_packed_out);
         for (int po = 0; po < (int)n_packed_out; po++) {
-            vector<double> bias_data(param.get_n() / 2, 0.0);
+            vector<double> bias_data(param_.get_n() / 2, 0.0);
             for (int ch_local = 0; ch_local < (int)n_channel_per_ct; ch_local++) {
                 int out_ch = po * n_channel_per_ct + ch_local;
                 if (out_ch < (int)n_channel_out) {
@@ -248,7 +249,7 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
 
         block_select_pt.resize(n_block_per_ct);
         for (int t = 0; t < n_block_per_ct; t++) {
-            vector<double> mask(param.get_n() / 2, 0.0);
+            vector<double> mask(param_.get_n() / 2, 0.0);
             for (int out_idx = 0; out_idx < (int)(input_shape / stride); out_idx++) {
                 int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip;
                 mask[slot_idx] = 1.0;

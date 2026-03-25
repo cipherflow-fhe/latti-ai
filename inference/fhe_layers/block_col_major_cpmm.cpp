@@ -21,6 +21,7 @@
 #include <cmath>
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 BlockColMajorCPMM::BlockColMajorCPMM(const CkksParameter& param_in,
                                      const Duo& shape_A,
@@ -28,7 +29,7 @@ BlockColMajorCPMM::BlockColMajorCPMM(const CkksParameter& param_in,
                                      const Array<double, 2>& B_mat_in,
                                      uint32_t block_size,
                                      uint32_t level_A)
-    : param_(param_in.copy()), B_mat_(B_mat_in.copy()) {
+    : Layer(param_in), B_mat_(B_mat_in.copy()) {
     assert(shape_A[1] == shape_B[0] && "inner dimensions must match: shape_A[1] != shape_B[0]");
 
     level_ = level_A;

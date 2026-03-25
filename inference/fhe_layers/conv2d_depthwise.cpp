@@ -30,6 +30,9 @@
 #include "conv2d_depthwise.h"
 #include "util.h"
 
+using namespace std;
+using namespace cxx_sdk_v2;
+
 Conv2DPackedDepthwiseLayer::Conv2DPackedDepthwiseLayer(const CkksParameter& param,
                                                        const Duo& input_shape,
                                                        const Array<double, 4>& weight,
@@ -83,10 +86,6 @@ void Conv2DPackedDepthwiseLayer::prepare_weight() {
     input_rotate_units_.clear();
     input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
     input_rotate_units_.push_back(skip_[0] * 1);
-
-    input_rotate_ranges_.clear();
-    input_rotate_ranges_.push_back(padding[1]);
-    input_rotate_ranges_.push_back(padding[0]);
 
     weight_pt_.clear();
     bias_pt_.clear();
