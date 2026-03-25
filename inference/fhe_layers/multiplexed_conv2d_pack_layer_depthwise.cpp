@@ -18,7 +18,7 @@
 
 #include <math.h>
 #include "conv2d_layer.h"
-#include "../common.h"
+#include "../util.h"
 #include "multiplexed_conv2d_pack_layer.h"
 #include "multiplexed_conv2d_pack_layer_depthwise.h"
 
