@@ -33,13 +33,9 @@ class AddLayer:
         self,
         x1: list[DataNode],
         x2: list[DataNode],
-        scale1: int,
-        scale2: int,
-        pt_scale1: DataNode = None,
-        pt_scale2: DataNode = None,
     ):
         result: list[DataNode] = list()
-        if scale1 == 1.0 and scale2 == 1.0:
+        for i in range(len(x1)):
             res = add(x1[i], x2[i])
             result.append(res)
         return result

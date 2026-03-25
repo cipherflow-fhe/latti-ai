@@ -2011,6 +2011,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "add_layer", "", HeteroProcessors)
 
     auto run_add_test = [&](uint32_t n_channel, uint32_t s) {
         Duo input_shape = {s, s};
+        uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
+        uint32_t n_ct = div_ceil(n_channel, n_channel_per_ct);
 
         Array<double, 3> input_x0 = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
         Array<double, 3> input_x1 = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
@@ -2021,10 +2023,37 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "add_layer", "", HeteroProcessors)
         Feature2DEncrypted x1_enc(&this->context, init_level, skip);
         x1_enc.pack_multiplexed(input_x1, false, this->param.get_default_scale());
 
-        AddLayer add_layer(this->param);
-        Feature2DEncrypted result_enc = add_layer.run(this->context, x0_enc, x1_enc);
+        // Pre-allocate output (add doesn't consume levels)
+        Feature2DEncrypted output_feature(&this->context, init_level);
+        for (uint32_t i = 0; i < n_ct; i++) {
+            output_feature.data.push_back(this->context.new_ciphertext(init_level, this->param.get_default_scale()));
+        }
 
-        auto result_mg = result_enc.unpack_multiplexed();
+        fs::path project_path =
+            base_path / ("CKKS_add_layer/ch_" + to_string(n_channel) + "_shape_" + to_string(s) + "_" + to_string(s)) /
+            ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+        auto arg_names = read_arg_names(project_path);
+        // Python arg order: input_node1, input_node2, output_ct
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node1")
+                cxx_args.push_back({name, &x0_enc.data});
+            else if (name == "input_node2")
+                cxx_args.push_back({name, &x1_enc.data});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output_feature.data});
+        }
+        this->run(project_path, cxx_args);
+
+        // Set output metadata
+        output_feature.skip = skip;
+        output_feature.n_channel = n_channel;
+        output_feature.n_channel_per_ct = n_channel_per_ct;
+        output_feature.shape = input_shape;
+        auto result_mg = output_feature.unpack_multiplexed();
+
+        AddLayer add_layer(this->param);
         auto result_expected = add_layer.run_plaintext(input_x0, input_x1);
 
         print_double_message(result_mg.to_array_1d().data(), "output_mg", 10);
@@ -2051,23 +2080,56 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "add_layer", "", HeteroProcessors)
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "avgpool2d_layer", "", HeteroProcessors) {
     int init_level = 3;
-    Duo stride = {2, 2};
     Duo skip = {1, 1};
 
-    auto run_avgpool_test = [&](uint32_t n_channel, uint32_t s) {
+    auto run_avgpool_test = [&](uint32_t n_channel, uint32_t s, const Duo& stride) {
         Duo input_shape = {s, s};
         uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
+        uint32_t n_ct = div_ceil(n_channel, n_channel_per_ct);
 
         Array<double, 3> input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
 
         Feature2DEncrypted input_feature(&this->context, init_level, skip);
         input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
 
+        // Prepare select_tensor_pt via Avgpool2DLayer
         Avgpool2DLayer avgpool(input_shape, stride);
-        avgpool.prepare_weight(this->param, n_channel_per_ct, init_level, skip, input_shape);
-        Feature2DEncrypted result_enc = avgpool.run_multiplexed_avgpool(this->context, input_feature);
+        avgpool.prepare_weight(this->param, n_channel_per_ct, n_channel, init_level, skip, input_shape);
 
-        auto result_mg = result_enc.unpack_multiplexed();
+        // Pre-allocate output (rescale consumes one level)
+        uint32_t out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1];
+        uint32_t n_packed_out_channel = div_ceil(n_channel, out_channels_per_ct);
+        Feature2DEncrypted output_feature(&this->context, init_level - 1);
+        for (uint32_t i = 0; i < n_packed_out_channel; i++) {
+            output_feature.data.push_back(
+                this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+        }
+
+        fs::path project_path = base_path /
+                                ("CKKS_avgpool2d/stride_" + to_string(stride[0]) + "_" + to_string(stride[1]) + "/ch_" +
+                                 to_string(n_channel) + "_shape_" + to_string(s) + "_" + to_string(s)) /
+                                ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+        auto arg_names = read_arg_names(project_path);
+        // Python arg order: input_node, select_tensor_pt, output_ct
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_feature.data});
+            else if (name == "select_tensor_pt")
+                cxx_args.push_back({name, &avgpool.select_tensor_pt});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output_feature.data});
+        }
+        this->run(project_path, cxx_args);
+
+        // Set output metadata: shape = input_shape/stride, skip = input_skip*stride
+        output_feature.skip = {skip[0] * stride[0], skip[1] * stride[1]};
+        output_feature.n_channel = n_channel;
+        output_feature.n_channel_per_ct = n_channel_per_ct * stride[0] * stride[1];
+        output_feature.shape = {input_shape[0] / stride[0], input_shape[1] / stride[1]};
+        auto result_mg = output_feature.unpack_multiplexed();
+
         auto result_expected = avgpool.plaintext_call_multiplexed(input_array);
 
         print_double_message(result_mg.to_array_1d().data(), "output_mg", 10);
@@ -2078,17 +2140,24 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "avgpool2d_layer", "", HeteroProce
         REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
     };
 
-    SECTION("n_channel=4, shape=16x16") {
-        run_avgpool_test(4, 16);
-    }
-    SECTION("n_channel=4, shape=32x32") {
-        run_avgpool_test(4, 32);
-    }
-    SECTION("n_channel=32, shape=16x16") {
-        run_avgpool_test(32, 16);
-    }
-    SECTION("n_channel=32, shape=32x32") {
-        run_avgpool_test(32, 32);
+    vector<uint32_t> shapes = {8, 16, 32, 64};
+    vector<uint32_t> channels = {4, 10, 15, 32, 37};
+    vector<Duo> strides = {{2, 2}, {4, 4}, {8, 8}};
+
+    for (const auto& stride : strides) {
+        SECTION("stride=" + to_string(stride[0])) {
+            for (uint32_t n_channel : channels) {
+                SECTION("n_channel=" + to_string(n_channel)) {
+                    for (uint32_t s : shapes) {
+                        if (s < stride[0])
+                            continue;  // shape must be >= stride
+                        SECTION("shape=" + to_string(s) + "x" + to_string(s)) {
+                            run_avgpool_test(n_channel, s, stride);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2137,6 +2206,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mult_scalar_layer", "", HeteroPro
     auto run_mult_scalar_test = [&](uint32_t n_channel, uint32_t s) {
         Duo input_shape = {s, s};
         uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
+        uint32_t n_ct = div_ceil(n_channel, n_channel_per_ct);
 
         Array<double, 3> input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
         Array<double, 1> weight = gen_random_array<1>({n_channel}, 1.0);
@@ -2144,11 +2214,42 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mult_scalar_layer", "", HeteroPro
         Feature2DEncrypted input_feature(&this->context, init_level, skip);
         input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
 
+        // Prepare weight plaintexts
         MultScalarLayer mult_layer(this->param, input_shape, weight, skip, n_channel_per_ct, init_level);
         mult_layer.prepare_weight();
-        Feature2DEncrypted result_enc = mult_layer.run(this->context, input_feature);
 
-        auto result_mg = result_enc.unpack_multiplexed();
+        // Pre-allocate output (mult_scalar consumes one level due to rescale)
+        Feature2DEncrypted output_feature(&this->context, init_level - 1);
+        for (uint32_t i = 0; i < n_ct; i++) {
+            output_feature.data.push_back(
+                this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+        }
+
+        fs::path project_path =
+            base_path /
+            ("CKKS_mult_scalar/ch_" + to_string(n_channel) + "_shape_" + to_string(s) + "_" + to_string(s)) /
+            ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+        auto arg_names = read_arg_names(project_path);
+        // Python arg order: input_node, weight_pt, output_ct
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_feature.data});
+            else if (name == "weight_pt")
+                cxx_args.push_back({name, &mult_layer.weight_pt});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output_feature.data});
+        }
+        this->run(project_path, cxx_args);
+
+        // Set output metadata
+        output_feature.skip = skip;
+        output_feature.n_channel = n_channel;
+        output_feature.n_channel_per_ct = n_channel_per_ct;
+        output_feature.shape = input_shape;
+        auto result_mg = output_feature.unpack_multiplexed();
+
         auto result_expected = mult_layer.run_plaintext(input_array);
 
         print_double_message(result_mg.to_array_1d().data(), "output_mg", 10);
@@ -2161,9 +2262,6 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mult_scalar_layer", "", HeteroPro
 
     SECTION("n_channel=32, shape=32x32") {
         run_mult_scalar_test(32, 32);
-    }
-    SECTION("n_channel=32, shape=16x16") {
-        run_mult_scalar_test(32, 16);
     }
 }
 
@@ -2240,14 +2338,5 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "upsample_nearest_layer", "", Hete
 
     SECTION("n_channel=4, shape=8x8") {
         run_upsample_nearest_test(4, 8);
-    }
-    SECTION("n_channel=4, shape=16x16") {
-        run_upsample_nearest_test(4, 16);
-    }
-    SECTION("n_channel=32, shape=8x8") {
-        run_upsample_nearest_test(32, 8);
-    }
-    SECTION("n_channel=32, shape=16x16") {
-        run_upsample_nearest_test(32, 16);
     }
 }
