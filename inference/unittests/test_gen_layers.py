@@ -28,6 +28,9 @@ base_path = project_root / 'build' / 'inference' / 'hetero'
 
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.deploy_cmds import *  # noqa: E402
+from inference.model_generator.layers.add_pack import AddLayer  # noqa: E402
+from inference.model_generator.layers.avgpool2d_layer import Avgpool2DLayer  # noqa: E402
+from inference.model_generator.layers.mult_scaler import MultScalarLayer  # noqa: E402
 from training.model_export.onnx_to_json import *  # noqa: E402
 
 
@@ -918,6 +921,96 @@ class TestLayerExport(unittest.TestCase):
                             / f'level_{init_level}'
                             / 'server',
                         )
+
+    def test_add_layer(self):
+        N = 16384
+        set_param(n=N)
+        level = 2
+        skip = (1, 1)
+        shapes = [16, 32]
+        channels = [4, 32]
+        for n_channel in channels:
+            for s in shapes:
+                print(f'sub-test: n_channel={n_channel}, s={s}')
+                n_ct = int(np.ceil(n_channel / (N / 2 / (s * s))))
+                input_ct1 = [CkksCiphertextNode(f'input_ct1_{i}', level) for i in range(n_ct)]
+                input_ct2 = [CkksCiphertextNode(f'input_ct2_{i}', level) for i in range(n_ct)]
+                add_layer = AddLayer()
+                output_ct = add_layer.call(input_ct1, input_ct2)
+                input_args = list()
+                input_args.append(Argument('input_node1', input_ct1))
+                input_args.append(Argument('input_node2', input_ct2))
+                process_custom_task(
+                    input_args=input_args,
+                    output_args=[Argument('output_ct', output_ct)],
+                    output_instruction_path=base_path
+                    / f'CKKS_add_layer/ch_{n_channel}_shape_{s}_{s}'
+                    / f'level_{level}'
+                    / 'server',
+                )
+
+    def test_avgpool2d_layer(self):
+        N = 16384
+        set_param(n=N)
+        level = 3
+        skip = (1, 1)
+        shapes = [8, 16, 32, 64]
+        channels = [4, 10, 15, 32, 37]
+        strides = [(2, 2), (4, 4), (8, 8)]
+        for stride in strides:
+            for n_channel in channels:
+                for s in shapes:
+                    if s < stride[0]:
+                        continue  # shape must be >= stride
+                    print(f'sub-test: stride={stride[0]}, n_channel={n_channel}, s={s}')
+                    n_channel_per_ct = int(np.ceil(N / 2 / (s * s)))
+                    n_ct = int(np.ceil(n_channel / n_channel_per_ct))
+                    input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+                    out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
+                    n_select_pt = min(n_channel, out_channels_per_ct)
+                    select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
+                    avgpool = Avgpool2DLayer(stride=list(stride), shape=[s, s], channel=n_channel, skip=[1, 1])
+                    output_ct = avgpool.call_multiplexed_avgpool(
+                        input_ct, select_tensor_pt, n_channel, n_channel_per_ct
+                    )
+                    input_args = list()
+                    input_args.append(Argument('input_node', input_ct))
+                    input_args.append(Argument('select_tensor_pt', select_tensor_pt))
+                    process_custom_task(
+                        input_args=input_args,
+                        output_args=[Argument('output_ct', output_ct)],
+                        output_instruction_path=base_path
+                        / f'CKKS_avgpool2d/stride_{stride[0]}_{stride[1]}'
+                        / f'ch_{n_channel}_shape_{s}_{s}'
+                        / f'level_{level}'
+                        / 'server',
+                    )
+
+    def test_mult_scalar_layer(self):
+        N = 16384
+        set_param(n=N)
+        level = 3
+        skip = (1, 1)
+        s = 32
+        n_channel = 32
+        print(f'sub-test: n_channel={n_channel}, s={s}')
+        n_channel_per_ct = int(np.ceil(N / 2 / (s * s)))
+        n_ct = int(np.ceil(n_channel / n_channel_per_ct))
+        input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+        weight_pt = [CkksPlaintextRingtNode(f'weight_pt_{i}') for i in range(n_ct)]
+        mult_layer = MultScalarLayer()
+        output_ct = mult_layer.call(input_ct, weight_pt)
+        input_args = list()
+        input_args.append(Argument('input_node', input_ct))
+        input_args.append(Argument('weight_pt', weight_pt))
+        process_custom_task(
+            input_args=input_args,
+            output_args=[Argument('output_ct', output_ct)],
+            output_instruction_path=base_path
+            / f'CKKS_mult_scalar/ch_{n_channel}_shape_{s}_{s}'
+            / f'level_{level}'
+            / 'server',
+        )
 
 
 if __name__ == '__main__':
