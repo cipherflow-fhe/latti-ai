@@ -18,15 +18,12 @@
 
 #pragma once
 
-#include <filesystem>
-#include <map>
 #include <memory>
-#include <string>
-#include <vector>
 
-#include <cxx_sdk_v2/cxx_fhe_task.h>
 #include "data_structs/feature.h"
 #include "util.h"
+
+namespace ls = cxx_sdk_v2;
 
 /// Result of decrypting an encrypted inference output.
 struct DecryptedOutput {

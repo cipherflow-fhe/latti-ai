@@ -18,7 +18,7 @@
 
 #pragma once
 #include "layer.h"
-#include "common.h"
+#include "util.h"
 #include "../data_structs/feature.h"
 
 class DensePackedLayer : public Layer {

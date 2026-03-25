@@ -16,9 +16,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <iostream>
+
 #include "interface/inference_client.h"
 
-#include <iostream>
+using namespace cxx_sdk_v2;
+
+using namespace fhe_ops_lib;
 
 InferenceClient::InferenceClient(const std::string& client_dir) : client_dir_(client_dir) {}
 

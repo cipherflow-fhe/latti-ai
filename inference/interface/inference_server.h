@@ -18,16 +18,14 @@
 
 #pragma once
 
-#include <filesystem>
-#include <map>
 #include <memory>
-#include <string>
 
-#include <cxx_sdk_v2/cxx_fhe_task.h>
 #include "data_structs/feature.h"
 #include "inference_task/inference_process.h"
 #include "interface/inference_client.h"
 #include "util.h"
+
+namespace ls = cxx_sdk_v2;
 
 /// Server-side encrypted inference interface.
 ///

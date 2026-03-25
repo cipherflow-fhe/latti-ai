@@ -452,7 +452,7 @@ void InitInferenceProcess::init_fhe_avgpool_layer(const string& key,
 
 void InitInferenceProcess::load_model_prepare() {
     current_json_path = project_path;
-    json_data = read_json(current_json_path + "nn_layers_ct_0.json");
+    json_data = read_json(current_json_path / "nn_layers_ct_0.json");
     json_features = json_data.at("feature");
     json_layers = json_data.at("layer");
     string block_input_feature = json_data["input_feature"][0];
@@ -971,20 +971,6 @@ void InferenceProcess::run_task(bool is_mpc) {
         }
         set_feature(ki, move(result));
     }
-}
-
-Array<double, 3> mult_const(Array<double, 3>& x, double const_scale) {
-    Array3D res = x.to_array_3d();
-
-    for (int i = 0; i < res.size(); i++) {
-        for (int j = 0; j < res[0].size(); j++) {
-            for (int k = 0; k < res[0][0].size(); k++) {
-                res[i][j][k] = res[i][j][k] * const_scale;
-            }
-        }
-    }
-    auto res_array = Array<double, 3>::from_array_3d(res);
-    return res_array;
 }
 
 void InferenceProcess::run_task_plaintext(bool is_mpc) {
