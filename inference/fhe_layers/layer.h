@@ -19,7 +19,7 @@
 #pragma once
 
 #include <cxx_sdk_v2/cxx_fhe_task.h>
-#include "common.h"
+#include "util.h"
 
 namespace ls = cxx_sdk_v2;
 

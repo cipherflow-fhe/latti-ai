@@ -20,10 +20,6 @@
 
 using namespace std;
 
-double total_num = 0;
-double mpc_num = 0;
-double mpc_fpga_num = 0;
-
 json read_json(string filename) {
     ifstream f(filename);
     if (!f.is_open()) {
@@ -34,16 +30,9 @@ json read_json(string filename) {
     return data;
 }
 
-uint64_t mod_sub(uint64_t x, uint64_t y, uint64_t mod, bool is_print) {
+uint64_t mod_sub(uint64_t x, uint64_t y, uint64_t mod) {
     double res = double(x) - double(y);
-    if (is_print) {
-        printf("res mod=%f\n", res);
-        printf("res mod add=%lu\n", uint64_t(res + (double)mod));
-    }
     uint64_t res_mod = uint64_t(res + (double)mod) % mod;
-    if (is_print) {
-        printf("res mod 97=%lu\n", res_mod);
-    }
     return res_mod;
 }
 
@@ -102,58 +91,6 @@ Array<double, 4> transpose_weight(const Array<double, 4>& weight) {
         }
     }
     return transformed;
-}
-
-void print_array(const Array<double, 3>& arr, std::ostream& out) {
-    auto shape = arr.get_shape();
-    int C = shape[0];
-    int H = shape[1];
-    int W = shape[2];
-
-    out << "Array shape: [" << C << ", " << H << ", " << W << "]\n";
-    for (int c = 0; c < C; c++) {
-        out << "Channel " << c << ":\n";
-        for (int h = 0; h < H; h++) {
-            for (int w = 0; w < W; w++) {
-                out << arr.get(c, h, w) << " ";
-            }
-            out << "\n";
-        }
-        out << "\n";
-    }
-    out << std::flush;
-}
-
-void print_array_to_file(const Array<double, 3>& arr, const std::string& filename, bool append) {
-    std::ios_base::openmode mode = std::ios::out;
-    if (append) {
-        mode |= std::ios::app;
-    }
-
-    std::ofstream outfile(filename, mode);
-
-    if (!outfile.is_open()) {
-        std::cerr << "Error: Unable to open file " << filename << " for writing." << std::endl;
-        return;
-    }
-
-    auto shape = arr.get_shape();
-    int C = shape[0];
-    int H = shape[1];
-    int W = shape[2];
-
-    outfile << "Array shape: [" << C << ", " << H << ", " << W << "]\n";
-    for (int c = 0; c < C; c++) {
-        outfile << "Channel " << c << ":\n";
-        for (int h = 0; h < H; h++) {
-            for (int w = 0; w < W; w++) {
-                outfile << arr.get(c, h, w) << " ";
-            }
-            outfile << "\n";
-        }
-        outfile << "\n";
-    }
-    outfile.close();
 }
 
 Array<double, 3> upsample_with_zero(const Array<double, 3>& x, const Duo& stride) {

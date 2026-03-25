@@ -20,8 +20,18 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cmath>
 
 inline uint32_t div_ceil(uint32_t x, uint32_t q) {
     assert(q != 0 && "div_ceil: division by zero");
     return (x + q - 1) / q;
+}
+
+inline bool f_equal(double a, double b) {
+    const double eps = 1e-8;
+    if (fabs(b) < eps) {
+        return fabs(a - b) < eps;
+    } else {
+        return fabs((a - b) / b) < eps;
+    }
 }

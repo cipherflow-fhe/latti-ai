@@ -19,7 +19,6 @@
 #pragma once
 #include <cstdint>
 #include "layer.h"
-#include "common.h"
 #include "data_structs/feature2d.h"
 #include "util.h"
 
