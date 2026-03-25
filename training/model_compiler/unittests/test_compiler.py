@@ -357,15 +357,15 @@ class CompilerTestBase(unittest.TestCase):
         h5_path = server_dir / 'model_parameters.h5'
         fuse_and_export_h5(model, str(h5_path), verbose=False)
 
-        # Step 5: Read n from ckks_parameter.json
-        with open(client_dir / 'ckks_parameter.json', 'r') as f:
-            ckks_config = json.load(f)
-        n = next(iter(ckks_config.values()))['poly_modulus_degree']
-
-        # Step 6: Read pack_style from task_config.json
+        # Step 6: Read pack_style and param_name from configs
         with open(client_dir / 'task_config.json', 'r') as f:
             task_config = json.load(f)
         pack_style = task_config.get('pack_style', style)
+
+        with open(client_dir / 'ckks_parameter.json', 'r') as f:
+            ckks_config = json.load(f)
+        first_param = next(iter(ckks_config.values()))
+        param_name = first_param.get('param_name', '')
 
         # Step 7: Generate mega_ag instructions
         # Run in subprocess to avoid global state pollution in lattisense frontend
@@ -373,10 +373,10 @@ class CompilerTestBase(unittest.TestCase):
 
         gen_script = (
             f'import sys;'
+            f'sys.path.insert(0,"{project_root}");'
             f'sys.path.insert(0,"{project_root / "inference"}");'
-            f'sys.path.insert(0,"{project_root / "inference" / "lattisense"}");'
-            f'from model_generator.deploy_cmds import gen_custom_task;'
-            f'gen_custom_task("{server_dir}",n={n},use_gpu=True,style="{pack_style}")'
+            f'from inference.model_generator.deploy_cmds import gen_custom_task;'
+            f'gen_custom_task("{server_dir}",param_name="{param_name}",use_gpu=True,style="{pack_style}")'
         )
         result = subprocess.run([sys.executable, '-c', gen_script], capture_output=True, text=True)
         if result.returncode != 0:

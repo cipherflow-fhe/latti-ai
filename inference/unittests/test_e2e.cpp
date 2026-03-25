@@ -31,8 +31,10 @@
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <string>
@@ -65,7 +67,9 @@ static vector<fs::path> discover_tests(const fs::path& base) {
 }
 
 static void run_e2e_test(const fs::path& test_dir, bool use_gpu) {
+    using clock = chrono::high_resolution_clock;
     string test_name = test_dir.filename().string();
+    string device_tag = use_gpu ? "GPU" : "CPU";
     string client_dir = (test_dir / "task" / "client").string();
     string server_dir = (test_dir / "task" / "server").string();
 
@@ -78,23 +82,56 @@ static void run_e2e_test(const fs::path& test_dir, bool use_gpu) {
         input_csvs[name] = csv_path;
     }
 
+    // Timing records: label → duration in ms
+    struct TimingRecord {
+        const char* label;
+        double ms;
+    };
+    vector<TimingRecord> timings;
+    auto measure = [&](const char* label, auto&& fn) {
+        auto t0 = clock::now();
+        auto result = fn();
+        auto t1 = clock::now();
+        timings.push_back({label, chrono::duration<double, milli>(t1 - t0).count()});
+        return result;
+    };
+    auto measure_void = [&](const char* label, auto&& fn) {
+        auto t0 = clock::now();
+        fn();
+        auto t1 = clock::now();
+        timings.push_back({label, chrono::duration<double, milli>(t1 - t0).count()});
+    };
+
     // Client: generate keys and encrypt input
     InferenceClient client(client_dir);
-    client.setup();
-    auto eval_ctx = client.export_eval_context();
-    auto encrypted_inputs = client.encrypt(input_csvs);
+    measure_void("Key generation", [&] { client.setup(); });
+    auto eval_ctx = measure("Export eval context", [&] { return client.export_eval_context(); });
+    auto encrypted_inputs = measure("Encrypt input", [&] { return client.encrypt(input_csvs); });
 
     // Server: import context, load model, run encrypted inference
     InferenceServer server(server_dir, use_gpu);
-    server.import_eval_context(eval_ctx);
-    server.load_model();
-    auto encrypted_outputs = server.evaluate(encrypted_inputs);
+    measure_void("Import eval context", [&] { server.import_eval_context(eval_ctx); });
+    measure_void("Load model", [&] { server.load_model(); });
+    auto encrypted_outputs = measure("Evaluate (encrypted)", [&] { return server.evaluate(encrypted_inputs); });
 
     // Client: decrypt results
-    auto results = client.decrypt(encrypted_outputs);
+    auto results = measure("Decrypt output", [&] { return client.decrypt(encrypted_outputs); });
 
     // Server: run plaintext reference inference
-    auto plaintext_outputs = server.evaluate_plaintext(input_csvs);
+    auto plaintext_outputs = measure("Evaluate (plaintext)", [&] { return server.evaluate_plaintext(input_csvs); });
+
+    // Print timing summary
+    double total_ms = 0.0;
+    for (auto& t : timings)
+        total_ms += t.ms;
+    cout << "\n[" << test_name << "] (" << device_tag << ") Timing:" << endl;
+    for (auto& t : timings) {
+        cout << "  " << left << setw(24) << t.label << right << setw(10) << fixed << setprecision(2) << t.ms << " ms"
+             << endl;
+    }
+    cout << "  " << string(34, '-') << endl;
+    cout << "  " << left << setw(24) << "Total" << right << setw(10) << fixed << setprecision(2) << total_ms << " ms"
+         << endl;
 
     // Compare encrypted vs plaintext outputs
     constexpr double tolerance = 0.1;
@@ -116,10 +153,9 @@ static void run_e2e_test(const fs::path& test_dir, bool use_gpu) {
             }
         }
 
-        // Print test name and first 10 plaintext/ciphertext values for manual comparison
+        // Print first 10 plaintext/ciphertext values for manual comparison
         int preview_count = min(count, 10);
-        cout << "[" << test_name << "] Output: " << name << " (" << (use_gpu ? "GPU" : "CPU") << ", " << count
-             << " values)" << endl;
+        cout << "[" << test_name << "] Output: " << name << " (" << device_tag << ", " << count << " values)" << endl;
         cout << "  Plaintext : ";
         for (int i = 0; i < preview_count; i++) {
             cout << pt_output[i] << (i < preview_count - 1 ? ", " : "");
@@ -132,8 +168,8 @@ static void run_e2e_test(const fs::path& test_dir, bool use_gpu) {
         cout << endl;
         cout << "  Max error : " << max_abs_err << " at index " << max_err_idx << endl;
 
-        INFO("Test: " << test_name << " (" << (use_gpu ? "GPU" : "CPU") << "), Output: " << name
-                      << ", Max error: " << max_abs_err << " at index " << max_err_idx);
+        INFO("Test: " << test_name << " (" << device_tag << "), Output: " << name << ", Max error: " << max_abs_err
+                      << " at index " << max_err_idx);
         REQUIRE(max_abs_err < tolerance);
     }
 }
