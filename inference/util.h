@@ -29,7 +29,7 @@
 #include <vector>
 
 #include "util/array_io.h"
-#include "util/helper.h"
+#include "util/numeric.h"
 #include "util/ndarray.h"
 #include "util/serial.h"
 #include "util/timer.h"
@@ -52,12 +52,6 @@ const int RING_MOD_BIT = 44;
 const uint64_t RING_MOD = 1UL << RING_MOD_BIT;
 
 const Duo BLOCK_SHAPE = {64, 64};
-
-inline int get_param_id(const std::string& param) {
-    std::string sub_in = param.substr(5);
-    int param_id = stoi(sub_in);
-    return param_id;
-}
 
 inline uint64_t gen_random_uint(int n_bit) {
     uint64_t result = 0;
@@ -85,15 +79,6 @@ inline Array1D L2_normal(const Array1D& x) {
     }
     return res;
 };
-
-inline bool f_equal(double a, double b) {
-    const double eps = 1e-8;
-    if (fabs(b) < eps) {
-        return fabs(a - b) < eps;
-    } else {
-        return fabs((a - b) / b) < eps;
-    }
-}
 
 uint64_t double_to_uint64(double input, double scale, uint64_t ring_mod);
 

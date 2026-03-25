@@ -121,7 +121,7 @@ public:
     int end_task_id;
     bool enable_fpga;
     json server_task;
-    std::string current_json_path;
+    std::filesystem::path current_json_path;
     json json_data;
     json json_features;
     json json_layers;
