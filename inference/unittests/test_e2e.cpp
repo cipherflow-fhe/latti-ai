@@ -33,6 +33,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <iostream>
 #include <map>
 #include <string>
 #include <vector>
@@ -114,6 +115,22 @@ static void run_e2e_test(const fs::path& test_dir, bool use_gpu) {
                 max_err_idx = i;
             }
         }
+
+        // Print test name and first 10 plaintext/ciphertext values for manual comparison
+        int preview_count = min(count, 10);
+        cout << "[" << test_name << "] Output: " << name << " (" << (use_gpu ? "GPU" : "CPU") << ", " << count
+             << " values)" << endl;
+        cout << "  Plaintext : ";
+        for (int i = 0; i < preview_count; i++) {
+            cout << pt_output[i] << (i < preview_count - 1 ? ", " : "");
+        }
+        cout << endl;
+        cout << "  Ciphertext: ";
+        for (int i = 0; i < preview_count; i++) {
+            cout << result.output[i] << (i < preview_count - 1 ? ", " : "");
+        }
+        cout << endl;
+        cout << "  Max error : " << max_abs_err << " at index " << max_err_idx << endl;
 
         INFO("Test: " << test_name << " (" << (use_gpu ? "GPU" : "CPU") << "), Output: " << name
                       << ", Max error: " << max_abs_err << " at index " << max_err_idx);

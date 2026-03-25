@@ -271,8 +271,14 @@ class CompilerTestBase(unittest.TestCase):
         input_size,
         style='ordinary',
         graph_type='btp',
+        replace=True,
         **export_kwargs,
     ):
+        if replace:
+            from nn_tools import prepare_for_fhe
+
+            prepare_for_fhe(model, input_size=input_size)
+
         export_to_onnx(
             model,
             save_path=self.temp_onnx_path,
@@ -299,6 +305,7 @@ class CompilerTestBase(unittest.TestCase):
         input_size,
         test_name,
         style='ordinary',
+        replace=True,
         **export_kwargs,
     ):
         """Full E2E pipeline: compile model and generate all files for C++ inference test.
@@ -308,6 +315,11 @@ class CompilerTestBase(unittest.TestCase):
           - server/: ckks_parameter.json, task_config.json, nn_layers_ct_0.json,
                      model_parameters.h5, mega_ag.json, ergs/, task_signature.json
         """
+        if replace:
+            from nn_tools import prepare_for_fhe
+
+            prepare_for_fhe(model, input_size=input_size)
+
         output_dir = self.e2e_base_path / test_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -415,7 +427,7 @@ class TestSingleLayer(CompilerTestBase):
 
     def test_single_maxpool(self):
         model = nn_modules.SingleMaxpool()
-        graph, score = self._export_and_compile(model, (1, 32, 64, 64))
+        graph, score = self._export_and_compile(model, (1, 32, 64, 64), replace=False)
 
     def test_single_reshape(self):
         model = nn_modules.SingleReshape()
@@ -560,43 +572,14 @@ class TestCompiler(CompilerTestBase):
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
 
     def test_resnet_20(self):
-        import torch.nn as nn
-        from nn_tools.activations import RangeNormPoly2d, Simple_Polyrelu
-        from nn_tools import (
-            replace_activation_with_poly,
-            replace_maxpool_with_avgpool,
-        )
+        from nn_tools import prepare_for_fhe
+        from nn_tools.activations import Simple_Polyrelu
         from resnet import resnet20
 
         model = resnet20()
+        prepare_for_fhe(model, poly_module=Simple_Polyrelu, input_size=(1, 3, 32, 32))
 
-        replace_maxpool_with_avgpool(model)
-        replace_activation_with_poly(
-            model,
-            old_cls=nn.ReLU,
-            new_module_factory=Simple_Polyrelu,
-            upper_bound=3.0,
-            degree=4,
-        )
-
-        export_to_onnx(
-            model,
-            save_path=self.temp_onnx_path,
-            input_size=tuple([1, 3, 32, 32]),
-            dynamic_batch=False,
-            save_h5=False,
-        )
-        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed')
-
-        graph, score = run_pipeline(
-            num_experiments=1,
-            input_file_path=self.temp_json_path,
-            output_dir=script_dir,
-            temperature=0.0,
-            num_workers=1,
-            style='multiplexed',
-            graph_type='btp',
-        )
+        graph, score = self._export_and_compile(model, (1, 3, 32, 32), style='multiplexed', replace=False)
         self.assertEqual(check_level_cost(graph), True)
         self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
