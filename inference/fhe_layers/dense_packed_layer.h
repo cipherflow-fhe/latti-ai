@@ -21,11 +21,9 @@
 #include "common.h"
 #include "../data_structs/feature.h"
 
-using namespace cxx_sdk_v2;
-
 class DensePackedLayer : public Layer {
 public:
-    DensePackedLayer(const CkksParameter& param_in,
+    DensePackedLayer(const ls::CkksParameter& param_in,
                      const Array<double, 2>& weight_in,
                      const Array<double, 1>& bias_in,
                      uint32_t pack_in,
@@ -41,29 +39,29 @@ public:
                                                         const Duo& skip_in,
                                                         const Duo& invalid_fill_in = {1, 1});
 
-    virtual Feature0DEncrypted run_0d_skip(CkksContext& ctx, const Feature0DEncrypted& x);
-    virtual Feature0DEncrypted run_2d_multiplexed(CkksContext& ctx, const Feature0DEncrypted& x);
+    virtual Feature0DEncrypted run_0d_skip(ls::CkksContext& ctx, const Feature0DEncrypted& x);
+    virtual Feature0DEncrypted run_2d_multiplexed(ls::CkksContext& ctx, const Feature0DEncrypted& x);
     Array<double, 1> plaintext_call(const Array<double, 1>& x, double multiplier = 1.0);
 
-    std::vector<std::vector<CkksPlaintextRingt>> weight_pt;
-    std::vector<CkksPlaintextRingt> bias_pt;
+    std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt;
+    std::vector<ls::CkksPlaintextRingt> bias_pt;
 
     // For lazy generation
     std::vector<std::vector<std::vector<double>>> weight_rearranged;
     std::vector<std::vector<double>> bias_rearranged;
 
-    CkksParameter param;
     bool normal_dense = true;
 
     // Helper functions for prepare_weight_0d_lazy
-    CkksPlaintextRingt
-    generate_weight_0d_pt_for_indices(CkksContext& ctx, uint32_t packed_out_idx, uint32_t weight_idx) const;
-    CkksPlaintextRingt generate_bias_0d_pt_for_index(CkksContext& ctx, uint32_t packed_out_idx) const;
+    ls::CkksPlaintextRingt
+    generate_weight_0d_pt_for_indices(ls::CkksContext& ctx, uint32_t packed_out_idx, uint32_t weight_idx) const;
+    ls::CkksPlaintextRingt generate_bias_0d_pt_for_index(ls::CkksContext& ctx, uint32_t packed_out_idx) const;
 
     // Helper functions for prepare_weight_for_mult_pack_lazy
-    CkksPlaintextRingt
-    generate_weight_pt_mult_pack_for_indices(CkksContext& ctx, int packed_out_feature_idx, int n_block_input_idx) const;
-    CkksPlaintextRingt generate_bias_pt_mult_pack_for_index(CkksContext& ctx, int packed_out_feature_idx) const;
+    ls::CkksPlaintextRingt generate_weight_pt_mult_pack_for_indices(ls::CkksContext& ctx,
+                                                                    int packed_out_feature_idx,
+                                                                    int n_block_input_idx) const;
+    ls::CkksPlaintextRingt generate_bias_pt_mult_pack_for_index(ls::CkksContext& ctx, int packed_out_feature_idx) const;
 
 protected:
     uint32_t n_out_feature;
@@ -91,6 +89,7 @@ protected:
     uint32_t bsgs_gs = 0;
 
     // core function
-    virtual std::vector<CkksCiphertext> run_core_0d(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
-    virtual std::vector<CkksCiphertext> run_core_mult_pack(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
+    virtual std::vector<ls::CkksCiphertext> run_core_0d(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
+    virtual std::vector<ls::CkksCiphertext> run_core_mult_pack(ls::CkksContext& ctx,
+                                                               const std::vector<ls::CkksCiphertext>& x);
 };

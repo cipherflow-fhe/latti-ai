@@ -23,7 +23,7 @@
 
 class Feature1DEncrypted : public FeatureEncrypted {
 public:
-    Feature1DEncrypted(CkksContext* context_in, int ct_level, uint32_t skip_in = 1);
+    Feature1DEncrypted(ls::CkksContext* context_in, int ct_level, uint32_t skip_in = 1);
     virtual void pack(Array<double, 2>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
     virtual Array<double, 2> unpack() const;
     virtual void
@@ -31,6 +31,6 @@ public:
     virtual Array<double, 2> unpack_multiplexed() const;
     uint32_t shape = 0;
     uint32_t skip = 0;
-    std::vector<CkksCiphertext> data;
-    std::vector<CkksCompressedCiphertext> data_compress;
+    std::vector<ls::CkksCiphertext> data;
+    std::vector<ls::CkksCompressedCiphertext> data_compress;
 };

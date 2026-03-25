@@ -21,6 +21,9 @@
 #include "../common.h"
 #include "inverse_multiplexed_conv2d_layer.h"
 
+using namespace std;
+using namespace cxx_sdk_v2;
+
 InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter& param_in,
                                                              const Duo& input_shape_in,
                                                              const Array<double, 4>& weight_in,
@@ -32,7 +35,7 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
                                                              const Duo& block_shape_in,
                                                              uint32_t level_in,
                                                              double residual_scale)
-    : param(param_in.copy()) {
+    : Layer(param_in) {
     block_shape[0] = block_shape_in[0];
     block_shape[1] = block_shape_in[1];
     input_shape[0] = input_shape_in[0];
@@ -94,7 +97,7 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
     weight = weight_in.copy();
     bias = bias_in.copy();
     level_ = level_in;
-    weight_scale = param.get_q(level_) * residual_scale;
+    weight_scale = param_.get_q(level_) * residual_scale;
     N = param_in.get_n();
 }
 
@@ -167,7 +170,7 @@ void InverseMultiplexedConv2DLayer::prepare_weight() {
         bias_pt.push_back(move(s));
     }
 
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     ctx.resize_copies(n_out_channel);
 
     int kernel_size = kernel_shape[0] * kernel_shape[1];

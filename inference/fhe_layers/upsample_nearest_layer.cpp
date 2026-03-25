@@ -19,6 +19,7 @@
 #include "upsample_nearest_layer.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 UpsampleNearestLayer::UpsampleNearestLayer(const CkksParameter& param_in,
                                            const Duo& shape_in,
@@ -26,7 +27,7 @@ UpsampleNearestLayer::UpsampleNearestLayer(const CkksParameter& param_in,
                                            const Duo& upsample_factor_in,
                                            const uint32_t& n_channel_per_ct_in,
                                            const uint32_t& level_in)
-    : param(param_in.copy()), cached_block_size(0), cached_skip_div_upsample_0(0), cached_skip_div_upsample_1(0) {
+    : Layer(param_in), cached_block_size(0), cached_skip_div_upsample_0(0), cached_skip_div_upsample_1(0) {
     upsample_factor[0] = upsample_factor_in[0];
     upsample_factor[1] = upsample_factor_in[1];
     shape[0] = shape_in[0];
@@ -69,7 +70,7 @@ vector<double> UpsampleNearestLayer::select_tensor(int num) const {
 }
 
 void UpsampleNearestLayer::prepare_weight() {
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     select_tensor_pt.clear();
     select_tensor_pt.resize(n_channel_per_ct / (upsample_factor[0] * upsample_factor[1]));
     for (int i = 0; i < n_channel_per_ct / (upsample_factor[0] * upsample_factor[1]); i++) {

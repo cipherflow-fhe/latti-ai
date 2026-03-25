@@ -22,6 +22,9 @@
 #include <limits>
 #include <functional>
 
+using namespace std;
+using namespace cxx_sdk_v2;
+
 // ======================== PolyReluBase ========================
 
 PolyReluBase::PolyReluBase(const CkksParameter& param_in,
@@ -29,7 +32,7 @@ PolyReluBase::PolyReluBase(const CkksParameter& param_in,
                            uint32_t n_channel_per_ct_in,
                            uint32_t level_in,
                            int order_in)
-    : param(param_in.copy()), weight(weight_in.copy()) {
+    : Layer(param_in), weight(weight_in.copy()) {
     order = order_in;
     level_ = level_in;
     n_channel_per_ct = n_channel_per_ct_in;
@@ -38,7 +41,7 @@ PolyReluBase::PolyReluBase(const CkksParameter& param_in,
 }
 
 void PolyReluBase::compute_all_powers() {
-    powers[1] = {0, (int)level_, param.get_default_scale(), 0, 0, true};
+    powers[1] = {0, (int)level_, param_.get_default_scale(), 0, 0, true};
     for (int n = 2; n <= order; n++) {
         compute_power(n);
     }
@@ -182,7 +185,7 @@ void PolyReluBase::init_bsgs() {
 
     modulus.clear();
     for (int i = 0; i <= (int)level_; i++) {
-        modulus.push_back(param.get_q(i));
+        modulus.push_back(param_.get_q(i));
     }
     powers.clear();
     compute_all_powers();
@@ -210,7 +213,7 @@ void PolyReluBase::determine_required_powers_bsgs() {
 
 void PolyReluBase::compute_coefficient_scales_bsgs(std::map<int, double>& coeff_scale,
                                                    std::map<int, int>& level_order) {
-    double S = param.get_default_scale();
+    double S = param_.get_default_scale();
 
     int max_depth = 0, max_power_level = level_;
     for (int p : required_powers) {
@@ -237,7 +240,7 @@ void PolyReluBase::compute_coefficient_scales_bsgs(std::map<int, double>& coeff_
             PowerInfo gp_info = get_power_info(giant_power);
             int level_mult = bsgs_output_level + 1;
             baby_poly_output_level[g] = level_mult;
-            baby_poly_output_scale[g] = S * param.get_q(level_mult) / gp_info.scale;
+            baby_poly_output_scale[g] = S * param_.get_q(level_mult) / gp_info.scale;
         }
 
         int start_idx = g * baby_steps;
@@ -254,7 +257,7 @@ void PolyReluBase::compute_coefficient_scales_bsgs(std::map<int, double>& coeff_
                 coeff_scale[idx] = target_scale;
             } else {
                 PowerInfo x_info = get_power_info(baby_step);
-                coeff_scale[idx] = target_scale * param.get_q(target_level + 1) / x_info.scale;
+                coeff_scale[idx] = target_scale * param_.get_q(target_level + 1) / x_info.scale;
                 level_order[idx] = target_level + 1;
             }
         }
@@ -455,7 +458,7 @@ void PolyRelu0D::prepare_weight_0d_skip() {
     int n_packed_out_channel = div_ceil(channel, n_channel_per_ct);
     weight_pt.resize(order + 1);
 
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     ctx.resize_copies(order + 1);
     parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int ct_idx = 0; ct_idx < n_packed_out_channel; ct_idx++) {
@@ -531,7 +534,7 @@ void PolyRelu0D::prepare_weight_2d_multiplexed(const Duo& input_shape_in, const 
     int n_packed_out_channel = div_ceil(channel, n_channel_per_ct_mux);
     weight_pt.resize(order + 1);
 
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     ctx.resize_copies(order + 1);
     parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int ct_idx = 0; ct_idx < n_packed_out_channel; ct_idx++) {

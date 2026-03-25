@@ -24,6 +24,7 @@
 #include <vector>
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 DensePackedLayer::DensePackedLayer(const CkksParameter& param_in,
                                    const Array<double, 2>& weight_in,
@@ -32,7 +33,7 @@ DensePackedLayer::DensePackedLayer(const CkksParameter& param_in,
                                    uint32_t level_in,
                                    int mark_in,
                                    double residual_scale)
-    : param(param_in.copy()) {
+    : Layer(param_in) {
     auto weight_shape = weight_in.get_shape();
     n_out_feature = weight_shape[0];
     n_in_feature = weight_shape[1];
@@ -43,7 +44,7 @@ DensePackedLayer::DensePackedLayer(const CkksParameter& param_in,
     n_packed_out_feature = div_ceil(n_out_feature, n_channel_per_ct);
     level_ = level_in;
     mark = mark_in;
-    modified_scale = param.get_q(level_) * residual_scale;
+    modified_scale = param_.get_q(level_) * residual_scale;
 }
 
 void DensePackedLayer::prepare_weight_0d_skip(uint32_t skip_0d) {
@@ -53,16 +54,16 @@ void DensePackedLayer::prepare_weight_0d_skip(uint32_t skip_0d) {
     bsgs_bs = (uint32_t)ceil(sqrt((double)n_channel_per_ct));
     bsgs_gs = div_ceil(n_channel_per_ct, bsgs_bs);
 
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     weight_pt.clear();
     bias_pt.clear();
 
     double bias_scale = 0;
     if (!normal_dense) {
-        modified_scale = modified_scale * ENC_TO_SHARE_SCALE / param.get_default_scale();
+        modified_scale = modified_scale * ENC_TO_SHARE_SCALE / param_.get_default_scale();
         bias_scale = ENC_TO_SHARE_SCALE;
     } else {
-        bias_scale = param.get_default_scale();
+        bias_scale = param_.get_default_scale();
     }
 
     // Pre-allocate: weight_pt[packed_out][packed_in * n_channel_per_ct + d]
@@ -123,7 +124,7 @@ void DensePackedLayer::prepare_weight_0d_skip_lazy(uint32_t skip_0d) {
     bsgs_gs = div_ceil(n_channel_per_ct, bsgs_bs);
 
     if (!normal_dense) {
-        modified_scale = modified_scale * ENC_TO_SHARE_SCALE / param.get_default_scale();
+        modified_scale = modified_scale * ENC_TO_SHARE_SCALE / param_.get_default_scale();
     }
 }
 
@@ -152,7 +153,7 @@ CkksPlaintextRingt DensePackedLayer::generate_weight_0d_pt_for_indices(CkksConte
 }
 
 CkksPlaintextRingt DensePackedLayer::generate_bias_0d_pt_for_index(CkksContext& ctx, uint32_t packed_out_idx) const {
-    double bias_scale = normal_dense ? param.get_default_scale() : ENC_TO_SHARE_SCALE;
+    double bias_scale = normal_dense ? param_.get_default_scale() : ENC_TO_SHARE_SCALE;
 
     vector<double> bv;
     for (uint32_t j = 0; j < n_channel_per_ct; j++) {
@@ -176,7 +177,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed_lazy(const Duo& input_s
     special_skip[1] = skip_in[1];
     special_invalid_fill[0] = invalid_fill_in[0];
     special_invalid_fill[1] = invalid_fill_in[1];
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     input_shape_ct_mult[0] = special_input_shape[0] * special_skip[0];
     input_shape_ct_mult[1] = special_input_shape[1] * special_skip[1];
     N_half = ctx.get_parameter().get_n() / 2;
@@ -249,7 +250,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_
     special_skip[1] = skip_in[1];
     special_invalid_fill[0] = invalid_fill_in[0];
     special_invalid_fill[1] = invalid_fill_in[1];
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     uint32_t input_shape_ct[2];
     input_shape_ct[0] = special_input_shape[0] * special_skip[0];
     input_shape_ct[1] = special_input_shape[1] * special_skip[1];
@@ -290,7 +291,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_
                     b[i] = bias.get(block_i);
                 }
             }
-            bias_pt[packed_out_feature_idx] = ctx_copy.encode_ringt(b, param.get_default_scale());
+            bias_pt[packed_out_feature_idx] = ctx_copy.encode_ringt(b, param_.get_default_scale());
 
             for (int n_block_input_idx = 0; n_block_input_idx < n_block_input; n_block_input_idx++) {
                 vector<double> w(N_half, 0);
@@ -319,7 +320,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_
                     }
                 }
                 weight_pt[packed_out_feature_idx][n_block_input_idx] =
-                    ctx_copy.encode_ringt(w, param.get_default_scale());
+                    ctx_copy.encode_ringt(w, param_.get_default_scale());
             }
         });
 }
