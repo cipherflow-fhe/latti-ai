@@ -508,7 +508,7 @@ def set_level_costs(graph: LayerAbstractGraph):
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                     if (
                         succ.shape[0] < config.fhe_param.block_shape[0]
-                        and succ.shape[1] < config.fhe_param.block_shape[1]
+                        or succ.shape[1] < config.fhe_param.block_shape[1]
                     ):
                         graph.dag.nodes[compute_node]['level_cost'] = 2
                 else:
