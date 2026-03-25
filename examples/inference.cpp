@@ -31,6 +31,7 @@
 #include "interface/inference_server.h"
 
 using namespace std;
+namespace ls = cxx_sdk_v2;
 
 int main(int argc, char* argv[]) {
     string task_dir;
@@ -119,12 +120,12 @@ int main(int argc, char* argv[]) {
     // --- Display results ---
     cout << "========== Results ==========" << endl;
     for (auto& [name, result] : results) {
-        print_double_message(result.output.data(), ("Encrypted output [" + name + "]").c_str(), 1);
+        ls::print_double_message(result.output.data(), ("Encrypted output [" + name + "]").c_str(), 1);
     }
 
     auto plaintext_outputs = server.evaluate_plaintext(input_csvs);
     for (auto& [name, plaintext_output] : plaintext_outputs) {
-        print_double_message(plaintext_output.data(), ("Plaintext output [" + name + "]").c_str(), 1);
+        ls::print_double_message(plaintext_output.data(), ("Plaintext output [" + name + "]").c_str(), 1);
     }
 
     if (verify) {
