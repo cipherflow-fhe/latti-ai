@@ -17,7 +17,6 @@
  */
 
 #include "conv2d_packed_layer.h"
-#include "../common.h"
 #include "util.h"
 
 #include <array>
