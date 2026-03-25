@@ -115,7 +115,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             layer_output_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
-        elif layer_config['type'] in ('conv2d', 'conv1d'):
+        elif layer_config['type'] == 'conv2d':
             input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
             groups = layer_config['groups']
             kernel_shape = layer_config['kernel_shape']
@@ -273,21 +273,10 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                             mask_pt = [
                                 [
                                     CkksPlaintextRingtNode(f'convm_{layer_id}_{i}_{j}')
-                                    for j in range(min(n_block_per_ct, n_out_channel))
+                                    for j in range(min(n_block_per_ct, n_out_channel - i * n_block_per_ct))
                                 ]
                                 for i in range(size_0)
                             ]
-                            remove_mask = {}
-                            for idx in range(len(mask_pt)):
-                                for jdx in range(len(mask_pt[0])):
-                                    m_idx = idx * len(mask_pt[0]) + jdx
-                                    remove_mask[idx] = []
-                                    if m_idx >= n_out_channel:
-                                        remove_mask[idx].append(mask_pt[idx][jdx])
-                            for k in remove_mask.keys():
-                                v = remove_mask[k]
-                                for vi in v:
-                                    mask_pt[k].remove(vi)
                             input_args.append(Argument(f'convm_{layer_id}', mask_pt))
 
                     input_args.append(Argument(f'convw_{layer_id}', weight_pt))
