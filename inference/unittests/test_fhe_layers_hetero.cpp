@@ -2005,7 +2005,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv1d", "", HeteroProcessors) {
                                     print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
                                     print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
 
-                                    auto compare_result = compare(plain_output.to_array_2d(), output_mg.to_array_2d());
+                                    auto compare_result = compare(plain_output, output_mg);
                                     REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
                                     REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
                                 }
@@ -2106,7 +2106,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
                                     print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
                                     print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
 
-                                    auto compare_result = compare(plain_output.to_array_2d(), output_mg.to_array_2d());
+                                    auto compare_result = compare(plain_output, output_mg);
                                     REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
                                     REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
                                 }

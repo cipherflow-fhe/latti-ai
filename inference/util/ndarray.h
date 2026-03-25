@@ -27,7 +27,7 @@
 #include <functional>
 #include <stdexcept>
 #include <limits>
-#include "helper.h"
+#include "numeric.h"
 
 template <typename T, int dim> class Array {
 public:
