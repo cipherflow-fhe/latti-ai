@@ -23,7 +23,7 @@
 
 class FeatureMatEncrypted : public FeatureEncrypted {
 public:
-    Duo shape;  // {rows (L), cols (C)}
+    Duo shape = {0, 0};  // {rows (L), cols (C)}
     std::vector<ls::CkksCiphertext> data;
     std::vector<ls::CkksCompressedCiphertext> data_compress;
 
