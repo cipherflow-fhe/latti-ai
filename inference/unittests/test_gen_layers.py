@@ -75,7 +75,7 @@ def export_to_onnx(model, inputs, output_names, onnx_path, dynamic_axes=None, op
 def gen_conv_mega_ag(
     n_in_channel, n_out_channel, input_shape, kernel_shape, stride, skip, groups, init_level, style='ordinary'
 ):
-    set_param(n=16384)
+    set_param('PN14QP438')
     model = SimpleCNN()
     conv = nn.Conv2d(
         n_in_channel, n_out_channel, kernel_shape[0], stride[0], padding=int(kernel_shape[0] / 2), groups=groups
@@ -176,7 +176,7 @@ class SimpleCNN(nn.Module):
 class TestLayerExport(unittest.TestCase):
     def test_sq(self):
         N = 16384
-        set_param(n=N)
+        set_param('PN14QP438')
         n_in_level = 2
         shapes = [16, 32, 64]
         for s in shapes:
@@ -313,7 +313,7 @@ class TestLayerExport(unittest.TestCase):
                         input_shape = [block_shape[0] * mult, block_shape[1] * mult]
 
                         for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
-                            set_param(n=N)
+                            set_param('PN14QP438')
 
                             next_stride = [
                                 input_shape[0] // (block_shape[0] * stride[0]),
@@ -397,7 +397,7 @@ class TestLayerExport(unittest.TestCase):
                 input_shape = [block_shape[0] * 2, block_shape[1] * 2]
 
                 for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
-                    set_param(n=N)
+                    set_param('PN14QP438')
 
                     next_stride = [
                         max(1, input_shape[0] // (block_shape[0] * stride[0])),
@@ -473,7 +473,7 @@ class TestLayerExport(unittest.TestCase):
 
     def test_poly_bsgs(self):
         N = 16384
-        set_param(n=N)
+        set_param('PN14QP438')
         n_in_channel = 32
         input_shape = (32, 32)
         skip = (1, 1)
@@ -508,7 +508,7 @@ class TestLayerExport(unittest.TestCase):
 
     def test_fc_pack_skip_feature0d(self):
         N = 16384
-        set_param(n=N)
+        set_param('PN14QP438')
         w_shape = [10, 4096]
         virtual_shape = [1, 1]
         level = 2
@@ -562,7 +562,7 @@ class TestLayerExport(unittest.TestCase):
 
     def test_fc_fc_feature0d(self):
         N = 16384
-        set_param(n=N)
+        set_param('PN14QP438')
         n_slot = 8192
         init_level = 2
         input_channel = 1024
@@ -645,7 +645,7 @@ class TestLayerExport(unittest.TestCase):
 
     def test_fc_multiplexed_feature2d(self):
         N = 16384
-        set_param(n=N)
+        set_param('PN14QP438')
         level = 3
         n_in_channel = 64
         n_out_channel = 10
@@ -707,7 +707,7 @@ class TestLayerExport(unittest.TestCase):
 
     def test_poly_relu_bsgs_feature2d(self):
         N = 16384
-        set_param(n=N)
+        set_param('PN14QP438')
         n_in_channel = 32
         input_shape = (32, 32)
         skip = (1, 1)
@@ -759,7 +759,7 @@ class TestLayerExport(unittest.TestCase):
 
     def test_poly_bsgs_feature0d(self):
         N = 16384
-        set_param(n=N)
+        set_param('PN14QP438')
         n_in_channel = 32
         orders = [2, 4, 6, 8]
         skips = [1, 2, 128, 256]
@@ -799,7 +799,7 @@ class TestLayerExport(unittest.TestCase):
 
     def test_conv1d_layer(self):
         N = 16384
-        set_param(n=N)
+        set_param('PN14QP438')
         n_in_channel = 4
         n_out_channel = 4
         init_level = 5
@@ -859,7 +859,7 @@ class TestLayerExport(unittest.TestCase):
 
     def test_mux_conv1d_layer(self):
         N = 16384
-        set_param(n=N)
+        set_param('PN14QP438')
 
         n_in_channel = 16
         n_out_channel = 32
@@ -924,7 +924,7 @@ class TestLayerExport(unittest.TestCase):
 
     def test_add_layer(self):
         N = 16384
-        set_param(n=N)
+        set_param('PN14QP438')
         level = 2
         skip = (1, 1)
         shapes = [16, 32]
@@ -951,7 +951,7 @@ class TestLayerExport(unittest.TestCase):
 
     def test_avgpool2d_layer(self):
         N = 16384
-        set_param(n=N)
+        set_param('PN14QP438')
         level = 3
         skip = (1, 1)
         shapes = [8, 16, 32, 64]
@@ -988,7 +988,7 @@ class TestLayerExport(unittest.TestCase):
 
     def test_mult_scalar_layer(self):
         N = 16384
-        set_param(n=N)
+        set_param('PN14QP438')
         level = 3
         skip = (1, 1)
         s = 32

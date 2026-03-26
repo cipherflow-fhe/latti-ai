@@ -25,10 +25,6 @@
 
 namespace ls = cxx_sdk_v2;
 
-using fhe_ops_lib::CkksContext;
-using fhe_ops_lib::CkksParameter;
-using std::string;
-
 enum class ComputeDevice { CPU, GPU, FPGA };
 
 class Node {
