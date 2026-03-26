@@ -35,6 +35,7 @@ public:
     std::vector<double> select_tensor(int num);
     void prepare_weight(const ls::CkksParameter& param_in,
                         int n_channel_per_ct,
+                        int n_channel,
                         int level,
                         const Duo& skip_in,
                         const Duo& shape_in);
