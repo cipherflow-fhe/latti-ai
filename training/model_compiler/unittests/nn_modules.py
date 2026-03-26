@@ -89,6 +89,20 @@ class SingleDense(nn.Module):
         return x
 
 
+class TwoDense(nn.Module):
+    """Pure FC-FC network: graph input is 0d (1-D feature vector)."""
+
+    def __init__(self):
+        super().__init__()
+        self.dense0 = nn.Linear(in_features=64, out_features=64, bias=True)
+        self.dense1 = nn.Linear(in_features=64, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.dense0(x)
+        x = self.dense1(x)
+        return x
+
+
 class SingleReshape(nn.Module):
     def __init__(self):
         super().__init__()
