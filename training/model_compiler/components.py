@@ -75,6 +75,8 @@ class FheParameter:
             'log_default_scale': self.log_default_scale,
             'block_shape': self.block_shape,
             'param_name': self.name,
+            'q': self.q,
+            'p': self.p,
         }
 
     def __repr__(self) -> str:
