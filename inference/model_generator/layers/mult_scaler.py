@@ -39,11 +39,11 @@ class MultScalarLayer:
         # self.target_scale = target_scale
         return
 
-    def call(self, x1: list[DataNode], pt_scale1: DataNode):
-        result: list[list[DataNode]] = list()
+    def call(self, x1: list[DataNode], weight_pt: list[DataNode]):
+        result: list[DataNode] = list()
 
         for i in range(len(x1)):
-            mult_res = mult(x1[i], pt_scale1)
+            mult_res = mult(x1[i], weight_pt[i])
             mult_res_scale = rescale(mult_res)
             result.append(mult_res_scale)
         return result

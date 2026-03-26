@@ -22,6 +22,8 @@
 
 using namespace cxx_sdk_v2;
 
+using namespace fhe_ops_lib;
+
 InferenceClient::InferenceClient(const std::string& client_dir) : client_dir_(client_dir) {}
 
 InferenceClient::~InferenceClient() = default;

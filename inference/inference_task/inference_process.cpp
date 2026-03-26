@@ -443,8 +443,8 @@ void InitInferenceProcess::init_fhe_avgpool_layer(const string& key,
             ckks_avgpool[key] = move(avgpool);
         } else {
             auto avgpool = make_unique<Avgpool2DLayer>(feature_input.shape, stride);
-            avgpool->prepare_weight(param, feature_input.pack_channel_per_ciphertext, feature_input.level,
-                                    feature_input.skip, feature_input.shape);
+            avgpool->prepare_weight(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
+                                    feature_input.level, feature_input.skip, feature_input.shape);
             ckks_avgpool[key] = move(avgpool);
         }
     }
