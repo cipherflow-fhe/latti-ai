@@ -23,10 +23,11 @@
 // complete task directories under build/inference/hetero_e2e/<test_name>/.
 //
 // Usage:
-//   ./test_e2e "[cpu]"              # Run all CPU tests
-//   ./test_e2e "[gpu]"              # Run all GPU tests
-//   ./test_e2e "[e2e]"              # Run all (CPU + GPU)
-//   ./test_e2e "e2e_cpu/conv_act"   # Run a specific CPU test
+//   ./test_e2e "[e2e]"                # Run all tests
+//   ./test_e2e "[cpu]"                # Run all CPU tests
+//   ./test_e2e "[gpu]"                # Run all GPU tests
+//   ./test_e2e "cpu/single_conv"      # Run a specific CPU test
+//   ./test_e2e "gpu/single_conv"      # Run a specific GPU test
 
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
@@ -49,23 +50,6 @@ namespace fs = std::filesystem;
 
 static const fs::path e2e_base_path = "../hetero_e2e";
 
-static vector<fs::path> discover_tests(const fs::path& base) {
-    vector<fs::path> result;
-    if (!fs::exists(base))
-        return result;
-    for (auto& entry : fs::directory_iterator(base)) {
-        if (!entry.is_directory())
-            continue;
-        auto client_config = entry.path() / "task" / "client" / "task_config.json";
-        auto server_config = entry.path() / "task" / "server" / "task_config.json";
-        if (fs::exists(client_config) && fs::exists(server_config)) {
-            result.push_back(entry.path());
-        }
-    }
-    sort(result.begin(), result.end());
-    return result;
-}
-
 static void run_e2e_test(const fs::path& test_dir, bool use_gpu) {
     using clock = chrono::high_resolution_clock;
     string test_name = test_dir.filename().string();
@@ -82,7 +66,7 @@ static void run_e2e_test(const fs::path& test_dir, bool use_gpu) {
         input_csvs[name] = csv_path.string();
     }
 
-    // Timing records: label → duration in ms
+    // Timing records: label -> duration in ms
     struct TimingRecord {
         const char* label;
         double ms;
@@ -174,26 +158,166 @@ static void run_e2e_test(const fs::path& test_dir, bool use_gpu) {
     }
 }
 
-TEST_CASE("e2e_cpu", "[e2e][cpu]") {
-    auto test_dirs = discover_tests(e2e_base_path);
-    REQUIRE_FALSE(test_dirs.empty());
+// == CPU tests ================================================================
 
-    for (const auto& test_dir : test_dirs) {
-        SECTION(test_dir.filename().string()) {
-            run_e2e_test(test_dir, false);
-        }
-    }
+TEST_CASE("cpu/single_conv", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "single_conv", false);
+}
+TEST_CASE("cpu/single_act", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "single_act", false);
+}
+TEST_CASE("cpu/single_avgpool", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "single_avgpool", false);
+}
+TEST_CASE("cpu/single_dense", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "single_dense", false);
+}
+TEST_CASE("cpu/single_add", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "single_add", false);
+}
+TEST_CASE("cpu/conv_batchnorm", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "conv_batchnorm", false);
+}
+TEST_CASE("cpu/conv_avgpool_reshape_dense", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "conv_avgpool_reshape_dense", false);
+}
+TEST_CASE("cpu/concat_e2e", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "concat_e2e", false);
+}
+TEST_CASE("cpu/conv_upsample_e2e", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "conv_upsample_e2e", false);
+}
+TEST_CASE("cpu/avgpool_stride4", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "avgpool_stride4", false);
+}
+TEST_CASE("cpu/poly_n_8192", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "poly_n_8192", false);
+}
+TEST_CASE("cpu/conv_act", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "conv_act", false);
+}
+TEST_CASE("cpu/resnet_basic_block", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "resnet_basic_block", false);
+}
+TEST_CASE("cpu/poly_n_32768", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "poly_n_32768", false);
+}
+TEST_CASE("cpu/poly_n_65536_no_btp", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "poly_n_65536_no_btp", false);
+}
+TEST_CASE("cpu/btp", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "btp", false);
+}
+TEST_CASE("cpu/conv_series", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "conv_series", false);
+}
+TEST_CASE("cpu/act_series", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "act_series", false);
+}
+TEST_CASE("cpu/intertwined", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "intertwined", false);
+}
+TEST_CASE("cpu/single_avgpool_big_size", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "single_avgpool_big_size", false);
+}
+TEST_CASE("cpu/single_conv_with_stride_big_size", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "single_conv_with_stride_big_size", false);
+}
+TEST_CASE("cpu/conv_mch_s1", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "conv_mch_s1", false);
+}
+TEST_CASE("cpu/conv_mch_s2", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "conv_mch_s2", false);
+}
+TEST_CASE("cpu/depthwise_conv_s1", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "depthwise_conv_s1", false);
+}
+TEST_CASE("cpu/depthwise_conv_s2", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "depthwise_conv_s2", false);
+}
+TEST_CASE("cpu/mux_conv_large_channel", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "mux_conv_large_channel", false);
 }
 
-#ifdef INFERENCE_SDK_ENABLE_GPU
-TEST_CASE("e2e_gpu", "[e2e][gpu]") {
-    auto test_dirs = discover_tests(e2e_base_path);
-    REQUIRE_FALSE(test_dirs.empty());
+// == GPU tests ================================================================
 
-    for (const auto& test_dir : test_dirs) {
-        SECTION(test_dir.filename().string()) {
-            run_e2e_test(test_dir, true);
-        }
-    }
+#ifdef INFERENCE_SDK_ENABLE_GPU
+TEST_CASE("gpu/single_conv", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "single_conv", true);
+}
+TEST_CASE("gpu/single_act", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "single_act", true);
+}
+TEST_CASE("gpu/single_avgpool", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "single_avgpool", true);
+}
+TEST_CASE("gpu/single_dense", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "single_dense", true);
+}
+TEST_CASE("gpu/single_add", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "single_add", true);
+}
+TEST_CASE("gpu/conv_batchnorm", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "conv_batchnorm", true);
+}
+TEST_CASE("gpu/conv_avgpool_reshape_dense", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "conv_avgpool_reshape_dense", true);
+}
+TEST_CASE("gpu/concat_e2e", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "concat_e2e", true);
+}
+TEST_CASE("gpu/conv_upsample_e2e", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "conv_upsample_e2e", true);
+}
+TEST_CASE("gpu/avgpool_stride4", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "avgpool_stride4", true);
+}
+TEST_CASE("gpu/poly_n_8192", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "poly_n_8192", true);
+}
+TEST_CASE("gpu/conv_act", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "conv_act", true);
+}
+TEST_CASE("gpu/resnet_basic_block", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "resnet_basic_block", true);
+}
+TEST_CASE("gpu/poly_n_32768", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "poly_n_32768", true);
+}
+TEST_CASE("gpu/poly_n_65536_no_btp", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "poly_n_65536_no_btp", true);
+}
+TEST_CASE("gpu/btp", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "btp", true);
+}
+TEST_CASE("gpu/conv_series", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "conv_series", true);
+}
+TEST_CASE("gpu/act_series", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "act_series", true);
+}
+TEST_CASE("gpu/intertwined", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "intertwined", true);
+}
+TEST_CASE("gpu/single_avgpool_big_size", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "single_avgpool_big_size", true);
+}
+TEST_CASE("gpu/single_conv_with_stride_big_size", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "single_conv_with_stride_big_size", true);
+}
+TEST_CASE("gpu/conv_mch_s1", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "conv_mch_s1", true);
+}
+TEST_CASE("gpu/conv_mch_s2", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "conv_mch_s2", true);
+}
+TEST_CASE("gpu/depthwise_conv_s1", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "depthwise_conv_s1", true);
+}
+TEST_CASE("gpu/depthwise_conv_s2", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "depthwise_conv_s2", true);
+}
+TEST_CASE("gpu/mux_conv_large_channel", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "mux_conv_large_channel", true);
 }
 #endif

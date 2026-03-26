@@ -21,7 +21,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from inference.lattisense.frontend.custom_task import *
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'lattisense'))
+from frontend.custom_task import *
 from inference.model_generator.layers.activation_layer import *
 from inference.model_generator.layers.add_pack import *
 from inference.model_generator.layers.avgpool2d_layer import *
@@ -345,7 +346,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 layer_output_nodes.append(bootstrap(node))
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
-        elif layer_config['type'] == 'add':
+        elif layer_config['type'] in ('add', 'add2d'):
             layer_output_nodes = [
                 add(
                     feature_id_to_nodes_map[layer_input_feature_ids[0]][i],
@@ -355,7 +356,19 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             ]
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
-        elif layer_config['type'] == 'avgpool2d':
+        elif 'concat2d' in layer_config['type']:
+            # concat is a runtime-only operation: just merge node lists from all inputs
+            layer_output_nodes = []
+            for input_fid in layer_input_feature_ids:
+                layer_output_nodes.extend(feature_id_to_nodes_map[input_fid])
+            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+
+        elif 'upsample' in layer_config['type']:
+            # upsample/upsample_nearest handled at runtime by InferenceProcess
+            layer_output_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
+            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+
+        elif 'avgpool' in layer_config['type']:
             input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
             stride = layer_config['stride']
             avgpool = Avgpool2DLayer(stride, input_shape, channel=n_in_channel, skip=skip)
