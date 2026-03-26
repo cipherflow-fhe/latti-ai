@@ -78,6 +78,7 @@ jobs:
           else
             echo "Building HEonGPU from scratch (arch=${CUDA_ARCH})"
             cd inference/lattisense/HEonGPU
+            rm -rf build install
             cmake -S . -B build \
               -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH} \
               -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
