@@ -52,6 +52,17 @@ def main():
     first_param = next(iter(ckks_config.values()))
     param_name = first_param.get('param_name', '')
 
+    if not param_name:
+        n = first_param['poly_modulus_degree']
+        n_mult_level = first_param.get('n_mult_level', 0)
+        if n == 65536 and n_mult_level <= 9:
+            param_name = 'N16QP1546H192H32'
+        else:
+            _N_TO_PARAM = {8192: 'PN13QP218', 16384: 'PN14QP438', 32768: 'PN15QP880', 65536: 'PN16QP1761'}
+            param_name = _N_TO_PARAM.get(n, '')
+        if not param_name:
+            raise ValueError(f'Cannot determine param_name for poly_modulus_degree={n}')
+
     # Read pack_style from task_config.json.
     task_config_path = os.path.join(task_dir, 'client', 'task_config.json')
     with open(task_config_path, 'r', encoding='utf-8') as f:
