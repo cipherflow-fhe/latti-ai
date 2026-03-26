@@ -22,21 +22,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from inference.lattisense.frontend.custom_task import *
-from model_generator.layers.activation_layer import *
-from model_generator.layers.add_pack import *
-from model_generator.layers.avgpool2d_layer import *
-from model_generator.layers.concat_layer import *
-from model_generator.layers.conv1d_packed_layer import *
-from model_generator.layers.conv2d_depthwise import *
-from model_generator.layers.conv2d_packed_layer import *
-from model_generator.layers.dense_packed_layer import *
-from model_generator.layers.inverse_multiplexed_conv2d_layer import *
-from model_generator.layers.mult_scaler import *
-from model_generator.layers.multiplexed_conv1d_pack_layer import *
-from model_generator.layers.multiplexed_conv2d_pack_layer import *
-from model_generator.layers.multiplexed_conv2d_pack_layer_depthwise import *
-from model_generator.layers.poly_relu2d import *
-from model_generator.layers.upsample_layer import *
+from inference.model_generator.layers.activation_layer import *
+from inference.model_generator.layers.add_pack import *
+from inference.model_generator.layers.avgpool2d_layer import *
+from inference.model_generator.layers.concat_layer import *
+from inference.model_generator.layers.conv1d_packed_layer import *
+from inference.model_generator.layers.conv2d_depthwise import *
+from inference.model_generator.layers.conv2d_packed_layer import *
+from inference.model_generator.layers.dense_packed_layer import *
+from inference.model_generator.layers.inverse_multiplexed_conv2d_layer import *
+from inference.model_generator.layers.mult_scaler import *
+from inference.model_generator.layers.multiplexed_conv1d_pack_layer import *
+from inference.model_generator.layers.multiplexed_conv2d_pack_layer import *
+from inference.model_generator.layers.multiplexed_conv2d_pack_layer_depthwise import *
+from inference.model_generator.layers.poly_relu2d import *
+from inference.model_generator.layers.upsample_layer import *
 from training.model_compiler.components import (
     N16QP1546H192H32,
     PN13QP218,
