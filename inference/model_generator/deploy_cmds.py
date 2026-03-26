@@ -21,8 +21,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'lattisense'))
-from frontend.custom_task import *
 from inference.model_generator.layers.activation_layer import *
 from inference.model_generator.layers.add_pack import *
 from inference.model_generator.layers.avgpool2d_layer import *
