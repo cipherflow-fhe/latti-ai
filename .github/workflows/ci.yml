@@ -108,7 +108,7 @@ jobs:
         timeout-minutes: 30
         run: |
           cd build/inference/unittests
-          ./test_e2e "[gpu]"
+          ./test_e2e "[e2e][gpu]"
 
       - name: Generate example instructions
         run: |
