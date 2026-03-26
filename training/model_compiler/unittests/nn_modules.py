@@ -692,4 +692,3 @@ class AvgpoolVariedStride(nn.Module):
     def forward(self, x):
         x = self.pool(x)
         return x
-
