@@ -189,7 +189,7 @@ class Feature2DShare : public FeatureShare {
 public:
     Feature2DShare(uint64_t q, int s);
 
-    Duo shape;
+    Duo shape = {0, 0};
 };
 
 inline void
