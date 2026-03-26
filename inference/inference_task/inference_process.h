@@ -34,13 +34,13 @@ public:
 
 class FeatureNode : public Node {
 public:
-    FeatureNode(std::string node_id_in,
+    FeatureNode(const std::string& node_id_in,
                 int dim_in,
                 int channel_in,
                 double scale_in,
                 uint32_t shape_in[],
                 uint32_t skip_in[],
-                std::string ckks_parameter_id_in,
+                const std::string& ckks_parameter_id_in,
                 int pack_channel_per_ciphertext_in);
 
     std::string node_id;
@@ -53,8 +53,8 @@ public:
     Duo invalid_fill = {0, 0};  // 0D from special_info，2D
     std::string ckks_parameter_id;
     int pack_channel_per_ciphertext;
-    int level;
-    double ckks_scale;
+    int level = 0;
+    double ckks_scale = 0.0;
 
     FeatureNode(const json& json_data)
         : dim(json_data["dim"]), channel(json_data["channel"]), scale(json_data["scale"]),
@@ -119,7 +119,7 @@ public:
     json task_output_param;
     int start_task_id;
     int end_task_id;
-    bool enable_fpga;
+    bool enable_fpga = false;
     json server_task;
     std::filesystem::path current_json_path;
     json json_data;

@@ -33,28 +33,24 @@ InferenceProcess::InferenceProcess(InitInferenceProcess* fp_in, bool is_fpga_in)
 
 InferenceProcess::~InferenceProcess() {}
 
-FeatureNode::FeatureNode(string node_id_in,
+FeatureNode::FeatureNode(const string& node_id_in,
                          int dim_in,
                          int channel_in,
                          double scale_in,
                          uint32_t shape_in[],
                          uint32_t skip_in[],
-                         string ckks_parameter_id_in,
-                         int pack_channel_per_ciphertext_in) {
-    node_id = node_id_in;
-    dim = dim_in;
-    channel = channel_in;
-    scale = scale_in;
+                         const string& ckks_parameter_id_in,
+                         int pack_channel_per_ciphertext_in)
+    : node_id(node_id_in), dim(dim_in), channel(channel_in), scale(scale_in), ckks_parameter_id(ckks_parameter_id_in),
+      pack_channel_per_ciphertext(pack_channel_per_ciphertext_in) {
     shape[0] = shape_in[0];
     shape[1] = shape_in[1];
     skip[0] = skip_in[0];
     skip[1] = skip_in[1];
-    ckks_parameter_id = ckks_parameter_id_in;
-    pack_channel_per_ciphertext = pack_channel_per_ciphertext_in;
 }
 
-InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool is_fpga) {
-    project_path = project_path_in;
+InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool is_fpga)
+    : project_path(project_path_in) {
     const json& config = read_json(project_path / "task_config.json");
     task_type = config["task_type"].get<string>();
     pack_style = config["pack_style"].get<string>();
