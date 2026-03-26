@@ -17,11 +17,11 @@
 import argparse
 import json
 import math
-import os
 import sys
+from pathlib import Path
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, project_root)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from inference.lattisense.frontend.custom_task import *
 from model_generator.layers.activation_layer import *
 from model_generator.layers.add_pack import *
 from model_generator.layers.avgpool2d_layer import *
@@ -37,8 +37,6 @@ from model_generator.layers.multiplexed_conv2d_pack_layer import *
 from model_generator.layers.multiplexed_conv2d_pack_layer_depthwise import *
 from model_generator.layers.poly_relu2d import *
 from model_generator.layers.upsample_layer import *
-
-from inference.lattisense.frontend.custom_task import *
 from training.model_compiler.components import (
     N16QP1546H192H32,
     PN13QP218,
