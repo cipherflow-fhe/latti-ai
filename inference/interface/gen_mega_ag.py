@@ -24,22 +24,11 @@ Usage:
 
 import argparse
 import json
-import os
 import sys
+from pathlib import Path
 
-# Resolve project root by walking up until we find the 'training' directory.
-script_dir = os.path.dirname(os.path.abspath(__file__))
-_dir = script_dir
-while _dir != os.path.dirname(_dir):
-    if os.path.isdir(os.path.join(_dir, 'training')):
-        break
-    _dir = os.path.dirname(_dir)
-project_root = _dir
-
-sys.path.insert(0, project_root)
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from inference.lattisense.frontend.custom_task import *  # noqa: E402
-
 from inference.model_generator.deploy_cmds import gen_custom_task  # noqa: E402
 
 
