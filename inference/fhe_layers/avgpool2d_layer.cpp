@@ -124,6 +124,7 @@ vector<double> Avgpool2DLayer::select_tensor(int num) {
 
 void Avgpool2DLayer::prepare_weight(const CkksParameter& param_in,
                                     int n_channel_per_ct,
+                                    int n_channel,
                                     int level,
                                     const Duo& skip_in,
                                     const Duo& shape_in) {
@@ -132,9 +133,11 @@ void Avgpool2DLayer::prepare_weight(const CkksParameter& param_in,
     n_block_per_ct = div_ceil(n_channel_per_ct, (skip[0] * skip[1]));
     shape = shape_in;
     level_ = level;
+    uint32_t out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1];
+    uint32_t n_select_pt = std::min((uint32_t)n_channel, out_channels_per_ct);
     select_tensor_pt.clear();
-    select_tensor_pt.resize(n_channel_per_ct * stride[0] * stride[1]);
-    for (int i = 0; i < n_channel_per_ct * stride[0] * stride[1]; i++) {
+    select_tensor_pt.resize(n_select_pt);
+    for (uint32_t i = 0; i < n_select_pt; i++) {
         vector<double> si = select_tensor(i);
         CkksPlaintextRingt p_st = ctx.encode_ringt(si, ctx.get_parameter().get_q(level));
         select_tensor_pt[i] = move(p_st);
@@ -164,7 +167,8 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
             result_ct[idx] = ctx_copy.add(result_ct[idx], ct_tmp);
         }
         vector<int32_t> steps;
-        for (int i = 0; i < x.n_channel_per_ct; i++) {
+        uint32_t n_valid = std::min(x.n_channel_per_ct, x.n_channel - idx * x.n_channel_per_ct);
+        for (uint32_t i = 0; i < n_valid; i++) {
             int32_t rp = (idx * x.n_channel_per_ct + i) % (x.n_channel_per_ct * stride[0] * stride[1]);
             int32_t r_num0 =
                 floor(rp / (skip[0] * skip[1] * stride[0] * stride[1])) * skip[0] * skip[1] * shape[0] * shape[1];
@@ -181,15 +185,13 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
             steps.push_back(r_num);
         }
         std::map<int32_t, cxx_sdk_v2::CkksCiphertext> s_rots = ctx_copy.rotate(result_ct[idx], steps);
-        for (int i = 0; i < x.n_channel_per_ct; i++) {
+        for (uint32_t i = 0; i < n_valid; i++) {
             int out_channel_pos = (idx * x.n_channel_per_ct + i) % (x.n_channel_per_ct * stride[0] * stride[1]);
             auto& pt_ringt = select_tensor_pt[out_channel_pos];
             auto pt = ctx_copy.ringt_to_mul(pt_ringt, level_);
             cxx_sdk_v2::CkksCiphertext c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], pt);
-            if ((idx * x.n_channel_per_ct + i) < x.n_channel) {
-                result_tmp[idx * x.n_channel_per_ct + i] =
-                    move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
-            }
+            result_tmp[idx * x.n_channel_per_ct + i] =
+                move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
         }
     });
     vector<CkksCiphertext> res;
