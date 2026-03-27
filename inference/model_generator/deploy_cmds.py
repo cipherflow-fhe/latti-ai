@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.activation_layer import *
 from inference.model_generator.layers.add_pack import *
 from inference.model_generator.layers.avgpool2d_layer import *
@@ -440,7 +441,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif layer_config['type'] == 'fc0':
-            n_packed_in_channel = math.ceil(n_in_channel / 8192)
+            n_packed_in_channel = math.ceil(n_in_channel / (n // 2))
             n_packed_out_channel = math.ceil(n_out_channel / pack)
             if 'special_info' not in config_info['feature'][layer_input_feature_ids[0]]:
                 # call_skip_0d path — matching test_fc_fc_feature0d Layer 1
@@ -511,7 +512,9 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
     output_args = [Argument(output_id, feature_id_to_nodes_map[output_id]) for output_id in task_output_feature_ids]
 
-    process_custom_task(input_args=input_args, output_args=output_args, output_instruction_path=task_path)
+    process_custom_task(
+        input_args=input_args, output_args=output_args, output_instruction_path=task_path, fpga_acc=False
+    )
 
 
 if __name__ == '__main__':

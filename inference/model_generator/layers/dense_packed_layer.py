@@ -190,21 +190,22 @@ class DensePackedLayer:
         n_block_input = int(np.ceil(n_channel / (n_num_pre_ct * n_channel_per_block))) * n_num_pre_ct
         n_packed_out_feature_for_mult_pack = int(np.ceil(self.n_out_channel / n_num_pre_ct))
 
-        rotated_tmp = []
+        # Each input ct contributes n_num_pre_ct rotations (one per block slot within the ct).
+        # rotated_cts[x_id][rot] = x[x_id] rotated by rot * block_size slots.
+        block_size = input_ct_shape[0] * input_ct_shape[1]
+        rotated_cts = []
         for x_id in range(x_size):
-            r_tmp = self.populate_rotations_1_side(x[x_id], n_block_input - 1, input_ct_shape[0] * input_ct_shape[1])
-            rotated_tmp.append(r_tmp)
-        input_rotated_x = []
-        for rr in rotated_tmp:
-            for ri in rr:
-                input_rotated_x.append(ri)
+            rotated_cts.append(self.populate_rotations_1_side(x[x_id], n_num_pre_ct - 1, block_size))
+
         result = []
 
         for packed_out_feature_idx in range(n_packed_out_feature_for_mult_pack):
             x_ct_list = []
             w_pt_list = []
             for in_feature_idx in range(len(weight_pt[packed_out_feature_idx])):
-                x_ct = input_rotated_x[in_feature_idx]
+                group = in_feature_idx // n_num_pre_ct
+                offset = in_feature_idx % n_num_pre_ct
+                x_ct = rotated_cts[group][offset]
                 w_pt = weight_pt[packed_out_feature_idx][in_feature_idx]
                 x_ct_list.append(x_ct)
                 w_pt_list.append(w_pt)
@@ -213,11 +214,11 @@ class DensePackedLayer:
             s = rescale(partial_sum)
             b_pt = bias_pt[packed_out_feature_idx]
             s = add(s, b_pt)
-            n_term = input_ct_shape[0] * input_ct_shape[1]
-            while n_term > 1:
-                rotated = rotate_cols(s, int(n_term / 2))
+            n_fold = block_size
+            while n_fold > 1:
+                rotated = rotate_cols(s, n_fold // 2)
                 s = add(s, rotated[0])
-                n_term /= 2
+                n_fold //= 2
             result.append(s)
         return result
 
@@ -235,21 +236,21 @@ class DensePackedLayer:
         n_block_input = int(np.ceil(n_channel / (n_num_pre_ct * n_channel_per_block))) * n_num_pre_ct
         n_packed_out_feature_for_mult_pack = int(np.ceil(self.n_out_channel / n_num_pre_ct))
 
-        rotated_tmp = []
+        # Each input ct contributes n_num_pre_ct rotations (one per block slot within the ct).
+        block_size = input_ct_shape[0] * input_ct_shape[1]
+        rotated_cts = []
         for x_id in range(x_size):
-            r_tmp = self.populate_rotations_1_side(x[x_id], n_block_input - 1, input_ct_shape[0] * input_ct_shape[1])
-            rotated_tmp.append(r_tmp)
-        input_rotated_x = []
-        for rr in rotated_tmp:
-            for ri in rr:
-                input_rotated_x.append(ri)
+            rotated_cts.append(self.populate_rotations_1_side(x[x_id], n_num_pre_ct - 1, block_size))
+
         result = []
 
         for packed_out_feature_idx in range(n_packed_out_feature_for_mult_pack):
             x_ct_list = []
             w_pt_list = []
             for in_feature_idx in range(n_block_input):
-                x_ct = input_rotated_x[in_feature_idx]
+                group = in_feature_idx // n_num_pre_ct
+                offset = in_feature_idx % n_num_pre_ct
+                x_ct = rotated_cts[group][offset]
                 w_pt = CkksPlaintextRingtNode(f'encode_pt_{packed_out_feature_idx}_{in_feature_idx}')
                 custom_compute(
                     inputs=[dense_data_source],
@@ -274,10 +275,10 @@ class DensePackedLayer:
                 attributes={'op_class': op_class, 'type': 'bias_pt', 'i': packed_out_feature_idx},
             )
             s = add(s, b_pt)
-            n_term = input_ct_shape[0] * input_ct_shape[1]
-            while n_term > 1:
-                rotated = rotate_cols(s, int(n_term / 2))
+            n_fold = block_size
+            while n_fold > 1:
+                rotated = rotate_cols(s, n_fold // 2)
                 s = add(s, rotated[0])
-                n_term /= 2
+                n_fold //= 2
             result.append(s)
         return result

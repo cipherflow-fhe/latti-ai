@@ -4,8 +4,12 @@
         "param0": {
             "poly_modulus_degree": 16384,
             "n_mult_level": 9,
-            "coeff_modulus_bit_length": 34,
-            "special_prime_bit_length": 34,
+            "log_default_scale": 34,
+            "block_shape": [
+                16,
+                16
+            ],
+            "param_name": "PN14QP438",
             "pack_num": 4
         }
     },
@@ -13,7 +17,7 @@
         "input": {
             "dim": 2,
             "channel": 1,
-            "scale": 1,
+            "scale": 1.0,
             "ckks_scale": 1,
             "shape": [
                 16,
@@ -26,12 +30,16 @@
             "ckks_parameter_id": "param0",
             "level": 7,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 32,
+            "invalid_fill": [
+                1,
+                1
+            ]
         },
         "_conv1_Conv_output_0": {
             "dim": 2,
             "channel": 16,
-            "scale": 1,
+            "scale": 1.0,
             "ckks_scale": 1,
             "shape": [
                 8,
@@ -44,12 +52,16 @@
             "ckks_parameter_id": "param0",
             "level": 6,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 32,
+            "invalid_fill": [
+                2,
+                2
+            ]
         },
         "_bn1_BatchNormalization_output_0": {
             "dim": 2,
             "channel": 16,
-            "scale": 1,
+            "scale": 1.0,
             "ckks_scale": 1,
             "shape": [
                 8,
@@ -62,12 +74,16 @@
             "ckks_parameter_id": "param0",
             "level": 6,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 32,
+            "invalid_fill": [
+                2,
+                2
+            ]
         },
         "_relu1_Simple_Polyrelu_output_0": {
             "dim": 2,
             "channel": 16,
-            "scale": 1,
+            "scale": 1.0,
             "ckks_scale": 1,
             "shape": [
                 8,
@@ -80,12 +96,16 @@
             "ckks_parameter_id": "param0",
             "level": 4,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 32,
+            "invalid_fill": [
+                2,
+                2
+            ]
         },
         "_conv2_Conv_output_0": {
             "dim": 2,
             "channel": 32,
-            "scale": 1,
+            "scale": 1.0,
             "ckks_scale": 1,
             "shape": [
                 4,
@@ -98,12 +118,16 @@
             "ckks_parameter_id": "param0",
             "level": 3,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 32,
+            "invalid_fill": [
+                4,
+                4
+            ]
         },
         "_bn2_BatchNormalization_output_0": {
             "dim": 2,
             "channel": 32,
-            "scale": 1,
+            "scale": 1.0,
             "ckks_scale": 1,
             "shape": [
                 4,
@@ -116,12 +140,16 @@
             "ckks_parameter_id": "param0",
             "level": 3,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 32,
+            "invalid_fill": [
+                4,
+                4
+            ]
         },
         "_relu2_Simple_Polyrelu_output_0": {
             "dim": 2,
             "channel": 32,
-            "scale": 1,
+            "scale": 1.0,
             "ckks_scale": 1,
             "shape": [
                 4,
@@ -134,42 +162,44 @@
             "ckks_parameter_id": "param0",
             "level": 1,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 32,
+            "invalid_fill": [
+                4,
+                4
+            ]
         },
         "_flatten_Flatten_output_0": {
             "dim": 0,
             "channel": 512,
-            "scale": 1,
+            "scale": 1.0,
             "ckks_scale": 1,
             "skip": 256,
             "ckks_parameter_id": "param0",
-            "virtual_shape": [
-                4,
-                4
-            ],
-            "virtual_skip": [
-                4,
-                4
-            ],
             "level": 1,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 32,
+            "special_info": {
+                "skip": [
+                    4,
+                    4
+                ],
+                "invalid_fill": [
+                    4,
+                    4
+                ],
+                "shape": [
+                    4,
+                    4
+                ]
+            }
         },
         "output": {
             "dim": 0,
             "channel": 10,
-            "scale": 1,
+            "scale": 1.0,
             "ckks_scale": 1,
             "skip": 256,
             "ckks_parameter_id": "param0",
-            "virtual_shape": [
-                4,
-                4
-            ],
-            "virtual_skip": [
-                4,
-                4
-            ],
             "level": 0,
             "depth": -1,
             "pack_num": 32
@@ -357,7 +387,6 @@
                 "_flatten_Flatten_output_0"
             ],
             "shape": [
-                -1,
                 512
             ],
             "level_cost": 0
