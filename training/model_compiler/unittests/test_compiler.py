@@ -906,7 +906,6 @@ class TestE2E(CompilerTestBase):
         graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'intertwined')
         self.assertTrue(check_dropped_levels_per_subgraph(graph))
 
-    @unittest.skip('skip mult_coeff')
     def test_e2e_intertwined_with_coeff(self):
         """Multi-branch graph with add + mult_scalar. Tests BTP with scale ops."""
         model = nn_modules.IntertwinedWithCoeff()

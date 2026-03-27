@@ -78,7 +78,7 @@ protected:
     Duo special_input_shape = {0, 0};
     Duo special_skip = {0, 0};
     uint32_t input_shape_ct_mult[2] = {0, 0};
-    int n_block_pre_ct = 0;
+    int n_block_per_ct = 0;
     int n_block_input = 0;
     int N_half = 0;
     Duo special_invalid_fill = {1, 1};
