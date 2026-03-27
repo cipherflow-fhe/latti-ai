@@ -440,7 +440,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif layer_config['type'] == 'fc0':
-            n_packed_in_channel = math.ceil(n_in_channel / 8192)
+            n_packed_in_channel = math.ceil(n_in_channel / (n // 2))
             n_packed_out_channel = math.ceil(n_out_channel / pack)
             if 'special_info' not in config_info['feature'][layer_input_feature_ids[0]]:
                 # call_skip_0d path — matching test_fc_fc_feature0d Layer 1
