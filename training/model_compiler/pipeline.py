@@ -53,25 +53,26 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
 
 
 def set_block_shape(params, raw_graph: LayerAbstractGraph):
-    """Set params.block_shape based on the input graph's leading feature node shape and N.
+    """Set config.block_shape based on the input graph's leading feature node shape and N.
 
     Rules:
-      (1) If shape0 * shape1 <= N / 2, block_shape = [shape0, shape1]
-      (2) Otherwise, divide both shape0 and shape1 by 2, 4, 8, 16, ...
+      (1) If leading node is not 2D, use sqrt(N/2) as a square default.
+      (2) If shape0 * shape1 <= N / 2, block_shape = [shape0, shape1]
+      (3) Otherwise, divide both shape0 and shape1 by 2, 4, 8, 16, ...,
           until shape0 * shape1 < N / 2
     """
+    slot_num = params.poly_modulus_degree // 2
     leading_nodes = raw_graph.get_leading_feature_nodes()
     if not leading_nodes or len(leading_nodes[0].shape) < 2:
+        side = 1 << (slot_num.bit_length() // 2)
+        config.block_shape = [side, side]
         return
     shape0, shape1 = leading_nodes[0].shape[0], leading_nodes[0].shape[1]
-    slot_num = params.poly_modulus_degree // 2
-    # threshold = N / 2
     divisor = 1
     while shape0 * shape1 > slot_num:
         divisor *= 2
-        s0, s1 = shape0 // divisor, shape1 // divisor
-        shape0, shape1 = s0, s1
-    params.block_shape = [shape0, shape1]
+        shape0, shape1 = shape0 // divisor, shape1 // divisor
+    config.block_shape = [shape0, shape1]
 
 
 def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph | None, float]:
