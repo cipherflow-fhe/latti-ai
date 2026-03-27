@@ -986,6 +986,37 @@ class TestLayerExport(unittest.TestCase):
                         / 'server',
                     )
 
+    def test_adaptive_avgpool2d_layer(self):
+        N = 16384
+        set_param('PN14QP438')
+        level = 3
+        skip = (1, 1)
+        shapes = [8, 16, 32, 64]
+        channels = [4, 10, 15, 32, 37]
+        strides = [(2, 2), (4, 4), (8, 8)]
+        for stride in strides:
+            for n_channel in channels:
+                for s in shapes:
+                    if s < stride[0]:
+                        continue
+                    print(f'sub-test: stride={stride[0]}, n_channel={n_channel}, s={s}')
+                    n_channel_per_ct = int(np.ceil(N / 2 / (s * s)))
+                    n_ct = int(np.ceil(n_channel / n_channel_per_ct))
+                    input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+                    avgpool = Avgpool2DLayer(stride=list(stride), shape=[s, s], channel=n_channel, skip=[1, 1])
+                    output_ct = avgpool.run_adaptive_avgpool(input_ct, n=N)
+                    input_args = list()
+                    input_args.append(Argument('input_node', input_ct))
+                    process_custom_task(
+                        input_args=input_args,
+                        output_args=[Argument('output_ct', output_ct)],
+                        output_instruction_path=base_path
+                        / f'CKKS_adaptive_avgpool2d/stride_{stride[0]}_{stride[1]}'
+                        / f'ch_{n_channel}_shape_{s}_{s}'
+                        / f'level_{level}'
+                        / 'server',
+                    )
+
     def test_mult_scalar_layer(self):
         N = 16384
         set_param('PN14QP438')

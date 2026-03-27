@@ -2160,6 +2160,84 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "avgpool2d_layer", "", HeteroProce
     }
 }
 
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool2d_layer", "", HeteroProcessors) {
+    int init_level = 3;
+    Duo skip = {1, 1};
+
+    auto run_adaptive_avgpool_test = [&](uint32_t n_channel, uint32_t s, const Duo& stride) {
+        Duo input_shape = {s, s};
+        uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
+        uint32_t n_ct = div_ceil(n_channel, n_channel_per_ct);
+
+        Array<double, 3> input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
+
+        Feature2DEncrypted input_feature(&this->context, init_level, skip);
+        input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
+
+        // No prepare_weight needed for adaptive avgpool
+        Avgpool2DLayer avgpool(input_shape, stride);
+
+        // Pre-allocate output — NO level consumed (no mult/rescale), same number of CTs
+        Feature2DEncrypted output_feature(&this->context, init_level);
+        for (uint32_t i = 0; i < n_ct; i++) {
+            output_feature.data.push_back(this->context.new_ciphertext(init_level, this->param.get_default_scale()));
+        }
+
+        fs::path project_path = base_path /
+                                ("CKKS_adaptive_avgpool2d/stride_" + to_string(stride[0]) + "_" + to_string(stride[1]) +
+                                 "/ch_" + to_string(n_channel) + "_shape_" + to_string(s) + "_" + to_string(s)) /
+                                ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+        auto arg_names = read_arg_names(project_path);
+        // Python arg order: input_node, output_ct (NO select_tensor_pt)
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_feature.data});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output_feature.data});
+        }
+        this->run(project_path, cxx_args);
+
+        // Set output metadata: invalid_fill = stride (key property of adaptive avgpool)
+        output_feature.skip = {skip[0] * stride[0], skip[1] * stride[1]};
+        output_feature.invalid_fill = {stride[0], stride[1]};
+        output_feature.n_channel = n_channel;
+        output_feature.n_channel_per_ct = n_channel_per_ct;
+        output_feature.shape = {input_shape[0] / stride[0], input_shape[1] / stride[1]};
+        auto result_mg = output_feature.unpack_multiplexed();
+
+        auto result_expected = avgpool.plaintext_call(input_array);
+
+        print_double_message(result_mg.to_array_1d().data(), "output_mg", 10);
+        print_double_message(result_expected.to_array_1d().data(), "plain_output", 10);
+
+        auto compare_result = compare(result_expected, result_mg);
+        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    };
+
+    vector<uint32_t> channels = {4, 10, 15, 32, 37};
+    vector<uint32_t> shapes = {8, 16, 32, 64};
+    vector<Duo> strides = {{2, 2}, {4, 4}, {8, 8}};
+
+    for (const auto& stride : strides) {
+        SECTION("stride=" + to_string(stride[0])) {
+            for (uint32_t n_channel : channels) {
+                SECTION("n_channel=" + to_string(n_channel)) {
+                    for (uint32_t s : shapes) {
+                        if (s < stride[0])
+                            continue;
+                        SECTION("shape=" + to_string(s) + "x" + to_string(s)) {
+                            run_adaptive_avgpool_test(n_channel, s, stride);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "concat_layer", "", HeteroProcessors) {
     int init_level = 2;
     Duo skip = {1, 1};
