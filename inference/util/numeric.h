@@ -17,19 +17,21 @@
  */
 
 #pragma once
-#include <stdio.h>
-#include <vector>
-#include <cstdint>
-#include <iostream>
-#include "layer.h"
-#include "util.h"
-#include "data_structs/feature2d.h"
 
-class ConcatLayer : public Layer {
-public:
-    ConcatLayer();
-    Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x1, const Feature2DEncrypted& x2);
-    Feature2DEncrypted run_multiple_inputs(ls::CkksContext& ctx, const std::vector<Feature2DEncrypted>& inputs);
-    Array<double, 3> concatenate_channels(const Array<double, 3>& x1, const Array<double, 3>& x2);
-    Array<double, 3> concatenate_channels_multiple_inputs(const std::vector<Array<double, 3>>& inputs);
-};
+#include <cassert>
+#include <cstdint>
+#include <cmath>
+
+inline uint32_t div_ceil(uint32_t x, uint32_t q) {
+    assert(q != 0 && "div_ceil: division by zero");
+    return (x + q - 1) / q;
+}
+
+inline bool f_equal(double a, double b) {
+    const double eps = 1e-8;
+    if (fabs(b) < eps) {
+        return fabs(a - b) < eps;
+    } else {
+        return fabs((a - b) / b) < eps;
+    }
+}

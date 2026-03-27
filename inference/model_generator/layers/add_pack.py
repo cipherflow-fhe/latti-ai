@@ -15,14 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-import os
+from pathlib import Path
 
-# Add mega_ag_generator to path for importing frontend module
-script_dir = os.path.dirname(os.path.abspath(__file__))
-mega_ag_generator_dir = os.path.join(script_dir, '../../lattisense')
-sys.path.insert(0, mega_ag_generator_dir)
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from frontend.custom_task import *
+from inference.lattisense.frontend.custom_task import *
 
 
 class AddLayer:
@@ -33,13 +30,9 @@ class AddLayer:
         self,
         x1: list[DataNode],
         x2: list[DataNode],
-        scale1: int,
-        scale2: int,
-        pt_scale1: DataNode = None,
-        pt_scale2: DataNode = None,
     ):
         result: list[DataNode] = list()
-        if scale1 == 1.0 and scale2 == 1.0:
+        for i in range(len(x1)):
             res = add(x1[i], x2[i])
             result.append(res)
         return result

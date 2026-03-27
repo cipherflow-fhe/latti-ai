@@ -18,28 +18,12 @@
 
 #pragma once
 
-#include <cstdint>
-#include <stdlib.h>
-#include <filesystem>
 #include <hdf5.h>
 
-#include "fhe_layers/reshape_layer.h"
 #include "util.h"
-#include "fhe_layers/poly_relu2d.h"
-#include "fhe_layers/poly_relu_base.h"
-#include "fhe_layers/activation_layer.h"
-#include "fhe_layers/add_layer.h"
-#include "fhe_layers/avgpool2d_layer.h"
-#include "fhe_layers/conv2d_depthwise.h"
-#include "fhe_layers/conv2d_packed_layer.h"
-#include "fhe_layers/dense_packed_layer.h"
-#include "fhe_layers/mult_scaler.h"
-#include "fhe_layers/inverse_multiplexed_conv2d_layer.h"
-#include "fhe_layers/concat_layer.h"
-#include "fhe_layers/upsample_layer.h"
-#include "fhe_layers/upsample_nearest_layer.h"
-#include "fhe_layers/multiplexed_conv2d_pack_layer.h"
-#include "fhe_layers/multiplexed_conv2d_pack_layer_depthwise.h"
+#include "fhe_layers/fhe_layers.h"
+
+namespace ls = cxx_sdk_v2;
 
 enum class ComputeDevice { CPU, GPU, FPGA };
 
@@ -50,27 +34,27 @@ public:
 
 class FeatureNode : public Node {
 public:
-    FeatureNode(string node_id_in,
+    FeatureNode(const std::string& node_id_in,
                 int dim_in,
                 int channel_in,
                 double scale_in,
                 uint32_t shape_in[],
                 uint32_t skip_in[],
-                string ckks_parameter_id_in,
+                const std::string& ckks_parameter_id_in,
                 int pack_channel_per_ciphertext_in);
 
-    string node_id;
+    std::string node_id;
     int dim;
     uint32_t channel;
     double scale;
     Duo shape = {0, 0};
     Duo skip = {1, 1};
-    Duo virtual_shape = {0, 0};
-    Duo virtual_skip = {0, 0};
-    string ckks_parameter_id;
+    Duo special_skip = {1, 1};  // 0D from special_info.skip
+    Duo invalid_fill = {0, 0};  // 0D from special_info，2D
+    std::string ckks_parameter_id;
     int pack_channel_per_ciphertext;
-    int level;
-    double ckks_scale;
+    int level = 0;
+    double ckks_scale = 0.0;
 
     FeatureNode(const json& json_data)
         : dim(json_data["dim"]), channel(json_data["channel"]), scale(json_data["scale"]),
@@ -81,13 +65,25 @@ public:
             shape[1] = json_data["shape"][1];
             skip[0] = json_data["skip"][0];
             skip[1] = json_data["skip"][1];
+            if (json_data.contains("invalid_fill")) {
+                invalid_fill[0] = json_data["invalid_fill"][0];
+                invalid_fill[1] = json_data["invalid_fill"][1];
+            }
         }
         if (dim == 0) {
             skip[0] = json_data["skip"];
-            virtual_shape[0] = json_data["virtual_shape"][0];
-            virtual_shape[1] = json_data["virtual_shape"][1];
-            virtual_skip[0] = json_data["virtual_skip"][0];
-            virtual_skip[1] = json_data["virtual_skip"][1];
+            if (json_data.contains("special_info")) {
+                auto& si = json_data["special_info"];
+                skip[0] = json_data["skip"];
+                if (si.contains("shape")) {
+                    shape[0] = si["shape"][0];
+                    shape[1] = si["shape"][1];
+                }
+                special_skip[0] = si["skip"][0];
+                special_skip[1] = si["skip"][1];
+                invalid_fill[0] = si["invalid_fill"][0];
+                invalid_fill[1] = si["invalid_fill"][1];
+            }
         }
     }
 };
@@ -110,28 +106,28 @@ Array<double, dim> h5_to_array(const hid_t& h5_file,
 class InitInferenceProcess {
 public:
     InitInferenceProcess() {}
-    InitInferenceProcess(const string& project_path_in, bool is_fpga = true);
+    InitInferenceProcess(const std::string& project_path_in, bool is_fpga = true);
     virtual ~InitInferenceProcess();
 
-    filesystem::path project_path;
-    string task_type;
-    string pack_style;
+    std::filesystem::path project_path;
+    std::string task_type;
+    std::string pack_style;
     int n_task;
-    string output_id;
-    string input_id;
+    std::string output_id;
+    std::string input_id;
     json task_input_param;
     json task_output_param;
     int start_task_id;
     int end_task_id;
-    bool enable_fpga;
+    bool enable_fpga = false;
     json server_task;
-    string current_json_path;
+    std::filesystem::path current_json_path;
     json json_data;
     json json_features;
     json json_layers;
     Duo block_shape;
     bool is_absorb_polyrelu;
-    std::map<std::string, std::unique_ptr<CkksParameter>> ckks_parameters;
+    std::map<std::string, std::unique_ptr<ls::CkksParameter>> ckks_parameters;
     bool fpga_loaded = false;
 
     bool is_lazy = false;
@@ -143,34 +139,34 @@ public:
     virtual void init_parameters(bool is_bootstrapping = false);
     virtual void load_model_prepare();
 
-    string get_abs_filename(const string& json_filename);
-    virtual void init_conv_layer(const string& key, const json& layer, const hid_t& h5_file);
-    virtual void init_square_layer(const string& key, const json& layer, const hid_t& h5_file);
-    virtual void init_dense_layer(const string& key, const json& layer, const hid_t& h5_file);
-    virtual void init_add_layer(const string& key, const json& layer, const string& block_input_feature);
-    virtual void init_reshape_layer(const string& key, const json& layer);
-    virtual void init_mult_scalar_layer(const string& key,
+    std::string get_abs_filename(const std::string& json_filename);
+    virtual void init_conv_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    virtual void init_square_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    virtual void init_dense_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    virtual void init_add_layer(const std::string& key, const json& layer, const std::string& block_input_feature);
+    virtual void init_reshape_layer(const std::string& key, const json& layer);
+    virtual void init_mult_scalar_layer(const std::string& key,
                                         const json& layer,
                                         const hid_t& h5_file,
                                         const Duo& block_shape = {128, 256});
-    virtual void init_drop_level_layer(const string& key, const json& layer);
-    virtual void init_fhe_avgpool_layer(const string& key,
+    virtual void init_drop_level_layer(const std::string& key, const json& layer);
+    virtual void init_fhe_avgpool_layer(const std::string& key,
                                         const json& layer,
                                         const bool& is_adaptive = true,
                                         const Duo& block_shape = {128, 256});
-    void init_multiplexed_conv_layer(const string& key,
+    void init_multiplexed_conv_layer(const std::string& key,
                                      const json& layer,
                                      const hid_t& h5_file,
                                      const Duo& block_shape_in = {128, 256});
 
-    void init_poly_relu2d_layer(const string& key,
+    void init_poly_relu2d_layer(const std::string& key,
                                 const json& layer,
                                 const hid_t& h5_file,
                                 bool is_absorb = true,
                                 const Duo& block_shape_in = {128, 256});
-    void init_concat_layer(const string& key, const json& layer);
-    void init_upsample_layer(const string& key, const json& layer, const Duo& block_shape = {128, 256});
-    void init_upsample_nearest_layer(const string& key, const json& layer);
+    void init_concat_layer(const std::string& key, const json& layer);
+    void init_upsample_layer(const std::string& key, const json& layer, const Duo& block_shape = {128, 256});
+    void init_upsample_nearest_layer(const std::string& key, const json& layer);
 
     std::map<std::string, std::unique_ptr<Conv2DPackedLayer>> ckks_conv2ds;
     std::map<std::string, std::unique_ptr<Conv2DPackedDepthwiseLayer>> ckks_dw_conv2ds;
@@ -199,8 +195,6 @@ public:
     InitInferenceProcess* fp;
     int task_num;
     bool is_fpga;
-    bool debug_all = true;
-    ;  // Debug switch: when enabled, outputs all ciphertexts according to task_signature.json
     ComputeDevice compute_device = ComputeDevice::CPU;  // Default to CPU mode
     Array1D template_vec;
     json json_data;
@@ -208,23 +202,18 @@ public:
     json json_layers;
 
     std::map<std::string, std::unique_ptr<FeatureEncrypted>> intermediate_result;
-    std::map<std::string, std::unique_ptr<CkksContext>> ckks_contexts;
+    std::map<std::string, std::unique_ptr<ls::CkksContext>> ckks_contexts;
 
     std::map<std::string, Array<double, 3>> p_feature2d_x;
     std::vector<std::string> available_keys;
     std::map<std::string, Array1D> p_feature0d_x;
 
     void run_task(bool is_mpc = false);
-
     void run_task_sdk(bool is_mpc = false);
-
     void run_task_plaintext(bool is_mpc = false);
 
     void set_feature(const std::string& feature_id, std::unique_ptr<FeatureEncrypted> feature);
-
     const FeatureEncrypted& get_feature(const std::string& feature_id);
-
     Feature0DEncrypted get_ciphertext_output_feature0D(const std::string& feature_id);
-
     Feature2DEncrypted get_ciphertext_output_feature2D(const std::string& feature_id);
 };

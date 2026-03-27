@@ -15,21 +15,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-import os
+from pathlib import Path
 
-# Add mega_ag_generator to path for importing frontend module
-script_dir = os.path.dirname(os.path.abspath(__file__))
-mega_ag_generator_dir = os.path.join(script_dir, '../../lattisense')
-sys.path.insert(0, mega_ag_generator_dir)
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from frontend.custom_task import *
+from inference.lattisense.frontend.custom_task import *
 
 import numpy as np
 
 op_class = 'MultConv2DPackedLayer'
 
 
-class MultConv2DPackedLayer:
+class ParMultiplexedConv2DPackedLayer:
     rotate_num = 0
     add_num = 0
     mult_num = 0
@@ -129,7 +126,7 @@ class MultConv2DPackedLayer:
         # 1. Block direction rotation
         block_rotations: list[CkksCiphertextNode] = list()
         for x_ct in x:
-            block_rotations += MultConv2DPackedLayer.populate_rotations_1_side(
+            block_rotations += ParMultiplexedConv2DPackedLayer.populate_rotations_1_side(
                 x_ct, self.n_block_per_ct - 1, self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
             )
         # 2. Kernel direction rotation
@@ -258,7 +255,7 @@ class MultConv2DPackedLayer:
         # 1. block direction rotation
         block_rotations: list[CkksCiphertextNode] = list()
         for x_ct in x:
-            block_rotations += MultConv2DPackedLayer.populate_rotations_1_side(
+            block_rotations += ParMultiplexedConv2DPackedLayer.populate_rotations_1_side(
                 x_ct, self.n_block_per_ct - 1, self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
             )
         # 2. Kernel direction rotation

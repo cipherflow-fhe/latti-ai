@@ -30,6 +30,9 @@
 #include "conv2d_depthwise.h"
 #include "util.h"
 
+using namespace std;
+using namespace cxx_sdk_v2;
+
 Conv2DPackedDepthwiseLayer::Conv2DPackedDepthwiseLayer(const CkksParameter& param,
                                                        const Duo& input_shape,
                                                        const Array<double, 4>& weight,
@@ -41,8 +44,10 @@ Conv2DPackedDepthwiseLayer::Conv2DPackedDepthwiseLayer(const CkksParameter& para
                                                        double residual_scale)
     : Conv2DLayer(param, input_shape, weight, bias, stride, skip), n_channel_per_ct_(n_channel_per_ct),
       n_packed_in_ct_(div_ceil(n_in_channel_, n_channel_per_ct)),
-      n_packed_out_ct_(div_ceil(n_out_channel_, n_channel_per_ct)), level_(level),
-      modified_scale_(param_.get_q(level) * residual_scale) {}
+      n_packed_out_ct_(div_ceil(n_out_channel_, n_channel_per_ct)) {
+    level_ = level;
+    modified_scale_ = param_.get_q(level_) * residual_scale;
+}
 
 void Conv2DPackedDepthwiseLayer::prepare_weight() {
     const std::array<uint32_t, 2> padding{kernel_shape_[0] / 2, kernel_shape_[1] / 2};
@@ -81,10 +86,6 @@ void Conv2DPackedDepthwiseLayer::prepare_weight() {
     input_rotate_units_.clear();
     input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
     input_rotate_units_.push_back(skip_[0] * 1);
-
-    input_rotate_ranges_.clear();
-    input_rotate_ranges_.push_back(padding[1]);
-    input_rotate_ranges_.push_back(padding[0]);
 
     weight_pt_.clear();
     bias_pt_.clear();

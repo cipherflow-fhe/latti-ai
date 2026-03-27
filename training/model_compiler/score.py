@@ -271,10 +271,10 @@ class FheScoreParam:
             self.input_skip = dag.nodes[preds[0]]['skip']
             self.output_skip = dag.nodes[succs[0]]['skip']
         else:
-            self.input_shape = dag.nodes[preds[0]]['virtual_shape']
-            self.output_shape = dag.nodes[succs[0]]['virtual_shape']
-            self.input_skip = dag.nodes[preds[0]]['virtual_skip']
-            self.output_skip = dag.nodes[succs[0]]['virtual_skip']
+            self.input_shape = preds[0].sp_info['shape']
+            self.output_shape = succs[0].sp_info['shape']
+            self.input_skip = preds[0].sp_info['skip']
+            self.output_skip = succs[0].sp_info['skip']
 
         self.pack = dag.nodes[preds[0]]['pack_num']
         self.pack_out = dag.nodes[succs[0]]['pack_num']
@@ -326,8 +326,8 @@ class FheScoreParam:
             else:
                 x_size = (
                     math.ceil(self.input_channel / self.pack)
-                    * math.ceil(self.input_shape[0] / config.fhe_param.block_shape[0])
-                    * math.ceil(self.input_shape[1] / config.fhe_param.block_shape[1])
+                    * math.ceil(self.input_shape[0] / config.block_shape[0])
+                    * math.ceil(self.input_shape[1] / config.block_shape[1])
                 )
 
                 n_block_per_ct = math.ceil(self.pack / (self.input_skip[0] * self.input_skip[1]))
@@ -468,24 +468,17 @@ class MpcScoreParam:
 
         self.input_channel = compute_node.channel_input
         self.output_channel = compute_node.channel_output
-        if (not preds[0].shape) and (not graph.dag.nodes[preds[0]]['skip']):
+        if preds[0].dim == 2:
             input_shape = preds[0].shape
             output_shape = succs[0].shape
             input_skip = graph.dag.nodes[preds[0]]['skip']
-            output_skip = graph.dag.nodes[succs[0]]['skip']
-        else:
-            input_shape = graph.dag.nodes[preds[0]]['virtual_shape']
-            output_shape = graph.dag.nodes[succs[0]]['virtual_shape']
-            input_skip = graph.dag.nodes[preds[0]]['virtual_skip']
-            output_skip = graph.dag.nodes[succs[0]]['virtual_skip']
-
-        self.input_channel = compute_node.channel_input
-        self.output_channel = compute_node.channel_output
-        temp_num_in = input_shape[0] * input_shape[1] * input_skip[0] * input_skip[1]
-        temp_num_out = output_shape[0] * output_shape[1]
-
-        self.n_packed_in = math.ceil(self.input_channel * temp_num_in / self.input_degree / 2)
-        self.n_packed_out = math.ceil(self.output_channel * temp_num_out / self.input_degree / 2)
+            temp_num_in = input_shape[0] * input_shape[1] * input_skip[0] * input_skip[1]
+            temp_num_out = output_shape[0] * output_shape[1]
+            self.n_packed_in = math.ceil(self.input_channel * temp_num_in / self.input_degree / 2)
+            self.n_packed_out = math.ceil(self.output_channel * temp_num_out / self.input_degree / 2)
+        elif preds[0].dim == 0:
+            self.n_packed_in = math.ceil(self.input_channel / self.input_degree / 2)
+            self.n_packed_out = self.n_packed_in
 
     def get_score(self) -> float:
         if 'relu2d' in self.compute_node.layer_type or 'pool' in self.compute_node.layer_type:

@@ -21,10 +21,9 @@
 #include "util.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
-SquareLayer::SquareLayer(const CkksParameter& param_in) : param(param_in.copy()) {}
-
-SquareLayer::~SquareLayer() {}
+SquareLayer::SquareLayer(const CkksParameter& param_in) : Layer(param_in) {}
 
 vector<CkksCiphertext> SquareLayer::call(CkksContext& ctx, const vector<CkksCiphertext>& x) {
     int x_size = x.size();
@@ -33,10 +32,10 @@ vector<CkksCiphertext> SquareLayer::call(CkksContext& ctx, const vector<CkksCiph
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         auto d = ctx_copy.mult(x[ct_idx], x[ct_idx]);
         auto d_res = ctx_copy.relinearize(d);
-        d_res = ctx_copy.rescale(d_res, param.get_default_scale() * param.get_default_scale() /
+        d_res = ctx_copy.rescale(d_res, param_.get_default_scale() * param_.get_default_scale() /
                                             ctx.get_parameter().get_q(x[0].get_level()));
         result[ct_idx] = move(d_res);
-        result[ct_idx].set_scale(param.get_default_scale());
+        result[ct_idx].set_scale(param_.get_default_scale());
     });
     return result;
 }

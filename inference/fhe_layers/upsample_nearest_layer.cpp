@@ -19,6 +19,7 @@
 #include "upsample_nearest_layer.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 UpsampleNearestLayer::UpsampleNearestLayer(const CkksParameter& param_in,
                                            const Duo& shape_in,
@@ -26,7 +27,7 @@ UpsampleNearestLayer::UpsampleNearestLayer(const CkksParameter& param_in,
                                            const Duo& upsample_factor_in,
                                            const uint32_t& n_channel_per_ct_in,
                                            const uint32_t& level_in)
-    : param(param_in.copy()), cached_block_size(0), cached_skip_div_upsample_0(0), cached_skip_div_upsample_1(0) {
+    : Layer(param_in), cached_block_size(0), cached_skip_div_upsample_0(0), cached_skip_div_upsample_1(0) {
     upsample_factor[0] = upsample_factor_in[0];
     upsample_factor[1] = upsample_factor_in[1];
     shape[0] = shape_in[0];
@@ -44,7 +45,7 @@ UpsampleNearestLayer::UpsampleNearestLayer(const CkksParameter& param_in,
     }
 
     n_channel_per_ct = n_channel_per_ct_in;
-    level = level_in;
+    level_ = level_in;
     n_block_per_ct = div_ceil(n_channel_per_ct, (skip[0] * skip[1]));
 }
 
@@ -69,12 +70,12 @@ vector<double> UpsampleNearestLayer::select_tensor(int num) const {
 }
 
 void UpsampleNearestLayer::prepare_weight() {
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     select_tensor_pt.clear();
     select_tensor_pt.resize(n_channel_per_ct / (upsample_factor[0] * upsample_factor[1]));
     for (int i = 0; i < n_channel_per_ct / (upsample_factor[0] * upsample_factor[1]); i++) {
         vector<double> si = select_tensor(i);
-        CkksPlaintextRingt p_si = ctx.encode_ringt(si, ctx.get_parameter().get_q(level));
+        CkksPlaintextRingt p_si = ctx.encode_ringt(si, ctx.get_parameter().get_q(level_));
         select_tensor_pt[i] = move(p_si);
     }
 }
@@ -92,7 +93,7 @@ void UpsampleNearestLayer::prepare_weight_lazy() {
 CkksPlaintextRingt UpsampleNearestLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int idx) const {
     // Generate select_tensor on-demand
     auto si = select_tensor(idx);
-    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level));
+    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_));
 }
 
 Feature2DEncrypted UpsampleNearestLayer::run(CkksContext& ctx, const Feature2DEncrypted& x) {
@@ -137,11 +138,11 @@ Feature2DEncrypted UpsampleNearestLayer::run(CkksContext& ctx, const Feature2DEn
             // Lazy mode: generate plaintext on-demand if select_tensor_pt is empty
             if (select_tensor_pt.empty()) {
                 auto pt_ringt = generate_select_tensor_pt_for_index(ctx_copy, out_channel_pos);
-                auto pt = ctx_copy.ringt_to_mul(pt_ringt, level);
+                auto pt = ctx_copy.ringt_to_mul(pt_ringt, level_);
                 c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], pt);
             } else {
                 auto& pt_ringt = select_tensor_pt[out_channel_pos];
-                auto pt = ctx_copy.ringt_to_mul(pt_ringt, level);
+                auto pt = ctx_copy.ringt_to_mul(pt_ringt, level_);
                 c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], pt);
             }
 

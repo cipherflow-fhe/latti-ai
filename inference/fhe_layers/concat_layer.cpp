@@ -19,6 +19,7 @@
 #include "concat_layer.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 ConcatLayer::ConcatLayer() {}
 
@@ -41,10 +42,10 @@ Feature2DEncrypted ConcatLayer::run(CkksContext& ctx, const Feature2DEncrypted& 
     Feature2DEncrypted result(&ctx, x1.level);
     result.data.clear();
 
-    for (const auto& elem : x2.data) {
+    for (const auto& elem : x1.data) {
         result.data.push_back(elem.copy());
     }
-    for (const auto& elem : x1.data) {
+    for (const auto& elem : x2.data) {
         result.data.push_back(elem.copy());
     }
 
@@ -112,30 +113,30 @@ Feature2DEncrypted ConcatLayer::run_multiple_inputs(CkksContext& ctx, const std:
 }
 
 Array<double, 3> ConcatLayer::concatenate_channels(const Array<double, 3>& x1, const Array<double, 3>& x2) {
-    auto shape_x2 = x2.get_shape();
-    uint64_t C2 = shape_x2[0];
-    uint64_t H2 = shape_x2[1];
-    uint64_t W2 = shape_x2[2];
-
     auto shape_x1 = x1.get_shape();
     uint64_t C1 = shape_x1[0];
     uint64_t H1 = shape_x1[1];
     uint64_t W1 = shape_x1[2];
-    if (H2 != H1 || W2 != W1) {
+
+    auto shape_x2 = x2.get_shape();
+    uint64_t C2 = shape_x2[0];
+    uint64_t H2 = shape_x2[1];
+    uint64_t W2 = shape_x2[2];
+    if (H1 != H2 || W1 != W2) {
         throw std::invalid_argument("Arrays must have same height and width dimensions");
     }
-    Array<double, 3> result({C2 + C1, H2, W2});
-    for (int c = 0; c < C2; ++c) {
-        for (int h = 0; h < H2; ++h) {
-            for (int w = 0; w < W2; ++w) {
-                result.set(c, h, w, x2.get(c, h, w));
-            }
-        }
-    }
+    Array<double, 3> result({C1 + C2, H1, W1});
     for (int c = 0; c < C1; ++c) {
         for (int h = 0; h < H1; ++h) {
             for (int w = 0; w < W1; ++w) {
-                result.set(C2 + c, h, w, x1.get(c, h, w));
+                result.set(c, h, w, x1.get(c, h, w));
+            }
+        }
+    }
+    for (int c = 0; c < C2; ++c) {
+        for (int h = 0; h < H2; ++h) {
+            for (int w = 0; w < W2; ++w) {
+                result.set(C1 + c, h, w, x2.get(c, h, w));
             }
         }
     }

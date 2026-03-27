@@ -24,23 +24,11 @@ Usage:
 
 import argparse
 import json
-import os
 import sys
+from pathlib import Path
 
-# Resolve project root by walking up until we find the 'training' directory.
-script_dir = os.path.dirname(os.path.abspath(__file__))
-_dir = script_dir
-while _dir != os.path.dirname(_dir):
-    if os.path.isdir(os.path.join(_dir, 'training')):
-        break
-    _dir = os.path.dirname(_dir)
-project_root = _dir
-
-sys.path.insert(0, project_root)
-sys.path.insert(0, os.path.join(project_root, 'inference', 'lattisense'))
-
-from frontend.custom_task import *  # noqa: E402
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from inference.lattisense.frontend.custom_task import *  # noqa: E402
 from inference.model_generator.deploy_cmds import gen_custom_task  # noqa: E402
 
 
@@ -57,12 +45,23 @@ def main():
     task_dir = os.path.abspath(args.task_dir)
     ergs_path = os.path.join(task_dir, 'server')
 
-    # Read poly_modulus_degree from ckks_parameter.json to determine n.
+    # Read param_name from ckks_parameter.json to identify the FHE parameter set.
     ckks_param_path = os.path.join(task_dir, 'client', 'ckks_parameter.json')
     with open(ckks_param_path, 'r', encoding='utf-8') as f:
         ckks_config = json.load(f)
     first_param = next(iter(ckks_config.values()))
-    n = first_param['poly_modulus_degree']
+    param_name = first_param.get('param_name', '')
+
+    if not param_name:
+        n = first_param['poly_modulus_degree']
+        n_mult_level = first_param.get('n_mult_level', 0)
+        if n == 65536 and n_mult_level <= 9:
+            param_name = 'N16QP1546H192H32'
+        else:
+            _N_TO_PARAM = {8192: 'PN13QP218', 16384: 'PN14QP438', 32768: 'PN15QP880', 65536: 'PN16QP1761'}
+            param_name = _N_TO_PARAM.get(n, '')
+        if not param_name:
+            raise ValueError(f'Cannot determine param_name for poly_modulus_degree={n}')
 
     # Read pack_style from task_config.json.
     task_config_path = os.path.join(task_dir, 'client', 'task_config.json')
@@ -77,7 +76,7 @@ def main():
 
     for erg_name, erg_config in server_config['server_task'].items():
         if erg_config['enable_fpga']:
-            gen_custom_task(ergs_path, use_gpu=True, n=n, style=style)
+            gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style)
 
     print(f'Done: mega_ag generated for {task_dir}.')
 

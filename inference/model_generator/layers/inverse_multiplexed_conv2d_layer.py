@@ -14,20 +14,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import sys
-import os
+from pathlib import Path
 
-# Add mega_ag_generator to path for importing frontend module
-script_dir = os.path.dirname(os.path.abspath(__file__))
-mega_ag_generator_dir = os.path.join(script_dir, '../../lattisense')
-sys.path.insert(0, mega_ag_generator_dir)
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from frontend.custom_task import *
+from inference.lattisense.frontend.custom_task import *
 
 op_class = 'InverseMultiplexedConv2d'
 
 
-class InverseMultiplexedConv2d:
+class InverseMultiplexedConv2DLayer:
     rotate_num = 0
     add_num = 0
     mult_num = 0
@@ -60,6 +58,45 @@ class InverseMultiplexedConv2d:
 
         if self.padding[0] < 0 and self.padding[1] < 0:
             self.padding = [(kernel_shape[0] - 1) // 2, (kernel_shape[1] - 1) // 2]
+
+        # Stride decomposition for output_shape < block_shape
+        self.orig_stride = list(stride)
+        output_shape0 = input_shape[0] // stride[0]
+        output_shape1 = input_shape[1] // stride[1]
+        self.need_repack = (output_shape0 < block_shape[0]) or (output_shape1 < block_shape[1])
+        if self.need_repack:
+            self.stride = [input_shape[0] // block_shape[0], input_shape[1] // block_shape[1]]
+            self.stride_next = [1, 1]
+
+    def get_used_input_indices(self) -> set:
+        """Return the set of input CT indices that are actually used in the convolution.
+        Useful for filtering input_args before calling process_custom_task."""
+        pad0 = self.padding[0]
+        pad1 = self.padding[1]
+        stride0 = self.stride[0]
+        stride1 = self.stride[1]
+        stride_next0 = self.stride_next[0]
+        stride_next1 = self.stride_next[1]
+        used = set()
+        for n_in_ch in range(self.n_in_channel):
+            base = n_in_ch * stride0 * stride1 * stride_next0 * stride_next1
+            for r_i2 in range(stride_next0):
+                for r_j2 in range(stride_next1):
+                    for row_seg_idx in range(stride0):
+                        for col_seg_idx in range(stride1):
+                            if row_seg_idx >= self.kernel_shape[0] or col_seg_idx >= self.kernel_shape[1]:
+                                continue
+                            split_ks0 = (self.kernel_shape[0] - 1 - row_seg_idx) // stride0 + 1
+                            split_ks1 = (self.kernel_shape[1] - 1 - col_seg_idx) // stride1 + 1
+                            for u_s in range(split_ks0):
+                                for v_s in range(split_ks1):
+                                    begin_row = (row_seg_idx - pad0 + stride0 * (u_s + r_i2)) % (stride0 * stride_next0)
+                                    begin_row = (begin_row + stride0 * stride_next0) % (stride0 * stride_next0)
+                                    begin_col = (col_seg_idx - pad1 + stride1 * (v_s + r_j2)) % (stride1 * stride_next1)
+                                    begin_col = (begin_col + stride1 * stride_next1) % (stride1 * stride_next1)
+                                    begin_idx = begin_row * stride1 * stride_next1 + begin_col
+                                    used.add(base + begin_idx)
+        return used
 
     def call_custom_compute(self, x: list[CkksCiphertextNode], conv_data_source, N: int) -> list[CkksCiphertextNode]:
         pad0 = self.padding[0]
@@ -158,7 +195,58 @@ class InverseMultiplexedConv2d:
                     s = add(s, b_pt)
                     temp_res[out_ct_idx] = s
 
-        res = [0 for i in range(int(self.n_out_channel // n_channel_per_ct_out * stride_next0 * stride_next1))]
+        if self.need_repack:
+            output_shape0 = self.input_shape[0] // self.orig_stride[0]
+            output_shape1 = self.input_shape[1] // self.orig_stride[1]
+            out_skip0 = self.block_shape[0] // output_shape0
+            out_skip1 = self.block_shape[1] // output_shape1
+            n_channel_per_block = out_skip0 * out_skip1
+            n_block_per_ct = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
+            n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
+
+            # Shared mask: select row%skip==0 && col%skip==0
+            repack_mask = CkksPlaintextRingtNode('repack_mask')
+            custom_compute(
+                inputs=[conv_data_source],
+                output=repack_mask,
+                type='encode_pt',
+                attributes={'op_class': op_class, 'type': 'repack_mask'},
+            )
+
+            # Step 1: mask all channels
+            for c in range(len(temp_res)):
+                temp_res[c] = mult(temp_res[c], repack_mask)
+
+            # Step 2: rotate + accumulate
+            res = [None] * n_out_ct
+            for out_ct_idx in range(n_out_ct):
+                packed = None
+                for ch_in_ct in range(n_channel_per_ct_out_repack):
+                    c = out_ct_idx * n_channel_per_ct_out_repack + ch_in_ct
+                    if c >= self.n_out_channel:
+                        break
+                    block_idx = ch_in_ct // n_channel_per_block
+                    ch_in_block = ch_in_ct % n_channel_per_block
+                    cx = ch_in_block // out_skip1
+                    cy = ch_in_block % out_skip1
+
+                    rot_step = -(cx * self.block_shape[1] + cy + block_idx * self.block_shape[0] * self.block_shape[1])
+                    if rot_step == 0:
+                        rotated = temp_res[c]
+                    else:
+                        rotated = rotate_cols(temp_res[c], [rot_step])[0]
+
+                    if packed is None:
+                        packed = rotated
+                    else:
+                        packed = add(packed, rotated)
+                res[out_ct_idx] = rescale(packed)
+            return res
+
+        res = [
+            0 for i in range(int(math.ceil(self.n_out_channel / n_channel_per_ct_out) * stride_next0 * stride_next1))
+        ]
         if n_channel_per_ct_out == 1:
             res = temp_res
         else:
@@ -183,7 +271,9 @@ class InverseMultiplexedConv2d:
                     res[pack_out_ct_idx] = add(res[pack_out_ct_idx], s_rot)
         return res
 
-    def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, N: int) -> list[CkksCiphertextNode]:
+    def call(
+        self, x: list[CkksCiphertextNode], weight_pt, bias_pt, N: int, conv_data_source=None, repack_mask_pt=None
+    ) -> list[CkksCiphertextNode]:
         pad0 = self.padding[0]
         pad1 = self.padding[1]
         stride0 = self.stride[0]
@@ -258,7 +348,49 @@ class InverseMultiplexedConv2d:
                     s = add(s, bias_pt[ct_idx])
                     temp_res[out_ct_idx] = s
 
-        res = [0 for i in range(int(len(weight_pt) // n_channel_per_ct_out * stride_next0 * stride_next1))]
+        if self.need_repack:
+            output_shape0 = self.input_shape[0] // self.orig_stride[0]
+            output_shape1 = self.input_shape[1] // self.orig_stride[1]
+            out_skip0 = self.block_shape[0] // output_shape0
+            out_skip1 = self.block_shape[1] // output_shape1
+            n_channel_per_block = out_skip0 * out_skip1
+            n_block_per_ct = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
+            n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
+
+            repack_mask = repack_mask_pt
+
+            # Step 1: mask all channels
+            for c in range(len(temp_res)):
+                temp_res[c] = mult(temp_res[c], repack_mask)
+
+            # Step 2: rotate + accumulate
+            res = [None] * n_out_ct
+            for out_ct_idx in range(n_out_ct):
+                packed = None
+                for ch_in_ct in range(n_channel_per_ct_out_repack):
+                    c = out_ct_idx * n_channel_per_ct_out_repack + ch_in_ct
+                    if c >= self.n_out_channel:
+                        break
+                    block_idx = ch_in_ct // n_channel_per_block
+                    ch_in_block = ch_in_ct % n_channel_per_block
+                    cx = ch_in_block // out_skip1
+                    cy = ch_in_block % out_skip1
+
+                    rot_step = -(cx * self.block_shape[1] + cy + block_idx * self.block_shape[0] * self.block_shape[1])
+                    if rot_step == 0:
+                        rotated = temp_res[c]
+                    else:
+                        rotated = rotate_cols(temp_res[c], [rot_step])[0]
+
+                    if packed is None:
+                        packed = rotated
+                    else:
+                        packed = add(packed, rotated)
+                res[out_ct_idx] = rescale(packed)
+            return res
+
+        res = [0 for i in range(int(math.ceil(len(weight_pt) / n_channel_per_ct_out) * stride_next0 * stride_next1))]
         if n_channel_per_ct_out == 1:
             res = temp_res
         else:

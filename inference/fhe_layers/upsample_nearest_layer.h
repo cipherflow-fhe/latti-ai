@@ -21,32 +21,31 @@
 #include <vector>
 #include <cstdint>
 #include <iostream>
-#include "common.h"
+#include "layer.h"
+#include "util.h"
 #include "data_structs/feature2d.h"
 
-class UpsampleNearestLayer {
+class UpsampleNearestLayer : public Layer {
 public:
-    UpsampleNearestLayer(const CkksParameter& param_in,
+    UpsampleNearestLayer(const ls::CkksParameter& param_in,
                          const Duo& shape_in,
                          const Duo& skip_in,
                          const Duo& upsample_factor_in,
                          const uint32_t& n_channel_per_ct_in,
                          const uint32_t& level_in);
-    vector<double> select_tensor(int num) const;
+    std::vector<double> select_tensor(int num) const;
     void prepare_weight();
     void prepare_weight_lazy();
-    Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
+    Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     Array<double, 3> run_plaintext(const Array<double, 3>& x);
 
     // Helper function to generate select_tensor plaintext on-demand
-    CkksPlaintextRingt generate_select_tensor_pt_for_index(CkksContext& ctx, int idx) const;
+    ls::CkksPlaintextRingt generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int idx) const;
 
-    CkksParameter param;
-    std::vector<CkksPlaintextRingt> select_tensor_pt;
+    std::vector<ls::CkksPlaintextRingt> select_tensor_pt;
     Duo upsample_factor;
     Duo shape;
     Duo skip;
-    uint32_t level;
     uint32_t n_channel_per_ct;
     uint32_t n_block_per_ct;
 

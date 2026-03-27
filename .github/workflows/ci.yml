@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 concurrency:
@@ -39,6 +39,17 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Detect CUDA architecture
+        id: cuda-arch
+        run: |
+          if [ -n "${LATTISENSE_CUDA_ARCH}" ]; then
+            echo "arch=${LATTISENSE_CUDA_ARCH}" >> "$GITHUB_OUTPUT"
+          else
+            ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d '.')
+            echo "Auto-detected CUDA arch: ${ARCH}"
+            echo "arch=${ARCH}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Verify prerequisites
         run: |
           echo "=== Tool versions ==="
@@ -49,6 +60,7 @@ jobs:
           python3 --version
           echo "=== GPU ==="
           nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+          echo "=== CUDA arch: ${{ steps.cuda-arch.outputs.arch }} ==="
 
       - name: Configure git mirrors
         run: |
@@ -56,17 +68,19 @@ jobs:
 
       - name: Build HEonGPU (cached)
         run: |
+          CUDA_ARCH="${{ steps.cuda-arch.outputs.arch }}"
           HEONGPU_COMMIT=$(git -C inference/lattisense/HEonGPU rev-parse HEAD)
-          CACHE_DIR="/opt/heongpu-cache/${HEONGPU_COMMIT}"
+          CACHE_DIR="/opt/heongpu-cache/${HEONGPU_COMMIT}-arch${CUDA_ARCH}"
           if [ -d "${CACHE_DIR}/install/lib" ]; then
-            echo "Using cached HEonGPU (${HEONGPU_COMMIT:0:8})"
+            echo "Using cached HEonGPU (${HEONGPU_COMMIT:0:8}, arch=${CUDA_ARCH})"
             cp -a "${CACHE_DIR}/install" inference/lattisense/HEonGPU/install
             cp -a "${CACHE_DIR}/build" inference/lattisense/HEonGPU/build
           else
-            echo "Building HEonGPU from scratch"
+            echo "Building HEonGPU from scratch (arch=${CUDA_ARCH})"
             cd inference/lattisense/HEonGPU
+            rm -rf build install
             cmake -S . -B build \
-              -DCMAKE_CUDA_ARCHITECTURES=86 \
+              -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH} \
               -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
               -DCMAKE_INSTALL_PREFIX=$(pwd)/install
             cmake --build build -j$(nproc)
@@ -81,36 +95,32 @@ jobs:
 
       - name: Build (GPU mode)
         run: |
+          CUDA_ARCH="${{ steps.cuda-arch.outputs.arch }}"
           mkdir -p build && cd build
-          cmake .. -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=86
+          cmake .. -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=${CUDA_ARCH}
           make -j$(nproc)
-
-      - name: Generate test data
-        run: |
-          cd build/inference/unittests
-          python3 test_gen_layers.py
-
-      - name: Run tests (CPU + GPU)
-        timeout-minutes: 30
-        run: |
-          cd build/inference/unittests
-          ./test_data_structs
-          ./test_fhe_layers_hetero
 
       - name: Run compiler tests
         run: |
-          python3 -m pytest training/model_compiler/unittests/test_compiler.py -v
+          cd build/inference/unittests
+          python3 ../../../training/model_compiler/unittests/test_compiler.py
+
+      - name: Run E2E tests (GPU)
+        timeout-minutes: 30
+        run: |
+          cd build/inference/unittests
+          ./test_e2e "[e2e][gpu]"
 
       - name: Generate example instructions
         run: |
           python3 inference/interface/gen_mega_ag.py --task-dir examples/test_mnist/task
           python3 inference/interface/gen_mega_ag.py --task-dir examples/test_cifar10/task
 
-      - name: Run example tests
+      - name: Run example tests (GPU only)
         timeout-minutes: 60
         run: |
           cd build
-          ctest -L example -E imagenet -V
+          ctest -R "example-(mnist|cifar10)-gpu" -V
 
   build-docker:
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')

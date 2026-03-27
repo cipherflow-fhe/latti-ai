@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include "layer.h"
 #include "../data_structs/feature.h"
 #include "data_structs/constants.h"
 
@@ -25,31 +26,28 @@
 #include <cstdint>
 #include <vector>
 
-class Conv2DLayer {
+class Conv2DLayer : public Layer {
 public:
-    Conv2DLayer(const CkksParameter& param,
+    Conv2DLayer(const ls::CkksParameter& param,
                 const Duo& input_shape,
                 const Array<double, 4>& weight,
                 const Array<double, 1>& bias,
                 const Duo& stride,
                 const Duo& skip);
-    virtual ~Conv2DLayer();
 
     Array<double, 3> run_plaintext(const Array<double, 3>& x, double multiplier = 1.0);
 
-    static std::vector<CkksCiphertext>
-    populate_rotations_1_side(CkksContext& ctx, const CkksCiphertext& x, int n_rotation, int unit);
+    static std::vector<ls::CkksCiphertext>
+    populate_rotations_1_side(ls::CkksContext& ctx, const ls::CkksCiphertext& x, int n_rotation, int unit);
 
-    static std::vector<CkksCiphertext>
-    populate_rotations_2_sides(CkksContext& ctx, const CkksCiphertext& x, int n_rotation, int unit);
+    static std::vector<ls::CkksCiphertext>
+    populate_rotations_2_sides(ls::CkksContext& ctx, const ls::CkksCiphertext& x, int n_rotation, int unit);
 
     Array<double, 4> weight_;
 
     Array<double, 1> bias_;
 
 protected:
-    CkksParameter param_;
-
     uint32_t n_out_channel_;
 
     uint32_t n_in_channel_;
@@ -62,17 +60,9 @@ protected:
 
     Duo skip_;
 
-    uint32_t n_slot_;
-
     std::vector<std::vector<double>> kernel_masks_;
 
-    std::vector<CkksPlaintextRingt> kernel_masks_pt_;
-
-    std::vector<int32_t> input_rotate_steps_;
-
     std::vector<int> input_rotate_units_;
-
-    std::vector<int> input_rotate_ranges_;
 
     void compute_output_element(Array<double, 3>& result,
                                 uint32_t out_ch,

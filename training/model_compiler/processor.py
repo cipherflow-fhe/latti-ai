@@ -131,8 +131,6 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 'ckks_scale': node.ckks_scale,
                 'skip': int(graph.dag.nodes[node]['skip'][0]),
                 'ckks_parameter_id': node.ckks_parameter_id,
-                'virtual_shape': [int(x) for x in graph.dag.nodes[node]['virtual_shape']],
-                'virtual_skip': [int(x) for x in graph.dag.nodes[node]['virtual_skip']],
                 'level': graph.dag.nodes[node]['level'],
                 'depth': node.depth,
                 'pack_num': graph.dag.nodes[node]['pack_num'],
@@ -156,7 +154,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
         'task_num': 1,
         'server_start_id': 0,
         'server_end_id': 0,
-        'block_shape': config.fhe_param.block_shape,
+        'block_shape': config.block_shape,
         'is_absorb_polyrelu': False,
         'pack_style': config.style,
         'task_input_id': [str(n.node_id) for n in input_roots],
@@ -184,7 +182,7 @@ def change_conv_transpose_shape(graph: LayerAbstractGraph):
         if isinstance(c_node, ComputeNode):
             if isinstance(c_node, ConvComputeNode):
                 if c_node.is_conv_transpose:
-                    target_c_node = find_layer_in_linear_graph(graph, c_node, 'conv2d', 'up')
+                    target_c_node = transforms.find_layer_in_linear_graph(graph, c_node, 'conv2d', 'up')
                     if target_c_node is not None:
                         f_in = list(graph.dag.predecessors(target_c_node))[0]
                         f_out = list(graph.dag.successors(target_c_node))[0]
@@ -208,8 +206,8 @@ def change_conv_transpose_shape(graph: LayerAbstractGraph):
 def check_conv_upsample_factor(graph: LayerAbstractGraph, c_node: ConvComputeNode):
     if c_node.upsample_factor_in[0] != 1:
         f_in = list(graph.dag.predecessors(c_node))[0]
-        if f_in.shape[0] * c_node.upsample_factor_in[0] > config.fhe_param.block_shape[0] or (
-            f_in.shape[1] * c_node.upsample_factor_in[1] > config.fhe_param.block_shape[1]
+        if f_in.shape[0] * c_node.upsample_factor_in[0] > config.block_shape[0] or (
+            f_in.shape[1] * c_node.upsample_factor_in[1] > config.block_shape[1]
         ):
             c_node.upsample_factor_in[0] = 1
             c_node.upsample_factor_in[1] = 1
@@ -275,10 +273,7 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
             if config.style == 'ordinary':
                 graph.dag.nodes[compute_node]['level_cost'] = 1
                 continue
-            if (
-                preds[0].shape[0] > config.fhe_param.block_shape[0]
-                or preds[0].shape[1] > config.fhe_param.block_shape[1]
-            ):
+            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
                 compute_node.is_big_size = True
                 graph.dag.nodes[compute_node]['level_cost'] = 1
             else:
@@ -294,10 +289,7 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
                         graph.dag.nodes[compute_node]['level_cost'] = 2
 
         elif compute_node.layer_type == 'avgpool2d':
-            if (
-                preds[0].shape[0] > config.fhe_param.block_shape[0]
-                or preds[0].shape[1] > config.fhe_param.block_shape[1]
-            ):
+            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
                 graph.dag.nodes[compute_node]['level_cost'] = 0
                 compute_node.is_big_size = True
                 compute_node.is_adaptive_avgpool = False
@@ -312,10 +304,7 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
                     compute_node.is_adaptive_avgpool = False
         elif compute_node.layer_type == config.approx_poly_type:
             graph.dag.nodes[compute_node]['level_cost'] = math.ceil(math.log2(compute_node.order)) + 1
-            if (
-                preds[0].shape[0] > config.fhe_param.block_shape[0]
-                or preds[0].shape[1] > config.fhe_param.block_shape[1]
-            ):
+            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
                 compute_node.is_big_size = True
 
 
@@ -372,10 +361,7 @@ def update_skip_for_btp(graph: LayerAbstractGraph, print_flag=False):
             graph.dag.nodes[succs[0]]['skip'][1] = (
                 graph.dag.nodes[preds[0]]['skip'][1] * compute_node.stride[1] / compute_node.upsample_factor_in[1]
             )
-            if (
-                preds[0].shape[0] > config.fhe_param.block_shape[0]
-                or preds[0].shape[1] > config.fhe_param.block_shape[1]
-            ):
+            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
                 graph.dag.nodes[succs[0]]['skip'] = [1, 1]
 
         if 'upsample' == compute_node.layer_type:
@@ -407,10 +393,7 @@ def update_skip_for_btp(graph: LayerAbstractGraph, print_flag=False):
             else:
                 graph.dag.nodes[succs[0]]['skip'][0] = graph.dag.nodes[preds[0]]['skip'][0] * compute_node.stride[0]
                 graph.dag.nodes[succs[0]]['skip'][1] = graph.dag.nodes[preds[0]]['skip'][1] * compute_node.stride[1]
-            if (
-                preds[0].shape[0] > config.fhe_param.block_shape[0]
-                or preds[0].shape[1] > config.fhe_param.block_shape[1]
-            ):
+            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
                 graph.dag.nodes[succs[0]]['skip'] = [1, 1]
         if 'resize' == compute_node.layer_type:
             if (

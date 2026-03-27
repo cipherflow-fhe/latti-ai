@@ -21,6 +21,7 @@
 #include <cmath>
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 static uint32_t next_pow2_cpmm(uint32_t x) {
     uint32_t p = 1;
@@ -35,7 +36,7 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
                                            uint32_t block_size,
                                            uint32_t n_heads,
                                            uint32_t level_A)
-    : param_(param_in.copy()) {
+    : Layer(param_in) {
     level_ = level_A;
     d_ = block_size;
     n_heads_ = n_heads;
@@ -103,8 +104,6 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
         W_padded_[mb] = std::move(W_sub);
     }
 }
-
-ParBlockColMajorCPMM::~ParBlockColMajorCPMM() {}
 
 int ParBlockColMajorCPMM::get_block_index(int bi, int bj, int num_block_rows) {
     return bi + num_block_rows * bj;
@@ -302,8 +301,8 @@ std::vector<CkksCiphertext> ParBlockColMajorCPMM::run_core(CkksContext& ctx,
     return C_cts;
 }
 
-Feature2DEncrypted ParBlockColMajorCPMM::run(CkksContext& ctx, const Feature2DEncrypted& A) {
-    Feature2DEncrypted result(&ctx, A.level);
+FeatureMatEncrypted ParBlockColMajorCPMM::run(CkksContext& ctx, const FeatureMatEncrypted& A) {
+    FeatureMatEncrypted result(&ctx, A.level);
     result.level = A.level - 2;  // block_mult (1 level) + mask (1 level)
     result.shape = {m_, n_per_head_};
     result.matmul_block_size = d_;

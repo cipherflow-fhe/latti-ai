@@ -18,10 +18,23 @@
 
 #pragma once
 
-#include <cassert>
-#include <cstdint>
+#include <cxx_sdk_v2/cxx_fhe_task.h>
+#include "util.h"
 
-inline uint32_t div_ceil(uint32_t x, uint32_t q) {
-    assert(q != 0 && "div_ceil: division by zero");
-    return (x + q - 1) / q;
-}
+namespace ls = cxx_sdk_v2;
+
+class Layer {
+public:
+    Layer() = default;
+    explicit Layer(const ls::CkksParameter& param) : param_(param.copy()) {}
+    virtual ~Layer() = default;
+
+    Layer(const Layer&) = delete;
+    Layer& operator=(const Layer&) = delete;
+    Layer(Layer&&) noexcept = default;
+    Layer& operator=(Layer&&) noexcept = default;
+
+protected:
+    ls::CkksParameter param_;
+    uint32_t level_ = 0;
+};

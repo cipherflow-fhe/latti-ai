@@ -18,10 +18,11 @@
 
 #pragma once
 #include "poly_relu_base.h"
+#include <map>
 
 class PolyRelu : public PolyReluBase {
 public:
-    PolyRelu(const CkksParameter& param_in,
+    PolyRelu(const ls::CkksParameter& param_in,
              const Duo& input_shape_in,
              const int order_in,
              const Array<double, 2>& weight_in,
@@ -32,8 +33,6 @@ public:
              const Duo& block_expansion_in = {1, 1},
              bool is_ordinary_pack_in = false);
 
-    ~PolyRelu() override;
-
     void prepare_weight();
     void prepare_weight_lazy();
     void prepare_weight_bsgs();
@@ -41,17 +40,18 @@ public:
     void prepare_weight_hornor();
     void prepare_weight_hornor_lazy();
 
-    CkksPlaintextRingt generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
-    CkksPlaintextRingt
-    generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
-    CkksPlaintextRingt
-    generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const override;
+    ls::CkksPlaintextRingt
+    generate_weight_pt_for_indices(ls::CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
+    ls::CkksPlaintextRingt
+    generate_weight_pt_for_non_absorb_indices(ls::CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
+    ls::CkksPlaintextRingt
+    generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int n_packed_out_channel_idx) const override;
 
-    Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
-    std::vector<CkksCiphertext> run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
-    Feature2DEncrypted run_bsgs(CkksContext& ctx, const Feature2DEncrypted& x);
-    Feature2DEncrypted run_horner(CkksContext& ctx, const Feature2DEncrypted& x);
-    std::vector<CkksCiphertext> run_core_horner(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
+    Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
+    std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
+    Feature2DEncrypted run_bsgs(ls::CkksContext& ctx, const Feature2DEncrypted& x);
+    Feature2DEncrypted run_horner(ls::CkksContext& ctx, const Feature2DEncrypted& x);
+    std::vector<ls::CkksCiphertext> run_core_horner(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
     Array<double, 3> run_plaintext_absorb_case(const Array<double, 3>& x);
     Array<double, 3> run_plaintext_for_non_absorb_case(const Array<double, 3>& x);
 
@@ -68,6 +68,6 @@ private:
     int cached_skip_prod;
     int cached_n_packed_out_channel;
     int cached_total_block_size;
-    map<int, double> cached_coeff_scale;
-    map<int, int> cached_level_order;
+    std::map<int, double> cached_coeff_scale;
+    std::map<int, int> cached_level_order;
 };

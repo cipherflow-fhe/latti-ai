@@ -19,6 +19,7 @@
 #include "feature1d.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 Feature1DEncrypted::Feature1DEncrypted(CkksContext* context_in, int ct_level, uint32_t skip_in) {
     dim = 1;
@@ -80,7 +81,7 @@ void Feature1DEncrypted::pack(Array<double, 2>& feature_mg, bool is_symmetric, d
     });
 }
 
-void Feature1DEncrypted::par_mult_pack(const Array<double, 2>& feature_mg, bool is_symmetric, double scale_in) {
+void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, bool is_symmetric, double scale_in) {
     const int N_THREAD = 4;
     n_channel = feature_mg.get_shape()[0];
     shape = feature_mg.get_shape()[1];
@@ -134,7 +135,7 @@ void Feature1DEncrypted::par_mult_pack(const Array<double, 2>& feature_mg, bool 
     });
 }
 
-Array<double, 2> Feature1DEncrypted::par_mult_unpack() const {
+Array<double, 2> Feature1DEncrypted::unpack_multiplexed() const {
     const int N_THREAD = 4;
     int n_ct = data.size();
     int n_slot = context->get_parameter().get_n() / 2;

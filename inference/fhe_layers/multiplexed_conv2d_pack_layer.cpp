@@ -18,8 +18,11 @@
 
 #include <math.h>
 #include "conv2d_layer.h"
-#include "../common.h"
+#include "../util.h"
 #include "multiplexed_conv2d_pack_layer.h"
+
+using namespace std;
+using namespace cxx_sdk_v2;
 
 CkksCiphertext sum_slot(CkksContext& ctx, CkksCiphertext& x, uint32_t m, uint32_t p) {
     CkksCiphertext result = x.copy();
@@ -78,12 +81,10 @@ ParMultiplexedConv2DPackedLayer::ParMultiplexedConv2DPackedLayer(const CkksParam
     n_packed_out_channel = div_ceil(n_out_channel_, n_channel_per_ct * stride_in[0] * stride_in[1] /
                                                         (upsample_factor[0] * upsample_factor[1]));
     n_block_per_ct = div_ceil(n_channel_per_ct, (skip_[0] * skip_[1]));
-    level = level_in;
-    weight_scale = param_.get_q(level) * residual_scale;
+    level_ = level_in;
+    weight_scale = param_.get_q(level_) * residual_scale;
     N = param_in.get_n();
 }
-
-ParMultiplexedConv2DPackedLayer::~ParMultiplexedConv2DPackedLayer() {}
 
 void ParMultiplexedConv2DPackedLayer::prepare_weight_for_reduct_rot() {
     uint32_t pad0 = std::floor(kernel_shape_[0] / 2);
@@ -200,7 +201,7 @@ void ParMultiplexedConv2DPackedLayer::prepare_weight_for_reduct_rot() {
                 // In reduct_rot, block i of ct_idx has local channel index = i * skip_out_prod + sub_pos_ct
                 uint32_t channel_local = i * skip_out_prod + sub_pos_ct;
                 auto si = select_tensor(channel_local);
-                mask_pt[ct_idx][i] = ctx_copy.encode_ringt(si, ctx_copy.get_parameter().get_q(level - 1));
+                mask_pt[ct_idx][i] = ctx_copy.encode_ringt(si, ctx_copy.get_parameter().get_q(level_ - 1));
             }
         });
     }
@@ -336,7 +337,7 @@ void ParMultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation() {
             for (int i = 0; i < mask_size; i++) {
                 auto si = select_tensor((ct_idx * n_block_per_ct + i) % (n_channel_per_ct * stride_[0] * stride_[1] /
                                                                          (upsample_factor[0] * upsample_factor[1])));
-                mask_pt[ct_idx][i] = ctx_copy.encode_ringt(si, ctx_copy.get_parameter().get_q(level - 1));
+                mask_pt[ct_idx][i] = ctx_copy.encode_ringt(si, ctx_copy.get_parameter().get_q(level_ - 1));
             }
         });
     }
@@ -491,7 +492,7 @@ CkksPlaintextRingt
 ParMultiplexedConv2DPackedLayer::generate_mask_pt_for_indices(CkksContext& ctx, int ct_idx, int i) const {
     auto si = select_tensor((ct_idx * n_block_per_ct + i) %
                             (n_channel_per_ct * stride_[0] * stride_[1] / (upsample_factor[0] * upsample_factor[1])));
-    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level - 1));
+    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_ - 1));
 }
 
 vector<CkksCiphertext> ParMultiplexedConv2DPackedLayer::run_core(CkksContext& ctx,
@@ -537,7 +538,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayer::run_core(CkksContext& ct
         for (int j = 0; j < weight_pt[ct_idx].size(); j++) {
             for (int k = 0; k < weight_pt[ct_idx][j].size(); k++) {
                 auto& w_pt_rt = weight_pt[ct_idx][j][k];
-                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level);
+                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
                 auto res = ctx_copy.mult_plain_mul(rotated_x[j][k], w_pt);
                 if (j == 0 && k == 0) {
                     s = move(res);
@@ -565,7 +566,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayer::run_core(CkksContext& ct
         for (int i = 0; i < n_block_per_ct; i++) {
             auto si = select_tensor((ct_idx * n_block_per_ct + i) % (n_channel_per_ct * stride_[0] * stride_[1] /
                                                                      (upsample_factor[0] * upsample_factor[1])));
-            auto p_ss = ctx_copy.encode(si, level - 1, ctx_copy.get_parameter().get_q(level - 1));
+            auto p_ss = ctx_copy.encode(si, level_ - 1, ctx_copy.get_parameter().get_q(level_ - 1));
             auto c_m_s = ctx_copy.mult_plain(s_rots[steps[i]], p_ss);
             if ((ct_idx * n_block_per_ct + i) < n_out_channel_) {
                 result_ct[ct_idx * n_block_per_ct + i] =
@@ -635,10 +636,10 @@ ParMultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ct
                 CkksCiphertext res;
                 if (weight_pt.empty()) {
                     auto w_pt_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, j, k);
-                    auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level);
+                    auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
                     res = ctx_copy.mult_plain_mul(rotated_x[j][k], w_pt);
                 } else {
-                    auto w_pt_rt = ctx_copy.ringt_to_mul(weight_pt[ct_idx][j][k], level);
+                    auto w_pt_rt = ctx_copy.ringt_to_mul(weight_pt[ct_idx][j][k], level_);
                     res = ctx_copy.mult_plain_mul(rotated_x[j][k], w_pt_rt);
                 }
                 if (j == 0 && k == 0) {
@@ -678,13 +679,13 @@ ParMultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ct
                 if ((ct_idx * n_block_per_ct + i) < n_out_channel_) {
                     if (mask_pt.empty()) {
                         auto m_pt_rt = generate_mask_pt_for_indices(ctx_copy, ct_idx, i);
-                        auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level - 1);
+                        auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level_ - 1);
                         auto c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], m_pt);
                         result_ct[ct_idx * n_block_per_ct + i] =
                             move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
                     } else {
                         auto& m_pt_rt = mask_pt[ct_idx][i];
-                        auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level - 1);
+                        auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level_ - 1);
                         auto c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], m_pt);
                         result_ct[ct_idx * n_block_per_ct + i] =
                             move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
@@ -790,7 +791,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayer::run_core_for_reduct_rot(
             for (int j = 0; j < weight_pt[ct_idx].size(); j++) {
                 for (int k = 0; k < weight_pt[ct_idx][j].size(); k++) {
                     auto& w_pt_rt = weight_pt[ct_idx][j][k];
-                    auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level);
+                    auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
                     auto mult_res = ctx_copy.mult_plain_mul(rotated_x[j][k], w_pt);
                     if (j == 0 && k == 0) {
                         s = move(mult_res);
@@ -818,7 +819,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayer::run_core_for_reduct_rot(
         for (int j = 0; j < weight_pt[ct_idx].size(); j++) {
             for (int k = 0; k < weight_pt[ct_idx][j].size(); k++) {
                 auto& w_pt_rt = weight_pt[ct_idx][j][k];
-                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level);
+                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
                 auto mult_res = ctx_copy.mult_plain_mul(rotated_x[j][k], w_pt);
                 if (j == 0 && k == 0) {
                     s = move(mult_res);
@@ -851,7 +852,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayer::run_core_for_reduct_rot(
             uint32_t channel_out = output_ct_group * n_channel_per_ct_out + i * skip_out_prod + sub_pos;
             if (channel_out < n_out_channel_) {
                 auto& m_pt_rt = mask_pt[ct_idx][i];
-                auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level - 1);
+                auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level_ - 1);
                 auto c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], m_pt);
                 result_ct[channel_out] = move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
             }

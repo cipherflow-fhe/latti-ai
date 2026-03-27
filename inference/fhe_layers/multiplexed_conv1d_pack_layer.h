@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include "layer.h"
 #include "../data_structs/feature.h"
 #include "data_structs/constants.h"
 
@@ -25,9 +26,9 @@
 #include <cstdint>
 #include <vector>
 
-class ParMultiplexedConv1DPackedLayer {
+class ParMultiplexedConv1DPackedLayer : public Layer {
 public:
-    ParMultiplexedConv1DPackedLayer(const CkksParameter& param_in,
+    ParMultiplexedConv1DPackedLayer(const ls::CkksParameter& param_in,
                                     uint32_t input_shape_in,
                                     const Array<double, 3>& weight_in,
                                     const Array<double, 1>& bias_in,
@@ -36,24 +37,23 @@ public:
                                     uint32_t n_channel_per_ct_in,
                                     uint32_t level_in,
                                     double residual_scale = 1.0);
-    ~ParMultiplexedConv1DPackedLayer();
-
     void prepare_weight();
     void prepare_weight_for_lazy();
 
     // Helper functions to generate weights/bias on-demand (for lazy mode)
-    CkksPlaintextRingt generate_weight_pt_for_indices(CkksContext& ctx, int wg, int w_idx, int kernel_idx) const;
-    CkksPlaintextRingt generate_bias_pt_for_index(CkksContext& ctx, int idx) const;
-    CkksPlaintext generate_select_tensor_pt_for_index(CkksContext& ctx, int t) const;
+    ls::CkksPlaintextRingt
+    generate_weight_pt_for_indices(ls::CkksContext& ctx, int wg, int w_idx, int kernel_idx) const;
+    ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int idx) const;
+    ls::CkksPlaintext generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int t) const;
 
-    Feature1DEncrypted run(CkksContext& ctx, Feature1DEncrypted& x);
-    virtual vector<double> select_tensor(int num) const;
+    Feature1DEncrypted run(ls::CkksContext& ctx, Feature1DEncrypted& x);
+    virtual std::vector<double> select_tensor(int num) const;
 
     Array<double, 2> plaintext_call(const Array<double, 2>& x);
 
-    std::vector<std::vector<std::vector<CkksPlaintextRingt>>> weight_pt;
-    std::vector<CkksPlaintextRingt> bias_pt;
-    std::vector<CkksPlaintextRingt> block_select_pt;
+    std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> weight_pt;
+    std::vector<ls::CkksPlaintextRingt> bias_pt;
+    std::vector<ls::CkksPlaintextRingt> block_select_pt;
 
     uint32_t input_shape;
     uint32_t skip;
@@ -62,15 +62,13 @@ public:
     uint32_t n_channel_in;
     uint32_t n_channel_out;
     uint32_t n_channel_per_ct;
-    uint32_t level;
     double weight_scale;
 
     Array<double, 3> weight;
     Array<double, 1> bias;
-    CkksParameter param;
 
 private:
-    std::vector<CkksCiphertext> run_core(CkksContext& ctx, std::vector<CkksCiphertext>& x);
+    std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, std::vector<ls::CkksCiphertext>& x);
 
     uint32_t n_packed_in_channel;
     uint32_t n_packed_out_channel;

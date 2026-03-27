@@ -23,6 +23,7 @@
 #include "ut_util.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 TEST_CASE("Feature2DEncrypted serialization", "") {
     CkksParameter paramter = CkksParameter::create_parameter(8192);
@@ -35,12 +36,12 @@ TEST_CASE("Feature2DEncrypted serialization", "") {
 
     auto x_mg = gen_random_array<3>({4, shape[0], shape[1]}, 1);
     Feature2DEncrypted x_e(&context, 1);
-    x_e.pack(x_mg);
+    x_e.pack_multiple_channel(x_mg);
 
     auto ss = x_e.serialize();
     Feature2DEncrypted y_e(&context, 1);
     y_e.deserialize(ss);
-    auto y_mg = y_e.unpack();
+    auto y_mg = y_e.unpack_multiple_channel();
 
     auto compare_res = compare(x_mg, y_mg);
     REQUIRE(compare_res.max_error < 1.0e-3 * compare_res.max_abs);

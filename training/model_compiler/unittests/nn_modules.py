@@ -16,14 +16,6 @@
 
 import torch
 import torch.nn as nn
-import sys
-from pathlib import Path
-
-script_dir = Path(__file__).parent.resolve()
-sys.path.append(str(script_dir.parent))
-sys.path.append(str(script_dir.parent.parent))
-
-from nn_tools.activations import RangeNormPoly2d
 
 
 class SingleConv(nn.Module):
@@ -49,7 +41,7 @@ class SingleConv1d(nn.Module):
 class SingleAct(nn.Module):
     def __init__(self):
         super().__init__()
-        self.relu0 = RangeNormPoly2d(num_features=32)
+        self.relu0 = nn.ReLU()
 
     def forward(self, x):
         x = self.relu0(x)
@@ -59,7 +51,7 @@ class SingleAct(nn.Module):
 class SingleAct1d(nn.Module):
     def __init__(self):
         super().__init__()
-        self.relu0 = RangeNormPoly2d(num_features=32)
+        self.relu0 = nn.ReLU()
 
     def forward(self, x):
         x = self.relu0(x)
@@ -69,7 +61,7 @@ class SingleAct1d(nn.Module):
 class SingleAvgpool(nn.Module):
     def __init__(self):
         super().__init__()
-        self.pool0 = nn.AvgPool2d(kernel_size=2, padding=1)
+        self.pool0 = nn.AvgPool2d(kernel_size=2, padding=0)
 
     def forward(self, x):
         x = self.pool0(x)
@@ -94,6 +86,20 @@ class SingleDense(nn.Module):
 
     def forward(self, x):
         x = self.dense0(x)
+        return x
+
+
+class TwoDense(nn.Module):
+    """Pure FC-FC network: graph input is 0d (1-D feature vector)."""
+
+    def __init__(self):
+        super().__init__()
+        self.dense0 = nn.Linear(in_features=64, out_features=64, bias=True)
+        self.dense1 = nn.Linear(in_features=64, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.dense0(x)
+        x = self.dense1(x)
         return x
 
 
@@ -156,7 +162,7 @@ class ActSeries(nn.Module):
         self.n_layers = 20
         self.acts = nn.ModuleList()
         for i in range(self.n_layers):
-            self.acts.append(RangeNormPoly2d(num_features=32))
+            self.acts.append(nn.ReLU())
 
     def forward(self, x):
         for i in range(self.n_layers):
@@ -220,10 +226,10 @@ class ResNetBasicBlock(nn.Module):
         super().__init__()
         self.conv1 = nn.Conv2d(in_planes, planes, 3, stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(planes)
-        self.relu1 = RangeNormPoly2d(num_features=planes)
+        self.relu1 = nn.ReLU()
         self.conv2 = nn.Conv2d(planes, planes, 3, stride=1, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(planes)
-        self.relu2 = RangeNormPoly2d(num_features=planes)
+        self.relu2 = nn.ReLU()
 
         self.shortcut = nn.Sequential()
         if stride != 1 or in_planes != planes:
@@ -258,7 +264,7 @@ class Unit(nn.Module):
         self.acts = nn.ModuleList()
         for i in range(pairs):
             self.convs.append(nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1))
-            self.acts.append(RangeNormPoly2d(num_features=32))
+            self.acts.append(nn.ReLU())
 
     def forward(self, x):
         for i in range(self.pairs):
@@ -384,8 +390,8 @@ class SkipConnection(nn.Module):
 class ConvAndConvTransposeBlock(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
-        self.relu0 = RangeNormPoly2d(num_features=32)
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=2)
+        self.relu0 = nn.ReLU()
         self.conv1 = nn.ConvTranspose2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=2)
 
     def forward(self, x):
@@ -420,11 +426,26 @@ class ConvReshapeAndDense(nn.Module):
         return x
 
 
+class ConvReshapeAndTwoDense(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, bias=False, padding=1, stride=2)
+        self.dense0 = nn.Linear(in_features=768, out_features=64, bias=True)
+        self.dense1 = nn.Linear(in_features=64, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = x.view(x.size(0), -1)
+        x = self.dense0(x)
+        x = self.dense1(x)
+        return x
+
+
 # ── Poly-degree targeting modules ─────────────────────────────────────────────
 #
 # Level costs (ordinary style):
 #   Conv (stride=1, ordinary): 1
-#   Activation (RangeNormPoly2d, order=4): ceil(log2(4)) + 1 = 3
+#   Activation (ReLU → RangeNormPoly2d after prepare_for_fhe, order=4): ceil(log2(4)) + 1 = 3
 #
 # The no-BTP pipeline tries poly_n values in order [8192, 16384, 32768, 65536]
 # with max_level [5, 9, 17, 33].  The input feature level equals the sum of
@@ -443,7 +464,7 @@ class PolyDegreeN8192(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
-        self.act0 = RangeNormPoly2d(num_features=32)
+        self.act0 = nn.ReLU()
 
     def forward(self, x):
         x = self.conv0(x)
@@ -458,7 +479,7 @@ class PolyDegreeN16384(nn.Module):
         super().__init__()
         self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
         self.conv1 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
-        self.act0 = RangeNormPoly2d(num_features=32)
+        self.act0 = nn.ReLU()
         self.conv2 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
 
     def forward(self, x):
@@ -475,10 +496,10 @@ class PolyDegreeN32768(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
-        self.act0 = RangeNormPoly2d(num_features=32)
+        self.act0 = nn.ReLU()
         self.conv1 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
         self.conv2 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
-        self.act1 = RangeNormPoly2d(num_features=32)
+        self.act1 = nn.ReLU()
         self.conv3 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
 
     def forward(self, x):
@@ -497,14 +518,14 @@ class PolyDegreeN65536NoBtp(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
-        self.act0 = RangeNormPoly2d(num_features=32)
+        self.act0 = nn.ReLU()
         self.conv1 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
-        self.act1 = RangeNormPoly2d(num_features=32)
+        self.act1 = nn.ReLU()
         self.conv2 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
         self.conv3 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
-        self.act2 = RangeNormPoly2d(num_features=32)
+        self.act2 = nn.ReLU()
         self.conv4 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
-        self.act3 = RangeNormPoly2d(num_features=32)
+        self.act3 = nn.ReLU()
         self.conv5 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
 
     def forward(self, x):
@@ -528,7 +549,7 @@ class PolyDegreeNBtp(nn.Module):
         super().__init__()
         self.n_acts = 10
         self.n_convs = 4
-        self.acts = nn.ModuleList([RangeNormPoly2d(num_features=32) for _ in range(self.n_acts)])
+        self.acts = nn.ModuleList([nn.ReLU() for _ in range(self.n_acts)])
         self.convs = nn.ModuleList(
             [
                 nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1)
@@ -553,13 +574,121 @@ class PolyDegreeNBtp(nn.Module):
 class ConvAvgpoolReshapeAndDense(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv0 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, bias=False, padding=1, stride=2)
-        self.pool0 = nn.AvgPool2d(kernel_size=8, stride=8, padding=0)
-        self.dense0 = nn.Linear(in_features=48, out_features=32, bias=True)
+        self.conv0 = nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, bias=False, padding=1, stride=4)
+        self.pool0 = nn.AvgPool2d(kernel_size=16, stride=16, padding=0)
+        self.dense0 = nn.Linear(in_features=16, out_features=32, bias=True)
 
     def forward(self, x):
         x = self.conv0(x)
         x = self.pool0(x)
         x = x.view(x.size(0), -1)
         x = self.dense0(x)
+        return x
+
+
+# ── Models for E2E migration of test_fhe_layers_hetero ────────────────────────
+
+
+class MultiChannelConv(nn.Module):
+    """Conv2d with different input/output channels. Covers conv_mch_s1/s2."""
+
+    def __init__(self, in_channels=3, out_channels=16, stride=1):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels, out_channels, kernel_size=3, bias=True, padding=1, stride=stride)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
+class DepthwiseConv(nn.Module):
+    """Depthwise Conv2d (groups=in_channels). Covers dw_*ch_s*."""
+
+    def __init__(self, channels=32, stride=1):
+        super().__init__()
+        self.conv0 = nn.Conv2d(channels, channels, kernel_size=3, bias=True, padding=1, stride=stride, groups=channels)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
+class ConvReshapeTwoFC(nn.Module):
+    """Conv → Flatten → Linear → Linear. Covers fc_fc_0d."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, bias=False, padding=1, stride=2)
+        self.dense0 = nn.Linear(in_features=768, out_features=128, bias=True)
+        self.dense1 = nn.Linear(in_features=128, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = x.view(x.size(0), -1)
+        x = self.dense0(x)
+        x = self.dense1(x)
+        return x
+
+
+class MuxConvLargeChannel(nn.Module):
+    """Large-channel conv to trigger multiplexed packing. Covers mux_conv_varied_*."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, bias=True, padding=1)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
+class SingleConv1dE2E(nn.Module):
+    """Conv1d for E2E test. Covers conv1d."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv1d(in_channels=4, out_channels=4, kernel_size=3, bias=True, padding=1)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
+class ConcatModel(nn.Module):
+    """Two conv branches concatenated. Covers concat_layer."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=3, out_channels=8, kernel_size=3, bias=False, padding=1)
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=8, kernel_size=3, bias=False, padding=1)
+
+    def forward(self, x):
+        a = self.conv0(x)
+        b = self.conv1(x)
+        return torch.cat([a, b], dim=1)
+
+
+class ConvUpsampleE2E(nn.Module):
+    """Conv with stride=2 followed by nearest upsample. Covers upsample_layer / upsample_nearest_layer."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=2)
+        self.resize = nn.Upsample(scale_factor=2, mode='nearest')
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = self.resize(x)
+        return x
+
+
+class AvgpoolVariedStride(nn.Module):
+    """Avgpool with configurable stride. Covers avgpool2d_layer varied strides."""
+
+    def __init__(self, stride=2):
+        super().__init__()
+        self.pool = nn.AvgPool2d(kernel_size=stride, stride=stride)
+
+    def forward(self, x):
+        x = self.pool(x)
         return x

@@ -16,9 +16,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <iostream>
+
 #include "interface/inference_client.h"
 
-#include <iostream>
+using namespace cxx_sdk_v2;
+
+using namespace fhe_ops_lib;
 
 InferenceClient::InferenceClient(const std::string& client_dir) : client_dir_(client_dir) {}
 
@@ -27,9 +31,13 @@ InferenceClient::~InferenceClient() = default;
 void InferenceClient::read_configuration() {
     task_config_ = read_json((client_dir_ / "task_config.json").string());
     pack_style_ = task_config_["pack_style"];
+    needs_btp_ = task_config_["use_btp"];
 
     auto& output_param = task_config_["task_output_param"].begin().value();
-    output_skip_ = output_param["skip"];
+    int first_output_dim = output_param["dim"];
+    if (first_output_dim == 0) {
+        output_skip_ = output_param["skip"];
+    }
 
     // Read per-output parameters
     for (auto& [name, param] : task_config_["task_output_param"].items()) {
@@ -65,9 +73,13 @@ void InferenceClient::read_configuration() {
     auto& first_param = task_config_["task_input_param"].begin().value();
     auto ckks_config = read_json((client_dir_ / "ckks_parameter.json").string());
     std::string ckks_param_id = first_param["ckks_parameter_id"];
-    poly_modulus_degree_ = ckks_config[ckks_param_id]["poly_modulus_degree"].get<int>();
+    auto& ckks_entry = ckks_config[ckks_param_id];
+    poly_modulus_degree_ = ckks_entry["poly_modulus_degree"].get<int>();
     n_slots_ = poly_modulus_degree_ / 2;
-    needs_btp_ = (poly_modulus_degree_ > 16384);
+    if (ckks_entry.contains("q") && ckks_entry.contains("p")) {
+        q_ = ckks_entry["q"].get<std::vector<uint64_t>>();
+        p_ = ckks_entry["p"].get<std::vector<uint64_t>>();
+    }
 }
 
 void InferenceClient::create_crypto_context() {
@@ -81,7 +93,12 @@ void InferenceClient::create_crypto_context() {
         btp_context_->gen_rotation_keys();
         context_ptr_ = btp_context_.get();
     } else {
-        ckks_param_ = std::make_unique<CkksParameter>(CkksParameter::create_parameter(poly_modulus_degree_));
+        if (!q_.empty() && !p_.empty()) {
+            ckks_param_ =
+                std::make_unique<CkksParameter>(CkksParameter::create_custom_parameter(poly_modulus_degree_, q_, p_));
+        } else {
+            ckks_param_ = std::make_unique<CkksParameter>(CkksParameter::create_parameter(poly_modulus_degree_));
+        }
         ckks_context_ = std::make_unique<CkksContext>(CkksContext::create_random_context(*ckks_param_));
         ckks_context_->gen_rotation_keys();
         context_ptr_ = ckks_context_.get();
@@ -140,14 +157,14 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
             Feature2DEncrypted input_ct(context_ptr_, param.level, Duo{1, 1});
 
             if (pack_style_ == "ordinary") {
-                input_ct.pack(input_array, false, scale);
+                input_ct.pack_multiple_channel(input_array, false, scale);
             } else if (param.height * param.width > n_slots_) {
                 Duo block_shape = {task_config_["block_shape"][0], task_config_["block_shape"][1]};
                 Duo channel_packing_factor = {(uint32_t)(param.height / block_shape[0]),
                                               (uint32_t)(param.width / block_shape[1])};
-                input_ct.split_with_stride_pack(input_array, block_shape, channel_packing_factor, false, scale);
+                input_ct.pack_interleaved(input_array, block_shape, channel_packing_factor, false, scale);
             } else {
-                input_ct.par_mult_pack(input_array, false, scale);
+                input_ct.pack_multiplexed(input_array, false, scale);
             }
             result[name] = input_ct.serialize();
         }
@@ -181,7 +198,13 @@ InferenceClient::decrypt(const std::map<std::string, Bytes>& encrypted_outputs) 
         } else {
             Feature2DEncrypted output_ct(context_ptr_, 0, Duo{1, 1});
             output_ct.deserialize(bytes);
-            auto decrypted = output_ct.unpack();
+            Array<double, 3> decrypted;
+            if (pack_style_ == "multiplexed") {
+                output_ct.invalid_fill = {1, 1};
+                decrypted = output_ct.unpack_multiplexed();
+            } else {
+                decrypted = output_ct.unpack_multiple_channel();
+            }
             auto dec_1d = decrypted.to_array_1d();
             result.output = std::vector<double>(dec_1d.data(), dec_1d.data() + dec_1d.size());
         }

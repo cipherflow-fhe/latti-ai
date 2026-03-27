@@ -15,14 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-import os
+from pathlib import Path
 
-# Add mega_ag_generator to path for importing frontend module
-script_dir = os.path.dirname(os.path.abspath(__file__))
-mega_ag_generator_dir = os.path.join(script_dir, '../../lattisense')
-sys.path.insert(0, mega_ag_generator_dir)
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from frontend.custom_task import *
+from inference.lattisense.frontend.custom_task import *
 
 DEFAULT_SCALE = 2**31
 
@@ -42,11 +39,11 @@ class MultScalarLayer:
         # self.target_scale = target_scale
         return
 
-    def call(self, x1: list[DataNode], pt_scale1: DataNode):
-        result: list[list[DataNode]] = list()
+    def call(self, x1: list[DataNode], weight_pt: list[DataNode]):
+        result: list[DataNode] = list()
 
         for i in range(len(x1)):
-            mult_res = mult(x1[i], pt_scale1)
+            mult_res = mult(x1[i], weight_pt[i])
             mult_res_scale = rescale(mult_res)
             result.append(mult_res_scale)
         return result

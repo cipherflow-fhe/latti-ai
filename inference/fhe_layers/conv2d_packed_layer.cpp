@@ -17,7 +17,6 @@
  */
 
 #include "conv2d_packed_layer.h"
-#include "../common.h"
 #include "util.h"
 
 #include <array>
@@ -26,6 +25,9 @@
 #include <future>
 #include <thread>
 #include <immintrin.h>
+
+using namespace std;
+using namespace cxx_sdk_v2;
 
 // ============================================================================
 // Constructor and Destructor
@@ -42,8 +44,10 @@ Conv2DPackedLayer::Conv2DPackedLayer(const CkksParameter& param,
                                      double residual_scale)
     : Conv2DLayer(param, input_shape, weight, bias, stride, skip), n_channel_per_ct_(n_channel_per_ct),
       n_packed_ct_in_(div_ceil(n_in_channel_, n_channel_per_ct)),
-      n_packed_ct_out_(div_ceil(n_out_channel_, n_channel_per_ct)), level_(level),
-      weight_scale_(param_.get_q(level) * residual_scale) {}
+      n_packed_ct_out_(div_ceil(n_out_channel_, n_channel_per_ct)),
+      weight_scale_(param_.get_q(level) * residual_scale) {
+    level_ = level;
+}
 
 // ============================================================================
 // Weight Preparation
@@ -89,10 +93,6 @@ void Conv2DPackedLayer::prepare_weight() {
     input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
     input_rotate_units_.push_back(skip_[0] * 1);
 
-    input_rotate_ranges_.clear();
-    input_rotate_ranges_.push_back(padding_shape[1]);
-    input_rotate_ranges_.push_back(padding_shape[0]);
-
     weight_pt_.clear();
     bias_pt_.clear();
 
@@ -128,7 +128,7 @@ void Conv2DPackedLayer::prepare_weight() {
                         const auto& mask = kernel_masks_[mask_idx];
 
                         std::vector<double> packed_weights;
-                        packed_weights.reserve(n_slot_);
+                        packed_weights.reserve(param_.get_n() / 2);
 
                         for (uint32_t pack_idx = 0; pack_idx < n_channel_per_ct_; pack_idx++) {
                             const uint32_t out_ch_idx = packed_out_ct_idx * n_channel_per_ct_ + pack_idx;
@@ -360,7 +360,7 @@ CkksPlaintextRingt Conv2DPackedLayer::generate_weight_pt_for_indices(CkksContext
     const double encode_pt_scale = weight_scale_;
 
     std::vector<double> packed_weights;
-    packed_weights.reserve(n_slot_);
+    packed_weights.reserve(param_.get_n() / 2);
 
     for (uint32_t pack_idx = 0; pack_idx < n_channel_per_ct_; pack_idx++) {
         const uint32_t out_ch_idx = ct_idx * n_channel_per_ct_ + pack_idx;

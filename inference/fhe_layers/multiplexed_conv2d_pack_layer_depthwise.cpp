@@ -18,9 +18,12 @@
 
 #include <math.h>
 #include "conv2d_layer.h"
-#include "../common.h"
+#include "../util.h"
 #include "multiplexed_conv2d_pack_layer.h"
 #include "multiplexed_conv2d_pack_layer_depthwise.h"
+
+using namespace std;
+using namespace cxx_sdk_v2;
 
 ParMultiplexedConv2DPackedLayerDepthwise::ParMultiplexedConv2DPackedLayerDepthwise(const CkksParameter& param_in,
                                                                                    const Duo& input_shape_in,
@@ -36,11 +39,9 @@ ParMultiplexedConv2DPackedLayerDepthwise::ParMultiplexedConv2DPackedLayerDepthwi
     n_packed_in_channel = div_ceil(n_out_channel_, n_channel_per_ct);
     n_packed_out_channel = div_ceil(n_out_channel_, n_channel_per_ct * stride_[0] * stride_[1]);
     n_block_per_ct = std::ceil(n_channel_per_ct / (skip_[0] * skip_[1]));
-    level = level_in;
-    weight_scale = param_.get_q(level) * residual_scale;
+    level_ = level_in;
+    weight_scale = param_.get_q(level_) * residual_scale;
 }
-
-ParMultiplexedConv2DPackedLayerDepthwise::~ParMultiplexedConv2DPackedLayerDepthwise() {}
 
 void ParMultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
     uint32_t pad0 = std::floor(kernel_shape_[0] / 2);
@@ -77,9 +78,6 @@ void ParMultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
     input_rotate_units_.clear();
     input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
     input_rotate_units_.push_back(skip_[0] * 1);
-    input_rotate_ranges_.clear();
-    input_rotate_ranges_.push_back(padding_shape[1]);
-    input_rotate_ranges_.push_back(padding_shape[0]);
     weight_pt.clear();
     bias_pt.clear();
 
@@ -166,7 +164,7 @@ void ParMultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
                     auto si =
                         select_tensor((ct_idx * n_channel_per_ct + i) % (n_channel_per_ct * stride_[0] * stride_[1]));
                     mask_pt[ct_idx * n_channel_per_ct + i] =
-                        ctx_copy.encode_ringt(si, ctx_copy.get_parameter().get_q(level - 1));
+                        ctx_copy.encode_ringt(si, ctx_copy.get_parameter().get_q(level_ - 1));
                 }
             }
         }
@@ -206,9 +204,6 @@ void ParMultiplexedConv2DPackedLayerDepthwise::prepare_weight_lazy() {
     input_rotate_units_.clear();
     input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
     input_rotate_units_.push_back(skip_[0] * 1);
-    input_rotate_ranges_.clear();
-    input_rotate_ranges_.push_back(padding_shape[1]);
-    input_rotate_ranges_.push_back(padding_shape[0]);
 
     int kernel_size = kernel_shape_[0] * kernel_shape_[1];
     int input_block_size = input_shape_ct[0] * input_shape_ct[1];
@@ -319,7 +314,7 @@ CkksPlaintextRingt ParMultiplexedConv2DPackedLayerDepthwise::generate_bias_pt_fo
 CkksPlaintextRingt
 ParMultiplexedConv2DPackedLayerDepthwise::generate_mask_pt_for_indices(CkksContext& ctx, int ct_idx, int i) const {
     auto si = select_tensor((ct_idx * n_channel_per_ct + i) % (n_channel_per_ct * stride_[0] * stride_[1]));
-    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level - 1));
+    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_ - 1));
 }
 
 vector<CkksCiphertext> ParMultiplexedConv2DPackedLayerDepthwise::run_core(CkksContext& ctx,
@@ -351,11 +346,11 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayerDepthwise::run_core(CkksCo
             CkksCiphertext r_tmp;
             if (weight_pt.empty()) {
                 auto w_pt_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, k);
-                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level);
+                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
                 r_tmp = ctx_copy.mult_plain_mul(rotated_x[ct_idx][k], w_pt);
             } else {
                 auto& w_pt_rt = weight_pt[ct_idx][k];
-                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level);
+                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
                 r_tmp = ctx_copy.mult_plain_mul(rotated_x[ct_idx][k], w_pt);
             }
             if (k == 0) {
@@ -389,7 +384,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayerDepthwise::run_core(CkksCo
                 if (mask_pt.empty()) {
                     if ((ct_idx * n_channel_per_ct + i) < n_out_channel_) {
                         auto m_pt_rt = generate_mask_pt_for_indices(ctx_copy, ct_idx, i);
-                        auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level - 1);
+                        auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level_ - 1);
                         auto c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[int(i / skip_[0])]], m_pt);
                         result_ct[ct_idx * n_channel_per_ct + i] =
                             move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
@@ -397,7 +392,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayerDepthwise::run_core(CkksCo
                 } else {
                     if ((ct_idx * n_channel_per_ct + i) < n_out_channel_) {
                         auto& m_pt_rt = mask_pt[ct_idx * n_channel_per_ct + i];
-                        auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level - 1);
+                        auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level_ - 1);
                         auto c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[int(i / skip_[0])]], m_pt);
                         result_ct[ct_idx * n_channel_per_ct + i] =
                             move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));

@@ -17,12 +17,13 @@
  */
 
 #pragma once
+#include "layer.h"
 #include "conv2d_layer.h"
 #include "../data_structs/feature.h"
 
 class ParMultiplexedConv2DPackedLayerDepthwise : public Conv2DLayer {
 public:
-    ParMultiplexedConv2DPackedLayerDepthwise(const CkksParameter& param_in,
+    ParMultiplexedConv2DPackedLayerDepthwise(const ls::CkksParameter& param_in,
                                              const Duo& input_shape_in,
                                              const Array<double, 4>& weight_in,
                                              const Array<double, 1>& bias_in,
@@ -32,25 +33,24 @@ public:
                                              uint32_t level_in,
                                              double residual_scale = 1.0);
 
-    ~ParMultiplexedConv2DPackedLayerDepthwise();
     virtual void prepare_weight();
     virtual void prepare_weight_lazy();
 
-    virtual Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
-    virtual vector<double> select_tensor(int num) const;
+    virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
+    virtual std::vector<double> select_tensor(int num) const;
 
-    std::vector<std::vector<CkksPlaintextRingt>> weight_pt;
-    std::vector<CkksPlaintextRingt> bias_pt;
-    std::vector<CkksPlaintextRingt> mask_pt;
+    std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt;
+    std::vector<ls::CkksPlaintextRingt> bias_pt;
+    std::vector<ls::CkksPlaintextRingt> mask_pt;
     bool normal_conv = true;
 
     virtual Array<double, 3> run_plaintext(const Array<double, 3>& x, double multiplier = 1);
 
     // Helper functions to generate weights/bias/mask on-demand
-    CkksPlaintextRingt
-    generate_weight_pt_for_indices(CkksContext& ctx, int n_packed_out_channel_idx, int kernel_idx) const;
-    CkksPlaintextRingt generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const;
-    CkksPlaintextRingt generate_mask_pt_for_indices(CkksContext& ctx, int ct_idx, int i) const;
+    ls::CkksPlaintextRingt
+    generate_weight_pt_for_indices(ls::CkksContext& ctx, int n_packed_out_channel_idx, int kernel_idx) const;
+    ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
+    ls::CkksPlaintextRingt generate_mask_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int i) const;
 
     // Getter for n_channel_per_ct (needed for CustomData executors)
     uint32_t get_n_channel_per_ct() const {
@@ -58,12 +58,11 @@ public:
     }
 
 private:
-    std::vector<CkksCiphertext> run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
+    std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
     uint32_t n_channel_per_ct;
     uint32_t n_packed_in_channel;
     uint32_t n_packed_out_channel;
     uint32_t n_block_per_ct;
-    uint32_t level;
     double weight_scale;
 
     // Cached values for on-demand generation

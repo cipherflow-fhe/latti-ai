@@ -21,6 +21,7 @@
 #include <cmath>
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 static uint32_t next_pow2_ccmm(uint32_t x) {
     uint32_t p = 1;
@@ -35,7 +36,7 @@ ParBlockColMajorCCMM::ParBlockColMajorCCMM(const CkksParameter& param_in,
                                            uint32_t block_size,
                                            uint32_t n_heads,
                                            uint32_t level)
-    : param_(param_in.copy()) {
+    : Layer(param_in) {
     assert(shape_A[1] == shape_B[0] && "inner dimensions must match: shape_A[1] != shape_B[0]");
 
     level_ = level;
@@ -71,8 +72,6 @@ ParBlockColMajorCCMM::ParBlockColMajorCCMM(const CkksParameter& param_in,
     num_block_rows_B_ = div_ceil(n, d_);
     num_block_cols_B_ = div_ceil(p, d_);
 }
-
-ParBlockColMajorCCMM::~ParBlockColMajorCCMM() {}
 
 int ParBlockColMajorCCMM::get_block_index(int bi, int bj, int num_block_rows) {
     return bi + num_block_rows * bj;
@@ -393,9 +392,9 @@ std::vector<CkksCiphertext> ParBlockColMajorCCMM::run_core(CkksContext& ctx,
     return C_cts;
 }
 
-Feature2DEncrypted
-ParBlockColMajorCCMM::run(CkksContext& ctx, const Feature2DEncrypted& A, const Feature2DEncrypted& B) {
-    Feature2DEncrypted result(&ctx, A.level);
+FeatureMatEncrypted
+ParBlockColMajorCCMM::run(CkksContext& ctx, const FeatureMatEncrypted& A, const FeatureMatEncrypted& B) {
+    FeatureMatEncrypted result(&ctx, A.level);
     result.data = run_core(ctx, A.data, B.data);
     result.level = A.level - 3;  // block_mult consumes 3 levels
     result.shape = {m_, p_};     // per-head result shape

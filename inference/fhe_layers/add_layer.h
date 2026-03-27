@@ -18,23 +18,23 @@
 
 #pragma once
 #include <cstdint>
-#include "common.h"
+#include "layer.h"
 #include "data_structs/feature2d.h"
 #include "util.h"
 
-class AddLayer {
+class AddLayer : public Layer {
 public:
-    AddLayer(const CkksParameter& param_in);
-    CkksParameter param;
+    AddLayer(const ls::CkksParameter& param_in);
     double target_ckks_scale = DEFAULT_SCALE;
-    Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x0, const Feature2DEncrypted& x1);
+    Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x0, const Feature2DEncrypted& x1);
     Array<double, 3> run_plaintext(const Array<double, 3>& x0, const Array<double, 3>& x1);
-    void add(CkksContext* ctx, const Feature2DEncrypted& x0, const Feature2DEncrypted& x1, Feature2DEncrypted& result);
+    void
+    add(ls::CkksContext* ctx, const Feature2DEncrypted& x0, const Feature2DEncrypted& x1, Feature2DEncrypted& result);
 };
 
-class DropLevelLayer {
+class DropLevelLayer : public Layer {
 public:
     DropLevelLayer();
-    ~DropLevelLayer();
-    void run(CkksContext& ctx, const Feature2DEncrypted& x, Feature2DEncrypted& result, int level_in, int level_out);
+    void
+    run(ls::CkksContext& ctx, const Feature2DEncrypted& x, Feature2DEncrypted& result, int level_in, int level_out);
 };

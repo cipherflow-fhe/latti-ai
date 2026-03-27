@@ -17,12 +17,13 @@
  */
 
 #pragma once
+#include "layer.h"
 #include "conv2d_layer.h"
 #include "../data_structs/feature.h"
 
 class ParMultiplexedConv2DPackedLayer : public Conv2DLayer {
 public:
-    ParMultiplexedConv2DPackedLayer(const CkksParameter& param_in,
+    ParMultiplexedConv2DPackedLayer(const ls::CkksParameter& param_in,
                                     const Duo& input_shape_in,
                                     const Array<double, 4>& weight_in,
                                     const Array<double, 1>& bias_in,
@@ -33,40 +34,40 @@ public:
                                     double residual_scale = 1.0,
                                     const Duo& upsample_factor_in = {1, 1});
 
-    ~ParMultiplexedConv2DPackedLayer();
     virtual void prepare_weight_for_reduct_rot();
     virtual void prepare_weight_for_post_skip_rotation();
     virtual void prepare_weight_for_post_skip_rotation_lazy();
 
-    virtual Feature2DEncrypted run(CkksContext& ctx, const Feature2DEncrypted& x);
-    virtual Feature2DEncrypted run_for_post_skip_rotation(CkksContext& ctx, const Feature2DEncrypted& x);
-    virtual Feature2DEncrypted run_for_reduct_rot(CkksContext& ctx, const Feature2DEncrypted& x);
-    virtual vector<double> select_tensor(int num) const;
+    virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
+    virtual Feature2DEncrypted run_for_post_skip_rotation(ls::CkksContext& ctx, const Feature2DEncrypted& x);
+    virtual Feature2DEncrypted run_for_reduct_rot(ls::CkksContext& ctx, const Feature2DEncrypted& x);
+    virtual std::vector<double> select_tensor(int num) const;
 
-    std::vector<std::vector<std::vector<CkksPlaintextRingt>>> weight_pt;
-    std::vector<CkksPlaintextRingt> bias_pt;
-    std::vector<std::vector<CkksPlaintextRingt>> mask_pt;
+    std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> weight_pt;
+    std::vector<ls::CkksPlaintextRingt> bias_pt;
+    std::vector<std::vector<ls::CkksPlaintextRingt>> mask_pt;
 
-    vector<vector<double>> mask_channel;
+    std::vector<std::vector<double>> mask_channel;
 
     bool normal_conv = true;
 
     // Helper functions to generate weights/bias/mask on-demand
-    CkksPlaintextRingt generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const;
-    CkksPlaintextRingt generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const;
-    CkksPlaintextRingt generate_mask_pt_for_indices(CkksContext& ctx, int ct_idx, int i) const;
+    ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
+    ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
+    ls::CkksPlaintextRingt generate_mask_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int i) const;
 
 private:
-    std::vector<CkksCiphertext> run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
-    std::vector<CkksCiphertext> run_core_for_post_skip_rotation(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
-    std::vector<CkksCiphertext> run_core_for_reduct_rot(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
+    std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
+    std::vector<ls::CkksCiphertext> run_core_for_post_skip_rotation(ls::CkksContext& ctx,
+                                                                    const std::vector<ls::CkksCiphertext>& x);
+    std::vector<ls::CkksCiphertext> run_core_for_reduct_rot(ls::CkksContext& ctx,
+                                                            const std::vector<ls::CkksCiphertext>& x);
 
     int N;
     uint32_t n_channel_per_ct;
     uint32_t n_packed_in_channel;
     uint32_t n_packed_out_channel;
     uint32_t n_block_per_ct;
-    uint32_t level;
     int bias_level_down = 0;
     double weight_scale;
     Duo upsample_factor;
@@ -84,4 +85,4 @@ private:
     int cached_total_block_size = 0;
 };
 
-CkksCiphertext sum_slot(CkksContext& ctx, CkksCiphertext& x, uint32_t m, uint32_t p);
+ls::CkksCiphertext sum_slot(ls::CkksContext& ctx, ls::CkksCiphertext& x, uint32_t m, uint32_t p);

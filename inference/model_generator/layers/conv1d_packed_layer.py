@@ -15,14 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-import os
+from pathlib import Path
 
-# Add mega_ag_generator to path for importing frontend module
-script_dir = os.path.dirname(os.path.abspath(__file__))
-mega_ag_generator_dir = os.path.join(script_dir, '../../lattisense')
-sys.path.insert(0, mega_ag_generator_dir)
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from frontend.custom_task import *
+from inference.lattisense.frontend.custom_task import *
 
 op_class = 'Conv1DPackedLayer'
 

@@ -17,21 +17,20 @@
  */
 
 #pragma once
+
+#include <vector>
+#include "layer.h"
 #include "../data_structs/feature2d.h"
 #include "../data_structs/feature0d.h"
-#include <vector>
 
-class SquareLayer {
+class SquareLayer : public Layer {
 public:
-    SquareLayer(const CkksParameter& param_in);
-    ~SquareLayer();
-    virtual std::vector<CkksCiphertext> call(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
-    virtual Feature2DEncrypted call(CkksContext& ctx, const Feature2DEncrypted& x);
-    virtual Feature0DEncrypted call(CkksContext& ctx, const Feature0DEncrypted& x);
+    SquareLayer(const ls::CkksParameter& param_in);
+    virtual std::vector<ls::CkksCiphertext> call(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
+    virtual Feature2DEncrypted call(ls::CkksContext& ctx, const Feature2DEncrypted& x);
+    virtual Feature0DEncrypted call(ls::CkksContext& ctx, const Feature0DEncrypted& x);
 
     template <int dim> Array<double, dim> run_plaintext(const Array<double, dim>& x) {
         return x.apply([](double e) { return e * e; });
     }
-
-    CkksParameter param;
 };

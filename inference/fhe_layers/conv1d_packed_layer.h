@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include "layer.h"
 #include "../data_structs/feature.h"
 #include "data_structs/constants.h"
 
@@ -25,9 +26,9 @@
 #include <cstdint>
 #include <vector>
 
-class Conv1DPackedLayer {
+class Conv1DPackedLayer : public Layer {
 public:
-    Conv1DPackedLayer(const CkksParameter& param_in,
+    Conv1DPackedLayer(const ls::CkksParameter& param_in,
                       const uint32_t input_shape_in,
                       const Array<double, 3>& weight_in,
                       const Array<double, 1>& bias_in,
@@ -36,16 +37,14 @@ public:
                       uint32_t pack_in,
                       uint32_t level_in,
                       double residual_scale = 1.0);
-    ~Conv1DPackedLayer();
-
     virtual void prepare_weight();
     void prepare_weight_lazy();
 
-    virtual Feature1DEncrypted run(CkksContext& ctx, Feature1DEncrypted& x);
+    virtual Feature1DEncrypted run(ls::CkksContext& ctx, Feature1DEncrypted& x);
     Array<double, 2> plaintext_call(const Array<double, 2>& x);
 
-    CkksPlaintextRingt generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const;
-    CkksPlaintextRingt generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const;
+    ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
+    ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
 
     uint32_t input_shape;
     uint32_t skip;
@@ -53,25 +52,23 @@ public:
 
     Array<double, 3> weight;
     Array<double, 1> bias;
-    CkksParameter param;
-    std::vector<std::vector<std::vector<CkksPlaintextRingt>>> weight_pt;
-    std::vector<CkksPlaintextRingt> bias_pt;
+    std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> weight_pt;
+    std::vector<ls::CkksPlaintextRingt> bias_pt;
     bool normal_conv = true;
 
 private:
-    std::vector<CkksCiphertext> run_core(CkksContext& ctx, std::vector<CkksCiphertext>& x);
-    void mult_add(CkksContext* ctx,
-                  vector<vector<CkksCiphertext>>& rotated_x,
+    std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, std::vector<ls::CkksCiphertext>& x);
+    void mult_add(ls::CkksContext* ctx,
+                  std::vector<std::vector<ls::CkksCiphertext>>& rotated_x,
                   uint32_t start,
                   uint32_t end,
-                  vector<CkksCiphertext>& result);
+                  std::vector<ls::CkksCiphertext>& result);
     uint32_t kernel_shape;
     uint32_t n_channel_in;
     uint32_t n_channel_out;
     uint32_t n_channel_per_ct;
     uint32_t n_packed_in_channel;
     uint32_t n_packed_out_channel;
-    uint32_t level;
     double weight_scale;
     std::vector<std::vector<double>> kernel_masks_;
 };

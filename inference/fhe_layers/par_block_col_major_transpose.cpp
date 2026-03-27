@@ -21,6 +21,7 @@
 #include <cmath>
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 static uint32_t next_pow2(uint32_t x) {
     uint32_t p = 1;
@@ -34,7 +35,7 @@ ParBlockColMajorTranspose::ParBlockColMajorTranspose(const CkksParameter& param_
                                                      uint32_t block_size,
                                                      uint32_t n_heads,
                                                      uint32_t level)
-    : param_(param_in.copy()) {
+    : Layer(param_in) {
     level_ = level;
     d_ = block_size;
     n_heads_ = n_heads;
@@ -64,8 +65,6 @@ ParBlockColMajorTranspose::ParBlockColMajorTranspose(const CkksParameter& param_
     num_block_rows_ = div_ceil(m, d_);
     num_block_cols_ = div_ceil(n, d_);
 }
-
-ParBlockColMajorTranspose::~ParBlockColMajorTranspose() {}
 
 int ParBlockColMajorTranspose::get_block_index(int bi, int bj, int num_block_rows) {
     return bi + num_block_rows * bj;
@@ -182,8 +181,8 @@ std::vector<CkksCiphertext> ParBlockColMajorTranspose::run_core(CkksContext& ctx
     return result_cts;
 }
 
-Feature2DEncrypted ParBlockColMajorTranspose::run(CkksContext& ctx, const Feature2DEncrypted& input) {
-    Feature2DEncrypted result(&ctx, input.level);
+FeatureMatEncrypted ParBlockColMajorTranspose::run(CkksContext& ctx, const FeatureMatEncrypted& input) {
+    FeatureMatEncrypted result(&ctx, input.level);
     result.data = run_core(ctx, input.data);
     result.level = input.level - 1;  // transpose consumes 1 level
     result.shape = {n_, m_};         // transposed per-head shape

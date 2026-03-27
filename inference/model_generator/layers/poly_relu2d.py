@@ -15,21 +15,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-import os
+from pathlib import Path
 
-# Add mega_ag_generator to path for importing frontend module
-script_dir = os.path.dirname(os.path.abspath(__file__))
-mega_ag_generator_dir = os.path.join(script_dir, '../../lattisense')
-sys.path.insert(0, mega_ag_generator_dir)
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from frontend.custom_task import *
+from inference.lattisense.frontend.custom_task import *
 
 import numpy as np
 
 op_class = 'PolyReluLayer'
 
 
-class PolyReluLayer:
+class PolyRelu:
     def __init__(
         self, input_shape, order, skip, n_channel_per_ct, upsample_factor: list = [1, 1], block_expansion: list = [1, 1]
     ):
@@ -389,8 +386,8 @@ class PolyReluLayer:
             return 1
         baby_steps = int(np.ceil(np.sqrt(order + 1)))
         giant_steps = int(np.ceil((order + 1) / baby_steps))
-        power_info = PolyReluLayer._compute_power_info(order)
-        required, to_compute = PolyReluLayer._determine_required_powers(order, baby_steps, giant_steps, power_info)
+        power_info = PolyRelu._compute_power_info(order)
+        required, to_compute = PolyRelu._determine_required_powers(order, baby_steps, giant_steps, power_info)
         power_depth = {1: 0}
         for n in sorted(to_compute):
             if n <= 1:
@@ -520,7 +517,7 @@ class PolyReluLayer:
 
         return result
 
-    def call_bsgs(self, x: list[CkksCiphertextNode], weight_pt):
+    def call_bsgs_feature2d(self, x: list[CkksCiphertextNode], weight_pt):
         """BSGS with pre-computed weight plaintexts (eager mode)."""
         return self._run_bsgs_core(x, lambda idx, x_idx: weight_pt[idx][x_idx])
 

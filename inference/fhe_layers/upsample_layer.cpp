@@ -19,6 +19,7 @@
 #include "upsample_layer.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 UpsampleLayer::UpsampleLayer(const CkksParameter& param_in,
                              const Duo& stride_in,
@@ -26,23 +27,21 @@ UpsampleLayer::UpsampleLayer(const CkksParameter& param_in,
                              const int& level_in,
                              const int& n_channel_in,
                              const int& n_channel_per_ct_in)
-    : param(param_in.copy()) {
+    : Layer(param_in) {
     stride[0] = stride_in[0];
     stride[1] = stride_in[1];
-    level = level_in;
+    level_ = level_in;
     n_channel_per_ct = n_channel_per_ct_in;
     upsample_factor[0] = upsample_factor_in[0];
     upsample_factor[1] = upsample_factor_in[1];
     n_channel = n_channel_in;
 }
 
-UpsampleLayer::~UpsampleLayer() {}
-
 void UpsampleLayer::prepare_data() {
-    CkksContext ctx = CkksContext::create_empty_context(this->param);
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
     vector<double> zero_vector;
     zero_vector.resize(ctx.get_parameter().get_n() / 2);
-    zero_vector_encoded = ctx.encode(zero_vector, level, ctx.get_parameter().get_default_scale());
+    zero_vector_encoded = ctx.encode(zero_vector, level_, ctx.get_parameter().get_default_scale());
 }
 
 Feature2DEncrypted UpsampleLayer::run(CkksContext& ctx, const Feature2DEncrypted& x) {

@@ -19,6 +19,7 @@
 #include "add_layer.h"
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 void copy_param(const Feature2DEncrypted& x1, Feature2DEncrypted& result) {
     result.dim = x1.dim;
@@ -44,7 +45,7 @@ void AddLayer::add(CkksContext* ctx,
     });
 }
 
-AddLayer::AddLayer(const CkksParameter& param_in) : param(param_in.copy()) {}
+AddLayer::AddLayer(const CkksParameter& param_in) : Layer(param_in) {}
 
 Feature2DEncrypted AddLayer::run(CkksContext& ctx, const Feature2DEncrypted& x0, const Feature2DEncrypted& x1) {
     Feature2DEncrypted result(&ctx, x0.level);
@@ -74,8 +75,6 @@ Array<double, 3> AddLayer::run_plaintext(const Array<double, 3>& x0, const Array
 }
 
 DropLevelLayer::DropLevelLayer() {}
-
-DropLevelLayer::~DropLevelLayer() {}
 
 void DropLevelLayer::run(CkksContext& ctx,
                          const Feature2DEncrypted& x0,

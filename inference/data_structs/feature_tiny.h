@@ -48,7 +48,7 @@ public:
     uint32_t shape[2];
     uint32_t skip[2];
 
-    std::vector<cxx_sdk_v2::CkksCiphertext> data_handle;
+    std::vector<ls::CkksCiphertext> data_handle;
 };
 
 class Feature0DEncrypted_tiny : public FeatureEncrypted_tiny {
@@ -63,4 +63,3 @@ public:
     uint32_t skip;
     std::vector<CkksCiphertext> data_handle;
 };
-CkksCiphertext drop_level_to(CkksCiphertext& x, CkksContext& ctx, int level_pre, int level_next);

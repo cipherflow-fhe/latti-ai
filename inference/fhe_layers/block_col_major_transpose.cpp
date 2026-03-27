@@ -21,12 +21,13 @@
 #include <cmath>
 
 using namespace std;
+using namespace cxx_sdk_v2;
 
 BlockColMajorTranspose::BlockColMajorTranspose(const CkksParameter& param_in,
                                                const Duo& shape,
                                                uint32_t block_size,
                                                uint32_t level)
-    : param_(param_in.copy()) {
+    : Layer(param_in) {
     level_ = level;
     d_ = block_size;
 
@@ -43,8 +44,6 @@ BlockColMajorTranspose::BlockColMajorTranspose(const CkksParameter& param_in,
     num_block_rows_ = div_ceil(m, d_);
     num_block_cols_ = div_ceil(n, d_);
 }
-
-BlockColMajorTranspose::~BlockColMajorTranspose() {}
 
 int BlockColMajorTranspose::get_block_index(int bi, int bj, int num_block_rows) {
     return bi + num_block_rows * bj;
@@ -137,8 +136,8 @@ std::vector<CkksCiphertext> BlockColMajorTranspose::run_core(CkksContext& ctx, c
     return result_cts;
 }
 
-Feature2DEncrypted BlockColMajorTranspose::run(CkksContext& ctx, const Feature2DEncrypted& input) {
-    Feature2DEncrypted result(&ctx, input.level);
+FeatureMatEncrypted BlockColMajorTranspose::run(CkksContext& ctx, const FeatureMatEncrypted& input) {
+    FeatureMatEncrypted result(&ctx, input.level);
     result.data = run_core(ctx, input.data);
     result.level = input.level - 1;  // transpose consumes 1 level
     result.shape = {n_, m_};         // transposed shape

@@ -16,10 +16,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "interface/inference_server.h"
-
 #include <iostream>
 #include <map>
+
+#include "interface/inference_server.h"
+
+using namespace cxx_sdk_v2;
 
 InferenceServer::InferenceServer(const std::string& server_dir, bool use_gpu)
     : server_dir_(server_dir), use_gpu_(use_gpu) {}
@@ -33,7 +35,7 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
     auto& input_param = task_config["task_input_param"].begin().value();
     std::string ckks_param_id = input_param["ckks_parameter_id"];
     int poly_modulus_degree = ckks_config[ckks_param_id]["poly_modulus_degree"].get<int>();
-    needs_btp_ = (poly_modulus_degree > 16384);
+    needs_btp_ = task_config.value("use_btp", false);
 
     // Store all input keys and per-input parameters
     for (auto& [name, param] : task_config["task_input_param"].items()) {

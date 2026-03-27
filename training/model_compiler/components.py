@@ -50,38 +50,37 @@ import os
 class FheParameter:
     def __init__(
         self,
+        name: str,
         poly_modulus_degree: int,
+        q: list[int],
+        p: list[int],
+        n_slots: int,
         max_level: int,
         log_default_scale: int,
-        block_shape: list | None = None,
-        name: str = '',
-        q: list[int] | None = None,
-        p: list[int] | None = None,
-        num_slots: int = 0,
     ):
+        self.name = name
         self.poly_modulus_degree = poly_modulus_degree
+        self.q = q
+        self.p = p
+        self.n_slots = n_slots
         self.max_level = max_level
         self.log_default_scale = log_default_scale
-        self.block_shape = block_shape
-        self.name = name
-        self.q = q or []
-        self.p = p or []
-        self.num_slots = num_slots
 
     def to_dict(self) -> dict:
         return {
             'poly_modulus_degree': self.poly_modulus_degree,
             'n_mult_level': self.max_level,
             'log_default_scale': self.log_default_scale,
-            'block_shape': self.block_shape,
+            'param_name': self.name,
+            'q': self.q,
+            'p': self.p,
         }
 
     def __repr__(self) -> str:
         return (
             f'FheParameter(poly_modulus_degree={self.poly_modulus_degree}, '
             f'n_mult_level={self.max_level}, '
-            f'log_default_scale={self.log_default_scale}, '
-            f'block_shape={self.block_shape})'
+            f'log_default_scale={self.log_default_scale})'
         )
 
 
@@ -102,24 +101,22 @@ class FheParameter:
 # PN13QP218: LogN=13, logQP=218, 128-bit classic security
 # Q: 1×33-bit + 5×30-bit, P: 1×35-bit, LogSlots=12
 PN13QP218 = FheParameter(
+    name='PN13QP218',
     poly_modulus_degree=8192,
     max_level=5,
     log_default_scale=30,
-    block_shape=[64, 64],
-    name='PN13QP218',
     q=[0x1FFFEC001, 0x3FFF4001, 0x3FFE8001, 0x40020001, 0x40038001, 0x3FFC0001],
     p=[0x800004001],
-    num_slots=1 << 12,
+    n_slots=1 << 12,
 )
 
 # PN14QP438: LogN=14, logQP=438, 128-bit classic security
 # Q: 1×45-bit + 9×34-bit, P: 2×43-bit, LogSlots=13
 PN14QP438 = FheParameter(
+    name='PN14QP438',
     poly_modulus_degree=16384,
     max_level=9,
     log_default_scale=34,
-    block_shape=[64, 64],
-    name='PN14QP438',
     q=[
         0x200000008001,
         0x400018001,
@@ -133,17 +130,16 @@ PN14QP438 = FheParameter(
         0x3FFEB8001,
     ],
     p=[0x7FFFFFD8001, 0x7FFFFFC8001],
-    num_slots=1 << 13,
+    n_slots=1 << 13,
 )
 
 # PN15QP880: LogN=15, logQP=880, 128-bit classic security
 # Q: 1×50-bit + 17×40-bit, P: 3×50-bit, LogSlots=14
 PN15QP880 = FheParameter(
+    name='PN15QP880',
     poly_modulus_degree=32768,
     max_level=17,
     log_default_scale=40,
-    block_shape=[128, 128],
-    name='PN15QP880',
     q=[
         0x4000000120001,
         0x10000140001,
@@ -165,17 +161,16 @@ PN15QP880 = FheParameter(
         0x10000960001,
     ],
     p=[0x40000001B0001, 0x3FFFFFFDF0001, 0x4000000270001],
-    num_slots=1 << 14,
+    n_slots=1 << 14,
 )
 
 # PN16QP1761: LogN=16, logQP=1761, 128-bit classic security
 # Q: 1×55-bit + 33×45-bit, P: 4×55-bit, LogSlots=15
 PN16QP1761 = FheParameter(
+    name='PN16QP1761',
     poly_modulus_degree=65536,
     max_level=33,
     log_default_scale=45,
-    block_shape=[128, 256],
-    name='PN16QP1761',
     q=[
         0x80000000080001,
         0x2000000A0001,
@@ -213,18 +208,17 @@ PN16QP1761 = FheParameter(
         0x200002560001,
     ],
     p=[0x80000000440001, 0x7FFFFFFFBA0001, 0x80000000500001, 0x7FFFFFFFAA0001],
-    num_slots=1 << 15,
+    n_slots=1 << 15,
 )
 
 # N16QP1546H192H32: LogN=16, logQP≈1546, sparse secret H=192, ephemeral H=32
 # Q: 1×60-bit Q0 + 9×40-bit residual + 15 bootstrapping primes, P: 5×61-bit
 # Residual Q : 420 bits. Precision : 26.6 bits for 2^15 slots.
 N16QP1546H192H32 = FheParameter(
+    name='N16QP1546H192H32',
     poly_modulus_degree=65536,
     max_level=9,
     log_default_scale=40,
-    block_shape=[128, 128],
-    name='N16QP1546H192H32',
     q=[
         0x10000000006E0001,  # 60  Q0
         0x10000140001,  # 40  residual
@@ -259,7 +253,7 @@ N16QP1546H192H32 = FheParameter(
         0x1FFFFFFFFF500001,
         0x1FFFFFFFFF420001,
     ],
-    num_slots=1 << 15,
+    n_slots=1 << 15,
 )
 
 
@@ -275,11 +269,15 @@ class GlobalConfig:
                 config_dict = json.load(f)
             # fhe_param will be overwritten by initialize_config() before first use
             cls._instance.fhe_param = FheParameter(
+                name='',
                 poly_modulus_degree=65536,
+                q=[],
+                p=[],
+                n_slots=0,
                 max_level=0,
                 log_default_scale=0,
-                block_shape=(1, 1),
             )
+            cls._instance.block_shape = [1, 1]
             cls._instance.graph_type = config_dict.get('GRAPH_TYPE', 'btp')
             cls._instance.style = config_dict.get('STYLE', 'multiplexed')
             cls._instance.mpc_refresh = config_dict.get('MPC_REFRESH', False)
@@ -325,6 +323,8 @@ class FeatureNode:
         self.is_total_graph_leading_node = False
         self.scale_up = 1
         self.scale_down = 1
+        self.invalid_fill = [1, 1]
+        self.sp_info = {'skip': [1, 1], 'invalid_fill': [1, 1], 'shape': [1, 1]}
 
     def __repr__(self) -> str:
         return f'{self.node_id}'
@@ -338,9 +338,7 @@ class FeatureNode:
             info['shape'] = self.shape
 
         if self.dim == 0:
-            virtual_shape = getattr(self, 'virtual_shape', [1, 1])
-            virtual_skip = getattr(self, 'virtual_skip', [1, 1])
-            info['skip'] = virtual_shape[0] * virtual_shape[1] * virtual_skip[0] * virtual_skip[1]
+            info['skip'] = math.prod(self.sp_info['skip']) * math.prod(self.sp_info['invalid_fill'])
             info['pack_num'] = math.ceil(config.fhe_param.poly_modulus_degree / 2 / info['skip'])
 
         info['ckks_parameter_id'] = self.ckks_parameter_id
@@ -666,20 +664,19 @@ class LayerAbstractGraph:
             if dim in (1, 2):
                 shape = feature_json['shape']
                 skip = [1] * dim
-                virtual_skip = [1] * dim
-                virtual_shape = [1] * dim
                 node = FeatureNode(key, dim, channel, scale, ckks_parameter_id, DEFAULT_SCALE, shape)
             elif dim == 0:
                 shape = [0, 0]
-                skip = [1, 0]
-                virtual_skip = feature_json['virtual_skip']
-                virtual_shape = feature_json['virtual_shape']
+
+                sp_info = feature_json.get('special_info', {'skip': [1, 1], 'invalid_fill': [1, 1], 'shape': [1, 1]})
+                skip = [math.prod(sp_info['skip'])]
                 node = FeatureNode(key, dim, channel, scale, ckks_parameter_id, DEFAULT_SCALE, shape)
+                node.sp_info = sp_info
             else:
                 raise ValueError(f'Unsupported feature dim: {dim}')
             node.node_index = f_index
 
-            graph_info.dag.add_node(node, name=key, skip=skip, virtual_shape=virtual_shape, virtual_skip=virtual_skip)
+            graph_info.dag.add_node(node, name=key, skip=skip)
             feature_dict[key] = node
             f_index = f_index + 1
 
@@ -1154,33 +1151,27 @@ class LayerAbstractGraph:
                 ckks_scale = feature.ckks_scale
                 shape = [int(item) for item in feature.shape]
                 skip = [int(item) for item in self.dag.nodes[feature]['skip']]
-                try:
-                    virtual_shape = [int(item) for item in self.dag.nodes[feature]['virtual_shape']]
-                    virtual_skip = [int(item) for item in self.dag.nodes[feature]['virtual_skip']]
-                except Exception as e:
-                    print(
-                        f'Failed to get node virtual_skip attribute! Node ID: {feature.node_id}, Error type: {type(e).__name__}, Details: {e}'
-                    )
-                    raise
 
                 ckks_parameter_id = feature.ckks_parameter_id
                 level = self.dag.nodes[feature]['level']
                 depth = feature.depth
                 pack_num = self.dag.nodes[feature]['pack_num']
                 if dim == 0:
-                    features[key] = {
+                    feature_dict = {
                         'dim': dim,
                         'channel': channel,
                         'scale': scale,
                         'ckks_scale': ckks_scale,
                         'skip': skip[0],
                         'ckks_parameter_id': ckks_parameter_id,
-                        'virtual_shape': virtual_shape,
-                        'virtual_skip': virtual_skip,
                         'level': level,
                         'depth': depth,
                         'pack_num': pack_num,
                     }
+                    pred_compute = next(self.dag.predecessors(feature), None)
+                    if isinstance(pred_compute, ReshapeComputeNode):
+                        feature_dict['special_info'] = feature.sp_info
+                    features[key] = feature_dict
                 elif dim in (1, 2):
                     features[key] = {
                         'dim': dim,
@@ -1193,6 +1184,7 @@ class LayerAbstractGraph:
                         'level': level,
                         'depth': depth,
                         'pack_num': pack_num,
+                        'invalid_fill': feature.invalid_fill,
                     }
                 else:
                     raise ValueError('Unsupported dim value.')

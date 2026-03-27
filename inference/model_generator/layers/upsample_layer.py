@@ -15,14 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-import os
+from pathlib import Path
 
-# Add mega_ag_generator to path for importing frontend module
-script_dir = os.path.dirname(os.path.abspath(__file__))
-mega_ag_generator_dir = os.path.join(script_dir, '../../lattisense')
-sys.path.insert(0, mega_ag_generator_dir)
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from frontend.custom_task import *
+from inference.lattisense.frontend.custom_task import *
 
 
 class UpsampleNearestLayer:
@@ -65,6 +62,140 @@ class UpsampleNearestLayer:
 
         # Calculate the number of blocks per ciphertext
         self.n_block_per_ct = (n_channel_per_ct + skip[0] * skip[1] - 1) // (skip[0] * skip[1])
+
+    def call(self, x: list[CkksCiphertextNode], select_tensor_pt: list, n_channel: int) -> list[CkksCiphertextNode]:
+        """
+        Generate computation graph for upsample_nearest layer using pre-generated select_tensor_pt
+
+        Args:
+            x: Input ciphertext node list
+            select_tensor_pt: Pre-generated select tensor plaintext nodes
+            n_channel: Total number of channels
+
+        Returns:
+            Output ciphertext node list
+
+        Implementation logic corresponds to C++ run() method - Normal mode branch (upsample_nearest_layer.cpp:99-203)
+        """
+        x_size = len(x)
+        if x_size == 0:
+            raise ValueError(f'UpsampleNearestLayer: input x is empty')
+        if n_channel == 0:
+            raise ValueError(f'UpsampleNearestLayer: n_channel is 0')
+
+        result_tmp = []
+
+        factor_h = self.upsample_factor[0]
+        factor_w = self.upsample_factor[1]
+
+        out_channels_per_ct = self.n_channel_per_ct // (factor_h * factor_w)
+        n_packed_out_channel = (n_channel + out_channels_per_ct - 1) // out_channels_per_ct
+
+        # Stage 1: Rotation, mask selection, rescale
+        for idx in range(x_size):
+            steps = []
+            for i in range(self.n_channel_per_ct):
+                channel_id = idx * self.n_channel_per_ct + i
+                if channel_id >= n_channel:
+                    steps.append(0)
+                    continue
+
+                rp = channel_id % out_channels_per_ct
+                r_num0 = (
+                    (rp // (self.skip[0] * self.skip[1] // (factor_h * factor_w)))
+                    * self.skip[0]
+                    * self.skip[1]
+                    * self.shape[0]
+                    * self.shape[1]
+                )
+                r_num1 = (
+                    ((rp % (self.skip[0] * self.skip[1] // (factor_h * factor_w))) // (self.skip[1] // factor_w))
+                    * self.shape[1]
+                    * self.skip[1]
+                )
+                r_num2 = rp % (self.skip[1] // factor_w)
+
+                lp = channel_id % self.n_channel_per_ct
+                l_num0 = (
+                    (lp // (self.skip[0] * self.skip[1])) * self.skip[0] * self.skip[1] * self.shape[0] * self.shape[1]
+                )
+                l_num1 = ((lp % (self.skip[0] * self.skip[1])) // self.skip[1]) * self.shape[1] * self.skip[1]
+                l_num2 = lp % self.skip[1]
+
+                r_num = -r_num0 - r_num1 - r_num2 + l_num0 + l_num1 + l_num2
+                steps.append(r_num)
+
+            unique_steps = list(set(steps))
+            if 0 in unique_steps and len(unique_steps) == 1:
+                s_rots = {0: x[idx]}
+            else:
+                non_zero_steps = [s for s in unique_steps if s != 0]
+                if non_zero_steps:
+                    rotated_list = rotate_cols(x[idx], non_zero_steps)
+                    s_rots = {step: rotated_list[i] for i, step in enumerate(non_zero_steps)}
+                    s_rots[0] = x[idx]
+                else:
+                    s_rots = {0: x[idx]}
+
+            for i in range(self.n_channel_per_ct):
+                channel_id = idx * self.n_channel_per_ct + i
+                if channel_id >= n_channel:
+                    continue
+
+                x_rot = s_rots[steps[i]]
+
+                out_channel_pos = channel_id % out_channels_per_ct
+                select_pt = select_tensor_pt[out_channel_pos]
+
+                c_m_s = mult(x_rot, select_pt)
+                c_m_s_rescaled = rescale(c_m_s)
+                result_tmp.append(c_m_s_rescaled)
+
+        # Stage 2: Repack channels
+        res = []
+        sp = None
+        for i in range(n_channel):
+            p = i % out_channels_per_ct
+            c_m_s = result_tmp[i]
+
+            if p == 0:
+                sp = c_m_s
+            else:
+                sp = add(sp, c_m_s)
+
+            if (i + 1) % out_channels_per_ct == 0 or i == n_channel - 1:
+                res.append(sp)
+
+        # Stage 3: Nearest neighbor replication via rotation and addition
+        import math
+
+        log2_upsample_0 = int(math.ceil(math.log2(factor_h))) if factor_h > 1 else 0
+        log2_upsample_1 = int(math.ceil(math.log2(factor_w))) if factor_w > 1 else 0
+
+        result = []
+        for idx in range(len(res)):
+            result_ct = res[idx]
+
+            for i in range(log2_upsample_0):
+                step = -int(pow(2, i) * self.shape[1] * self.skip[1] * self.skip[0] // factor_h)
+                ct_tmp = rotate_cols(result_ct, [step])[0]
+                result_ct = add(result_ct, ct_tmp)
+
+            for j in range(log2_upsample_1):
+                step = -int(pow(2, j) * self.skip[1] // factor_w)
+                ct_tmp = rotate_cols(result_ct, [step])[0]
+                result_ct = add(result_ct, ct_tmp)
+
+            result.append(result_ct)
+
+        if len(result) == 0:
+            raise ValueError(
+                f'UpsampleNearestLayer: generated empty result! '
+                f'x_size={x_size}, n_channel={n_channel}, n_channel_per_ct={self.n_channel_per_ct}, '
+                f'factor={self.upsample_factor}, out_channels_per_ct={out_channels_per_ct}'
+            )
+
+        return result
 
     def call_custom_compute(
         self, x: list[CkksCiphertextNode], data_source: 'CustomDataNode', n_channel: int
