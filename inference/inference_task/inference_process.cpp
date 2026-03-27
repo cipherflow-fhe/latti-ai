@@ -884,7 +884,8 @@ void InferenceProcess::run_task(bool is_mpc) {
                     if (is_big_size) {
                         continue;
                     } else {
-                        continue;
+                        cxx_args.push_back(CxxVectorArgument{"select_tensor_pt_" + key,
+                                                             &(fp->ckks_avgpool.at(key)->select_tensor_pt)});
                     }
                 }
             } else {

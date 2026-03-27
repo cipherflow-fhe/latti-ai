@@ -58,23 +58,23 @@ class Avgpool2DLayer:
         x_size = len(x)
 
         # If ciphertext slots are not full, need to rotate to fill them
-        n_rot = int(np.ceil(n / 2 / (self.channel * self.shape[0] * self.shape[1])))
+        n_rot = int(np.floor(n / 2 / (self.channel * self.shape[0] * self.shape[1])))
 
-        log2_shape_0 = int(np.ceil(np.log2(self.shape[0])))
-        log2_shape_1 = int(np.ceil(np.log2(self.shape[1])))
+        log2_stride_0 = int(np.ceil(np.log2(self.stride[0])))
+        log2_stride_1 = int(np.ceil(np.log2(self.stride[1])))
 
         result = []
         for idx in range(0, x_size):
             res = x[idx]
-            for i in range(log2_shape_0 - 1, 0 - 1, -1):
+            for i in range(log2_stride_0 - 1, 0 - 1, -1):
                 ct_tmp = rotate_cols(res, (2**i) * self.shape[0] * self.skip[0] * self.skip[1])
                 res = add(res, ct_tmp[0])
 
-            for j in range(log2_shape_1 - 1, 0 - 1, -1):
+            for j in range(log2_stride_1 - 1, 0 - 1, -1):
                 ct_tmp = rotate_cols(res, (2**j) * self.skip[1])
                 res = add(res, ct_tmp[0])
 
-            for r in range(0, int(np.log2(n_rot))):
+            for r in range(0, int(np.floor(np.log2(n_rot))) if n_rot > 1 else 0):
                 res = add(res, rotate_cols(res, (2**r) * self.channel * self.shape[0] * self.shape[1])[0])
             result.append(res)
         return result
