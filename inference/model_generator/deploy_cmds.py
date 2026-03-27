@@ -103,8 +103,10 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             n_packed_in_channel = math.ceil(n_in_channel / 8192)
             n_packed_out_channel = math.ceil(n_out_channel / pack)
 
-        # For big_conv, input CT count differs from the default n_packed_in_channel
-        if layer_config['type'] == 'conv2d' and layer_config.get('is_big_size', False):
+        # For big_conv/big_avgpool, input CT count differs from the default n_packed_in_channel
+        if (layer_config['type'] == 'conv2d' or 'avgpool' in layer_config['type']) and layer_config.get(
+            'is_big_size', False
+        ):
             input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
             block_expansion = (
                 math.ceil(input_shape[0] / block_shape[0]),
@@ -406,9 +408,28 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 layer_output_nodes.extend(feature_id_to_nodes_map[input_fid])
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
-        elif 'upsample' in layer_config['type']:
-            # upsample/upsample_nearest handled at runtime by InferenceProcess
-            layer_output_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
+        elif 'upsample_nearest' in layer_config['type']:
+            input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
+            upsample_factor = layer_config['upsample_factor']
+            n_channel_per_ct = pack
+            upsample_layer = UpsampleNearestLayer(
+                shape=input_shape,
+                skip=skip,
+                upsample_factor=upsample_factor,
+                n_channel_per_ct=n_channel_per_ct,
+                level=level,
+            )
+            out_channels_per_ct = n_channel_per_ct // (upsample_factor[0] * upsample_factor[1])
+            n_select_pt = out_channels_per_ct
+            select_tensor_pt = [
+                CkksPlaintextRingtNode(f'upsample_select_pt_{layer_id}_{i}') for i in range(n_select_pt)
+            ]
+            layer_output_nodes = upsample_layer.call(
+                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                select_tensor_pt,
+                n_in_channel,
+            )
+            input_args.append(Argument(f'upsample_select_pt_{layer_id}', select_tensor_pt))
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif 'avgpool' in layer_config['type']:
@@ -417,27 +438,37 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             is_adaptive = layer_config.get('is_adaptive_avgpool', True)
             is_big_size = layer_config.get('is_big_size', False)
             avgpool = Avgpool2DLayer(stride, input_shape, channel=n_in_channel, skip=skip)
-            if is_adaptive:
-                # level_cost=0: only rotations + adds, normalization absorbed into adjacent layers
-                if style == 'ordinary':
-                    layer_output_nodes = avgpool.call(feature_id_to_nodes_map[layer_input_feature_ids[0]])
-                else:
-                    layer_output_nodes = avgpool.run_adaptive_avgpool(
-                        feature_id_to_nodes_map[layer_input_feature_ids[0]], n=n
-                    )
-            else:
-                # level_cost=1: non-adaptive avgpool needs mult+rescale (select_tensor)
-                n_channel_per_ct = int(math.ceil(n / 2 / (input_shape[0] * input_shape[1])))
-                out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
-                n_select_pt = min(n_in_channel, out_channels_per_ct)
-                select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)]
-                layer_output_nodes = avgpool.call_multiplexed_avgpool(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]],
-                    select_tensor_pt,
-                    n_in_channel,
-                    n_channel_per_ct,
+            if is_big_size:
+                block_expansion = [
+                    math.ceil(input_shape[0] / block_shape[0]),
+                    math.ceil(input_shape[1] / block_shape[1]),
+                ]
+                layer_output_nodes = avgpool.call_interleaved_avgpool(
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]], block_expansion
                 )
-                input_args.append(Argument(f'select_tensor_pt_{layer_id}', select_tensor_pt))
+            else:
+                if is_adaptive:
+                    # level_cost=0: only rotations + adds, normalization absorbed into adjacent layers
+                    if style == 'ordinary':
+                        layer_output_nodes = avgpool.call(feature_id_to_nodes_map[layer_input_feature_ids[0]])
+                    else:
+                        layer_output_nodes = avgpool.run_adaptive_avgpool(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], n=n
+                        )
+                else:
+                    # level_cost=1: non-adaptive avgpool needs mult+rescale (select_tensor)
+                    n_channel_per_ct = int(math.ceil(n / 2 / (input_shape[0] * input_shape[1])))
+                    out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
+                    n_select_pt = min(n_in_channel, out_channels_per_ct)
+                    select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)]
+                    layer_output_nodes = avgpool.call_multiplexed_avgpool(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                        select_tensor_pt,
+                        n_in_channel,
+                        n_channel_per_ct,
+                    )
+                    input_args.append(Argument(f'select_tensor_pt_{layer_id}', select_tensor_pt))
+
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif layer_config['type'] == 'fc0':
