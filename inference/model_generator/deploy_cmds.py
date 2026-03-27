@@ -102,6 +102,15 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             n_packed_in_channel = math.ceil(n_in_channel / 8192)
             n_packed_out_channel = math.ceil(n_out_channel / pack)
 
+        # For big_conv, input CT count differs from the default n_packed_in_channel
+        if layer_config['type'] == 'conv2d' and layer_config.get('is_big_size', False):
+            input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
+            block_expansion = (
+                math.ceil(input_shape[0] / block_shape[0]),
+                math.ceil(input_shape[1] / block_shape[1]),
+            )
+            n_packed_in_channel = n_in_channel * block_expansion[0] * block_expansion[1]
+
         for input_node in layer_input_feature_ids:
             if input_node not in feature_id_to_nodes_map.keys():
                 x = [CkksCiphertextNode(input_node + f'input{k}', level=level) for k in range(n_packed_in_channel)]
@@ -123,23 +132,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             next_stride = [block_expansion[0] // stride[0], block_expansion[1] // stride[1]]
             padding = [-1, -1]
             if is_big_conv:
-                input_node = layer_input_feature_ids[0]
-                level = config_info['feature'][layer_input_feature_ids[0]]['level']
-                block_expansion = (
-                    math.ceil(input_shape[0] / block_shape[0]),
-                    math.ceil(input_shape[1] / block_shape[1]),
-                )
-                n_ct_expected = n_in_channel * block_expansion[0] * block_expansion[1]
-                # Check if this feature is a raw network input (present in input_args)
-                raw_input_idx = next((i for i, arg in enumerate(input_args) if arg.id == input_node), None)
-                if raw_input_idx is not None:
-                    # Raw input: replace packed CTs with big_conv format (different CT count)
-                    del input_args[raw_input_idx]
-                    feature_id_to_nodes_map[input_node] = [
-                        CkksCiphertextNode(input_node + f'input{k}', level=level) for k in range(n_ct_expected)
-                    ]
-                    input_args.append(Argument(input_node, feature_id_to_nodes_map[input_node]))
-                # else: reuse output CTs from previous layer (already in g_dag, not an external input)
                 big_conv = InverseMultiplexedConv2DLayer(
                     n_out_channel,
                     n_in_channel,
@@ -374,10 +366,10 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             input_args.append(Argument(f'mult_scalar_{layer_id}', pt))
 
         elif layer_config['type'] == 'mult_coeff':
-            # mult_coeff is absorbed into adjacent layer weights (level_cost=0),
-            # so it is a pass-through in the FHE computation graph.
-            layer_output_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
-            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+            raise ValueError(
+                f"Layer '{layer_id}' has type 'mult_coeff', which should have been absorbed "
+                f"into adjacent layers or converted to 'mult_scalar' during compilation."
+            )
 
         elif layer_config['type'] == 'drop_level':
             level_in = config_info['feature'][layer_input_feature_ids[0]]['level']
