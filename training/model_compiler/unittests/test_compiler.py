@@ -430,7 +430,7 @@ class TestSingleLayer(CompilerTestBase):
 
     def test_single_avgpool_big_size(self):
         model = nn_modules.SingleAvgpool()
-        graph, score = self._export_and_compile(model, (1, 32, 128, 256))
+        graph, score = self._export_and_compile(model, (1, 32, 256, 256))
         self.assertEqual(check_feature_scale(graph), True)
 
     def test_single_maxpool(self):
@@ -448,7 +448,16 @@ class TestSingleLayer(CompilerTestBase):
 
     def test_single_conv_with_stride_big_size(self):
         model = nn_modules.SingleConv(2)
-        graph, score = self._export_and_compile(model, (1, 32, 128, 128), style='multiplexed')
+        graph, score = self._export_and_compile(model, (1, 32, 256, 256), style='multiplexed')
+        res = None
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode):
+                input = list(graph.dag.predecessors(node))[0]
+                output = list(graph.dag.successors(node))[0]
+                if graph.dag.nodes[output]['skip'] == [1, 1]:
+                    res = True
+                    break
+        self.assertEqual(res, True)
 
 
 class TestLayerInteraction(CompilerTestBase):
