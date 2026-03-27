@@ -274,6 +274,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_
     input_shape_ct_mult[0] = input_shape_ct[0];
     input_shape_ct_mult[1] = input_shape_ct[1];
     this->N_half = N_half;
+    this->n_block_pre_ct = n_block_pre_ct;
     n_block_input = n_block_input_local;
 
     parallel_for(
@@ -326,19 +327,17 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_
 }
 
 vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, const vector<CkksCiphertext>& x) {
-    vector<CkksCiphertext> input_rotated_x;
     uint32_t x_size = x.size();
     int n_packed_out_feature_for_mult_pack =
         weight_pt.empty() ? div_ceil(n_out_feature, n_block_pre_ct) : (int)weight_pt.size();
 
-    vector<vector<CkksCiphertext>> rotated_tmp(x_size);
+    // Each input ct contributes n_block_pre_ct rotations (one per block slot within the ct).
+    // rotated_cts[x_id][rot] = x[x_id] rotated by rot * block_size slots.
+    int block_size = input_shape_ct_mult[0] * input_shape_ct_mult[1];
+    vector<vector<CkksCiphertext>> rotated_cts(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
-        rotated_tmp[x_id] = Conv2DLayer::populate_rotations_1_side(ctx_copy, x[x_id], n_block_input - 1,
-                                                                   input_shape_ct_mult[0] * input_shape_ct_mult[1]);
+        rotated_cts[x_id] = Conv2DLayer::populate_rotations_1_side(ctx_copy, x[x_id], n_block_pre_ct - 1, block_size);
     });
-    for (auto& y : rotated_tmp) {
-        move(y.begin(), y.end(), back_inserter(input_rotated_x));
-    }
 
     vector<CkksCiphertext> result;
     result.resize(n_packed_out_feature_for_mult_pack);
@@ -348,7 +347,10 @@ vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, co
             CkksCiphertext s(0);
             int num_inputs = weight_pt.empty() ? n_block_input : weight_pt[packed_out_feature_idx].size();
             for (int in_feature_idx = 0; in_feature_idx < num_inputs; in_feature_idx++) {
-                auto& x_ct = input_rotated_x[in_feature_idx];
+                // in_feature_idx encodes (group, offset): group = which input ct, offset = rotation within ct.
+                int group = in_feature_idx / n_block_pre_ct;
+                int offset = in_feature_idx % n_block_pre_ct;
+                auto& x_ct = rotated_cts[group][offset];
 
                 CkksPlaintextRingt w_pt_rt_owned;
                 const CkksPlaintextRingt* w_ptr;
@@ -379,11 +381,12 @@ vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, co
             }
             s = ctx_copy.add_plain_ringt(s, *b_ptr);
 
-            uint32_t n_term = input_shape_ct_mult[0] * input_shape_ct_mult[1];
-            while (n_term > 1) {
-                CkksCiphertext rotated = ctx_copy.rotate(s, n_term / 2);
+            // Fold across all block_size = shape*skip positions (spatial + channel sub-positions).
+            int n_fold = input_shape_ct_mult[0] * input_shape_ct_mult[1];
+            while (n_fold > 1) {
+                CkksCiphertext rotated = ctx_copy.rotate(s, n_fold / 2);
                 s = ctx_copy.add(s, rotated);
-                n_term /= 2;
+                n_fold /= 2;
             }
             result[packed_out_feature_idx] = move(s);
         });

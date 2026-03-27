@@ -379,7 +379,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif layer_config['type'] == 'fc0':
-            n_packed_in_channel = math.ceil(n_in_channel / 8192)
+            n_packed_in_channel = math.ceil(n_in_channel / (n // 2))
             n_packed_out_channel = math.ceil(n_out_channel / pack)
             if 'special_info' not in config_info['feature'][layer_input_feature_ids[0]]:
                 virtual_shape = [1, 1]
@@ -407,10 +407,15 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             else:
                 special_shape = config_info['feature'][layer_input_feature_ids[0]]['special_info']['shape']
                 special_skip = config_info['feature'][layer_input_feature_ids[0]]['special_info']['skip']
+                invalid_fill = config_info['feature'][layer_input_feature_ids[0]]['special_info']['invalid_fill']
                 input_shape_ct = [special_shape[0] * special_skip[0], special_shape[1] * special_skip[1]]
                 n_num_per_ct = math.ceil(n // 2 / (input_shape_ct[0] * input_shape_ct[1]))
                 n_packed_out_feature_for_mult_apck = math.ceil(n_out_channel / n_num_per_ct)
-                n_block_input = math.ceil(n_in_channel * special_shape[0] * special_shape[1] / (n // 2)) * n_num_per_ct
+                valid_skip_0 = special_skip[0] // invalid_fill[0]
+                valid_skip_1 = special_skip[1] // invalid_fill[1]
+                n_channel_per_block = valid_skip_0 * valid_skip_1
+                n_channel = n_in_channel // (special_shape[0] * special_shape[1])
+                n_block_input = math.ceil(n_channel / (n_num_per_ct * n_channel_per_block)) * n_num_per_ct
                 weight_pt = [
                     [CkksPlaintextRingtNode(f'densew_{layer_id}_{i}_{j}') for j in range(n_block_input)]
                     for i in range(n_packed_out_feature_for_mult_apck)
@@ -426,6 +431,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     n_num_per_ct,
                     n_in_channel,
                     n_out_channel,
+                    invalid_fill=invalid_fill,
                 )
                 input_args.append(Argument(f'densew_{layer_id}', weight_pt))
                 input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
