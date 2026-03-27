@@ -440,7 +440,9 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
     output_args = [Argument(output_id, feature_id_to_nodes_map[output_id]) for output_id in task_output_feature_ids]
 
-    process_custom_task(input_args=input_args, output_args=output_args, output_instruction_path=task_path)
+    process_custom_task(
+        input_args=input_args, output_args=output_args, output_instruction_path=task_path, fpga_acc=False
+    )
 
 
 if __name__ == '__main__':

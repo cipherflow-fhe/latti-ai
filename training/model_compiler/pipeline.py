@@ -91,7 +91,7 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
     for params in no_btp_params:
         config.fhe_param = params
         set_block_shape(config.fhe_param, raw_graph)
-        print(f'Trying FheParam = {config.fhe_param}')
+        print(f'Trying FheParam {config.fhe_param.name}')
 
         # (1) Pre-process
         pt_graph = prepare_graph(raw_graph)
@@ -101,12 +101,10 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
 
         # (3) Post-process
         if result is not None:
-            print(f'Success! Using FheParam = {config.fhe_param}')
+            print(f'Success! Using FheParam {config.fhe_param.name}')
             print('✓ No-BTP mode succeeded! Saving results...')
             restore_node_attributes(result.dag)
             result = post_process(result)
-            print(f'\n=== No-BTP Results ===')
-            print(f'Score: 0.0')
             return True, result, 0.0
         else:
             print(f'Level exceeded with POLY_N={config.fhe_param.poly_modulus_degree}, trying next level...')
