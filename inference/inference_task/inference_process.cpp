@@ -156,13 +156,11 @@ void InitInferenceProcess::init_dense_layer(const string& key, const json& layer
     } else {
         Duo input_shape = feature_input.shape;
         Duo input_skip;
-        input_skip[0] = feature_input.special_skip[0] / input_shape[0];
-        input_skip[1] = feature_input.special_skip[1] / input_shape[1];
         Duo invalid_fill = feature_input.invalid_fill;
         if (is_lazy) {
-            dense->prepare_weight_for_2d_multiplexed_lazy(input_shape, input_skip, invalid_fill);
+            dense->prepare_weight_for_2d_multiplexed_lazy(input_shape, feature_input.special_skip, invalid_fill);
         } else {
-            dense->prepare_weight_for_2d_multiplexed(input_shape, input_skip, invalid_fill);
+            dense->prepare_weight_for_2d_multiplexed(input_shape, feature_input.special_skip, invalid_fill);
         }
     }
     ckks_denses[key] = move(dense);
@@ -459,7 +457,7 @@ void InitInferenceProcess::load_model_prepare() {
     json config_json = read_json(project_path / "task_config.json");
     for (auto& layer : json_layers.items()) {
         const string& key = layer.key();
-        cout << "key=" << key << endl;
+        // cout << "key=" << key << endl;
         const json& value = layer.value();
         const string& layer_type = value["type"].get<string>();
         if (layer_type == "conv2d") {
