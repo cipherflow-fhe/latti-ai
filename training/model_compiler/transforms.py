@@ -450,7 +450,7 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                 graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
         if preds[0].dim >= 1 and any(preds[0].shape[i] > config.fhe_param.block_shape[i] for i in range(preds[0].dim)):
             graph.dag.nodes[succ]['skip'] = [1] * preds[0].dim
-            if succ.shape[0] < config.fhe_param.block_shape[0] or succ.shape[1] < config.fhe_param.block_shape[1]:
+            if any(succ.shape[i] < config.fhe_param.block_shape[i] for i in range(succ.dim)):
                 for i in range(preds[0].dim):
                     graph.dag.nodes[succ]['skip'][i] = config.fhe_param.block_shape[i] / succ[0].shape[i]
 
@@ -510,10 +510,7 @@ def set_level_costs(graph: LayerAbstractGraph):
                 ):
                     compute_node.is_big_size = True
                     graph.dag.nodes[compute_node]['level_cost'] = 1
-                    if (
-                        succ.shape[0] < config.fhe_param.block_shape[0]
-                        or succ.shape[1] < config.fhe_param.block_shape[1]
-                    ):
+                    if any(succ.shape[i] < config.fhe_param.block_shape[i] for i in range(succ.dim)):
                         graph.dag.nodes[compute_node]['level_cost'] = 2
                 else:
                     if compute_node.groups == 1:
