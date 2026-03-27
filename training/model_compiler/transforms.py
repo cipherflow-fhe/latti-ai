@@ -418,7 +418,7 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
     for compute_node in sorted_compute_nodes:
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
         succ: FeatureNode = next(graph.dag.successors(compute_node))
-        # init skip
+        # init skip,
         if succ.dim != 0:
             graph.dag.nodes[succ]['skip'] = [1] * succ.dim
 
