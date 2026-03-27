@@ -779,7 +779,7 @@ class TestE2E(CompilerTestBase):
     def test_e2e_single_avgpool(self):
         """1 Avgpool → poly_n=8192, no BTP."""
         model = nn_modules.SingleAvgpool()
-        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'single_avgpool')
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'single_avgpool', style='multiplexed')
         self.assertTrue(check_feature_scale(graph))
 
     def test_e2e_single_dense(self):
@@ -810,7 +810,6 @@ class TestE2E(CompilerTestBase):
         graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'conv_batchnorm')
         self.assertEqual(self._max_feature_level(graph), 1)
 
-    @unittest.skip('gen_custom_task bug: FC special_info branch weight/input dimensions mismatch in call_multiplexed')
     def test_e2e_conv_reshape_dense(self):
         """Conv → Reshape → Dense pipeline."""
         model = nn_modules.ConvReshapeAndDense()
@@ -907,7 +906,6 @@ class TestE2E(CompilerTestBase):
         graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'intertwined')
         self.assertTrue(check_dropped_levels_per_subgraph(graph))
 
-    @unittest.skip('mult_coeff type not supported by C++ inference (level_cost mismatch)')
     def test_e2e_intertwined_with_coeff(self):
         """Multi-branch graph with add + mult_scalar. Tests BTP with scale ops."""
         model = nn_modules.IntertwinedWithCoeff()
@@ -915,7 +913,6 @@ class TestE2E(CompilerTestBase):
 
     # ── Big-size tests (256×256 input) ──
 
-    @unittest.skip('gen_custom_task bug: mult_scalar CkksPlaintextRingtNode not subscriptable')
     def test_e2e_single_avgpool_big_size(self):
         """Avgpool with big_size input (256×256), ordinary style."""
         model = nn_modules.SingleAvgpool()
@@ -930,7 +927,6 @@ class TestE2E(CompilerTestBase):
         )
         self.assertIsNotNone(graph)
 
-    @unittest.skip('gen_custom_task: unused data node error with big_size conv + BTP')
     def test_e2e_conv_series_with_stride(self):
         """Deep conv chain with strides, big_size (256×256), multiplexed."""
         model = nn_modules.ConvSeriesWithStride()
@@ -965,7 +961,6 @@ class TestE2E(CompilerTestBase):
         graph, score = self._export_compile_and_deploy(model, (1, 4, 32, 32), 'depthwise_conv_s2')
         self.assertIsNotNone(graph)
 
-    @unittest.skip('gen_custom_task bug: FC dense.call_multiplexed IndexError')
     def test_e2e_two_fc(self):
         """Conv → Flatten → FC → FC. Covers fc_fc_0d."""
         model = nn_modules.ConvReshapeTwoFC()
@@ -980,7 +975,6 @@ class TestE2E(CompilerTestBase):
         )
         self.assertIsNotNone(graph)
 
-    @unittest.skip('1D bug: transforms.py:449 IndexError on succ.shape[1]')
     def test_e2e_conv1d(self):
         """Conv1d E2E. Covers conv1d."""
         model = nn_modules.SingleConv1dE2E()
@@ -1006,7 +1000,7 @@ class TestE2E(CompilerTestBase):
     def test_e2e_avgpool_stride4(self):
         """Avgpool with stride=4. Covers avgpool2d_layer varied strides."""
         model = nn_modules.AvgpoolVariedStride(stride=4)
-        graph, score = self._export_compile_and_deploy(model, (1, 32, 32, 32), 'avgpool_stride4')
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 32, 32), 'avgpool_stride4', style='multiplexed')
         self.assertIsNotNone(graph)
 
 
