@@ -23,9 +23,9 @@
 // complete task directories under build/inference/hetero_e2e/<test_name>/.
 //
 // Usage:
-//   ./test_e2e "[e2e]"                # Run all tests
-//   ./test_e2e "[cpu]"                # Run all CPU tests
-//   ./test_e2e "[gpu]"                # Run all GPU tests
+//   ./test_e2e "[e2e]"                # Run all working tests
+//   ./test_e2e "[cpu]"                # Run all working CPU tests
+//   ./test_e2e "[gpu]"                # Run all working GPU tests
 //   ./test_e2e "cpu/single_conv"      # Run a specific CPU test
 //   ./test_e2e "gpu/single_conv"      # Run a specific GPU test
 //   ./test_e2e "cpu/all"              # Run all CPU tests (batch)
