@@ -448,7 +448,7 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
             for i in range(preds[0].dim):
                 succ.shape[i] = preds[0].shape[i]
                 graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
-        if any(preds[0].shape[i] > config.fhe_param.block_shape[i] for i in range(preds[0].dim)):
+        if preds[0].dim >= 2 and any(preds[0].shape[i] > config.fhe_param.block_shape[i] for i in range(preds[0].dim)):
             graph.dag.nodes[succ]['skip'] = [1] * preds[0].dim
             if succ.shape[0] < config.fhe_param.block_shape[0] or succ.shape[1] < config.fhe_param.block_shape[1]:
                 for i in range(preds[0].dim):

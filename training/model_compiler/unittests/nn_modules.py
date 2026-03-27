@@ -61,7 +61,7 @@ class SingleAct1d(nn.Module):
 class SingleAvgpool(nn.Module):
     def __init__(self):
         super().__init__()
-        self.pool0 = nn.AvgPool2d(kernel_size=2, padding=1)
+        self.pool0 = nn.AvgPool2d(kernel_size=2, padding=0)
 
     def forward(self, x):
         x = self.pool0(x)
