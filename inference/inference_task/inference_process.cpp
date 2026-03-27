@@ -799,14 +799,14 @@ void InferenceProcess::run_task(bool is_mpc) {
             for (int j = 0; j < _size; j++) {
                 ct_data[i].push_back(input.data[j].copy());
             }
-            cxx_args.push_back(CxxVectorArgument{ki, &ct_data});
+            cxx_args.push_back(CxxVectorArgument{ki, &ct_data[i]});
         }
         if (feature_input.dim == 0) {
             const Feature0DEncrypted& input = dynamic_cast<const Feature0DEncrypted&>(get_feature(ki));
             for (int j = 0; j < input.data.size(); j++) {
                 ct_data[i].push_back(input.data[j].copy());
             }
-            cxx_args.push_back(CxxVectorArgument{ki, &ct_data});
+            cxx_args.push_back(CxxVectorArgument{ki, &ct_data[i]});
         }
     }
 

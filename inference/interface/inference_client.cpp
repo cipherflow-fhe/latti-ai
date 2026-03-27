@@ -158,7 +158,6 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
             }
             result[name] = input_ct.serialize();
         }
-
         std::cout << "[Client] Done." << std::endl;
     }
 
