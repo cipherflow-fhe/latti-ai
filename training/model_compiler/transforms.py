@@ -34,18 +34,15 @@ def _calc_pack_num(dag: nx.DiGraph, feature_node, slot_num: int, use_skip: bool 
     if feature_node.dim == 0:
         return math.ceil(slot_num / (attrs['skip'][0]))
     else:
-        denom = math.prod(feature_node.shape)
-        if use_skip:
-            denom *= math.prod(attrs['skip'])
+        denom = math.prod(feature_node.shape) * math.prod(feature_node.invalid_fill)
         return math.ceil(slot_num / denom)
 
 
 def populate_pack_num(dag: nx.DiGraph, node, slot_num: int):
     preds = list(dag.predecessors(node))
     succs = list(dag.successors(node))
-    use_skip = config.style != 'multiplexed'
     for f_node in preds + succs:
-        dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num, use_skip=use_skip)
+        dag.nodes[f_node]['pack_num'] = _calc_pack_num(dag, f_node, slot_num)
 
 
 def _insert_layer_between_feature_and_compute(
@@ -381,7 +378,7 @@ def process_special_info(
 
     if preds[0].dim == 2 and succ.dim == 2:
         if config.style == 'ordinary':
-            succ.invalid_fill = graph.dag.nodes[preds[0]]['skip'].copy()
+            succ.invalid_fill = graph.dag.nodes[succ]['skip'].copy()
         else:
             if isinstance(compute_node, PoolComputeNode):
                 if compute_node.is_adaptive_avgpool:
@@ -421,39 +418,40 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
     for compute_node in sorted_compute_nodes:
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
         succ: FeatureNode = next(graph.dag.successors(compute_node))
-        # init skip
+        # init skip,
         if succ.dim != 0:
             graph.dag.nodes[succ]['skip'] = [1] * succ.dim
 
         if process_special_info(graph, compute_node, preds, succ):
             populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)
             continue
+        if succ.dim > 0:
+            if isinstance(compute_node, SpatialComputeNode):
+                for i in range(compute_node.dim):
+                    succ.shape[i] = (
+                        preds[0].shape[i]
+                        // compute_node.stride[i]
+                        * compute_node.upsample_factor_in[i]
+                        * compute_node.upsample_factor[i]
+                    )
+                    graph.dag.nodes[succ]['skip'][i] = (
+                        graph.dag.nodes[preds[0]]['skip'][i]
+                        * compute_node.stride[i]
+                        // compute_node.upsample_factor_in[i]
+                        // compute_node.upsample_factor[i]
+                    )
 
-        if isinstance(compute_node, SpatialComputeNode):
-            for i in range(compute_node.dim):
-                succ.shape[i] = (
-                    preds[0].shape[i]
-                    // compute_node.stride[i]
-                    * compute_node.upsample_factor_in[i]
-                    * compute_node.upsample_factor[i]
-                )
-                graph.dag.nodes[succ]['skip'][i] = (
-                    graph.dag.nodes[preds[0]]['skip'][i]
-                    * compute_node.stride[i]
-                    // compute_node.upsample_factor_in[i]
-                    // compute_node.upsample_factor[i]
-                )
-
-        else:
-            for i in range(preds[0].dim):
-                succ.shape[i] = preds[0].shape[i]
-                graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
+            else:
+                for i in range(preds[0].dim):
+                    succ.shape[i] = preds[0].shape[i]
+                    graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
         if preds[0].dim >= 1 and any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
             graph.dag.nodes[succ]['skip'] = [1] * preds[0].dim
-            if succ.shape[0] < config.block_shape[0] or succ.shape[1] < config.block_shape[1]:
+            if any(succ.shape[i] < config.block_shape[i] for i in range(succ.dim)):
                 for i in range(preds[0].dim):
                     graph.dag.nodes[succ]['skip'][i] = config.block_shape[i] / succ[0].shape[i]
 
+        process_special_info(graph, compute_node, preds, succ)
         populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)
 
 
@@ -505,7 +503,7 @@ def set_level_costs(graph: LayerAbstractGraph):
                 if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
                     compute_node.is_big_size = True
                     graph.dag.nodes[compute_node]['level_cost'] = 1
-                    if succ.shape[0] < config.block_shape[0] or succ.shape[1] < config.block_shape[1]:
+                    if any(succ.shape[i] < config.block_shape[i] for i in range(succ.dim)):
                         graph.dag.nodes[compute_node]['level_cost'] = 2
                 else:
                     if compute_node.groups == 1:
