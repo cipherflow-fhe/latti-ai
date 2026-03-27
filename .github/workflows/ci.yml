@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 concurrency:
@@ -116,11 +116,11 @@ jobs:
           python3 inference/interface/gen_mega_ag.py --task-dir examples/test_mnist/task
           python3 inference/interface/gen_mega_ag.py --task-dir examples/test_cifar10/task
 
-      - name: Run example tests
+      - name: Run example tests (GPU only)
         timeout-minutes: 60
         run: |
           cd build
-          ctest -L example -E imagenet -V
+          ctest -R "example-(mnist|cifar10)-gpu" -V
 
   build-docker:
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
