@@ -78,7 +78,13 @@ def update_bd_node_in_sub(node: FeatureNode, subgraph: nx.DiGraph, remaining_dag
 def generate_param_dict_for_graph():
     param_dict = dict()
     param_dict['param0'] = FheParameter(
-        config.fhe_param.poly_modulus_degree, config.fhe_param.max_level, config.fhe_param.log_default_scale
+        name=config.fhe_param.name,
+        poly_modulus_degree=config.fhe_param.poly_modulus_degree,
+        q=config.fhe_param.q,
+        p=config.fhe_param.p,
+        n_slots=config.fhe_param.n_slots,
+        max_level=config.fhe_param.max_level,
+        log_default_scale=config.fhe_param.log_default_scale,
     )
     return param_dict
 

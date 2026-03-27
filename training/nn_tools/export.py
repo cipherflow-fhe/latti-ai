@@ -85,20 +85,24 @@ def export_to_onnx(
     if dynamic_batch:
         dynamic_axes = {name: {0: 'batch_size'} for name in input_names + output_names}
 
-    torch.onnx.export(
-        export_model,
-        dummy_input,
-        save_path,
-        export_params=True,
-        opset_version=opset_version,
-        do_constant_folding=do_constant_folding,
-        input_names=input_names,
-        output_names=output_names,
-        dynamic_axes=dynamic_axes,
-        training=torch.onnx.TrainingMode.EVAL,
-        keep_initializers_as_inputs=False,
-        dynamo=False,
-    )
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', DeprecationWarning)
+        torch.onnx.export(
+            export_model,
+            dummy_input,
+            save_path,
+            export_params=True,
+            opset_version=opset_version,
+            do_constant_folding=do_constant_folding,
+            input_names=input_names,
+            output_names=output_names,
+            dynamic_axes=dynamic_axes,
+            training=torch.onnx.TrainingMode.EVAL,
+            keep_initializers_as_inputs=False,
+            dynamo=False,
+        )
 
     if verbose:
         log.info('ONNX exported: %s', save_path)
@@ -204,8 +208,7 @@ def save_onnx_weights_to_h5(
     with h5py.File(h5_path, 'w') as f:
         for initializer in model.graph.initializer:
             weight = numpy_helper.to_array(initializer).astype('float64')
-            name = initializer.name.replace('/', '_').replace('.', '_')
-            f.create_dataset(name, data=weight)
+            f.create_dataset(initializer.name, data=weight)
             total_params += weight.size
             weight_count += 1
 

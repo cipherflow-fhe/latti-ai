@@ -73,8 +73,13 @@ void InferenceClient::read_configuration() {
     auto& first_param = task_config_["task_input_param"].begin().value();
     auto ckks_config = read_json((client_dir_ / "ckks_parameter.json").string());
     std::string ckks_param_id = first_param["ckks_parameter_id"];
-    poly_modulus_degree_ = ckks_config[ckks_param_id]["poly_modulus_degree"].get<int>();
+    auto& ckks_entry = ckks_config[ckks_param_id];
+    poly_modulus_degree_ = ckks_entry["poly_modulus_degree"].get<int>();
     n_slots_ = poly_modulus_degree_ / 2;
+    if (ckks_entry.contains("q") && ckks_entry.contains("p")) {
+        q_ = ckks_entry["q"].get<std::vector<uint64_t>>();
+        p_ = ckks_entry["p"].get<std::vector<uint64_t>>();
+    }
 }
 
 void InferenceClient::create_crypto_context() {
@@ -88,7 +93,12 @@ void InferenceClient::create_crypto_context() {
         btp_context_->gen_rotation_keys();
         context_ptr_ = btp_context_.get();
     } else {
-        ckks_param_ = std::make_unique<CkksParameter>(CkksParameter::create_parameter(poly_modulus_degree_));
+        if (!q_.empty() && !p_.empty()) {
+            ckks_param_ =
+                std::make_unique<CkksParameter>(CkksParameter::create_custom_parameter(poly_modulus_degree_, q_, p_));
+        } else {
+            ckks_param_ = std::make_unique<CkksParameter>(CkksParameter::create_parameter(poly_modulus_degree_));
+        }
         ckks_context_ = std::make_unique<CkksContext>(CkksContext::create_random_context(*ckks_param_));
         ckks_context_->gen_rotation_keys();
         context_ptr_ = ckks_context_.get();

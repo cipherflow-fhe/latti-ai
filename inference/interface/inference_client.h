@@ -92,6 +92,8 @@ private:
     std::map<std::string, OutputParam> output_params_;
     int n_slots_ = 0;
     int poly_modulus_degree_ = 0;
+    std::vector<uint64_t> q_;
+    std::vector<uint64_t> p_;
     bool needs_btp_ = false;
     std::string pack_style_;
     nlohmann::ordered_json task_config_;
