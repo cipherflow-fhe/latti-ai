@@ -74,7 +74,9 @@ def set_block_shape(params, raw_graph: LayerAbstractGraph):
         s0, s1 = shape0 // 2, shape1 // 2
         shape0, shape1 = s0, s1
 
-    params.block_shape = [shape0, shape1]
+    # params.block_shape = [shape0, shape1]
+    config.block_shape = [shape0, shape1]
+    print('block_shape=', config.block_shape)
 
 
 def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph | None, float]:
