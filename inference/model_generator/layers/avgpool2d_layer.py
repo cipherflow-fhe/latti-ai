@@ -79,7 +79,7 @@ class Avgpool2DLayer:
             result.append(res)
         return result
 
-    def call_interleaved_avgpool(self, x: list, block_expansion):
+    def call_interleaved_avgpool(self, x: list, block_expansion, N: int):
         """
         Interleaved (split) avgpool computation graph.
 
@@ -108,7 +108,31 @@ class Avgpool2DLayer:
                         res[out_idx] = x[ct_idx]
                     else:
                         res[out_idx] = add(res[out_idx], x[ct_idx])
-        return res
+
+        output_h = self.shape[0] // self.stride[0]
+        output_w = self.shape[1] // self.stride[1]
+
+        n_channel_per_ct_out = 1
+        if 2 * output_h * output_w < N:
+            n_channel_per_ct_out = N // (2 * output_h * output_w)
+
+        if n_channel_per_ct_out == 1:
+            return res
+        else:
+            packed_res = [0 for i in range(out_size // n_channel_per_ct_out)]
+            for out_ct_idx in range(out_size):
+                pack_out_ct_idx = int(out_ct_idx // n_channel_per_ct_out)
+                channel_idx_in_ct = out_ct_idx % n_channel_per_ct_out
+                if channel_idx_in_ct == 0:
+                    packed_res[pack_out_ct_idx] = res[out_ct_idx]
+                else:
+                    step = int(-1 * channel_idx_in_ct * output_h * output_w)
+                    if step == 0:
+                        s_rot = res[out_ct_idx]
+                    else:
+                        s_rot = rotate_cols(res[out_ct_idx], [step])[0]
+                    packed_res[pack_out_ct_idx] = add(packed_res[pack_out_ct_idx], s_rot)
+            return packed_res
 
     def call_multiplexed_avgpool(
         self, x: list[CkksCiphertextNode], select_tensor_pt, n_channel: int, n_channel_per_ct: int
