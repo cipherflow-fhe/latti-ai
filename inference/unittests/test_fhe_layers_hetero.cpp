@@ -2498,3 +2498,91 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "upsample_nearest_layer", "", Hete
         run_upsample_nearest_test(4, 8);
     }
 }
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv2d_packed_1ch_4x4_64x64", "", HeteroProcessors) {
+    // cin=1, cout=1, input_shape in {4x4, 64x64}, kernel in {1x1, 3x3}, stride=(1,1)
+    Duo skip = {1, 1};
+    Duo stride = {1, 1};
+    int init_level = 2;
+    uint32_t n_in_channel = 1;
+    uint32_t n_out_channel = 1;
+
+    auto run_test = [&](Duo input_shape, Duo kernel_shape) {
+        uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
+
+        Array<double, 4> conv0_weight =
+            gen_random_array<4>({n_out_channel, n_in_channel, kernel_shape[0], kernel_shape[1]}, 0.1);
+        Array<double, 1> conv0_bias = gen_random_array<1>({n_out_channel}, 0.1);
+        Array<double, 3> input_array = gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
+
+        Feature2DEncrypted input_feature(&this->context, init_level);
+        input_feature.pack_multiple_channel(input_array, false, this->param.get_default_scale());
+
+        Conv2DPackedLayer conv0_layer(this->context.get_parameter(), input_shape, conv0_weight, conv0_bias, stride,
+                                      skip, n_channel_per_ct, init_level);
+        conv0_layer.prepare_weight();
+
+        Feature2DEncrypted output_feature(&this->context, init_level - 1);
+        output_feature.shape[0] = input_shape[0] / stride[0];
+        output_feature.shape[1] = input_shape[1] / stride[1];
+        output_feature.skip[0] = skip[0] * stride[0];
+        output_feature.skip[1] = skip[1] * stride[1];
+        output_feature.n_channel = n_out_channel;
+        output_feature.n_channel_per_ct = n_channel_per_ct;
+        for (int i = 0; i < div_ceil(n_out_channel, n_channel_per_ct); i++) {
+            output_feature.data.push_back(
+                this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+        }
+
+        fs::path project_path = base_path / "CKKS_conv2d" /
+                                ("stride_" + to_string(stride[0]) + "_" + to_string(stride[1])) /
+                                ("kernel_shape_" + to_string(kernel_shape[0]) + "_" + to_string(kernel_shape[1])) /
+                                ("cin_" + to_string(n_in_channel) + "_cout_" + to_string(n_out_channel)) /
+                                ("input_shape_" + to_string(input_shape[0]) + "_" + to_string(input_shape[1])) /
+                                ("level_" + to_string(init_level)) / "server";
+
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name.rfind("input", 0) == 0)
+                cxx_args.push_back({name, &input_feature.data});
+            else if (name.rfind("convw_", 0) == 0)
+                cxx_args.push_back({name, &conv0_layer.weight_pt_});
+            else if (name.rfind("convb_", 0) == 0)
+                cxx_args.push_back({name, &conv0_layer.bias_pt_});
+            else if (name.rfind("output", 0) == 0)
+                cxx_args.push_back({name, &output_feature.data});
+        }
+
+        this->run(project_path, cxx_args);
+
+        auto output_mg = output_feature.unpack_multiple_channel();
+        auto plain_output = conv0_layer.run_plaintext(input_array);
+
+        print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+        print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
+
+        auto compare_result = compare(plain_output, output_mg);
+        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    };
+
+    SECTION("input_shape=4x4") {
+        Duo input_shape = {4, 4};
+        SECTION("kernel_shape=1x1") {
+            run_test(input_shape, {1, 1});
+        }
+        SECTION("kernel_shape=3x3") {
+            run_test(input_shape, {3, 3});
+        }
+    }
+    SECTION("input_shape=64x64") {
+        Duo input_shape = {64, 64};
+        SECTION("kernel_shape=1x1") {
+            run_test(input_shape, {1, 1});
+        }
+        SECTION("kernel_shape=3x3") {
+            run_test(input_shape, {3, 3});
+        }
+    }
+}

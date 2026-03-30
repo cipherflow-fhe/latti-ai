@@ -174,6 +174,9 @@ static const vector<string> all_test_names = {
     "mux_conv_large_channel",
     "single_avgpool", 
     "conv_avgpool_reshape_dense", "avgpool_stride4",
+    "conv_reshape_dense",
+    "two_fc",
+    "conv1d_e2e",
 };
 // clang-format on
 
@@ -250,71 +253,87 @@ TEST_CASE("cpu/conv_avgpool_reshape_dense", "[e2e][cpu]") {
 }
 TEST_CASE("cpu/avgpool_stride4", "[e2e][cpu]") {
     run_e2e_test(e2e_base_path / "avgpool_stride4", false);
-}
+    TEST_CASE("cpu/conv_reshape_dense", "[e2e][cpu]") {
+        run_e2e_test(e2e_base_path / "conv_reshape_dense", false);
+    }
+    TEST_CASE("cpu/two_fc", "[e2e][cpu]") {
+        run_e2e_test(e2e_base_path / "two_fc", false);
+    }
+    TEST_CASE("cpu/conv1d_e2e", "[e2e][cpu]") {
+        run_e2e_test(e2e_base_path / "conv1d_e2e", false);
+    }
 
-// == GPU tests ================================================================
+    // == GPU tests ================================================================
 
 #ifdef INFERENCE_SDK_ENABLE_GPU
-TEST_CASE("gpu/single_conv", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "single_conv", true);
-}
-TEST_CASE("gpu/single_act", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "single_act", true);
-}
-TEST_CASE("gpu/single_dense", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "single_dense", true);
-}
-TEST_CASE("gpu/conv_batchnorm", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "conv_batchnorm", true);
-}
-TEST_CASE("gpu/concat_e2e", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "concat_e2e", true);
-}
-TEST_CASE("gpu/poly_n_8192", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "poly_n_8192", true);
-}
-TEST_CASE("gpu/conv_act", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "conv_act", true);
-}
-TEST_CASE("gpu/resnet_basic_block", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "resnet_basic_block", true);
-}
-TEST_CASE("gpu/poly_n_32768", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "poly_n_32768", true);
-}
-TEST_CASE("gpu/act_series", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "act_series", true);
-}
-TEST_CASE("gpu/conv_mch_s1", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "conv_mch_s1", true);
-}
-TEST_CASE("gpu/conv_mch_s2", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "conv_mch_s2", true);
-}
-TEST_CASE("gpu/depthwise_conv_s1", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "depthwise_conv_s1", true);
-}
-TEST_CASE("gpu/depthwise_conv_s2", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "depthwise_conv_s2", true);
-}
-TEST_CASE("gpu/mux_conv_large_channel", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "mux_conv_large_channel", true);
-}
-TEST_CASE("gpu/single_avgpool", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "single_avgpool", true);
-}
-TEST_CASE("gpu/conv_avgpool_reshape_dense", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "conv_avgpool_reshape_dense", true);
-}
-TEST_CASE("gpu/avgpool_stride4", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "avgpool_stride4", true);
-}
+    TEST_CASE("gpu/single_conv", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "single_conv", true);
+    }
+    TEST_CASE("gpu/single_act", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "single_act", true);
+    }
+    TEST_CASE("gpu/single_dense", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "single_dense", true);
+    }
+    TEST_CASE("gpu/conv_batchnorm", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "conv_batchnorm", true);
+    }
+    TEST_CASE("gpu/concat_e2e", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "concat_e2e", true);
+    }
+    TEST_CASE("gpu/poly_n_8192", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "poly_n_8192", true);
+    }
+    TEST_CASE("gpu/conv_act", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "conv_act", true);
+    }
+    TEST_CASE("gpu/resnet_basic_block", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "resnet_basic_block", true);
+    }
+    TEST_CASE("gpu/poly_n_32768", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "poly_n_32768", true);
+    }
+    TEST_CASE("gpu/act_series", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "act_series", true);
+    }
+    TEST_CASE("gpu/conv_mch_s1", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "conv_mch_s1", true);
+    }
+    TEST_CASE("gpu/conv_mch_s2", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "conv_mch_s2", true);
+    }
+    TEST_CASE("gpu/depthwise_conv_s1", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "depthwise_conv_s1", true);
+    }
+    TEST_CASE("gpu/depthwise_conv_s2", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "depthwise_conv_s2", true);
+    }
+    TEST_CASE("gpu/mux_conv_large_channel", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "mux_conv_large_channel", true);
+    }
+    TEST_CASE("gpu/single_avgpool", "[e2e][gpu]") {
+        run_e2e_test(e2e_base_path / "single_avgpool", true);
+        TEST_CASE("gpu/conv_reshape_dense", "[e2e][gpu]") {
+            run_e2e_test(e2e_base_path / "conv_reshape_dense", true);
+        }
+        TEST_CASE("gpu/two_fc", "[e2e][gpu]") {
+            run_e2e_test(e2e_base_path / "two_fc", true);
+        }
+        TEST_CASE("gpu/conv1d_e2e", "[e2e][gpu]") {
+            run_e2e_test(e2e_base_path / "conv1d_e2e", true);
+        }
+        TEST_CASE("gpu/conv_avgpool_reshape_dense", "[e2e][gpu]") {
+            run_e2e_test(e2e_base_path / "conv_avgpool_reshape_dense", true);
+        }
+        TEST_CASE("gpu/avgpool_stride4", "[e2e][gpu]") {
+            run_e2e_test(e2e_base_path / "avgpool_stride4", true);
+        }
 #endif
 
-// == Known broken tests (disabled) ============================================
-// These tests crash (GPU OOM, Go panic, C++ abort) and are disabled until fixed.
-// See docs/e2e_test_status.md for details.
-//
-// Both CPU and GPU:
-//   single_add, poly_n_65536_no_btp,
-//   btp, conv_series, intertwined
+        // == Known broken tests (disabled) ============================================
+        // These tests crash (GPU OOM, Go panic, C++ abort) and are disabled until fixed.
+        // See docs/e2e_test_status.md for details.
+        //
+        // Both CPU and GPU:
+        //   single_add, poly_n_65536_no_btp,
+        //   btp, conv_series, intertwined

@@ -1090,6 +1090,25 @@ class TestLayerExport(unittest.TestCase):
             / 'server',
         )
 
+    def test_conv2d_packed_1ch_4x4_64x64(self):
+        """Conv2D packed: cin=1, cout=1, input_shape in {4x4, 64x64}, kernel in {1x1, 3x3}, stride=(1,1)."""
+        groups = 1
+        skip = (1, 1)
+        init_level = 2
+        stride = (1, 1)
+        n_in_channel = 1
+        n_out_channel = 1
+
+        for input_shape in [(4, 4), (64, 64)]:
+            for kernel_shape in [(1, 1), (3, 3)]:
+                print(
+                    f'sub-test: input_shape={input_shape}, kernel_shape={kernel_shape}, '
+                    f'cin={n_in_channel}, cout={n_out_channel}'
+                )
+                gen_conv_mega_ag(
+                    n_in_channel, n_out_channel, input_shape, kernel_shape, stride, skip, groups, init_level
+                )
+
 
 if __name__ == '__main__':
     unittest.main()

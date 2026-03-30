@@ -47,6 +47,8 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
         if (ip.dim == 2) {
             ip.height = param["shape"][0];
             ip.width = param["shape"][1];
+        } else if (ip.dim == 1) {
+            ip.length = param["shape"][0];
         } else if (ip.dim == 0) {
             ip.skip = param.value("skip", 1);
         }
@@ -62,6 +64,8 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
         op.channel = param["channel"];
         if (op.dim == 0) {
             op.skip = param["skip"];
+        } else if (op.dim == 1) {
+            op.length = param["shape"][0];
         } else if (op.dim == 2) {
             op.height = param["shape"][0];
             op.width = param["shape"][1];
@@ -122,6 +126,10 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
             auto input_ct = std::make_unique<Feature0DEncrypted>(context_ptr_, 0);
             input_ct->deserialize(bytes);
             fp_->set_feature(name, std::move(input_ct));
+        } else if (param.dim == 1) {
+            auto input_ct = std::make_unique<Feature1DEncrypted>(context_ptr_, 0);
+            input_ct->deserialize(bytes);
+            fp_->set_feature(name, std::move(input_ct));
         } else {
             auto input_ct = std::make_unique<Feature2DEncrypted>(context_ptr_, 0);
             input_ct->deserialize(bytes);
@@ -146,6 +154,9 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
         if (param.dim == 0) {
             auto output_ct = fp_->get_ciphertext_output_feature0D(name);
             encrypted_outputs[name] = output_ct.serialize();
+        } else if (param.dim == 1) {
+            auto output_ct = fp_->get_ciphertext_output_feature1D(name);
+            encrypted_outputs[name] = output_ct.serialize();
         } else {
             auto output_ct = fp_->get_ciphertext_output_feature2D(name);
             encrypted_outputs[name] = output_ct.serialize();
@@ -166,6 +177,9 @@ InferenceServer::evaluate_plaintext(const std::map<std::string, std::string>& in
         if (param.dim == 0) {
             auto input_array = csv_to_array<1>(csv_path);
             fp_->p_feature0d_x[name] = input_array.to_array_1d();
+        } else if (param.dim == 1) {
+            auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.channel, (uint64_t)param.length});
+            fp_->p_feature1d_x[name] = std::move(input_array.copy());
         } else {
             auto input_array =
                 csv_to_array<3>(csv_path, {(uint64_t)param.channel, (uint64_t)param.height, (uint64_t)param.width});
@@ -178,6 +192,10 @@ InferenceServer::evaluate_plaintext(const std::map<std::string, std::string>& in
     for (auto& [name, param] : output_params_) {
         if (param.dim == 0) {
             results[name] = fp_->p_feature0d_x[name];
+        } else if (param.dim == 1) {
+            auto& arr = fp_->p_feature1d_x[name];
+            auto arr_1d = arr.to_array_1d();
+            results[name] = std::vector<double>(arr_1d.data(), arr_1d.data() + arr_1d.size());
         } else {
             auto& arr = fp_->p_feature2d_x[name];
             auto arr_1d = arr.to_array_1d();
