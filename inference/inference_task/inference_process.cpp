@@ -243,7 +243,7 @@ void InitInferenceProcess::init_upsample_nearest_layer(const string& key, const 
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
 
     CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
-    Duo upsample_factor_in = {layer["upsample_factor_in"][0], layer["upsample_factor_in"][1]};
+    Duo upsample_factor_in = {layer["upsample_factor"][0], layer["upsample_factor"][1]};
 
     auto upsample_nearest =
         make_unique<UpsampleNearestLayer>(param, feature_input.shape, feature_input.skip, upsample_factor_in,
@@ -904,6 +904,9 @@ void InferenceProcess::run_task(bool is_mpc) {
             }
         } else if (layer_type == "mult_scalar") {
             cxx_args.push_back(CxxVectorArgument{"mult_scalar_" + key, &(fp->ckks_mult_scalar.at(key)->weight_pt)});
+        } else if (layer_type == "upsample_nearest") {
+            cxx_args.push_back(
+                CxxVectorArgument{"upsample_select_pt_" + key, &(fp->ckks_upsample_nearest.at(key)->select_tensor_pt)});
         }
     }
 
