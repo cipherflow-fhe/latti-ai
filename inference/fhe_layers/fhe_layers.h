@@ -31,6 +31,7 @@
 #include "fhe_layers/conv2d_packed_layer.h"
 #include "fhe_layers/dense_packed_layer.h"
 #include "fhe_layers/inverse_multiplexed_conv2d_layer.h"
+#include "fhe_layers/inverse_multiplexed_conv2d_layer_depthwise.h"
 #include "fhe_layers/layer.h"
 #include "fhe_layers/mult_scaler.h"
 #include "fhe_layers/multiplexed_conv1d_pack_layer.h"
