@@ -2238,6 +2238,87 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool2d_layer", "", He
     }
 }
 
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "interleaved_avgpool2d_layer", "", HeteroProcessors) {
+    int init_level = 3;
+
+    auto run_interleaved_avgpool_test = [&](uint32_t n_channel, const Duo& stride, const Duo& block_shape,
+                                            uint32_t mult) {
+        Duo input_shape = {block_shape[0] * mult, block_shape[1] * mult};
+        Duo block_expansion = {input_shape[0] / block_shape[0], input_shape[1] / block_shape[1]};
+
+        Array<double, 3> input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
+
+        Feature2DEncrypted input_feature(&this->context, init_level);
+        Duo total_stride = block_expansion;
+        input_feature.pack_interleaved(input_array, block_shape, total_stride, false, this->param.get_default_scale());
+
+        Avgpool2DLayer avgpool(block_shape, stride);
+
+        // No level consumed (only adds)
+        uint32_t out_size = input_feature.data.size() / (stride[0] * stride[1]);
+        Feature2DEncrypted output_feature(&this->context, init_level);
+        for (uint32_t i = 0; i < out_size; i++) {
+            output_feature.data.push_back(this->context.new_ciphertext(init_level, this->param.get_default_scale()));
+        }
+
+        fs::path project_path =
+            base_path /
+            ("CKKS_interleaved_avgpool2d/stride_" + to_string(stride[0]) + "_" + to_string(stride[1]) + "/ch_" +
+             to_string(n_channel) + "/block_shape_" + to_string(block_shape[0]) + "_" + to_string(block_shape[1]) +
+             "/input_shape_" + to_string(input_shape[0]) + "_" + to_string(input_shape[1])) /
+            ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_feature.data});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output_feature.data});
+        }
+        this->run(project_path, cxx_args);
+
+        // Set output metadata
+        Duo out_expansion = {block_expansion[0] / stride[0], block_expansion[1] / stride[1]};
+        output_feature.n_channel = n_channel;
+        output_feature.n_channel_per_ct = 1;
+        output_feature.skip = {1, 1};
+        output_feature.shape = {input_shape[0] / stride[0], input_shape[1] / stride[1]};
+        auto result_mg = output_feature.unpack_interleaved(block_shape, out_expansion);
+
+        auto result_expected = avgpool.plaintext_call(input_array);
+
+        print_double_message(result_mg.to_array_1d().data(), "output_mg", 10);
+        print_double_message(result_expected.to_array_1d().data(), "plain_output", 10);
+
+        auto compare_result = compare(result_expected, result_mg);
+        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    };
+
+    vector<uint32_t> channels = {2, 4, 8};
+    vector<Duo> strides = {{2, 2}, {4, 4}};
+    Duo block_shape = {64, 64};
+    vector<uint32_t> multipliers = {2, 4};
+
+    for (const auto& stride : strides) {
+        SECTION("stride=" + to_string(stride[0])) {
+            for (uint32_t n_channel : channels) {
+                SECTION("ch=" + to_string(n_channel)) {
+                    for (uint32_t mult : multipliers) {
+                        if (mult < stride[0])
+                            continue;  // block_expansion must be >= stride
+                        SECTION("mult=" + to_string(mult)) {
+                            run_interleaved_avgpool_test(n_channel, stride, block_shape, mult);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "concat_layer", "", HeteroProcessors) {
     int init_level = 2;
     Duo skip = {1, 1};

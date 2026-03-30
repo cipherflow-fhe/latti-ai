@@ -1018,6 +1018,52 @@ class TestLayerExport(unittest.TestCase):
                         / 'server',
                     )
 
+    def test_interleaved_avgpool2d_layer(self):
+        N = 16384
+        set_param('PN14QP438')
+        level = 3
+        channels = [2, 4, 8]
+        strides = [(2, 2), (4, 4)]
+        block_shapes = [(64, 64)]
+        multipliers = [2, 4]
+
+        for stride in strides:
+            for n_channel in channels:
+                for block_shape in block_shapes:
+                    for mult in multipliers:
+                        if mult < stride[0]:
+                            continue  # block_expansion must be >= stride
+                        input_shape = [block_shape[0] * mult, block_shape[1] * mult]
+                        block_expansion = [input_shape[0] // block_shape[0], input_shape[1] // block_shape[1]]
+                        n_ct_in = n_channel * block_expansion[0] * block_expansion[1]
+
+                        print(
+                            f'sub-test: stride={stride}, n_channel={n_channel}, '
+                            f'block_shape={block_shape}, input_shape={input_shape}'
+                        )
+
+                        input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct_in)]
+                        avgpool = Avgpool2DLayer(
+                            stride=list(stride),
+                            shape=[block_shape[0], block_shape[1]],
+                            channel=n_channel,
+                            skip=[1, 1],
+                        )
+                        output_ct = avgpool.call_interleaved_avgpool(input_ct, block_expansion)
+
+                        input_args = [Argument('input_node', input_ct)]
+                        process_custom_task(
+                            input_args=input_args,
+                            output_args=[Argument('output_ct', output_ct)],
+                            output_instruction_path=base_path
+                            / f'CKKS_interleaved_avgpool2d/stride_{stride[0]}_{stride[1]}'
+                            / f'ch_{n_channel}'
+                            / f'block_shape_{block_shape[0]}_{block_shape[1]}'
+                            / f'input_shape_{input_shape[0]}_{input_shape[1]}'
+                            / f'level_{level}'
+                            / 'server',
+                        )
+
     def test_mult_scalar_layer(self):
         N = 16384
         set_param('PN14QP438')

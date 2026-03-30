@@ -574,9 +574,9 @@ class PolyDegreeNBtp(nn.Module):
 class ConvAvgpoolReshapeAndDense(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv0 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, bias=False, padding=1, stride=2)
-        self.pool0 = nn.AvgPool2d(kernel_size=8, stride=8, padding=0)
-        self.dense0 = nn.Linear(in_features=48, out_features=32, bias=True)
+        self.conv0 = nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, bias=False, padding=1, stride=4)
+        self.pool0 = nn.AvgPool2d(kernel_size=16, stride=16, padding=0)
+        self.dense0 = nn.Linear(in_features=16, out_features=32, bias=True)
 
     def forward(self, x):
         x = self.conv0(x)

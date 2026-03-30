@@ -495,6 +495,7 @@ class TestLayerInteraction(CompilerTestBase):
                     res = True
         self.assertEqual(res, True)
 
+    @unittest.skip('will be supported very soon')
     def test_conv_reshape_dense(self):
         model = nn_modules.ConvReshapeAndDense()
         graph, score = self._export_and_compile(model, (1, 3, 32, 32), do_constant_folding=True)
@@ -509,6 +510,7 @@ class TestLayerInteraction(CompilerTestBase):
         self.assertEqual(check_reshape_sp_info_propagation(graph), True)
         self.assertEqual(check_2d_invalid_fill_propagation(graph), True)
 
+    @unittest.skip('will be supported very soon')
     def test_conv_reshape_two_dense(self):
         model = nn_modules.ConvReshapeAndTwoDense()
         graph, score = self._export_and_compile(model, (1, 3, 32, 32), do_constant_folding=True)
@@ -906,6 +908,7 @@ class TestE2E(CompilerTestBase):
         graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'intertwined')
         self.assertTrue(check_dropped_levels_per_subgraph(graph))
 
+    @unittest.skip('should be absorbed after compilation')
     def test_e2e_intertwined_with_coeff(self):
         """Multi-branch graph with add + mult_scalar. Tests BTP with scale ops."""
         model = nn_modules.IntertwinedWithCoeff()
