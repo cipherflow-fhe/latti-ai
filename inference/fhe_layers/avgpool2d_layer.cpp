@@ -243,14 +243,43 @@ Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x,
             }
         }
     });
+
+    int N = ctx.get_parameter().get_n();
+    int output_h = shape[0] / stride[0];
+    int output_w = shape[1] / stride[1];
+
+    int n_channel_per_ct_out;
+    if (2 * output_h * output_w < N) {
+        n_channel_per_ct_out = N / (2 * output_h * output_w);
+    } else {
+        n_channel_per_ct_out = 1;
+    }
+
+    vector<CkksCiphertext> packed_res(out_size / n_channel_per_ct_out);
+    if (n_channel_per_ct_out == 1) {
+        packed_res = move(res);
+    } else {
+        for (uint32_t out_ct_idx = 0; out_ct_idx < out_size; out_ct_idx++) {
+            int pack_out_ct_idx = out_ct_idx / n_channel_per_ct_out;
+            int channel_idx_in_ct = out_ct_idx % n_channel_per_ct_out;
+            if (channel_idx_in_ct == 0) {
+                packed_res[pack_out_ct_idx] = move(res[out_ct_idx]);
+            } else {
+                long step = -1 * channel_idx_in_ct * output_h * output_w;
+                auto s_rot = ctx.rotate(res[out_ct_idx], step);
+                packed_res[pack_out_ct_idx] = ctx.add(packed_res[pack_out_ct_idx], move(s_rot));
+            }
+        }
+    }
+
     Feature2DEncrypted result(&ctx, x.level);
-    result.data = move(res);
+    result.data = move(packed_res);
     result.n_channel = x.n_channel;
-    result.n_channel_per_ct = 1;
+    result.n_channel_per_ct = n_channel_per_ct_out;
     result.skip[0] = 1;
     result.skip[1] = 1;
-    result.shape[0] = x.shape[0] / stride[0];
-    result.shape[1] = x.shape[1] / stride[1];
+    result.shape[0] = output_h;
+    result.shape[1] = output_w;
     result.level = x.level;
     return result;
 }

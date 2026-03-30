@@ -51,6 +51,9 @@ void InferenceClient::read_configuration() {
         } else if (op.dim == 2) {
             op.height = param["shape"][0];
             op.width = param["shape"][1];
+            if (param.contains("invalid_fill")) {
+                op.invalid_fill = {param["invalid_fill"][0], param["invalid_fill"][1]};
+            }
         }
         output_params_[name] = op;
     }
@@ -178,7 +181,6 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
             }
             result[name] = input_ct.serialize();
         }
-
         std::cout << "[Client] Done." << std::endl;
     }
 
@@ -216,8 +218,14 @@ InferenceClient::decrypt(const std::map<std::string, Bytes>& encrypted_outputs) 
             output_ct.deserialize(bytes);
             Array<double, 3> decrypted;
             if (pack_style_ == "multiplexed") {
-                output_ct.invalid_fill = {1, 1};
-                decrypted = output_ct.unpack_multiplexed();
+                Duo block_shape = {task_config_["block_shape"][0], task_config_["block_shape"][1]};
+                if (param.height * param.width > (int)(block_shape[0] * block_shape[1])) {
+                    Duo stride = {(uint32_t)(param.height / block_shape[0]), (uint32_t)(param.width / block_shape[1])};
+                    decrypted = output_ct.unpack_interleaved(block_shape, stride);
+                } else {
+                    output_ct.invalid_fill = param.invalid_fill;
+                    decrypted = output_ct.unpack_multiplexed();
+                }
             } else {
                 decrypted = output_ct.unpack_multiple_channel();
             }
