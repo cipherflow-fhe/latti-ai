@@ -31,6 +31,7 @@ from inference.model_generator.layers.conv2d_depthwise import *
 from inference.model_generator.layers.conv2d_packed_layer import *
 from inference.model_generator.layers.dense_packed_layer import *
 from inference.model_generator.layers.inverse_multiplexed_conv2d_layer import *
+from inference.model_generator.layers.inverse_multiplexed_depthwise_conv2d_layer import *
 from inference.model_generator.layers.mult_scaler import *
 from inference.model_generator.layers.multiplexed_conv1d_pack_layer import *
 from inference.model_generator.layers.multiplexed_conv2d_pack_layer import *

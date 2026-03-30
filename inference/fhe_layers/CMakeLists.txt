@@ -3,6 +3,7 @@ add_library(fhe_layers
   upsample_layer.cpp
   upsample_nearest_layer.cpp
   inverse_multiplexed_conv2d_layer.cpp
+  inverse_multiplexed_conv2d_layer_depthwise.cpp
   concat_layer.cpp
   conv2d_packed_layer.cpp 
   activation_layer.cpp 
