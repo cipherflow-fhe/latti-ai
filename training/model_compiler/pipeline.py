@@ -68,11 +68,15 @@ def set_block_shape(params, raw_graph: LayerAbstractGraph):
         config.block_shape = [side, side]
         return
     shape0, shape1 = leading_nodes[0].shape[0], leading_nodes[0].shape[1]
-    divisor = 1
+    slot_num = params.poly_modulus_degree // 2
+    # threshold = N / 2
     while shape0 * shape1 > slot_num:
-        divisor *= 2
-        shape0, shape1 = shape0 // divisor, shape1 // divisor
+        s0, s1 = shape0 // 2, shape1 // 2
+        shape0, shape1 = s0, s1
+
+    # params.block_shape = [shape0, shape1]
     config.block_shape = [shape0, shape1]
+    print('block_shape=', config.block_shape)
 
 
 def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph | None, float]:
