@@ -33,4 +33,8 @@ public:
     uint32_t skip = 0;
     std::vector<ls::CkksCiphertext> data;
     std::vector<ls::CkksCompressedCiphertext> data_compress;
+
+    Bytes serialize() const;
+    void deserialize(const Bytes& bytes) override;
+    Feature1DEncrypted copy() const;
 };

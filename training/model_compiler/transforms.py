@@ -290,6 +290,12 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
         compute_node.layer_id + '_mult_scalar_', 'mult_scalar', compute_node.channel_input, compute_node.channel_output
     )
 
+    # Inherit is_big_size from predecessor's shape vs block_shape
+    if old_output_feature.dim == 2 and (
+        old_output_feature.shape[0] > config.block_shape[0] or old_output_feature.shape[1] > config.block_shape[1]
+    ):
+        mult_scalar_node.is_big_size = True
+
     _insert_layer_after_compute(
         graph.dag,
         compute_node,

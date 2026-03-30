@@ -118,10 +118,12 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             n_packed_in_channel = math.ceil(n_in_channel / 8192)
             n_packed_out_channel = math.ceil(n_out_channel / pack)
 
-        # For big_conv/big_avgpool, input CT count differs from the default n_packed_in_channel
-        if (layer_config['type'] == 'conv2d' or 'avgpool' in layer_config['type']) and layer_config.get(
-            'is_big_size', False
-        ):
+        # For big_conv/big_avgpool/big_mult_scalar, input CT count differs from the default n_packed_in_channel
+        if (
+            layer_config['type'] == 'conv2d'
+            or 'avgpool' in layer_config['type']
+            or layer_config['type'] == 'mult_scalar'
+        ) and layer_config.get('is_big_size', False):
             input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
             block_expansion = (
                 math.ceil(input_shape[0] / block_shape[0]),
@@ -459,7 +461,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     math.ceil(input_shape[1] / block_shape[1]),
                 ]
                 layer_output_nodes = avgpool.call_interleaved_avgpool(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]], block_expansion
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]], block_expansion, N=n
                 )
             else:
                 if is_adaptive:
