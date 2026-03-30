@@ -270,6 +270,9 @@ TEST_CASE("cpu/single_avgpool_big_size", "[e2e][cpu]") {
 TEST_CASE("cpu/single_conv_with_stride_big_size", "[e2e][cpu]") {
     run_e2e_test(e2e_base_path / "single_conv_with_stride_big_size", false);
 }
+TEST_CASE("cpu/dw_conv_big_size", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "dw_conv_big_size", false);
+}
 TEST_CASE("cpu/single_add", "[e2e][cpu]") {
     run_e2e_test(e2e_base_path / "single_add", false);
 }
@@ -350,6 +353,9 @@ TEST_CASE("gpu/single_conv_with_stride_big_size", "[e2e][gpu]") {
 }
 TEST_CASE("gpu/conv_upsample_e2e", "[e2e][gpu]") {
     run_e2e_test(e2e_base_path / "conv_upsample_e2e", false);
+}
+TEST_CASE("gpu/dw_conv_big_size", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "dw_conv_big_size", false);
 }
 #endif
 
