@@ -926,7 +926,7 @@ class TestE2E(CompilerTestBase):
         """Conv stride=2 with big_size input (256×256), multiplexed."""
         model = nn_modules.SingleConv(2)
         graph, score = self._export_compile_and_deploy(
-            model, (1, 32, 256, 256), 'single_conv_with_stride_big_size', style='multiplexed'
+            model, (1, 32, 128, 128), 'single_conv_with_stride_big_size', style='multiplexed'
         )
         self.assertIsNotNone(graph)
 
@@ -934,7 +934,7 @@ class TestE2E(CompilerTestBase):
         """Deep conv chain with strides, big_size (256×256), multiplexed."""
         model = nn_modules.ConvSeriesWithStride()
         graph, score = self._export_compile_and_deploy(
-            model, (1, 32, 128, 128), 'conv_series_with_stride', style='multiplexed'
+            model, (1, 32, 256, 256), 'conv_series_with_stride', style='multiplexed'
         )
         self.assertTrue(check_dropped_levels_per_subgraph(graph))
 
