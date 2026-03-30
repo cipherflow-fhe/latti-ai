@@ -243,7 +243,7 @@ void InitInferenceProcess::init_upsample_nearest_layer(const string& key, const 
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
 
     CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
-    Duo upsample_factor_in = {layer["upsample_factor_in"][0], layer["upsample_factor_in"][1]};
+    Duo upsample_factor_in = {layer["upsample_factor"][0], layer["upsample_factor"][1]};
 
     auto upsample_nearest =
         make_unique<UpsampleNearestLayer>(param, feature_input.shape, feature_input.skip, upsample_factor_in,
@@ -904,6 +904,9 @@ void InferenceProcess::run_task(bool is_mpc) {
             }
         } else if (layer_type == "mult_scalar") {
             cxx_args.push_back(CxxVectorArgument{"mult_scalar_" + key, &(fp->ckks_mult_scalar.at(key)->weight_pt)});
+        } else if (layer_type == "upsample_nearest") {
+            cxx_args.push_back(
+                CxxVectorArgument{"upsample_select_pt_" + key, &(fp->ckks_upsample_nearest.at(key)->select_tensor_pt)});
         }
     }
 
@@ -915,6 +918,11 @@ void InferenceProcess::run_task(bool is_mpc) {
         context_id = feature_output.ckks_parameter_id;
         level = feature_output.level;
         int n_out_num = div_ceil(feature_output.channel, feature_output.pack_channel_per_ciphertext);
+        if (feature_output.shape[0] > block_shape[0] || feature_output.shape[1] > block_shape[1]) {
+            Duo out_block_expansion = {feature_output.shape[0] / block_shape[0],
+                                       feature_output.shape[1] / block_shape[1]};
+            n_out_num *= out_block_expansion[0] * out_block_expansion[1];
+        }
         double encode_scale =
             ckks_contexts.at(feature_output.ckks_parameter_id).get()->get_parameter().get_default_scale();
         for (int i = 0; i < n_out_num; i++) {
