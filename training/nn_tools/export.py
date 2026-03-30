@@ -391,7 +391,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
         return sd[key].detach().cpu().numpy()
 
     # Collect leaf modules in traversal order
-    target_types = (nn.Conv2d, nn.BatchNorm2d, _RangeNormPoly2d, _Simple_Polyrelu, nn.Linear)
+    target_types = (nn.Conv2d, nn.Conv1d, nn.BatchNorm2d, _RangeNormPoly2d, _Simple_Polyrelu, nn.Linear)
     modules_list = [(name, mod) for name, mod in model.named_modules() if isinstance(mod, target_types)]
 
     fused = {}
@@ -399,9 +399,12 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
     while i < len(modules_list):
         name, mod = modules_list[i]
 
-        if isinstance(mod, nn.Conv2d):
-            next_is_bn = i + 1 < len(modules_list) and isinstance(modules_list[i + 1][1], nn.BatchNorm2d)
-
+        if isinstance(mod, (nn.Conv2d, nn.Conv1d)):
+            next_is_bn = (
+                isinstance(mod, nn.Conv2d)
+                and i + 1 < len(modules_list)
+                and isinstance(modules_list[i + 1][1], nn.BatchNorm2d)
+            )
             conv_w = get_np(f'{name}.weight')
             conv_b = get_np(f'{name}.bias') if mod.bias is not None else np.zeros(conv_w.shape[0])
 

@@ -1064,6 +1064,7 @@ class LayerAbstractGraph:
                     'absorb_path': absorb_path,
                     'weight_path': layer_id + '.weight',
                     'weight_scale_list': layer.weight_scale_list,
+                    'is_big_size': layer.is_big_size,
                 }
 
             if 'maxpool' == layer_type:

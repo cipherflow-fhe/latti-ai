@@ -46,9 +46,14 @@ void InferenceClient::read_configuration() {
         op.channel = param["channel"];
         if (op.dim == 0) {
             op.skip = param["skip"];
+        } else if (op.dim == 1) {
+            op.length = param["shape"][0];
         } else if (op.dim == 2) {
             op.height = param["shape"][0];
             op.width = param["shape"][1];
+            if (param.contains("invalid_fill")) {
+                op.invalid_fill = {param["invalid_fill"][0], param["invalid_fill"][1]};
+            }
         }
         output_params_[name] = op;
     }
@@ -62,6 +67,8 @@ void InferenceClient::read_configuration() {
         if (ip.dim == 2) {
             ip.height = param["shape"][0];
             ip.width = param["shape"][1];
+        } else if (ip.dim == 1) {
+            ip.length = param["shape"][0];
         } else if (ip.dim == 0) {
             ip.skip = param.value("skip", 1);
         }
@@ -151,6 +158,12 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
             uint32_t input_skip = n_slots_ / param.pack_num;
             input_ct.pack(input_array, false, scale, input_skip);
             result[name] = input_ct.serialize();
+        } else if (param.dim == 1) {
+            auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.channel, (uint64_t)param.length});
+            uint32_t skip = param.pack_num > 0 ? (uint32_t)(n_slots_ / (param.length * param.pack_num)) : 1;
+            Feature1DEncrypted input_ct(context_ptr_, param.level, skip);
+            input_ct.pack(input_array, false, scale);
+            result[name] = input_ct.serialize();
         } else {
             auto input_array =
                 csv_to_array<3>(csv_path, {(uint64_t)param.channel, (uint64_t)param.height, (uint64_t)param.width});
@@ -194,13 +207,25 @@ InferenceClient::decrypt(const std::map<std::string, Bytes>& encrypted_outputs) 
             auto decrypted = output_ct.unpack();
             auto dec_1d = decrypted.to_array_1d();
             result.output = std::vector<double>(dec_1d.data(), dec_1d.data() + dec_1d.size());
+        } else if (param.dim == 1) {
+            Feature1DEncrypted output_ct(context_ptr_, 0);
+            output_ct.deserialize(bytes);
+            auto decrypted = output_ct.unpack();
+            auto dec_1d = decrypted.to_array_1d();
+            result.output = std::vector<double>(dec_1d.data(), dec_1d.data() + dec_1d.size());
         } else {
             Feature2DEncrypted output_ct(context_ptr_, 0, Duo{1, 1});
             output_ct.deserialize(bytes);
             Array<double, 3> decrypted;
             if (pack_style_ == "multiplexed") {
-                output_ct.invalid_fill = {1, 1};
-                decrypted = output_ct.unpack_multiplexed();
+                Duo block_shape = {task_config_["block_shape"][0], task_config_["block_shape"][1]};
+                if (param.height * param.width > (int)(block_shape[0] * block_shape[1])) {
+                    Duo stride = {(uint32_t)(param.height / block_shape[0]), (uint32_t)(param.width / block_shape[1])};
+                    decrypted = output_ct.unpack_interleaved(block_shape, stride);
+                } else {
+                    output_ct.invalid_fill = param.invalid_fill;
+                    decrypted = output_ct.unpack_multiplexed();
+                }
             } else {
                 decrypted = output_ct.unpack_multiple_channel();
             }

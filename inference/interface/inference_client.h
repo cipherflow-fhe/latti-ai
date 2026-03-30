@@ -35,9 +35,11 @@ struct DecryptedOutput {
 struct OutputParam {
     int dim = 0;
     int channel = 0;
-    int skip = 1;    // dim=0 only (scalar skip)
-    int height = 0;  // dim=2 only
-    int width = 0;   // dim=2 only
+    int skip = 1;               // dim=0 only (scalar skip)
+    int height = 0;             // dim=2 only
+    int width = 0;              // dim=2 only
+    int length = 0;             // dim=1 only
+    Duo invalid_fill = {1, 1};  // dim=2 only
 };
 
 /// Per-input parameters read from task_config.json.
@@ -47,6 +49,7 @@ struct InputParam {
     int channel = 0;
     int height = 0;    // dim=2 only
     int width = 0;     // dim=2 only
+    int length = 0;    // dim=1 only
     int skip = 1;      // dim=0 only
     int pack_num = 0;  // n_channel_per_ct
 };

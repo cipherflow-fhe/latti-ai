@@ -918,9 +918,11 @@ class TestE2E(CompilerTestBase):
     # ── Big-size tests (256×256 input) ──
 
     def test_e2e_single_avgpool_big_size(self):
-        """Avgpool with big_size input (256×256), ordinary style."""
+        """Avgpool with big_size input (256×256), multiplexed style."""
         model = nn_modules.SingleAvgpool()
-        graph, score = self._export_compile_and_deploy(model, (1, 32, 256, 256), 'single_avgpool_big_size')
+        graph, score = self._export_compile_and_deploy(
+            model, (1, 5, 256, 256), 'single_avgpool_big_size', style='multiplexed'
+        )
         self.assertTrue(check_feature_scale(graph))
 
     def test_e2e_single_conv_with_stride_big_size(self):

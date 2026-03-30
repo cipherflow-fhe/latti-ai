@@ -174,6 +174,9 @@ static const vector<string> all_test_names = {
     "mux_conv_large_channel",
     "single_avgpool", 
     "conv_avgpool_reshape_dense", "avgpool_stride4",
+    "conv_reshape_dense",
+    "two_fc",
+    "conv1d_e2e",
 };
 // clang-format on
 
@@ -251,12 +254,27 @@ TEST_CASE("cpu/conv_avgpool_reshape_dense", "[e2e][cpu]") {
 TEST_CASE("cpu/avgpool_stride4", "[e2e][cpu]") {
     run_e2e_test(e2e_base_path / "avgpool_stride4", false);
 }
+TEST_CASE("cpu/conv_reshape_dense", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "conv_reshape_dense", false);
+}
+TEST_CASE("cpu/two_fc", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "two_fc", false);
+}
+TEST_CASE("cpu/conv1d_e2e", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "conv1d_e2e", false);
+}
 
-TEST_CASE("cpu/single_add", "[e2e][cpu]") {
-    run_e2e_test(e2e_base_path / "single_add", false);
+TEST_CASE("cpu/single_avgpool_big_size", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "single_avgpool_big_size", false);
 }
 TEST_CASE("cpu/single_conv_with_stride_big_size", "[e2e][cpu]") {
     run_e2e_test(e2e_base_path / "single_conv_with_stride_big_size", false);
+}
+TEST_CASE("cpu/single_add", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "single_add", false);
+}
+TEST_CASE("cpu/conv_upsample_e2e", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "conv_upsample_e2e", false);
 }
 
 TEST_CASE("cpu/multiple_inputs", "[e2e][cpu]") {
@@ -317,11 +335,29 @@ TEST_CASE("gpu/mux_conv_large_channel", "[e2e][gpu]") {
 TEST_CASE("gpu/single_avgpool", "[e2e][gpu]") {
     run_e2e_test(e2e_base_path / "single_avgpool", true);
 }
+TEST_CASE("gpu/conv_reshape_dense", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "conv_reshape_dense", true);
+}
+TEST_CASE("gpu/two_fc", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "two_fc", true);
+}
+TEST_CASE("gpu/conv1d_e2e", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "conv1d_e2e", true);
+}
 TEST_CASE("gpu/conv_avgpool_reshape_dense", "[e2e][gpu]") {
     run_e2e_test(e2e_base_path / "conv_avgpool_reshape_dense", true);
 }
 TEST_CASE("gpu/avgpool_stride4", "[e2e][gpu]") {
     run_e2e_test(e2e_base_path / "avgpool_stride4", true);
+}
+TEST_CASE("gpu/single_avgpool_big_size", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "single_avgpool_big_size", true);
+}
+TEST_CASE("gpu/single_conv_with_stride_big_size", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "single_conv_with_stride_big_size", false);
+}
+TEST_CASE("gpu/conv_upsample_e2e", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "conv_upsample_e2e", false);
 }
 #endif
 

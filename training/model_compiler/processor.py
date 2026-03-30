@@ -147,6 +147,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 'level': graph.dag.nodes[node]['level'],
                 'depth': node.depth,
                 'pack_num': graph.dag.nodes[node]['pack_num'],
+                'invalid_fill': node.invalid_fill,
             }
 
     task_config = {
