@@ -1055,7 +1055,7 @@ void InferenceProcess::run_task(bool is_mpc) {
         if (feature_output.dim == 1) {
             Feature1DEncrypted f1d(ckks_contexts.at(feature_output.ckks_parameter_id).get(), feature_output.level,
                                    feature_output.skip[0]);
-            f1d.data = move(z_list);
+            f1d.data = move(z_lists[out_idx]);
             f1d.shape = feature_output.shape[0];
             f1d.n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
             f1d.n_channel = feature_output.channel;
