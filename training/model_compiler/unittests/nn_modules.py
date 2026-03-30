@@ -307,12 +307,12 @@ class MutipleInputs(nn.Module):
         self.n_inputs = 3
         self.units = nn.ModuleList()
         for i in range(self.n_inputs + 1):
-            self.units.append(Unit(pairs=5))
+            self.units.append(Unit(pairs=2))
 
-    def forward(self, xs):
-        s = torch.zeros_like(x)
-        for i in range(self.n_inputs):
-            s += self.units[i](xs[i])
+    def forward(self, *xs):
+        s = self.units[0](xs[0])
+        for i in range(1, self.n_inputs):
+            s = s + self.units[i](xs[i])
         x = self.units[self.n_inputs](s)
         return x
 
@@ -323,10 +323,9 @@ class MutipleOutputs(nn.Module):
         self.n_outputs = 3
         self.units = nn.ModuleList()
         for i in range(self.n_outputs + 1):
-            self.units.append(Unit(pairs=5))
+            self.units.append(Unit(pairs=2))
 
     def forward(self, x):
-        x = torch.zeros_like(x)
         x = self.units[0](x)
         ys = list()
         for i in range(self.n_outputs):
