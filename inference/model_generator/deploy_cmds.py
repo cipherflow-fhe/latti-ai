@@ -104,15 +104,11 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             n_packed_out_channel = math.ceil(n_out_channel / pack)
 
         # For big_conv/big_avgpool/big_mult_scalar, input CT count differs from the default n_packed_in_channel
-        is_big_size = layer_config.get('is_big_size', False)
-        if not is_big_size and layer_config['type'] == 'mult_scalar':
-            input_shape_check = config_info['feature'][layer_input_feature_ids[0]]['shape']
-            is_big_size = input_shape_check[0] > block_shape[0] or input_shape_check[1] > block_shape[1]
         if (
             layer_config['type'] == 'conv2d'
             or 'avgpool' in layer_config['type']
             or layer_config['type'] == 'mult_scalar'
-        ) and is_big_size:
+        ) and layer_config.get('is_big_size', False):
             input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
             block_expansion = (
                 math.ceil(input_shape[0] / block_shape[0]),
