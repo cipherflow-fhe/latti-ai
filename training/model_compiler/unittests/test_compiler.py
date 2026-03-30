@@ -615,12 +615,13 @@ class TestCompiler(CompilerTestBase):
         graph, score = self._export_and_compile(model, (1, 32, 64, 64))
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
 
-    @unittest.skip('Not supported yet')
+    # @unittest.skip('Not supported yet')
     def test_multiple_inputs(self):
         model = nn_modules.MutipleInputs()
-        graph, score = self._export_and_compile(model, (1, 32, 64, 64))
+        input_sizes = [(1, 32, 64, 64)] * model.n_inputs
+        graph, score = self._export_and_compile(model, input_sizes)
 
-    @unittest.skip('Not supported yet')
+    # @unittest.skip('Not supported yet')
     def test_multiple_outputs(self):
         model = nn_modules.MutipleOutputs()
         graph, score = self._export_and_compile(model, (1, 32, 64, 64))
@@ -1004,6 +1005,19 @@ class TestE2E(CompilerTestBase):
         """Avgpool with stride=4. Covers avgpool2d_layer varied strides."""
         model = nn_modules.AvgpoolVariedStride(stride=4)
         graph, score = self._export_compile_and_deploy(model, (1, 32, 32, 32), 'avgpool_stride4', style='multiplexed')
+        self.assertIsNotNone(graph)
+
+    def test_multiple_outputs(self):
+        """input."""
+        model = nn_modules.MutipleOutputs()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 64, 64), 'multiple_outputs', style='multiplexed')
+        self.assertIsNotNone(graph)
+
+    def test_multiple_inputs(self):
+        """output."""
+        model = nn_modules.MutipleInputs()
+        input_sizes = [(1, 32, 64, 64)] * model.n_inputs
+        graph, score = self._export_compile_and_deploy(model, input_sizes, 'multiple_inputs', style='multiplexed')
         self.assertIsNotNone(graph)
 
 

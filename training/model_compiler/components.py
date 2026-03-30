@@ -1189,8 +1189,13 @@ class LayerAbstractGraph:
                 else:
                     raise ValueError('Unsupported dim value.')
 
-        input_feature = [node.node_id for node in list(self.dag.predecessors(compute_list[0]))]
-        output_feature = [node.node_id for node in list(self.dag.successors(compute_list[-1]))]
+        compute_set = set(compute_list)
+        input_feature = [
+            node.node_id for node in self.dag.nodes if node not in compute_set and self.dag.in_degree(node) == 0
+        ]
+        output_feature = [
+            node.node_id for node in self.dag.nodes if node not in compute_set and self.dag.out_degree(node) == 0
+        ]
         config_info = {
             'score': score,
             'ckks_parameter': param_dict,

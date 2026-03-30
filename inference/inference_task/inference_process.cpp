@@ -909,8 +909,11 @@ void InferenceProcess::run_task(bool is_mpc) {
 
     string context_id;
     int level;
-    vector<CkksCiphertext> z_list;
-    for (auto& ki : json_data["output_feature"]) {
+    // Each output feature needs its own z_list so that cxx_args entries point to
+    // independent vectors of the correct size for check_signatures validation.
+    vector<vector<CkksCiphertext>> z_lists(json_data["output_feature"].size());
+    for (int out_idx = 0; out_idx < (int)json_data["output_feature"].size(); out_idx++) {
+        auto ki = json_data["output_feature"][out_idx];
         FeatureNode feature_output(json_features[ki.get<string>()]);
         context_id = feature_output.ckks_parameter_id;
         level = feature_output.level;
@@ -918,10 +921,10 @@ void InferenceProcess::run_task(bool is_mpc) {
         double encode_scale =
             ckks_contexts.at(feature_output.ckks_parameter_id).get()->get_parameter().get_default_scale();
         for (int i = 0; i < n_out_num; i++) {
-            z_list.push_back((*ckks_contexts.at(feature_output.ckks_parameter_id))
-                                 .new_ciphertext(feature_output.level, encode_scale));
+            z_lists[out_idx].push_back((*ckks_contexts.at(feature_output.ckks_parameter_id))
+                                           .new_ciphertext(feature_output.level, encode_scale));
         }
-        cxx_args.push_back(CxxVectorArgument{ki, &z_list});
+        cxx_args.push_back(CxxVectorArgument{ki, &z_lists[out_idx]});
     }
 
     // Dynamically create and run task executors based on the compute_device configuration
@@ -945,11 +948,12 @@ void InferenceProcess::run_task(bool is_mpc) {
         case ComputeDevice::FPGA: throw runtime_error("FPGA mode should use run_task_fpga() instead of run_task_cpu()");
         default: throw runtime_error("Unknown compute device type");
     }
-    for (auto& ki : json_data["output_feature"]) {
+    for (int out_idx = 0; out_idx < (int)json_data["output_feature"].size(); out_idx++) {
+        auto ki = json_data["output_feature"][out_idx];
         FeatureNode feature_output(json_features[ki.get<string>()]);
         if (feature_output.dim == 2) {
             Feature2DEncrypted f2d(ckks_contexts.at(feature_output.ckks_parameter_id).get(), feature_output.level);
-            f2d.data = move(z_list);
+            f2d.data = move(z_lists[out_idx]);
             f2d.shape = feature_output.shape;
             f2d.skip = feature_output.skip;
             f2d.n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
@@ -958,7 +962,7 @@ void InferenceProcess::run_task(bool is_mpc) {
         }
         if (feature_output.dim == 0) {
             Feature0DEncrypted f0d(ckks_contexts.at(feature_output.ckks_parameter_id).get(), feature_output.level);
-            f0d.data = move(z_list);
+            f0d.data = move(z_lists[out_idx]);
             f0d.skip = feature_output.skip[0];
             f0d.n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
             f0d.n_channel = feature_output.channel;
