@@ -172,6 +172,8 @@ static const vector<string> all_test_names = {
     "conv_mch_s1", "conv_mch_s2",
     "depthwise_conv_s1", "depthwise_conv_s2",
     "mux_conv_large_channel",
+    "single_avgpool", 
+    "conv_avgpool_reshape_dense", "avgpool_stride4",
 };
 // clang-format on
 
@@ -240,6 +242,16 @@ TEST_CASE("cpu/depthwise_conv_s2", "[e2e][cpu]") {
 TEST_CASE("cpu/mux_conv_large_channel", "[e2e][cpu]") {
     run_e2e_test(e2e_base_path / "mux_conv_large_channel", false);
 }
+TEST_CASE("cpu/single_avgpool", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "single_avgpool", false);
+}
+TEST_CASE("cpu/conv_avgpool_reshape_dense", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "conv_avgpool_reshape_dense", false);
+}
+TEST_CASE("cpu/avgpool_stride4", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "avgpool_stride4", false);
+}
+
 TEST_CASE("cpu/single_add", "[e2e][cpu]") {
     run_e2e_test(e2e_base_path / "single_add", false);
 }
@@ -294,8 +306,14 @@ TEST_CASE("gpu/depthwise_conv_s2", "[e2e][gpu]") {
 TEST_CASE("gpu/mux_conv_large_channel", "[e2e][gpu]") {
     run_e2e_test(e2e_base_path / "mux_conv_large_channel", true);
 }
-TEST_CASE("gpu/single_add", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "single_add", false);
+TEST_CASE("gpu/single_avgpool", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "single_avgpool", true);
+}
+TEST_CASE("gpu/conv_avgpool_reshape_dense", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "conv_avgpool_reshape_dense", true);
+}
+TEST_CASE("gpu/avgpool_stride4", "[e2e][gpu]") {
+    run_e2e_test(e2e_base_path / "avgpool_stride4", true);
 }
 #endif
 
@@ -304,6 +322,5 @@ TEST_CASE("gpu/single_add", "[e2e][gpu]") {
 // See docs/e2e_test_status.md for details.
 //
 // Both CPU and GPU:
-//   single_avgpool, single_add, conv_avgpool_reshape_dense, conv_upsample_e2e,
-//   avgpool_stride4, poly_n_65536_no_btp, single_avgpool_big_size,
-//   single_conv_with_stride_big_size, btp, conv_series, intertwined
+//   single_add, poly_n_65536_no_btp,
+//   btp, conv_series, intertwined

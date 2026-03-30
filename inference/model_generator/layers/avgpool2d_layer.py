@@ -79,6 +79,37 @@ class Avgpool2DLayer:
             result.append(res)
         return result
 
+    def call_interleaved_avgpool(self, x: list, block_expansion):
+        """
+        Interleaved (split) avgpool computation graph.
+
+        Corresponds to C++ run_split_avgpool() (avgpool2d_layer.cpp:224-245).
+
+        Adds stride[0]*stride[1] ciphertexts together per output position.
+        No level consumption (only adds, no mult/rescale).
+        """
+        x_size = len(x)
+        out_size = x_size // (self.stride[0] * self.stride[1])
+        res = [None] * out_size
+
+        for channel_idx in range(self.channel):
+            base_idx = channel_idx * (block_expansion[0] // self.stride[0]) * (block_expansion[1] // self.stride[1])
+            for row_idx in range(block_expansion[0]):
+                for col_idx in range(block_expansion[1]):
+                    ct_idx = (
+                        channel_idx * block_expansion[0] * block_expansion[1] + row_idx * block_expansion[1] + col_idx
+                    )
+                    out_idx = (
+                        base_idx
+                        + (row_idx // self.stride[0]) * (block_expansion[1] // self.stride[1])
+                        + col_idx // self.stride[1]
+                    )
+                    if row_idx % self.stride[0] == 0 and col_idx % self.stride[1] == 0:
+                        res[out_idx] = x[ct_idx]
+                    else:
+                        res[out_idx] = add(res[out_idx], x[ct_idx])
+        return res
+
     def call_multiplexed_avgpool(
         self, x: list[CkksCiphertextNode], select_tensor_pt, n_channel: int, n_channel_per_ct: int
     ):
