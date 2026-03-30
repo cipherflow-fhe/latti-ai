@@ -70,6 +70,10 @@ public:
                 invalid_fill[1] = json_data["invalid_fill"][1];
             }
         }
+        if (dim == 1) {
+            shape[0] = json_data["shape"][0];
+            skip[0] = json_data["skip"][0];
+        }
         if (dim == 0) {
             skip[0] = json_data["skip"];
             if (json_data.contains("special_info")) {
@@ -167,6 +171,7 @@ public:
     void init_concat_layer(const std::string& key, const json& layer);
     void init_upsample_layer(const std::string& key, const json& layer, const Duo& block_shape = {128, 256});
     void init_upsample_nearest_layer(const std::string& key, const json& layer);
+    void init_conv1d_layer(const std::string& key, const json& layer, const hid_t& h5_file);
 
     std::map<std::string, std::unique_ptr<Conv2DPackedLayer>> ckks_conv2ds;
     std::map<std::string, std::unique_ptr<Conv2DPackedDepthwiseLayer>> ckks_dw_conv2ds;
@@ -185,6 +190,8 @@ public:
     std::map<std::string, std::unique_ptr<ConcatLayer>> ckks_concat;
     std::map<std::string, std::unique_ptr<UpsampleLayer>> ckks_upsample;
     std::map<std::string, std::unique_ptr<UpsampleNearestLayer>> ckks_upsample_nearest;
+    std::map<std::string, std::unique_ptr<Conv1DPackedLayer>> ckks_conv1ds;
+    std::map<std::string, std::unique_ptr<ParMultiplexedConv1DPackedLayer>> ckks_multiplexed_conv1ds;
 };
 
 class InferenceProcess {
@@ -205,6 +212,7 @@ public:
     std::map<std::string, std::unique_ptr<ls::CkksContext>> ckks_contexts;
 
     std::map<std::string, Array<double, 3>> p_feature2d_x;
+    std::map<std::string, Array<double, 2>> p_feature1d_x;
     std::vector<std::string> available_keys;
     std::map<std::string, Array1D> p_feature0d_x;
 
@@ -215,5 +223,6 @@ public:
     void set_feature(const std::string& feature_id, std::unique_ptr<FeatureEncrypted> feature);
     const FeatureEncrypted& get_feature(const std::string& feature_id);
     Feature0DEncrypted get_ciphertext_output_feature0D(const std::string& feature_id);
+    Feature1DEncrypted get_ciphertext_output_feature1D(const std::string& feature_id);
     Feature2DEncrypted get_ciphertext_output_feature2D(const std::string& feature_id);
 };

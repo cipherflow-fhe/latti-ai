@@ -187,3 +187,62 @@ Array<double, 2> Feature1DEncrypted::unpack() const {
     });
     return result;
 }
+
+Bytes Feature1DEncrypted::serialize() const {
+    stringstream ss;
+    ss_write(ss, dim);
+    ss_write(ss, n_channel);
+    ss_write(ss, n_channel_per_ct);
+    ss_write(ss, level);
+    ss_write(ss, shape);
+    ss_write(ss, skip);
+    uint32_t n_ct = data.size();
+    ss_write(ss, n_ct);
+    for (const CkksCiphertext& ct : data) {
+        Bytes ct_data = ct.serialize(context->get_parameter());
+        ss_write_vector(ss, ct_data);
+    }
+    uint32_t n_cct = data_compress.size();
+    ss_write(ss, n_cct);
+    for (const CkksCompressedCiphertext& cct : data_compress) {
+        Bytes cct_data = cct.serialize(context->get_parameter());
+        ss_write_vector(ss, cct_data);
+    }
+    return ss_to_bytes(ss);
+}
+
+void Feature1DEncrypted::deserialize(const Bytes& bytes) {
+    stringstream ss;
+    bytes_to_ss(bytes, ss);
+    ss_read(ss, &dim);
+    ss_read(ss, &n_channel);
+    ss_read(ss, &n_channel_per_ct);
+    ss_read(ss, &level);
+    ss_read(ss, &shape);
+    ss_read(ss, &skip);
+    uint32_t n_ct;
+    ss_read(ss, &n_ct);
+    for (uint32_t i = 0; i < n_ct; i++) {
+        Bytes ct_data;
+        ss_read_vector(ss, &ct_data);
+        data.push_back(CkksCiphertext::deserialize(ct_data));
+    }
+    uint32_t n_cct;
+    ss_read(ss, &n_cct);
+    for (uint32_t i = 0; i < n_cct; i++) {
+        Bytes cct_data;
+        ss_read_vector(ss, &cct_data);
+        data_compress.push_back(CkksCompressedCiphertext::deserialize(cct_data));
+    }
+}
+
+Feature1DEncrypted Feature1DEncrypted::copy() const {
+    Feature1DEncrypted result(context, level, skip);
+    result.n_channel = n_channel;
+    result.n_channel_per_ct = n_channel_per_ct;
+    result.shape = shape;
+    for (const auto& ct : data) {
+        result.data.push_back(ct.copy());
+    }
+    return result;
+}

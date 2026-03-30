@@ -128,6 +128,46 @@ void InitInferenceProcess::init_conv_layer(const string& key, const json& layer,
     }
 }
 
+void InitInferenceProcess::init_conv1d_layer(const string& key, const json& layer, const hid_t& h5_file) {
+    FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
+    FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
+    int out_level = feature_output.level;
+    double weight_scale = layer["weight_scale"];
+    double bias_scale = layer["bias_scale"];
+    uint32_t input_shape = feature_input.shape[0];
+    uint32_t kernel_shape = layer["kernel_shape"][0];
+    uint32_t stride = layer["stride"][0];
+    uint32_t skip = feature_input.skip[0];
+    uint32_t n_channel_per_ct = feature_input.pack_channel_per_ciphertext;
+    CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
+
+    Array<double, 3> weight = h5_to_array<3>(
+        h5_file, layer["weight_path"],
+        {(uint64_t)feature_output.channel, (uint64_t)feature_input.channel, (uint64_t)kernel_shape}, weight_scale);
+    Array<double, 1> bias = h5_to_array<1>(h5_file, layer["bias_path"], {(uint64_t)feature_output.channel}, bias_scale);
+
+    string style = layer.value("style", string("ordinary"));
+    if (style == "multiplexed") {
+        auto conv_layer = make_unique<ParMultiplexedConv1DPackedLayer>(param, input_shape, weight, bias, stride, skip,
+                                                                       n_channel_per_ct, out_level + 1);
+        if (is_lazy) {
+            conv_layer->prepare_weight_for_lazy();
+        } else {
+            conv_layer->prepare_weight();
+        }
+        ckks_multiplexed_conv1ds[key] = move(conv_layer);
+    } else {
+        auto conv_layer = make_unique<Conv1DPackedLayer>(param, input_shape, weight, bias, stride, skip,
+                                                         n_channel_per_ct, out_level + 1);
+        if (is_lazy) {
+            conv_layer->prepare_weight_lazy();
+        } else {
+            conv_layer->prepare_weight();
+        }
+        ckks_conv1ds[key] = move(conv_layer);
+    }
+}
+
 void InitInferenceProcess::init_square_layer(const string& key, const json& layer, const hid_t& h5_file) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     auto squar2d = make_unique<SquareLayer>(*ckks_parameters.at(feature_input.ckks_parameter_id));
@@ -489,6 +529,8 @@ void InitInferenceProcess::load_model_prepare() {
         } else if (layer_type == "avgpool2d") {
             bool is_adaptive_avgpool = value["is_adaptive_avgpool"];
             init_fhe_avgpool_layer(key, value, is_adaptive_avgpool, block_shape);
+        } else if (layer_type == "conv1d") {
+            init_conv1d_layer(key, value, h5_file);
         }
     }
     H5Fclose(h5_file);
@@ -764,6 +806,23 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     throw runtime_error("input is not available, expect Feature2DEncrypted or Feature0DEncrypted");
                 }
                 fhe_timer.stop();
+            } else if (layer_type == "conv1d") {
+                fhe_timer.start();
+                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                if (feature_node.dim == 1) {
+                    const Feature1DEncrypted& input1D = dynamic_cast<const Feature1DEncrypted&>(feature_node);
+                    string style = layer.value().value("style", string("ordinary"));
+                    if (style == "multiplexed") {
+                        result = make_unique<Feature1DEncrypted>(
+                            fp->ckks_multiplexed_conv1ds[key]->run(context, const_cast<Feature1DEncrypted&>(input1D)));
+                    } else {
+                        result = make_unique<Feature1DEncrypted>(
+                            fp->ckks_conv1ds[key]->run(context, const_cast<Feature1DEncrypted&>(input1D)));
+                    }
+                } else {
+                    throw runtime_error("input is not available, expect Feature1DEncrypted");
+                }
+                fhe_timer.stop();
             }
             set_feature(feature_output_id, move(result));
             json_layers.erase(key);
@@ -805,6 +864,13 @@ void InferenceProcess::run_task(bool is_mpc) {
                 ct_data[i].push_back(input.data[j].copy());
             }
             cxx_args.push_back(CxxVectorArgument{ki, &ct_data[i]});
+        }
+        if (feature_input.dim == 1) {
+            const Feature1DEncrypted& input = dynamic_cast<const Feature1DEncrypted&>(get_feature(ki));
+            for (int j = 0; j < input.data.size(); j++) {
+                ct_data[i].push_back(input.data[j].copy());
+            }
+            cxx_args.push_back(CxxVectorArgument{ki, &ct_data});
         }
     }
 
@@ -904,6 +970,16 @@ void InferenceProcess::run_task(bool is_mpc) {
             }
         } else if (layer_type == "mult_scalar") {
             cxx_args.push_back(CxxVectorArgument{"mult_scalar_" + key, &(fp->ckks_mult_scalar.at(key)->weight_pt)});
+        } else if (layer_type == "conv1d") {
+            string style = layer.value().value("style", string("ordinary"));
+            if (style == "multiplexed") {
+                cxx_args.push_back(
+                    CxxVectorArgument{"convw_" + key, &(fp->ckks_multiplexed_conv1ds.at(key)->weight_pt)});
+                cxx_args.push_back(CxxVectorArgument{"convb_" + key, &(fp->ckks_multiplexed_conv1ds.at(key)->bias_pt)});
+            } else {
+                cxx_args.push_back(CxxVectorArgument{"convw_" + key, &(fp->ckks_conv1ds.at(key)->weight_pt)});
+                cxx_args.push_back(CxxVectorArgument{"convb_" + key, &(fp->ckks_conv1ds.at(key)->bias_pt)});
+            }
         } else if (layer_type == "upsample_nearest") {
             cxx_args.push_back(
                 CxxVectorArgument{"upsample_select_pt_" + key, &(fp->ckks_upsample_nearest.at(key)->select_tensor_pt)});
@@ -972,6 +1048,15 @@ void InferenceProcess::run_task(bool is_mpc) {
             f0d.n_channel = feature_output.channel;
             result = make_unique<Feature0DEncrypted>(move(f0d));
         }
+        if (feature_output.dim == 1) {
+            Feature1DEncrypted f1d(ckks_contexts.at(feature_output.ckks_parameter_id).get(), feature_output.level,
+                                   feature_output.skip[0]);
+            f1d.data = move(z_list);
+            f1d.shape = feature_output.shape[0];
+            f1d.n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
+            f1d.n_channel = feature_output.channel;
+            result = make_unique<Feature1DEncrypted>(move(f1d));
+        }
         set_feature(ki, move(result));
     }
 }
@@ -999,6 +1084,7 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
             }
             string feature_output_id = layer.value()["feature_output"][0];
             Array<double, 3> result;
+            Array<double, 2> result1d;
             vector<double> result0d;
             if (layer_type == "conv2d") {
                 auto& input0 = p_feature2d_x[feature_input[0]];
@@ -1120,8 +1206,20 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                     }
                 }
             }
+            if (layer_type == "conv1d") {
+                auto& input0 = p_feature1d_x[feature_input[0]];
+                string style = layer.value().value("style", string("ordinary"));
+                if (style == "multiplexed") {
+                    result1d = fp->ckks_multiplexed_conv1ds[key]->plaintext_call(input0);
+                } else {
+                    result1d = fp->ckks_conv1ds[key]->plaintext_call(input0);
+                }
+            }
             if (result.get_size() != 0) {
                 p_feature2d_x[feature_output_id] = move(result);
+            }
+            if (result1d.get_size() != 0) {
+                p_feature1d_x[feature_output_id] = move(result1d);
             }
             if (result0d.size() != 0) {
                 p_feature0d_x[feature_output_id] = move(result0d);
@@ -1148,5 +1246,10 @@ Feature0DEncrypted InferenceProcess::get_ciphertext_output_feature0D(const std::
 
 Feature2DEncrypted InferenceProcess::get_ciphertext_output_feature2D(const std::string& feature_id) {
     const Feature2DEncrypted& output = dynamic_cast<const Feature2DEncrypted&>(get_feature(feature_id));
+    return output.copy();
+}
+
+Feature1DEncrypted InferenceProcess::get_ciphertext_output_feature1D(const std::string& feature_id) {
+    const Feature1DEncrypted& output = dynamic_cast<const Feature1DEncrypted&>(get_feature(feature_id));
     return output.copy();
 }
