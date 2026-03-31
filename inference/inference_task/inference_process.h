@@ -186,6 +186,7 @@ public:
     std::map<std::string, std::unique_ptr<PolyRelu0D>> ckks_poly_relu_0d;
     std::map<std::string, std::unique_ptr<ParMultiplexedConv2DPackedLayer>> ckks_multiplexed_conv2ds;
     std::map<std::string, std::unique_ptr<InverseMultiplexedConv2DLayer>> ckks_big_conv2ds;
+    std::map<std::string, std::unique_ptr<InverseMultiplexedConv2DLayerDepthwise>> ckks_big_dw_conv2ds;
     std::map<std::string, std::unique_ptr<ParMultiplexedConv2DPackedLayerDepthwise>> ckks_multiplexed_dw_conv2ds;
     std::map<std::string, std::unique_ptr<ConcatLayer>> ckks_concat;
     std::map<std::string, std::unique_ptr<UpsampleLayer>> ckks_upsample;
