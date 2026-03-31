@@ -86,6 +86,21 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     feature_id_to_nodes_map = {}
     task_output_feature_ids = config_info['output_feature']
 
+    # Pre-add all graph-level input ciphertexts first so they precede weights in input_args.
+    # This ensures the C++ signature position-matching works correctly for multi-input models.
+    # Only needed when there are multiple graph-level inputs; single-input models are handled
+    # correctly by the lazy-loading in the main loop (which also computes the right CT count
+    # for big_size layers).
+    if len(config_info['input_feature']) > 1:
+        for input_fid in config_info['input_feature']:
+            feat = config_info['feature'][input_fid]
+            pack = int(feat['pack_num'])
+            level = int(feat['level'])
+            n_packed = math.ceil(int(feat['channel']) / pack)
+            x = [CkksCiphertextNode(input_fid + f'input{k}', level=level) for k in range(n_packed)]
+            feature_id_to_nodes_map[input_fid] = x
+            input_args.append(Argument(input_fid, x))
+
     for layer_id, layer_config in config_info['layer'].items():
         if layer_config['type'] == 'relu2d':
             continue

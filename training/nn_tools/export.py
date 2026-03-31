@@ -75,7 +75,10 @@ def export_to_onnx(
     if input_names is None:
         input_names = [f'input_{i}' for i in range(n_inputs)] if multi_input else ['input']
     if output_names is None:
-        output_names = ['output']
+        with torch.no_grad():
+            probe_out = export_model(dummy_input) if not multi_input else export_model(*dummy_input)
+        n_outputs = len(probe_out) if isinstance(probe_out, (list, tuple)) else 1
+        output_names = [f'output_{i}' for i in range(n_outputs)] if n_outputs > 1 else ['output']
 
     save_dir = os.path.dirname(save_path)
     if save_dir:
