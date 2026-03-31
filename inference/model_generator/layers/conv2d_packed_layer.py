@@ -148,6 +148,19 @@ class Conv2DPackedLayer:
             result.append(result_ct)
         return result
 
+    def make_pt_nodes(self, layer_id):
+        """Return (weight_pt, bias_pt) with shapes matching call()."""
+        index = self.kernel_shape[0] * self.kernel_shape[1]
+        weight_pt = [
+            [
+                [CkksPlaintextRingtNode(f'convw_{layer_id}_{n}_{m}_{i}') for i in range(index)]
+                for m in range(self.n_packed_in_channel * self.pack)
+            ]
+            for n in range(self.n_packed_out_channel)
+        ]
+        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_packed_out_channel)]
+        return weight_pt, bias_pt
+
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt) -> list[CkksCiphertextNode]:
         rotated_x: list[CkksCiphertextNode] = list()
         for x_ct in x:

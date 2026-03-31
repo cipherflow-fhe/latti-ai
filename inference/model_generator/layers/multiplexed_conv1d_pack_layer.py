@@ -214,6 +214,33 @@ class ParMultiplexedConv1DPackedLayer:
                 res.append(combined)
             return res
 
+    def make_pt_nodes(self, layer_id):
+        """Return (weight_pt, bias_pt, block_select_pt) matching call().
+
+        weight_pt[i][j][k]: i in n_out_groups, j in n_packed_in_channel*n_block_per_ct, k in kernel_shape
+        bias_pt[i]: i in ceil(n_out_channel / n_channel_per_ct)
+        block_select_pt[i]: i in min(n_block_per_ct, n_out_channel)  (empty if not needs_rearrange)
+        """
+        import math as _math
+
+        n_out_groups = _math.ceil(self.n_out_channel / self.n_block_per_ct)
+        n_packed_out = _math.ceil(self.n_out_channel / self.n_channel_per_ct)
+        weight_pt = [
+            [
+                [CkksPlaintextRingtNode(f'convw_{layer_id}_{i}_{j}_{k}') for k in range(self.kernel_shape)]
+                for j in range(self.n_packed_in_channel * self.n_block_per_ct)
+            ]
+            for i in range(n_out_groups)
+        ]
+        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_packed_out)]
+        needs_rearrange = self.skip > 1 or self.stride > 1
+        if needs_rearrange:
+            n_select = min(self.n_block_per_ct, self.n_out_channel)
+            block_select_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_select)]
+        else:
+            block_select_pt = []
+        return weight_pt, bias_pt, block_select_pt
+
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, block_select_pt=None) -> list[CkksCiphertextNode]:
         # 1. Kernel direction rotation
         rotated_x = self.gen_rotated_x(x)

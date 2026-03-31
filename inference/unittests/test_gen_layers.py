@@ -332,19 +332,6 @@ class TestLayerExport(unittest.TestCase):
 
                             input_ct = [CkksCiphertextNode(f'input_0input{k}', level=level) for k in range(n_ct_in)]
 
-                            index = kernel_shape[0] * kernel_shape[1]
-                            weight_pt = [
-                                [
-                                    [
-                                        CkksPlaintextRingtNode(f'convw__conv1_{k}_{n}_{i}')
-                                        for i in range(int(index * next_stride[0] * next_stride[1]))
-                                    ]
-                                    for n in range(n_in_channel)
-                                ]
-                                for k in range(n_out_channel)
-                            ]
-                            bias_pt = [CkksPlaintextRingtNode(f'convb__conv1_{i}') for i in range(n_out_channel)]
-
                             big_conv = InverseMultiplexedConv2DLayer(
                                 n_out_channel,
                                 n_in_channel,
@@ -357,7 +344,8 @@ class TestLayerExport(unittest.TestCase):
                                 block_shape,
                             )
 
-                            output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N)
+                            weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes('_conv1')
+                            output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_pt)
 
                             used_indices = big_conv.get_used_input_indices()
                             used_input_ct = [input_ct[i] for i in sorted(used_indices)]
@@ -365,6 +353,8 @@ class TestLayerExport(unittest.TestCase):
                             input_args.append(Argument('input_0', used_input_ct))
                             input_args.append(Argument('convw__conv1', weight_pt))
                             input_args.append(Argument('convb__conv1', bias_pt))
+                            if repack_mask_pt is not None:
+                                input_args.append(Argument('repack_mask__conv1', [repack_mask_pt]))
 
                             process_custom_task(
                                 input_args=input_args,
@@ -433,21 +423,8 @@ class TestLayerExport(unittest.TestCase):
 
                     input_ct = [CkksCiphertextNode(f'input_0input{k}', level=level) for k in range(n_ct_in)]
 
-                    index = kernel_shape[0] * kernel_shape[1]
-                    weight_pt = [
-                        [
-                            [
-                                CkksPlaintextRingtNode(f'convw__conv1_{k}_{n}_{i}')
-                                for i in range(int(index * effective_next_stride[0] * effective_next_stride[1]))
-                            ]
-                            for n in range(n_in_channel)
-                        ]
-                        for k in range(n_out_channel)
-                    ]
-                    bias_pt = [CkksPlaintextRingtNode(f'convb__conv1_{i}') for i in range(n_out_channel)]
-
-                    repack_mask_node = CkksPlaintextRingtNode('repack_mask__conv1') if big_conv.need_repack else None
-                    output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_node)
+                    weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes('_conv1')
+                    output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_pt)
 
                     used_indices = big_conv.get_used_input_indices()
                     used_input_ct = [input_ct[i] for i in sorted(used_indices)]
@@ -455,8 +432,8 @@ class TestLayerExport(unittest.TestCase):
                     input_args.append(Argument('input_0', used_input_ct))
                     input_args.append(Argument('convw__conv1', weight_pt))
                     input_args.append(Argument('convb__conv1', bias_pt))
-                    if repack_mask_node is not None:
-                        input_args.append(Argument('repack_mask__conv1', [repack_mask_node]))
+                    if repack_mask_pt is not None:
+                        input_args.append(Argument('repack_mask__conv1', [repack_mask_pt]))
 
                     process_custom_task(
                         input_args=input_args,
@@ -821,16 +798,6 @@ class TestLayerExport(unittest.TestCase):
                         n_pack_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
                         n_packed_out_channel = math.ceil(n_out_channel / (n_channel_per_ct * stride))
                         input_ct = [CkksCiphertextNode(f'input_{k}', init_level) for k in range(n_pack_in_channel)]
-                        rot_n_channel_per_ct = n_in_channel if n_in_channel < n_channel_per_ct else n_channel_per_ct
-                        weight_pt = [
-                            [
-                                [CkksPlaintextRingtNode(f'weight_{i}_{k}_{j}') for k in range(kernel_shape)]
-                                for j in range(rot_n_channel_per_ct)
-                            ]
-                            for i in range(n_packed_out_channel)
-                        ]
-                        bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_channel)]
-
                         conv1d = Conv1DPackedLayer(
                             n_out_channel,
                             n_in_channel,
@@ -842,12 +809,13 @@ class TestLayerExport(unittest.TestCase):
                             n_pack_in_channel,
                             n_packed_out_channel,
                         )
+                        weight_pt, bias_pt = conv1d.make_pt_nodes('_conv1d')
                         output_ct = conv1d.call(input_ct, weight_pt, bias_pt)
 
                         input_args = list()
                         input_args.append(Argument('input_node', input_ct))
-                        input_args.append(Argument(f'weight_pt', weight_pt))
-                        input_args.append(Argument(f'bias_pt', bias_pt))
+                        input_args.append(Argument(f'convw__conv1d', weight_pt))
+                        input_args.append(Argument(f'convb__conv1d', bias_pt))
 
                         process_custom_task(
                             input_args=input_args,
@@ -964,13 +932,12 @@ class TestLayerExport(unittest.TestCase):
                     if s < stride[0]:
                         continue  # shape must be >= stride
                     print(f'sub-test: stride={stride[0]}, n_channel={n_channel}, s={s}')
-                    n_channel_per_ct = int(np.ceil(N / 2 / (s * s)))
-                    n_ct = int(np.ceil(n_channel / n_channel_per_ct))
+                    n_ct = int(np.ceil(n_channel / int(np.ceil(N / 2 / (s * s)))))
                     input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
-                    out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
-                    n_select_pt = min(n_channel, out_channels_per_ct)
-                    select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
                     avgpool = Avgpool2DLayer(stride=list(stride), shape=[s, s], channel=n_channel, skip=[1, 1])
+                    select_tensor_pt, n_channel_per_ct = avgpool.make_pt_nodes_multiplexed_avgpool(
+                        '_avgpool', n_channel, N
+                    )
                     output_ct = avgpool.call_multiplexed_avgpool(
                         input_ct, select_tensor_pt, n_channel, n_channel_per_ct
                     )
@@ -1049,7 +1016,7 @@ class TestLayerExport(unittest.TestCase):
                             channel=n_channel,
                             skip=[1, 1],
                         )
-                        output_ct = avgpool.call_interleaved_avgpool(input_ct, block_expansion)
+                        output_ct = avgpool.call_interleaved_avgpool(input_ct, block_expansion, N)
 
                         input_args = [Argument('input_node', input_ct)]
                         process_custom_task(

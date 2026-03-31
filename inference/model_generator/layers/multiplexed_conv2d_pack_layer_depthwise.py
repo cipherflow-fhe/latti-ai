@@ -107,6 +107,28 @@ class ParMultiplexedConv2DPackedLayerDepthwise:
             rotated_x.append(row)
         return rotated_x
 
+    def make_pt_nodes(self, layer_id):
+        """Return (weight_pt, bias_pt, mask_pt).
+
+        weight_pt[j][k]: j in n_packed_in_channel, k in kernel_size
+        bias_pt[i]: i in n_packed_out_channel
+        mask_pt[i]: i in n_out_channel  (empty list if stride==1)
+        """
+        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
+        weight_pt = [
+            [CkksPlaintextRingtNode(f'convw_{layer_id}_{j}_{k}') for k in range(kernel_size)]
+            for j in range(self.n_packed_in_channel)
+        ]
+        import math as _math
+
+        n_bias = _math.ceil(self.n_out_channel / (self.stride[0] * self.stride[1] * self.n_channel_per_ct))
+        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_bias)]
+        if self.stride[0] != 1:
+            mask_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(self.n_out_channel)]
+        else:
+            mask_pt = []
+        return weight_pt, bias_pt, mask_pt
+
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mast_pt) -> list[CkksCiphertextNode]:
         # 1. Kernel direction rotation
         kernel_rotations = self.gen_rotated_x(x)

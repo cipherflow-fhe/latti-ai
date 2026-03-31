@@ -65,6 +65,42 @@ class DensePackedLayer:
         result += rotate_cols(x, steps)
         return result
 
+    def make_pt_nodes_skip_0d(self, layer_id):
+        """Return (weight_pt, bias_pt) for call_skip_0d().
+
+        weight_pt[m][i]: m in n_packed_out_feature, i in n_packed_in_feature * pack
+        bias_pt[i]: i in n_packed_out_feature
+        """
+        weight_pt_size = self.n_packed_in_feature * self.pack
+        weight_pt = [
+            [CkksPlaintextRingtNode(f'densew_{layer_id}_{m}_{i}') for i in range(weight_pt_size)]
+            for m in range(self.n_packed_out_feature)
+        ]
+        bias_pt = [CkksPlaintextRingtNode(f'denseb_{layer_id}_{i}') for i in range(self.n_packed_out_feature)]
+        return weight_pt, bias_pt
+
+    def make_pt_nodes_multiplexed(self, layer_id, n):
+        """Return (weight_pt, bias_pt) for call_multiplexed().
+
+        weight_pt[i][j]: i in n_packed_out_feature_for_mult_pack, j in n_block_input
+        bias_pt[i]: i in n_packed_out_feature_for_mult_pack
+        """
+        input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
+        N_half = int(n / 2)
+        n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
+        valid_skip_0 = self.skip[0] // self.invalid_fill[0]
+        valid_skip_1 = self.skip[1] // self.invalid_fill[1]
+        n_channel_per_block = valid_skip_0 * valid_skip_1
+        n_channel = self.n_in_channel // (self.input_shape[0] * self.input_shape[1])
+        n_block_input = int(np.ceil(n_channel / (n_num_pre_ct * n_channel_per_block))) * n_num_pre_ct
+        n_packed_out = int(np.ceil(self.n_out_channel / n_num_pre_ct))
+        weight_pt = [
+            [CkksPlaintextRingtNode(f'densew_{layer_id}_{i}_{j}') for j in range(n_block_input)]
+            for i in range(n_packed_out)
+        ]
+        bias_pt = [CkksPlaintextRingtNode(f'denseb_{layer_id}_{i}') for i in range(n_packed_out)]
+        return weight_pt, bias_pt
+
     def call_skip_0d(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, skip_0d: int):
         """Corresponds to C++ run_core_0d + run_skip_0d (BSGS approach)."""
         bsgs_bs = int(math.ceil(math.sqrt(self.pack)))

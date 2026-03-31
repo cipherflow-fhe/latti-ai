@@ -517,6 +517,13 @@ class PolyRelu:
 
         return result
 
+    def make_pt_nodes(self, layer_id, n_pack_in_channel):
+        """Return weight_pt with shape [order+1][n_pack_in_channel]."""
+        return [
+            [CkksPlaintextRingtNode(f'poly_reluw_{layer_id}_{i}_{j}') for j in range(n_pack_in_channel)]
+            for i in range(self.order + 1)
+        ]
+
     def call_bsgs_feature2d(self, x: list[CkksCiphertextNode], weight_pt):
         """BSGS with pre-computed weight plaintexts (eager mode)."""
         return self._run_bsgs_core(x, lambda idx, x_idx: weight_pt[idx][x_idx])
