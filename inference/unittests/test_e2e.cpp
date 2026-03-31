@@ -279,6 +279,14 @@ TEST_CASE("cpu/single_add", "[e2e][cpu]") {
 TEST_CASE("cpu/conv_upsample_e2e", "[e2e][cpu]") {
     run_e2e_test(e2e_base_path / "conv_upsample_e2e", false);
 }
+
+TEST_CASE("cpu/multiple_inputs", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "multiple_inputs", false);
+}
+
+TEST_CASE("cpu/multiple_outputs", "[e2e][cpu]") {
+    run_e2e_test(e2e_base_path / "multiple_outputs", false);
+}
 // == GPU tests ================================================================
 
 #ifdef INFERENCE_SDK_ENABLE_GPU
