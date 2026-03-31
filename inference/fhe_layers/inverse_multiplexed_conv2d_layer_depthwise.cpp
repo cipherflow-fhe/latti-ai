@@ -19,22 +19,22 @@
 #include <math.h>
 #include <set>
 #include "../util.h"
-#include "inverse_multiplexed_conv2d_layer.h"
+#include "inverse_multiplexed_conv2d_layer_depthwise.h"
 
 using namespace std;
 using namespace cxx_sdk_v2;
 
-InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter& param_in,
-                                                             const Duo& input_shape_in,
-                                                             const Array<double, 4>& weight_in,
-                                                             const Array<double, 1>& bias_in,
-                                                             const Array<int, 1>& padding_in,
-                                                             const Duo& stride_in,
-                                                             const Duo& stride_next_in,
-                                                             const Duo& skip_in,
-                                                             const Duo& block_shape_in,
-                                                             uint32_t level_in,
-                                                             double residual_scale)
+InverseMultiplexedConv2DLayerDepthwise::InverseMultiplexedConv2DLayerDepthwise(const CkksParameter& param_in,
+                                                                               const Duo& input_shape_in,
+                                                                               const Array<double, 4>& weight_in,
+                                                                               const Array<double, 1>& bias_in,
+                                                                               const Array<int, 1>& padding_in,
+                                                                               const Duo& stride_in,
+                                                                               const Duo& stride_next_in,
+                                                                               const Duo& skip_in,
+                                                                               const Duo& block_shape_in,
+                                                                               uint32_t level_in,
+                                                                               double residual_scale)
     : Layer(param_in) {
     block_shape[0] = block_shape_in[0];
     block_shape[1] = block_shape_in[1];
@@ -42,7 +42,12 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
     input_shape[1] = input_shape_in[1];
     std::array<uint64_t, 4UL> weight_shape = weight_in.get_shape();
     n_out_channel = weight_shape[0];
-    n_in_channel = weight_shape[1];
+    // Depthwise: weight shape is [n_channel, 1, kH, kW]
+    if (weight_shape[1] != 1) {
+        throw std::invalid_argument("Depthwise conv requires weight shape [n_channel, 1, kH, kW], got n_in_channel=" +
+                                    std::to_string(weight_shape[1]));
+    }
+    n_in_channel = n_out_channel;
     kernel_shape[0] = weight_shape[2];
     kernel_shape[1] = weight_shape[3];
     if (padding_in.get(0) < 0 && padding_in.get(1) < 0) {
@@ -51,7 +56,7 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
         padding_shape[0] = padding_in.get(0);
         padding_shape[1] = padding_in.get(1);
     } else {
-        throw std::invalid_argument("Invalid padding inputs in InverseMultiplexedConv2DLayer");
+        throw std::invalid_argument("Invalid padding inputs in InverseMultiplexedConv2DLayerDepthwise");
     }
     stride[0] = stride_in[0];
     stride[1] = stride_in[1];
@@ -101,7 +106,7 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
     N = param_in.get_n();
 }
 
-void InverseMultiplexedConv2DLayer::prepare_weight() {
+void InverseMultiplexedConv2DLayerDepthwise::prepare_weight() {
     int pad0 = static_cast<int>(padding_shape[0]);
     int pad1 = static_cast<int>(padding_shape[1]);
     int stride0 = static_cast<int>(stride[0]);
@@ -160,14 +165,11 @@ void InverseMultiplexedConv2DLayer::prepare_weight() {
     weight_pt.clear();
     bias_pt.clear();
 
+    // Depthwise: weight_pt is [n_out_channel][kernel] (no n_in_channel dimension)
     weight_pt.resize(n_out_channel);
 
-    for (int i = 0; i < weight_pt.size(); i++) {
-        weight_pt[i].resize(n_in_channel);
-    }
     for (int i = 0; i < n_out_channel; i++) {
-        CkksPlaintextRingt s(0);
-        bias_pt.push_back(move(s));
+        bias_pt.push_back(CkksPlaintextRingt(0));
     }
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
@@ -176,41 +178,40 @@ void InverseMultiplexedConv2DLayer::prepare_weight() {
     int kernel_size = kernel_shape[0] * kernel_shape[1];
     int input_block_size = block_shape[0] * block_shape[1];
     parallel_for(n_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int out_channel_idx) {
-        for (int in_channel_idx = 0; in_channel_idx < n_in_channel; ++in_channel_idx) {
-            vector<CkksPlaintextRingt> a1(kernel_size * stride_next[0] * stride_next[1]);
-            int kernel_count = 0;
-            for (int r_i2 = 0; r_i2 < stride_next[0]; r_i2++) {
-                for (int r_j2 = 0; r_j2 < stride_next[1]; r_j2++) {
-                    for (int row_seg_idx = 0; row_seg_idx < stride[0]; row_seg_idx++) {
-                        for (int col_seg_idx = 0; col_seg_idx < stride[1]; col_seg_idx++) {
-                            if (row_seg_idx >= kernel_shape[0] || col_seg_idx >= kernel_shape[1]) {
-                                continue;
-                            }
-                            int split_kernel_shape0 = (kernel_shape0 - 1 - row_seg_idx) / stride0 + 1;
-                            int split_kernel_shape1 = (kernel_shape1 - 1 - col_seg_idx) / stride1 + 1;
-                            for (int u_s = 0; u_s < split_kernel_shape0; u_s++) {
-                                for (int v_s = 0; v_s < split_kernel_shape1; v_s++) {
-                                    int kernel_idx_i = u_s * stride[0] + row_seg_idx;
-                                    int kernel_idx_j = v_s * stride[1] + col_seg_idx;
-                                    auto& mask = kernel_masks[kernel_count];
-                                    vector<double> w(N / 2);
-                                    for (int linear_idx = 0; linear_idx < input_block_size; ++linear_idx) {
-                                        int shape_i = linear_idx / block_shape[1];
-                                        int shape_j = linear_idx % block_shape[1];
-                                        w[linear_idx] =
-                                            weight.get(out_channel_idx, in_channel_idx, kernel_idx_i, kernel_idx_j) *
-                                            mask[shape_i * block_shape[1] + shape_j];
-                                    }
-                                    a1[kernel_count] = ctx_copy.encode_ringt(w, weight_scale);
-                                    kernel_count = kernel_count + 1;
+        // Depthwise: only one input channel (index 0 in weight), no inner loop over n_in_channel
+        vector<CkksPlaintextRingt> a1(kernel_size * stride_next[0] * stride_next[1]);
+        int kernel_count = 0;
+        for (int r_i2 = 0; r_i2 < stride_next[0]; r_i2++) {
+            for (int r_j2 = 0; r_j2 < stride_next[1]; r_j2++) {
+                for (int row_seg_idx = 0; row_seg_idx < stride[0]; row_seg_idx++) {
+                    for (int col_seg_idx = 0; col_seg_idx < stride[1]; col_seg_idx++) {
+                        if (row_seg_idx >= kernel_shape[0] || col_seg_idx >= kernel_shape[1]) {
+                            continue;
+                        }
+                        int split_kernel_shape0 = (kernel_shape0 - 1 - row_seg_idx) / stride0 + 1;
+                        int split_kernel_shape1 = (kernel_shape1 - 1 - col_seg_idx) / stride1 + 1;
+                        for (int u_s = 0; u_s < split_kernel_shape0; u_s++) {
+                            for (int v_s = 0; v_s < split_kernel_shape1; v_s++) {
+                                int kernel_idx_i = u_s * stride[0] + row_seg_idx;
+                                int kernel_idx_j = v_s * stride[1] + col_seg_idx;
+                                auto& mask = kernel_masks[kernel_count];
+                                vector<double> w(N / 2);
+                                for (int linear_idx = 0; linear_idx < input_block_size; ++linear_idx) {
+                                    int shape_i = linear_idx / block_shape[1];
+                                    int shape_j = linear_idx % block_shape[1];
+                                    // Depthwise: weight second index is always 0
+                                    w[linear_idx] = weight.get(out_channel_idx, 0, kernel_idx_i, kernel_idx_j) *
+                                                    mask[shape_i * block_shape[1] + shape_j];
                                 }
+                                a1[kernel_count] = ctx_copy.encode_ringt(w, weight_scale);
+                                kernel_count = kernel_count + 1;
                             }
                         }
                     }
                 }
             }
-            weight_pt[out_channel_idx][in_channel_idx] = move(a1);
         }
+        weight_pt[out_channel_idx] = move(a1);
     });
     vector<vector<double>> feature_tmp_pack(n_out_channel);
     parallel_for(n_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int out_channel_idx) {
@@ -236,7 +237,7 @@ void InverseMultiplexedConv2DLayer::prepare_weight() {
     }
 }
 
-void InverseMultiplexedConv2DLayer::prepare_weight_lazy() {
+void InverseMultiplexedConv2DLayerDepthwise::prepare_weight_lazy() {
     int pad0 = static_cast<int>(padding_shape[0]);
     int pad1 = static_cast<int>(padding_shape[1]);
     int stride0 = static_cast<int>(stride[0]);
@@ -311,10 +312,9 @@ void InverseMultiplexedConv2DLayer::prepare_weight_lazy() {
     }
 }
 
-CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_weight_pt_for_indices(CkksContext& ctx,
-                                                                                 int out_channel_idx,
-                                                                                 int in_channel_idx,
-                                                                                 int kernel_count) const {
+CkksPlaintextRingt InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_for_indices(CkksContext& ctx,
+                                                                                          int out_channel_idx,
+                                                                                          int kernel_count) const {
     int pad0 = static_cast<int>(padding_shape[0]);
     int pad1 = static_cast<int>(padding_shape[1]);
     int stride0 = static_cast<int>(stride[0]);
@@ -325,7 +325,7 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_weight_pt_for_indices
     int kernel_shape1 = static_cast<int>(kernel_shape[1]);
 
     int current_count = 0;
-    int saved_r_i2 = 0, saved_r_j2 = 0, saved_row_seg_idx = 0, saved_col_seg_idx = 0, saved_u_s = 0, saved_v_s = 0;
+    int saved_row_seg_idx = 0, saved_col_seg_idx = 0, saved_u_s = 0, saved_v_s = 0;
     bool found = false;
 
     for (int r_i2 = 0; r_i2 < stride_next[0] && !found; r_i2++) {
@@ -340,8 +340,6 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_weight_pt_for_indices
                     for (int u_s = 0; u_s < split_kernel_shape0 && !found; u_s++) {
                         for (int v_s = 0; v_s < split_kernel_shape1 && !found; v_s++) {
                             if (current_count == kernel_count) {
-                                saved_r_i2 = r_i2;
-                                saved_r_j2 = r_j2;
                                 saved_row_seg_idx = row_seg_idx;
                                 saved_col_seg_idx = col_seg_idx;
                                 saved_u_s = u_s;
@@ -365,14 +363,15 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_weight_pt_for_indices
     for (int linear_idx = 0; linear_idx < cached_input_block_size; ++linear_idx) {
         int shape_i = linear_idx / block_shape[1];
         int shape_j = linear_idx % block_shape[1];
-        w[linear_idx] = weight.get(out_channel_idx, in_channel_idx, kernel_idx_i, kernel_idx_j) *
-                        mask[shape_i * block_shape[1] + shape_j];
+        // Depthwise: weight second index is always 0
+        w[linear_idx] =
+            weight.get(out_channel_idx, 0, kernel_idx_i, kernel_idx_j) * mask[shape_i * block_shape[1] + shape_j];
     }
     return ctx.encode_ringt(w, weight_scale);
 }
 
-CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_bias_pt_for_index(CkksContext& ctx,
-                                                                             int out_channel_idx) const {
+CkksPlaintextRingt InverseMultiplexedConv2DLayerDepthwise::generate_bias_pt_for_index(CkksContext& ctx,
+                                                                                      int out_channel_idx) const {
     vector<double> bias_vec(N / 2, 0.0);
     for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         bias_vec[linear_idx] = bias.get(out_channel_idx);
@@ -380,7 +379,7 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_bias_pt_for_index(Ckk
     return ctx.encode_ringt(bias_vec, ctx.get_parameter().get_default_scale());
 }
 
-CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_repack_mask_pt(CkksContext& ctx) const {
+CkksPlaintextRingt InverseMultiplexedConv2DLayerDepthwise::generate_repack_mask_pt(CkksContext& ctx) const {
     uint32_t output_shape0 = input_shape[0] / orig_stride[0];
     uint32_t output_shape1 = input_shape[1] / orig_stride[1];
     uint32_t out_skip0 = block_shape[0] / output_shape0;
@@ -394,7 +393,7 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_repack_mask_pt(CkksCo
     return ctx.encode_ringt(mask_vec, ctx.get_parameter().get_q(level_ - 1));
 }
 
-std::vector<uint32_t> InverseMultiplexedConv2DLayer::get_used_input_indices() const {
+std::vector<uint32_t> InverseMultiplexedConv2DLayerDepthwise::get_used_input_indices() const {
     std::set<uint32_t> used;
     int pad0 = static_cast<int>(padding_shape[0]);
     int pad1 = static_cast<int>(padding_shape[1]);
@@ -403,8 +402,9 @@ std::vector<uint32_t> InverseMultiplexedConv2DLayer::get_used_input_indices() co
     int sn0 = static_cast<int>(stride_next[0]);
     int sn1 = static_cast<int>(stride_next[1]);
 
-    for (uint32_t n_in_ch = 0; n_in_ch < n_in_channel; n_in_ch++) {
-        uint32_t base = n_in_ch * s0 * s1 * sn0 * sn1;
+    // Depthwise: each output channel uses only its own input channel
+    for (uint32_t n_ch = 0; n_ch < n_in_channel; n_ch++) {
+        uint32_t base = n_ch * s0 * s1 * sn0 * sn1;
         for (int r_i2 = 0; r_i2 < sn0; r_i2++) {
             for (int r_j2 = 0; r_j2 < sn1; r_j2++) {
                 for (int row_seg = 0; row_seg < s0; row_seg++) {
@@ -432,8 +432,10 @@ std::vector<uint32_t> InverseMultiplexedConv2DLayer::get_used_input_indices() co
     return std::vector<uint32_t>(used.begin(), used.end());
 }
 
-vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
-    std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(n_in_channel);
+vector<CkksCiphertext> InverseMultiplexedConv2DLayerDepthwise::run_core(CkksContext& ctx,
+                                                                        const std::vector<CkksCiphertext>& x) {
+    // Depthwise: rotated_x is indexed per output channel (each uses its own input channel)
+    std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(n_out_channel);
     int pad0 = static_cast<int>(padding_shape[0]);
     int pad1 = static_cast<int>(padding_shape[1]);
     int stride0 = static_cast<int>(stride[0]);
@@ -444,8 +446,9 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
     int kernel_shape1 = static_cast<int>(kernel_shape[1]);
     int block_shape1 = static_cast<int>(block_shape[1]);
 
-    parallel_for(n_in_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int in_channel_idx) {
-        int base_in_ct_idx = in_channel_idx * stride[0] * stride[1] * stride_next[0] * stride_next[1];
+    // Depthwise: each output channel rotates its own corresponding input channel
+    parallel_for(n_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int out_channel_idx) {
+        int base_in_ct_idx = out_channel_idx * stride[0] * stride[1] * stride_next[0] * stride_next[1];
         for (int r_i2 = 0; r_i2 < stride_next[0]; r_i2++) {
             for (int r_j2 = 0; r_j2 < stride_next[1]; r_j2++) {
                 for (int row_seg_idx = 0; row_seg_idx < stride[0]; row_seg_idx++) {
@@ -472,7 +475,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
 
                                 long step = row_step * block_shape1 + col_step;
                                 CkksCiphertext res_temp = ctx_copy.rotate(x[in_ct_idx], step);
-                                rotated_x[in_channel_idx].push_back(move(res_temp));
+                                rotated_x[out_channel_idx].push_back(move(res_temp));
                             }
                         }
                     }
@@ -497,29 +500,29 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
                 CkksCiphertext s(0);
                 int out_ct_idx = ct_idx * stride_next[0] * stride_next[1] + r_i2 * stride_next[1] + r_j2;
                 int base_idx = (r_i2 * stride_next[1] + r_j2) * kernel_shape[0] * kernel_shape[1];
-                uint32_t n_j = weight_pt.empty() ? n_in_channel : weight_pt[ct_idx].size();
-                for (int j = 0; j < n_j; j++) {
-                    for (int k = 0; k < kernel_shape[0] * kernel_shape[1]; k++) {
-                        if (weight_pt.empty()) {
-                            auto w_pt_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, j, k + base_idx);
-                            auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
-                            cxx_sdk_v2::CkksCiphertext one_mult_res =
-                                ctx_copy.mult_plain_mul(rotated_x[j][k + base_idx], w_pt);
-                            if (j == 0 && k == 0) {
-                                s = move(one_mult_res);
-                            } else {
-                                s = ctx_copy.add(s, one_mult_res);
-                            }
+                // Depthwise: no inner loop over n_in_channel, each output channel uses its own input
+                uint32_t n_k = weight_pt.empty() ? kernel_shape[0] * kernel_shape[1] :
+                                                   weight_pt[ct_idx].size() / (stride_next[0] * stride_next[1]);
+                for (int k = 0; k < n_k; k++) {
+                    if (weight_pt.empty()) {
+                        auto w_pt_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, k + base_idx);
+                        auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
+                        cxx_sdk_v2::CkksCiphertext one_mult_res =
+                            ctx_copy.mult_plain_mul(rotated_x[ct_idx][k + base_idx], w_pt);
+                        if (k == 0) {
+                            s = move(one_mult_res);
                         } else {
-                            cxx_sdk_v2::CkksPlaintextRingt& w_pt_rt = weight_pt[ct_idx][j][k + base_idx];
-                            cxx_sdk_v2::CkksPlaintextMul w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
-                            cxx_sdk_v2::CkksCiphertext one_mult_res =
-                                ctx_copy.mult_plain_mul(rotated_x[j][k + base_idx], w_pt);
-                            if (j == 0 && k == 0) {
-                                s = move(one_mult_res);
-                            } else {
-                                s = ctx_copy.add(s, one_mult_res);
-                            }
+                            s = ctx_copy.add(s, one_mult_res);
+                        }
+                    } else {
+                        cxx_sdk_v2::CkksPlaintextRingt& w_pt_rt = weight_pt[ct_idx][k + base_idx];
+                        cxx_sdk_v2::CkksPlaintextMul w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
+                        cxx_sdk_v2::CkksCiphertext one_mult_res =
+                            ctx_copy.mult_plain_mul(rotated_x[ct_idx][k + base_idx], w_pt);
+                        if (k == 0) {
+                            s = move(one_mult_res);
+                        } else {
+                            s = ctx_copy.add(s, one_mult_res);
                         }
                     }
                 }
@@ -606,7 +609,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
     return res;
 }
 
-Feature2DEncrypted InverseMultiplexedConv2DLayer::run(CkksContext& ctx, const Feature2DEncrypted& x) {
+Feature2DEncrypted InverseMultiplexedConv2DLayerDepthwise::run(CkksContext& ctx, const Feature2DEncrypted& x) {
     Feature2DEncrypted result(&ctx, x.level);
     result.shape[0] = x.shape[0] / orig_stride[0];
     result.shape[1] = x.shape[1] / orig_stride[1];
@@ -630,42 +633,37 @@ Feature2DEncrypted InverseMultiplexedConv2DLayer::run(CkksContext& ctx, const Fe
     return result;
 }
 
-Array<double, 3> InverseMultiplexedConv2DLayer::run_plaintext(const Array<double, 3>& x, double multiplier) {
+Array<double, 3> InverseMultiplexedConv2DLayerDepthwise::run_plaintext(const Array<double, 3>& x, double multiplier) {
     double value = 1.0 / multiplier;
 
     auto x_shape = x.get_shape();
     input_shape[0] = x_shape[1];
     input_shape[1] = x_shape[2];
+    // Depthwise: padded_input indexed by out_channel (== in_channel)
     vector<vector<vector<double>>> padded_input(
-        n_in_channel, vector<vector<double>>(input_shape[0] + padding_shape[0] * 2,
-                                             vector<double>(input_shape[1] + padding_shape[1] * 2, 0.0)));
-    for (int in_channel_idx = 0; in_channel_idx < n_in_channel; in_channel_idx++) {
+        n_out_channel, vector<vector<double>>(input_shape[0] + padding_shape[0] * 2,
+                                              vector<double>(input_shape[1] + padding_shape[1] * 2, 0.0)));
+    for (int channel_idx = 0; channel_idx < n_out_channel; channel_idx++) {
         for (int i = 0; i < input_shape[0]; i++) {
             for (int j = 0; j < input_shape[1]; j++) {
-                padded_input[in_channel_idx][i + padding_shape[0]][j + padding_shape[1]] = x.get(in_channel_idx, i, j);
+                padded_input[channel_idx][i + padding_shape[0]][j + padding_shape[1]] = x.get(channel_idx, i, j);
             }
         }
     }
     uint32_t output_shape[]{input_shape[0] / orig_stride[0], input_shape[1] / orig_stride[1]};
     Array<double, 3> result({n_out_channel, output_shape[0], output_shape[1]});
     for (int out_channel_idx = 0; out_channel_idx < n_out_channel; out_channel_idx++) {
-        vector<vector<double>> output_channel(output_shape[0], vector<double>(output_shape[1], bias[out_channel_idx]));
-        for (int in_channel_idx = 0; in_channel_idx < n_in_channel; in_channel_idx++) {
-            for (int i = 0; i < output_shape[0]; i++) {
-                for (int j = 0; j < output_shape[1]; j++) {
-                    for (int ki = 0; ki < kernel_shape[0]; ki++) {
-                        for (int kj = 0; kj < kernel_shape[1]; kj++) {
-                            output_channel[i][j] +=
-                                padded_input[in_channel_idx][i * orig_stride[0] + ki][j * orig_stride[1] + kj] *
-                                (weight.get(out_channel_idx, in_channel_idx, ki, kj) * value);
-                        }
-                    }
-                }
-            }
-        }
+        // Depthwise: each output channel only convolves with its own input channel, no sum across channels
         for (int i = 0; i < output_shape[0]; i++) {
             for (int j = 0; j < output_shape[1]; j++) {
-                result.set(out_channel_idx, i, j, output_channel[i][j]);
+                double r = bias[out_channel_idx];
+                for (int ki = 0; ki < kernel_shape[0]; ki++) {
+                    for (int kj = 0; kj < kernel_shape[1]; kj++) {
+                        r += padded_input[out_channel_idx][i * orig_stride[0] + ki][j * orig_stride[1] + kj] *
+                             (weight.get(out_channel_idx, 0, ki, kj) * value);
+                    }
+                }
+                result.set(out_channel_idx, i, j, r);
             }
         }
     }
