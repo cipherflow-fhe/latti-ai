@@ -32,46 +32,19 @@ log = logging.getLogger(__name__)
 
 def replace_activation(
     module: nn.Module,
-    old_cls: Type[nn.Module] = nn.ReLU,
-    new_module_factory: Callable = RangeNormPoly2d,
-    upper_bound: float = 3.0,
-    degree: int = 4,
-    activation: str = 'relu',
+    old_cls: Type[nn.Module],
+    new_module_factory: Callable,
+    upper_bound: float,
+    hermite_coeffs: tuple,
 ):
-    """Replace all *old_cls* activations with *new_module_factory*.
-
-    Channel count is automatically inferred at the first forward pass
-    via lazy initialization in ``RangeNormPoly2d``.
-
-    Args:
-        module:             Model to modify in-place.
-        old_cls:            Activation class to replace (default ``nn.ReLU``).
-        new_module_factory: Constructor ``(upper_bound, degree, activation) -> nn.Module``.
-        upper_bound:        Normalization upper bound.
-        degree:             Polynomial degree.
-        activation:         Target activation name ('relu' or 'silu').
-
-    Example::
-
-        >>> model = resnet18()
-        >>> replace_activation(model, nn.ReLU, RangeNormPoly2d, upper_bound=3.0, degree=4)
-    """
+    """Replace all *old_cls* activations with *new_module_factory* in-place."""
     for name, child in list(module.named_children()):
-        replace_activation(
-            child,
-            old_cls=old_cls,
-            new_module_factory=new_module_factory,
-            upper_bound=upper_bound,
-            degree=degree,
-            activation=activation,
-        )
+        replace_activation(child, old_cls, new_module_factory, upper_bound, hermite_coeffs)
 
         if isinstance(child, old_cls):
-            new_module = new_module_factory(upper_bound=upper_bound, degree=degree, activation=activation)
+            new_module = new_module_factory(hermite_coeffs=hermite_coeffs, upper_bound=upper_bound)
             setattr(module, name, new_module)
-            log.debug(
-                'Replaced %s: %s -> %s(activation=%s)', name, old_cls.__name__, new_module_factory.__name__, activation
-            )
+            log.debug('Replaced %s: %s -> %s', name, old_cls.__name__, new_module_factory.__name__)
 
 
 def replace_activation_with_poly(
@@ -81,51 +54,38 @@ def replace_activation_with_poly(
     upper_bound: float = 3.0,
     degree: int = 4,
 ) -> nn.Module:
-    """Replace all instances of *old_cls* activation with ``RangeNormPoly2d``.
+    """Replace all instances of *old_cls* activation with polynomial activation.
 
-    Supported activation classes: ``nn.ReLU`` and ``nn.SiLU``.
-    Channel count is automatically inferred at the first forward pass
-    via lazy initialization.
+    Supports any ``nn.Module`` activation class. Hermite expansion coefficients
+    are computed automatically via numerical integration by instantiating the
+    activation module and evaluating it.
 
     Args:
         model:       PyTorch model (modified in-place).
         old_cls:     Activation class to replace (default ``nn.ReLU``).
-                     Supported: ``nn.ReLU``, ``nn.SiLU``.
         upper_bound: Normalization upper bound.
-        degree:      Polynomial degree (2 or 4).
+        degree:      Polynomial degree.
 
     Returns:
         The same model with activations replaced.
-
-    Raises:
-        ValueError: If *old_cls* is not ``nn.ReLU`` or ``nn.SiLU``.
 
     Example::
 
         >>> model = resnet20()
         >>> replace_activation_with_poly(model, old_cls=nn.ReLU)
-        >>> # or replace SiLU activations
-        >>> replace_activation_with_poly(model, old_cls=nn.SiLU, degree=4)
+        >>> replace_activation_with_poly(model, old_cls=nn.GELU, degree=4)
     """
-    _supported = (nn.ReLU, nn.ReLU6, nn.SiLU)
-    if old_cls not in _supported:
-        raise ValueError(
-            f'Unsupported activation class: {old_cls.__name__}. '
-            f'Supported: {", ".join(c.__name__ for c in _supported)}. '
-            f'For other activations, use Chebyshev polynomial fitting.'
-        )
+    from .eval_fn_hat_for_aespa import get_hermite_coeffs_for_module
 
-    _activation_map = {nn.ReLU: 'relu', nn.ReLU6: 'relu', nn.SiLU: 'silu'}
-    activation = _activation_map[old_cls]
-
-    replace_activation(
-        model,
-        old_cls=old_cls,
-        new_module_factory=new_module_factory,
-        upper_bound=upper_bound,
-        degree=degree,
-        activation=activation,
+    hermite_coeffs = get_hermite_coeffs_for_module(old_cls, degree=degree)
+    log.info(
+        'Hermite coefficients for %s (degree=%d): %s',
+        old_cls.__name__,
+        degree,
+        ', '.join(f'{c:.8f}' for c in hermite_coeffs),
     )
+
+    replace_activation(model, old_cls, new_module_factory, upper_bound, hermite_coeffs)
     return model
 
 
