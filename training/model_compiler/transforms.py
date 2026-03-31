@@ -195,8 +195,8 @@ def add_layer(
     )
     feature_node_out.sp_info = feature_node_in.sp_info.copy()
 
-    if hasattr(feature_node_in, 'node_index'):
-        feature_node_out.node_index = feature_node_in.node_index
+    if hasattr(feature_node_in, 'multi_input_index'):
+        feature_node_out.multi_input_index = feature_node_in.multi_input_index
 
     if insert_node:
         new_compute_node = insert_node
