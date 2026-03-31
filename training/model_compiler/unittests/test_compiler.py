@@ -459,6 +459,11 @@ class TestSingleLayer(CompilerTestBase):
                     break
         self.assertEqual(res, True)
 
+    def test_single_dw_conv_big_size(self):
+        model = nn_modules.DepthwiseConv(channels=32, stride=2)
+        graph, score = self._export_and_compile(model, (1, 32, 256, 256), style='multiplexed')
+        self.assertTrue(any(node.is_big_size for node in graph.dag.nodes if isinstance(node, ConvComputeNode)))
+
 
 class TestLayerInteraction(CompilerTestBase):
     def test_mismatched_scale(self):
@@ -929,6 +934,14 @@ class TestE2E(CompilerTestBase):
         model = nn_modules.SingleConv(2)
         graph, score = self._export_compile_and_deploy(
             model, (1, 32, 256, 256), 'single_conv_with_stride_big_size', style='multiplexed'
+        )
+        self.assertIsNotNone(graph)
+
+    def test_e2e_dw_conv_big_size(self):
+        """Depthwise conv stride=2 with big_size input (256x256), multiplexed."""
+        model = nn_modules.DepthwiseConv(channels=32, stride=2)
+        graph, score = self._export_compile_and_deploy(
+            model, (1, 32, 256, 256), 'dw_conv_big_size', style='multiplexed'
         )
         self.assertIsNotNone(graph)
 

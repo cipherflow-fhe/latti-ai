@@ -471,6 +471,87 @@ class TestLayerExport(unittest.TestCase):
                         / 'server',
                     )
 
+    def test_inverse_mux_dw_conv(self):
+        N = 16384
+
+        skip = [1, 1]
+        padding = [-1, -1]
+        init_level = 1
+
+        kernel_shapes = [[3, 3], [5, 5]]
+        strides = [[1, 1], [2, 2]]
+        block_shapes = [[64, 64]]
+        multipliers = [2, 4]
+        n_channels = [2, 3, 5, 8]
+
+        for kernel_shape in kernel_shapes:
+            for stride in strides:
+                for block_shape in block_shapes:
+                    for mult in multipliers:
+                        input_shape = [block_shape[0] * mult, block_shape[1] * mult]
+
+                        for n_channel in n_channels:
+                            set_param('PN14QP438')
+
+                            next_stride = [
+                                input_shape[0] // (block_shape[0] * stride[0]),
+                                input_shape[1] // (block_shape[1] * stride[1]),
+                            ]
+
+                            n_block_per_channel = next_stride[0] * next_stride[1] * stride[0] * stride[1]
+                            n_ct_in = n_channel * n_block_per_channel
+                            level = init_level
+
+                            print(
+                                f'sub-test: kernel_shape={kernel_shape}, stride={stride}, '
+                                f'block_shape={block_shape}, input_shape={input_shape}, '
+                                f'ch={n_channel}'
+                            )
+
+                            input_ct = [CkksCiphertextNode(f'input_0input{k}', level=level) for k in range(n_ct_in)]
+
+                            index = kernel_shape[0] * kernel_shape[1]
+                            # Depthwise: weight_pt is 2D [out_ch][kernel], no n_in_channel dimension
+                            weight_pt = [
+                                [
+                                    CkksPlaintextRingtNode(f'convw__conv1_{k}_{i}')
+                                    for i in range(int(index * next_stride[0] * next_stride[1]))
+                                ]
+                                for k in range(n_channel)
+                            ]
+                            bias_pt = [CkksPlaintextRingtNode(f'convb__conv1_{i}') for i in range(n_channel)]
+
+                            big_conv = InverseMultiplexedDepthwiseConv2DLayer(
+                                n_channel,
+                                input_shape,
+                                padding,
+                                kernel_shape,
+                                stride,
+                                next_stride,
+                                skip,
+                                block_shape,
+                            )
+
+                            output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N)
+
+                            input_args = list()
+                            input_args.append(Argument('input_0', input_ct))
+                            input_args.append(Argument('convw__conv1', weight_pt))
+                            input_args.append(Argument('convb__conv1', bias_pt))
+
+                            process_custom_task(
+                                input_args=input_args,
+                                output_args=[Argument('output', output_ct)],
+                                output_instruction_path=base_path
+                                / 'CKKS_inverse_multiplexed_dw_conv2d'
+                                / f'stride_{stride[0]}_{stride[1]}'
+                                / f'kernel_shape_{kernel_shape[0]}_{kernel_shape[1]}'
+                                / f'cin_{n_channel}_cout_{n_channel}'
+                                / f'input_shape_{input_shape[0]}_{input_shape[1]}'
+                                / f'level_{init_level}'
+                                / 'server',
+                            )
+
     def test_poly_bsgs(self):
         N = 16384
         set_param('PN14QP438')
