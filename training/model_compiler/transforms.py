@@ -62,10 +62,11 @@ def _insert_layer_between_feature_and_compute(
     dag.add_node(new_compute, **new_compute_args)
     dag.add_node(new_feature, **new_feature_args)
 
+    old_edge_attrs = dag.edges[old_feature, old_compute]
     dag.remove_edge(old_feature, old_compute)
     dag.add_edge(old_feature, new_compute)
     dag.add_edge(new_compute, new_feature)
-    dag.add_edge(new_feature, old_compute)
+    dag.add_edge(new_feature, old_compute, **old_edge_attrs)
 
 
 def _insert_layer_after_feature(
@@ -194,9 +195,6 @@ def add_layer(
         shape,
     )
     feature_node_out.sp_info = feature_node_in.sp_info.copy()
-
-    if hasattr(feature_node_in, 'multi_input_index'):
-        feature_node_out.multi_input_index = feature_node_in.multi_input_index
 
     if insert_node:
         new_compute_node = insert_node
