@@ -206,7 +206,11 @@ def prepare_for_fhe(
         if has_lazy:
             model.eval()
             with torch.no_grad():
-                model(torch.randn(*input_size))
+                multi_input = isinstance(input_size[0], (list, tuple))
+                if multi_input:
+                    model(*[torch.randn(*s) for s in input_size])
+                else:
+                    model(torch.randn(*input_size))
 
     return model
 
