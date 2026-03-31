@@ -318,9 +318,6 @@ class FeatureNode:
         self.ckks_scale = ckks_scale
         self.shape = shape
         self.ckks_parameter_id = ckks_parameter_id
-        self.multi_input_index = (
-            -1
-        )  # position in the feature_input list of the nearest downstream multi-input node (e.g. concat2d, add2d)
         self.depth = -1
         self.is_total_graph_leading_node = False
         self.scale_up = 1
@@ -686,10 +683,6 @@ class LayerAbstractGraph:
             feature_input = [feature_dict[fid] for fid in layer_json['feature_input']]
             feature_output = [feature_dict[fid] for fid in layer_json['feature_output']]
 
-            if len(feature_input) > 1:
-                for idx, f_node in enumerate(feature_input):
-                    f_node.multi_input_index = idx
-
             running_mean_path = None
             running_var_path = None
 
@@ -807,7 +800,8 @@ class LayerAbstractGraph:
                 compute_node = ComputeNode(key, layer_type, channel_input, channel_output)
 
             graph_info.dag.add_node(compute_node, name=key)
-            graph_info.dag.add_edges_from([(node, compute_node) for node in feature_input])
+            for idx, f_node in enumerate(feature_input):
+                graph_info.dag.add_edge(f_node, compute_node, input_index=idx if len(feature_input) > 1 else None)
             graph_info.dag.add_edges_from([(compute_node, node) for node in feature_output])
 
         if is_fpga:
@@ -877,10 +871,10 @@ class LayerAbstractGraph:
                 or 'identity' == layer_type
             ):
                 if 'concat2d' == layer_type or 'add' in layer_type:
-                    # Restore the original input ordering using multi_input_index, which is set at parse time
-                    # and propagated through inserted intermediate nodes (drop_level, bootstrapping, etc.).
-                    if all(n.multi_input_index >= 0 for n in preds):
-                        input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: n.multi_input_index)]
+                    # Restore the original input ordering using input_index stored on each edge.
+                    edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
+                    if all(v is not None for v in edge_indices.values()):
+                        input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: edge_indices[n])]
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,

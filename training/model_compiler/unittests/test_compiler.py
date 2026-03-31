@@ -265,6 +265,33 @@ class CompilerTestBase(unittest.TestCase):
     temp_json_path = script_dir / 'temp.json'
     e2e_base_path = project_root / 'build' / 'inference' / 'hetero_e2e'
 
+    def _check_concat_input_ordering(self, graph: LayerAbstractGraph, raw_json_path):
+        """Assert every concat2d node in *graph* preserves the input ordering from *raw_json_path*."""
+        raw_graph = LayerAbstractGraph.from_json(str(raw_json_path))
+
+        raw_concat_inputs: dict[str, list[str]] = {}
+        for node in raw_graph.dag.nodes:
+            if isinstance(node, ComputeNode) and node.layer_type == 'concat2d':
+                raw_concat_inputs[node.layer_id] = [p.node_id for p in raw_graph.dag.predecessors(node)]
+
+        for node in graph.dag.nodes:
+            if not (isinstance(node, ComputeNode) and node.layer_type == 'concat2d'):
+                continue
+            if node.layer_id not in raw_concat_inputs:
+                continue
+            compiled_ids = [
+                p.node_id
+                for p in sorted(
+                    graph.dag.predecessors(node),
+                    key=lambda p: graph.dag.edges[p, node]['input_index'],
+                )
+            ]
+            self.assertEqual(
+                compiled_ids,
+                raw_concat_inputs[node.layer_id],
+                f'concat {node.layer_id} input order changed after compilation',
+            )
+
     def _export_and_compile(
         self,
         model,
@@ -701,6 +728,17 @@ class TestCompiler(CompilerTestBase):
         subs = split_graph_to_linear_subgraph(pt_graph.dag)
         self.assertEqual(len(subs), 2)
 
+    def test_conv_concat_conv(self):
+        """Shared-input concat structure with final add:
+        concat1: [conv1_out, conv2_out] → 16ch
+        concat2: [conv2_out, conv3_out, conv4_out] → 16ch  (conv2_out shared)
+        add:     concat1_out + concat2_out
+        """
+        model = nn_modules.ConvConcatConv()
+        graph, score = self._export_and_compile(model, (1, 16, 32, 32))
+        # temp_json_path still holds the pre-pipeline JSON at this point
+        self._check_concat_input_ordering(graph, self.temp_json_path)
+
 
 class TestCompilerErrors(CompilerTestBase):
     """Tests that verify the compiler raises the correct errors on invalid inputs."""
@@ -1020,6 +1058,12 @@ class TestE2E(CompilerTestBase):
         model = nn_modules.MutipleInputs()
         input_sizes = [(1, 32, 64, 64)] * model.n_inputs
         graph, score = self._export_compile_and_deploy(model, input_sizes, 'multiple_inputs', style='multiplexed')
+        self.assertIsNotNone(graph)
+
+    def test_e2e_conv_concat_conv(self):
+        """Shared-input concat structure with final add."""
+        model = nn_modules.ConvConcatConv()
+        graph, score = self._export_compile_and_deploy(model, (1, 16, 32, 32), 'conv_concat_conv')
         self.assertIsNotNone(graph)
 
 
