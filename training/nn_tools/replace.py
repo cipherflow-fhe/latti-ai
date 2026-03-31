@@ -25,6 +25,7 @@ from typing import Type, Callable
 import torch.nn as nn
 
 from .activations import RangeNormPoly2d, Simple_Polyrelu
+from .modules import DepthwiseAvgPool2d
 
 log = logging.getLogger(__name__)
 
@@ -162,6 +163,104 @@ def replace_maxpool_with_avgpool(model: nn.Module) -> nn.Module:
     return model
 
 
+def _is_power_of_2(n: int) -> bool:
+    return n > 0 and (n & (n - 1)) == 0
+
+
+def _needs_depthwise_replacement(pool: nn.AvgPool2d) -> bool:
+    """Return True if this AvgPool2d cannot be handled by the FHE multiplexed avgpool.
+
+    The multiplexed avgpool requires stride == kernel_size and both are powers of 2.
+    Any other configuration must be replaced with a depthwise convolution.
+    """
+    ks = pool.kernel_size if isinstance(pool.kernel_size, (tuple, list)) else (pool.kernel_size, pool.kernel_size)
+    st = pool.stride if isinstance(pool.stride, (tuple, list)) else (pool.stride, pool.stride)
+
+    if ks[0] != st[0] or ks[1] != st[1]:
+        return True
+    if not _is_power_of_2(ks[0]) or not _is_power_of_2(ks[1]):
+        return True
+    return False
+
+
+def _replace_general_avgpool_recursive(model: nn.Module, freeze: bool) -> None:
+    for name, child in list(model.named_children()):
+        _replace_general_avgpool_recursive(child, freeze=freeze)
+
+        if isinstance(child, nn.AvgPool2d) and _needs_depthwise_replacement(child):
+            ks = (
+                child.kernel_size
+                if isinstance(child.kernel_size, (tuple, list))
+                else (child.kernel_size, child.kernel_size)
+            )
+            st = child.stride if isinstance(child.stride, (tuple, list)) else (child.stride, child.stride)
+            pad = child.padding if isinstance(child.padding, (tuple, list)) else (child.padding, child.padding)
+
+            dw = DepthwiseAvgPool2d(
+                kernel_size=ks,
+                stride=st,
+                padding=pad,
+                freeze=freeze,
+            )
+            setattr(model, name, dw)
+            log.debug(
+                'Replaced %s: AvgPool2d -> DepthwiseAvgPool2d(kernel=%s, stride=%s, padding=%s)',
+                name,
+                ks,
+                st,
+                pad,
+            )
+
+
+def replace_general_avgpool_with_depthwise_conv(
+    model: nn.Module,
+    input_size: tuple,
+    freeze: bool = True,
+) -> nn.Module:
+    """Replace general ``nn.AvgPool2d`` with ``DepthwiseAvgPool2d`` in-place.
+
+    A "general" AvgPool is one where ``kernel_size != stride`` or
+    ``kernel_size`` is not a power of 2.  These cannot be evaluated by the
+    FHE multiplexed avgpool operator, so they are converted to an
+    equivalent depthwise separable convolution with fixed weights
+    ``1 / (k0 * k1)`` and zero bias.
+
+    AvgPool layers where ``kernel_size == stride`` and both are powers of 2
+    are left unchanged (handled by the existing multiplexed avgpool).
+
+    This function should be called **after training** and **before ONNX
+    export**, so that training accuracy is not affected.
+
+    Args:
+        model:      PyTorch model (modified in-place).
+        input_size: Model input shape (e.g. ``(1, 3, 32, 32)``), used to
+                    run a dummy forward pass that initialises the depthwise
+                    conv layers.
+        freeze:     If ``True`` (default), the depthwise conv weights are
+                    frozen.
+
+    Returns:
+        The same model with general AvgPool layers replaced.
+
+    Example::
+
+        >>> model = resnet18()
+        >>> replace_general_avgpool_with_depthwise_conv(model, input_size=(1, 3, 32, 32))
+    """
+    import torch
+
+    _replace_general_avgpool_recursive(model, freeze=freeze)
+
+    # Trigger lazy init of DepthwiseAvgPool2d via a dummy forward pass
+    has_lazy = any(isinstance(m, DepthwiseAvgPool2d) and m.conv is None for m in model.modules())
+    if has_lazy:
+        model.eval()
+        with torch.no_grad():
+            model(torch.randn(*input_size))
+
+    return model
+
+
 def prepare_for_fhe(
     model: nn.Module,
     poly_module=RangeNormPoly2d,
@@ -171,14 +270,15 @@ def prepare_for_fhe(
 ) -> nn.Module:
     """Convert a standard PyTorch model to be FHE-compatible.
 
-    Performs two in-place replacements:
+    Performs three in-place replacements:
 
     1. ``nn.MaxPool2d`` → ``nn.AvgPool2d``
-    2. ``nn.ReLU`` → *poly_module* (default ``RangeNormPoly2d``)
+    2. General ``nn.AvgPool2d`` → ``DepthwiseAvgPool2d`` (depthwise conv)
+    3. ``nn.ReLU`` → *poly_module* (default ``RangeNormPoly2d``)
 
     When *input_size* is provided, a dummy forward pass is run to trigger
-    lazy initialization of ``RangeNormPoly2d`` buffers (required before
-    ONNX export).
+    lazy initialization of ``RangeNormPoly2d`` and ``DepthwiseAvgPool2d``
+    buffers (required before ONNX export).
 
     Args:
         model:       PyTorch model (modified in-place).
@@ -199,11 +299,13 @@ def prepare_for_fhe(
     import torch
 
     replace_maxpool_with_avgpool(model)
+    _replace_general_avgpool_recursive(model, freeze=True)
     replace_activation_with_poly(model, new_module_factory=poly_module, upper_bound=upper_bound, degree=degree)
 
     if input_size is not None:
-        has_lazy = any(isinstance(m, RangeNormPoly2d) and m.rangenorm.running_max is None for m in model.modules())
-        if has_lazy:
+        has_lazy_poly = any(isinstance(m, RangeNormPoly2d) and m.rangenorm.running_max is None for m in model.modules())
+        has_lazy_dw = any(isinstance(m, DepthwiseAvgPool2d) and m.conv is None for m in model.modules())
+        if has_lazy_poly or has_lazy_dw:
             model.eval()
             with torch.no_grad():
                 multi_input = isinstance(input_size[0], (list, tuple))

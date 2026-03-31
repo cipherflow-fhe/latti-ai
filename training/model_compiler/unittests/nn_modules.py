@@ -716,3 +716,15 @@ class AvgpoolVariedStride(nn.Module):
     def forward(self, x):
         x = self.pool(x)
         return x
+
+
+class GeneralAvgpool(nn.Module):
+    """General avgpool where kernel_size != stride (replaced with depthwise conv for FHE)."""
+
+    def __init__(self, kernel_size=3, stride=2, padding=1):
+        super().__init__()
+        self.pool = nn.AvgPool2d(kernel_size=kernel_size, stride=stride, padding=padding)
+
+    def forward(self, x):
+        x = self.pool(x)
+        return x

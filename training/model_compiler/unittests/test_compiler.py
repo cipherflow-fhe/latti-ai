@@ -1078,6 +1078,17 @@ class TestE2E(CompilerTestBase):
         model = nn_modules.ConvConcatConv()
         graph, score = self._export_compile_and_deploy(model, (1, 16, 32, 32), 'conv_concat_conv')
         self.assertIsNotNone(graph)
+        
+    def test_e2e_general_avgpool(self):
+        """General avgpool (kernel_size=3, stride=2) replaced with depthwise conv for FHE."""
+        model = nn_modules.GeneralAvgpool(kernel_size=3, stride=2, padding=1)
+        graph, score = self._export_compile_and_deploy(
+            model,
+            (1, 32, 8, 8),
+            'general_avgpool',
+            style='multiplexed',
+        )
+        self.assertIsNotNone(graph)
 
 
 if __name__ == '__main__':

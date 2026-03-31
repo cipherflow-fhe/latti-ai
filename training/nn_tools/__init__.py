@@ -20,7 +20,14 @@ suitable for encrypted inference, and export models to ONNX / H5 formats.
 """
 
 from .activations import RangeNorm2d, Simple_Polyrelu, RangeNormPoly2d
-from .replace import replace_activation, replace_activation_with_poly, replace_maxpool_with_avgpool, prepare_for_fhe
+from .modules import DepthwiseAvgPool2d
+from .replace import (
+    replace_activation,
+    replace_activation_with_poly,
+    replace_maxpool_with_avgpool,
+    replace_general_avgpool_with_depthwise_conv,
+    prepare_for_fhe,
+)
 from .export import (
     export_to_onnx,
     save_onnx_weights_to_h5,
@@ -34,10 +41,13 @@ __all__ = [
     'RangeNorm2d',
     'Simple_Polyrelu',
     'RangeNormPoly2d',
+    # Modules
+    'DepthwiseAvgPool2d',
     # Replace
     'replace_activation',
     'replace_activation_with_poly',
     'replace_maxpool_with_avgpool',
+    'replace_general_avgpool_with_depthwise_conv',
     'prepare_for_fhe',
     # Export
     'export_to_onnx',
