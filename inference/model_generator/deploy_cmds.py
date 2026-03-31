@@ -31,6 +31,7 @@ from inference.model_generator.layers.conv2d_depthwise import *
 from inference.model_generator.layers.conv2d_packed_layer import *
 from inference.model_generator.layers.dense_packed_layer import *
 from inference.model_generator.layers.inverse_multiplexed_conv2d_layer import *
+from inference.model_generator.layers.inverse_multiplexed_depthwise_conv2d_layer import *
 from inference.model_generator.layers.mult_scaler import *
 from inference.model_generator.layers.multiplexed_conv1d_pack_layer import *
 from inference.model_generator.layers.multiplexed_conv2d_pack_layer import *
@@ -152,28 +153,48 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             next_stride = [block_expansion[0] // stride[0], block_expansion[1] // stride[1]]
             padding = [-1, -1]
             if is_big_conv:
-                big_conv = InverseMultiplexedConv2DLayer(
-                    n_out_channel,
-                    n_in_channel,
-                    input_shape,
-                    padding,
-                    kernel_shape,
-                    stride,
-                    next_stride,
-                    skip,
-                    block_shape,
-                )
+                if groups == n_out_channel and groups != 1:
+                    big_conv = InverseMultiplexedDepthwiseConv2DLayer(
+                        n_out_channel,
+                        input_shape,
+                        padding,
+                        kernel_shape,
+                        stride,
+                        next_stride,
+                        skip,
+                        block_shape,
+                    )
 
-                weight_pt = [
-                    [
+                    weight_pt = [
                         [
-                            CkksPlaintextRingtNode(f'convw_{layer_id}_{k}_{n}_{i}')
+                            CkksPlaintextRingtNode(f'convw_{layer_id}_{k}_{i}')
                             for i in range(int(index * next_stride[0] * next_stride[1]))
                         ]
-                        for n in range(n_in_channel)
+                        for k in range(n_out_channel)
                     ]
-                    for k in range(n_out_channel)
-                ]
+                else:
+                    big_conv = InverseMultiplexedConv2DLayer(
+                        n_out_channel,
+                        n_in_channel,
+                        input_shape,
+                        padding,
+                        kernel_shape,
+                        stride,
+                        next_stride,
+                        skip,
+                        block_shape,
+                    )
+
+                    weight_pt = [
+                        [
+                            [
+                                CkksPlaintextRingtNode(f'convw_{layer_id}_{k}_{n}_{i}')
+                                for i in range(int(index * next_stride[0] * next_stride[1]))
+                            ]
+                            for n in range(n_in_channel)
+                        ]
+                        for k in range(n_out_channel)
+                    ]
 
                 bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_out_channel)]
 
