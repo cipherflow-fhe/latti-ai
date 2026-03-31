@@ -31,6 +31,7 @@ from inference.model_generator.layers.conv2d_depthwise import *
 from inference.model_generator.layers.conv2d_packed_layer import *
 from inference.model_generator.layers.dense_packed_layer import *
 from inference.model_generator.layers.inverse_multiplexed_conv2d_layer import *
+from inference.model_generator.layers.inverse_multiplexed_depthwise_conv2d_layer import *
 from inference.model_generator.layers.mult_scaler import *
 from inference.model_generator.layers.multiplexed_conv1d_pack_layer import *
 from inference.model_generator.layers.multiplexed_conv2d_pack_layer import *
@@ -141,17 +142,29 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             next_stride = [block_expansion[0] // stride[0], block_expansion[1] // stride[1]]
             padding = [-1, -1]
             if is_big_conv:
-                big_conv = InverseMultiplexedConv2DLayer(
-                    n_out_channel,
-                    n_in_channel,
-                    input_shape,
-                    padding,
-                    kernel_shape,
-                    stride,
-                    next_stride,
-                    skip,
-                    block_shape,
-                )
+                if groups == n_out_channel and groups != 1:
+                    big_conv = InverseMultiplexedDepthwiseConv2DLayer(
+                        n_out_channel,
+                        input_shape,
+                        padding,
+                        kernel_shape,
+                        stride,
+                        next_stride,
+                        skip,
+                        block_shape,
+                    )
+                else:
+                    big_conv = InverseMultiplexedConv2DLayer(
+                        n_out_channel,
+                        n_in_channel,
+                        input_shape,
+                        padding,
+                        kernel_shape,
+                        stride,
+                        next_stride,
+                        skip,
+                        block_shape,
+                    )
 
                 weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes(layer_id)
 

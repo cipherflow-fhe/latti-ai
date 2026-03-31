@@ -370,15 +370,15 @@ void InitInferenceProcess::init_multiplexed_conv_layer(const string& key,
                 padding.set(0, -1);
                 padding.set(1, -1);
             }
-            auto inv_conv_layer = make_unique<InverseMultiplexedConv2DLayer>(
+            auto inv_dw_conv_layer = make_unique<InverseMultiplexedConv2DLayerDepthwise>(
                 param, feature_input.shape, weight, bias, padding, stride, next_stride, feature_input.skip,
                 block_shape_in, feature_input.level, residual_scale);
             if (is_lazy) {
-                inv_conv_layer->prepare_weight_lazy();
+                inv_dw_conv_layer->prepare_weight_lazy();
             } else {
-                inv_conv_layer->prepare_weight();
+                inv_dw_conv_layer->prepare_weight();
             }
-            ckks_big_conv2ds[key] = move(inv_conv_layer);
+            ckks_big_dw_conv2ds[key] = move(inv_dw_conv_layer);
         } else {
             auto mux_dw_layer = make_unique<ParMultiplexedConv2DPackedLayerDepthwise>(
                 param, feature_input.shape, weight, bias, stride, feature_input.skip,
@@ -590,8 +590,8 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                         } else {
                             bool is_big_size = layer.value()["is_big_size"];
                             if (is_big_size) {
-                                result =
-                                    make_unique<Feature2DEncrypted>(fp->ckks_big_conv2ds[key]->run(context, input2D));
+                                result = make_unique<Feature2DEncrypted>(
+                                    fp->ckks_big_dw_conv2ds[key]->run(context, input2D));
                             } else {
                                 result = make_unique<Feature2DEncrypted>(
                                     fp->ckks_multiplexed_dw_conv2ds[key]->run(context, input2D));
@@ -913,7 +913,13 @@ void InferenceProcess::run_task(bool is_mpc) {
                         }
                     }
                 } else {
-                    if (fp->pack_style == "multiplexed") {
+                    bool is_big_size = layer.value()["is_big_size"];
+                    if (is_big_size) {
+                        cxx_args.push_back(
+                            CxxVectorArgument{"convw_" + key, &(fp->ckks_big_dw_conv2ds.at(key)->weight_pt)});
+                        cxx_args.push_back(
+                            CxxVectorArgument{"convb_" + key, &(fp->ckks_big_dw_conv2ds.at(key)->bias_pt)});
+                    } else if (fp->pack_style == "multiplexed") {
                         if (layer.value()["stride"][0] == 1) {
                         } else {
                             cxx_args.push_back(
@@ -1100,8 +1106,13 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                             result = fp->ckks_multiplexed_conv2ds[key]->run_plaintext(input0, 1.0);
                         }
                     } else {
-                        FeatureNode feature_input0(json_features[feature_input[0]]);
-                        result = fp->ckks_multiplexed_dw_conv2ds[key]->run_plaintext(input0, 1.0);
+                        bool is_big_size = layer.value()["is_big_size"];
+                        if (is_big_size) {
+                            result = fp->ckks_big_dw_conv2ds[key]->run_plaintext(input0, 1.0);
+                        } else {
+                            FeatureNode feature_input0(json_features[feature_input[0]]);
+                            result = fp->ckks_multiplexed_dw_conv2ds[key]->run_plaintext(input0, 1.0);
+                        }
                     }
                     if (upsample_factor[0] > 1 || upsample_factor[1] > 1) {
                         result = upsample_with_zero(result, upsample_factor);
