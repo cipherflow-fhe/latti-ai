@@ -87,8 +87,9 @@ def _insert_layer_after_feature(
 
     old_computes = list(dag.successors(old_feature))
     for oc in old_computes:
+        old_edge_attrs = dict(dag.edges[old_feature, oc])
         dag.remove_edge(old_feature, oc)
-        dag.add_edge(new_feature, oc)
+        dag.add_edge(new_feature, oc, **old_edge_attrs)
     dag.add_edge(old_feature, new_compute)
     dag.add_edge(new_compute, new_feature)
 
@@ -145,11 +146,12 @@ def _delete_layer(
     feature_out = feature_out_list[0]
 
     downstream_computes = list(dag.successors(feature_out))
+    downstream_edge_attrs = {dc: dict(dag.edges[feature_out, dc]) for dc in downstream_computes}
 
     dag.remove_node(feature_out)
     dag.remove_node(compute)
     for dc in downstream_computes:
-        dag.add_edge(feature_in, dc)
+        dag.add_edge(feature_in, dc, **downstream_edge_attrs[dc])
 
 
 def init_levels(graph: LayerAbstractGraph):
