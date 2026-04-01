@@ -1275,40 +1275,6 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
             if (result0d.size() != 0) {
                 p_feature0d_x[feature_output_id] = move(result0d);
             }
-            // Debug: print per-layer output stats
-            {
-                auto print_stats = [&](const double* data, size_t n) {
-                    if (n == 0)
-                        return;
-                    double mn = data[0], mx = data[0], sum = 0.0;
-                    int nan_count = 0;
-                    for (size_t i = 0; i < n; i++) {
-                        if (std::isnan(data[i])) {
-                            nan_count++;
-                            continue;
-                        }
-                        if (data[i] < mn)
-                            mn = data[i];
-                        if (data[i] > mx)
-                            mx = data[i];
-                        sum += data[i];
-                    }
-                    int valid = (int)n - nan_count;
-                    std::cout << "[PT] " << key << " (" << layer_type << ") -> " << feature_output_id << " size=" << n
-                              << " min=" << mn << " max=" << mx << " mean=" << (valid > 0 ? sum / valid : 0.0)
-                              << (nan_count ? " NAN=" + std::to_string(nan_count) : "") << std::endl;
-                };
-                if (p_feature2d_x.count(feature_output_id)) {
-                    auto arr1d = p_feature2d_x[feature_output_id].to_array_1d();
-                    print_stats(arr1d.data(), arr1d.size());
-                } else if (p_feature1d_x.count(feature_output_id)) {
-                    auto arr1d = p_feature1d_x[feature_output_id].to_array_1d();
-                    print_stats(arr1d.data(), arr1d.size());
-                } else if (p_feature0d_x.count(feature_output_id)) {
-                    auto& v = p_feature0d_x[feature_output_id];
-                    print_stats(v.data(), v.size());
-                }
-            }
             available_keys.push_back(feature_output_id);
             json_layers.erase(key);
             break;
