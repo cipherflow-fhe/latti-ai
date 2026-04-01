@@ -698,11 +698,15 @@ class UnevenConcatModel(nn.Module):
         super().__init__()
         self.conv0 = nn.Conv2d(in_channels=3, out_channels=5, kernel_size=3, bias=False, padding=1)
         self.conv1 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, bias=False, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=3, out_channels=7, kernel_size=3, bias=False, padding=1)
+        self.conv3 = nn.Conv2d(in_channels=15, out_channels=5, kernel_size=3, bias=False, padding=1)
 
     def forward(self, x):
         a = self.conv0(x)
         b = self.conv1(x)
-        return torch.cat([a, b], dim=1)
+        c = self.conv2(x)
+        d = torch.cat([a, b, c], dim=1)
+        return self.conv3(d)
 
 
 class ConvUpsampleE2E(nn.Module):

@@ -100,6 +100,9 @@ jobs:
           cmake .. -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=${CUDA_ARCH}
           make -j$(nproc)
 
+      - name: Install Python dependencies
+        run: pip install scipy==1.15.3 -i https://mirrors.aliyun.com/pypi/simple/
+
       - name: Run compiler tests
         run: |
           cd build/inference/unittests
