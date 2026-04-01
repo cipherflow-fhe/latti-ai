@@ -948,7 +948,7 @@ class TestLayerExport(unittest.TestCase):
         init_level = 5
 
         input_shapes = [32, 64, 512]
-        kernel_shapes = [1, 3, 5]
+        kernel_shapes = [1, 3, 4, 5]
         skips = [2, 4]
         strides = [1, 2]
 
@@ -1170,6 +1170,69 @@ class TestLayerExport(unittest.TestCase):
             / f'level_{level}'
             / 'server',
         )
+
+    def test_mux_dw_conv1d_layer(self):
+        N = 16384
+        set_param('PN14QP438')
+
+        init_level = 5
+
+        channels = [4, 16, 32]
+        input_shapes = [32, 64, 512]
+        kernel_shapes = [1, 3, 5]
+        skips = [2, 4]
+        strides = [1, 2]
+
+        for n_channel in channels:
+            for input_shape in input_shapes:
+                for kernel_shape in kernel_shapes:
+                    for skip in skips:
+                        for stride in strides:
+                            print(
+                                f'sub-test: n_channel={n_channel}, input_shape={input_shape}, '
+                                f'kernel_shape={kernel_shape}, skip={skip}, stride={stride}'
+                            )
+                            n_channel_per_ct = math.ceil(N / 2 / input_shape)
+                            n_packed_ct = math.ceil(n_channel / n_channel_per_ct)
+                            n_block_per_ct = math.ceil(n_channel_per_ct / skip)
+                            n_packed_out = math.ceil(n_channel / n_channel_per_ct)
+
+                            input_ct = [CkksCiphertextNode(f'input_{k}', init_level) for k in range(n_packed_ct)]
+                            # weight_pt[ct_idx][kernel_idx]
+                            weight_pt = [
+                                [CkksPlaintextRingtNode(f'weight_pt_{i}_{k}') for k in range(kernel_shape)]
+                                for i in range(n_packed_ct)
+                            ]
+                            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out)]
+                            n_select_pt = min(n_channel_per_ct, n_channel)
+                            block_select_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
+
+                            conv1d = ParMultiplexedDWConv1DPackedLayer(
+                                n_channel,
+                                input_shape,
+                                kernel_shape,
+                                stride,
+                                skip,
+                                n_channel_per_ct,
+                                n_packed_ct,
+                            )
+                            output_ct = conv1d.call(input_ct, weight_pt, bias_pt, block_select_pt)
+
+                            input_args = list()
+                            input_args.append(Argument('input_node', input_ct))
+                            input_args.append(Argument('weight_pt', weight_pt))
+                            input_args.append(Argument('bias_pt', bias_pt))
+                            if len(block_select_pt) != 0:
+                                input_args.append(Argument('block_select_pt', block_select_pt))
+
+                            process_custom_task(
+                                input_args=input_args,
+                                output_args=[Argument('output_ct', output_ct)],
+                                output_instruction_path=base_path
+                                / f'mux_dw_conv1d_ch_{n_channel}_input_{input_shape}_kernel_{kernel_shape}_skip_{skip}_stride_{stride}'
+                                / f'level_{init_level}'
+                                / 'server',
+                            )
 
 
 if __name__ == '__main__':

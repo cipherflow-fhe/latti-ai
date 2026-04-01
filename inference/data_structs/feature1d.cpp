@@ -100,10 +100,6 @@ void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, bo
 
     int n_mult_pack_per_ct = std::min((int)n_channel_per_ct, (int)n_channel);
 
-    if (n_channel > n_channel_per_ct) {
-        throw std::runtime_error("over slot!");
-    }
-
     int f_ct_num = div_ceil(n_channel, n_mult_pack_per_ct);
 
     data.clear();
