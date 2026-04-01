@@ -18,6 +18,7 @@
 
 #include "inference_process.h"
 #include "lattisense/cxx_sdk_v2/cxx_fhe_task.h"
+#include <cmath>
 #include <iostream>
 
 using namespace std;
@@ -393,11 +394,11 @@ void InitInferenceProcess::init_multiplexed_conv_layer(const string& key,
     }
 }
 
-void InitInferenceProcess::init_poly_relu2d_layer(const string& key,
-                                                  const json& layer,
-                                                  const hid_t& h5_file,
-                                                  bool is_absorb,
-                                                  const Duo& block_shape_in) {
+void InitInferenceProcess::init_poly_relu_layer(const string& key,
+                                                const json& layer,
+                                                const hid_t& h5_file,
+                                                bool is_absorb,
+                                                const Duo& block_shape_in) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     Duo zero_skip_in = {layer["zero_skip"][0], layer["zero_skip"][1]};
@@ -438,9 +439,9 @@ void InitInferenceProcess::init_poly_relu2d_layer(const string& key,
     } else {
         Duo block_expansion = {div_ceil(feature_input.shape[0], block_shape_in[0]),
                                div_ceil(feature_input.shape[1], block_shape_in[1])};
-        auto layer_poly_relu = make_unique<PolyRelu>(param, feature_input.shape, order, weight, feature_input.skip,
-                                                     feature_input.pack_channel_per_ciphertext, feature_input.level,
-                                                     zero_skip_in, block_expansion, pack_style != "multiplexed");
+        auto layer_poly_relu = make_unique<PolyRelu2D>(param, feature_input.shape, order, weight, feature_input.skip,
+                                                       feature_input.pack_channel_per_ciphertext, feature_input.level,
+                                                       zero_skip_in, block_expansion, pack_style != "multiplexed");
         if (is_absorb) {
             if (is_lazy) {
                 layer_poly_relu->prepare_weight_lazy();
@@ -456,6 +457,36 @@ void InitInferenceProcess::init_poly_relu2d_layer(const string& key,
         }
         ckks_poly_relu[key] = move(layer_poly_relu);
     }
+}
+
+void InitInferenceProcess::init_poly_relu1d_layer(const string& key, const json& layer, const hid_t& h5_file) {
+    FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
+    uint32_t order = layer["order"];
+    double weight_scale = layer["weight_scale"];
+    auto weight = h5_to_array<2>(h5_file, layer["weight_path"], {order + 1, feature_input.channel}, weight_scale);
+
+    CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
+
+    int skip_val = feature_input.skip[0];
+    int shape_val = feature_input.shape[0];
+    string style = layer.value("style", string("ordinary"));
+
+    auto layer_poly_relu = make_unique<PolyRelu1D>(param, weight, feature_input.level, order, skip_val, shape_val);
+
+    if (style == "multiplexed") {
+        if (is_lazy) {
+            layer_poly_relu->prepare_weight_bsgs_mux_lazy();
+        } else {
+            layer_poly_relu->prepare_weight_bsgs_mux();
+        }
+    } else {
+        if (is_lazy) {
+            layer_poly_relu->prepare_weight_bsgs_lazy();
+        } else {
+            layer_poly_relu->prepare_weight_bsgs();
+        }
+    }
+    ckks_poly_relu_1d[key] = move(layer_poly_relu);
 }
 
 void InitInferenceProcess::init_fhe_avgpool_layer(const string& key,
@@ -525,7 +556,12 @@ void InitInferenceProcess::load_model_prepare() {
         } else if (layer_type == "mult_scalar") {
             init_mult_scalar_layer(key, value, h5_file, block_shape);
         } else if (layer_type == "poly_relu2d" || layer_type == "simple_polyrelu") {
-            init_poly_relu2d_layer(key, value, h5_file, is_absorb_polyrelu, block_shape);
+            FeatureNode feat(json_features[value["feature_input"][0].get<string>()]);
+            if (feat.dim == 1) {
+                init_poly_relu1d_layer(key, value, h5_file);
+            } else {
+                init_poly_relu_layer(key, value, h5_file, is_absorb_polyrelu, block_shape);
+            }
         } else if (layer_type == "avgpool2d") {
             bool is_adaptive_avgpool = value["is_adaptive_avgpool"];
             init_fhe_avgpool_layer(key, value, is_adaptive_avgpool, block_shape);
@@ -1238,6 +1274,40 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
             }
             if (result0d.size() != 0) {
                 p_feature0d_x[feature_output_id] = move(result0d);
+            }
+            // Debug: print per-layer output stats
+            {
+                auto print_stats = [&](const double* data, size_t n) {
+                    if (n == 0)
+                        return;
+                    double mn = data[0], mx = data[0], sum = 0.0;
+                    int nan_count = 0;
+                    for (size_t i = 0; i < n; i++) {
+                        if (std::isnan(data[i])) {
+                            nan_count++;
+                            continue;
+                        }
+                        if (data[i] < mn)
+                            mn = data[i];
+                        if (data[i] > mx)
+                            mx = data[i];
+                        sum += data[i];
+                    }
+                    int valid = (int)n - nan_count;
+                    std::cout << "[PT] " << key << " (" << layer_type << ") -> " << feature_output_id << " size=" << n
+                              << " min=" << mn << " max=" << mx << " mean=" << (valid > 0 ? sum / valid : 0.0)
+                              << (nan_count ? " NAN=" + std::to_string(nan_count) : "") << std::endl;
+                };
+                if (p_feature2d_x.count(feature_output_id)) {
+                    auto arr1d = p_feature2d_x[feature_output_id].to_array_1d();
+                    print_stats(arr1d.data(), arr1d.size());
+                } else if (p_feature1d_x.count(feature_output_id)) {
+                    auto arr1d = p_feature1d_x[feature_output_id].to_array_1d();
+                    print_stats(arr1d.data(), arr1d.size());
+                } else if (p_feature0d_x.count(feature_output_id)) {
+                    auto& v = p_feature0d_x[feature_output_id];
+                    print_stats(v.data(), v.size());
+                }
             }
             available_keys.push_back(feature_output_id);
             json_layers.erase(key);

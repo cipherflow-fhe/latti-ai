@@ -36,6 +36,8 @@ from inference.model_generator.layers.mult_scaler import *
 from inference.model_generator.layers.multiplexed_conv1d_pack_layer import *
 from inference.model_generator.layers.multiplexed_conv2d_pack_layer import *
 from inference.model_generator.layers.multiplexed_conv2d_pack_layer_depthwise import *
+from inference.model_generator.layers.poly_relu0d import *
+from inference.model_generator.layers.poly_relu1d import *
 from inference.model_generator.layers.poly_relu2d import *
 from inference.model_generator.layers.upsample_layer import *
 from training.model_compiler.components import (
@@ -279,22 +281,40 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feat = config_info['feature'][layer_input_feature_ids[0]]
             level = int(feat['level'])
             order = layer_config['order']
-            if feat['dim'] == 0:
-                input_shape = [1, 1]
-                skip = [1, 1]
-            else:
-                input_shape = feat['shape']
-            polyrelu = PolyRelu(input_shape, order, skip, pack)
+            dim = feat['dim']
+
             feature_id_in_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
             drop_level_n = feature_id_in_nodes[0].level - level
-
             if level < feature_id_in_nodes[0].level:
                 feature_id_in_nodes = [drop_level(node, drop_level_n) for node in feature_id_in_nodes]
-            weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
-            if feat['dim'] == 0:
+
+            if dim == 0:
+                skip_0d = feat['skip'] if not isinstance(feat['skip'], list) else feat['skip'][0]
+                n_channel_per_ct_0d = int(n // 2 // skip_0d)
+                polyrelu = PolyRelu0D(order, skip_0d, n_channel_per_ct_0d)
+                weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
                 layer_output_nodes = polyrelu.call_bsgs_feature0d(feature_id_in_nodes, weight_pt)
-            else:
+
+            elif dim == 1:
+                shape_1d = feat['shape'][0]
+                skip_1d = feat['skip'] if not isinstance(feat['skip'], list) else feat['skip'][0]
+                if style == 'multiplexed':
+                    n_channel_per_ct_1d = int(n // 2 // shape_1d)
+                    polyrelu = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
+                    weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
+                    layer_output_nodes = polyrelu.call_bsgs_mux(feature_id_in_nodes, weight_pt)
+                else:
+                    n_channel_per_ct_1d = int(n // 2 // shape_1d // skip_1d)
+                    polyrelu = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
+                    weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
+                    layer_output_nodes = polyrelu.call_bsgs_skip(feature_id_in_nodes, weight_pt)
+
+            else:  # dim == 2
+                input_shape = feat['shape']
+                polyrelu = PolyRelu2D(input_shape, order, skip, pack)
+                weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
                 layer_output_nodes = polyrelu.call_bsgs_feature2d(feature_id_in_nodes, weight_pt)
+
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
             for i in range(len(weight_pt)):
                 input_args.append(Argument(f'poly_reluw_{layer_id}_{i}', weight_pt[i]))

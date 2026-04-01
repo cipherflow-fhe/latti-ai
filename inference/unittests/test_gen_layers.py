@@ -774,21 +774,21 @@ class TestLayerExport(unittest.TestCase):
         n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
         order0 = 7
         order1 = 7
-        level_cost0 = PolyRelu.compute_bsgs_level_cost(order0)
-        level_cost1 = PolyRelu.compute_bsgs_level_cost(order1)
+        level_cost0 = PolyRelu2D.compute_bsgs_level_cost(order0)
+        level_cost1 = PolyRelu2D.compute_bsgs_level_cost(order1)
         level = level_cost0 + level_cost1 + 1  # +1 for sign(x)*x multiplication
 
         input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
         weight_pt0 = [
             [CkksPlaintextRingtNode(f'poly0w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order0 + 1)
         ]
-        poly_layer0 = PolyRelu(input_shape, order0, skip, n_in_channel_per_ct)
+        poly_layer0 = PolyRelu2D(input_shape, order0, skip, n_in_channel_per_ct)
         output_ct0 = poly_layer0.call_bsgs_feature2d(input_ct, weight_pt0)
 
         weight_pt1 = [
             [CkksPlaintextRingtNode(f'poly1w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order1 + 1)
         ]
-        poly_layer1 = PolyRelu(input_shape, order1, skip, n_in_channel_per_ct)
+        poly_layer1 = PolyRelu2D(input_shape, order1, skip, n_in_channel_per_ct)
         output_ct1 = poly_layer1.call_bsgs_feature2d(output_ct0, weight_pt1)
 
         output_ct = list()
@@ -829,7 +829,7 @@ class TestLayerExport(unittest.TestCase):
             level = 8
 
             for order in orders:
-                level_cost = PolyRelu.compute_bsgs_level_cost(order)
+                level_cost = PolyRelu0D.compute_bsgs_level_cost(order)
                 if level < level_cost:
                     continue
 
@@ -840,7 +840,7 @@ class TestLayerExport(unittest.TestCase):
                     for i in range(order + 1)
                 ]
 
-                poly_layer = PolyRelu.create_for_feature0d(order, skip_val, n_channel_per_ct)
+                poly_layer = PolyRelu0D(order, skip_val, n_channel_per_ct)
                 output_ct = poly_layer.call_bsgs_feature0d(input_ct, weight_pt)
 
                 input_args = list()
@@ -855,6 +855,98 @@ class TestLayerExport(unittest.TestCase):
                     / f'CKKS_poly_relu_bsgs_feature0d_{n_in_channel}_channel_order_{order}_skip_{skip_val}'
                     / f'level_{level}',
                 )
+
+    def test_poly_bsgs_feature1d_skip(self):
+        """PolyRelu1D — skip-pack mode (Feature1DEncrypted::pack).
+
+        Slot layout: channel ch, position i → slot ch * shape * skip + i * skip
+        n_channel_per_ct = N/2 / (shape * skip)
+        """
+        N = 16384
+        set_param('PN14QP438')
+        n_in_channel = 64
+        shapes = [32, 64]
+        skips = [1, 2]
+        orders = [2, 4, 7]
+        level = 8
+
+        for shape in shapes:
+            for skip_val in skips:
+                n_channel_per_ct = N // 2 // shape // skip_val
+                if n_channel_per_ct == 0:
+                    continue
+                n_pack_in_channel = int(np.ceil(n_in_channel / n_channel_per_ct))
+
+                for order in orders:
+                    level_cost = PolyRelu1D.compute_bsgs_level_cost(order)
+                    if level < level_cost:
+                        continue
+
+                    print(f'sub-test skip: shape={shape}, skip={skip_val}, order={order}')
+                    input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+                    weight_pt = [
+                        [CkksPlaintextRingtNode(f'polyw_1d_skip_{i}_{j}') for j in range(n_pack_in_channel)]
+                        for i in range(order + 1)
+                    ]
+
+                    poly_layer = PolyRelu1D(shape, order, skip_val, n_channel_per_ct)
+                    output_ct = poly_layer.call_bsgs_skip(input_ct, weight_pt)
+
+                    input_args = [Argument('input_node', input_ct)]
+                    for i in range(order + 1):
+                        input_args.append(Argument(f'weight_pt{i}', weight_pt[i]))
+
+                    process_custom_task(
+                        input_args=input_args,
+                        output_args=[Argument('output_ct', output_ct)],
+                        output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_skip_{n_in_channel}_channel'
+                        f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
+                    )
+
+    def test_poly_bsgs_feature1d_mux(self):
+        """PolyRelu1D — multiplexed/interleaved-pack mode (Feature1DEncrypted::pack_multiplexed).
+
+        Slot layout: channel j (CT-local), position i → slot (j/skip)*shape*skip + i*skip + (j%skip)
+        n_channel_per_ct = N/2 / shape   (skip channels share each shape*skip block)
+        """
+        N = 16384
+        set_param('PN14QP438')
+        n_in_channel = 64
+        shapes = [32, 64]
+        skips = [1, 2]
+        orders = [2, 4, 7]
+        level = 8
+
+        for shape in shapes:
+            for skip_val in skips:
+                n_channel_per_ct = N // 2 // shape  # multiplexed: no skip in denominator
+                n_pack_in_channel = int(np.ceil(n_in_channel / n_channel_per_ct))
+
+                for order in orders:
+                    level_cost = PolyRelu1D.compute_bsgs_level_cost(order)
+                    if level < level_cost:
+                        continue
+
+                    print(f'sub-test mux: shape={shape}, skip={skip_val}, order={order}')
+                    input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+                    weight_pt = [
+                        [CkksPlaintextRingtNode(f'polyw_1d_mux_{i}_{j}') for j in range(n_pack_in_channel)]
+                        for i in range(order + 1)
+                    ]
+
+                    poly_layer = PolyRelu1D(shape, order, skip_val, n_channel_per_ct)
+                    output_ct = poly_layer.call_bsgs_mux(input_ct, weight_pt)
+
+                    input_args = [Argument('input_node', input_ct)]
+                    for i in range(order + 1):
+                        input_args.append(Argument(f'weight_pt{i}', weight_pt[i]))
+
+                    process_custom_task(
+                        input_args=input_args,
+                        output_args=[Argument('output_ct', output_ct)],
+                        output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_mux_{n_in_channel}_channel'
+                        f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
+                    )
 
     def test_conv1d_layer(self):
         N = 16384
