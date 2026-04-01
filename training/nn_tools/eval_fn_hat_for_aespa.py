@@ -45,7 +45,7 @@ def hermite_prob(n, x):
 
 
 # =====================
-# Activation function implementations
+# Activation function implementation
 # =====================
 def relu(x):
     """ReLU function."""
