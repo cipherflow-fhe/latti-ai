@@ -32,4 +32,16 @@ public:
     Feature2DEncrypted run_multiple_inputs(ls::CkksContext& ctx, const std::vector<Feature2DEncrypted>& inputs);
     Array<double, 3> concatenate_channels(const Array<double, 3>& x1, const Array<double, 3>& x2);
     Array<double, 3> concatenate_channels_multiple_inputs(const std::vector<Array<double, 3>>& inputs);
+
+    void prepare_mask_data(const ls::CkksParameter& param,
+                           const std::vector<uint32_t>& input_n_channels,
+                           uint32_t n_channel_per_ct,
+                           Duo shape,
+                           Duo skip,
+                           int level);
+
+    std::vector<ls::CkksPlaintextRingt> mask_pt;
+
+private:
+    Feature2DEncrypted run_multiple_inputs_uneven(ls::CkksContext& ctx, const std::vector<Feature2DEncrypted>& inputs);
 };

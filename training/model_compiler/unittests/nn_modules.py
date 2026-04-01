@@ -690,6 +690,19 @@ class ConvConcatConv(nn.Module):
         e = self.conv4(x)
         c2 = torch.cat([b, d, e], dim=1)  # concat2: [conv2_out, conv3_out, conv4_out], 16ch
         return c1 + c2  # add: concat1_out + concat2_out, 16ch
+    
+class UnevenConcatModel(nn.Module):
+    """Two conv branches with uneven channels concatenated. Covers concat_layer uneven path."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=3, out_channels=5, kernel_size=3, bias=False, padding=1)
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, bias=False, padding=1)
+
+    def forward(self, x):
+        a = self.conv0(x)
+        b = self.conv1(x)
+        return torch.cat([a, b], dim=1)
 
 
 class ConvUpsampleE2E(nn.Module):

@@ -68,9 +68,6 @@ Feature2DEncrypted ConcatLayer::run_multiple_inputs(CkksContext& ctx, const std:
     }
 
     const Feature2DEncrypted& first = inputs[0];
-    if ((first.n_channel % first.n_channel_per_ct) != 0) {
-        throw std::runtime_error("n_channel is not divisible by n_channel_per_ct in ConcatLayer::run_multiple_inputs");
-    }
     for (size_t i = 1; i < inputs.size(); ++i) {
         const Feature2DEncrypted& current = inputs[i];
         if (current.n_channel_per_ct != first.n_channel_per_ct) {
@@ -85,12 +82,22 @@ Feature2DEncrypted ConcatLayer::run_multiple_inputs(CkksContext& ctx, const std:
         if (current.skip[0] != first.skip[0] || current.skip[1] != first.skip[1]) {
             throw std::runtime_error("skip mismatch in ConcatLayer::run_multiple_inputs");
         }
-        if ((current.n_channel % current.n_channel_per_ct) != 0) {
-            throw std::runtime_error(
-                "n_channel is not divisible by n_channel_per_ct in ConcatLayer::run_multiple_inputs");
+    }
+
+    // Check if any input has uneven channels
+    bool has_uneven = false;
+    for (const auto& input : inputs) {
+        if ((input.n_channel % input.n_channel_per_ct) != 0) {
+            has_uneven = true;
+            break;
         }
     }
 
+    if (has_uneven) {
+        return run_multiple_inputs_uneven(ctx, inputs);
+    }
+
+    // Fast path: all inputs have n_channel divisible by n_channel_per_ct
     Feature2DEncrypted result(&ctx, first.level);
     result.data.clear();
 
@@ -110,6 +117,158 @@ Feature2DEncrypted ConcatLayer::run_multiple_inputs(CkksContext& ctx, const std:
     result.skip[0] = first.skip[0];
     result.skip[1] = first.skip[1];
     return result;
+}
+
+Feature2DEncrypted ConcatLayer::run_multiple_inputs_uneven(CkksContext& ctx,
+                                                           const std::vector<Feature2DEncrypted>& inputs) {
+    const Feature2DEncrypted& first = inputs[0];
+    const Duo shape = first.shape;
+    const Duo skip = first.skip;
+    uint32_t n_channel_per_ct = first.n_channel_per_ct;
+    uint32_t n_channel_per_block = prod(skip);
+    uint32_t block_size = prod(shape * skip);  // slots per block
+    uint32_t level = first.level;
+
+    // Compute channel offsets and total channels
+    vector<uint64_t> channel_offsets(inputs.size());
+    uint64_t total_channels = 0;
+    for (size_t i = 0; i < inputs.size(); ++i) {
+        channel_offsets[i] = total_channels;
+        total_channels += inputs[i].n_channel;
+    }
+    uint32_t n_out_ct = div_ceil((uint32_t)total_channels, n_channel_per_ct);
+
+    // Step 1: For each global channel, mask the source CT using pre-computed mask_pt
+    vector<CkksCiphertext> masked_cts(total_channels);
+    for (uint64_t global_ch = 0; global_ch < total_channels; ++global_ch) {
+        // global_ch channle is the local_ch channel of the input_idx Feature2D input
+        size_t input_idx = 0;
+        uint64_t local_ch = global_ch;
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            if (local_ch < inputs[i].n_channel) {
+                input_idx = i;
+                break;
+            }
+            local_ch -= inputs[i].n_channel;
+        }
+
+        // Source position in source CT
+        uint32_t src_ct_idx = local_ch / n_channel_per_ct;
+
+        // Use pre-computed mask plaintext
+        CkksPlaintextMul mask_mul = ctx.ringt_to_mul(mask_pt[global_ch], level);
+        masked_cts[global_ch] = ctx.mult_plain_mul(inputs[input_idx].data[src_ct_idx], mask_mul);
+    }
+
+    // Step 2: Rotate and accumulate into output CTs
+    vector<CkksCiphertext> out_data(n_out_ct);
+    for (uint32_t out_ct_idx = 0; out_ct_idx < n_out_ct; ++out_ct_idx) {
+        CkksCiphertext sum(0);
+        bool first_in_ct = true;
+
+        for (uint32_t ch_in_ct = 0; ch_in_ct < n_channel_per_ct; ++ch_in_ct) {
+            uint64_t global_ch = (uint64_t)out_ct_idx * n_channel_per_ct + ch_in_ct;
+            if (global_ch >= total_channels)
+                break;
+
+            // Source position (where the channel currently sits after masking)
+            size_t input_idx = 0;
+            uint64_t local_ch = global_ch;
+            for (size_t i = 0; i < inputs.size(); ++i) {
+                if (local_ch < inputs[i].n_channel) {
+                    input_idx = i;
+                    break;
+                }
+                local_ch -= inputs[i].n_channel;
+            }
+            uint32_t src_channel_in_ct = local_ch % n_channel_per_ct;
+            uint32_t src_block = src_channel_in_ct / n_channel_per_block;
+            uint32_t src_offset = src_channel_in_ct % n_channel_per_block;
+            uint32_t src_cx = src_offset / skip[1];
+            uint32_t src_cy = src_offset % skip[1];
+            long src_slot_base = (long)src_block * block_size + (long)src_cx * (shape[1] * skip[1]) + src_cy;
+
+            // Target position in output CT
+            uint32_t dst_channel_in_ct = ch_in_ct;
+            uint32_t dst_block = dst_channel_in_ct / n_channel_per_block;
+            uint32_t dst_offset = dst_channel_in_ct % n_channel_per_block;
+            uint32_t dst_cx = dst_offset / skip[1];
+            uint32_t dst_cy = dst_offset % skip[1];
+            long dst_slot_base = (long)dst_block * block_size + (long)dst_cx * (shape[1] * skip[1]) + dst_cy;
+
+            long rot_step = -(dst_slot_base - src_slot_base);
+
+            CkksCiphertext rotated;
+            if (rot_step == 0) {
+                rotated = masked_cts[global_ch].copy();
+            } else {
+                rotated = ctx.rotate(masked_cts[global_ch], rot_step);
+            }
+
+            if (first_in_ct) {
+                sum = move(rotated);
+                first_in_ct = false;
+            } else {
+                sum = ctx.add(sum, rotated);
+            }
+        }
+        out_data[out_ct_idx] = ctx.rescale(sum, ctx.get_parameter().get_default_scale());
+    }
+
+    Feature2DEncrypted result(&ctx, level - 1);
+    result.data = move(out_data);
+    result.n_channel = total_channels;
+    result.n_channel_per_ct = n_channel_per_ct;
+    result.shape[0] = shape[0];
+    result.shape[1] = shape[1];
+    result.skip[0] = skip[0];
+    result.skip[1] = skip[1];
+    return result;
+}
+
+void ConcatLayer::prepare_mask_data(const CkksParameter& param,
+                                    const vector<uint32_t>& input_n_channels,
+                                    uint32_t n_channel_per_ct,
+                                    Duo shape,
+                                    Duo skip,
+                                    int level) {
+    CkksContext ctx = CkksContext::create_empty_context(param);
+    uint32_t n_channel_per_block = prod(skip);
+    uint32_t block_size = prod(shape * skip);
+    uint32_t N = param.get_n();
+
+    uint64_t total_channels = 0;
+    for (auto n_ch : input_n_channels)
+        total_channels += n_ch;
+
+    mask_pt.clear();
+    mask_pt.resize(total_channels);
+
+    for (uint64_t global_ch = 0; global_ch < total_channels; ++global_ch) {
+        uint64_t local_ch = global_ch;
+        for (auto n_ch : input_n_channels) {
+            if (local_ch < n_ch)
+                break;
+            local_ch -= n_ch;
+        }
+
+        uint32_t src_channel_in_ct = local_ch % n_channel_per_ct;
+        uint32_t src_block = src_channel_in_ct / n_channel_per_block;
+        uint32_t src_offset = src_channel_in_ct % n_channel_per_block;
+        uint32_t src_cx = src_offset / skip[1];
+        uint32_t src_cy = src_offset % skip[1];
+
+        vector<double> mask_vec(N / 2, 0.0);
+        for (uint32_t x = 0; x < shape[0]; ++x) {
+            for (uint32_t y = 0; y < shape[1]; ++y) {
+                uint32_t slot =
+                    src_block * block_size + (x * skip[0] + src_cx) * (shape[1] * skip[1]) + (y * skip[1] + src_cy);
+                mask_vec[slot] = 1.0;
+            }
+        }
+
+        mask_pt[global_ch] = ctx.encode_ringt(mask_vec, ctx.get_parameter().get_q(level));
+    }
 }
 
 Array<double, 3> ConcatLayer::concatenate_channels(const Array<double, 3>& x1, const Array<double, 3>& x2) {

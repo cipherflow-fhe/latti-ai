@@ -554,6 +554,9 @@ def set_level_costs(graph: LayerAbstractGraph):
             graph.dag.nodes[compute_node]['level_cost'] = 1
         elif 'resize' in compute_node.layer_type:
             graph.dag.nodes[compute_node]['level_cost'] = 1
+        elif compute_node.layer_type == 'concat2d':
+            has_uneven = any(p.channel % graph.dag.nodes[p]['pack_num'] != 0 for p in preds)
+            graph.dag.nodes[compute_node]['level_cost'] = 1 if has_uneven else 0
         else:
             graph.dag.nodes[compute_node]['level_cost'] = 0
 

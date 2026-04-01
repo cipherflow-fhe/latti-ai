@@ -261,6 +261,33 @@ void InitInferenceProcess::init_reshape_layer(const string& key, const json& lay
 
 void InitInferenceProcess::init_concat_layer(const string& key, const json& layer) {
     auto concat = make_unique<ConcatLayer>();
+
+    auto feature_inputs = layer["feature_input"].get<vector<string>>();
+    vector<uint32_t> input_n_channels;
+    bool has_uneven = false;
+    string ckks_param_id;
+    Duo shape = {0, 0};
+    Duo skip = {1, 1};
+    int level = 0;
+    uint32_t pack = 0;
+
+    for (const auto& fid : feature_inputs) {
+        FeatureNode feat(json_features[fid]);
+        input_n_channels.push_back(feat.channel);
+        if (feat.channel % feat.pack_channel_per_ciphertext != 0) {
+            has_uneven = true;
+        }
+        ckks_param_id = feat.ckks_parameter_id;
+        shape = feat.shape;
+        skip = feat.skip;
+        level = feat.level;
+        pack = feat.pack_channel_per_ciphertext;
+    }
+
+    if (has_uneven) {
+        concat->prepare_mask_data(*ckks_parameters.at(ckks_param_id), input_n_channels, pack, shape, skip, level);
+    }
+
     ckks_concat[key] = move(concat);
 }
 
@@ -940,6 +967,10 @@ void InferenceProcess::run_task(bool is_mpc) {
             }
         } else if (layer_type == "add2d") {
             continue;
+        } else if (layer_type == "concat2d") {
+            if (!fp->ckks_concat.at(key)->mask_pt.empty()) {
+                cxx_args.push_back(CxxVectorArgument{"concat_mask_" + key, &(fp->ckks_concat.at(key)->mask_pt)});
+            }
         } else if (layer_type == "fc0" || layer_type == "fc1") {
             cxx_args.push_back(CxxVectorArgument{"densew_" + key, &(fp->ckks_denses.at(key)->weight_pt)});
             cxx_args.push_back(CxxVectorArgument{"denseb_" + key, &(fp->ckks_denses.at(key)->bias_pt)});
