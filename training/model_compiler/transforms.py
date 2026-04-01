@@ -455,7 +455,7 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
             graph.dag.nodes[succ]['skip'] = [1] * preds[0].dim
             if any(succ.shape[i] < config.block_shape[i] for i in range(succ.dim)):
                 for i in range(preds[0].dim):
-                    graph.dag.nodes[succ]['skip'][i] = config.block_shape[i] / succ[0].shape[i]
+                    graph.dag.nodes[succ]['skip'][i] = config.block_shape[i] / succ.shape[i]
 
         process_special_info(graph, compute_node, preds, succ)
         populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)
@@ -506,19 +506,21 @@ def set_level_costs(graph: LayerAbstractGraph):
             if config.style == 'ordinary':
                 graph.dag.nodes[compute_node]['level_cost'] = 1
             elif config.style == 'multiplexed':
-                if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+                if any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
                     compute_node.is_big_size = True
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                     if any(succ.shape[i] < config.block_shape[i] for i in range(succ.dim)):
                         graph.dag.nodes[compute_node]['level_cost'] = 2
                 else:
                     if compute_node.groups == 1:
-                        if compute_node.stride[0] == 1 and graph.dag.nodes[preds[0]]['skip'][0] == 1:
+                        if all(compute_node.stride[i] == 1 for i in range(compute_node.dim)) and all(
+                            graph.dag.nodes[preds[0]]['skip'][i] == 1 for i in range(preds[0].dim)
+                        ):
                             graph.dag.nodes[compute_node]['level_cost'] = 1
                         else:
                             graph.dag.nodes[compute_node]['level_cost'] = 2
                     else:
-                        if compute_node.stride[0] == 1:
+                        if all(compute_node.stride[i] == 1 for i in range(compute_node.dim)):
                             graph.dag.nodes[compute_node]['level_cost'] = 1
                         else:
                             graph.dag.nodes[compute_node]['level_cost'] = 2

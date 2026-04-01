@@ -507,9 +507,8 @@ class BtpScoreParam:
         graph.dag = dag
         pred = list(graph.dag.predecessors(compute_node))[0]
         self.n = param[pred.ckks_parameter_id].poly_modulus_degree
-        btp_slot = int(self.n / 2)
-
-        self.ct_num = math.ceil(pred.shape[0] * pred.shape[1] * compute_node.channel_input / btp_slot)
+        pack_num = graph.dag.nodes[pred]['pack_num']
+        self.ct_num = math.ceil(compute_node.channel_input / pack_num)
 
     def get_score(self):
         score = self.ct_num * btp_time[str(self.n)] / get_multithread_rate_for_btp(self.ct_num)
