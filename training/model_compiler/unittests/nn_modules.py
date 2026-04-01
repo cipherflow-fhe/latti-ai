@@ -690,7 +690,8 @@ class ConvConcatConv(nn.Module):
         e = self.conv4(x)
         c2 = torch.cat([b, d, e], dim=1)  # concat2: [conv2_out, conv3_out, conv4_out], 16ch
         return c1 + c2  # add: concat1_out + concat2_out, 16ch
-    
+
+
 class UnevenConcatModel(nn.Module):
     """Two conv branches with uneven channels concatenated. Covers concat_layer uneven path."""
 
