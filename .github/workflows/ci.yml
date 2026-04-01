@@ -39,6 +39,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install Python dependencies
+        run: pip install -r training/requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+
       - name: Detect CUDA architecture
         id: cuda-arch
         run: |
@@ -99,9 +102,6 @@ jobs:
           mkdir -p build && cd build
           cmake .. -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=${CUDA_ARCH}
           make -j$(nproc)
-
-      - name: Install Python dependencies
-        run: pip install scipy==1.15.3 matplotlib==3.10.8 -i https://mirrors.aliyun.com/pypi/simple/
 
       - name: Run compiler tests
         run: |
