@@ -390,10 +390,10 @@ TEST_CASE("gpu/conv_concat_conv", "[e2e][gpu]") {
     run_e2e_test(e2e_base_path / "conv_concat_conv", true);
 }
 TEST_CASE("gpu/dw_conv_big_size", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "dw_conv_big_size", false);
+    run_e2e_test(e2e_base_path / "dw_conv_big_size", true);
 }
 TEST_CASE("gpu/uneven_concat", "[e2e][gpu]") {
-    run_e2e_test(e2e_base_path / "uneven_concat", false);
+    run_e2e_test(e2e_base_path / "uneven_concat", true);
 }
 #endif
 
