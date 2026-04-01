@@ -440,11 +440,37 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif 'concat2d' in layer_config['type']:
-            # concat is a runtime-only operation: just merge node lists from all inputs
-            layer_output_nodes = []
+            # Check if any input has n_channel not divisible by n_channel_per_ct
+            input_n_channels = []
+            has_uneven = False
             for input_fid in layer_input_feature_ids:
-                layer_output_nodes.extend(feature_id_to_nodes_map[input_fid])
-            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                feat = config_info['feature'][input_fid]
+                n_ch = int(feat['channel'])
+                input_n_channels.append(n_ch)
+                if n_ch % pack != 0:
+                    has_uneven = True
+
+            if has_uneven:
+                # Uneven path: per-channel mask+rotate+add
+                concat_layer = ConcatLayer()
+                input_node_lists = [feature_id_to_nodes_map[fid] for fid in layer_input_feature_ids]
+                input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
+                total_channels = sum(input_n_channels)
+
+                # Create mask plaintext nodes for each global channel
+                mask_pts = [CkksPlaintextRingtNode(f'concat_mask_{layer_id}_{i}') for i in range(total_channels)]
+
+                layer_output_nodes = concat_layer.call_multiple_inputs_uneven(
+                    input_node_lists, input_n_channels, pack, input_shape, skip, mask_pts
+                )
+                feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                input_args.append(Argument(f'concat_mask_{layer_id}', mask_pts))
+            else:
+                # Fast path: concat is a runtime-only operation, just merge node lists
+                layer_output_nodes = []
+                for input_fid in layer_input_feature_ids:
+                    layer_output_nodes.extend(feature_id_to_nodes_map[input_fid])
+                feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif 'upsample_nearest' in layer_config['type']:
             input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
