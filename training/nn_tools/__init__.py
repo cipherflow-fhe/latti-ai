@@ -19,7 +19,7 @@ Replace standard activations (e.g. ReLU) with polynomial approximations
 suitable for encrypted inference, and export models to ONNX / H5 formats.
 """
 
-from .activations import RangeNorm2d, Simple_Polyrelu, RangeNormPoly2d
+from .activations import RangeNorm2d, RangeNormPoly1d, Simple_Polyrelu, RangeNormPoly2d
 from .modules import DepthwiseAvgPool2d
 from .replace import (
     replace_activation,
@@ -27,6 +27,7 @@ from .replace import (
     replace_maxpool_with_avgpool,
     replace_general_avgpool_with_depthwise_conv,
     prepare_for_fhe,
+    convert_1d_to_2d,
 )
 from .export import (
     export_to_onnx,
@@ -39,6 +40,7 @@ from .export import (
 __all__ = [
     # Activations
     'RangeNorm2d',
+    'RangeNormPoly1d',
     'Simple_Polyrelu',
     'RangeNormPoly2d',
     # Modules
@@ -49,6 +51,7 @@ __all__ = [
     'replace_maxpool_with_avgpool',
     'replace_general_avgpool_with_depthwise_conv',
     'prepare_for_fhe',
+    'convert_1d_to_2d',
     # Export
     'export_to_onnx',
     'save_onnx_weights_to_h5',

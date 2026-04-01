@@ -276,7 +276,7 @@ class RangeNorm1d(nn.Module):
         self.scale_factor = 1.0
 
         if num_features > 0:
-            self.register_buffer('running_max', torch.ones(1, num_features))
+            self.register_buffer('running_max', torch.ones(1, num_features, 1))
             self.register_buffer('num_batches_tracked', torch.tensor(0, dtype=torch.long))
         else:
             self.register_buffer('running_max', None)
@@ -284,13 +284,13 @@ class RangeNorm1d(nn.Module):
 
     def _lazy_init(self, x: torch.Tensor):
         self.num_features = x.shape[1]
-        self.running_max = torch.ones(1, self.num_features, device=x.device, dtype=x.dtype)
+        self.running_max = torch.ones(1, self.num_features, 1, device=x.device, dtype=x.dtype)
         self.num_batches_tracked = torch.tensor(0, dtype=torch.long, device=x.device)
 
     def forward(self, x):
         """
         Args:
-            x: Input tensor of shape (B, C, L) or (B, C)
+            x: Input tensor of shape (B, C, L)
 
         Returns:
             Normalized x
@@ -299,7 +299,7 @@ class RangeNorm1d(nn.Module):
             self._lazy_init(x)
 
         if self.training:
-            abs_max = x.abs().amax(dim=(0), keepdim=True)
+            abs_max = x.abs().amax(dim=(0, 2), keepdim=True)
             if self.num_batches_tracked == 0:
                 self.running_max.copy_(abs_max.detach())
             else:
