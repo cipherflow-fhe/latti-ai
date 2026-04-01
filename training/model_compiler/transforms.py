@@ -62,10 +62,11 @@ def _insert_layer_between_feature_and_compute(
     dag.add_node(new_compute, **new_compute_args)
     dag.add_node(new_feature, **new_feature_args)
 
+    old_edge_attrs = dag.edges[old_feature, old_compute]
     dag.remove_edge(old_feature, old_compute)
     dag.add_edge(old_feature, new_compute)
     dag.add_edge(new_compute, new_feature)
-    dag.add_edge(new_feature, old_compute)
+    dag.add_edge(new_feature, old_compute, **old_edge_attrs)
 
 
 def _insert_layer_after_feature(
@@ -86,8 +87,9 @@ def _insert_layer_after_feature(
 
     old_computes = list(dag.successors(old_feature))
     for oc in old_computes:
+        old_edge_attrs = dict(dag.edges[old_feature, oc])
         dag.remove_edge(old_feature, oc)
-        dag.add_edge(new_feature, oc)
+        dag.add_edge(new_feature, oc, **old_edge_attrs)
     dag.add_edge(old_feature, new_compute)
     dag.add_edge(new_compute, new_feature)
 
@@ -144,11 +146,12 @@ def _delete_layer(
     feature_out = feature_out_list[0]
 
     downstream_computes = list(dag.successors(feature_out))
+    downstream_edge_attrs = {dc: dict(dag.edges[feature_out, dc]) for dc in downstream_computes}
 
     dag.remove_node(feature_out)
     dag.remove_node(compute)
     for dc in downstream_computes:
-        dag.add_edge(feature_in, dc)
+        dag.add_edge(feature_in, dc, **downstream_edge_attrs[dc])
 
 
 def init_levels(graph: LayerAbstractGraph):
@@ -194,9 +197,6 @@ def add_layer(
         shape,
     )
     feature_node_out.sp_info = feature_node_in.sp_info.copy()
-
-    if hasattr(feature_node_in, 'node_index'):
-        feature_node_out.node_index = feature_node_in.node_index
 
     if insert_node:
         new_compute_node = insert_node
@@ -455,7 +455,7 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
             graph.dag.nodes[succ]['skip'] = [1] * preds[0].dim
             if any(succ.shape[i] < config.block_shape[i] for i in range(succ.dim)):
                 for i in range(preds[0].dim):
-                    graph.dag.nodes[succ]['skip'][i] = config.block_shape[i] / succ[0].shape[i]
+                    graph.dag.nodes[succ]['skip'][i] = config.block_shape[i] / succ.shape[i]
 
         process_special_info(graph, compute_node, preds, succ)
         populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)
@@ -506,19 +506,21 @@ def set_level_costs(graph: LayerAbstractGraph):
             if config.style == 'ordinary':
                 graph.dag.nodes[compute_node]['level_cost'] = 1
             elif config.style == 'multiplexed':
-                if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+                if any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
                     compute_node.is_big_size = True
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                     if any(succ.shape[i] < config.block_shape[i] for i in range(succ.dim)):
                         graph.dag.nodes[compute_node]['level_cost'] = 2
                 else:
                     if compute_node.groups == 1:
-                        if compute_node.stride[0] == 1 and graph.dag.nodes[preds[0]]['skip'][0] == 1:
+                        if all(compute_node.stride[i] == 1 for i in range(compute_node.dim)) and all(
+                            graph.dag.nodes[preds[0]]['skip'][i] == 1 for i in range(preds[0].dim)
+                        ):
                             graph.dag.nodes[compute_node]['level_cost'] = 1
                         else:
                             graph.dag.nodes[compute_node]['level_cost'] = 2
                     else:
-                        if compute_node.stride[0] == 1:
+                        if all(compute_node.stride[i] == 1 for i in range(compute_node.dim)):
                             graph.dag.nodes[compute_node]['level_cost'] = 1
                         else:
                             graph.dag.nodes[compute_node]['level_cost'] = 2
@@ -554,6 +556,9 @@ def set_level_costs(graph: LayerAbstractGraph):
             graph.dag.nodes[compute_node]['level_cost'] = 1
         elif 'resize' in compute_node.layer_type:
             graph.dag.nodes[compute_node]['level_cost'] = 1
+        elif compute_node.layer_type == 'concat2d':
+            has_uneven = any(p.channel % graph.dag.nodes[p]['pack_num'] != 0 for p in preds)
+            graph.dag.nodes[compute_node]['level_cost'] = 1 if has_uneven else 0
         else:
             graph.dag.nodes[compute_node]['level_cost'] = 0
 

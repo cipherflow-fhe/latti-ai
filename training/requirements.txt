@@ -1,6 +1,7 @@
 torch==2.8.0
 torchvision==0.23.0
 numpy==2.2.6
+scipy==1.15.3
 networkx==3.4.2
 tqdm==4.67.1
 onnx==1.19.0
@@ -10,3 +11,4 @@ typing_extensions==4.15.0
 graphviz==0.21
 h5py==3.14.0
 pytest==8.3.4
+matplotlib==3.10.8

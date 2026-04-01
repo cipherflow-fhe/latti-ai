@@ -667,6 +667,49 @@ class ConcatModel(nn.Module):
         return torch.cat([a, b], dim=1)
 
 
+class ConvConcatConv(nn.Module):
+    """Shared-input concat structure with final add:
+      concat1: [conv1_out(8ch), conv2_out(8ch)] → concat1_out (16ch)
+      concat2: [conv2_out(8ch), conv3_out(4ch), conv4_out(4ch)] → concat2_out (16ch)
+      add:     concat1_out + concat2_out → 16ch
+    Note: conv2_out feeds both concat1 and concat2 (tests shared-FeatureNode edge ordering).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels=16, out_channels=8, kernel_size=3, bias=False, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=16, out_channels=8, kernel_size=3, bias=False, padding=1)
+        self.conv3 = nn.Conv2d(in_channels=16, out_channels=4, kernel_size=3, bias=False, padding=1)
+        self.conv4 = nn.Conv2d(in_channels=16, out_channels=4, kernel_size=3, bias=False, padding=1)
+
+    def forward(self, x):
+        a = self.conv1(x)
+        b = self.conv2(x)
+        c1 = torch.cat([a, b], dim=1)  # concat1: [conv1_out, conv2_out], 16ch
+        d = self.conv3(x)
+        e = self.conv4(x)
+        c2 = torch.cat([b, d, e], dim=1)  # concat2: [conv2_out, conv3_out, conv4_out], 16ch
+        return c1 + c2  # add: concat1_out + concat2_out, 16ch
+
+
+class UnevenConcatModel(nn.Module):
+    """Two conv branches with uneven channels concatenated. Covers concat_layer uneven path."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=3, out_channels=5, kernel_size=3, bias=False, padding=1)
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, bias=False, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=3, out_channels=7, kernel_size=3, bias=False, padding=1)
+        self.conv3 = nn.Conv2d(in_channels=15, out_channels=5, kernel_size=3, bias=False, padding=1)
+
+    def forward(self, x):
+        a = self.conv0(x)
+        b = self.conv1(x)
+        c = self.conv2(x)
+        d = torch.cat([a, b, c], dim=1)
+        return self.conv3(d)
+
+
 class ConvUpsampleE2E(nn.Module):
     """Conv with stride=2 followed by nearest upsample. Covers upsample_layer / upsample_nearest_layer."""
 
@@ -687,6 +730,18 @@ class AvgpoolVariedStride(nn.Module):
     def __init__(self, stride=2):
         super().__init__()
         self.pool = nn.AvgPool2d(kernel_size=stride, stride=stride)
+
+    def forward(self, x):
+        x = self.pool(x)
+        return x
+
+
+class GeneralAvgpool(nn.Module):
+    """General avgpool where kernel_size != stride (replaced with depthwise conv for FHE)."""
+
+    def __init__(self, kernel_size=3, stride=2, padding=1):
+        super().__init__()
+        self.pool = nn.AvgPool2d(kernel_size=kernel_size, stride=stride, padding=padding)
 
     def forward(self, x):
         x = self.pool(x)
