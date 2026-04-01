@@ -108,7 +108,7 @@ def compute_coefficients(func, max_n=5, tol=1e-8, limit=20, **func_kwargs):
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', category=RuntimeWarning)
             I_n, _ = quad(
-                lambda x: float(integrand(x)),
+                lambda x: np.array(integrand(x)),  # ensure output is array
                 -limit,
                 limit,
                 epsabs=tol,
