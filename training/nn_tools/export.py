@@ -279,41 +279,36 @@ def _fuse_conv_bn(conv_weight, conv_bias, bn_weight, bn_bias, bn_mean, bn_var, e
     return fused_weight, fused_bias
 
 
-def _compute_poly_coeffs(running_max, upper_bound=3.0, eps=1e-3, degree=4):
+def _compute_poly_coeffs(running_max, upper_bound, eps, hermite_coeffs):
     """Absorb RangeNormPoly2d scale into standard polynomial coefficients.
 
     Given::
 
-        s = running_max / upper_bound + eps(per - channel)
-        output = s * poly(x / s)
+        s = running_max / upper_bound + eps   (per-channel)
+        output = s * sum_n a_n * He_n(x / s)
 
     this function returns per-channel coefficients ``c_k`` such that::
 
         output = c0 + c1 * x + c2 * x ^ 2 + ... + c_n * x ^ n
 
     Args:
-        running_max: Per-channel running_max ``[C]`` (1-D numpy).
-        upper_bound: Normalization upper bound.
-        eps:         Epsilon.
-        degree:      Polynomial degree (2, 4, or 8).
+        running_max:    Per-channel running_max ``[C]`` (1-D numpy).
+        upper_bound:    Normalization upper bound.
+        eps:            Epsilon.
+        hermite_coeffs: Tuple of Hermite coefficients (a_0, ..., a_degree).
 
     Returns:
         ``numpy.ndarray`` of shape ``(degree+1, C)``
-        (only even + const + linear terms are non-zero).
     """
     import numpy as np
 
     s = running_max / upper_bound + eps
-
-    # Fixed Hermite-expansion coefficients
-    _a0 = 0.39894228
-    _a1 = 0.5
-    _a2 = 0.28209479 / np.sqrt(2)
-    _a4 = -0.08143375 / np.sqrt(24)
-    _a6 = 0.04460310 / np.sqrt(720)
-    _a8 = -0.02980170 / np.sqrt(40320)
-
     C = len(s)
+    degree = len(hermite_coeffs) - 1
+
+    _a0 = hermite_coeffs[0]
+    _a1 = hermite_coeffs[1]
+    _a2 = hermite_coeffs[2]
 
     if degree == 2:
         c0 = s * (_a0 - _a2)
@@ -322,6 +317,7 @@ def _compute_poly_coeffs(running_max, upper_bound=3.0, eps=1e-3, degree=4):
         return np.array([c0, c1, c2])  # [3, C]
 
     elif degree == 4:
+        _a4 = hermite_coeffs[4]
         c0 = s * (_a0 - _a2 + 3 * _a4)
         c1 = np.full(C, _a1)
         c2 = (_a2 - 6 * _a4) / s
@@ -329,34 +325,8 @@ def _compute_poly_coeffs(running_max, upper_bound=3.0, eps=1e-3, degree=4):
         c4 = _a4 / (s**3)
         return np.array([c0, c1, c2, c3, c4])  # [5, C]
 
-    elif degree == 8:
-        # Hermite -> standard monomial expansion
-        # He2 = t^2 - 1
-        # He4 = t^4 - 6t^2 + 3
-        # He6 = t^6 - 15t^4 + 45t^2 - 15
-        # He8 = t^8 - 28t^6 + 210t^4 - 420t^2 + 105
-        #
-        # output = s * poly(x/s) -> c_k = p_k / s^(k-1)
-        p0 = _a0 - _a2 + 3 * _a4 - 15 * _a6 + 105 * _a8
-        p1 = _a1
-        p2 = _a2 - 6 * _a4 + 45 * _a6 - 420 * _a8
-        p4 = _a4 - 15 * _a6 + 210 * _a8
-        p6 = _a6 - 28 * _a8
-        p8 = _a8
-
-        c0 = s * p0
-        c1 = np.full(C, p1)
-        c2 = p2 / s
-        c3 = np.zeros(C)
-        c4 = p4 / (s**3)
-        c5 = np.zeros(C)
-        c6 = p6 / (s**5)
-        c7 = np.zeros(C)
-        c8 = p8 / (s**7)
-        return np.array([c0, c1, c2, c3, c4, c5, c6, c7, c8])  # [9, C]
-
     else:
-        raise ValueError(f'Unsupported degree: {degree}')
+        raise ValueError(f'Unsupported degree: {degree}. Use 2 or 4.')
 
 
 def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verbose=True):
@@ -430,7 +400,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
 
         elif isinstance(mod, _RangeNormPoly2d):
             running_max = get_np(f'{name}.rangenorm.running_max').flatten()
-            coeffs = _compute_poly_coeffs(running_max, upper_bound, eps, degree)
+            coeffs = _compute_poly_coeffs(running_max, upper_bound, eps, mod.hermite_coeffs)
             fused[f'{name}.weight'] = coeffs.flatten()
             if verbose:
                 log.info('Poly coeffs:  %s  (%d coeffs x %d ch)', name, coeffs.shape[0], coeffs.shape[1])
@@ -449,7 +419,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
                     break
             # Simple_Polyrelu has no per-channel normalization, equivalent to s = 1
             s = np.ones(num_channels)
-            coeffs = _compute_poly_coeffs(s, upper_bound=1.0, eps=0.0, degree=mod.degree)
+            coeffs = _compute_poly_coeffs(s, 1.0, 0.0, mod.hermite_coeffs)
             fused[f'{name}.weight'] = coeffs.flatten()
             if verbose:
                 log.info('Poly coeffs:  %s  (%d coeffs x %d ch)', name, coeffs.shape[0], coeffs.shape[1])

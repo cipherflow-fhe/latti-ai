@@ -17,7 +17,7 @@
 
 Modules:
   - RangeNorm2d:      per-channel range normalization
-  - Simple_Polyrelu:  Hermite polynomial approximation of ReLU
+  - Simple_Polyrelu:  Hermite polynomial approximation of activations
   - RangeNormPoly2d:  combined range-norm + polynomial activation
 """
 
@@ -88,90 +88,73 @@ class RangeNorm2d(nn.Module):
         )
 
 
+def _eval_hermite(x, hermite_coeffs, scale_after=1.0):
+    """Evaluate Hermite polynomial expansion.
+
+    Computes scale_after * sum_n a_n * He_n(x) where He_n is the probabilist's
+    Hermite polynomial.
+    """
+    a0, a1, a2 = hermite_coeffs[0], hermite_coeffs[1], hermite_coeffs[2]
+    degree = len(hermite_coeffs) - 1
+
+    if degree == 2:
+        return scale_after * (a0 + (a1 + a2 * x) * x - a2)
+
+    if degree == 4:
+        a4 = hermite_coeffs[4]
+        return scale_after * (a0 + a1 * x + a2 * (x**2 - 1) + a4 * (x**4 - 6 * x**2 + 3))
+
+    # General degree: recurrence He_n = x*He_{n-1} - (n-1)*He_{n-2}
+    result = a0 * scale_after + a1 * scale_after * x
+    he_prev2 = torch.ones_like(x)  # He_0
+    he_prev1 = x  # He_1
+    for n in range(2, degree + 1):
+        he_n = x * he_prev1 - (n - 1) * he_prev2
+        result = result + hermite_coeffs[n] * scale_after * he_n
+        he_prev2, he_prev1 = he_prev1, he_n
+    return result
+
+
 class _SimplePolyreluExport(torch.autograd.Function):
     """ONNX export helper: emit Simple_Polyrelu as a single custom op."""
 
     @staticmethod
-    def forward(ctx, x, scale_before, scale_after, degree, activation):
-        if activation == 'relu':
-            coeffs = Simple_Polyrelu._RELU_COEFF
-        else:
-            coeffs = Simple_Polyrelu._SILU_COEFF
-        a0, a1, a2, a3, a4 = coeffs[degree]
-        a0 *= scale_after
-        a1 *= scale_after
-        a2 *= scale_after
-        a4 *= scale_after
-
-        x = scale_before * x
-
-        if degree == 2:
-            return a0 + (a1 + a2 * x) * x - a2
-        elif degree == 4:
-            return a0 + a1 * x + a2 * (x**2 - 1) + a4 * (x**4 - 6 * x**2 + 3)
-        else:
-            raise ValueError(f'Unsupported degree: {degree}')
+    def forward(ctx, x, scale_before, scale_after, hermite_coeffs):
+        return _eval_hermite(scale_before * x, hermite_coeffs, scale_after)
 
     @staticmethod
-    def symbolic(g, x, scale_before, scale_after, degree, activation):
+    def symbolic(g, x, scale_before, scale_after, hermite_coeffs):
         return g.op(
             'nn_tools::Simple_Polyrelu',
             x,
             scale_before_f=scale_before,
             scale_after_f=scale_after,
-            degree_i=degree,
-            activation_s=activation,
+            degree_i=len(hermite_coeffs) - 1,
         ).setType(x.type())
 
 
 class Simple_Polyrelu(nn.Module):
-    """Polynomial activation approximating ReLU or SiLU via Hermite expansion.
+    """Polynomial activation via Hermite expansion.
 
-    Exported as a single ``nn_tools::Simple_Polyrelu`` custom op in ONNX.
+    Hermite coefficients are computed by ``get_hermite_coeffs_for_module()``
+    and passed in via ``hermite_coeffs``.
+
+    Reference coefficients (degree=4):
+      ReLU: (0.39894228, 0.50000000, 0.28209479/sqrt(2), 0.0, -0.08143375/sqrt(24))
+      SiLU: (0.20662096, 0.50000000, 0.24808519/sqrt(2), 0.0, -0.03780501/sqrt(24))
 
     Args:
-        scale_before: Input scaling factor.
-        scale_after:  Output scaling factor.
-        degree:       Polynomial degree (2 or 4).
-        activation:   Target activation ('relu' or 'silu').
+        hermite_coeffs: Tuple of (degree+1) Hermite expansion coefficients.
+        scale_before:   Input scaling factor.
+        scale_after:    Output scaling factor.
     """
 
-    # Hermite coefficients for ReLU approximation
-    _RELU_COEFF = {
-        2: (0.39894228, 0.50000000, 0.28209479 / np.sqrt(2), 0.0, 0.0),
-        4: (0.39894228, 0.50000000, 0.28209479 / np.sqrt(2), 0.0, -0.08143375 / np.sqrt(24)),
-    }
-
-    # Coefficients for SiLU approximation
-    _SILU_COEFF = {
-        2: (0.20662096, 0.50000000, 0.24808519 / np.sqrt(2), 0.0, 0.0),
-        4: (0.20662096, 0.50000000, 0.24808519 / np.sqrt(2), 0.0, -0.03780501 / np.sqrt(24)),
-    }
-
-    def __init__(self, scale_before=1.0, scale_after=1.0, degree=4, activation='relu', **kwargs):
+    def __init__(self, hermite_coeffs, scale_before=1.0, scale_after=1.0, **kwargs):
         super().__init__()
+        self.hermite_coeffs = tuple(hermite_coeffs)
+        self.degree = len(hermite_coeffs) - 1
         self.scale_before = scale_before
         self.scale_after = scale_after
-        self.degree = degree
-        self.activation = activation
-
-        if activation == 'relu':
-            coeffs = self._RELU_COEFF
-        elif activation == 'silu':
-            coeffs = self._SILU_COEFF
-        else:
-            raise ValueError(
-                f'Unsupported activation: {activation}. For other activations, use Chebyshev polynomial fitting.'
-            )
-
-        if degree not in coeffs:
-            raise ValueError(f'Unsupported degree: {degree}. Use 2 or 4.')
-
-        a0, a1, a2, a3, a4 = coeffs[degree]
-        self.a0 = a0 * self.scale_after
-        self.a1 = a1 * self.scale_after
-        self.a2 = a2 * self.scale_after
-        self.a4 = a4 * self.scale_after
 
     def forward(self, x):
         if torch.onnx.is_in_onnx_export():
@@ -179,59 +162,32 @@ class Simple_Polyrelu(nn.Module):
                 x,
                 self.scale_before,
                 self.scale_after,
-                self.degree,
-                self.activation,
+                self.hermite_coeffs,
             )
-        x = self.scale_before * x
-
-        if self.degree == 2:
-            return self.a0 + (self.a1 + self.a2 * x) * x - self.a2
-        if self.degree == 4:
-            return self.a0 + self.a1 * x + self.a2 * (x**2 - 1) + self.a4 * (x**4 - 6 * x**2 + 3)
+        return _eval_hermite(self.scale_before * x, self.hermite_coeffs, self.scale_after)
 
     def extra_repr(self):
-        return (
-            f'degree={self.degree}, activation={self.activation}, '
-            f'scale_before={self.scale_before}, scale_after={self.scale_after}'
-        )
+        return f'degree={self.degree}, scale_before={self.scale_before}, scale_after={self.scale_after}'
 
 
 class _RangeNormPoly1dExport(torch.autograd.Function):
     """ONNX export helper: emit RangeNormPoly1d as a single custom op."""
 
     @staticmethod
-    def forward(ctx, x, running_max, upper_bound, degree, eps, activation):
-        # running_max is (1, C, 1) but x may be (B, C) — squeeze to match
-        # if x.dim() == 2:
-        #     running_max = running_max.squeeze(2)
+    def forward(ctx, x, running_max, upper_bound, eps, hermite_coeffs):
         scale_factor = running_max / upper_bound + eps
-        x_norm = x / scale_factor
-
-        if activation == 'relu':
-            coeffs = Simple_Polyrelu._RELU_COEFF
-        else:
-            coeffs = Simple_Polyrelu._SILU_COEFF
-        a0, a1, a2, a3, a4 = coeffs[degree]
-
-        if degree == 2:
-            poly_out = a0 + (a1 + a2 * x_norm) * x_norm - a2
-        elif degree == 4:
-            poly_out = a0 + a1 * x_norm + a2 * (x_norm**2 - 1) + a4 * (x_norm**4 - 6 * x_norm**2 + 3)
-        else:
-            raise ValueError(f'Unsupported degree: {degree}')
-
+        poly_out = _eval_hermite(x / scale_factor, hermite_coeffs)
         return scale_factor * poly_out
 
     @staticmethod
-    def symbolic(g, x, running_max, upper_bound, degree, eps, activation):
+    def symbolic(g, x, running_max, upper_bound, eps, hermite_coeffs):
         return g.op(
             'nn_tools::RangeNormPoly1d',
             x,
             running_max,
             upper_bound_f=upper_bound,
-            degree_i=degree,
+            degree_i=len(hermite_coeffs) - 1,
             eps_f=eps,
-            activation_s=activation,
         ).setType(x.type())
 
 
@@ -239,64 +195,43 @@ class _RangeNormPoly2dExport(torch.autograd.Function):
     """ONNX export helper: emit RangeNormPoly2d as a single custom op."""
 
     @staticmethod
-    def forward(ctx, x, running_max, upper_bound, degree, eps, activation):
+    def forward(ctx, x, running_max, upper_bound, eps, hermite_coeffs):
         scale_factor = running_max / upper_bound + eps
-        x_norm = x / scale_factor
-
-        if activation == 'relu':
-            coeffs = Simple_Polyrelu._RELU_COEFF
-        else:
-            coeffs = Simple_Polyrelu._SILU_COEFF
-        a0, a1, a2, a3, a4 = coeffs[degree]
-
-        if degree == 2:
-            poly_out = a0 + (a1 + a2 * x_norm) * x_norm - a2
-        elif degree == 4:
-            poly_out = a0 + a1 * x_norm + a2 * (x_norm**2 - 1) + a4 * (x_norm**4 - 6 * x_norm**2 + 3)
-        else:
-            raise ValueError(f'Unsupported degree: {degree}')
-
+        poly_out = _eval_hermite(x / scale_factor, hermite_coeffs)
         return scale_factor * poly_out
 
     @staticmethod
-    def symbolic(g, x, running_max, upper_bound, degree, eps, activation):
+    def symbolic(g, x, running_max, upper_bound, eps, hermite_coeffs):
         return g.op(
             'nn_tools::RangeNormPoly2d',
             x,
             running_max,
             upper_bound_f=upper_bound,
-            degree_i=degree,
+            degree_i=len(hermite_coeffs) - 1,
             eps_f=eps,
-            activation_s=activation,
         ).setType(x.type())
 
 
 class RangeNormPoly2d(nn.Module):
     """Combined range normalization + polynomial activation.
 
-    Applies per-channel range normalization, then a polynomial activation,
-    and rescales back. Exported as a single ``nn_tools::RangeNormPoly2d``
-    custom op in ONNX.
-
-    Supports lazy initialization: pass ``num_features=0`` (default) to defer
-    buffer creation until the first forward call.
+    Applies per-channel range normalization, then a Hermite polynomial
+    activation, and rescales back.
 
     Args:
-        num_features: Number of channels (0 for lazy initialization).
-        upper_bound:  Normalization upper bound.
-        degree:       Polynomial degree (2 or 4).
-        activation:   Target activation ('relu' or 'silu').
+        hermite_coeffs: Tuple of Hermite expansion coefficients.
+        num_features:   Number of channels (0 for lazy initialization).
+        upper_bound:    Normalization upper bound.
     """
 
-    def __init__(self, num_features=0, upper_bound=3.0, degree=4, activation='relu'):
+    def __init__(self, hermite_coeffs, num_features=0, upper_bound=3.0, **kwargs):
         super().__init__()
+        self.hermite_coeffs = tuple(hermite_coeffs)
         self.num_features = num_features
         self.upper_bound = upper_bound
-        self.degree = degree
-        self.activation = activation
 
         self.rangenorm = RangeNorm2d(num_features, upper_bound=upper_bound, eps=1e-3, momentum=0.1)
-        self.poly = Simple_Polyrelu(degree=degree, activation=activation)
+        self.poly = Simple_Polyrelu(hermite_coeffs)
 
     def forward(self, x):
         if torch.onnx.is_in_onnx_export():
@@ -304,9 +239,8 @@ class RangeNormPoly2d(nn.Module):
                 x,
                 self.rangenorm.running_max,
                 self.upper_bound,
-                self.degree,
                 self.rangenorm.eps,
-                self.activation,
+                self.hermite_coeffs,
             )
         x = self.rangenorm(x)
         x = self.rangenorm.scale_factor * self.poly(x)
@@ -314,8 +248,7 @@ class RangeNormPoly2d(nn.Module):
 
     def extra_repr(self):
         return (
-            f'num_features={self.num_features}, upper_bound={self.upper_bound}, '
-            f'degree={self.degree}, activation={self.activation}'
+            f'num_features={self.num_features}, upper_bound={self.upper_bound}, degree={len(self.hermite_coeffs) - 1}'
         )
 
 
@@ -370,7 +303,6 @@ class RangeNorm1d(nn.Module):
             if self.num_batches_tracked == 0:
                 self.running_max.copy_(abs_max.detach())
             else:
-                # torch.maximum(self.running_max, abs_max.detach(), out=self.running_max)
                 self.running_max.mul_(1 - self.momentum).add_(self.momentum * abs_max.detach())
             self.num_batches_tracked.add_(1)
         else:
@@ -381,31 +313,22 @@ class RangeNorm1d(nn.Module):
 
 
 class RangeNormPoly1d(nn.Module):
-    """Combined range normalization + polynomial activation.
-
-    Applies per-channel range normalization, then a polynomial activation,
-    and rescales back. Exported as a single ``nn_tools::RangeNormPoly2d``
-    custom op in ONNX.
-
-    Supports lazy initialization: pass ``num_features=0`` (default) to defer
-    buffer creation until the first forward call.
+    """Combined range normalization + polynomial activation for 1D features.
 
     Args:
-        num_features: Number of channels (0 for lazy initialization).
-        upper_bound:  Normalization upper bound.
-        degree:       Polynomial degree (2 or 4).
-        activation:   Target activation ('relu' or 'silu').
+        hermite_coeffs: Tuple of Hermite expansion coefficients.
+        num_features:   Number of channels (0 for lazy initialization).
+        upper_bound:    Normalization upper bound.
     """
 
-    def __init__(self, num_features=0, upper_bound=3.0, degree=4, activation='relu'):
+    def __init__(self, hermite_coeffs, num_features=0, upper_bound=3.0, **kwargs):
         super().__init__()
+        self.hermite_coeffs = tuple(hermite_coeffs)
         self.num_features = num_features
         self.upper_bound = upper_bound
-        self.degree = degree
-        self.activation = activation
 
         self.rangenorm = RangeNorm1d(num_features, upper_bound=upper_bound, eps=1e-3, momentum=0.1)
-        self.poly = Simple_Polyrelu(degree=degree, activation=activation)
+        self.poly = Simple_Polyrelu(hermite_coeffs)
 
     def forward(self, x):
         if torch.onnx.is_in_onnx_export():
@@ -413,9 +336,8 @@ class RangeNormPoly1d(nn.Module):
                 x,
                 self.rangenorm.running_max,
                 self.upper_bound,
-                self.degree,
                 self.rangenorm.eps,
-                self.activation,
+                self.hermite_coeffs,
             )
         x = self.rangenorm(x)
         x = self.rangenorm.scale_factor * self.poly(x)
@@ -423,8 +345,7 @@ class RangeNormPoly1d(nn.Module):
 
     def extra_repr(self):
         return (
-            f'num_features={self.num_features}, upper_bound={self.upper_bound}, '
-            f'degree={self.degree}, activation={self.activation}'
+            f'num_features={self.num_features}, upper_bound={self.upper_bound}, degree={len(self.hermite_coeffs) - 1}'
         )
 
 

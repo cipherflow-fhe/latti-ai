@@ -177,6 +177,7 @@ def main():
             fuse_and_export_h5,
             replace_activation_with_poly,
             replace_maxpool_with_avgpool,
+            replace_general_avgpool_with_depthwise_conv,
         )
         from training.nn_tools.activations import RangeNormPoly2d, Simple_Polyrelu
         from training.nn_tools.replace import count_activations
@@ -248,6 +249,9 @@ def main():
         ckpt = torch.load(best_path, map_location='cpu')
         model.load_state_dict(ckpt['state_dict'])
         model.eval()
+
+        # Replace general AvgPool2d (kernel_size != stride or non-power-of-2) with depthwise conv
+        replace_general_avgpool_with_depthwise_conv(model, input_size=tuple([1, *input_shape]))
 
         onnx_path = os.path.join(args.output_dir, 'trained_poly.onnx')
         export_to_onnx(

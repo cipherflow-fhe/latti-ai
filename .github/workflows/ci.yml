@@ -39,6 +39,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install Python dependencies
+        run: pip install -r training/requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+
       - name: Detect CUDA architecture
         id: cuda-arch
         run: |

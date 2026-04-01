@@ -1046,6 +1046,12 @@ class TestE2E(CompilerTestBase):
         graph, score = self._export_compile_and_deploy(model, (1, 3, 32, 32), 'concat_e2e')
         self.assertIsNotNone(graph)
 
+    def test_e2e_uneven_concat(self):
+        """Two conv branches with uneven channels concatenated. Covers concat_layer uneven path."""
+        model = nn_modules.UnevenConcatModel()
+        graph, score = self._export_compile_and_deploy(model, (1, 3, 32, 32), 'uneven_concat')
+        self.assertIsNotNone(graph)
+
     def test_e2e_conv_upsample(self):
         """Conv stride=2 + nearest upsample. Covers upsample_layer / upsample_nearest_layer."""
         model = nn_modules.ConvUpsampleE2E()
@@ -1077,6 +1083,17 @@ class TestE2E(CompilerTestBase):
         """Shared-input concat structure with final add."""
         model = nn_modules.ConvConcatConv()
         graph, score = self._export_compile_and_deploy(model, (1, 16, 32, 32), 'conv_concat_conv')
+        self.assertIsNotNone(graph)
+
+    def test_e2e_general_avgpool(self):
+        """General avgpool (kernel_size=3, stride=2) replaced with depthwise conv for FHE."""
+        model = nn_modules.GeneralAvgpool(kernel_size=3, stride=2, padding=1)
+        graph, score = self._export_compile_and_deploy(
+            model,
+            (1, 32, 8, 8),
+            'general_avgpool',
+            style='multiplexed',
+        )
         self.assertIsNotNone(graph)
 
 
