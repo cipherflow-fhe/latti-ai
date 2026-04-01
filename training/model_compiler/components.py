@@ -318,7 +318,6 @@ class FeatureNode:
         self.ckks_scale = ckks_scale
         self.shape = shape
         self.ckks_parameter_id = ckks_parameter_id
-        self.node_index = -1
         self.depth = -1
         self.is_total_graph_leading_node = False
         self.scale_up = 1
@@ -655,7 +654,6 @@ class LayerAbstractGraph:
 
         graph_info = LayerAbstractGraph()
         feature_dict = dict()
-        f_index = 0
         for key, feature_json in graph_json['feature'].items():
             dim = feature_json['dim']
             channel = feature_json['channel']
@@ -674,11 +672,8 @@ class LayerAbstractGraph:
                 node.sp_info = sp_info
             else:
                 raise ValueError(f'Unsupported feature dim: {dim}')
-            node.node_index = f_index
-
             graph_info.dag.add_node(node, name=key, skip=skip)
             feature_dict[key] = node
-            f_index = f_index + 1
 
         for key, layer_json in graph_json['layer'].items():
             layer_type = layer_json['type']
@@ -805,7 +800,8 @@ class LayerAbstractGraph:
                 compute_node = ComputeNode(key, layer_type, channel_input, channel_output)
 
             graph_info.dag.add_node(compute_node, name=key)
-            graph_info.dag.add_edges_from([(node, compute_node) for node in feature_input])
+            for idx, f_node in enumerate(feature_input):
+                graph_info.dag.add_edge(f_node, compute_node, input_index=idx if len(feature_input) > 1 else None)
             graph_info.dag.add_edges_from([(compute_node, node) for node in feature_output])
 
         if is_fpga:
@@ -874,9 +870,11 @@ class LayerAbstractGraph:
                 or 'concat2d' == layer_type
                 or 'identity' == layer_type
             ):
-                if 'concat2d' == layer_type:
-                    # The ordering of concat2d inputs is recovered from node_index on the FeatureNodes, which is set at parse time.
-                    input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: n.node_index)]
+                if 'concat2d' == layer_type or 'add' in layer_type:
+                    # Restore the original input ordering using input_index stored on each edge.
+                    edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
+                    if all(v is not None for v in edge_indices.values()):
+                        input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: edge_indices[n])]
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,
