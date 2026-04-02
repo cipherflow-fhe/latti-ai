@@ -21,7 +21,7 @@
 using namespace std;
 using namespace cxx_sdk_v2;
 
-Avgpool1DLayer::Avgpool1DLayer(uint32_t shape_in, uint32_t stride_in) : n_block_per_ct(0) {
+Avgpool1DLayer::Avgpool1DLayer(uint32_t shape_in, uint32_t stride_in) : n_block_per_ct(0), skip(0) {
     shape = shape_in;
     stride = stride_in;
 
