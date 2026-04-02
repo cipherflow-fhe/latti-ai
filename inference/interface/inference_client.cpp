@@ -162,7 +162,11 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
             auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.channel, (uint64_t)param.length});
             uint32_t skip = param.pack_num > 0 ? (uint32_t)(n_slots_ / (param.length * param.pack_num)) : 1;
             Feature1DEncrypted input_ct(context_ptr_, param.level, skip);
-            input_ct.pack(input_array, false, scale);
+            if (pack_style_ == "ordinary") {
+                input_ct.pack(input_array, false, scale);
+            } else {
+                input_ct.pack_multiplexed(input_array, false, scale);
+            }
             result[name] = input_ct.serialize();
         } else {
             auto input_array =

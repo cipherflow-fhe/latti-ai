@@ -506,3 +506,140 @@ Array<double, 1> DensePackedLayer::plaintext_call(const Array<double, 1>& x, dou
     }
     return result;
 }
+
+void DensePackedLayer::prepare_weight_for_1d_multiplexed(uint32_t input_shape_in,
+                                                         uint32_t skip_in,
+                                                         uint32_t invalid_fill_in) {
+    input_shape_1d = input_shape_in;
+    skip_1d = skip_in;
+    invalid_fill_1d = invalid_fill_in;
+
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
+    N_half = ctx.get_parameter().get_n() / 2;
+
+    // 1D multiplexed layout: block_stride = skip * invalid_fill, block_size = shape * block_stride
+    uint32_t block_stride = skip_1d * invalid_fill_1d;
+    uint32_t block_size = input_shape_1d * block_stride;
+
+    // channels per ciphertext in the 1D multiplexed layout
+    // n_channel_per_ct_1d = skip_1d * (N_half / block_size)
+    int n_blocks = N_half / (int)block_size;
+    int n_channel_per_ct_1d = n_blocks * skip_1d;
+    n_block_per_ct_1d = n_blocks;
+
+    // Each output group covers n_block_per_ct_1d output channels.
+    int n_packed_out = div_ceil(n_out_feature, n_block_per_ct_1d);
+    // Number of rotation steps needed to cover all input channels:
+    // each rotation shifts by block_size slots, covering one block worth of channels.
+    n_block_input_1d = div_ceil(n_in_feature, n_channel_per_ct_1d) * n_block_per_ct_1d;
+
+    weight_pt.resize(n_packed_out);
+    bias_pt.resize(n_packed_out);
+
+    parallel_for(n_packed_out, th_nums, ctx, [&](CkksContext& ctx_copy, int out_group) {
+        weight_pt[out_group].resize(n_block_input_1d);
+
+        // bias: place bias[out_ch] at the first element slot of each block for that output channel.
+        // In the output 0D feature (skip=1 after fold), output channel out_ch is at slot out_ch.
+        // Before fold, it occupies block_size slots; we put the bias at slot 0 within the block.
+        vector<double> b(N_half, 0.0);
+        for (int local_block = 0; local_block < n_block_per_ct_1d; local_block++) {
+            int out_ch = out_group * n_block_per_ct_1d + local_block;
+            if (out_ch < n_out_feature) {
+                // slot 0 of this block's first element position
+                int slot = local_block * (int)block_size;
+                b[slot] = bias.get(out_ch);
+            }
+        }
+        bias_pt[out_group] = ctx_copy.encode_ringt(b, param_.get_default_scale());
+
+        for (int rot_idx = 0; rot_idx < n_block_input_1d; rot_idx++) {
+            // rot_idx encodes (group, offset): which input ct group and rotation within
+            int group = rot_idx / n_block_per_ct_1d;
+            int offset = rot_idx % n_block_per_ct_1d;
+
+            vector<double> w(N_half, 0.0);
+            for (int i = 0; i < N_half; i++) {
+                // Determine which output channel this slot position maps to
+                int local_block = i / (int)block_size;
+                int pos_in_block = i % (int)block_size;
+                int data_idx = pos_in_block / (int)block_stride;  // spatial position
+                int sub = pos_in_block % (int)block_stride;
+
+                // Only the first skip_1d sub-positions (invalid_fill_1d==1 means all valid)
+                if (sub >= (int)skip_1d)
+                    continue;
+
+                int out_ch = out_group * n_block_per_ct_1d + local_block;
+                if (out_ch >= n_out_feature)
+                    continue;
+
+                // After rotation by offset*block_size, the input block that lands here is:
+                int rotated_block = (offset + local_block) % n_block_per_ct_1d + group * n_block_per_ct_1d;
+                // input channel index: each block has skip_1d channels, sub selects within block
+                int in_ch = rotated_block * (int)skip_1d + sub;
+                // flattened input index: in_ch * input_shape_1d + data_idx
+                int in_flat = in_ch * (int)input_shape_1d + data_idx;
+
+                if (in_flat < n_in_feature) {
+                    w[i] = weight.get(out_ch, in_flat);
+                }
+            }
+            weight_pt[out_group][rot_idx] = ctx_copy.encode_ringt(w, modified_scale);
+        }
+    });
+}
+
+Feature0DEncrypted DensePackedLayer::run_1d_multiplexed(CkksContext& ctx, const Feature0DEncrypted& x) {
+    uint32_t block_stride = skip_1d * invalid_fill_1d;
+    uint32_t block_size = input_shape_1d * block_stride;
+
+    int n_packed_out = (int)weight_pt.size();
+
+    // Pre-compute rotations of each input ciphertext (rotate by multiples of block_size)
+    int x_size = (int)x.data.size();
+    vector<vector<CkksCiphertext>> rotated_cts(x_size);
+    parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
+        rotated_cts[x_id] =
+            Conv2DLayer::populate_rotations_1_side(ctx_copy, x.data[x_id], n_block_per_ct_1d - 1, (int)block_size);
+    });
+
+    vector<CkksCiphertext> result(n_packed_out);
+    parallel_for(n_packed_out, th_nums, ctx, [&](CkksContext& ctx_copy, int out_group) {
+        CkksCiphertext s(0);
+        int num_rot = (int)weight_pt[out_group].size();
+        for (int rot_idx = 0; rot_idx < num_rot; rot_idx++) {
+            int group = rot_idx / n_block_per_ct_1d;
+            int offset = rot_idx % n_block_per_ct_1d;
+            auto& x_ct = rotated_cts[group][offset];
+            auto w_pt = ctx_copy.ringt_to_mul(weight_pt[out_group][rot_idx], level_);
+            auto p = ctx_copy.mult_plain_mul(x_ct, w_pt);
+            if (rot_idx == 0) {
+                s = move(p);
+            } else {
+                s = ctx_copy.add(s, p);
+            }
+        }
+        s = ctx_copy.rescale(s, ctx_copy.get_parameter().get_default_scale());
+        s = ctx_copy.add_plain_ringt(s, bias_pt[out_group]);
+
+        // Fold: sum over the block_size slots within each output block position.
+        // Each output channel's value is spread over block_size slots; fold to slot 0.
+        int n_fold = (int)block_size;
+        while (n_fold > 1) {
+            CkksCiphertext rotated = ctx_copy.rotate(s, n_fold / 2);
+            s = ctx_copy.add(s, rotated);
+            n_fold /= 2;
+        }
+        result[out_group] = move(s);
+    });
+
+    Feature0DEncrypted out(x.context, x.level);
+    out.data = move(result);
+    out.skip = 1;
+    out.n_channel = n_out_feature;
+    out.dim = 0;
+    out.n_channel_per_ct = n_block_per_ct_1d;
+    out.level = x.level - 1;
+    return out;
+}

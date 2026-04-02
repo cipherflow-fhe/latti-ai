@@ -119,7 +119,7 @@ class Avgpool2DLayer:
         if n_channel_per_ct_out == 1:
             return res
         else:
-            packed_res = [0 for i in range(out_size // n_channel_per_ct_out)]
+            packed_res = [0 for i in range((out_size + n_channel_per_ct_out - 1) // n_channel_per_ct_out)]
             for out_ct_idx in range(out_size):
                 pack_out_ct_idx = int(out_ct_idx // n_channel_per_ct_out)
                 channel_idx_in_ct = out_ct_idx % n_channel_per_ct_out
@@ -133,6 +133,20 @@ class Avgpool2DLayer:
                         s_rot = rotate_cols(res[out_ct_idx], [step])[0]
                     packed_res[pack_out_ct_idx] = add(packed_res[pack_out_ct_idx], s_rot)
             return packed_res
+
+    def make_pt_nodes_multiplexed_avgpool(self, layer_id, n_channel, n):
+        """Return (select_tensor_pt, n_channel_per_ct) for call_multiplexed_avgpool().
+
+        select_tensor_pt[i]: i in min(n_channel, n_channel_per_ct * stride[0] * stride[1])
+        Also returns n_channel_per_ct so caller can pass it to call_multiplexed_avgpool().
+        """
+        import math as _math
+
+        n_channel_per_ct = int(_math.ceil(n / 2 / (self.shape[0] * self.shape[1])))
+        out_channels_per_ct = n_channel_per_ct * self.stride[0] * self.stride[1]
+        n_select_pt = min(n_channel, out_channels_per_ct)
+        select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)]
+        return select_tensor_pt, n_channel_per_ct
 
     def call_multiplexed_avgpool(
         self, x: list[CkksCiphertextNode], select_tensor_pt, n_channel: int, n_channel_per_ct: int
