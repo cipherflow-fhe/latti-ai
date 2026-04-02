@@ -192,17 +192,21 @@ void InitInferenceProcess::init_dense_layer(const string& key, const json& layer
     auto dense = make_unique<DensePackedLayer>(*ckks_parameters.at(feature_input.ckks_parameter_id), weight, bias,
                                                feature_input.pack_channel_per_ciphertext, feature_input.level, 0,
                                                residual_scale);
-    if (feature_input.invalid_fill[0] == 0 | feature_input.invalid_fill[1] == 0) {
-        dense->prepare_weight_0d_skip(feature_input.skip[0]);
-    } else {
+    if (feature_input.special_info_dim == 1) {
+        uint32_t shape_1d = feature_input.shape[0];
+        uint32_t skip_1d = feature_input.special_skip[0];
+        uint32_t invalid_fill_1d = feature_input.invalid_fill[0] > 0 ? feature_input.invalid_fill[0] : 1;
+        dense->prepare_weight_for_1d_multiplexed(shape_1d, skip_1d, invalid_fill_1d);
+    } else if (feature_input.special_info_dim == 2) {
         Duo input_shape = feature_input.shape;
-        Duo input_skip;
         Duo invalid_fill = feature_input.invalid_fill;
         if (is_lazy) {
             dense->prepare_weight_for_2d_multiplexed_lazy(input_shape, feature_input.special_skip, invalid_fill);
         } else {
             dense->prepare_weight_for_2d_multiplexed(input_shape, feature_input.special_skip, invalid_fill);
         }
+    } else {
+        dense->prepare_weight_0d_skip(feature_input.skip[0]);
     }
     ckks_denses[key] = move(dense);
 }
@@ -428,19 +432,35 @@ void InitInferenceProcess::init_poly_relu_layer(const string& key,
                                                 const Duo& block_shape_in) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
-    Duo zero_skip_in = {layer["zero_skip"][0], layer["zero_skip"][1]};
     uint32_t order = layer["order"];
-    Array<double, 2> weight;
     double weight_scale = layer["weight_scale"];
-    if (is_absorb) {
-        weight = h5_to_array<2>(h5_file, layer["weight_path"], {order, feature_input.channel}, weight_scale);
-    } else {
-        weight = h5_to_array<2>(h5_file, layer["weight_path"], {order + 1, feature_input.channel}, weight_scale);
-    }
+    auto weight = h5_to_array<2>(h5_file, layer["weight_path"], {order + 1, feature_input.channel}, weight_scale);
 
     CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
 
-    if (feature_input.dim == 0) {
+    if (feature_input.dim == 1) {
+        int skip_val = feature_input.skip[0];
+        int shape_val = feature_input.shape[0];
+        string style = layer.value("style", string("ordinary"));
+        auto layer_poly_relu = make_unique<PolyRelu1D>(param, weight, feature_input.level, order, skip_val, shape_val);
+        if (style == "multiplexed") {
+            if (is_lazy) {
+                layer_poly_relu->prepare_weight_bsgs_mux_lazy();
+            } else {
+                layer_poly_relu->prepare_weight_bsgs_mux();
+            }
+        } else {
+            if (is_lazy) {
+                layer_poly_relu->prepare_weight_bsgs_lazy();
+            } else {
+                layer_poly_relu->prepare_weight_bsgs();
+            }
+        }
+        ckks_poly_relu_1d[key] = move(layer_poly_relu);
+    } else if (feature_input.dim == 0) {
+        if (is_absorb) {
+            weight = h5_to_array<2>(h5_file, layer["weight_path"], {order, feature_input.channel}, weight_scale);
+        }
         int ciphertext_skip = feature_input.skip[0];
         auto layer_poly_relu = make_unique<PolyRelu0D>(param, weight, feature_input.level, order, ciphertext_skip);
         if (feature_input.invalid_fill[0] == 0 || feature_input.invalid_fill[1] == 0) {
@@ -464,6 +484,10 @@ void InitInferenceProcess::init_poly_relu_layer(const string& key,
         }
         ckks_poly_relu_0d[key] = move(layer_poly_relu);
     } else {
+        Duo zero_skip_in = {layer["zero_skip"][0], layer["zero_skip"][1]};
+        if (is_absorb) {
+            weight = h5_to_array<2>(h5_file, layer["weight_path"], {order, feature_input.channel}, weight_scale);
+        }
         Duo block_expansion = {div_ceil(feature_input.shape[0], block_shape_in[0]),
                                div_ceil(feature_input.shape[1], block_shape_in[1])};
         auto layer_poly_relu = make_unique<PolyRelu2D>(param, feature_input.shape, order, weight, feature_input.skip,
@@ -484,36 +508,6 @@ void InitInferenceProcess::init_poly_relu_layer(const string& key,
         }
         ckks_poly_relu[key] = move(layer_poly_relu);
     }
-}
-
-void InitInferenceProcess::init_poly_relu1d_layer(const string& key, const json& layer, const hid_t& h5_file) {
-    FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
-    uint32_t order = layer["order"];
-    double weight_scale = layer["weight_scale"];
-    auto weight = h5_to_array<2>(h5_file, layer["weight_path"], {order + 1, feature_input.channel}, weight_scale);
-
-    CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
-
-    int skip_val = feature_input.skip[0];
-    int shape_val = feature_input.shape[0];
-    string style = layer.value("style", string("ordinary"));
-
-    auto layer_poly_relu = make_unique<PolyRelu1D>(param, weight, feature_input.level, order, skip_val, shape_val);
-
-    if (style == "multiplexed") {
-        if (is_lazy) {
-            layer_poly_relu->prepare_weight_bsgs_mux_lazy();
-        } else {
-            layer_poly_relu->prepare_weight_bsgs_mux();
-        }
-    } else {
-        if (is_lazy) {
-            layer_poly_relu->prepare_weight_bsgs_lazy();
-        } else {
-            layer_poly_relu->prepare_weight_bsgs();
-        }
-    }
-    ckks_poly_relu_1d[key] = move(layer_poly_relu);
 }
 
 void InitInferenceProcess::init_fhe_avgpool_layer(const string& key,
@@ -583,12 +577,7 @@ void InitInferenceProcess::load_model_prepare() {
         } else if (layer_type == "mult_scalar") {
             init_mult_scalar_layer(key, value, h5_file, block_shape);
         } else if (layer_type == "poly_relu2d" || layer_type == "simple_polyrelu") {
-            FeatureNode feat(json_features[value["feature_input"][0].get<string>()]);
-            if (feat.dim == 1) {
-                init_poly_relu1d_layer(key, value, h5_file);
-            } else {
-                init_poly_relu_layer(key, value, h5_file, is_absorb_polyrelu, block_shape);
-            }
+            init_poly_relu_layer(key, value, h5_file, is_absorb_polyrelu, block_shape);
         } else if (layer_type == "avgpool2d") {
             bool is_adaptive_avgpool = value["is_adaptive_avgpool"];
             init_fhe_avgpool_layer(key, value, is_adaptive_avgpool, block_shape);
@@ -768,11 +757,14 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
                 if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
-                    if (d_input_node.invalid_fill[0] == 0 | d_input_node.invalid_fill[1] == 0) {
-                        result = make_unique<Feature0DEncrypted>(fp->ckks_denses[key]->run_0d_skip(context, input0D));
-                    } else {
+                    if (d_input_node.special_info_dim == 1) {
+                        result =
+                            make_unique<Feature0DEncrypted>(fp->ckks_denses[key]->run_1d_multiplexed(context, input0D));
+                    } else if (d_input_node.special_info_dim == 2) {
                         result =
                             make_unique<Feature0DEncrypted>(fp->ckks_denses[key]->run_2d_multiplexed(context, input0D));
+                    } else {
+                        result = make_unique<Feature0DEncrypted>(fp->ckks_denses[key]->run_0d_skip(context, input0D));
                     }
                 } else {
                     throw runtime_error("input is not available, expect Feature0DEncrypted");
@@ -865,6 +857,9 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 } else if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
                     result = make_unique<Feature0DEncrypted>(fp->ckks_poly_relu_0d[key]->run(context, input0D));
+                } else if (feature_node.dim == 1) {
+                    const Feature1DEncrypted& input1D = dynamic_cast<const Feature1DEncrypted&>(feature_node);
+                    result = make_unique<Feature1DEncrypted>(fp->ckks_poly_relu_1d[key]->run(context, input1D));
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted or Feature0DEncrypted");
                 }
@@ -1034,6 +1029,11 @@ void InferenceProcess::run_task(bool is_mpc) {
                 for (int i = 0; i < fp->ckks_poly_relu_0d.at(key)->weight_pt.size(); i++) {
                     cxx_args.push_back(CxxVectorArgument{"poly_reluw_" + key + "_" + to_string(i),
                                                          &(fp->ckks_poly_relu_0d.at(key)->weight_pt[i])});
+                }
+            } else if (d_input_node.dim == 1) {
+                for (int i = 0; i < fp->ckks_poly_relu_1d.at(key)->weight_pt.size(); i++) {
+                    cxx_args.push_back(CxxVectorArgument{"poly_reluw_" + key + "_" + to_string(i),
+                                                         &(fp->ckks_poly_relu_1d.at(key)->weight_pt[i])});
                 }
             } else {
                 for (int i = 0; i < fp->ckks_poly_relu.at(key)->weight_pt.size(); i++) {
@@ -1253,6 +1253,9 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                     result0d = fp->ckks_poly_relu_0d[key]
                                    ->run_plaintext(Array<double, 1>::from_array_1d(input0))
                                    .to_array_1d();
+                } else if (feature_input0.dim == 1) {
+                    auto& input0 = p_feature1d_x[feature_input[0]];
+                    result1d = fp->ckks_poly_relu_1d[key]->run_plaintext(input0);
                 } else {
                     const Array<double, 3>& input0 = p_feature2d_x[feature_input[0]];
                     if (fp->is_absorb_polyrelu) {

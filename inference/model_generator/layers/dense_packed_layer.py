@@ -258,6 +258,85 @@ class DensePackedLayer:
             result.append(s)
         return result
 
+    def make_pt_nodes_1d_multiplexed(self, layer_id, n):
+        """Return (weight_pt, bias_pt) for call_1d_multiplexed().
+
+        input_shape is 1D: [shape], skip is 1D: [skip_val].
+        block_stride = skip * invalid_fill[0]
+        block_size   = shape * block_stride
+        n_block_per_ct = N_half // block_size
+        n_channel_per_ct = n_block_per_ct * skip
+        n_block_input = ceil(n_in_channel / n_channel_per_ct) * n_block_per_ct
+        n_packed_out  = ceil(n_out_channel / n_block_per_ct)
+
+        weight_pt[i][j]: i in n_packed_out, j in n_block_input
+        bias_pt[i]:       i in n_packed_out
+        """
+        N_half = n // 2
+        shape = int(self.input_shape[0])
+        skip_val = int(self.skip[0])
+        invalid_fill_val = int(self.invalid_fill[0])
+        block_stride = skip_val * invalid_fill_val
+        block_size = shape * block_stride
+        n_block_per_ct = N_half // block_size
+        n_channel_per_ct = n_block_per_ct * skip_val
+        n_block_input = int(np.ceil(self.n_in_channel / n_channel_per_ct)) * n_block_per_ct
+        n_packed_out = int(np.ceil(self.n_out_channel / n_block_per_ct))
+
+        weight_pt = [
+            [CkksPlaintextRingtNode(f'densew_{layer_id}_{i}_{j}') for j in range(n_block_input)]
+            for i in range(n_packed_out)
+        ]
+        bias_pt = [CkksPlaintextRingtNode(f'denseb_{layer_id}_{i}') for i in range(n_packed_out)]
+        return weight_pt, bias_pt
+
+    def call_1d_multiplexed(self, x: list, weight_pt, bias_pt, n):
+        """Corresponds to C++ run_1d_multiplexed.
+
+        x is a list of CkksCiphertextNode (one per input ciphertext).
+        Rotation unit is block_size; fold over block_size after accumulation.
+        """
+        N_half = n // 2
+        shape = int(self.input_shape[0])
+        skip_val = int(self.skip[0])
+        invalid_fill_val = int(self.invalid_fill[0])
+        block_stride = skip_val * invalid_fill_val
+        block_size = shape * block_stride
+        n_block_per_ct = N_half // block_size
+        n_channel_per_ct = n_block_per_ct * skip_val
+        n_block_input = int(np.ceil(self.n_in_channel / n_channel_per_ct)) * n_block_per_ct
+        n_packed_out = int(np.ceil(self.n_out_channel / n_block_per_ct))
+        x_size = len(x)
+
+        # Rotations per input ct: n_block_per_ct rotations of block_size each
+        rotated_cts = []
+        for x_id in range(x_size):
+            rotated_cts.append(self.populate_rotations_1_side(x[x_id], n_block_per_ct - 1, block_size))
+
+        result = []
+        for out_group in range(n_packed_out):
+            x_ct_list = []
+            w_pt_list = []
+            for rot_idx in range(len(weight_pt[out_group])):
+                group = rot_idx // n_block_per_ct
+                offset = rot_idx % n_block_per_ct
+                x_ct_list.append(rotated_cts[group][offset])
+                w_pt_list.append(weight_pt[out_group][rot_idx])
+
+            s = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+            s = rescale(s)
+            s = add(s, bias_pt[out_group])
+
+            # Fold over block_size (sum spatial positions into slot 0 of each block)
+            n_fold = block_size
+            while n_fold > 1:
+                rotated = rotate_cols(s, n_fold // 2)
+                s = add(s, rotated[0])
+                n_fold //= 2
+
+            result.append(s)
+        return result
+
     def call_multiplexed_custom_compute(self, x: list[DataNode], dense_data_source, n):
         """Corresponds to C++ run_core_mult_pack with lazy weight generation."""
         input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]

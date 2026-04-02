@@ -533,22 +533,48 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 special_shape = special_info['shape']
                 special_skip = special_info['skip']
                 invalid_fill = special_info.get('invalid_fill', [1, 1])
-                dense = DensePackedLayer(
-                    n_out_channel,
-                    n_in_channel,
-                    special_shape,
-                    special_skip,
-                    math.ceil(n // 2 / (special_shape[0] * special_skip[0] * special_shape[1] * special_skip[1])),
-                    n_in_channel,
-                    n_out_channel,
-                    invalid_fill=invalid_fill,
-                )
-                weight_pt, bias_pt = dense.make_pt_nodes_multiplexed(layer_id, n)
-                input_args.append(Argument(f'densew_{layer_id}', weight_pt))
-                input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
-                layer_output_nodes = dense.call_multiplexed(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, n
-                )
+                if len(special_shape) == 1:
+                    # 1D multiplexed: special_shape=[L], special_skip=[skip]
+                    shape_1d = int(special_shape[0])
+                    skip_1d = int(special_skip[0])
+                    invalid_fill_1d = int(invalid_fill[0])
+                    block_stride = skip_1d * invalid_fill_1d
+                    block_size = shape_1d * block_stride
+                    n_block_per_ct = int(n // 2) // block_size
+                    n_channel_per_ct_1d = n_block_per_ct * skip_1d
+                    dense = DensePackedLayer(
+                        n_out_channel,
+                        n_in_channel,
+                        [shape_1d, 1],
+                        [skip_1d, 1],
+                        n_channel_per_ct_1d,
+                        math.ceil(n_in_channel / n_channel_per_ct_1d),
+                        math.ceil(n_out_channel / n_block_per_ct),
+                    )
+                    weight_pt, bias_pt = dense.make_pt_nodes_1d_multiplexed(layer_id, n)
+                    input_args.append(Argument(f'densew_{layer_id}', weight_pt))
+                    input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
+                    layer_output_nodes = dense.call_1d_multiplexed(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, n
+                    )
+                else:
+                    # 2D multiplexed: special_shape=[H, W], special_skip=[s0, s1]
+                    dense = DensePackedLayer(
+                        n_out_channel,
+                        n_in_channel,
+                        special_shape,
+                        special_skip,
+                        math.ceil(n // 2 / (special_shape[0] * special_skip[0] * special_shape[1] * special_skip[1])),
+                        n_in_channel,
+                        n_out_channel,
+                        invalid_fill=invalid_fill,
+                    )
+                    weight_pt, bias_pt = dense.make_pt_nodes_multiplexed(layer_id, n)
+                    input_args.append(Argument(f'densew_{layer_id}', weight_pt))
+                    input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
+                    layer_output_nodes = dense.call_multiplexed(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, n
+                    )
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         else:
