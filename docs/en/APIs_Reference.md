@@ -51,10 +51,10 @@ Supports lazy initialization: pass `num_features=0` to defer buffer creation unt
 
 ---
 
-#### Simple_Polyrelu
+#### PolyAct
 
 ```python
-Simple_Polyrelu(scale_before=1.0, scale_after=1.0, degree=4, activation='relu')
+PolyAct(scale_before=1.0, scale_after=1.0, degree=4, activation='relu')
 ```
 
 Polynomial activation approximating ReLU or SiLU via Hermite expansion.
@@ -402,7 +402,7 @@ Base class for operation nodes in the computation graph.
 | `DenseComputeNode` | `operations/Dense.py` | Gemm |
 | `BatchNormComputeNode` | `operations/BatchNorm.py` | BatchNormalization |
 | `ReluComputeNode` | `operations/Relu.py` | Relu |
-| `Simple_PolyreluComputeNode` | `operations/Simple_Polyrelu.py` | RangeNormPoly2d |
+| `PolyActComputeNode` | `operations/PolyAct.py` | RangeNormPoly2d |
 | `PolyReluComputeNode` | `operations/PolyRelu.py` | PolyReluListIndependent |
 | `AveragePoolComputeNode` | `operations/AveragePool.py` | AveragePool / GlobalAveragePool |
 | `MaxPoolComputeNode` | `operations/MaxPool.py` | MaxPool |

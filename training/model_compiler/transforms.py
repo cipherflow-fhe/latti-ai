@@ -487,7 +487,7 @@ def combine_convs_with_upsamples(graph: LayerAbstractGraph):
             cur_compute_node = next(graph.dag.successors(cur_feature_node))
             if cur_compute_node == upsample_node:
                 break
-            if cur_compute_node.layer_type in ('relu2d', 'simple_polyrelu'):
+            if cur_compute_node.layer_type in ('relu2d', 'polyact'):
                 for i in range(dim):
                     cur_compute_node.zero_skip[i] *= upsample_node.upsample_factor[i]
 
@@ -611,13 +611,13 @@ def handle_valid_poly_subgraph(subgraph: nx.DiGraph, use_mpc_refresh: bool = Fal
     if not use_mpc_refresh:
         for node in subgraph.nodes:
             if isinstance(node, ComputeNode):
-                if node.layer_type == 'simple_polyrelu' or node.layer_type == 'relu2d':
+                if node.layer_type == 'polyact' or node.layer_type == 'relu2d':
                     res_node = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.UP)
                     if res_node is not None:
                         node.up_scale_str.append(res_node.layer_id)
                 elif node.layer_type in {'avgpool1d', 'avgpool2d', 'mult_coeff'}:
                     res_node_down = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.DOWN)
-                    if res_node_down is not None and res_node_down.layer_type != 'simple_polyrelu':
+                    if res_node_down is not None and res_node_down.layer_type != 'polyact':
                         node.down_scale_str.append(res_node_down.layer_id)
 
                         continue
@@ -634,7 +634,7 @@ def handle_valid_poly_subgraph(subgraph: nx.DiGraph, use_mpc_refresh: bool = Fal
 
                 candidates[node] = {
                     'down': res_node_down
-                    if (res_node_down is not None and res_node_down.layer_type != 'simple_polyrelu')
+                    if (res_node_down is not None and res_node_down.layer_type != 'polyact')
                     else None,
                     'up': res_node_up,
                 }
@@ -723,7 +723,7 @@ def set_feature_scales(graph: LayerAbstractGraph):
         elif compute.layer_type == 'mult_coeff':
             scale = compute.coeff
 
-        if compute.layer_type == 'simple_polyrelu':
+        if compute.layer_type == 'polyact':
             while compute.up_scale_str:
                 node_out = set_scale_for_node(graph, compute, 1)
                 node_out.vec_scale_path = compute.layer_id
@@ -749,9 +749,7 @@ def linear_subgraph_can_absorb_scale(subgraph: nx.DiGraph, use_mpc_refresh: bool
                 if target_node_down is None and target_node_up is None:
                     return False
                 elif (
-                    target_node_up is None
-                    and target_node_down is not None
-                    and target_node_down.layer_type == 'simple_polyrelu'
+                    target_node_up is None and target_node_down is not None and target_node_down.layer_type == 'polyact'
                 ):
                     return False
                 else:

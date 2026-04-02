@@ -177,7 +177,7 @@ def get_hermite_coeffs_for_module(module_cls, degree=4, **kwargs):
 
     Returns:
         Tuple of (degree+1) floats: (a_0, a_1, ..., a_degree),
-        ready to use as hermite_coeffs in Simple_Polyrelu.
+        ready to use as hermite_coeffs in PolyAct.
     """
     module = module_cls()
     module.eval()

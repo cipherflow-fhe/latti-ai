@@ -278,7 +278,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             layer_output_nodes = act_layer.call(feature_id_to_nodes_map[layer_input_feature_ids[0]])
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
-        elif layer_config['type'] in ('poly_relu2d', 'simple_polyrelu'):
+        elif layer_config['type'] in ('poly_relu2d', 'polyact'):
             feat = config_info['feature'][layer_input_feature_ids[0]]
             level = int(feat['level'])
             order = layer_config['order']
