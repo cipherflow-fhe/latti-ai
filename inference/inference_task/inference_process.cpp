@@ -540,6 +540,27 @@ void InitInferenceProcess::init_fhe_avgpool_layer(const string& key,
     }
 }
 
+void InitInferenceProcess::init_fhe_avgpool1d_layer(const string& key, const json& layer, const bool& is_adaptive) {
+    FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
+    CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
+    uint32_t stride = layer["stride"][0];
+    bool is_big_size = layer["is_big_size"];
+    if (is_big_size) {
+        auto avgpool = make_unique<Avgpool1DLayer>(feature_input.shape[0], stride);
+        ckks_avgpool1d[key] = move(avgpool);
+    } else {
+        if (is_adaptive) {
+            auto avgpool = make_unique<Avgpool1DLayer>(feature_input.shape[0], stride);
+            ckks_avgpool1d[key] = move(avgpool);
+        } else {
+            auto avgpool = make_unique<Avgpool1DLayer>(feature_input.shape[0], stride);
+            avgpool->prepare_weight(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
+                                    feature_input.level, feature_input.skip[0], feature_input.shape[0]);
+            ckks_avgpool1d[key] = move(avgpool);
+        }
+    }
+}
+
 void InitInferenceProcess::load_model_prepare() {
     current_json_path = project_path;
     json_data = read_json(current_json_path / "nn_layers_ct_0.json");
@@ -585,6 +606,9 @@ void InitInferenceProcess::load_model_prepare() {
         } else if (layer_type == "avgpool2d") {
             bool is_adaptive_avgpool = value["is_adaptive_avgpool"];
             init_fhe_avgpool_layer(key, value, is_adaptive_avgpool, block_shape);
+        } else if (layer_type == "avgpool1d") {
+            bool is_adaptive_avgpool = value["is_adaptive_avgpool"];
+            init_fhe_avgpool1d_layer(key, value, is_adaptive_avgpool);
         } else if (layer_type == "conv1d") {
             init_conv1d_layer(key, value, h5_file);
         }
@@ -814,6 +838,29 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     throw runtime_error("input is not available, expect Feature2DEncrypted");
                 }
                 fhe_timer.stop();
+            } else if (layer_type == "avgpool1d") {
+                fhe_timer.start();
+                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                if (feature_node.dim == 1) {
+                    const Feature1DEncrypted& input1D = dynamic_cast<const Feature1DEncrypted&>(feature_node);
+
+                    bool is_adaptive_avgpool = layer.value()["is_adaptive_avgpool"];
+                    bool is_big_size = layer.value()["is_big_size"];
+                    if (is_adaptive_avgpool) {
+                        result = make_unique<Feature1DEncrypted>(
+                            fp->ckks_avgpool1d[key]->run_adaptive_avgpool(context, input1D));
+                    } else {
+                        if (is_big_size) {
+                            throw runtime_error("avgpool1d does not support big_size mode");
+                        } else {
+                            result = make_unique<Feature1DEncrypted>(
+                                fp->ckks_avgpool1d[key]->run_multiplexed_avgpool(context, input1D));
+                        }
+                    }
+                } else {
+                    throw runtime_error("input is not available, expect Feature1DEncrypted");
+                }
+                fhe_timer.stop();
             } else if (layer_type == "concat2d") {
                 fhe_timer.start();
                 vector<Feature2DEncrypted> inputs;
@@ -1026,6 +1073,15 @@ void InferenceProcess::run_task(bool is_mpc) {
                 }
             } else {
                 throw runtime_error("input is not available, expect Feature2DEncrypted");
+            }
+        } else if (layer_type == "avgpool1d") {
+            bool is_adaptive_avgpool = layer.value()["is_adaptive_avgpool"];
+            bool is_big_size = layer.value()["is_big_size"];
+            if (is_adaptive_avgpool || is_big_size) {
+                continue;
+            } else {
+                cxx_args.push_back(
+                    CxxVectorArgument{"select_tensor_pt_" + key, &(fp->ckks_avgpool1d.at(key)->select_tensor_pt)});
             }
         } else if (layer_type == "poly_relu2d" || layer_type == "simple_polyrelu") {
             FeatureNode d_input_node(json_features[feature_input[0]]);
@@ -1292,6 +1348,20 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                         result = fp->ckks_avgpool[key]->plaintext_call(input0);
                     } else {
                         result = fp->ckks_avgpool[key]->plaintext_call_multiplexed(input0);
+                    }
+                }
+            }
+            if (layer_type == "avgpool1d") {
+                auto& input0 = p_feature1d_x[feature_input[0]];
+                bool is_adaptive_avgpool = layer.value()["is_adaptive_avgpool"];
+                bool is_big_size = layer.value()["is_big_size"];
+                if (is_adaptive_avgpool) {
+                    result1d = fp->ckks_avgpool1d[key]->plaintext_call(input0);
+                } else {
+                    if (is_big_size) {
+                        result1d = fp->ckks_avgpool1d[key]->plaintext_call(input0);
+                    } else {
+                        result1d = fp->ckks_avgpool1d[key]->plaintext_call_multiplexed(input0);
                     }
                 }
             }

@@ -175,7 +175,7 @@ def get_op_id(op: str):
         output = 'Relu6'
     elif op == 'reshape' or op == 'Reshape' or op == 'Flatten':
         output = 'Reshape'
-    elif op == 'avgpool' or op == 'avgpool2d' or op == 'AveragePool' or op == 'GlobalAveragePool':
+    elif op == 'avgpool' or op == 'avgpool2d' or op == 'avgpool1d' or op == 'AveragePool' or op == 'GlobalAveragePool':
         output = 'AveragePool'
     elif op == 'maxpool' or op == 'MaxPool':
         output = 'MaxPool'
@@ -247,7 +247,7 @@ def get_type_id(op: str):
         output = 'relu6'
     elif op == 'reshape' or op == 'Reshape' or op == 'Flatten':
         output = 'reshape'
-    elif op == 'avgpool2d' or op == 'AveragePool' or op == 'avgpool' or op == 'GlobalAveragePool':
+    elif op == 'avgpool2d' or op == 'avgpool1d' or op == 'AveragePool' or op == 'avgpool' or op == 'GlobalAveragePool':
         output = 'avgpool'
     elif op == 'maxpool' or op == 'MaxPool':
         output = 'maxpool'

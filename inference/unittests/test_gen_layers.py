@@ -30,6 +30,7 @@ from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.deploy_cmds import *  # noqa: E402
 from inference.model_generator.layers.add_pack import AddLayer  # noqa: E402
 from inference.model_generator.layers.avgpool2d_layer import Avgpool2DLayer  # noqa: E402
+from inference.model_generator.layers.avgpool1d_layer import Avgpool1DLayer  # noqa: E402
 from inference.model_generator.layers.mult_scaler import MultScalarLayer  # noqa: E402
 from training.model_export.onnx_to_json import *  # noqa: E402
 
@@ -1203,6 +1204,74 @@ class TestLayerExport(unittest.TestCase):
                             / f'level_{level}'
                             / 'server',
                         )
+
+    def test_avgpool1d_layer(self):
+        N = 16384
+        set_param('PN14QP438')
+        level = 3
+        skip = 1
+        shapes = [8, 16, 32, 64]
+        channels = [4, 10, 15, 32]
+        strides = [2, 4, 8]
+        for stride in strides:
+            for n_channel in channels:
+                for s in shapes:
+                    if s < stride:
+                        continue
+                    print(f'sub-test: stride={stride}, n_channel={n_channel}, s={s}')
+                    n_channel_per_ct = int(np.ceil(N / 2 / s))
+                    n_ct = int(np.ceil(n_channel / n_channel_per_ct))
+                    input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+                    out_channels_per_ct = n_channel_per_ct * stride
+                    n_select_pt = min(n_channel, out_channels_per_ct)
+                    select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
+                    avgpool = Avgpool1DLayer(stride=stride, shape=s, channel=n_channel, skip=skip)
+                    output_ct = avgpool.call_multiplexed_avgpool(
+                        input_ct, select_tensor_pt, n_channel, n_channel_per_ct
+                    )
+                    input_args = list()
+                    input_args.append(Argument('input_node', input_ct))
+                    input_args.append(Argument('select_tensor_pt', select_tensor_pt))
+                    process_custom_task(
+                        input_args=input_args,
+                        output_args=[Argument('output_ct', output_ct)],
+                        output_instruction_path=base_path
+                        / f'CKKS_avgpool1d/stride_{stride}'
+                        / f'ch_{n_channel}_shape_{s}'
+                        / f'level_{level}'
+                        / 'server',
+                    )
+
+    def test_adaptive_avgpool1d_layer(self):
+        N = 16384
+        set_param('PN14QP438')
+        level = 3
+        skip = 1
+        shapes = [8, 16, 32, 64]
+        channels = [4, 10, 15, 32]
+        strides = [2, 4, 8]
+        for stride in strides:
+            for n_channel in channels:
+                for s in shapes:
+                    if s < stride:
+                        continue
+                    print(f'sub-test: stride={stride}, n_channel={n_channel}, s={s}')
+                    n_channel_per_ct = int(np.ceil(N / 2 / s))
+                    n_ct = int(np.ceil(n_channel / n_channel_per_ct))
+                    input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+                    avgpool = Avgpool1DLayer(stride=stride, shape=s, channel=n_channel, skip=skip)
+                    output_ct = avgpool.run_adaptive_avgpool(input_ct, n=N)
+                    input_args = list()
+                    input_args.append(Argument('input_node', input_ct))
+                    process_custom_task(
+                        input_args=input_args,
+                        output_args=[Argument('output_ct', output_ct)],
+                        output_instruction_path=base_path
+                        / f'CKKS_adaptive_avgpool1d/stride_{stride}'
+                        / f'ch_{n_channel}_shape_{s}'
+                        / f'level_{level}'
+                        / 'server',
+                    )
 
     def test_mult_scalar_layer(self):
         N = 16384

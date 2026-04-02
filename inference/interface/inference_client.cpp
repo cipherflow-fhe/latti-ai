@@ -48,6 +48,12 @@ void InferenceClient::read_configuration() {
             op.skip = param["skip"];
         } else if (op.dim == 1) {
             op.length = param["shape"][0];
+            if (param.contains("invalid_fill")) {
+                op.invalid_fill[0] = param["invalid_fill"][0];
+                if (param["invalid_fill"].size() > 1) {
+                    op.invalid_fill[1] = param["invalid_fill"][1];
+                }
+            }
         } else if (op.dim == 2) {
             op.height = param["shape"][0];
             op.width = param["shape"][1];
@@ -214,7 +220,13 @@ InferenceClient::decrypt(const std::map<std::string, Bytes>& encrypted_outputs) 
         } else if (param.dim == 1) {
             Feature1DEncrypted output_ct(context_ptr_, 0);
             output_ct.deserialize(bytes);
-            auto decrypted = output_ct.unpack();
+            Array<double, 2> decrypted;
+            if (pack_style_ == "multiplexed") {
+                output_ct.invalid_fill = param.invalid_fill[0];
+                decrypted = output_ct.unpack_multiplexed();
+            } else {
+                decrypted = output_ct.unpack();
+            }
             auto dec_1d = decrypted.to_array_1d();
             result.output = std::vector<double>(dec_1d.data(), dec_1d.data() + dec_1d.size());
         } else {

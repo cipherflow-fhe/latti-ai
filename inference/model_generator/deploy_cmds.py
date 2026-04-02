@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.activation_layer import *
 from inference.model_generator.layers.add_pack import *
+from inference.model_generator.layers.avgpool1d_layer import *
 from inference.model_generator.layers.avgpool2d_layer import *
 from inference.model_generator.layers.concat_layer import *
 from inference.model_generator.layers.conv1d_packed_layer import *
@@ -472,12 +473,23 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             stride = layer_config['stride']
             is_adaptive = layer_config.get('is_adaptive_avgpool', True)
             is_big_size = layer_config.get('is_big_size', False)
-            avgpool = Avgpool2DLayer(stride, input_shape, channel=n_in_channel, skip=skip)
+            is_1d = layer_config['type'] == 'avgpool1d'
+            if is_1d:
+                skip_1d = skip[0] if isinstance(skip, list) else skip
+                avgpool = Avgpool1DLayer(stride[0], input_shape[0], channel=n_in_channel, skip=skip_1d)
+            else:
+                avgpool = Avgpool2DLayer(stride, input_shape, channel=n_in_channel, skip=skip)
             if is_big_size:
-                block_expansion = [
-                    math.ceil(input_shape[0] / block_shape[0]),
-                    math.ceil(input_shape[1] / block_shape[1]),
-                ]
+                block_expansion = (
+                    [
+                        math.ceil(input_shape[0] / block_shape[0]),
+                    ]
+                    if is_1d
+                    else [
+                        math.ceil(input_shape[0] / block_shape[0]),
+                        math.ceil(input_shape[1] / block_shape[1]),
+                    ]
+                )
                 layer_output_nodes = avgpool.call_interleaved_avgpool(
                     feature_id_to_nodes_map[layer_input_feature_ids[0]], block_expansion, N=n
                 )
@@ -492,9 +504,14 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         )
                 else:
                     # level_cost=1: non-adaptive avgpool needs mult+rescale (select_tensor)
-                    select_tensor_pt, n_channel_per_ct = avgpool.make_pt_nodes_multiplexed_avgpool(
-                        layer_id, n_in_channel, n
-                    )
+                    if is_1d:
+                        n_channel_per_ct = int(math.ceil(n / 2 / input_shape[0]))
+                        out_channels_per_ct = n_channel_per_ct * stride[0]
+                    else:
+                        n_channel_per_ct = int(math.ceil(n / 2 / (input_shape[0] * input_shape[1])))
+                        out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
+                    n_select_pt = min(n_in_channel, out_channels_per_ct)
+                    select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)]
                     layer_output_nodes = avgpool.call_multiplexed_avgpool(
                         feature_id_to_nodes_map[layer_input_feature_ids[0]],
                         select_tensor_pt,
