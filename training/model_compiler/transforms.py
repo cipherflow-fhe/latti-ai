@@ -247,7 +247,7 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
 
     refreshed_feature.node_id = new_id
     if config.mpc_refresh:
-        skip = [1, 1]
+        skip = [1] * upstream_feature.dim
     else:
         skip = dag.nodes[upstream_feature]['skip']
 
@@ -291,9 +291,7 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
     )
 
     # Inherit is_big_size from predecessor's shape vs block_shape
-    if old_output_feature.dim == 2 and (
-        old_output_feature.shape[0] > config.block_shape[0] or old_output_feature.shape[1] > config.block_shape[1]
-    ):
+    if any(old_output_feature.shape[i] > config.block_shape[i] for i in range(old_output_feature.dim)):
         mult_scalar_node.is_big_size = True
 
     _insert_layer_after_compute(
@@ -374,7 +372,7 @@ def split_upsampling_layers(graph: LayerAbstractGraph):
                 upsampled_feature,
                 new_feature_args={},
             )
-            conv_node.upsample_factor = [1, 1]
+            conv_node.upsample_factor = [1] * conv_node.dim
 
 
 def process_special_info(
@@ -382,7 +380,9 @@ def process_special_info(
 ):
     """Process sp_info for dim=0 and reshape nodes. Returns True if caller should continue."""
 
-    if preds[0].dim == 2 and succ.dim == 2:
+    # 2d->2d, 1d->1d
+    if preds[0].dim == succ.dim and succ.dim in (1, 2):
+        invalid_fill_default = [1] * succ.dim
         if config.style == 'ordinary':
             succ.invalid_fill = graph.dag.nodes[succ]['skip'].copy()
         else:
@@ -390,14 +390,14 @@ def process_special_info(
                 if compute_node.is_adaptive_avgpool:
                     succ.invalid_fill = compute_node.stride.copy()
                 else:
-                    succ.invalid_fill = [1, 1]
+                    succ.invalid_fill = invalid_fill_default
             elif isinstance(compute_node, ConvComputeNode):
-                succ.invalid_fill = [1, 1]
+                succ.invalid_fill = invalid_fill_default
             else:
                 succ.invalid_fill = preds[0].invalid_fill
         return False
-    # 2d -> 0d: reshape
-    if preds[0].dim == 2 and succ.dim == 0:
+    # 2d -> 0d, 1d->0d: reshape
+    if (preds[0].dim == 2 or preds[0].dim == 1) and succ.dim == 0:
         succ.sp_info['skip'] = graph.dag.nodes[preds[0]]['skip'].copy()
         succ.sp_info['shape'] = preds[0].shape
         succ.sp_info['invalid_fill'] = preds[0].invalid_fill
@@ -527,8 +527,8 @@ def set_level_costs(graph: LayerAbstractGraph):
             else:
                 raise ValueError('Unsupported config.style')
 
-        elif compute_node.layer_type == 'avgpool2d':
-            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+        elif 'avgpool' in compute_node.layer_type:
+            if any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
                 graph.dag.nodes[compute_node]['level_cost'] = 0
                 compute_node.is_big_size = True
                 compute_node.is_adaptive_avgpool = False
@@ -546,7 +546,7 @@ def set_level_costs(graph: LayerAbstractGraph):
             if any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
                 compute_node.is_big_size = True
         elif isinstance(compute_node, UpsampleComputeNode):
-            if compute_node.upsample_factor[0] == 1 and compute_node.upsample_factor[1] == 1:
+            if all(compute_node.upsample_factor[i] == 1 for i in range(compute_node.dim)):
                 graph.dag.nodes[compute_node]['level_cost'] = 0
             else:
                 graph.dag.nodes[compute_node]['level_cost'] = 1
@@ -716,9 +716,9 @@ def set_feature_scales(graph: LayerAbstractGraph):
 
         elif compute.layer_type == 'avgpool2d':
             if config.graph_type == 'mpc':
-                scale = 1.0 / (compute.kernel_shape[0] * compute.kernel_shape[1])
+                scale = 1.0 / math.prod(compute.kernel_shape)
             elif compute.is_adaptive_avgpool or compute.is_big_size:
-                scale = 1.0 / (compute.kernel_shape[0] * compute.kernel_shape[1])
+                scale = 1.0 / math.prod(compute.kernel_shape)
         elif compute.layer_type == 'mult_coeff':
             scale = compute.coeff
 
