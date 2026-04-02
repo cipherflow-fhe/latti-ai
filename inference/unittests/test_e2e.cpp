@@ -177,8 +177,7 @@ static const vector<string> all_test_names = {
     "general_avgpool",
     "conv_reshape_dense",
     "two_fc",
-    // TODO: 
-    // "conv1d_e2e",
+    "conv1d_e2e",
 };
 // clang-format on
 
