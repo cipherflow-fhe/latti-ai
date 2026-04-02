@@ -68,6 +68,16 @@ class SingleAvgpool(nn.Module):
         return x
 
 
+class SingleAvgpool1d(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.pool0 = nn.AvgPool1d(kernel_size=2, padding=0)
+
+    def forward(self, x):
+        x = self.pool0(x)
+        return x
+
+
 class SingleMaxpool(nn.Module):
     def __init__(self):
         super().__init__()

@@ -53,6 +53,7 @@
 #include "fhe_layers/inverse_multiplexed_conv2d_layer_depthwise.h"
 #include "fhe_layers/add_layer.h"
 #include "fhe_layers/avgpool2d_layer.h"
+#include "fhe_layers/avgpool1d_layer.h"
 #include "fhe_layers/concat_layer.h"
 #include "fhe_layers/mult_scaler.h"
 #include "fhe_layers/upsample_layer.h"
@@ -2595,6 +2596,107 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "interleaved_avgpool2d_layer", "",
                             continue;  // block_expansion must be >= stride
                         SECTION("mult=" + to_string(mult)) {
                             run_interleaved_avgpool_test(n_channel, stride, block_shape, mult);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool1d_layer", "", HeteroProcessors) {
+    int init_level = 3;
+    uint32_t skip = 1;
+
+    auto run_adaptive_avgpool1d_test = [&](uint32_t n_channel, uint32_t s, uint32_t stride) {
+        uint32_t n_channel_per_ct = div_ceil(this->n_slot, s);
+        uint32_t n_ct = div_ceil(n_channel, n_channel_per_ct);
+
+        Array<double, 2> input_array = gen_random_array<2>({n_channel, s}, 1.0);
+
+        Feature1DEncrypted input_feature(&this->context, init_level, skip);
+        input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
+
+        Avgpool1DLayer avgpool(s, stride);
+
+        Feature1DEncrypted output_feature = avgpool.run_adaptive_avgpool(this->context, input_feature);
+
+        auto result_mg = output_feature.unpack_multiplexed();
+
+        auto result_expected = avgpool.plaintext_call(input_array);
+
+        print_double_message(result_mg.to_array_1d().data(), "output_mg", 10);
+        print_double_message(result_expected.to_array_1d().data(), "plain_output", 10);
+
+        auto compare_result = compare(result_expected, result_mg);
+        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    };
+
+    vector<uint32_t> channels = {4, 10, 15, 32};
+    vector<uint32_t> shapes = {8, 16, 32, 64};
+    vector<uint32_t> strides = {2, 4, 8};
+
+    for (uint32_t stride : strides) {
+        SECTION("stride=" + to_string(stride)) {
+            for (uint32_t n_channel : channels) {
+                SECTION("n_channel=" + to_string(n_channel)) {
+                    for (uint32_t s : shapes) {
+                        if (s < stride)
+                            continue;
+                        SECTION("shape=" + to_string(s)) {
+                            run_adaptive_avgpool1d_test(n_channel, s, stride);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_avgpool1d_layer", "", HeteroProcessors) {
+    int init_level = 3;
+    uint32_t skip = 1;
+
+    auto run_multiplexed_avgpool1d_test = [&](uint32_t n_channel, uint32_t s, uint32_t stride) {
+        uint32_t n_channel_per_ct = div_ceil(this->n_slot, s);
+        uint32_t n_ct = div_ceil(n_channel, n_channel_per_ct);
+
+        Array<double, 2> input_array = gen_random_array<2>({n_channel, s}, 1.0);
+
+        Feature1DEncrypted input_feature(&this->context, init_level, skip);
+        input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
+
+        Avgpool1DLayer avgpool(s, stride);
+        avgpool.prepare_weight(this->param, n_channel_per_ct, n_channel, init_level, skip, s);
+
+        Feature1DEncrypted output_feature = avgpool.run_multiplexed_avgpool(this->context, input_feature);
+
+        auto result_mg = output_feature.unpack_multiplexed();
+
+        auto result_expected = avgpool.plaintext_call_multiplexed(input_array);
+
+        print_double_message(result_mg.to_array_1d().data(), "output_mg", 10);
+        print_double_message(result_expected.to_array_1d().data(), "plain_output", 10);
+
+        auto compare_result = compare(result_expected, result_mg);
+        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    };
+
+    vector<uint32_t> shapes = {8, 16, 32, 64};
+    vector<uint32_t> channels = {4, 10, 15, 32};
+    vector<uint32_t> strides = {2, 4, 8};
+
+    for (uint32_t stride : strides) {
+        SECTION("stride=" + to_string(stride)) {
+            for (uint32_t n_channel : channels) {
+                SECTION("n_channel=" + to_string(n_channel)) {
+                    for (uint32_t s : shapes) {
+                        if (s < stride)
+                            continue;
+                        SECTION("shape=" + to_string(s)) {
+                            run_multiplexed_avgpool1d_test(n_channel, s, stride);
                         }
                     }
                 }

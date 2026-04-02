@@ -12,6 +12,7 @@ add_library(fhe_layers
   add_layer.cpp
   conv2d_depthwise.cpp
   avgpool2d_layer.cpp
+  avgpool1d_layer.cpp
   multiplexed_conv2d_pack_layer.cpp
   multiplexed_conv2d_pack_layer_depthwise.cpp
   poly_relu2d.cpp

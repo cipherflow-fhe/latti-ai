@@ -96,7 +96,7 @@ def calculate_compute_score_for_graph(
     for compute in grow.nodes:
         if not isinstance(compute, ComputeNode):
             continue
-        if compute.layer_type in ['conv2d', 'fc0', 'add2d', 'simple_polyrelu', 'avgpool2d']:
+        if compute.layer_type in ['conv2d', 'fc0', 'add2d', 'simple_polyrelu', 'avgpool1d', 'avgpool2d']:
             pred = next(enclosing_graph.predecessors(compute))
             s_param = FheScoreParam(enclosing_graph, compute, param_dict, enclosing_graph.nodes[pred]['level'])
             score = s_param.get_score()

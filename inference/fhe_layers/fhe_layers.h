@@ -20,6 +20,7 @@
 
 #include "fhe_layers/activation_layer.h"
 #include "fhe_layers/add_layer.h"
+#include "fhe_layers/avgpool1d_layer.h"
 #include "fhe_layers/avgpool2d_layer.h"
 #include "fhe_layers/block_col_major_ccmm.h"
 #include "fhe_layers/block_col_major_cpmm.h"

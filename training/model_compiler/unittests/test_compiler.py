@@ -115,6 +115,8 @@ def check_multi_input_level_skip_aligned(graph: LayerAbstractGraph) -> bool:
 
 
 def check_feature_scale(graph: LayerAbstractGraph):
+    import math
+
     all_nodes_in_topo_sort = list(nx.topological_sort(graph.dag))
     for node in all_nodes_in_topo_sort:
         if not isinstance(node, ComputeNode):
@@ -132,11 +134,11 @@ def check_feature_scale(graph: LayerAbstractGraph):
             out_node.scale = f_node.scale * node.weight_scale
         elif node.layer_type == 'mult_coeff':
             out_node.scale = f_node.scale * (1 / node.coeff)
-        elif node.layer_type == 'avgpool2d':
+        elif node.layer_type in {'avgpool1d', 'avgpool2d'}:
             if (not node.is_adaptive_avgpool) and (not node.is_big_size):
                 out_node.scale = f_node.scale
             else:
-                out_node.scale = f_node.scale * (node.kernel_shape[0] * node.kernel_shape[1])
+                out_node.scale = f_node.scale * math.prod(node.kernel_shape)
         else:
             out_node.scale = f_node.scale
 
@@ -836,6 +838,12 @@ class TestE2E(CompilerTestBase):
         """1 Avgpool → poly_n=8192, no BTP."""
         model = nn_modules.SingleAvgpool()
         graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'single_avgpool', style='multiplexed')
+        self.assertTrue(check_feature_scale(graph))
+
+    def test_e2e_single_avgpool1d(self):
+        """1 Avgpool1d → poly_n=8192, no BTP."""
+        model = nn_modules.SingleAvgpool1d()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 16), 'single_avgpool1d', style='multiplexed')
         self.assertTrue(check_feature_scale(graph))
 
     def test_e2e_single_dense(self):
