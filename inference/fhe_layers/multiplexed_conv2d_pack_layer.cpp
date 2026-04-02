@@ -187,7 +187,6 @@ void ParMultiplexedConv2DPackedLayer::prepare_weight_for_reduct_rot() {
         }
     });
     bias_level_down = 2;
-    int mask_size = min(n_block_per_ct, n_out_channel_);
     vector<vector<double>> feature_tmp_pack(n_packed_out_channel);
     if (stride_[0] == 1 && stride_[1] == 1 && skip_[0] == 1 && skip_[1] == 1) {
         bias_level_down = 1;
@@ -196,8 +195,9 @@ void ParMultiplexedConv2DPackedLayer::prepare_weight_for_reduct_rot() {
         mask_pt.resize(n_weight_pt);
         parallel_for(n_weight_pt, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
             uint32_t sub_pos_ct = ct_idx % skip_out_prod;
-            mask_pt[ct_idx].resize(mask_size);
-            for (int i = 0; i < mask_size; i++) {
+            int valid_n = min(n_block_per_ct, n_out_channel_ - ct_idx * n_block_per_ct);
+            mask_pt[ct_idx].resize(valid_n);
+            for (int i = 0; i < valid_n; i++) {
                 // In reduct_rot, block i of ct_idx has local channel index = i * skip_out_prod + sub_pos_ct
                 uint32_t channel_local = i * skip_out_prod + sub_pos_ct;
                 auto si = select_tensor(channel_local);
@@ -326,15 +326,15 @@ void ParMultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation() {
         }
     });
     bias_level_down = 2;
-    int mask_size = min(n_block_per_ct, n_out_channel_);
     vector<vector<double>> feature_tmp_pack(n_packed_out_channel);
     if (stride_[0] == 1 && stride_[1] == 1 && skip_[0] == 1 && skip_[1] == 1) {
         bias_level_down = 1;
     } else {
         mask_pt.resize(weight_pt.size());
         parallel_for(weight_pt.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-            mask_pt[ct_idx].resize(mask_size);
-            for (int i = 0; i < mask_size; i++) {
+            int valid_n = min(n_block_per_ct, n_out_channel_ - ct_idx * n_block_per_ct);
+            mask_pt[ct_idx].resize(valid_n);
+            for (int i = 0; i < valid_n; i++) {
                 auto si = select_tensor((ct_idx * n_block_per_ct + i) % (n_channel_per_ct * stride_[0] * stride_[1] /
                                                                          (upsample_factor[0] * upsample_factor[1])));
                 mask_pt[ct_idx][i] = ctx_copy.encode_ringt(si, ctx_copy.get_parameter().get_q(level_ - 1));

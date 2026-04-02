@@ -37,6 +37,8 @@ from inference.model_generator.layers.multiplexed_conv1d_pack_layer import *
 from inference.model_generator.layers.multiplexed_dw_conv1d_pack_layer import *
 from inference.model_generator.layers.multiplexed_conv2d_pack_layer import *
 from inference.model_generator.layers.multiplexed_conv2d_pack_layer_depthwise import *
+from inference.model_generator.layers.poly_relu0d import *
+from inference.model_generator.layers.poly_relu1d import *
 from inference.model_generator.layers.poly_relu2d import *
 from inference.model_generator.layers.upsample_layer import *
 from training.model_compiler.components import (
@@ -116,9 +118,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         level = int(config_info['feature'][layer_input_feature_ids[0]]['level'])
         n_packed_in_channel = math.ceil(n_in_channel / pack)
         n_packed_out_channel = math.ceil(n_out_channel / pack)
-        if layer_config['type'] == 'fc0':
-            n_packed_in_channel = math.ceil(n_in_channel / 8192)
-            n_packed_out_channel = math.ceil(n_out_channel / pack)
 
         # For big_conv/big_avgpool/big_mult_scalar, input CT count differs from the default n_packed_in_channel
         if (
@@ -132,6 +131,14 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 math.ceil(input_shape[1] / block_shape[1]),
             )
             n_packed_in_channel = n_in_channel * block_expansion[0] * block_expansion[1]
+
+        if layer_config['type'] == 'conv1d':
+            _input_shape_1d = config_info['feature'][layer_input_feature_ids[0]]['shape'][0]
+            _skip_1d = skip[0] if isinstance(skip, list) else skip
+            if style == 'multiplexed':
+                n_packed_in_channel = math.ceil(n_in_channel / math.ceil(n // 2 / _input_shape_1d))
+            else:
+                n_packed_in_channel = math.ceil(n_in_channel / int(n // 2 // _input_shape_1d // _skip_1d))
 
         for input_node in layer_input_feature_ids:
             if input_node not in feature_id_to_nodes_map.keys():
@@ -148,7 +155,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             groups = layer_config['groups']
             kernel_shape = layer_config['kernel_shape']
             stride = layer_config['stride']
-            index = int(kernel_shape[0] * kernel_shape[1])
             is_big_conv = layer_config['is_big_size']
             block_expansion = (math.ceil(input_shape[0] / block_shape[0]), math.ceil(input_shape[1] / block_shape[1]))
             next_stride = [block_expansion[0] // stride[0], block_expansion[1] // stride[1]]
@@ -165,14 +171,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         skip,
                         block_shape,
                     )
-
-                    weight_pt = [
-                        [
-                            CkksPlaintextRingtNode(f'convw_{layer_id}_{k}_{i}')
-                            for i in range(int(index * next_stride[0] * next_stride[1]))
-                        ]
-                        for k in range(n_out_channel)
-                    ]
                 else:
                     big_conv = InverseMultiplexedConv2DLayer(
                         n_out_channel,
@@ -186,25 +184,20 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         block_shape,
                     )
 
-                    weight_pt = [
-                        [
-                            [
-                                CkksPlaintextRingtNode(f'convw_{layer_id}_{k}_{n}_{i}')
-                                for i in range(int(index * next_stride[0] * next_stride[1]))
-                            ]
-                            for n in range(n_in_channel)
-                        ]
-                        for k in range(n_out_channel)
-                    ]
-
-                bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_out_channel)]
+                weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes(layer_id)
 
                 layer_output_nodes = big_conv.call(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, n
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                    weight_pt,
+                    bias_pt,
+                    n,
+                    repack_mask_pt=repack_mask_pt,
                 )
                 feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                 input_args.append(Argument(f'convw_{layer_id}', weight_pt))
                 input_args.append(Argument(f'convb_{layer_id}', bias_pt))
+                if repack_mask_pt is not None:
+                    input_args.append(Argument(f'repack_mask_{layer_id}', [repack_mask_pt]))
             else:
                 if style == 'ordinary':
                     if groups == n_out_channel and groups != 1:
@@ -219,10 +212,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                             n_packed_in_channel,
                             n_packed_out_channel,
                         )
-                        weight_pt = [
-                            [CkksPlaintextRingtNode(f'convw_{layer_id}_{n}_{i}') for i in range(index)]
-                            for n in range(n_packed_out_channel)
-                        ]
                     else:
                         conv0_layer = Conv2DPackedLayer(
                             n_out_channel,
@@ -235,15 +224,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                             n_packed_in_channel,
                             n_packed_out_channel,
                         )
-                        weight_pt = [
-                            [
-                                [CkksPlaintextRingtNode(f'convw_{layer_id}_{n}_{m}_{i}') for i in range(index)]
-                                for m in range(int(n_packed_in_channel * pack))
-                            ]
-                            for n in range(n_packed_out_channel)
-                        ]
 
-                    bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_packed_out_channel)]
+                    weight_pt, bias_pt = conv0_layer.make_pt_nodes(layer_id)
                     input_args.append(Argument(f'convw_{layer_id}', weight_pt))
                     input_args.append(Argument(f'convb_{layer_id}', bias_pt))
                     layer_output_nodes = conv0_layer.call(
@@ -252,11 +234,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                 if style == 'multiplexed':
                     n_in_channel_per_ct = pack
-                    n_block_per_ct = n_in_channel_per_ct // (skip[0] * skip[1])
-                    n_out_channel_per_ct = n_in_channel_per_ct * stride[0] * stride[1]
-                    n_pack_in_channel = math.ceil(n_in_channel / n_in_channel_per_ct)
-                    n_pack_out_channel = math.ceil(n_out_channel / n_out_channel_per_ct)
-                    kernel_size = kernel_shape[0] * kernel_shape[1]
                     if groups == n_out_channel and groups != 1:
                         conv0_layer = ParMultiplexedConv2DPackedLayerDepthwise(
                             n_out_channel,
@@ -269,16 +246,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                             n_packed_in_channel,
                             n_packed_out_channel,
                         )
-                        weight_pt = [
-                            [CkksPlaintextRingtNode(f'convw_{layer_id}_{j}_{k}') for k in range(kernel_size)]
-                            for j in range(n_pack_in_channel)
-                        ]
-                        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_pack_out_channel)]
-                        if stride[0] != 1:
-                            mask_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_out_channel)]
-                            input_args.append(Argument(f'convm_{layer_id}', mask_pt))
-                        else:
-                            mask_pt = []
                     else:
                         conv0_layer = ParMultiplexedConv2DPackedLayer(
                             n_out_channel,
@@ -292,29 +259,9 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                             n_packed_out_channel,
                         )
 
-                        size_0 = math.ceil(n_out_channel / n_block_per_ct)
-                        size_1 = n_pack_in_channel * n_block_per_ct
-
-                        weight_pt = [
-                            [
-                                [CkksPlaintextRingtNode(f'convw_{layer_id}_{i}_{j}_{k}') for k in range(kernel_size)]
-                                for j in range(size_1)
-                            ]
-                            for i in range(size_0)
-                        ]
-                        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_pack_out_channel)]
-                        if stride[0] == 1 and stride[1] == 1 and skip[0] == 1 and skip[1] == 1:
-                            mask_pt = []
-                        else:
-                            mask_pt = [
-                                [
-                                    CkksPlaintextRingtNode(f'convm_{layer_id}_{i}_{j}')
-                                    for j in range(min(n_block_per_ct, n_out_channel - i * n_block_per_ct))
-                                ]
-                                for i in range(size_0)
-                            ]
-                            input_args.append(Argument(f'convm_{layer_id}', mask_pt))
-
+                    weight_pt, bias_pt, mask_pt = conv0_layer.make_pt_nodes(layer_id)
+                    if mask_pt:
+                        input_args.append(Argument(f'convm_{layer_id}', mask_pt))
                     input_args.append(Argument(f'convw_{layer_id}', weight_pt))
                     input_args.append(Argument(f'convb_{layer_id}', bias_pt))
                     layer_output_nodes = conv0_layer.call(
@@ -335,26 +282,40 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feat = config_info['feature'][layer_input_feature_ids[0]]
             level = int(feat['level'])
             order = layer_config['order']
-            n_pack_in_channel = math.ceil(n_in_channel / pack)
-            if feat['dim'] == 0:
-                input_shape = [1, 1]
-                skip = [1, 1]
-            else:
-                input_shape = feat['shape']
-            weight_pt = [
-                [CkksPlaintextRingtNode(f'poly_reluw_{layer_id}_{i}_{j}') for j in range(n_pack_in_channel)]
-                for i in range(order + 1)
-            ]
-            polyrelu = PolyRelu(input_shape, order, skip, pack)
+            dim = feat['dim']
+
             feature_id_in_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
             drop_level_n = feature_id_in_nodes[0].level - level
-
             if level < feature_id_in_nodes[0].level:
                 feature_id_in_nodes = [drop_level(node, drop_level_n) for node in feature_id_in_nodes]
-            if feat['dim'] == 0:
+
+            if dim == 0:
+                skip_0d = feat['skip'] if not isinstance(feat['skip'], list) else feat['skip'][0]
+                n_channel_per_ct_0d = int(n // 2 // skip_0d)
+                polyrelu = PolyRelu0D(order, skip_0d, n_channel_per_ct_0d)
+                weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
                 layer_output_nodes = polyrelu.call_bsgs_feature0d(feature_id_in_nodes, weight_pt)
-            else:
+
+            elif dim == 1:
+                shape_1d = feat['shape'][0]
+                skip_1d = feat['skip'] if not isinstance(feat['skip'], list) else feat['skip'][0]
+                if style == 'multiplexed':
+                    n_channel_per_ct_1d = int(n // 2 // shape_1d)
+                    polyrelu = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
+                    weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
+                    layer_output_nodes = polyrelu.call_bsgs_mux(feature_id_in_nodes, weight_pt)
+                else:
+                    n_channel_per_ct_1d = int(n // 2 // shape_1d // skip_1d)
+                    polyrelu = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
+                    weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
+                    layer_output_nodes = polyrelu.call_bsgs_skip(feature_id_in_nodes, weight_pt)
+
+            else:  # dim == 2
+                input_shape = feat['shape']
+                polyrelu = PolyRelu2D(input_shape, order, skip, pack)
+                weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
                 layer_output_nodes = polyrelu.call_bsgs_feature2d(feature_id_in_nodes, weight_pt)
+
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
             for i in range(len(weight_pt)):
                 input_args.append(Argument(f'poly_reluw_{layer_id}_{i}', weight_pt[i]))
@@ -364,45 +325,60 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             kernel_shape = layer_config['kernel_shape'][0]
             stride = layer_config['stride'][0]
             skip_1d = skip[0] if isinstance(skip, list) else skip
-            n_channel_per_ct = int(n // 2 // input_shape // skip_1d)
-            n_pack_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
-            n_packed_out_channel = math.ceil(n_out_channel / (n_channel_per_ct * stride))
-            rot_n_channel_per_ct = min(n_in_channel, n_channel_per_ct)
-            input_ct = [
-                CkksCiphertextNode(f'{layer_input_feature_ids[0]}input{k}', level=level)
-                for k in range(n_pack_in_channel)
-            ]
-            if layer_input_feature_ids[0] not in feature_id_to_nodes_map:
-                feature_id_to_nodes_map[layer_input_feature_ids[0]] = input_ct
-                input_args.append(Argument(layer_input_feature_ids[0], input_ct))
-            weight_pt = [
-                [
-                    [CkksPlaintextRingtNode(f'convw_{layer_id}_{i}_{k}_{j}') for k in range(kernel_shape)]
-                    for j in range(rot_n_channel_per_ct)
-                ]
-                for i in range(n_packed_out_channel)
-            ]
-            bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_packed_out_channel)]
-            conv1d = Conv1DPackedLayer(
-                n_out_channel,
-                n_in_channel,
-                input_shape,
-                kernel_shape,
-                stride,
-                skip_1d,
-                n_channel_per_ct,
-                n_pack_in_channel,
-                n_packed_out_channel,
-            )
-            layer_output_nodes = conv1d.call(feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt)
-            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-            input_args.append(Argument(f'convw_{layer_id}', weight_pt))
-            input_args.append(Argument(f'convb_{layer_id}', bias_pt))
+            if style == 'multiplexed':
+                n_channel_per_ct = math.ceil(n // 2 / input_shape)
+                n_packed_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
+                n_packed_out_channel = math.ceil(n_out_channel / n_channel_per_ct)
+                conv1d = ParMultiplexedConv1DPackedLayer(
+                    n_out_channel,
+                    n_in_channel,
+                    input_shape,
+                    kernel_shape,
+                    stride,
+                    skip_1d,
+                    n_channel_per_ct,
+                    n_packed_in_channel,
+                    n_packed_out_channel,
+                )
+                weight_pt, bias_pt, block_select_pt = conv1d.make_pt_nodes(layer_id)
+                layer_output_nodes = conv1d.call(
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                    weight_pt,
+                    bias_pt,
+                    block_select_pt if block_select_pt else None,
+                )
+                feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                input_args.append(Argument(f'convw_{layer_id}', weight_pt))
+                input_args.append(Argument(f'convb_{layer_id}', bias_pt))
+                if block_select_pt:
+                    input_args.append(Argument(f'convm_{layer_id}', block_select_pt))
+            else:
+                n_channel_per_ct = int(n // 2 // input_shape // skip_1d)
+                n_pack_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
+                n_packed_out_channel = math.ceil(n_out_channel / (n_channel_per_ct * stride))
+                conv1d = Conv1DPackedLayer(
+                    n_out_channel,
+                    n_in_channel,
+                    input_shape,
+                    kernel_shape,
+                    stride,
+                    skip_1d,
+                    n_channel_per_ct,
+                    n_pack_in_channel,
+                    n_packed_out_channel,
+                )
+                weight_pt, bias_pt = conv1d.make_pt_nodes(layer_id)
+                layer_output_nodes = conv1d.call(
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt
+                )
+                feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                input_args.append(Argument(f'convw_{layer_id}', weight_pt))
+                input_args.append(Argument(f'convb_{layer_id}', bias_pt))
 
         elif layer_config['type'] == 'mult_scalar':
             mult_scalar_layer = MultScalarLayer()
             input_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
-            pt = [CkksPlaintextRingtNode(f'mult_scalar_{layer_id}_{i}') for i in range(len(input_nodes))]
+            pt = mult_scalar_layer.make_pt_nodes(layer_id, len(input_nodes))
             layer_output_nodes = mult_scalar_layer.call(input_nodes, pt)
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
             input_args.append(Argument(f'mult_scalar_{layer_id}', pt))
@@ -476,19 +452,14 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         elif 'upsample_nearest' in layer_config['type']:
             input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
             upsample_factor = layer_config['upsample_factor']
-            n_channel_per_ct = pack
             upsample_layer = UpsampleNearestLayer(
                 shape=input_shape,
                 skip=skip,
                 upsample_factor=upsample_factor,
-                n_channel_per_ct=n_channel_per_ct,
+                n_channel_per_ct=pack,
                 level=level,
             )
-            out_channels_per_ct = n_channel_per_ct // (upsample_factor[0] * upsample_factor[1])
-            n_select_pt = out_channels_per_ct
-            select_tensor_pt = [
-                CkksPlaintextRingtNode(f'upsample_select_pt_{layer_id}_{i}') for i in range(n_select_pt)
-            ]
+            select_tensor_pt = upsample_layer.make_pt_nodes(layer_id, n_in_channel)
             layer_output_nodes = upsample_layer.call(
                 feature_id_to_nodes_map[layer_input_feature_ids[0]],
                 select_tensor_pt,
@@ -522,10 +493,9 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         )
                 else:
                     # level_cost=1: non-adaptive avgpool needs mult+rescale (select_tensor)
-                    n_channel_per_ct = int(math.ceil(n / 2 / (input_shape[0] * input_shape[1])))
-                    out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
-                    n_select_pt = min(n_in_channel, out_channels_per_ct)
-                    select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)]
+                    select_tensor_pt, n_channel_per_ct = avgpool.make_pt_nodes_multiplexed_avgpool(
+                        layer_id, n_in_channel, n
+                    )
                     layer_output_nodes = avgpool.call_multiplexed_avgpool(
                         feature_id_to_nodes_map[layer_input_feature_ids[0]],
                         select_tensor_pt,
@@ -537,8 +507,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif layer_config['type'] == 'fc0':
-            n_packed_in_channel = math.ceil(n_in_channel / (n // 2))
-            n_packed_out_channel = math.ceil(n_out_channel / pack)
             if 'special_info' not in config_info['feature'][layer_input_feature_ids[0]]:
                 # call_skip_0d path — matching test_fc_fc_feature0d Layer 1
                 skip_0d = config_info['feature'][layer_input_feature_ids[0]]['skip']
@@ -546,12 +514,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 pack_0d = n_channel_per_ct
                 n_packed_in_feature = math.ceil(n_in_channel / n_channel_per_ct)
                 n_packed_out_feature = math.ceil(n_out_channel / n_channel_per_ct)
-                weight_pt_size = n_packed_in_feature * pack_0d
-                weight_pt = [
-                    [CkksPlaintextRingtNode(f'densew_{layer_id}_{m}_{i}') for i in range(weight_pt_size)]
-                    for m in range(n_packed_out_feature)
-                ]
-                bias_pt = [CkksPlaintextRingtNode(f'denseb_{layer_id}_{i}') for i in range(n_packed_out_feature)]
                 fc_layer = DensePackedLayer(
                     n_out_channel,
                     n_in_channel,
@@ -561,6 +523,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     n_packed_in_feature,
                     n_packed_out_feature,
                 )
+                weight_pt, bias_pt = fc_layer.make_pt_nodes_skip_0d(layer_id)
                 input_args.append(Argument(f'densew_{layer_id}', weight_pt))
                 input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
                 layer_output_nodes = fc_layer.call_skip_0d(
@@ -571,36 +534,48 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 special_shape = special_info['shape']
                 special_skip = special_info['skip']
                 invalid_fill = special_info.get('invalid_fill', [1, 1])
-                input_shape_ct = [special_shape[0] * special_skip[0], special_shape[1] * special_skip[1]]
-                n_num_per_ct = math.ceil(n // 2 / (input_shape_ct[0] * input_shape_ct[1]))
-                n_packed_out_feature_for_mult_apck = math.ceil(n_out_channel / n_num_per_ct)
-                valid_skip_0 = special_skip[0] // invalid_fill[0]
-                valid_skip_1 = special_skip[1] // invalid_fill[1]
-                n_channel_per_block = valid_skip_0 * valid_skip_1
-                n_channel = n_in_channel // (special_shape[0] * special_shape[1])
-                n_block_input = math.ceil(n_channel / (n_num_per_ct * n_channel_per_block)) * n_num_per_ct
-                weight_pt = [
-                    [CkksPlaintextRingtNode(f'densew_{layer_id}_{i}_{j}') for j in range(n_block_input)]
-                    for i in range(n_packed_out_feature_for_mult_apck)
-                ]
-                bias_pt = [
-                    CkksPlaintextRingtNode(f'denseb_{layer_id}_{i}') for i in range(n_packed_out_feature_for_mult_apck)
-                ]
-                dense = DensePackedLayer(
-                    n_out_channel,
-                    n_in_channel,
-                    special_shape,
-                    special_skip,
-                    n_num_per_ct,
-                    n_in_channel,
-                    n_out_channel,
-                    invalid_fill=invalid_fill,
-                )
-                input_args.append(Argument(f'densew_{layer_id}', weight_pt))
-                input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
-                layer_output_nodes = dense.call_multiplexed(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, n
-                )
+                if len(special_shape) == 1:
+                    # 1D multiplexed: special_shape=[L], special_skip=[skip]
+                    shape_1d = int(special_shape[0])
+                    skip_1d = int(special_skip[0])
+                    invalid_fill_1d = int(invalid_fill[0])
+                    block_stride = skip_1d * invalid_fill_1d
+                    block_size = shape_1d * block_stride
+                    n_block_per_ct = int(n // 2) // block_size
+                    n_channel_per_ct_1d = n_block_per_ct * skip_1d
+                    dense = DensePackedLayer(
+                        n_out_channel,
+                        n_in_channel,
+                        [shape_1d, 1],
+                        [skip_1d, 1],
+                        n_channel_per_ct_1d,
+                        math.ceil(n_in_channel / n_channel_per_ct_1d),
+                        math.ceil(n_out_channel / n_block_per_ct),
+                    )
+                    weight_pt, bias_pt = dense.make_pt_nodes_1d_multiplexed(layer_id, n)
+                    input_args.append(Argument(f'densew_{layer_id}', weight_pt))
+                    input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
+                    layer_output_nodes = dense.call_1d_multiplexed(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, n
+                    )
+                else:
+                    # 2D multiplexed: special_shape=[H, W], special_skip=[s0, s1]
+                    dense = DensePackedLayer(
+                        n_out_channel,
+                        n_in_channel,
+                        special_shape,
+                        special_skip,
+                        math.ceil(n // 2 / (special_shape[0] * special_skip[0] * special_shape[1] * special_skip[1])),
+                        n_in_channel,
+                        n_out_channel,
+                        invalid_fill=invalid_fill,
+                    )
+                    weight_pt, bias_pt = dense.make_pt_nodes_multiplexed(layer_id, n)
+                    input_args.append(Argument(f'densew_{layer_id}', weight_pt))
+                    input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
+                    layer_output_nodes = dense.call_multiplexed(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, n
+                    )
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         else:

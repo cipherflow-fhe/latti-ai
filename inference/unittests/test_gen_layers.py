@@ -332,19 +332,6 @@ class TestLayerExport(unittest.TestCase):
 
                             input_ct = [CkksCiphertextNode(f'input_0input{k}', level=level) for k in range(n_ct_in)]
 
-                            index = kernel_shape[0] * kernel_shape[1]
-                            weight_pt = [
-                                [
-                                    [
-                                        CkksPlaintextRingtNode(f'convw__conv1_{k}_{n}_{i}')
-                                        for i in range(int(index * next_stride[0] * next_stride[1]))
-                                    ]
-                                    for n in range(n_in_channel)
-                                ]
-                                for k in range(n_out_channel)
-                            ]
-                            bias_pt = [CkksPlaintextRingtNode(f'convb__conv1_{i}') for i in range(n_out_channel)]
-
                             big_conv = InverseMultiplexedConv2DLayer(
                                 n_out_channel,
                                 n_in_channel,
@@ -357,7 +344,8 @@ class TestLayerExport(unittest.TestCase):
                                 block_shape,
                             )
 
-                            output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N)
+                            weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes('_conv1')
+                            output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_pt)
 
                             used_indices = big_conv.get_used_input_indices()
                             used_input_ct = [input_ct[i] for i in sorted(used_indices)]
@@ -365,6 +353,8 @@ class TestLayerExport(unittest.TestCase):
                             input_args.append(Argument('input_0', used_input_ct))
                             input_args.append(Argument('convw__conv1', weight_pt))
                             input_args.append(Argument('convb__conv1', bias_pt))
+                            if repack_mask_pt is not None:
+                                input_args.append(Argument('repack_mask__conv1', [repack_mask_pt]))
 
                             process_custom_task(
                                 input_args=input_args,
@@ -433,21 +423,8 @@ class TestLayerExport(unittest.TestCase):
 
                     input_ct = [CkksCiphertextNode(f'input_0input{k}', level=level) for k in range(n_ct_in)]
 
-                    index = kernel_shape[0] * kernel_shape[1]
-                    weight_pt = [
-                        [
-                            [
-                                CkksPlaintextRingtNode(f'convw__conv1_{k}_{n}_{i}')
-                                for i in range(int(index * effective_next_stride[0] * effective_next_stride[1]))
-                            ]
-                            for n in range(n_in_channel)
-                        ]
-                        for k in range(n_out_channel)
-                    ]
-                    bias_pt = [CkksPlaintextRingtNode(f'convb__conv1_{i}') for i in range(n_out_channel)]
-
-                    repack_mask_node = CkksPlaintextRingtNode('repack_mask__conv1') if big_conv.need_repack else None
-                    output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_node)
+                    weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes('_conv1')
+                    output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_pt)
 
                     used_indices = big_conv.get_used_input_indices()
                     used_input_ct = [input_ct[i] for i in sorted(used_indices)]
@@ -455,8 +432,8 @@ class TestLayerExport(unittest.TestCase):
                     input_args.append(Argument('input_0', used_input_ct))
                     input_args.append(Argument('convw__conv1', weight_pt))
                     input_args.append(Argument('convb__conv1', bias_pt))
-                    if repack_mask_node is not None:
-                        input_args.append(Argument('repack_mask__conv1', [repack_mask_node]))
+                    if repack_mask_pt is not None:
+                        input_args.append(Argument('repack_mask__conv1', [repack_mask_pt]))
 
                     process_custom_task(
                         input_args=input_args,
@@ -797,21 +774,21 @@ class TestLayerExport(unittest.TestCase):
         n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
         order0 = 7
         order1 = 7
-        level_cost0 = PolyRelu.compute_bsgs_level_cost(order0)
-        level_cost1 = PolyRelu.compute_bsgs_level_cost(order1)
+        level_cost0 = PolyRelu2D.compute_bsgs_level_cost(order0)
+        level_cost1 = PolyRelu2D.compute_bsgs_level_cost(order1)
         level = level_cost0 + level_cost1 + 1  # +1 for sign(x)*x multiplication
 
         input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
         weight_pt0 = [
             [CkksPlaintextRingtNode(f'poly0w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order0 + 1)
         ]
-        poly_layer0 = PolyRelu(input_shape, order0, skip, n_in_channel_per_ct)
+        poly_layer0 = PolyRelu2D(input_shape, order0, skip, n_in_channel_per_ct)
         output_ct0 = poly_layer0.call_bsgs_feature2d(input_ct, weight_pt0)
 
         weight_pt1 = [
             [CkksPlaintextRingtNode(f'poly1w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order1 + 1)
         ]
-        poly_layer1 = PolyRelu(input_shape, order1, skip, n_in_channel_per_ct)
+        poly_layer1 = PolyRelu2D(input_shape, order1, skip, n_in_channel_per_ct)
         output_ct1 = poly_layer1.call_bsgs_feature2d(output_ct0, weight_pt1)
 
         output_ct = list()
@@ -852,7 +829,7 @@ class TestLayerExport(unittest.TestCase):
             level = 8
 
             for order in orders:
-                level_cost = PolyRelu.compute_bsgs_level_cost(order)
+                level_cost = PolyRelu0D.compute_bsgs_level_cost(order)
                 if level < level_cost:
                     continue
 
@@ -863,7 +840,7 @@ class TestLayerExport(unittest.TestCase):
                     for i in range(order + 1)
                 ]
 
-                poly_layer = PolyRelu.create_for_feature0d(order, skip_val, n_channel_per_ct)
+                poly_layer = PolyRelu0D(order, skip_val, n_channel_per_ct)
                 output_ct = poly_layer.call_bsgs_feature0d(input_ct, weight_pt)
 
                 input_args = list()
@@ -878,6 +855,98 @@ class TestLayerExport(unittest.TestCase):
                     / f'CKKS_poly_relu_bsgs_feature0d_{n_in_channel}_channel_order_{order}_skip_{skip_val}'
                     / f'level_{level}',
                 )
+
+    def test_poly_bsgs_feature1d_skip(self):
+        """PolyRelu1D — skip-pack mode (Feature1DEncrypted::pack).
+
+        Slot layout: channel ch, position i → slot ch * shape * skip + i * skip
+        n_channel_per_ct = N/2 / (shape * skip)
+        """
+        N = 16384
+        set_param('PN14QP438')
+        n_in_channel = 64
+        shapes = [32, 64]
+        skips = [1, 2]
+        orders = [2, 4, 7]
+        level = 8
+
+        for shape in shapes:
+            for skip_val in skips:
+                n_channel_per_ct = N // 2 // shape // skip_val
+                if n_channel_per_ct == 0:
+                    continue
+                n_pack_in_channel = int(np.ceil(n_in_channel / n_channel_per_ct))
+
+                for order in orders:
+                    level_cost = PolyRelu1D.compute_bsgs_level_cost(order)
+                    if level < level_cost:
+                        continue
+
+                    print(f'sub-test skip: shape={shape}, skip={skip_val}, order={order}')
+                    input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+                    weight_pt = [
+                        [CkksPlaintextRingtNode(f'polyw_1d_skip_{i}_{j}') for j in range(n_pack_in_channel)]
+                        for i in range(order + 1)
+                    ]
+
+                    poly_layer = PolyRelu1D(shape, order, skip_val, n_channel_per_ct)
+                    output_ct = poly_layer.call_bsgs_skip(input_ct, weight_pt)
+
+                    input_args = [Argument('input_node', input_ct)]
+                    for i in range(order + 1):
+                        input_args.append(Argument(f'weight_pt{i}', weight_pt[i]))
+
+                    process_custom_task(
+                        input_args=input_args,
+                        output_args=[Argument('output_ct', output_ct)],
+                        output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_skip_{n_in_channel}_channel'
+                        f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
+                    )
+
+    def test_poly_bsgs_feature1d_mux(self):
+        """PolyRelu1D — multiplexed/interleaved-pack mode (Feature1DEncrypted::pack_multiplexed).
+
+        Slot layout: channel j (CT-local), position i → slot (j/skip)*shape*skip + i*skip + (j%skip)
+        n_channel_per_ct = N/2 / shape   (skip channels share each shape*skip block)
+        """
+        N = 16384
+        set_param('PN14QP438')
+        n_in_channel = 64
+        shapes = [32, 64]
+        skips = [1, 2]
+        orders = [2, 4, 7]
+        level = 8
+
+        for shape in shapes:
+            for skip_val in skips:
+                n_channel_per_ct = N // 2 // shape  # multiplexed: no skip in denominator
+                n_pack_in_channel = int(np.ceil(n_in_channel / n_channel_per_ct))
+
+                for order in orders:
+                    level_cost = PolyRelu1D.compute_bsgs_level_cost(order)
+                    if level < level_cost:
+                        continue
+
+                    print(f'sub-test mux: shape={shape}, skip={skip_val}, order={order}')
+                    input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+                    weight_pt = [
+                        [CkksPlaintextRingtNode(f'polyw_1d_mux_{i}_{j}') for j in range(n_pack_in_channel)]
+                        for i in range(order + 1)
+                    ]
+
+                    poly_layer = PolyRelu1D(shape, order, skip_val, n_channel_per_ct)
+                    output_ct = poly_layer.call_bsgs_mux(input_ct, weight_pt)
+
+                    input_args = [Argument('input_node', input_ct)]
+                    for i in range(order + 1):
+                        input_args.append(Argument(f'weight_pt{i}', weight_pt[i]))
+
+                    process_custom_task(
+                        input_args=input_args,
+                        output_args=[Argument('output_ct', output_ct)],
+                        output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_mux_{n_in_channel}_channel'
+                        f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
+                    )
 
     def test_conv1d_layer(self):
         N = 16384
@@ -902,16 +971,6 @@ class TestLayerExport(unittest.TestCase):
                         n_pack_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
                         n_packed_out_channel = math.ceil(n_out_channel / (n_channel_per_ct * stride))
                         input_ct = [CkksCiphertextNode(f'input_{k}', init_level) for k in range(n_pack_in_channel)]
-                        rot_n_channel_per_ct = n_in_channel if n_in_channel < n_channel_per_ct else n_channel_per_ct
-                        weight_pt = [
-                            [
-                                [CkksPlaintextRingtNode(f'weight_{i}_{k}_{j}') for k in range(kernel_shape)]
-                                for j in range(rot_n_channel_per_ct)
-                            ]
-                            for i in range(n_packed_out_channel)
-                        ]
-                        bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_channel)]
-
                         conv1d = Conv1DPackedLayer(
                             n_out_channel,
                             n_in_channel,
@@ -923,12 +982,13 @@ class TestLayerExport(unittest.TestCase):
                             n_pack_in_channel,
                             n_packed_out_channel,
                         )
+                        weight_pt, bias_pt = conv1d.make_pt_nodes('_conv1d')
                         output_ct = conv1d.call(input_ct, weight_pt, bias_pt)
 
                         input_args = list()
                         input_args.append(Argument('input_node', input_ct))
-                        input_args.append(Argument(f'weight_pt', weight_pt))
-                        input_args.append(Argument(f'bias_pt', bias_pt))
+                        input_args.append(Argument(f'convw__conv1d', weight_pt))
+                        input_args.append(Argument(f'convb__conv1d', bias_pt))
 
                         process_custom_task(
                             input_args=input_args,
@@ -1045,13 +1105,12 @@ class TestLayerExport(unittest.TestCase):
                     if s < stride[0]:
                         continue  # shape must be >= stride
                     print(f'sub-test: stride={stride[0]}, n_channel={n_channel}, s={s}')
-                    n_channel_per_ct = int(np.ceil(N / 2 / (s * s)))
-                    n_ct = int(np.ceil(n_channel / n_channel_per_ct))
+                    n_ct = int(np.ceil(n_channel / int(np.ceil(N / 2 / (s * s)))))
                     input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
-                    out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
-                    n_select_pt = min(n_channel, out_channels_per_ct)
-                    select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
                     avgpool = Avgpool2DLayer(stride=list(stride), shape=[s, s], channel=n_channel, skip=[1, 1])
+                    select_tensor_pt, n_channel_per_ct = avgpool.make_pt_nodes_multiplexed_avgpool(
+                        '_avgpool', n_channel, N
+                    )
                     output_ct = avgpool.call_multiplexed_avgpool(
                         input_ct, select_tensor_pt, n_channel, n_channel_per_ct
                     )
@@ -1130,7 +1189,7 @@ class TestLayerExport(unittest.TestCase):
                             channel=n_channel,
                             skip=[1, 1],
                         )
-                        output_ct = avgpool.call_interleaved_avgpool(input_ct, block_expansion)
+                        output_ct = avgpool.call_interleaved_avgpool(input_ct, block_expansion, N)
 
                         input_args = [Argument('input_node', input_ct)]
                         process_custom_task(
