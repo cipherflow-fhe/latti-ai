@@ -61,7 +61,11 @@ InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool i
     task_input_param = config["task_input_param"];
     task_output_param = config["task_output_param"];
     server_task = config["server_task"];
-    block_shape = config["block_shape"];
+    if (config["block_shape"].size() == 1) {
+        block_shape = {config["block_shape"][0], config["block_shape"][0]};
+    } else {
+        block_shape = config["block_shape"];
+    }
     is_absorb_polyrelu = config["is_absorb_polyrelu"];
     Timer timer(true);
 }
