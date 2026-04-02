@@ -260,7 +260,7 @@ class FheScoreParam:
         self.output_mult_level = dag.nodes[succs[0]]['level']
         self.input_degree = param[preds[0].ckks_parameter_id].poly_modulus_degree
         self.output_degree = param[succs[0].ckks_parameter_id].poly_modulus_degree
-        if compute_node.layer_type == 'conv2d':
+        if 'conv' in compute_node.layer_type:
             self.stride = compute_node.stride
             self.kernel_shape = compute_node.kernel_shape
         if compute_node.layer_type == 'avgpool2d':
@@ -293,91 +293,119 @@ class FheScoreParam:
     def get_score(self) -> float:
         compute_score = 0.0
         if 'conv' in self.compute_node.layer_type:
-            if config.style == 'ordinary':
-                if self.compute_node.groups == 1:
-                    n_mult_and_add_score = (
-                        (self.n_packed_in * self.pack * self.n_packed_out * self.kernel_shape[0] * self.kernel_shape[1])
-                        * (self.mult_plain_score + self.add_score)
-                        / get_multithread_rate(self.n_packed_out)
-                    ) + self.n_packed_out * self.rescale_score / get_multithread_rate(self.n_packed_out)
-                else:
-                    n_mult_and_add_score = (
-                        (self.n_packed_out * self.kernel_shape[0] * self.kernel_shape[1])
-                        * (self.mult_plain_score + self.add_score)
-                        / get_multithread_rate(self.n_packed_out)
-                    ) + self.n_packed_out * self.rescale_score / get_multithread_rate(self.n_packed_out)
+            if self.compute_node.dim == 2:
+                if config.style == 'ordinary':
+                    if self.compute_node.groups == 1:
+                        n_mult_and_add_score = (
+                            (
+                                self.n_packed_in
+                                * self.pack
+                                * self.n_packed_out
+                                * self.kernel_shape[0]
+                                * self.kernel_shape[1]
+                            )
+                            * (self.mult_plain_score + self.add_score)
+                            / get_multithread_rate(self.n_packed_out)
+                        ) + self.n_packed_out * self.rescale_score / get_multithread_rate(self.n_packed_out)
+                    else:
+                        n_mult_and_add_score = (
+                            (self.n_packed_out * self.kernel_shape[0] * self.kernel_shape[1])
+                            * (self.mult_plain_score + self.add_score)
+                            / get_multithread_rate(self.n_packed_out)
+                        ) + self.n_packed_out * self.rescale_score / get_multithread_rate(self.n_packed_out)
 
-                if self.compute_node.groups == 1:
-                    n_rotate_step_1 = self.n_packed_in * (self.pack - 1)
-                    n_rotate_step_2 = (
-                        self.n_packed_in
-                        * self.pack
-                        * (self.kernel_shape[0] - 1 + self.kernel_shape[0] * (self.kernel_shape[1] - 1))
-                    )
-                    n_rotate_score = (
-                        n_rotate_step_1 / get_multithread_rate(self.n_packed_in)
-                        + n_rotate_step_2 / get_multithread_rate(self.n_packed_in * self.pack)
-                    ) * self.rotate_score
+                    if self.compute_node.groups == 1:
+                        n_rotate_step_1 = self.n_packed_in * (self.pack - 1)
+                        n_rotate_step_2 = (
+                            self.n_packed_in
+                            * self.pack
+                            * (self.kernel_shape[0] - 1 + self.kernel_shape[0] * (self.kernel_shape[1] - 1))
+                        )
+                        n_rotate_score = (
+                            n_rotate_step_1 / get_multithread_rate(self.n_packed_in)
+                            + n_rotate_step_2 / get_multithread_rate(self.n_packed_in * self.pack)
+                        ) * self.rotate_score
+                    else:
+                        n_rotate_step = self.n_packed_in * (
+                            self.kernel_shape[0] - 1 + self.kernel_shape[0] * (self.kernel_shape[1] - 1)
+                        )
+                        n_rotate_score = n_rotate_step / get_multithread_rate(self.n_packed_in) * self.rotate_score
                 else:
-                    n_rotate_step = self.n_packed_in * (
-                        self.kernel_shape[0] - 1 + self.kernel_shape[0] * (self.kernel_shape[1] - 1)
+                    x_size = (
+                        math.ceil(self.input_channel / self.pack)
+                        * math.ceil(self.input_shape[0] / config.block_shape[0])
+                        * math.ceil(self.input_shape[1] / config.block_shape[1])
                     )
-                    n_rotate_score = n_rotate_step / get_multithread_rate(self.n_packed_in) * self.rotate_score
+
+                    n_block_per_ct = math.ceil(self.pack / (self.input_skip[0] * self.input_skip[1]))
+                    rotate_num1 = x_size / get_multithread_rate_for_block_rotation(x_size) * (n_block_per_ct - 1)
+                    rotated_size = x_size * n_block_per_ct
+                    rotate_num2 = (
+                        rotated_size
+                        / get_multithread_rate_for_kernel_rotation(rotated_size)
+                        * (self.kernel_shape[0] * self.kernel_shape[1] - 1)
+                    )
+                    weight_size = math.ceil(self.output_channel / n_block_per_ct)
+
+                    if self.stride[0] != 1 and self.input_skip[0] != 1:
+                        rotate_num3 = (
+                            weight_size
+                            / get_multithread_rate_for_weight_ops(weight_size)
+                            * (math.log2(self.input_skip[0]) * 2 + n_block_per_ct)
+                        )
+                    else:
+                        rotate_num3 = (
+                            weight_size
+                            / get_multithread_rate_for_weight_ops(weight_size)
+                            * (math.log2(self.input_skip[0]))
+                            * 2
+                        )
+
+                    n_in_ct = math.ceil(self.input_channel / self.pack)
+                    n_out_ct = math.ceil(self.output_channel / self.pack_out)
+                    if self.stride[0] != 1:
+                        mult_num = weight_size * (
+                            n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1] + n_block_per_ct
+                        )
+                    else:
+                        mult_num = weight_size * (
+                            n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1]
+                        )
+                    mult_num = mult_num / get_multithread_rate_for_weight_ops(weight_size)
+                    add_num = (
+                        weight_size
+                        / get_multithread_rate_for_weight_ops(weight_size)
+                        * (
+                            (math.log2(self.input_skip[0])) * 2
+                            + n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1]
+                        )
+                        + n_out_ct
+                    )
+
+                    n_rescale_score = (
+                        weight_size
+                        / get_multithread_rate_for_weight_ops(weight_size)
+                        * n_block_per_ct
+                        * self.rescale_score
+                    )
+                    n_mult_and_add_score = mult_num * self.mult_plain_score + add_num * self.add_score + n_rescale_score
+                    n_rotate_score = (rotate_num1 + rotate_num2 + rotate_num3) * self.rotate_score
             else:
-                x_size = (
-                    math.ceil(self.input_channel / self.pack)
-                    * math.ceil(self.input_shape[0] / config.block_shape[0])
-                    * math.ceil(self.input_shape[1] / config.block_shape[1])
-                )
-
-                n_block_per_ct = math.ceil(self.pack / (self.input_skip[0] * self.input_skip[1]))
-                rotate_num1 = x_size / get_multithread_rate_for_block_rotation(x_size) * (n_block_per_ct - 1)
-                rotated_size = x_size * n_block_per_ct
-                rotate_num2 = (
-                    rotated_size
-                    / get_multithread_rate_for_kernel_rotation(rotated_size)
-                    * (self.kernel_shape[0] * self.kernel_shape[1] - 1)
-                )
-                weight_size = math.ceil(self.output_channel / n_block_per_ct)
-
-                if self.stride[0] != 1 and self.input_skip[0] != 1:
-                    rotate_num3 = (
-                        weight_size
-                        / get_multithread_rate_for_weight_ops(weight_size)
-                        * (math.log2(self.input_skip[0]) * 2 + n_block_per_ct)
-                    )
-                else:
-                    rotate_num3 = (
-                        weight_size
-                        / get_multithread_rate_for_weight_ops(weight_size)
-                        * (math.log2(self.input_skip[0]))
-                        * 2
-                    )
-
-                n_in_ct = math.ceil(self.input_channel / self.pack)
-                n_out_ct = math.ceil(self.output_channel / self.pack_out)
-                if self.stride[0] != 1:
-                    mult_num = weight_size * (
-                        n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1] + n_block_per_ct
-                    )
-                else:
-                    mult_num = weight_size * (n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1])
-                mult_num = mult_num / get_multithread_rate_for_weight_ops(weight_size)
-                add_num = (
-                    weight_size
-                    / get_multithread_rate_for_weight_ops(weight_size)
-                    * (
-                        (math.log2(self.input_skip[0])) * 2
-                        + n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1]
-                    )
-                    + n_out_ct
-                )
-
-                n_rescale_score = (
-                    weight_size / get_multithread_rate_for_weight_ops(weight_size) * n_block_per_ct * self.rescale_score
-                )
-                n_mult_and_add_score = mult_num * self.mult_plain_score + add_num * self.add_score + n_rescale_score
-                n_rotate_score = (rotate_num1 + rotate_num2 + rotate_num3) * self.rotate_score
+                # conv1d: cost derived from Conv1DPackedLayer::run_core
+                # step 1 - populate_rotations_1_side: (pack-1) rotations per input ct
+                n_rotate_step_1 = self.n_packed_in * (self.pack - 1)
+                # step 2 - populate_rotations_2_sides: (kernel_shape-1) rotations per rotated ct
+                n_rotate_step_2 = self.n_packed_in * self.pack * (self.kernel_shape[0] - 1)
+                n_rotate_score = (
+                    n_rotate_step_1 / get_multithread_rate(self.n_packed_in)
+                    + n_rotate_step_2 / get_multithread_rate(self.n_packed_in * self.pack)
+                ) * self.rotate_score
+                # step 3 - mult_add: n_packed_in*pack*kernel_shape mults+adds per output ct, then rescale
+                n_mult_and_add_score = (
+                    (self.n_packed_in * self.pack * self.n_packed_out * self.kernel_shape[0])
+                    * (self.mult_plain_score + self.add_score)
+                    / get_multithread_rate(self.n_packed_out)
+                ) + self.n_packed_out * self.rescale_score / get_multithread_rate(self.n_packed_out)
             compute_score = n_mult_and_add_score + n_rotate_score
 
             return compute_score * self.acc_rate
