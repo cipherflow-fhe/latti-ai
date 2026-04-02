@@ -820,8 +820,20 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     result = make_unique<Feature0DEncrypted>(fp->ckks_reshape[key]->call(context, input2D));
+                } else if (feature_node.dim == 1) {
+                    const Feature1DEncrypted& input1D = dynamic_cast<const Feature1DEncrypted&>(feature_node);
+                    Feature0DEncrypted out(&context, input1D.level);
+                    for (int i = 0; i < (int)input1D.data.size(); i++) {
+                        out.data.push_back(input1D.data[i].copy());
+                    }
+                    out.dim = 0;
+                    out.skip = input1D.shape * input1D.skip;
+                    out.level = input1D.level;
+                    out.n_channel = input1D.n_channel;
+                    out.n_channel_per_ct = input1D.n_channel_per_ct;
+                    result = make_unique<Feature0DEncrypted>(move(out));
                 } else {
-                    throw runtime_error("input is not available, expect Feature2DEncrypted");
+                    throw runtime_error("input is not available, expect Feature2DEncrypted or Feature1DEncrypted");
                 }
                 fhe_timer.stop();
             } else if (layer_type == "avgpool2d") {
@@ -1369,8 +1381,14 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                                .to_array_1d();
             }
             if (layer_type == "reshape") {
-                auto& input0 = p_feature2d_x[feature_input[0]];
-                result0d = input0.reshape<1>({0}).to_array_1d();
+                FeatureNode feature_input0(json_features[feature_input[0]]);
+                if (feature_input0.dim == 1) {
+                    auto& input0 = p_feature1d_x[feature_input[0]];
+                    result0d = input0.reshape<1>({0}).to_array_1d();
+                } else {
+                    auto& input0 = p_feature2d_x[feature_input[0]];
+                    result0d = input0.reshape<1>({0}).to_array_1d();
+                }
             }
             if (layer_type == "avgpool2d") {
                 auto& input0 = p_feature2d_x[feature_input[0]];

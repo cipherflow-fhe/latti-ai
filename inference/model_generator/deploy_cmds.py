@@ -581,10 +581,11 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     shape_1d = int(special_shape[0])
                     skip_1d = int(special_skip[0])
                     invalid_fill_1d = int(invalid_fill[0])
-                    block_stride = skip_1d * invalid_fill_1d
+                    block_stride = skip_1d  # skip already contains invalid_fill
                     block_size = shape_1d * block_stride
                     n_block_per_ct = int(n // 2) // block_size
-                    n_channel_per_ct_1d = n_block_per_ct * skip_1d
+                    valid_sub = skip_1d // invalid_fill_1d
+                    n_channel_per_ct_1d = n_block_per_ct * valid_sub
                     dense = DensePackedLayer(
                         n_out_channel,
                         n_in_channel,

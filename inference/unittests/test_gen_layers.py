@@ -1362,6 +1362,86 @@ class TestLayerExport(unittest.TestCase):
                                 / 'server',
                             )
 
+    def test_fc_1d_multiplexed(self):
+        """DensePackedLayer — 1D multiplexed mode (call_1d_multiplexed).
 
-if __name__ == '__main__':
-    unittest.main()
+        Feature layout: Feature1DEncrypted::pack_multiplexed
+          block_stride  = skip          (skip already contains invalid_fill)
+          block_size    = shape * skip
+          n_block_per_ct = N/2 / block_size
+          valid_sub      = skip / invalid_fill
+          n_valid_per_ct = n_block_per_ct * valid_sub  (channels with actual data)
+          n_ct           = ceil(n_channel / n_valid_per_ct)
+        """
+        N = 16384
+        set_param('PN14QP438')
+        N_half = N // 2
+        level = 2
+
+        # (shape, skip, invalid_fill, n_in_channel, n_out_channel)
+        configs = [
+            (32, 2, 1, 16, 8),
+            (32, 2, 1, 64, 32),
+            (32, 4, 1, 32, 16),
+            (32, 4, 2, 32, 16),
+            (32, 4, 4, 32, 16),
+            (64, 2, 1, 16, 8),
+            (64, 4, 2, 64, 32),
+            (64, 8, 4, 64, 32),
+        ]
+
+        for shape, skip, invalid_fill, n_in_channel, n_out_channel in configs:
+            # Corrected formulas: skip already contains invalid_fill
+            block_size = shape * skip
+            n_block_per_ct = N_half // block_size
+            valid_sub = skip // invalid_fill  # valid sub_pos per block
+            n_valid_per_ct = n_block_per_ct * valid_sub  # channels with data per CT
+            if n_block_per_ct == 0 or n_valid_per_ct == 0:
+                continue
+
+            n_packed_out = math.ceil(n_out_channel / n_block_per_ct)
+            n_block_input = math.ceil(n_in_channel / n_valid_per_ct) * n_block_per_ct
+            n_input_ct = math.ceil(n_in_channel / n_valid_per_ct)
+
+            print(
+                f'sub-test: shape={shape}, skip={skip}, invalid_fill={invalid_fill}, '
+                f'cin={n_in_channel}, cout={n_out_channel}, '
+                f'n_block_per_ct={n_block_per_ct}, n_valid_per_ct={n_valid_per_ct}, '
+                f'n_packed_out={n_packed_out}, n_block_input={n_block_input}'
+            )
+
+            input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_input_ct)]
+            weight_pt = [
+                [CkksPlaintextRingtNode(f'weight_pt_{i}_{j}') for j in range(n_block_input)]
+                for i in range(n_packed_out)
+            ]
+            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out)]
+
+            dense = DensePackedLayer(
+                n_out_channel,
+                n_in_channel,
+                [shape, 1],
+                [skip, 1],
+                n_block_per_ct,
+                n_input_ct,
+                n_packed_out,
+                invalid_fill=[invalid_fill, 1],
+            )
+            output_ct = dense.call_1d_multiplexed(input_ct, weight_pt, bias_pt, N)
+
+            path_name = (
+                f'CKKS_fc_1d_multiplexed'
+                f'_shape{shape}'
+                f'_skip{skip}'
+                f'_inv{invalid_fill}'
+                f'_cin{n_in_channel}_cout{n_out_channel}'
+            )
+            process_custom_task(
+                input_args=[
+                    Argument('input_node', input_ct),
+                    Argument('weight_pt', weight_pt),
+                    Argument('bias_pt', bias_pt),
+                ],
+                output_args=[Argument('output_ct', output_ct)],
+                output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
+            )

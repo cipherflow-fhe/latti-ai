@@ -527,7 +527,10 @@ void DensePackedLayer::prepare_weight_for_1d_multiplexed(uint32_t input_shape_in
     n_block_per_ct_1d = n_blocks;
 
     int n_packed_out = div_ceil(n_out_feature, n_block_per_ct_1d);
-    n_block_input_1d = div_ceil(n_in_feature, n_valid_per_ct_1d) * n_block_per_ct_1d;
+    // n_in_feature is the flattened count (channels * spatial_length); divide by input_shape_1d
+    // to get the actual number of conv1d output channels, which determines the input CT count.
+    int n_actual_channels = n_in_feature / (int)input_shape_1d;
+    n_block_input_1d = div_ceil(n_actual_channels, n_valid_per_ct_1d) * n_block_per_ct_1d;
 
     weight_pt.resize(n_packed_out);
     bias_pt.resize(n_packed_out);
@@ -632,7 +635,7 @@ Feature0DEncrypted DensePackedLayer::run_1d_multiplexed(CkksContext& ctx, const 
 
     Feature0DEncrypted out(x.context, x.level);
     out.data = move(result);
-    out.skip = 1;
+    out.skip = (int)block_size;
     out.n_channel = n_out_feature;
     out.dim = 0;
     out.n_channel_per_ct = n_block_per_ct_1d;
