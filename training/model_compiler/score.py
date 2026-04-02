@@ -263,7 +263,7 @@ class FheScoreParam:
         if compute_node.layer_type == 'conv2d':
             self.stride = compute_node.stride
             self.kernel_shape = compute_node.kernel_shape
-        if compute_node.layer_type == 'avgpool2d':
+        if compute_node.layer_type in {'avgpool1d', 'avgpool2d'}:
             self.stride = compute_node.stride
         if preds[0].dim == 2:
             self.input_shape = preds[0].shape
@@ -423,7 +423,7 @@ class FheScoreParam:
                 math.ceil(math.log2(self.compute_node.order)) + 1
             )
             return compute_score * self.acc_rate
-        elif 'avgpool2d' == self.compute_node.layer_type:
+        elif self.compute_node.layer_type in {'avgpool1d', 'avgpool2d'}:
             num = self.n_packed_in * (self.stride[0] - 1 + math.log2(self.stride[0]))
             n_add_score = num * self.add_score
             n_rotate_score = num * self.rotate_score
