@@ -653,6 +653,18 @@ class SingleConv1dE2E(nn.Module):
         return x
 
 
+class DepthwiseConv1d(nn.Module):
+    """Depthwise Conv1d (groups=in_channels). Covers dw_conv1d."""
+
+    def __init__(self, channels=8, stride=1):
+        super().__init__()
+        self.conv0 = nn.Conv1d(channels, channels, kernel_size=3, bias=True, padding=1, stride=stride, groups=channels)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
 class ConcatModel(nn.Module):
     """Two conv branches concatenated. Covers concat_layer."""
 

@@ -198,6 +198,29 @@ class ParMultiplexedDWConv1DPackedLayer:
                 res.append(combined)
             return res
 
+    def make_pt_nodes(self, layer_id):
+        """Return (weight_pt, bias_pt, block_select_pt) matching call().
+
+        weight_pt[ct_idx][k]: ct_idx in n_packed_ct, k in kernel_shape
+        bias_pt[i]:           i in n_packed_ct
+        block_select_pt[i]:   i in n_channel_per_ct (empty if not needs_rearrange)
+        """
+        import math as _math
+
+        n_packed_ct = _math.ceil(self.n_channel / self.n_channel_per_ct)
+        weight_pt = [
+            [CkksPlaintextRingtNode(f'convw_{layer_id}_{ct_idx}_{k}') for k in range(self.kernel_shape)]
+            for ct_idx in range(n_packed_ct)
+        ]
+        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_packed_ct)]
+        needs_rearrange = self.skip > 1 or self.stride > 1
+        if needs_rearrange:
+            n_local_ch = min(self.n_channel_per_ct, self.n_channel)
+            block_select_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_local_ch)]
+        else:
+            block_select_pt = []
+        return weight_pt, bias_pt, block_select_pt
+
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, block_select_pt=None) -> list[CkksCiphertextNode]:
         # 1. Kernel direction rotation
         rotated_x = self.gen_rotated_x(x)

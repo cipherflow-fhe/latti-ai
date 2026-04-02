@@ -324,34 +324,59 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape'][0]
             kernel_shape = layer_config['kernel_shape'][0]
             stride = layer_config['stride'][0]
+            groups = layer_config['groups']
             skip_1d = skip[0] if isinstance(skip, list) else skip
             if style == 'multiplexed':
                 n_channel_per_ct = math.ceil(n // 2 / input_shape)
                 n_packed_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
                 n_packed_out_channel = math.ceil(n_out_channel / n_channel_per_ct)
-                conv1d = ParMultiplexedConv1DPackedLayer(
-                    n_out_channel,
-                    n_in_channel,
-                    input_shape,
-                    kernel_shape,
-                    stride,
-                    skip_1d,
-                    n_channel_per_ct,
-                    n_packed_in_channel,
-                    n_packed_out_channel,
-                )
-                weight_pt, bias_pt, block_select_pt = conv1d.make_pt_nodes(layer_id)
-                layer_output_nodes = conv1d.call(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]],
-                    weight_pt,
-                    bias_pt,
-                    block_select_pt if block_select_pt else None,
-                )
-                feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-                input_args.append(Argument(f'convw_{layer_id}', weight_pt))
-                input_args.append(Argument(f'convb_{layer_id}', bias_pt))
-                if block_select_pt:
-                    input_args.append(Argument(f'convm_{layer_id}', block_select_pt))
+                if groups == n_out_channel and groups != 1:
+                    n_packed_ct = math.ceil(n_out_channel / n_channel_per_ct)
+                    conv1d = ParMultiplexedDWConv1DPackedLayer(
+                        n_out_channel,
+                        input_shape,
+                        kernel_shape,
+                        stride,
+                        skip_1d,
+                        n_channel_per_ct,
+                        n_packed_ct,
+                    )
+                    weight_pt, bias_pt, block_select_pt = conv1d.make_pt_nodes(layer_id)
+                    layer_output_nodes = conv1d.call(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                        weight_pt,
+                        bias_pt,
+                        block_select_pt if block_select_pt else None,
+                    )
+                    feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                    input_args.append(Argument(f'convw_{layer_id}', weight_pt))
+                    input_args.append(Argument(f'convb_{layer_id}', bias_pt))
+                    if block_select_pt:
+                        input_args.append(Argument(f'convm_{layer_id}', block_select_pt))
+                else:
+                    conv1d = ParMultiplexedConv1DPackedLayer(
+                        n_out_channel,
+                        n_in_channel,
+                        input_shape,
+                        kernel_shape,
+                        stride,
+                        skip_1d,
+                        n_channel_per_ct,
+                        n_packed_in_channel,
+                        n_packed_out_channel,
+                    )
+                    weight_pt, bias_pt, block_select_pt = conv1d.make_pt_nodes(layer_id)
+                    layer_output_nodes = conv1d.call(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                        weight_pt,
+                        bias_pt,
+                        block_select_pt if block_select_pt else None,
+                    )
+                    feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                    input_args.append(Argument(f'convw_{layer_id}', weight_pt))
+                    input_args.append(Argument(f'convb_{layer_id}', bias_pt))
+                    if block_select_pt:
+                        input_args.append(Argument(f'convm_{layer_id}', block_select_pt))
             else:
                 n_channel_per_ct = int(n // 2 // input_shape // skip_1d)
                 n_pack_in_channel = math.ceil(n_in_channel / n_channel_per_ct)

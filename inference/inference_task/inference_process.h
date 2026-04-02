@@ -201,6 +201,7 @@ public:
     std::map<std::string, std::unique_ptr<UpsampleNearestLayer>> ckks_upsample_nearest;
     std::map<std::string, std::unique_ptr<Conv1DPackedLayer>> ckks_conv1ds;
     std::map<std::string, std::unique_ptr<ParMultiplexedConv1DPackedLayer>> ckks_multiplexed_conv1ds;
+    std::map<std::string, std::unique_ptr<ParMultiplexedDWConv1DPackedLayer>> ckks_multiplexed_dw_conv1ds;
 };
 
 class InferenceProcess {

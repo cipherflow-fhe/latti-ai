@@ -491,6 +491,16 @@ class TestSingleLayer(CompilerTestBase):
         graph, score = self._export_and_compile(model, (1, 32, 256, 256), style='multiplexed')
         self.assertTrue(any(node.is_big_size for node in graph.dag.nodes if isinstance(node, ConvComputeNode)))
 
+    def test_single_dw_conv1d(self):
+        model = nn_modules.DepthwiseConv1d(channels=8, stride=1)
+        graph, score = self._export_and_compile(model, (1, 8, 64), style='multiplexed')
+        self.assertTrue(
+            any(
+                isinstance(node, ConvComputeNode) and node.layer_type == 'conv1d' and node.groups == node.channel_input
+                for node in graph.dag.nodes
+            )
+        )
+
 
 class TestLayerInteraction(CompilerTestBase):
     def test_mismatched_scale(self):
@@ -1036,6 +1046,12 @@ class TestE2E(CompilerTestBase):
         """Conv1d E2E. Covers conv1d."""
         model = nn_modules.SingleConv1dE2E()
         graph, score = self._export_compile_and_deploy(model, (1, 4, 64), 'conv1d_e2e')
+        self.assertIsNotNone(graph)
+
+    def test_e2e_dw_conv1d(self):
+        """Depthwise Conv1d E2E (groups=channels). Covers dw_conv1d."""
+        model = nn_modules.DepthwiseConv1d(channels=8, stride=1)
+        graph, score = self._export_compile_and_deploy(model, (1, 8, 64), 'dw_conv1d_e2e', style='multiplexed')
         self.assertIsNotNone(graph)
 
     # ── New layer migration from refactor/linghm ──
