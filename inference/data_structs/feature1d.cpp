@@ -21,11 +21,15 @@
 using namespace std;
 using namespace cxx_sdk_v2;
 
-Feature1DEncrypted::Feature1DEncrypted(CkksContext* context_in, int ct_level, uint32_t skip_in) {
+Feature1DEncrypted::Feature1DEncrypted(CkksContext* context_in,
+                                       int ct_level,
+                                       uint32_t skip_in,
+                                       uint32_t invalid_fill_in) {
     dim = 1;
     context = context_in;
     level = ct_level;
     skip = skip_in;
+    invalid_fill = invalid_fill_in;
 }
 
 void Feature1DEncrypted::pack(Array<double, 2>& feature_mg, bool is_symmetric, double scale_in) {
@@ -88,8 +92,11 @@ void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, bo
 
     int n_slot = context->get_parameter().get_n() / 2;
 
-    uint32_t shape_with_skip = shape * skip;
-    n_channel_per_ct = (n_slot / shape_with_skip) * skip;
+    // block_stride: slots per spatial position (first skip valid, rest invalid)
+    // block_size:   total slots per block (shape spatial positions)
+    uint32_t block_stride = skip * invalid_fill;
+    uint32_t block_size = shape * block_stride;
+    n_channel_per_ct = n_slot / (shape * invalid_fill);
 
     int n_mult_pack_per_ct = std::min((int)n_channel_per_ct, (int)n_channel);
 
@@ -118,8 +125,10 @@ void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, bo
                 continue;
             }
 
+            int block_idx = j / skip;
+            int sub_pos = j % skip;
             for (int data_idx = 0; data_idx < shape; data_idx++) {
-                int slot_idx = (j / skip) * shape_with_skip + data_idx * skip + (j % skip);
+                int slot_idx = block_idx * (int)block_size + data_idx * (int)block_stride + sub_pos;
                 image_flat[slot_idx] = feature_mg.get(channel, data_idx);
             }
         }
@@ -138,9 +147,9 @@ void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, bo
 Array<double, 2> Feature1DEncrypted::unpack_multiplexed() const {
     const int N_THREAD = 4;
     int n_ct = data.size();
-    int n_slot = context->get_parameter().get_n() / 2;
 
-    uint32_t shape_with_skip = shape * skip;
+    uint32_t block_stride = skip * invalid_fill;
+    uint32_t block_size = shape * block_stride;
     int n_mult_pack_per_ct = std::min((int)n_channel_per_ct, (int)n_channel);
 
     Array<double, 2> result({n_channel, shape});
@@ -156,8 +165,10 @@ Array<double, 2> Feature1DEncrypted::unpack_multiplexed() const {
                 continue;
             }
 
+            int block_idx = j / skip;
+            int sub_pos = j % skip;
             for (int data_idx = 0; data_idx < shape; data_idx++) {
-                int slot_idx = (j / skip) * shape_with_skip + data_idx * skip + (j % skip);
+                int slot_idx = block_idx * (int)block_size + data_idx * (int)block_stride + sub_pos;
                 result.set(channel, data_idx, x_mg[slot_idx]);
             }
         }
@@ -196,6 +207,7 @@ Bytes Feature1DEncrypted::serialize() const {
     ss_write(ss, level);
     ss_write(ss, shape);
     ss_write(ss, skip);
+    ss_write(ss, invalid_fill);
     uint32_t n_ct = data.size();
     ss_write(ss, n_ct);
     for (const CkksCiphertext& ct : data) {
@@ -220,6 +232,7 @@ void Feature1DEncrypted::deserialize(const Bytes& bytes) {
     ss_read(ss, &level);
     ss_read(ss, &shape);
     ss_read(ss, &skip);
+    ss_read(ss, &invalid_fill);
     uint32_t n_ct;
     ss_read(ss, &n_ct);
     for (uint32_t i = 0; i < n_ct; i++) {
@@ -237,7 +250,7 @@ void Feature1DEncrypted::deserialize(const Bytes& bytes) {
 }
 
 Feature1DEncrypted Feature1DEncrypted::copy() const {
-    Feature1DEncrypted result(context, level, skip);
+    Feature1DEncrypted result(context, level, skip, invalid_fill);
     result.n_channel = n_channel;
     result.n_channel_per_ct = n_channel_per_ct;
     result.shape = shape;
