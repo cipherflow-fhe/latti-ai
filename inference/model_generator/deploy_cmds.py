@@ -235,7 +235,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 if style == 'multiplexed':
                     n_in_channel_per_ct = pack
                     if groups == n_out_channel and groups != 1:
-                        conv0_layer = ParMultiplexedConv2DPackedLayerDepthwise(
+                        conv0_layer = MultiplexedConv2DPackedLayerDepthwise(
                             n_out_channel,
                             n_in_channel,
                             input_shape,
@@ -247,7 +247,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                             n_packed_out_channel,
                         )
                     else:
-                        conv0_layer = ParMultiplexedConv2DPackedLayer(
+                        conv0_layer = MultiplexedConv2DPackedLayer(
                             n_out_channel,
                             n_in_channel,
                             input_shape,
@@ -329,7 +329,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 n_channel_per_ct = math.ceil(n // 2 / input_shape)
                 n_packed_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
                 n_packed_out_channel = math.ceil(n_out_channel / n_channel_per_ct)
-                conv1d = ParMultiplexedConv1DPackedLayer(
+                conv1d = MultiplexedConv1DPackedLayer(
                     n_out_channel,
                     n_in_channel,
                     input_shape,

@@ -23,10 +23,10 @@ from inference.lattisense.frontend.custom_task import *
 
 import numpy as np
 
-op_class = 'ParMultiplexedConv1DPackedLayer'
+op_class = 'MultiplexedConv1DPackedLayer'
 
 
-class ParMultiplexedConv1DPackedLayer:
+class MultiplexedConv1DPackedLayer:
     rotate_num = 0
     add_num = 0
     mult_num = 0

@@ -662,7 +662,7 @@ The class holds maps of all initialized FHE layer instances:
 - `ckks_avgpool` — `Avgpool2DLayer` instances
 - `ckks_concat` — `ConcatLayer` instances
 - `ckks_upsample` — `UpsampleLayer` instances
-- `ckks_multiplexed_conv2ds` — `ParMultiplexedConv2DPackedLayer` instances
+- `ckks_multiplexed_conv2ds` — `MultiplexedConv2DPackedLayer` instances
 
 ---
 
@@ -741,7 +741,7 @@ Execution device for inference.
 |-------------|--------|-------------|
 | `Conv2DPackedLayer` | `fhe_layers/conv2d_packed_layer.h` | Encrypted Conv2D with channel packing |
 | `Conv2DPackedDepthwiseLayer` | `fhe_layers/conv2d_depthwise.h` | Encrypted depthwise Conv2D |
-| `ParMultiplexedConv2DPackedLayer` | `fhe_layers/multiplexed_conv2d_pack_layer.h` | Multiplexed Conv2D with parallel packing |
+| `MultiplexedConv2DPackedLayer` | `fhe_layers/multiplexed_conv2d_pack_layer.h` | Multiplexed Conv2D with parallel packing |
 | `Avgpool2DLayer` | `fhe_layers/avgpool2d_layer.h` | Encrypted average pooling |
 | `PolyRelu` | `fhe_layers/poly_relu2d.h` | Polynomial activation (Hermite expansion) |
 | `DensePackedLayer` | `fhe_layers/dense_packed_layer.h` | Encrypted fully-connected layer |
@@ -831,10 +831,10 @@ Encrypted depthwise 2D convolution. Each input channel is convolved with its own
 
 ---
 
-#### ParMultiplexedConv2DPackedLayer
+#### MultiplexedConv2DPackedLayer
 
 ```cpp
-ParMultiplexedConv2DPackedLayer(const CkksParameter& param,
+MultiplexedConv2DPackedLayer(const CkksParameter& param,
                                 const Duo& input_shape,
                                 const Array<double, 4>& weight,
                                 const Array<double, 1>& bias,

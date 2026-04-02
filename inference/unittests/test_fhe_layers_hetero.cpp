@@ -509,8 +509,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv2d_packed", "", HeteroPro
         Array<double, 1> conv0_bias = gen_random_array<1>({n_out_channel}, 0.1);
         Array<double, 3> input_array = gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
 
-        ParMultiplexedConv2DPackedLayer conv_layer(this->context.get_parameter(), input_shape, conv0_weight, conv0_bias,
-                                                   stride, skip, n_channel_per_ct, init_level, 1.0);
+        MultiplexedConv2DPackedLayer conv_layer(this->context.get_parameter(), input_shape, conv0_weight, conv0_bias,
+                                                stride, skip, n_channel_per_ct, init_level, 1.0);
         conv_layer.prepare_weight_for_post_skip_rotation();
 
         Feature2DEncrypted input_feature(&this->context, init_level, skip);
@@ -656,9 +656,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_dw_s2_64x64_k3", "", HeteroPr
                     Array<double, 3> input_array =
                         gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
 
-                    ParMultiplexedConv2DPackedLayerDepthwise dw_conv_layer(this->context.get_parameter(), input_shape,
-                                                                           conv0_weight, conv0_bias, stride, skip,
-                                                                           n_channel_per_ct, init_level, 1.0);
+                    MultiplexedConv2DPackedLayerDepthwise dw_conv_layer(this->context.get_parameter(), input_shape,
+                                                                        conv0_weight, conv0_bias, stride, skip,
+                                                                        n_channel_per_ct, init_level, 1.0);
                     dw_conv_layer.prepare_weight();
 
                     Feature2DEncrypted input_feature(&this->context, init_level, skip);
@@ -1992,9 +1992,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
 
                                     Feature1DEncrypted input_feature(&this->context, init_level, skip);
                                     input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
-                                    ParMultiplexedConv1DPackedLayer conv0_layer(
-                                        this->context.get_parameter(), input_shape, conv0_weight, conv0_bias, stride,
-                                        skip, n_channel_per_ct, init_level);
+                                    MultiplexedConv1DPackedLayer conv0_layer(this->context.get_parameter(), input_shape,
+                                                                             conv0_weight, conv0_bias, stride, skip,
+                                                                             n_channel_per_ct, init_level);
                                     conv0_layer.prepare_weight();
 
                                     bool needs_rearrange = (skip > 1 || stride > 1);

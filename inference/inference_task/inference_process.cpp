@@ -149,8 +149,8 @@ void InitInferenceProcess::init_conv1d_layer(const string& key, const json& laye
 
     string style = layer.value("style", string("ordinary"));
     if (style == "multiplexed") {
-        auto conv_layer = make_unique<ParMultiplexedConv1DPackedLayer>(param, input_shape, weight, bias, stride, skip,
-                                                                       n_channel_per_ct, out_level + 1);
+        auto conv_layer = make_unique<MultiplexedConv1DPackedLayer>(param, input_shape, weight, bias, stride, skip,
+                                                                    n_channel_per_ct, out_level + 1);
         if (is_lazy) {
             conv_layer->prepare_weight_for_lazy();
         } else {
@@ -380,7 +380,7 @@ void InitInferenceProcess::init_multiplexed_conv_layer(const string& key,
             }
             ckks_big_conv2ds[key] = move(inv_conv_layer);
         } else {
-            auto mux_conv_layer = make_unique<ParMultiplexedConv2DPackedLayer>(
+            auto mux_conv_layer = make_unique<MultiplexedConv2DPackedLayer>(
                 param, feature_input.shape, weight, bias, stride, feature_input.skip,
                 feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale, upsample_factor_in);
             if (is_lazy) {
@@ -412,7 +412,7 @@ void InitInferenceProcess::init_multiplexed_conv_layer(const string& key,
             }
             ckks_big_dw_conv2ds[key] = move(inv_dw_conv_layer);
         } else {
-            auto mux_dw_layer = make_unique<ParMultiplexedConv2DPackedLayerDepthwise>(
+            auto mux_dw_layer = make_unique<MultiplexedConv2DPackedLayerDepthwise>(
                 param, feature_input.shape, weight, bias, stride, feature_input.skip,
                 feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale);
             if (is_lazy) {

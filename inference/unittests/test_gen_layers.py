@@ -1034,7 +1034,7 @@ class TestLayerExport(unittest.TestCase):
                             for i in range(n_weight_pt)
                         ]
                         bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_channel)]
-                        conv1d = ParMultiplexedConv1DPackedLayer(
+                        conv1d = MultiplexedConv1DPackedLayer(
                             n_out_channel,
                             n_in_channel,
                             input_shape,

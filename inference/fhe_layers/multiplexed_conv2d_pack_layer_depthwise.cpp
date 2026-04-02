@@ -25,15 +25,15 @@
 using namespace std;
 using namespace cxx_sdk_v2;
 
-ParMultiplexedConv2DPackedLayerDepthwise::ParMultiplexedConv2DPackedLayerDepthwise(const CkksParameter& param_in,
-                                                                                   const Duo& input_shape_in,
-                                                                                   const Array<double, 4>& weight_in,
-                                                                                   const Array<double, 1>& bias_in,
-                                                                                   const Duo& stride_in,
-                                                                                   const Duo& skip_in,
-                                                                                   uint32_t n_channel_per_ct_in,
-                                                                                   uint32_t level_in,
-                                                                                   double residual_scale)
+MultiplexedConv2DPackedLayerDepthwise::MultiplexedConv2DPackedLayerDepthwise(const CkksParameter& param_in,
+                                                                             const Duo& input_shape_in,
+                                                                             const Array<double, 4>& weight_in,
+                                                                             const Array<double, 1>& bias_in,
+                                                                             const Duo& stride_in,
+                                                                             const Duo& skip_in,
+                                                                             uint32_t n_channel_per_ct_in,
+                                                                             uint32_t level_in,
+                                                                             double residual_scale)
     : Conv2DLayer(param_in, input_shape_in, weight_in, bias_in, stride_in, skip_in) {
     n_channel_per_ct = n_channel_per_ct_in;
     n_packed_in_channel = div_ceil(n_out_channel_, n_channel_per_ct);
@@ -43,7 +43,7 @@ ParMultiplexedConv2DPackedLayerDepthwise::ParMultiplexedConv2DPackedLayerDepthwi
     weight_scale = param_.get_q(level_) * residual_scale;
 }
 
-void ParMultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
+void MultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
     uint32_t pad0 = std::floor(kernel_shape_[0] / 2);
     uint32_t pad1 = std::floor(kernel_shape_[1] / 2);
 
@@ -171,7 +171,7 @@ void ParMultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
     });
 }
 
-void ParMultiplexedConv2DPackedLayerDepthwise::prepare_weight_lazy() {
+void MultiplexedConv2DPackedLayerDepthwise::prepare_weight_lazy() {
     uint32_t pad0 = std::floor(kernel_shape_[0] / 2);
     uint32_t pad1 = std::floor(kernel_shape_[1] / 2);
 
@@ -233,7 +233,7 @@ void ParMultiplexedConv2DPackedLayerDepthwise::prepare_weight_lazy() {
     // They will be generated on-demand in run_core using helper functions.
 }
 
-vector<double> ParMultiplexedConv2DPackedLayerDepthwise::select_tensor(int num) const {
+vector<double> MultiplexedConv2DPackedLayerDepthwise::select_tensor(int num) const {
     vector<double> tensor;
     for (int k = 0; k < n_block_per_ct; k++) {
         for (int i = 0; i < input_shape_[0] * skip_[0]; i++) {
@@ -252,10 +252,9 @@ vector<double> ParMultiplexedConv2DPackedLayerDepthwise::select_tensor(int num) 
     return tensor;
 }
 
-CkksPlaintextRingt
-ParMultiplexedConv2DPackedLayerDepthwise::generate_weight_pt_for_indices(CkksContext& ctx,
-                                                                         int n_packed_out_channel_idx,
-                                                                         int kernel_idx) const {
+CkksPlaintextRingt MultiplexedConv2DPackedLayerDepthwise::generate_weight_pt_for_indices(CkksContext& ctx,
+                                                                                         int n_packed_out_channel_idx,
+                                                                                         int kernel_idx) const {
     auto& mask = kernel_masks_[kernel_idx];
     vector<double> w(n_block_per_ct * cached_input_block_size, 0.0);
 
@@ -278,8 +277,8 @@ ParMultiplexedConv2DPackedLayerDepthwise::generate_weight_pt_for_indices(CkksCon
     return ctx.encode_ringt(w, weight_scale);
 }
 
-CkksPlaintextRingt ParMultiplexedConv2DPackedLayerDepthwise::generate_bias_pt_for_index(CkksContext& ctx,
-                                                                                        int bpt_idx) const {
+CkksPlaintextRingt MultiplexedConv2DPackedLayerDepthwise::generate_bias_pt_for_index(CkksContext& ctx,
+                                                                                     int bpt_idx) const {
     int N = param_.get_n();
     vector<double> bias_vec(N / 2, 0.0);
 
@@ -312,13 +311,13 @@ CkksPlaintextRingt ParMultiplexedConv2DPackedLayerDepthwise::generate_bias_pt_fo
 }
 
 CkksPlaintextRingt
-ParMultiplexedConv2DPackedLayerDepthwise::generate_mask_pt_for_indices(CkksContext& ctx, int ct_idx, int i) const {
+MultiplexedConv2DPackedLayerDepthwise::generate_mask_pt_for_indices(CkksContext& ctx, int ct_idx, int i) const {
     auto si = select_tensor((ct_idx * n_channel_per_ct + i) % (n_channel_per_ct * stride_[0] * stride_[1]));
     return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_ - 1));
 }
 
-vector<CkksCiphertext> ParMultiplexedConv2DPackedLayerDepthwise::run_core(CkksContext& ctx,
-                                                                          const std::vector<CkksCiphertext>& x) {
+vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksContext& ctx,
+                                                                       const std::vector<CkksCiphertext>& x) {
     vector<CkksCiphertext> result_ct;
     result_ct.resize(n_out_channel_);
 
@@ -436,7 +435,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayerDepthwise::run_core(CkksCo
     return res;
 }
 
-Feature2DEncrypted ParMultiplexedConv2DPackedLayerDepthwise::run(CkksContext& ctx, const Feature2DEncrypted& x) {
+Feature2DEncrypted MultiplexedConv2DPackedLayerDepthwise::run(CkksContext& ctx, const Feature2DEncrypted& x) {
     Feature2DEncrypted result(&ctx, x.level);
     int bias_level_down = 2;
     if (stride_[0] == 1) {
@@ -453,7 +452,7 @@ Feature2DEncrypted ParMultiplexedConv2DPackedLayerDepthwise::run(CkksContext& ct
     return result;
 }
 
-Array<double, 3> ParMultiplexedConv2DPackedLayerDepthwise::run_plaintext(const Array<double, 3>& x, double multiplier) {
+Array<double, 3> MultiplexedConv2DPackedLayerDepthwise::run_plaintext(const Array<double, 3>& x, double multiplier) {
     double value = 1.0 / multiplier;
     uint32_t padding_shape[]{kernel_shape_[0] / 2, kernel_shape_[1] / 2};
     Array<double, 3> padded_input(
