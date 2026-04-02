@@ -36,7 +36,7 @@
 #include "fhe_layers/mult_scaler.h"
 #include "fhe_layers/multiplexed_conv1d_pack_layer.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer.h"
-#include "fhe_layers/multiplexed_dw_conv1d_pack_layer.h"
+#include "fhe_layers/multiplexed_conv1d_depthwise_pack_layer.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer_depthwise.h"
 #include "fhe_layers/par_block_col_major_ccmm.h"
 #include "fhe_layers/par_block_col_major_cpmm.h"

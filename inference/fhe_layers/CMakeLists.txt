@@ -19,7 +19,7 @@ add_library(fhe_layers
   mult_scaler.cpp
   conv1d_packed_layer.cpp
   multiplexed_conv1d_pack_layer.cpp
-  multiplexed_dw_conv1d_pack_layer.cpp
+  multiplexed_conv1d_depthwise_pack_layer.cpp
   block_col_major_ccmm.cpp
   block_col_major_cpmm.cpp
   block_col_major_transpose.cpp

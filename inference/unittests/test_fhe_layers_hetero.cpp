@@ -47,7 +47,7 @@
 #include "fhe_layers/par_block_col_major_cpmm.h"
 #include "fhe_layers/conv1d_packed_layer.h"
 #include "fhe_layers/multiplexed_conv1d_pack_layer.h"
-#include "fhe_layers/multiplexed_dw_conv1d_pack_layer.h"
+#include "fhe_layers/multiplexed_conv1d_depthwise_pack_layer.h"
 #include "fhe_layers/inverse_multiplexed_conv2d_layer.h"
 #include "fhe_layers/inverse_multiplexed_conv2d_layer_depthwise.h"
 #include "fhe_layers/add_layer.h"

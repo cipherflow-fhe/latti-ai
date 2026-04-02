@@ -16,7 +16,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "multiplexed_dw_conv1d_pack_layer.h"
+#include "multiplexed_conv1d_depthwise_pack_layer.h"
 #include "conv2d_layer.h"
 #include "util.h"
 #include <cmath>
