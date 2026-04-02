@@ -766,12 +766,14 @@ class LayerAbstractGraph:
                 stride = layer_json['stride']
                 padding = layer_json.get('padding', [1, 1])
                 if layer_type == 'avgpool':
-                    layer_type = 'avgpool2d'
+                    spatial_dims = len(kernel_shape)
+                    layer_type = f'avgpool{spatial_dims}d'
                 compute_node = PoolComputeNode(
                     key,
                     layer_type,
                     channel_input,
                     channel_output,
+                    dim=len(stride),
                     stride=stride,
                     kernel_shape=kernel_shape,
                     padding=padding,
@@ -950,7 +952,8 @@ class LayerAbstractGraph:
                 }
             if 'pool' in layer_type:
                 if 'avgpool' in layer_type:
-                    layer_type = 'avgpool2d'
+                    spatial_dims = len(stride)
+                    layer_type = f'avgpool{spatial_dims}d'
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,
