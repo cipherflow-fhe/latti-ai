@@ -63,6 +63,16 @@ class UpsampleNearestLayer:
         # Calculate the number of blocks per ciphertext
         self.n_block_per_ct = (n_channel_per_ct + skip[0] * skip[1] - 1) // (skip[0] * skip[1])
 
+    def make_pt_nodes(self, layer_id, n_channel):
+        """Return select_tensor_pt list.
+
+        Size: min(n_channel, out_channels_per_ct)
+        where out_channels_per_ct = n_channel_per_ct // (upsample_factor[0] * upsample_factor[1])
+        """
+        out_channels_per_ct = self.n_channel_per_ct // (self.upsample_factor[0] * self.upsample_factor[1])
+        n_select_pt = min(out_channels_per_ct, n_channel)
+        return [CkksPlaintextRingtNode(f'upsample_select_pt_{layer_id}_{i}') for i in range(n_select_pt)]
+
     def call(self, x: list[CkksCiphertextNode], select_tensor_pt: list, n_channel: int) -> list[CkksCiphertextNode]:
         """
         Generate computation graph for upsample_nearest layer using pre-generated select_tensor_pt
