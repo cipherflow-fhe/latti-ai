@@ -39,6 +39,10 @@ class MultScalarLayer:
         # self.target_scale = target_scale
         return
 
+    def make_pt_nodes(self, layer_id, n_input_nodes):
+        """Return weight_pt list with n_input_nodes elements."""
+        return [CkksPlaintextRingtNode(f'mult_scalar_{layer_id}_{i}') for i in range(n_input_nodes)]
+
     def call(self, x1: list[DataNode], weight_pt: list[DataNode]):
         result: list[DataNode] = list()
 

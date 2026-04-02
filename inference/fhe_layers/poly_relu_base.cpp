@@ -497,7 +497,7 @@ CkksPlaintextRingt PolyRelu0D::generate_weight_pt_skip0d(CkksContext& ctx, int i
 
 // ---- Mode 2: from reshape of 2D with shape>1 ----
 // Weight is broadcast to all H*W spatial positions within each channel block.
-// Slot layout (mirrors 2D ordinary pack in PolyRelu::prepare_weight_bsgs):
+// Slot layout (mirrors 2D ordinary pack in PolyRelu2D::prepare_weight_bsgs):
 //   channel ch in CT at block ch, position (h,k):
 //   slot = ch * block_size + h * W * s0 * s1 + k * s1
 

@@ -33,6 +33,7 @@
 #include "fhe_layers/conv2d_packed_layer.h"
 #include "fhe_layers/poly_relu2d.h"
 #include "fhe_layers/poly_relu_base.h"
+#include "fhe_layers/poly_relu1d.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer_depthwise.h"
 #include "fhe_layers/activation_layer.h"
@@ -1313,11 +1314,11 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature2d", "", HeteroP
             Feature2DEncrypted input_feature(&this->context, init_level, skip);
             input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
 
-            PolyRelu polyx(this->context.get_parameter(), {input_shape[0], input_shape[1]}, order, weight, skip,
-                           n_channel_per_ct, init_level);
+            PolyRelu2D polyx(this->context.get_parameter(), {input_shape[0], input_shape[1]}, order, weight, skip,
+                             n_channel_per_ct, init_level);
             polyx.prepare_weight_bsgs();
 
-            int output_level = init_level - PolyRelu::compute_bsgs_level_cost(order);
+            int output_level = init_level - PolyRelu2D::compute_bsgs_level_cost(order);
             Feature2DEncrypted output_feature(&this->context, output_level);
             output_feature.skip = skip;
             output_feature.shape = input_shape;
@@ -1368,7 +1369,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature0d", "", HeteroP
             uint32_t n_channel_per_ct = this->n_slot / skip_val;
 
             for (uint32_t order : orders) {
-                int level_cost = PolyRelu::compute_bsgs_level_cost(order);
+                int level_cost = PolyRelu2D::compute_bsgs_level_cost(order);
                 if (init_level < level_cost)
                     continue;
 
@@ -1423,6 +1424,169 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature0d", "", HeteroP
                     auto compare_result = compare(output_mg_expected, output_mg);
                     REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
                     REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                }
+            }
+        }
+    }
+}
+
+// ---- poly_relu 1D, skip-pack mode ----
+// Matches Feature1DEncrypted::pack():
+//   channel ch, position i → slot = ch * shape * skip + i * skip
+//   n_channel_per_ct = N/2 / (shape * skip)
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature1d_skip", "", HeteroProcessors) {
+    uint32_t n_channel = 64;
+    int init_level = 8;
+    vector<uint32_t> shapes = {32, 64};
+    vector<uint32_t> skips = {1, 2};
+    vector<int> orders = {2, 4, 7};
+
+    for (uint32_t shape : shapes) {
+        SECTION("shape=" + to_string(shape)) {
+            for (uint32_t skip_val : skips) {
+                uint32_t n_channel_per_ct = this->n_slot / shape / skip_val;
+                if (n_channel_per_ct == 0)
+                    continue;
+
+                SECTION("skip=" + to_string(skip_val)) {
+                    for (int order : orders) {
+                        int level_cost = PolyRelu1D::compute_bsgs_level_cost(order);
+                        if (init_level < level_cost)
+                            continue;
+
+                        SECTION("order=" + to_string(order)) {
+                            auto input_array = gen_random_array<2>({n_channel, shape}, 1.0);
+                            auto weight = gen_random_array<2>({(uint64_t)order + 1, n_channel}, 0.5);
+
+                            Feature1DEncrypted input_feature(&this->context, init_level, skip_val);
+                            input_feature.pack(input_array, false, this->param.get_default_scale());
+
+                            PolyRelu1D polyx(this->context.get_parameter(), weight, init_level, order, skip_val, shape);
+                            polyx.prepare_weight_bsgs();
+
+                            int output_level = init_level - level_cost;
+                            uint32_t n_packed_ct = div_ceil(n_channel, n_channel_per_ct);
+
+                            Feature1DEncrypted output_feature(&this->context, output_level, skip_val);
+                            output_feature.shape = shape;
+                            output_feature.skip = skip_val;
+                            output_feature.n_channel = n_channel;
+                            output_feature.n_channel_per_ct = n_channel_per_ct;
+                            for (uint32_t i = 0; i < n_packed_ct; i++) {
+                                output_feature.data.push_back(
+                                    this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+                            }
+
+                            fs::path project_path =
+                                base_path /
+                                ("CKKS_poly_relu_bsgs_feature1d_skip_" + to_string(n_channel) + "_channel" + "_shape" +
+                                 to_string(shape) + "_skip" + to_string(skip_val) + "_order" + to_string(order)) /
+                                ("level_" + to_string(init_level));
+
+                            auto arg_names = read_arg_names(project_path);
+                            vector<CxxVectorArgument> cxx_args;
+                            int idx = 0;
+                            cxx_args.push_back({arg_names[idx++], &input_feature.data});
+                            for (int i = 0; i <= order; i++) {
+                                cxx_args.push_back({arg_names[idx++], &polyx.weight_pt[i]});
+                            }
+                            cxx_args.push_back({arg_names[idx++], &output_feature.data});
+
+                            this->run(project_path, cxx_args);
+
+                            auto output_mg = output_feature.unpack();
+                            auto output_mg_expected = polyx.run_plaintext(input_array);
+
+                            INFO("shape=" << shape << " skip=" << skip_val << " order=" << order);
+                            print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+                            print_double_message(output_mg_expected.to_array_1d().data(), "output_mg_expected", 10);
+
+                            auto compare_result = compare(output_mg_expected, output_mg);
+                            REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+                            REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---- poly_relu 1D, multiplexed/interleaved-pack mode ----
+// Matches Feature1DEncrypted::pack_multiplexed():
+//   channel j (CT-local), position i → slot = (j/skip)*shape*skip + i*skip + (j%skip)
+//   n_channel_per_ct = N/2 / shape   (skip channels share each shape*skip block)
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature1d_mux", "", HeteroProcessors) {
+    uint32_t n_channel = 64;
+    int init_level = 8;
+    vector<uint32_t> shapes = {32, 64};
+    vector<uint32_t> skips = {1, 2};
+    vector<int> orders = {2, 4, 7};
+
+    for (uint32_t shape : shapes) {
+        SECTION("shape=" + to_string(shape)) {
+            for (uint32_t skip_val : skips) {
+                // multiplexed: n_channel_per_ct = N/2 / shape (no skip in denominator)
+                uint32_t n_channel_per_ct = this->n_slot / shape;
+
+                SECTION("skip=" + to_string(skip_val)) {
+                    for (int order : orders) {
+                        int level_cost = PolyRelu1D::compute_bsgs_level_cost(order);
+                        if (init_level < level_cost)
+                            continue;
+
+                        SECTION("order=" + to_string(order)) {
+                            auto input_array = gen_random_array<2>({n_channel, shape}, 1.0);
+                            auto weight = gen_random_array<2>({(uint64_t)order + 1, n_channel}, 0.5);
+
+                            Feature1DEncrypted input_feature(&this->context, init_level, skip_val);
+                            input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
+
+                            PolyRelu1D polyx(this->context.get_parameter(), weight, init_level, order, skip_val, shape);
+                            polyx.prepare_weight_bsgs_mux();
+
+                            int output_level = init_level - level_cost;
+                            uint32_t n_packed_ct = div_ceil(n_channel, n_channel_per_ct);
+
+                            Feature1DEncrypted output_feature(&this->context, output_level, skip_val);
+                            output_feature.shape = shape;
+                            output_feature.skip = skip_val;
+                            output_feature.n_channel = n_channel;
+                            output_feature.n_channel_per_ct = n_channel_per_ct;
+                            for (uint32_t i = 0; i < n_packed_ct; i++) {
+                                output_feature.data.push_back(
+                                    this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+                            }
+
+                            fs::path project_path =
+                                base_path /
+                                ("CKKS_poly_relu_bsgs_feature1d_mux_" + to_string(n_channel) + "_channel" + "_shape" +
+                                 to_string(shape) + "_skip" + to_string(skip_val) + "_order" + to_string(order)) /
+                                ("level_" + to_string(init_level));
+
+                            auto arg_names = read_arg_names(project_path);
+                            vector<CxxVectorArgument> cxx_args;
+                            int idx = 0;
+                            cxx_args.push_back({arg_names[idx++], &input_feature.data});
+                            for (int i = 0; i <= order; i++) {
+                                cxx_args.push_back({arg_names[idx++], &polyx.weight_pt[i]});
+                            }
+                            cxx_args.push_back({arg_names[idx++], &output_feature.data});
+
+                            this->run(project_path, cxx_args);
+
+                            auto output_mg = output_feature.unpack_multiplexed();
+                            auto output_mg_expected = polyx.run_plaintext(input_array);
+
+                            INFO("shape=" << shape << " skip=" << skip_val << " order=" << order);
+                            print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+                            print_double_message(output_mg_expected.to_array_1d().data(), "output_mg_expected", 10);
+
+                            auto compare_result = compare(output_mg_expected, output_mg);
+                            REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+                            REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+                        }
+                    }
                 }
             }
         }
@@ -1629,8 +1793,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs_feature2d", "", He
     uint32_t n_channel_per_ct = div_ceil(this->n_slot, (input_shape[0] * input_shape[1]));
     int order0 = 7;
     int order1 = 7;
-    int level_cost0 = PolyRelu::compute_bsgs_level_cost(order0);
-    int level_cost1 = PolyRelu::compute_bsgs_level_cost(order1);
+    int level_cost0 = PolyRelu2D::compute_bsgs_level_cost(order0);
+    int level_cost1 = PolyRelu2D::compute_bsgs_level_cost(order1);
     int init_level = level_cost0 + level_cost1 + 1;  // +1 for sign(x)*x multiplication
 
     auto input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
@@ -1646,12 +1810,12 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs_feature2d", "", He
     input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
 
     // Layer 0: p0(x)
-    PolyRelu poly0(this->context.get_parameter(), input_shape, order0, weight0, skip, n_channel_per_ct, init_level);
+    PolyRelu2D poly0(this->context.get_parameter(), input_shape, order0, weight0, skip, n_channel_per_ct, init_level);
     poly0.prepare_weight_bsgs();
 
     // Layer 1: sign(x) ≈ p1(p0(x))
-    PolyRelu poly1(this->context.get_parameter(), input_shape, order1, weight1, skip, n_channel_per_ct,
-                   init_level - level_cost0);
+    PolyRelu2D poly1(this->context.get_parameter(), input_shape, order1, weight1, skip, n_channel_per_ct,
+                     init_level - level_cost0);
     poly1.prepare_weight_bsgs();
 
     // Output: after sign*x mult + rescale

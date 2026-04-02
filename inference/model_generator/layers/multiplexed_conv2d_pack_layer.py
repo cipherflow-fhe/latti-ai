@@ -169,7 +169,8 @@ class ParMultiplexedConv2DPackedLayer:
                 res.append(add(s, b_pt))
             else:
                 steps = []
-                for i in range(min(self.n_block_per_ct, self.n_out_channel)):
+                valid_n = min(self.n_block_per_ct, self.n_out_channel - ct_idx * self.n_block_per_ct)
+                for i in range(valid_n):
                     n_block = (ct_idx * self.n_block_per_ct + i) % (
                         self.n_channel_per_ct
                         * self.stride[0]
@@ -199,17 +200,16 @@ class ParMultiplexedConv2DPackedLayer:
                     )
                     steps.append(int(rot_step))
                 s_rots = rotate_cols(s, steps)
-                for i in range(self.n_block_per_ct):
-                    if (ct_idx * self.n_block_per_ct + i) < self.n_out_channel:
-                        m_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}_{i}')
-                        custom_compute(
-                            inputs=[conv_data_source],  # Reference same data source
-                            output=m_pt,
-                            type='encode_pt',
-                            attributes={'op_class': op_class, 'type': 'mask_pt', 'i': ct_idx, 'j': i},
-                        )
-                        c_m_s = mult(s_rots[i], m_pt)
-                        result_ct.append(rescale(c_m_s))
+                for i in range(valid_n):
+                    m_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}_{i}')
+                    custom_compute(
+                        inputs=[conv_data_source],  # Reference same data source
+                        output=m_pt,
+                        type='encode_pt',
+                        attributes={'op_class': op_class, 'type': 'mask_pt', 'i': ct_idx, 'j': i},
+                    )
+                    c_m_s = mult(s_rots[i], m_pt)
+                    result_ct.append(rescale(c_m_s))
 
         for i in range(len(result_ct)):
             n_block = i % (
@@ -251,6 +251,41 @@ class ParMultiplexedConv2DPackedLayer:
                 res.append(sp)
         return res
 
+    def make_pt_nodes(self, layer_id):
+        """Return (weight_pt, bias_pt, mask_pt).
+
+        weight_pt[i][j][k]: i in size_0, j in size_1, k in kernel_size
+        bias_pt[i]: i in n_packed_out_channel
+        mask_pt[i][j]: i in size_0, j in valid blocks per ct  (empty list if no mask needed)
+        """
+        import math as _math
+
+        n_pack_in_channel = _math.ceil(self.n_in_channel / self.n_channel_per_ct)
+        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
+        size_0 = _math.ceil(self.n_out_channel / self.n_block_per_ct)
+        size_1 = n_pack_in_channel * self.n_block_per_ct
+
+        weight_pt = [
+            [
+                [CkksPlaintextRingtNode(f'convw_{layer_id}_{i}_{j}_{k}') for k in range(kernel_size)]
+                for j in range(size_1)
+            ]
+            for i in range(size_0)
+        ]
+        n_bias = _math.ceil(self.n_out_channel / (self.stride[0] * self.stride[1] * self.n_channel_per_ct))
+        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_bias)]
+        if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
+            mask_pt = []
+        else:
+            mask_pt = [
+                [
+                    CkksPlaintextRingtNode(f'convm_{layer_id}_{i}_{j}')
+                    for j in range(min(self.n_block_per_ct, self.n_out_channel - i * self.n_block_per_ct))
+                ]
+                for i in range(size_0)
+            ]
+        return weight_pt, bias_pt, mask_pt
+
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mast_pt) -> list[CkksCiphertextNode]:
         # 1. block direction rotation
         block_rotations: list[CkksCiphertextNode] = list()
@@ -281,7 +316,8 @@ class ParMultiplexedConv2DPackedLayer:
                 res.append(add(s, bias_pt[ct_idx]))
             else:
                 steps = []
-                for i in range(min(self.n_block_per_ct, self.n_out_channel)):
+                valid_n = min(self.n_block_per_ct, self.n_out_channel - ct_idx * self.n_block_per_ct)
+                for i in range(valid_n):
                     n_block = (ct_idx * self.n_block_per_ct + i) % (
                         self.n_channel_per_ct
                         * self.stride[0]
@@ -311,10 +347,9 @@ class ParMultiplexedConv2DPackedLayer:
                     )
                     steps.append(int(rot_step))
                 s_rots = rotate_cols(s, steps)
-                for i in range(self.n_block_per_ct):
-                    if (ct_idx * self.n_block_per_ct + i) < self.n_out_channel:
-                        c_m_s = mult(s_rots[i], mast_pt[ct_idx][i])
-                        result_ct.append(rescale(c_m_s))
+                for i in range(valid_n):
+                    c_m_s = mult(s_rots[i], mast_pt[ct_idx][i])
+                    result_ct.append(rescale(c_m_s))
 
         for i in range(len(result_ct)):
             n_block = i % (

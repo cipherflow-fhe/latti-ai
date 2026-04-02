@@ -38,9 +38,12 @@ public:
     virtual void prepare_weight_for_2d_multiplexed_lazy(const Duo& input_shape_in,
                                                         const Duo& skip_in,
                                                         const Duo& invalid_fill_in = {1, 1});
+    virtual void
+    prepare_weight_for_1d_multiplexed(uint32_t input_shape_in, uint32_t skip_in, uint32_t invalid_fill_in = 1);
 
     virtual Feature0DEncrypted run_0d_skip(ls::CkksContext& ctx, const Feature0DEncrypted& x);
     virtual Feature0DEncrypted run_2d_multiplexed(ls::CkksContext& ctx, const Feature0DEncrypted& x);
+    virtual Feature0DEncrypted run_1d_multiplexed(ls::CkksContext& ctx, const Feature0DEncrypted& x);
     Array<double, 1> plaintext_call(const Array<double, 1>& x, double multiplier = 1.0);
 
     std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt;
@@ -82,6 +85,13 @@ protected:
     int n_block_input = 0;
     int N_half = 0;
     Duo special_invalid_fill = {1, 1};
+
+    // Cached values for prepare_weight_for_1d_multiplexed
+    uint32_t input_shape_1d = 0;
+    uint32_t skip_1d = 0;
+    uint32_t invalid_fill_1d = 1;
+    int n_block_per_ct_1d = 0;
+    int n_block_input_1d = 0;
 
     // 0D specific
     uint32_t skip = 0;

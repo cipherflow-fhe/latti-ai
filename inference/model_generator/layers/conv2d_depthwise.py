@@ -141,6 +141,16 @@ class Conv2DPackedDepthwiseLayer:
             result.append(result_ct)
         return result
 
+    def make_pt_nodes(self, layer_id):
+        """Return (weight_pt, bias_pt) with shapes matching call()."""
+        index = self.kernel_shape[0] * self.kernel_shape[1]
+        weight_pt = [
+            [CkksPlaintextRingtNode(f'convw_{layer_id}_{n}_{i}') for i in range(index)]
+            for n in range(self.n_packed_out_channel)
+        ]
+        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_packed_out_channel)]
+        return weight_pt, bias_pt
+
     def call(self, x: list[DataNode], weight_pt, bias_pt) -> list[DataNode]:
         rotated_x = x
         rotated_x_2d = self.gen_rotated_x(rotated_x)
