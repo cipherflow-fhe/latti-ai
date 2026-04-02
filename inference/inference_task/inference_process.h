@@ -165,6 +165,7 @@ public:
                                         const json& layer,
                                         const bool& is_adaptive = true,
                                         const Duo& block_shape = {128, 256});
+    virtual void init_fhe_avgpool1d_layer(const std::string& key, const json& layer, const bool& is_adaptive = true);
     void init_multiplexed_conv_layer(const std::string& key,
                                      const json& layer,
                                      const hid_t& h5_file,
@@ -190,6 +191,7 @@ public:
     std::map<std::string, std::unique_ptr<ReshapeLayer>> ckks_reshape;
     std::map<std::string, std::unique_ptr<Avgpool2DLayer>> ckks_avgpool;
     std::map<std::string, std::unique_ptr<PolyRelu2D>> ckks_poly_relu;
+    std::map<std::string, std::unique_ptr<Avgpool1DLayer>> ckks_avgpool1d;
     std::map<std::string, std::unique_ptr<PolyRelu0D>> ckks_poly_relu_0d;
     std::map<std::string, std::unique_ptr<PolyRelu1D>> ckks_poly_relu_1d;
     std::map<std::string, std::unique_ptr<ParMultiplexedConv2DPackedLayer>> ckks_multiplexed_conv2ds;
