@@ -271,8 +271,28 @@ class InverseMultiplexedConv2DLayer:
                     res[pack_out_ct_idx] = add(res[pack_out_ct_idx], s_rot)
         return res
 
+    def make_pt_nodes(self, layer_id):
+        """Return (weight_pt, bias_pt, repack_mask_pt).
+
+        weight_pt[k][n][i]: k in n_out_channel, n in n_in_channel,
+                            i in kernel_size * stride_next[0] * stride_next[1]
+        bias_pt[i]: i in n_out_channel
+        repack_mask_pt: a single CkksPlaintextRingtNode if need_repack, else None
+        """
+        inner = self.kernel_shape[0] * self.kernel_shape[1] * self.stride_next[0] * self.stride_next[1]
+        weight_pt = [
+            [
+                [CkksPlaintextRingtNode(f'convw_{layer_id}_{k}_{n}_{i}') for i in range(inner)]
+                for n in range(self.n_in_channel)
+            ]
+            for k in range(self.n_out_channel)
+        ]
+        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_out_channel)]
+        repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}') if self.need_repack else None
+        return weight_pt, bias_pt, repack_mask_pt
+
     def call(
-        self, x: list[CkksCiphertextNode], weight_pt, bias_pt, N: int, conv_data_source=None, repack_mask_pt=None
+        self, x: list[CkksCiphertextNode], weight_pt, bias_pt, N: int, repack_mask_pt=None
     ) -> list[CkksCiphertextNode]:
         pad0 = self.padding[0]
         pad1 = self.padding[1]

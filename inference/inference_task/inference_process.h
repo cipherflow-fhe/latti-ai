@@ -51,6 +51,7 @@ public:
     Duo skip = {1, 1};
     Duo special_skip = {1, 1};  // 0D from special_info.skip
     Duo invalid_fill = {0, 0};  // 0D from special_info，2D
+    int special_info_dim = 0;   // 0: no special_info, 1: from 1D, 2: from 2D
     std::string ckks_parameter_id;
     int pack_channel_per_ciphertext;
     int level = 0;
@@ -79,14 +80,20 @@ public:
             if (json_data.contains("special_info")) {
                 auto& si = json_data["special_info"];
                 skip[0] = json_data["skip"];
-                if (si.contains("shape")) {
+                special_info_dim = si["invalid_fill"].size();
+                if (special_info_dim == 2) {
                     shape[0] = si["shape"][0];
                     shape[1] = si["shape"][1];
+                    special_skip[0] = si["skip"][0];
+                    special_skip[1] = si["skip"][1];
+                    invalid_fill[0] = si["invalid_fill"][0];
+                    invalid_fill[1] = si["invalid_fill"][1];
+                } else {
+                    // special_info_dim == 1: from 1D feature
+                    shape[0] = si["shape"][0];
+                    special_skip[0] = si["skip"][0];
+                    invalid_fill[0] = si["invalid_fill"][0];
                 }
-                special_skip[0] = si["skip"][0];
-                special_skip[1] = si["skip"][1];
-                invalid_fill[0] = si["invalid_fill"][0];
-                invalid_fill[1] = si["invalid_fill"][1];
             }
         }
     }
@@ -163,11 +170,11 @@ public:
                                      const hid_t& h5_file,
                                      const Duo& block_shape_in = {128, 256});
 
-    void init_poly_relu2d_layer(const std::string& key,
-                                const json& layer,
-                                const hid_t& h5_file,
-                                bool is_absorb = true,
-                                const Duo& block_shape_in = {128, 256});
+    void init_poly_relu_layer(const std::string& key,
+                              const json& layer,
+                              const hid_t& h5_file,
+                              bool is_absorb = true,
+                              const Duo& block_shape_in = {128, 256});
     void init_concat_layer(const std::string& key, const json& layer);
     void init_upsample_layer(const std::string& key, const json& layer, const Duo& block_shape = {128, 256});
     void init_upsample_nearest_layer(const std::string& key, const json& layer);
@@ -182,8 +189,9 @@ public:
     std::map<std::string, std::unique_ptr<DropLevelLayer>> ckks_drop_level;
     std::map<std::string, std::unique_ptr<ReshapeLayer>> ckks_reshape;
     std::map<std::string, std::unique_ptr<Avgpool2DLayer>> ckks_avgpool;
-    std::map<std::string, std::unique_ptr<PolyRelu>> ckks_poly_relu;
+    std::map<std::string, std::unique_ptr<PolyRelu2D>> ckks_poly_relu;
     std::map<std::string, std::unique_ptr<PolyRelu0D>> ckks_poly_relu_0d;
+    std::map<std::string, std::unique_ptr<PolyRelu1D>> ckks_poly_relu_1d;
     std::map<std::string, std::unique_ptr<ParMultiplexedConv2DPackedLayer>> ckks_multiplexed_conv2ds;
     std::map<std::string, std::unique_ptr<InverseMultiplexedConv2DLayer>> ckks_big_conv2ds;
     std::map<std::string, std::unique_ptr<InverseMultiplexedConv2DLayerDepthwise>> ckks_big_dw_conv2ds;
