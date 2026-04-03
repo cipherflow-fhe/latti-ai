@@ -1156,6 +1156,10 @@ void InferenceProcess::run_task(bool is_mpc) {
                         CxxVectorArgument{"convw_" + key, &(fp->ckks_multiplexed_conv1ds.at(key)->weight_pt)});
                     cxx_args.push_back(
                         CxxVectorArgument{"convb_" + key, &(fp->ckks_multiplexed_conv1ds.at(key)->bias_pt)});
+                    if (!fp->ckks_multiplexed_conv1ds.at(key)->block_select_pt.empty()) {
+                        cxx_args.push_back(CxxVectorArgument{"convm_" + key,
+                                                             &(fp->ckks_multiplexed_conv1ds.at(key)->block_select_pt)});
+                    }
                 }
             } else {
                 cxx_args.push_back(CxxVectorArgument{"convw_" + key, &(fp->ckks_conv1ds.at(key)->weight_pt)});
@@ -1312,6 +1316,9 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 if (feature_input0.dim == 2) {
                     auto& input0 = p_feature2d_x[feature_input[0]];
                     result = input0.copy();
+                } else if (feature_input0.dim == 1) {
+                    auto& input0 = p_feature1d_x[feature_input[0]];
+                    result1d = input0.copy();
                 } else {
                     auto& input0 = p_feature0d_x[feature_input[0]];
                     result0d = input0;

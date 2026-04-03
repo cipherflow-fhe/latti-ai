@@ -246,8 +246,9 @@ void MultiplexedConv1DPackedLayer::prepare_weight() {
             bias_pt[po] = ctx.encode_ringt(bias_data, ctx.get_parameter().get_q(level_ - 1));
         }
 
-        block_select_pt.resize(n_block_per_ct);
-        for (int t = 0; t < n_block_per_ct; t++) {
+        int n_select = std::min(n_block_per_ct, (int)n_channel_out);
+        block_select_pt.resize(n_select);
+        for (int t = 0; t < n_select; t++) {
             vector<double> mask(param_.get_n() / 2, 0.0);
             for (int out_idx = 0; out_idx < (int)(input_shape / stride); out_idx++) {
                 int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip;
