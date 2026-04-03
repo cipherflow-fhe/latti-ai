@@ -160,7 +160,7 @@ if args.poly_model_convert:
 - `--export-dir`: directory for the H5 weight file, corresponding to the server-side model weights.
 - `--upper-bound`: normalization upper bound for RangeNormPoly2d (default: `3.0`). Controls the input range for polynomial approximation.
 - `--degree`: degree of the polynomial activation (choices: `2`, `4`, `8`; default: `4`). Higher degree gives better approximation but increases FHE computational depth.
-- `--poly-module`: type of polynomial activation to replace ReLU (choices: `RangeNormPoly2d`, `Simple_Polyrelu`).
+- `--poly-module`: type of polynomial activation to replace ReLU (choices: `RangeNormPoly2d`, `PolyAct`).
 
 **Output:**
 

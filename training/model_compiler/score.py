@@ -446,7 +446,7 @@ class FheScoreParam:
                     + add_time * self.add_score
                     + rescale_time * self.rescale_score
                 )
-        elif 'simple_polyrelu' in self.compute_node.layer_type:
+        elif 'polyact' in self.compute_node.layer_type:
             compute_score = (self.n_packed_in * (self.mult_score + self.add_score)) * (
                 math.ceil(math.log2(self.compute_node.order)) + 1
             )

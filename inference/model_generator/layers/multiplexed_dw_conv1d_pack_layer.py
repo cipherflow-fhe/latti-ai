@@ -23,10 +23,10 @@ from inference.lattisense.frontend.custom_task import *
 
 import numpy as np
 
-op_class = 'MultiplexedConv1DPackedLayer'
+op_class = 'MultiplexedDWConv1DPackedLayer'
 
 
-class MultiplexedConv1DPackedLayer:
+class MultiplexedDWConv1DPackedLayer:
     rotate_num = 0
     add_num = 0
     mult_num = 0
@@ -35,25 +35,21 @@ class MultiplexedConv1DPackedLayer:
 
     def __init__(
         self,
-        n_out_channel,
-        n_in_channel,
+        n_channel,
         input_shape,
         kernel_shape,
         stride,
         skip,
         n_channel_per_ct,
-        n_packed_in_channel,
-        n_packed_out_channel,
+        n_packed_ct,
     ):
-        self.n_out_channel: int = n_out_channel
-        self.n_in_channel: int = n_in_channel
+        self.n_channel: int = n_channel
         self.input_shape: int = input_shape
         self.kernel_shape: int = kernel_shape
         self.stride: int = stride
         self.skip: int = skip
         self.n_channel_per_ct: int = n_channel_per_ct
-        self.n_packed_in_channel: int = n_packed_in_channel
-        self.n_packed_out_channel: int = n_packed_out_channel
+        self.n_packed_ct: int = n_packed_ct
         self.input_shape_ct: int = input_shape * skip
         self.n_block_per_ct: int = int(np.ceil(n_channel_per_ct / skip))
 
@@ -94,49 +90,35 @@ class MultiplexedConv1DPackedLayer:
         # 1. Kernel direction rotation
         rotated_x = self.gen_rotated_x(x)
 
-        # 2. Mult + Add
-        n_out_groups = int(np.ceil(self.n_out_channel / self.n_block_per_ct))
+        # 2. Mult + Add (no cross-ct loop; each ct is self-contained for DW conv)
         conv_results = list()
 
-        for wg in range(n_out_groups):
+        for ct_idx in range(self.n_packed_ct):
             x_ct_list = []
             w_pt_list = []
-            for in_ct in range(self.n_packed_in_channel):
-                for b in range(self.n_block_per_ct):
-                    # Block rotation
-                    if b == 0:
-                        block_rots = [rotated_x[in_ct][k] for k in range(self.kernel_shape)]
-                    else:
-                        block_rots = []
-                        for k in range(self.kernel_shape):
-                            rot = rotate_cols(rotated_x[in_ct][k], [b * self.input_shape_ct])
-                            block_rots.append(rot[0])
-
-                    w_idx = in_ct * self.n_block_per_ct + b
-                    for k in range(self.kernel_shape):
-                        w_pt = CkksPlaintextRingtNode(f'encode_pt_{wg}_{w_idx}_{k}')
-                        custom_compute(
-                            inputs=[conv_data_source],
-                            output=w_pt,
-                            type='encode_pt',
-                            attributes={
-                                'op_class': op_class,
-                                'type': 'weight_pt',
-                                'i': wg,
-                                'j': w_idx,
-                                'k': k,
-                            },
-                        )
-                        x_ct_list.append(block_rots[k])
-                        w_pt_list.append(w_pt)
+            for k in range(self.kernel_shape):
+                w_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}_{k}')
+                custom_compute(
+                    inputs=[conv_data_source],
+                    output=w_pt,
+                    type='encode_pt',
+                    attributes={
+                        'op_class': op_class,
+                        'type': 'weight_pt',
+                        'i': ct_idx,
+                        'j': k,
+                    },
+                )
+                x_ct_list.append(rotated_x[ct_idx][k])
+                w_pt_list.append(w_pt)
 
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
 
-            # 3. Skip accumulation
-            s = self.sum_slot(partial_sum, self.skip, 1)
+            # 3. Skip reduction NOT done for DW conv — each slot already holds
+            #    its own channel's result; summing would mix channels.
 
             # 4. Rescale
-            s = rescale(s)
+            s = rescale(partial_sum)
             conv_results.append(s)
 
         # 5. Add bias
@@ -144,31 +126,33 @@ class MultiplexedConv1DPackedLayer:
 
         if not needs_rearrange:
             res = list()
-            for wg in range(n_out_groups):
-                b_pt = CkksPlaintextRingtNode(f'encode_pt_bias_{wg}')
+            for ct_idx in range(self.n_packed_ct):
+                b_pt = CkksPlaintextRingtNode(f'encode_pt_bias_{ct_idx}')
                 custom_compute(
                     inputs=[conv_data_source],
                     output=b_pt,
                     type='encode_pt',
-                    attributes={'op_class': op_class, 'type': 'bias_pt', 'i': wg},
+                    attributes={'op_class': op_class, 'type': 'bias_pt', 'i': ct_idx},
                 )
-                res.append(add(conv_results[wg], b_pt))
+                res.append(add(conv_results[ct_idx], b_pt))
             return res
         else:
             # Select + rotate + merge
             skip_out = self.skip * self.stride
             output_shape = self.input_shape // self.stride
-            n_packed_out = int(np.ceil(self.n_out_channel / self.n_channel_per_ct))
+            n_packed_out = int(np.ceil(self.n_channel / self.n_channel_per_ct))
 
-            # Pre-generate select tensor plaintexts
+            # One select tensor per local channel (not per block), so that we can
+            # pick the specific skip-offset slot j = local_ch % skip.
+            n_local_ch = min(self.n_channel_per_ct, self.n_channel)
             select_pts = []
-            for t in range(self.n_block_per_ct):
-                s_pt = CkksPlaintextRingtNode(f'encode_pt_select_{t}')
+            for local_ch in range(n_local_ch):
+                s_pt = CkksPlaintextRingtNode(f'encode_pt_select_{local_ch}')
                 custom_compute(
                     inputs=[conv_data_source],
                     output=s_pt,
                     type='encode_pt',
-                    attributes={'op_class': op_class, 'type': 'select_pt', 'i': t},
+                    attributes={'op_class': op_class, 'type': 'select_pt', 'i': local_ch},
                 )
                 select_pts.append(s_pt)
 
@@ -176,21 +160,21 @@ class MultiplexedConv1DPackedLayer:
             for po in range(n_packed_out):
                 combined = None
                 for ch_local in range(self.n_channel_per_ct):
-                    out_ch = po * self.n_channel_per_ct + ch_local
-                    if out_ch >= self.n_out_channel:
+                    ch = po * self.n_channel_per_ct + ch_local
+                    if ch >= self.n_channel:
                         break
 
-                    wg = out_ch // self.n_block_per_ct
-                    t = out_ch % self.n_block_per_ct
-                    if wg >= n_out_groups:
-                        break
+                    ct_idx = po  # ch // n_channel_per_ct
+                    local_ch = ch_local  # ch % n_channel_per_ct
+                    t = local_ch // self.skip  # block within CT
+                    j = local_ch % self.skip  # channel_index within skip group
 
-                    masked = mult(conv_results[wg], select_pts[t])
+                    masked = mult(conv_results[ct_idx], select_pts[local_ch])
                     masked = rescale(masked)
 
                     group = ch_local // skip_out
                     ch_offset = ch_local % skip_out
-                    source_base = t * self.input_shape_ct
+                    source_base = t * self.input_shape_ct + j
                     target_base = group * (output_shape * skip_out) + ch_offset
                     rotation = target_base - source_base
 
@@ -217,26 +201,22 @@ class MultiplexedConv1DPackedLayer:
     def make_pt_nodes(self, layer_id):
         """Return (weight_pt, bias_pt, block_select_pt) matching call().
 
-        weight_pt[i][j][k]: i in n_out_groups, j in n_packed_in_channel*n_block_per_ct, k in kernel_shape
-        bias_pt[i]: i in ceil(n_out_channel / n_channel_per_ct)
-        block_select_pt[i]: i in min(n_block_per_ct, n_out_channel)  (empty if not needs_rearrange)
+        weight_pt[ct_idx][k]: ct_idx in n_packed_ct, k in kernel_shape
+        bias_pt[i]:           i in n_packed_ct
+        block_select_pt[i]:   i in n_channel_per_ct (empty if not needs_rearrange)
         """
         import math as _math
 
-        n_out_groups = _math.ceil(self.n_out_channel / self.n_block_per_ct)
-        n_packed_out = _math.ceil(self.n_out_channel / self.n_channel_per_ct)
+        n_packed_ct = _math.ceil(self.n_channel / self.n_channel_per_ct)
         weight_pt = [
-            [
-                [CkksPlaintextRingtNode(f'convw_{layer_id}_{i}_{j}_{k}') for k in range(self.kernel_shape)]
-                for j in range(self.n_packed_in_channel * self.n_block_per_ct)
-            ]
-            for i in range(n_out_groups)
+            [CkksPlaintextRingtNode(f'convw_{layer_id}_{ct_idx}_{k}') for k in range(self.kernel_shape)]
+            for ct_idx in range(n_packed_ct)
         ]
-        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_packed_out)]
+        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_packed_ct)]
         needs_rearrange = self.skip > 1 or self.stride > 1
         if needs_rearrange:
-            n_select = min(self.n_block_per_ct, self.n_out_channel)
-            block_select_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_select)]
+            n_local_ch = min(self.n_channel_per_ct, self.n_channel)
+            block_select_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_local_ch)]
         else:
             block_select_pt = []
         return weight_pt, bias_pt, block_select_pt
@@ -246,35 +226,20 @@ class MultiplexedConv1DPackedLayer:
         rotated_x = self.gen_rotated_x(x)
 
         # 2. Mult + Add
-        n_out_groups = len(weight_pt)
         conv_results = list()
 
-        for wg in range(n_out_groups):
+        for ct_idx in range(self.n_packed_ct):
             x_ct_list = []
             w_pt_list = []
-            for in_ct in range(self.n_packed_in_channel):
-                for b in range(self.n_block_per_ct):
-                    # Block rotation
-                    if b == 0:
-                        block_rots = [rotated_x[in_ct][k] for k in range(self.kernel_shape)]
-                    else:
-                        block_rots = []
-                        for k in range(self.kernel_shape):
-                            rot = rotate_cols(rotated_x[in_ct][k], [b * self.input_shape_ct])
-                            block_rots.append(rot[0])
-
-                    w_idx = in_ct * self.n_block_per_ct + b
-                    for k in range(self.kernel_shape):
-                        x_ct_list.append(block_rots[k])
-                        w_pt_list.append(weight_pt[wg][w_idx][k])
+            for k in range(self.kernel_shape):
+                x_ct_list.append(rotated_x[ct_idx][k])
+                w_pt_list.append(weight_pt[ct_idx][k])
 
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
 
-            # 3. Skip accumulation
-            s = self.sum_slot(partial_sum, self.skip, 1)
-
+            # 3. Skip reduction NOT done for DW conv.
             # 4. Rescale
-            s = rescale(s)
+            s = rescale(partial_sum)
             conv_results.append(s)
 
         # 5. Add bias
@@ -282,34 +247,33 @@ class MultiplexedConv1DPackedLayer:
 
         if not needs_rearrange:
             res = list()
-            for wg in range(n_out_groups):
-                res.append(add(conv_results[wg], bias_pt[wg]))
+            for ct_idx in range(self.n_packed_ct):
+                res.append(add(conv_results[ct_idx], bias_pt[ct_idx]))
             return res
         else:
-            # Select + rotate + merge
             skip_out = self.skip * self.stride
             output_shape = self.input_shape // self.stride
-            n_packed_out = int(np.ceil(self.n_out_channel / self.n_channel_per_ct))
+            n_packed_out = int(np.ceil(self.n_channel / self.n_channel_per_ct))
 
             res = list()
             for po in range(n_packed_out):
                 combined = None
                 for ch_local in range(self.n_channel_per_ct):
-                    out_ch = po * self.n_channel_per_ct + ch_local
-                    if out_ch >= self.n_out_channel:
+                    ch = po * self.n_channel_per_ct + ch_local
+                    if ch >= self.n_channel:
                         break
 
-                    wg = out_ch // self.n_block_per_ct
-                    t = out_ch % self.n_block_per_ct
-                    if wg >= n_out_groups:
-                        break
+                    ct_idx = po  # ch // n_channel_per_ct
+                    local_ch = ch_local  # ch % n_channel_per_ct
+                    t = local_ch // self.skip
+                    j = local_ch % self.skip
 
-                    masked = mult(conv_results[wg], block_select_pt[t])
+                    masked = mult(conv_results[ct_idx], block_select_pt[local_ch])
                     masked = rescale(masked)
 
                     group = ch_local // skip_out
                     ch_offset = ch_local % skip_out
-                    source_base = t * self.input_shape_ct
+                    source_base = t * self.input_shape_ct + j
                     target_base = group * (output_shape * skip_out) + ch_offset
                     rotation = target_base - source_base
 

@@ -200,14 +200,8 @@ def get_op_id(op: str):
         output = 'RangeNorm2d'
     elif op == 'RangeNorm' or op == 'range_norm':
         output = 'RangeNorm'
-    elif (
-        op == 'Simple_Polyrelu'
-        or op == 'simple_polyrelu'
-        or op == 'SimplePolyrelu'
-        or op == 'RangeNormPoly2d'
-        or op == 'RangeNormPoly1d'
-    ):
-        output = 'Simple_Polyrelu'
+    elif op == 'PolyAct' or op == 'polyact' or op == 'RangeNormPoly2d' or op == 'RangeNormPoly1d':
+        output = 'PolyAct'
     elif op == 'Split' or op == 'split':
         output = 'Split'
     elif op == 'Resize' or op == 'resize':
@@ -264,8 +258,8 @@ def get_type_id(op: str):
         output = 'range_norm2d'
     elif op == 'RangeNorm':
         output = 'range_norm'
-    elif op == 'Simple_Polyrelu':
-        output = 'simple_polyrelu'
+    elif op == 'PolyAct':
+        output = 'polyact'
     elif op == 'Split':
         output = 'split'
     elif op == 'Resize':
