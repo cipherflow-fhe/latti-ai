@@ -67,7 +67,6 @@ class Simple_PolyreluComputeNode(ComputeNode):
                 module_path = '.'.join(parts[:-1])
             else:
                 module_path = layer_id
-        degree = 4
         for attr in x.attribute:
             if attr.name == 'degree':
                 degree = attr.i

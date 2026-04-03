@@ -243,7 +243,7 @@ def dump_graph(
     if server_task_config.exists():
         shutil.copy(str(server_task_config), str(client_task_config))
 
-    ckks_param = {'param0': {**config.fhe_param.to_dict(), 'pack_num': 4.0}}
+    ckks_param = {'param0': {**config.fhe_param.to_dict()}}
 
     with open(server_dir / 'ckks_parameter.json', 'w') as f:
         json.dump(ckks_param, f, indent=4)
@@ -252,12 +252,15 @@ def dump_graph(
         json.dump(ckks_param, f, indent=4)
 
 
+import os
+
+
 def run_pipeline(
     num_experiments: int,
     input_file_path: Path,
     output_dir: Path,
     temperature: float = 0.0,
-    num_workers: int = 16,
+    num_workers: int = os.cpu_count(),
     style: str | None = None,
     graph_type: str | None = None,
 ):
