@@ -39,6 +39,8 @@ class ReshapeComputeNode(ComputeNode):
         fin = feature_input[0]
         if fin.dim == 2:
             feature_output[0].channel = fin.channel * fin.shape[0] * fin.shape[1]
+        elif fin.dim == 1:
+            feature_output[0].channel = fin.channel * fin.shape[0]
         else:
             feature_output[0].channel = fin.channel
         feature_output[0].level = fin.level

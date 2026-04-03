@@ -517,21 +517,20 @@ void DensePackedLayer::prepare_weight_for_1d_multiplexed(uint32_t input_shape_in
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
     N_half = ctx.get_parameter().get_n() / 2;
 
-    // 1D multiplexed layout: block_stride = skip * invalid_fill, block_size = shape * block_stride
-    uint32_t block_stride = skip_1d * invalid_fill_1d;
-    uint32_t block_size = input_shape_1d * block_stride;
+    // skip already contains invalid_fill: block_stride = skip (not skip*invalid_fill)
+    uint32_t block_stride = skip_1d;
+    uint32_t block_size = input_shape_1d * block_stride;  // = input_shape_1d * skip_1d
 
-    // channels per ciphertext in the 1D multiplexed layout
-    // n_channel_per_ct_1d = skip_1d * (N_half / block_size)
     int n_blocks = N_half / (int)block_size;
-    int n_channel_per_ct_1d = n_blocks * skip_1d;
+    int valid_sub = (int)skip_1d / (int)invalid_fill_1d;  // valid sub_pos per block
+    int n_valid_per_ct_1d = n_blocks * valid_sub;         // channels with actual data
     n_block_per_ct_1d = n_blocks;
 
-    // Each output group covers n_block_per_ct_1d output channels.
     int n_packed_out = div_ceil(n_out_feature, n_block_per_ct_1d);
-    // Number of rotation steps needed to cover all input channels:
-    // each rotation shifts by block_size slots, covering one block worth of channels.
-    n_block_input_1d = div_ceil(n_in_feature, n_channel_per_ct_1d) * n_block_per_ct_1d;
+    // n_in_feature is the flattened count (channels * spatial_length); divide by input_shape_1d
+    // to get the actual number of conv1d output channels, which determines the input CT count.
+    int n_actual_channels = n_in_feature / (int)input_shape_1d;
+    n_block_input_1d = div_ceil(n_actual_channels, n_valid_per_ct_1d) * n_block_per_ct_1d;
 
     weight_pt.resize(n_packed_out);
     bias_pt.resize(n_packed_out);
@@ -566,8 +565,8 @@ void DensePackedLayer::prepare_weight_for_1d_multiplexed(uint32_t input_shape_in
                 int data_idx = pos_in_block / (int)block_stride;  // spatial position
                 int sub = pos_in_block % (int)block_stride;
 
-                // Only the first skip_1d sub-positions (invalid_fill_1d==1 means all valid)
-                if (sub >= (int)skip_1d)
+                // Only the first valid_sub sub-positions carry data; rest are zero
+                if (sub >= valid_sub)
                     continue;
 
                 int out_ch = out_group * n_block_per_ct_1d + local_block;
@@ -576,8 +575,8 @@ void DensePackedLayer::prepare_weight_for_1d_multiplexed(uint32_t input_shape_in
 
                 // After rotation by offset*block_size, the input block that lands here is:
                 int rotated_block = (offset + local_block) % n_block_per_ct_1d + group * n_block_per_ct_1d;
-                // input channel index: each block has skip_1d channels, sub selects within block
-                int in_ch = rotated_block * (int)skip_1d + sub;
+                // input channel index: each block has valid_sub channels, sub selects within block
+                int in_ch = rotated_block * valid_sub + sub;
                 // flattened input index: in_ch * input_shape_1d + data_idx
                 int in_flat = in_ch * (int)input_shape_1d + data_idx;
 
@@ -591,7 +590,7 @@ void DensePackedLayer::prepare_weight_for_1d_multiplexed(uint32_t input_shape_in
 }
 
 Feature0DEncrypted DensePackedLayer::run_1d_multiplexed(CkksContext& ctx, const Feature0DEncrypted& x) {
-    uint32_t block_stride = skip_1d * invalid_fill_1d;
+    uint32_t block_stride = skip_1d;  // skip already contains invalid_fill
     uint32_t block_size = input_shape_1d * block_stride;
 
     int n_packed_out = (int)weight_pt.size();
@@ -636,7 +635,7 @@ Feature0DEncrypted DensePackedLayer::run_1d_multiplexed(CkksContext& ctx, const 
 
     Feature0DEncrypted out(x.context, x.level);
     out.data = move(result);
-    out.skip = 1;
+    out.skip = (int)block_size;
     out.n_channel = n_out_feature;
     out.dim = 0;
     out.n_channel_per_ct = n_block_per_ct_1d;

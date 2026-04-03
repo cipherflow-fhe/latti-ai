@@ -148,7 +148,7 @@ CkksPlaintext MultiplexedConv1DPackedLayer::generate_select_tensor_pt_for_index(
 
 void MultiplexedConv1DPackedLayer::prepare_weight() {
     uint32_t shape_with_skip = input_shape * skip;
-    uint32_t half_kernel_shape = kernel_shape / 2;
+    uint32_t half_kernel_shape = std::floor(kernel_shape / 2);
     uint32_t n_groups = n_channel_per_ct / skip;
 
     vector<vector<double>> kernel_mask(kernel_shape);
@@ -259,7 +259,7 @@ void MultiplexedConv1DPackedLayer::prepare_weight() {
 }
 
 void MultiplexedConv1DPackedLayer::prepare_weight_for_lazy() {
-    uint32_t half_kernel_shape = kernel_shape / 2;
+    uint32_t half_kernel_shape = std::floor(kernel_shape / 2);
     // Generate kernel masks
     kernel_masks_.clear();
     kernel_masks_.resize(kernel_shape);
