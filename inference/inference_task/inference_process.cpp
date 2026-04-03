@@ -159,8 +159,8 @@ void InitInferenceProcess::init_conv1d_layer(const string& key, const json& laye
             Array<double, 3> dw_weight =
                 h5_to_array<3>(h5_file, layer["weight_path"],
                                {(uint64_t)feature_output.channel, 1, (uint64_t)kernel_shape}, weight_scale);
-            auto conv_layer = make_unique<ParMultiplexedDWConv1DPackedLayer>(
-                param, input_shape, dw_weight, bias, stride, skip, n_channel_per_ct, out_level + 1);
+            auto conv_layer = make_unique<MultiplexedDWConv1DPackedLayer>(param, input_shape, dw_weight, bias, stride,
+                                                                          skip, n_channel_per_ct, out_level + 1);
             if (is_lazy) {
                 conv_layer->prepare_weight_for_lazy();
             } else {
@@ -168,8 +168,8 @@ void InitInferenceProcess::init_conv1d_layer(const string& key, const json& laye
             }
             ckks_multiplexed_dw_conv1ds[key] = move(conv_layer);
         } else {
-            auto conv_layer = make_unique<ParMultiplexedConv1DPackedLayer>(param, input_shape, weight, bias, stride,
-                                                                           skip, n_channel_per_ct, out_level + 1);
+            auto conv_layer = make_unique<MultiplexedConv1DPackedLayer>(param, input_shape, weight, bias, stride, skip,
+                                                                        n_channel_per_ct, out_level + 1);
             if (is_lazy) {
                 conv_layer->prepare_weight_for_lazy();
             } else {
@@ -400,7 +400,7 @@ void InitInferenceProcess::init_multiplexed_conv_layer(const string& key,
             }
             ckks_big_conv2ds[key] = move(inv_conv_layer);
         } else {
-            auto mux_conv_layer = make_unique<ParMultiplexedConv2DPackedLayer>(
+            auto mux_conv_layer = make_unique<MultiplexedConv2DPackedLayer>(
                 param, feature_input.shape, weight, bias, stride, feature_input.skip,
                 feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale, upsample_factor_in);
             if (is_lazy) {
@@ -432,7 +432,7 @@ void InitInferenceProcess::init_multiplexed_conv_layer(const string& key,
             }
             ckks_big_dw_conv2ds[key] = move(inv_dw_conv_layer);
         } else {
-            auto mux_dw_layer = make_unique<ParMultiplexedConv2DPackedLayerDepthwise>(
+            auto mux_dw_layer = make_unique<MultiplexedConv2DPackedLayerDepthwise>(
                 param, feature_input.shape, weight, bias, stride, feature_input.skip,
                 feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale);
             if (is_lazy) {
@@ -617,7 +617,7 @@ void InitInferenceProcess::load_model_prepare() {
             init_upsample_nearest_layer(key, value);
         } else if (layer_type == "mult_scalar") {
             init_mult_scalar_layer(key, value, h5_file, block_shape);
-        } else if (layer_type == "poly_relu2d" || layer_type == "simple_polyrelu") {
+        } else if (layer_type == "poly_relu2d" || layer_type == "polyact") {
             init_poly_relu_layer(key, value, h5_file, is_absorb_polyrelu, block_shape);
         } else if (layer_type == "avgpool2d") {
             bool is_adaptive_avgpool = value["is_adaptive_avgpool"];
@@ -923,7 +923,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     throw runtime_error("input is not available, expect Feature2DEncrypted");
                 }
                 fhe_timer.stop();
-            } else if (layer_type == "poly_relu2d" || layer_type == "simple_polyrelu") {
+            } else if (layer_type == "poly_relu2d" || layer_type == "polyact") {
                 fhe_timer.start();
                 const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
@@ -1117,7 +1117,7 @@ void InferenceProcess::run_task(bool is_mpc) {
                 cxx_args.push_back(
                     CxxVectorArgument{"select_tensor_pt_" + key, &(fp->ckks_avgpool1d.at(key)->select_tensor_pt)});
             }
-        } else if (layer_type == "poly_relu2d" || layer_type == "simple_polyrelu") {
+        } else if (layer_type == "poly_relu2d" || layer_type == "polyact") {
             FeatureNode d_input_node(json_features[feature_input[0]]);
             if (d_input_node.dim == 0) {
                 for (int i = 0; i < fp->ckks_poly_relu_0d.at(key)->weight_pt.size(); i++) {
@@ -1354,7 +1354,7 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 auto& input1 = p_feature2d_x[feature_input[1]];
                 result = fp->ckks_adds[key]->run_plaintext(input0, input1);
             }
-            if (layer_type == "poly_relu2d" || layer_type == "simple_polyrelu") {
+            if (layer_type == "poly_relu2d" || layer_type == "polyact") {
                 FeatureNode feature_input0(json_features[feature_input[0]]);
                 if (feature_input0.dim == 0) {
                     auto& input0 = p_feature0d_x[feature_input[0]];

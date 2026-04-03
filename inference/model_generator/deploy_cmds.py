@@ -236,7 +236,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 if style == 'multiplexed':
                     n_in_channel_per_ct = pack
                     if groups == n_out_channel and groups != 1:
-                        conv0_layer = ParMultiplexedConv2DPackedLayerDepthwise(
+                        conv0_layer = MultiplexedConv2DPackedLayerDepthwise(
                             n_out_channel,
                             n_in_channel,
                             input_shape,
@@ -248,7 +248,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                             n_packed_out_channel,
                         )
                     else:
-                        conv0_layer = ParMultiplexedConv2DPackedLayer(
+                        conv0_layer = MultiplexedConv2DPackedLayer(
                             n_out_channel,
                             n_in_channel,
                             input_shape,
@@ -279,7 +279,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             layer_output_nodes = act_layer.call(feature_id_to_nodes_map[layer_input_feature_ids[0]])
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
-        elif layer_config['type'] in ('poly_relu2d', 'simple_polyrelu'):
+        elif layer_config['type'] in ('poly_relu2d', 'polyact'):
             feat = config_info['feature'][layer_input_feature_ids[0]]
             level = int(feat['level'])
             order = layer_config['order']
@@ -333,7 +333,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 n_packed_out_channel = math.ceil(n_out_channel / n_channel_per_ct)
                 if groups == n_out_channel and groups != 1:
                     n_packed_ct = math.ceil(n_out_channel / n_channel_per_ct)
-                    conv1d = ParMultiplexedDWConv1DPackedLayer(
+                    conv1d = MultiplexedDWConv1DPackedLayer(
                         n_out_channel,
                         input_shape,
                         kernel_shape,
@@ -355,7 +355,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     if block_select_pt:
                         input_args.append(Argument(f'convm_{layer_id}', block_select_pt))
                 else:
-                    conv1d = ParMultiplexedConv1DPackedLayer(
+                    conv1d = MultiplexedConv1DPackedLayer(
                         n_out_channel,
                         n_in_channel,
                         input_shape,

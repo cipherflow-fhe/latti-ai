@@ -24,15 +24,15 @@
 using namespace std;
 using namespace cxx_sdk_v2;
 
-ParMultiplexedConv1DPackedLayer::ParMultiplexedConv1DPackedLayer(const CkksParameter& param_in,
-                                                                 uint32_t input_shape_in,
-                                                                 const Array<double, 3>& weight_in,
-                                                                 const Array<double, 1>& bias_in,
-                                                                 uint32_t stride_in,
-                                                                 uint32_t skip_in,
-                                                                 uint32_t n_channel_per_ct_in,
-                                                                 uint32_t level_in,
-                                                                 double residual_scale)
+MultiplexedConv1DPackedLayer::MultiplexedConv1DPackedLayer(const CkksParameter& param_in,
+                                                           uint32_t input_shape_in,
+                                                           const Array<double, 3>& weight_in,
+                                                           const Array<double, 1>& bias_in,
+                                                           uint32_t stride_in,
+                                                           uint32_t skip_in,
+                                                           uint32_t n_channel_per_ct_in,
+                                                           uint32_t level_in,
+                                                           double residual_scale)
     : Layer(param_in), weight(weight_in.copy()), bias(bias_in.copy()) {
     input_shape = input_shape_in;
     skip = skip_in;
@@ -51,7 +51,7 @@ ParMultiplexedConv1DPackedLayer::ParMultiplexedConv1DPackedLayer(const CkksParam
     cached_input_block_size = input_shape * skip;
 }
 
-vector<double> ParMultiplexedConv1DPackedLayer::select_tensor(int num) const {
+vector<double> MultiplexedConv1DPackedLayer::select_tensor(int num) const {
     uint32_t skip_out = skip * stride;
     uint32_t output_shape = input_shape / stride;
     uint32_t output_shape_with_skip = output_shape * skip_out;
@@ -69,10 +69,10 @@ vector<double> ParMultiplexedConv1DPackedLayer::select_tensor(int num) const {
     return tensor;
 }
 
-CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx,
-                                                                                   int wg,
-                                                                                   int w_idx,
-                                                                                   int kernel_idx) const {
+CkksPlaintextRingt MultiplexedConv1DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx,
+                                                                                int wg,
+                                                                                int w_idx,
+                                                                                int kernel_idx) const {
     int n_block_per_ct = div_ceil(n_channel_per_ct, skip);
     uint32_t input_block_size = cached_input_block_size;
 
@@ -100,7 +100,7 @@ CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_weight_pt_for_indic
     return ctx.encode_ringt(w, weight_scale);
 }
 
-CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int idx) const {
+CkksPlaintextRingt MultiplexedConv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int idx) const {
     bool needs_rearrange = (skip > 1 || stride > 1);
     int n_block_per_ct = div_ceil(n_channel_per_ct, skip);
     uint32_t input_block_size = cached_input_block_size;
@@ -136,7 +136,7 @@ CkksPlaintextRingt ParMultiplexedConv1DPackedLayer::generate_bias_pt_for_index(C
     }
 }
 
-CkksPlaintext ParMultiplexedConv1DPackedLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int t) const {
+CkksPlaintext MultiplexedConv1DPackedLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int t) const {
     uint32_t input_block_size = cached_input_block_size;
     vector<double> mask(param_.get_n() / 2, 0.0);
     for (int out_idx = 0; out_idx < (int)(input_shape / stride); out_idx++) {
@@ -146,7 +146,7 @@ CkksPlaintext ParMultiplexedConv1DPackedLayer::generate_select_tensor_pt_for_ind
     return ctx.encode(mask, level_ - 1, ctx.get_parameter().get_q(level_ - 1));
 }
 
-void ParMultiplexedConv1DPackedLayer::prepare_weight() {
+void MultiplexedConv1DPackedLayer::prepare_weight() {
     uint32_t shape_with_skip = input_shape * skip;
     uint32_t half_kernel_shape = std::floor(kernel_shape / 2);
     uint32_t n_groups = n_channel_per_ct / skip;
@@ -258,7 +258,7 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight() {
     }
 }
 
-void ParMultiplexedConv1DPackedLayer::prepare_weight_for_lazy() {
+void MultiplexedConv1DPackedLayer::prepare_weight_for_lazy() {
     uint32_t half_kernel_shape = std::floor(kernel_shape / 2);
     // Generate kernel masks
     kernel_masks_.clear();
@@ -285,7 +285,7 @@ void ParMultiplexedConv1DPackedLayer::prepare_weight_for_lazy() {
     block_select_pt.clear();
 }
 
-Array<double, 2> ParMultiplexedConv1DPackedLayer::plaintext_call(const Array<double, 2>& x) {
+Array<double, 2> MultiplexedConv1DPackedLayer::plaintext_call(const Array<double, 2>& x) {
     Array<double, 2> output({n_channel_out, input_shape / stride});
     uint32_t padding_shape = kernel_shape / 2;
     Array<double, 2> padding_input({n_channel_in, input_shape + padding_shape * 2});
@@ -314,7 +314,7 @@ Array<double, 2> ParMultiplexedConv1DPackedLayer::plaintext_call(const Array<dou
     return output;
 }
 
-Feature1DEncrypted ParMultiplexedConv1DPackedLayer::run(CkksContext& ctx, Feature1DEncrypted& x) {
+Feature1DEncrypted MultiplexedConv1DPackedLayer::run(CkksContext& ctx, Feature1DEncrypted& x) {
     Feature1DEncrypted result(x.context, x.level);
     result.data = move(run_core(ctx, x.data));
     result.n_channel = n_channel_out;
@@ -333,7 +333,7 @@ Feature1DEncrypted ParMultiplexedConv1DPackedLayer::run(CkksContext& ctx, Featur
     return result;
 }
 
-vector<CkksCiphertext> ParMultiplexedConv1DPackedLayer::run_core(CkksContext& ctx, std::vector<CkksCiphertext>& x) {
+vector<CkksCiphertext> MultiplexedConv1DPackedLayer::run_core(CkksContext& ctx, std::vector<CkksCiphertext>& x) {
     uint32_t x_size = x.size();
     int n_block_per_ct = div_ceil(n_channel_per_ct, skip);
     uint32_t input_block_size = input_shape * skip;
