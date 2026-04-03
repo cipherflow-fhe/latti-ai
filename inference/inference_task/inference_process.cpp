@@ -1156,6 +1156,10 @@ void InferenceProcess::run_task(bool is_mpc) {
                         CxxVectorArgument{"convw_" + key, &(fp->ckks_multiplexed_conv1ds.at(key)->weight_pt)});
                     cxx_args.push_back(
                         CxxVectorArgument{"convb_" + key, &(fp->ckks_multiplexed_conv1ds.at(key)->bias_pt)});
+                    if (!fp->ckks_multiplexed_conv1ds.at(key)->block_select_pt.empty()) {
+                        cxx_args.push_back(CxxVectorArgument{"convm_" + key,
+                                                             &(fp->ckks_multiplexed_conv1ds.at(key)->block_select_pt)});
+                    }
                 }
             } else {
                 cxx_args.push_back(CxxVectorArgument{"convw_" + key, &(fp->ckks_conv1ds.at(key)->weight_pt)});
