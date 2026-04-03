@@ -58,13 +58,15 @@ class SingleAct1d(nn.Module):
         return x
 
 
-class SingleAvgpool(nn.Module):
-    def __init__(self):
+class SingleAvgpool2d(nn.Module):
+    """AvgPool2d with configurable kernel_size, stride, and padding."""
+
+    def __init__(self, kernel_size=2, stride=None, padding=0):
         super().__init__()
-        self.pool0 = nn.AvgPool2d(kernel_size=2, padding=0)
+        self.pool = nn.AvgPool2d(kernel_size=kernel_size, stride=stride, padding=padding)
 
     def forward(self, x):
-        x = self.pool0(x)
+        x = self.pool(x)
         return x
 
 
@@ -690,7 +692,7 @@ class Conv1dReshapeAndDense(nn.Module):
         return x
 
 
-class ConcatModel(nn.Module):
+class Concat(nn.Module):
     """Two conv branches concatenated. Covers concat_layer."""
 
     def __init__(self):
@@ -747,7 +749,7 @@ class UnevenConcatModel(nn.Module):
         return self.conv3(d)
 
 
-class ConvUpsampleE2E(nn.Module):
+class ConvUpsample(nn.Module):
     """Conv with stride=2 followed by nearest upsample. Covers upsample_layer / upsample_nearest_layer."""
 
     def __init__(self):
@@ -758,28 +760,4 @@ class ConvUpsampleE2E(nn.Module):
     def forward(self, x):
         x = self.conv0(x)
         x = self.resize(x)
-        return x
-
-
-class AvgpoolVariedStride(nn.Module):
-    """Avgpool with configurable stride. Covers avgpool2d_layer varied strides."""
-
-    def __init__(self, stride=2):
-        super().__init__()
-        self.pool = nn.AvgPool2d(kernel_size=stride, stride=stride)
-
-    def forward(self, x):
-        x = self.pool(x)
-        return x
-
-
-class GeneralAvgpool(nn.Module):
-    """General avgpool where kernel_size != stride (replaced with depthwise conv for FHE)."""
-
-    def __init__(self, kernel_size=3, stride=2, padding=1):
-        super().__init__()
-        self.pool = nn.AvgPool2d(kernel_size=kernel_size, stride=stride, padding=padding)
-
-    def forward(self, x):
-        x = self.pool(x)
         return x
