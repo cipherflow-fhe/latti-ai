@@ -262,12 +262,15 @@ class DensePackedLayer:
         """Return (weight_pt, bias_pt) for call_1d_multiplexed().
 
         input_shape is 1D: [shape], skip is 1D: [skip_val].
-        block_stride = skip * invalid_fill[0]
-        block_size   = shape * block_stride
-        n_block_per_ct = N_half // block_size
-        n_channel_per_ct = n_block_per_ct * skip
-        n_block_input = ceil(n_in_channel / n_channel_per_ct) * n_block_per_ct
-        n_packed_out  = ceil(n_out_channel / n_block_per_ct)
+        skip already contains invalid_fill, so:
+          block_stride  = skip                              (NOT skip * invalid_fill)
+          block_size    = shape * skip
+          n_block_per_ct = N_half // block_size
+          valid_sub      = skip // invalid_fill             (valid sub_pos per block)
+          n_valid_per_ct = n_block_per_ct * valid_sub       (channels with actual data)
+          n_actual_ch    = n_in_channel // shape              (flattened → channel count)
+          n_block_input  = ceil(n_actual_ch / n_valid_per_ct) * n_block_per_ct
+          n_packed_out   = ceil(n_out_channel / n_block_per_ct)
 
         weight_pt[i][j]: i in n_packed_out, j in n_block_input
         bias_pt[i]:       i in n_packed_out
@@ -276,11 +279,15 @@ class DensePackedLayer:
         shape = int(self.input_shape[0])
         skip_val = int(self.skip[0])
         invalid_fill_val = int(self.invalid_fill[0])
-        block_stride = skip_val * invalid_fill_val
-        block_size = shape * block_stride
+        block_stride = skip_val  # skip already contains invalid_fill
+        block_size = shape * block_stride  # = shape * skip
         n_block_per_ct = N_half // block_size
-        n_channel_per_ct = n_block_per_ct * skip_val
-        n_block_input = int(np.ceil(self.n_in_channel / n_channel_per_ct)) * n_block_per_ct
+        valid_sub = skip_val // invalid_fill_val  # valid sub_pos per block
+        n_valid_per_ct = n_block_per_ct * valid_sub  # channels with actual data
+        # n_in_channel is the flattened count (channels * spatial_length); divide by shape to get
+        # the number of actual conv1d output channels, which determines the number of input CTs.
+        n_actual_channels = self.n_in_channel // shape
+        n_block_input = int(np.ceil(n_actual_channels / n_valid_per_ct)) * n_block_per_ct
         n_packed_out = int(np.ceil(self.n_out_channel / n_block_per_ct))
 
         weight_pt = [
@@ -294,17 +301,23 @@ class DensePackedLayer:
         """Corresponds to C++ run_1d_multiplexed.
 
         x is a list of CkksCiphertextNode (one per input ciphertext).
+        skip already contains invalid_fill:
+          block_stride = skip  (NOT skip * invalid_fill)
+          block_size   = shape * skip
         Rotation unit is block_size; fold over block_size after accumulation.
         """
         N_half = n // 2
         shape = int(self.input_shape[0])
         skip_val = int(self.skip[0])
         invalid_fill_val = int(self.invalid_fill[0])
-        block_stride = skip_val * invalid_fill_val
-        block_size = shape * block_stride
+        block_stride = skip_val  # skip already contains invalid_fill
+        block_size = shape * block_stride  # = shape * skip
         n_block_per_ct = N_half // block_size
-        n_channel_per_ct = n_block_per_ct * skip_val
-        n_block_input = int(np.ceil(self.n_in_channel / n_channel_per_ct)) * n_block_per_ct
+        valid_sub = skip_val // invalid_fill_val  # valid sub_pos per block
+        n_valid_per_ct = n_block_per_ct * valid_sub  # channels with actual data
+        # n_in_channel is flattened (channels * spatial_length); divide by shape to get actual channel count.
+        n_actual_channels = self.n_in_channel // shape
+        n_block_input = int(np.ceil(n_actual_channels / n_valid_per_ct)) * n_block_per_ct
         n_packed_out = int(np.ceil(self.n_out_channel / n_block_per_ct))
         x_size = len(x)
 

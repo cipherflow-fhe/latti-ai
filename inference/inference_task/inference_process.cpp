@@ -153,14 +153,30 @@ void InitInferenceProcess::init_conv1d_layer(const string& key, const json& laye
 
     string style = layer.value("style", string("ordinary"));
     if (style == "multiplexed") {
-        auto conv_layer = make_unique<ParMultiplexedConv1DPackedLayer>(param, input_shape, weight, bias, stride, skip,
-                                                                       n_channel_per_ct, out_level + 1);
-        if (is_lazy) {
-            conv_layer->prepare_weight_for_lazy();
+        int groups = layer["groups"];
+        if (groups == (int)feature_output.channel && groups != 1) {
+            // Depthwise conv1d: weight shape [n_channel, 1, kernel_shape]
+            Array<double, 3> dw_weight =
+                h5_to_array<3>(h5_file, layer["weight_path"],
+                               {(uint64_t)feature_output.channel, 1, (uint64_t)kernel_shape}, weight_scale);
+            auto conv_layer = make_unique<ParMultiplexedDWConv1DPackedLayer>(
+                param, input_shape, dw_weight, bias, stride, skip, n_channel_per_ct, out_level + 1);
+            if (is_lazy) {
+                conv_layer->prepare_weight_for_lazy();
+            } else {
+                conv_layer->prepare_weight();
+            }
+            ckks_multiplexed_dw_conv1ds[key] = move(conv_layer);
         } else {
-            conv_layer->prepare_weight();
+            auto conv_layer = make_unique<ParMultiplexedConv1DPackedLayer>(param, input_shape, weight, bias, stride,
+                                                                           skip, n_channel_per_ct, out_level + 1);
+            if (is_lazy) {
+                conv_layer->prepare_weight_for_lazy();
+            } else {
+                conv_layer->prepare_weight();
+            }
+            ckks_multiplexed_conv1ds[key] = move(conv_layer);
         }
-        ckks_multiplexed_conv1ds[key] = move(conv_layer);
     } else {
         auto conv_layer = make_unique<Conv1DPackedLayer>(param, input_shape, weight, bias, stride, skip,
                                                          n_channel_per_ct, out_level + 1);
@@ -804,8 +820,20 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     result = make_unique<Feature0DEncrypted>(fp->ckks_reshape[key]->call(context, input2D));
+                } else if (feature_node.dim == 1) {
+                    const Feature1DEncrypted& input1D = dynamic_cast<const Feature1DEncrypted&>(feature_node);
+                    Feature0DEncrypted out(&context, input1D.level);
+                    for (int i = 0; i < (int)input1D.data.size(); i++) {
+                        out.data.push_back(input1D.data[i].copy());
+                    }
+                    out.dim = 0;
+                    out.skip = input1D.shape * input1D.skip;
+                    out.level = input1D.level;
+                    out.n_channel = input1D.n_channel;
+                    out.n_channel_per_ct = input1D.n_channel_per_ct;
+                    result = make_unique<Feature0DEncrypted>(move(out));
                 } else {
-                    throw runtime_error("input is not available, expect Feature2DEncrypted");
+                    throw runtime_error("input is not available, expect Feature2DEncrypted or Feature1DEncrypted");
                 }
                 fhe_timer.stop();
             } else if (layer_type == "avgpool2d") {
@@ -922,8 +950,14 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     const Feature1DEncrypted& input1D = dynamic_cast<const Feature1DEncrypted&>(feature_node);
                     string style = layer.value().value("style", string("ordinary"));
                     if (style == "multiplexed") {
-                        result = make_unique<Feature1DEncrypted>(
-                            fp->ckks_multiplexed_conv1ds[key]->run(context, const_cast<Feature1DEncrypted&>(input1D)));
+                        int groups = layer.value().value("groups", 1);
+                        if (groups == (int)input1D.n_channel && groups != 1) {
+                            result = make_unique<Feature1DEncrypted>(fp->ckks_multiplexed_dw_conv1ds[key]->run(
+                                context, const_cast<Feature1DEncrypted&>(input1D)));
+                        } else {
+                            result = make_unique<Feature1DEncrypted>(fp->ckks_multiplexed_conv1ds[key]->run(
+                                context, const_cast<Feature1DEncrypted&>(input1D)));
+                        }
                     } else {
                         result = make_unique<Feature1DEncrypted>(
                             fp->ckks_conv1ds[key]->run(context, const_cast<Feature1DEncrypted&>(input1D)));
@@ -1106,9 +1140,23 @@ void InferenceProcess::run_task(bool is_mpc) {
         } else if (layer_type == "conv1d") {
             string style = layer.value().value("style", string("ordinary"));
             if (style == "multiplexed") {
-                cxx_args.push_back(
-                    CxxVectorArgument{"convw_" + key, &(fp->ckks_multiplexed_conv1ds.at(key)->weight_pt)});
-                cxx_args.push_back(CxxVectorArgument{"convb_" + key, &(fp->ckks_multiplexed_conv1ds.at(key)->bias_pt)});
+                int groups = layer.value().value("groups", 1);
+                int n_out_channel = layer.value().value("channel_output", 1);
+                if (groups == n_out_channel && groups != 1) {
+                    cxx_args.push_back(
+                        CxxVectorArgument{"convw_" + key, &(fp->ckks_multiplexed_dw_conv1ds.at(key)->weight_pt)});
+                    cxx_args.push_back(
+                        CxxVectorArgument{"convb_" + key, &(fp->ckks_multiplexed_dw_conv1ds.at(key)->bias_pt)});
+                    if (!fp->ckks_multiplexed_dw_conv1ds.at(key)->block_select_pt.empty()) {
+                        cxx_args.push_back(CxxVectorArgument{
+                            "convm_" + key, &(fp->ckks_multiplexed_dw_conv1ds.at(key)->block_select_pt)});
+                    }
+                } else {
+                    cxx_args.push_back(
+                        CxxVectorArgument{"convw_" + key, &(fp->ckks_multiplexed_conv1ds.at(key)->weight_pt)});
+                    cxx_args.push_back(
+                        CxxVectorArgument{"convb_" + key, &(fp->ckks_multiplexed_conv1ds.at(key)->bias_pt)});
+                }
             } else {
                 cxx_args.push_back(CxxVectorArgument{"convw_" + key, &(fp->ckks_conv1ds.at(key)->weight_pt)});
                 cxx_args.push_back(CxxVectorArgument{"convb_" + key, &(fp->ckks_conv1ds.at(key)->bias_pt)});
@@ -1333,8 +1381,14 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                                .to_array_1d();
             }
             if (layer_type == "reshape") {
-                auto& input0 = p_feature2d_x[feature_input[0]];
-                result0d = input0.reshape<1>({0}).to_array_1d();
+                FeatureNode feature_input0(json_features[feature_input[0]]);
+                if (feature_input0.dim == 1) {
+                    auto& input0 = p_feature1d_x[feature_input[0]];
+                    result0d = input0.reshape<1>({0}).to_array_1d();
+                } else {
+                    auto& input0 = p_feature2d_x[feature_input[0]];
+                    result0d = input0.reshape<1>({0}).to_array_1d();
+                }
             }
             if (layer_type == "avgpool2d") {
                 auto& input0 = p_feature2d_x[feature_input[0]];
@@ -1369,7 +1423,12 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 auto& input0 = p_feature1d_x[feature_input[0]];
                 string style = layer.value().value("style", string("ordinary"));
                 if (style == "multiplexed") {
-                    result1d = fp->ckks_multiplexed_conv1ds[key]->plaintext_call(input0);
+                    int groups = layer.value().value("groups", 1);
+                    if (groups == (int)input0.get_shape()[0] && groups != 1) {
+                        result1d = fp->ckks_multiplexed_dw_conv1ds[key]->plaintext_call(input0);
+                    } else {
+                        result1d = fp->ckks_multiplexed_conv1ds[key]->plaintext_call(input0);
+                    }
                 } else {
                     result1d = fp->ckks_conv1ds[key]->plaintext_call(input0);
                 }
