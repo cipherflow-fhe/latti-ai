@@ -1258,7 +1258,6 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
     while (json_layers.size() > 0) {
         for (auto& layer : json_layers.items()) {
             string key = layer.key();
-            cout << "key=" << key << endl;
             string layer_type = layer.value()["type"].get<string>();
 
             auto feature_input = layer.value()["feature_input"].get<vector<string>>();
