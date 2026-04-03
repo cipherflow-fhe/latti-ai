@@ -23,8 +23,6 @@ import onnx
 
 log = logging.getLogger(__name__)
 
-N = 65536
-
 modules = glob.glob(os.path.join(os.path.dirname(__file__), '*.py'))
 __all__ = [os.path.basename(f)[:-3] for f in modules if os.path.isfile(f) and not f.endswith('__init__.py')] + [
     'get_op_code_generator',
@@ -57,7 +55,6 @@ class FeatureNode(object):
         self.shape = shape
         self.skip = skip
         self.ckks_parameter_id = ckks_parameter_id
-        self.pack_num = None
         self.isvisit = False
         self.level = 0
         self.computer_nodes: list[ComputeNode] = []
@@ -74,22 +71,14 @@ class FeatureNode(object):
         if self.dim == 2:
             info['shape'] = self.shape
             info['skip'] = self.skip
-            try:
-                info['pack_num'] = math.ceil(N / 2 / self.shape[0] / self.shape[1] / self.skip[0] / self.skip[1])
-            except Exception:
-                info['pack_num'] = 1
         if self.dim == 1:
             info['shape'] = self.shape
             info['skip'] = self.skip
-            info['pack_num'] = math.ceil(N / 2 / self.shape[0] / self.skip[0])
         if self.dim == 0:
-            info['virtual_shape'] = [8, 8]
-            info['virtual_skip'] = [1, 1]
             info['skip'] = self.skip[0]
-            info['pack_num'] = math.ceil(N / 2 / info['virtual_shape'][0] / info['virtual_shape'][1])
 
         info['ckks_parameter_id'] = self.ckks_parameter_id
-        info['level'] = 5 + int(self.level)
+        info['level'] = int(self.level)
         return info
 
 
