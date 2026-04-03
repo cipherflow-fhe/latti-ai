@@ -28,15 +28,15 @@ using namespace cxx_sdk_v2;
 // Constructor
 // ---------------------------------------------------------------------------
 
-ParMultiplexedDWConv1DPackedLayer::ParMultiplexedDWConv1DPackedLayer(const CkksParameter& param_in,
-                                                                     uint32_t input_shape_in,
-                                                                     const Array<double, 3>& weight_in,
-                                                                     const Array<double, 1>& bias_in,
-                                                                     uint32_t stride_in,
-                                                                     uint32_t skip_in,
-                                                                     uint32_t n_channel_per_ct_in,
-                                                                     uint32_t level_in,
-                                                                     double residual_scale)
+MultiplexedDWConv1DPackedLayer::MultiplexedDWConv1DPackedLayer(const CkksParameter& param_in,
+                                                               uint32_t input_shape_in,
+                                                               const Array<double, 3>& weight_in,
+                                                               const Array<double, 1>& bias_in,
+                                                               uint32_t stride_in,
+                                                               uint32_t skip_in,
+                                                               uint32_t n_channel_per_ct_in,
+                                                               uint32_t level_in,
+                                                               double residual_scale)
     : Layer(param_in), weight(weight_in.copy()), bias(bias_in.copy()) {
     input_shape = input_shape_in;
     skip = skip_in;
@@ -59,7 +59,7 @@ ParMultiplexedDWConv1DPackedLayer::ParMultiplexedDWConv1DPackedLayer(const CkksP
 // select_tensor  (same semantics as the normal Conv1D version)
 // ---------------------------------------------------------------------------
 
-vector<double> ParMultiplexedDWConv1DPackedLayer::select_tensor(int num) const {
+vector<double> MultiplexedDWConv1DPackedLayer::select_tensor(int num) const {
     uint32_t skip_out = skip * stride;
     uint32_t output_shape = input_shape / stride;
     uint32_t output_shape_with_skip = output_shape * skip_out;
@@ -87,7 +87,7 @@ vector<double> ParMultiplexedDWConv1DPackedLayer::select_tensor(int num) const {
 // ---------------------------------------------------------------------------
 
 CkksPlaintextRingt
-ParMultiplexedDWConv1DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int kernel_idx) const {
+MultiplexedDWConv1DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int kernel_idx) const {
     uint32_t input_block_size = cached_input_block_size;
     const auto& mask = kernel_masks_[kernel_idx];
     vector<double> w(param_.get_n() / 2, 0.0);
@@ -118,7 +118,7 @@ ParMultiplexedDWConv1DPackedLayer::generate_weight_pt_for_indices(CkksContext& c
 // Mirrors the two-path logic from the normal Conv1D layer.
 // ---------------------------------------------------------------------------
 
-CkksPlaintextRingt ParMultiplexedDWConv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int idx) const {
+CkksPlaintextRingt MultiplexedDWConv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int idx) const {
     bool needs_rearrange = (skip > 1 || stride > 1);
     uint32_t input_block_size = cached_input_block_size;
     vector<double> bias_data(param_.get_n() / 2, 0.0);
@@ -157,8 +157,8 @@ CkksPlaintextRingt ParMultiplexedDWConv1DPackedLayer::generate_bias_pt_for_index
 // generate_select_tensor_pt_for_index  (lazy / on-demand)
 // ---------------------------------------------------------------------------
 
-CkksPlaintext ParMultiplexedDWConv1DPackedLayer::generate_select_tensor_pt_for_index(CkksContext& ctx,
-                                                                                     int local_ch) const {
+CkksPlaintext MultiplexedDWConv1DPackedLayer::generate_select_tensor_pt_for_index(CkksContext& ctx,
+                                                                                  int local_ch) const {
     int t = local_ch / (int)skip;
     int j = local_ch % (int)skip;
     uint32_t input_block_size = cached_input_block_size;
@@ -174,7 +174,7 @@ CkksPlaintext ParMultiplexedDWConv1DPackedLayer::generate_select_tensor_pt_for_i
 // prepare_weight
 // ---------------------------------------------------------------------------
 
-void ParMultiplexedDWConv1DPackedLayer::prepare_weight() {
+void MultiplexedDWConv1DPackedLayer::prepare_weight() {
     uint32_t half_kernel_shape = kernel_shape / 2;
     uint32_t input_block_size = input_shape * skip;
 
@@ -280,7 +280,7 @@ void ParMultiplexedDWConv1DPackedLayer::prepare_weight() {
 // prepare_weight_for_lazy
 // ---------------------------------------------------------------------------
 
-void ParMultiplexedDWConv1DPackedLayer::prepare_weight_for_lazy() {
+void MultiplexedDWConv1DPackedLayer::prepare_weight_for_lazy() {
     uint32_t half_kernel_shape = kernel_shape / 2;
 
     kernel_masks_.clear();
@@ -310,7 +310,7 @@ void ParMultiplexedDWConv1DPackedLayer::prepare_weight_for_lazy() {
 // plaintext_call  (reference implementation for correctness verification)
 // ---------------------------------------------------------------------------
 
-Array<double, 2> ParMultiplexedDWConv1DPackedLayer::plaintext_call(const Array<double, 2>& x) {
+Array<double, 2> MultiplexedDWConv1DPackedLayer::plaintext_call(const Array<double, 2>& x) {
     uint32_t output_shape = input_shape / stride;
     Array<double, 2> output({n_channel, output_shape});
     uint32_t padding = kernel_shape / 2;
@@ -334,7 +334,7 @@ Array<double, 2> ParMultiplexedDWConv1DPackedLayer::plaintext_call(const Array<d
 // run
 // ---------------------------------------------------------------------------
 
-Feature1DEncrypted ParMultiplexedDWConv1DPackedLayer::run(CkksContext& ctx, Feature1DEncrypted& x) {
+Feature1DEncrypted MultiplexedDWConv1DPackedLayer::run(CkksContext& ctx, Feature1DEncrypted& x) {
     Feature1DEncrypted result(x.context, x.level);
     result.data = move(run_core(ctx, x.data));
     result.n_channel = n_channel;
@@ -357,7 +357,7 @@ Feature1DEncrypted ParMultiplexedDWConv1DPackedLayer::run(CkksContext& ctx, Feat
 //   - The skip-reduction and rearrange stages are identical to the normal layer.
 // ---------------------------------------------------------------------------
 
-vector<CkksCiphertext> ParMultiplexedDWConv1DPackedLayer::run_core(CkksContext& ctx, vector<CkksCiphertext>& x) {
+vector<CkksCiphertext> MultiplexedDWConv1DPackedLayer::run_core(CkksContext& ctx, vector<CkksCiphertext>& x) {
     uint32_t input_block_size = cached_input_block_size;
 
     // ======== 1: kernel rotations ========

@@ -257,7 +257,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_
     int N_half = ctx.get_parameter().get_n() / 2;
     int n_block_per_ct = div_ceil(N_half, input_shape_ct[0] * input_shape_ct[1]);
 
-    // ParMultiplexedPack: valid channels per mini-block
+    // MultiplexedPack: valid channels per mini-block
     int valid_skip_0 = special_skip[0] / invalid_fill_in[0];
     int valid_skip_1 = special_skip[1] / invalid_fill_in[1];
     int n_channel_per_block = valid_skip_0 * valid_skip_1;

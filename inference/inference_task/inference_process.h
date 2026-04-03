@@ -194,16 +194,16 @@ public:
     std::map<std::string, std::unique_ptr<Avgpool1DLayer>> ckks_avgpool1d;
     std::map<std::string, std::unique_ptr<PolyRelu0D>> ckks_poly_relu_0d;
     std::map<std::string, std::unique_ptr<PolyRelu1D>> ckks_poly_relu_1d;
-    std::map<std::string, std::unique_ptr<ParMultiplexedConv2DPackedLayer>> ckks_multiplexed_conv2ds;
+    std::map<std::string, std::unique_ptr<MultiplexedConv2DPackedLayer>> ckks_multiplexed_conv2ds;
     std::map<std::string, std::unique_ptr<InverseMultiplexedConv2DLayer>> ckks_big_conv2ds;
     std::map<std::string, std::unique_ptr<InverseMultiplexedConv2DLayerDepthwise>> ckks_big_dw_conv2ds;
-    std::map<std::string, std::unique_ptr<ParMultiplexedConv2DPackedLayerDepthwise>> ckks_multiplexed_dw_conv2ds;
+    std::map<std::string, std::unique_ptr<MultiplexedConv2DPackedLayerDepthwise>> ckks_multiplexed_dw_conv2ds;
     std::map<std::string, std::unique_ptr<ConcatLayer>> ckks_concat;
     std::map<std::string, std::unique_ptr<UpsampleLayer>> ckks_upsample;
     std::map<std::string, std::unique_ptr<UpsampleNearestLayer>> ckks_upsample_nearest;
     std::map<std::string, std::unique_ptr<Conv1DPackedLayer>> ckks_conv1ds;
-    std::map<std::string, std::unique_ptr<ParMultiplexedConv1DPackedLayer>> ckks_multiplexed_conv1ds;
-    std::map<std::string, std::unique_ptr<ParMultiplexedDWConv1DPackedLayer>> ckks_multiplexed_dw_conv1ds;
+    std::map<std::string, std::unique_ptr<MultiplexedConv1DPackedLayer>> ckks_multiplexed_conv1ds;
+    std::map<std::string, std::unique_ptr<MultiplexedDWConv1DPackedLayer>> ckks_multiplexed_dw_conv1ds;
 };
 
 class InferenceProcess {

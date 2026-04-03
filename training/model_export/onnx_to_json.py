@@ -35,7 +35,7 @@ from .operations.MaxPool import MaxPoolComputeNode
 from .operations.Sigmoid import SigmoidComputeNode
 from .operations.PolyRelu import PolyReluComputeNode
 from .operations.ConvTranspose import ConvTransposeComputeNode
-from .operations.Simple_Polyrelu import Simple_PolyreluComputeNode
+from .operations.PolyAct import PolyActComputeNode
 from .onnx_model_manipulations import simplify_onnx_model
 
 log = logging.getLogger(__name__)
@@ -160,11 +160,11 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
             case 'ConvTranspose':
                 compute_node = ConvTransposeComputeNode.from_onnx_node(n, features_nodes)
             case 'RangeNormPoly2d':
-                compute_node = Simple_PolyreluComputeNode.from_onnx_node(n, features_nodes)
+                compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
             case 'RangeNormPoly1d':
-                compute_node = Simple_PolyreluComputeNode.from_onnx_node(n, features_nodes)
-            case 'Simple_Polyrelu':
-                compute_node = Simple_PolyreluComputeNode.from_onnx_node(n, features_nodes)
+                compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
+            case 'PolyAct':
+                compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
             case _:
                 kwargs = {}
                 if 'Add' in n.op_type:
