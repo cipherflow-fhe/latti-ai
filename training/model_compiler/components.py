@@ -1116,6 +1116,7 @@ class LayerAbstractGraph:
                 layers[layer_id]['zero_skip'] = layer.zero_skip
                 layers[layer_id]['is_big_size'] = layer.is_big_size
                 layers[layer_id]['is_absorb_polyrelu'] = IS_ABSORB_POLYRELU
+                layers[layer_id]['style'] = config.style
             if 'level_cost' in self.dag.nodes[layer]:
                 layers[layer_id]['level_cost'] = self.dag.nodes[layer]['level_cost']
             if 'polyact' == layer.layer_type:
