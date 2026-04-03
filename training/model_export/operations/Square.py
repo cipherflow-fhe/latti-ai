@@ -23,9 +23,6 @@ from . import ComputeNode, FeatureNode
 log = logging.getLogger(__name__)
 
 
-defaulf_scale = 0.01
-
-
 class SquareComputeNode(ComputeNode):
     """Compute node for Square operation"""
 
