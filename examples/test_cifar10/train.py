@@ -124,7 +124,7 @@ def main():
 
     # Poly-ReLU options
     parser.add_argument('--poly_model_convert', action='store_true', help='replace ReLU with RangeNormPoly2d')
-    parser.add_argument('--poly-module', default='RangeNormPoly2d', help='choose RangeNormPoly2d or Simple_Polyrelu')
+    parser.add_argument('--poly-module', default='RangeNormPoly2d', help='choose RangeNormPoly2d or PolyAct')
     parser.add_argument('--upper-bound', type=float, default=3.0, help='normalization upper bound for RangeNormPoly2d')
     parser.add_argument('--degree', type=int, default=4, choices=[2, 4, 8])
     parser.add_argument(
@@ -166,7 +166,7 @@ def main():
             replace_maxpool_with_avgpool,
             replace_general_avgpool_with_depthwise_conv,
         )
-        from training.nn_tools.activations import RangeNormPoly2d, Simple_Polyrelu
+        from training.nn_tools.activations import RangeNormPoly2d, PolyAct
         from training.nn_tools.replace import count_activations
 
         n_maxpool = count_activations(model, nn.MaxPool2d)
@@ -183,15 +183,15 @@ def main():
                 degree=args.degree,
             )
             n_poly = count_activations(model, RangeNormPoly2d)
-        elif args.poly_module == 'Simple_Polyrelu':
+        elif args.poly_module == 'PolyAct':
             replace_activation_with_poly(
                 model,
                 old_cls=nn.ReLU,
-                new_module_factory=Simple_Polyrelu,
+                new_module_factory=PolyAct,
                 upper_bound=args.upper_bound,
                 degree=args.degree,
             )
-            n_poly = count_activations(model, Simple_Polyrelu)
+            n_poly = count_activations(model, PolyAct)
         log.info(f'Device: {device}  |  ReLU {n_relu} -> Poly {n_poly} (ub={args.upper_bound}, deg={args.degree})')
     else:
         n_params = sum(p.numel() for p in model.parameters())

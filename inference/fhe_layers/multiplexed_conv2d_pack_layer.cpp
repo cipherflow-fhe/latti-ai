@@ -40,7 +40,7 @@ CkksCiphertext sum_slot(CkksContext& ctx, CkksCiphertext& x, uint32_t m, uint32_
     return result;
 }
 
-vector<double> ParMultiplexedConv2DPackedLayer::select_tensor(int num) const {
+vector<double> MultiplexedConv2DPackedLayer::select_tensor(int num) const {
     vector<double> tensor;
     for (int k = 0; k < n_block_per_ct; k++) {
         for (int i = 0; i < input_shape_[0] * skip_[0]; i++) {
@@ -61,16 +61,16 @@ vector<double> ParMultiplexedConv2DPackedLayer::select_tensor(int num) const {
     return tensor;
 }
 
-ParMultiplexedConv2DPackedLayer::ParMultiplexedConv2DPackedLayer(const CkksParameter& param_in,
-                                                                 const Duo& input_shape_in,
-                                                                 const Array<double, 4>& weight_in,
-                                                                 const Array<double, 1>& bias_in,
-                                                                 const Duo& stride_in,
-                                                                 const Duo& skip_in,
-                                                                 uint32_t n_channel_per_ct_in,
-                                                                 uint32_t level_in,
-                                                                 double residual_scale,
-                                                                 const Duo& upsample_factor_in)
+MultiplexedConv2DPackedLayer::MultiplexedConv2DPackedLayer(const CkksParameter& param_in,
+                                                           const Duo& input_shape_in,
+                                                           const Array<double, 4>& weight_in,
+                                                           const Array<double, 1>& bias_in,
+                                                           const Duo& stride_in,
+                                                           const Duo& skip_in,
+                                                           uint32_t n_channel_per_ct_in,
+                                                           uint32_t level_in,
+                                                           double residual_scale,
+                                                           const Duo& upsample_factor_in)
     : Conv2DLayer(param_in, input_shape_in, weight_in, bias_in, stride_in, skip_in) {
     upsample_factor[0] = upsample_factor_in[0];
     upsample_factor[1] = upsample_factor_in[1];
@@ -86,7 +86,7 @@ ParMultiplexedConv2DPackedLayer::ParMultiplexedConv2DPackedLayer(const CkksParam
     N = param_in.get_n();
 }
 
-void ParMultiplexedConv2DPackedLayer::prepare_weight_for_reduct_rot() {
+void MultiplexedConv2DPackedLayer::prepare_weight_for_reduct_rot() {
     uint32_t pad0 = std::floor(kernel_shape_[0] / 2);
     uint32_t pad1 = std::floor(kernel_shape_[1] / 2);
 
@@ -236,7 +236,7 @@ void ParMultiplexedConv2DPackedLayer::prepare_weight_for_reduct_rot() {
     });
 }
 
-void ParMultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation() {
+void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation() {
     uint32_t pad0 = std::floor(kernel_shape_[0] / 2);
     uint32_t pad1 = std::floor(kernel_shape_[1] / 2);
 
@@ -372,7 +372,7 @@ void ParMultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation() {
     });
 }
 
-void ParMultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation_lazy() {
+void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation_lazy() {
     uint32_t pad0 = std::floor(kernel_shape_[0] / 2);
     uint32_t pad1 = std::floor(kernel_shape_[1] / 2);
 
@@ -431,7 +431,7 @@ void ParMultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation_lazy
 }
 
 CkksPlaintextRingt
-ParMultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const {
+MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const {
     // Extract indices from j
     int packed_in_channel_idx = j / n_block_per_ct;
     int block_idx = j % n_block_per_ct;
@@ -464,7 +464,7 @@ ParMultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx
     return ctx.encode_ringt(w, weight_scale);
 }
 
-CkksPlaintextRingt ParMultiplexedConv2DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const {
+CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const {
     // Use cached values
     vector<double> bias_vec(N / 2, 0.0);
 
@@ -489,14 +489,13 @@ CkksPlaintextRingt ParMultiplexedConv2DPackedLayer::generate_bias_pt_for_index(C
 
 // Generate mask vector for given indices on-demand
 CkksPlaintextRingt
-ParMultiplexedConv2DPackedLayer::generate_mask_pt_for_indices(CkksContext& ctx, int ct_idx, int i) const {
+MultiplexedConv2DPackedLayer::generate_mask_pt_for_indices(CkksContext& ctx, int ct_idx, int i) const {
     auto si = select_tensor((ct_idx * n_block_per_ct + i) %
                             (n_channel_per_ct * stride_[0] * stride_[1] / (upsample_factor[0] * upsample_factor[1])));
     return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_ - 1));
 }
 
-vector<CkksCiphertext> ParMultiplexedConv2DPackedLayer::run_core(CkksContext& ctx,
-                                                                 const std::vector<CkksCiphertext>& x) {
+vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
     vector<CkksCiphertext> result_ct;
     result_ct.resize(n_out_channel_);
 
@@ -595,8 +594,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayer::run_core(CkksContext& ct
 }
 
 vector<CkksCiphertext>
-ParMultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx,
-                                                                 const std::vector<CkksCiphertext>& x) {
+MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
     vector<CkksCiphertext> result_ct;
     result_ct.resize(n_out_channel_);
 
@@ -723,7 +721,7 @@ ParMultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ct
     return res;
 }
 
-Feature2DEncrypted ParMultiplexedConv2DPackedLayer::run(CkksContext& ctx, const Feature2DEncrypted& x) {
+Feature2DEncrypted MultiplexedConv2DPackedLayer::run(CkksContext& ctx, const Feature2DEncrypted& x) {
     Feature2DEncrypted result(&ctx, x.level);
     result.shape[0] = x.shape[0] / stride_[0] * upsample_factor[0];
     result.shape[1] = x.shape[1] / stride_[1] * upsample_factor[1];
@@ -736,8 +734,8 @@ Feature2DEncrypted ParMultiplexedConv2DPackedLayer::run(CkksContext& ctx, const 
     return result;
 }
 
-Feature2DEncrypted ParMultiplexedConv2DPackedLayer::run_for_post_skip_rotation(CkksContext& ctx,
-                                                                               const Feature2DEncrypted& x) {
+Feature2DEncrypted MultiplexedConv2DPackedLayer::run_for_post_skip_rotation(CkksContext& ctx,
+                                                                            const Feature2DEncrypted& x) {
     Feature2DEncrypted result(&ctx, x.level);
     result.shape[0] = x.shape[0] / stride_[0] * upsample_factor[0];
     result.shape[1] = x.shape[1] / stride_[1] * upsample_factor[1];
@@ -750,8 +748,8 @@ Feature2DEncrypted ParMultiplexedConv2DPackedLayer::run_for_post_skip_rotation(C
     return result;
 }
 
-vector<CkksCiphertext> ParMultiplexedConv2DPackedLayer::run_core_for_reduct_rot(CkksContext& ctx,
-                                                                                const std::vector<CkksCiphertext>& x) {
+vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core_for_reduct_rot(CkksContext& ctx,
+                                                                             const std::vector<CkksCiphertext>& x) {
     // 1. Block direction rotations (same as post_skip)
     vector<CkksCiphertext> input_rotated_x;
     uint32_t x_size = x.size();
@@ -879,7 +877,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayer::run_core_for_reduct_rot(
     return res;
 }
 
-Feature2DEncrypted ParMultiplexedConv2DPackedLayer::run_for_reduct_rot(CkksContext& ctx, const Feature2DEncrypted& x) {
+Feature2DEncrypted MultiplexedConv2DPackedLayer::run_for_reduct_rot(CkksContext& ctx, const Feature2DEncrypted& x) {
     Feature2DEncrypted result(&ctx, x.level);
     result.shape[0] = x.shape[0] / stride_[0] * upsample_factor[0];
     result.shape[1] = x.shape[1] / stride_[1] * upsample_factor[1];

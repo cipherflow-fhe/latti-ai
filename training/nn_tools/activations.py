@@ -17,7 +17,7 @@
 
 Modules:
   - RangeNorm2d:      per-channel range normalization
-  - Simple_Polyrelu:  Hermite polynomial approximation of activations
+  - PolyAct:          Hermite polynomial approximation of activations
   - RangeNormPoly2d:  combined range-norm + polynomial activation
 """
 
@@ -115,8 +115,8 @@ def _eval_hermite(x, hermite_coeffs, scale_after=1.0):
     return result
 
 
-class _SimplePolyreluExport(torch.autograd.Function):
-    """ONNX export helper: emit Simple_Polyrelu as a single custom op."""
+class _PolyActExport(torch.autograd.Function):
+    """ONNX export helper: emit PolyAct as a single custom op."""
 
     @staticmethod
     def forward(ctx, x, scale_before, scale_after, hermite_coeffs):
@@ -125,7 +125,7 @@ class _SimplePolyreluExport(torch.autograd.Function):
     @staticmethod
     def symbolic(g, x, scale_before, scale_after, hermite_coeffs):
         return g.op(
-            'nn_tools::Simple_Polyrelu',
+            'nn_tools::PolyAct',
             x,
             scale_before_f=scale_before,
             scale_after_f=scale_after,
@@ -133,7 +133,7 @@ class _SimplePolyreluExport(torch.autograd.Function):
         ).setType(x.type())
 
 
-class Simple_Polyrelu(nn.Module):
+class PolyAct(nn.Module):
     """Polynomial activation via Hermite expansion.
 
     Hermite coefficients are computed by ``get_hermite_coeffs_for_module()``
@@ -158,7 +158,7 @@ class Simple_Polyrelu(nn.Module):
 
     def forward(self, x):
         if torch.onnx.is_in_onnx_export():
-            return _SimplePolyreluExport.apply(
+            return _PolyActExport.apply(
                 x,
                 self.scale_before,
                 self.scale_after,
@@ -231,7 +231,7 @@ class RangeNormPoly2d(nn.Module):
         self.upper_bound = upper_bound
 
         self.rangenorm = RangeNorm2d(num_features, upper_bound=upper_bound, eps=1e-3, momentum=0.1)
-        self.poly = Simple_Polyrelu(hermite_coeffs)
+        self.poly = PolyAct(hermite_coeffs)
 
     def forward(self, x):
         if torch.onnx.is_in_onnx_export():
@@ -328,7 +328,7 @@ class RangeNormPoly1d(nn.Module):
         self.upper_bound = upper_bound
 
         self.rangenorm = RangeNorm1d(num_features, upper_bound=upper_bound, eps=1e-3, momentum=0.1)
-        self.poly = Simple_Polyrelu(hermite_coeffs)
+        self.poly = PolyAct(hermite_coeffs)
 
     def forward(self, x):
         if torch.onnx.is_in_onnx_export():

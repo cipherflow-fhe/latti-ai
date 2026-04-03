@@ -24,7 +24,7 @@ from typing import Type, Callable
 
 import torch.nn as nn
 
-from .activations import RangeNormPoly2d, Simple_Polyrelu
+from .activations import RangeNormPoly2d, PolyAct
 from .modules import DepthwiseAvgPool2d
 
 log = logging.getLogger(__name__)

@@ -58,7 +58,7 @@
                 1
             ]
         },
-        "_features_features_0_features_0_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_0_features_0_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 32,
             "scale": 1.0,
@@ -102,7 +102,7 @@
                 1
             ]
         },
-        "_features_features_1_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_1_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 32,
             "scale": 1.0,
@@ -190,7 +190,7 @@
                 1
             ]
         },
-        "_features_features_2_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_2_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 96,
             "scale": 1.0,
@@ -234,7 +234,7 @@
                 1
             ]
         },
-        "_features_features_2_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_2_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 96,
             "scale": 1.0,
@@ -256,7 +256,7 @@
                 1
             ]
         },
-        "_features_features_2_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed": {
+        "_features_features_2_conv_conv_5_poly_PolyAct_output_0_refreshed": {
             "dim": 2,
             "channel": 96,
             "scale": 1.0,
@@ -278,7 +278,7 @@
                 1
             ]
         },
-        "_features_features_2_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643788465600_drop_level_output": {
+        "_features_features_2_conv_conv_5_poly_PolyAct_output_0_refreshed140643788465600_drop_level_output": {
             "dim": 2,
             "channel": 96,
             "scale": 1.0,
@@ -366,7 +366,7 @@
                 1
             ]
         },
-        "_features_features_3_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_3_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 144,
             "scale": 1.0,
@@ -454,7 +454,7 @@
                 1
             ]
         },
-        "_features_features_3_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_3_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 144,
             "scale": 1.0,
@@ -586,7 +586,7 @@
                 1
             ]
         },
-        "_features_features_4_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_4_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 144,
             "scale": 1.0,
@@ -630,7 +630,7 @@
                 1
             ]
         },
-        "_features_features_4_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_4_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 144,
             "scale": 1.0,
@@ -652,7 +652,7 @@
                 1
             ]
         },
-        "_features_features_4_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed": {
+        "_features_features_4_conv_conv_5_poly_PolyAct_output_0_refreshed": {
             "dim": 2,
             "channel": 144,
             "scale": 1.0,
@@ -674,7 +674,7 @@
                 1
             ]
         },
-        "_features_features_4_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643787504768_drop_level_output": {
+        "_features_features_4_conv_conv_5_poly_PolyAct_output_0_refreshed140643787504768_drop_level_output": {
             "dim": 2,
             "channel": 144,
             "scale": 1.0,
@@ -784,7 +784,7 @@
                 1
             ]
         },
-        "_features_features_5_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_5_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 192,
             "scale": 1.0,
@@ -828,7 +828,7 @@
                 1
             ]
         },
-        "_features_features_5_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_5_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 192,
             "scale": 1.0,
@@ -850,7 +850,7 @@
                 1
             ]
         },
-        "_features_features_5_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed": {
+        "_features_features_5_conv_conv_5_poly_PolyAct_output_0_refreshed": {
             "dim": 2,
             "channel": 192,
             "scale": 1.0,
@@ -872,7 +872,7 @@
                 1
             ]
         },
-        "_features_features_5_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643787499200_drop_level_output": {
+        "_features_features_5_conv_conv_5_poly_PolyAct_output_0_refreshed140643787499200_drop_level_output": {
             "dim": 2,
             "channel": 192,
             "scale": 1.0,
@@ -1004,7 +1004,7 @@
                 1
             ]
         },
-        "_features_features_6_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_6_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 192,
             "scale": 1.0,
@@ -1048,7 +1048,7 @@
                 1
             ]
         },
-        "_features_features_6_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_6_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 192,
             "scale": 1.0,
@@ -1070,7 +1070,7 @@
                 1
             ]
         },
-        "_features_features_6_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed": {
+        "_features_features_6_conv_conv_5_poly_PolyAct_output_0_refreshed": {
             "dim": 2,
             "channel": 192,
             "scale": 1.0,
@@ -1092,7 +1092,7 @@
                 1
             ]
         },
-        "_features_features_6_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643787502592_drop_level_output": {
+        "_features_features_6_conv_conv_5_poly_PolyAct_output_0_refreshed140643787502592_drop_level_output": {
             "dim": 2,
             "channel": 192,
             "scale": 1.0,
@@ -1180,7 +1180,7 @@
                 1
             ]
         },
-        "_features_features_7_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_7_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 192,
             "scale": 1.0,
@@ -1202,7 +1202,7 @@
                 1
             ]
         },
-        "_features_features_7_conv_conv_2_poly_SimplePolyrelu_output_0_refreshed": {
+        "_features_features_7_conv_conv_2_poly_PolyAct_output_0_refreshed": {
             "dim": 2,
             "channel": 192,
             "scale": 1.0,
@@ -1224,7 +1224,7 @@
                 1
             ]
         },
-        "_features_features_7_conv_conv_2_poly_SimplePolyrelu_output_0_refreshed140643787501632_drop_level_output": {
+        "_features_features_7_conv_conv_2_poly_PolyAct_output_0_refreshed140643787501632_drop_level_output": {
             "dim": 2,
             "channel": 192,
             "scale": 1.0,
@@ -1268,7 +1268,7 @@
                 1
             ]
         },
-        "_features_features_7_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_7_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 192,
             "scale": 1.0,
@@ -1400,7 +1400,7 @@
                 1
             ]
         },
-        "_features_features_8_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_8_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 384,
             "scale": 1.0,
@@ -1444,7 +1444,7 @@
                 1
             ]
         },
-        "_features_features_8_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_8_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 384,
             "scale": 1.0,
@@ -1598,7 +1598,7 @@
                 1
             ]
         },
-        "_features_features_9_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_9_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 384,
             "scale": 1.0,
@@ -1642,7 +1642,7 @@
                 1
             ]
         },
-        "_features_features_9_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_9_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 384,
             "scale": 1.0,
@@ -1818,7 +1818,7 @@
                 1
             ]
         },
-        "_features_features_10_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_10_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 384,
             "scale": 1.0,
@@ -1906,7 +1906,7 @@
                 1
             ]
         },
-        "_features_features_10_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_10_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 384,
             "scale": 1.0,
@@ -2016,7 +2016,7 @@
                 1
             ]
         },
-        "_features_features_11_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_11_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 384,
             "scale": 1.0,
@@ -2060,7 +2060,7 @@
                 1
             ]
         },
-        "_features_features_11_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_11_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 384,
             "scale": 1.0,
@@ -2082,7 +2082,7 @@
                 1
             ]
         },
-        "_features_features_11_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed": {
+        "_features_features_11_conv_conv_5_poly_PolyAct_output_0_refreshed": {
             "dim": 2,
             "channel": 384,
             "scale": 1.0,
@@ -2104,7 +2104,7 @@
                 1
             ]
         },
-        "_features_features_11_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643784179008_drop_level_output": {
+        "_features_features_11_conv_conv_5_poly_PolyAct_output_0_refreshed140643784179008_drop_level_output": {
             "dim": 2,
             "channel": 384,
             "scale": 1.0,
@@ -2214,7 +2214,7 @@
                 1
             ]
         },
-        "_features_features_12_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_12_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 576,
             "scale": 1.0,
@@ -2258,7 +2258,7 @@
                 1
             ]
         },
-        "_features_features_12_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_12_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 576,
             "scale": 1.0,
@@ -2280,7 +2280,7 @@
                 1
             ]
         },
-        "_features_features_12_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed": {
+        "_features_features_12_conv_conv_5_poly_PolyAct_output_0_refreshed": {
             "dim": 2,
             "channel": 576,
             "scale": 1.0,
@@ -2434,7 +2434,7 @@
                 1
             ]
         },
-        "_features_features_13_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_13_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 576,
             "scale": 1.0,
@@ -2478,7 +2478,7 @@
                 1
             ]
         },
-        "_features_features_13_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_13_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 576,
             "scale": 1.0,
@@ -2500,7 +2500,7 @@
                 1
             ]
         },
-        "_features_features_13_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed": {
+        "_features_features_13_conv_conv_5_poly_PolyAct_output_0_refreshed": {
             "dim": 2,
             "channel": 576,
             "scale": 1.0,
@@ -2588,7 +2588,7 @@
                 1
             ]
         },
-        "_features_features_14_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_14_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 576,
             "scale": 1.0,
@@ -2676,7 +2676,7 @@
                 1
             ]
         },
-        "_features_features_14_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_14_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 576,
             "scale": 1.0,
@@ -2786,7 +2786,7 @@
                 1
             ]
         },
-        "_features_features_15_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_15_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 960,
             "scale": 1.0,
@@ -2830,7 +2830,7 @@
                 1
             ]
         },
-        "_features_features_15_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_15_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 960,
             "scale": 1.0,
@@ -2852,7 +2852,7 @@
                 1
             ]
         },
-        "_features_features_15_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed": {
+        "_features_features_15_conv_conv_5_poly_PolyAct_output_0_refreshed": {
             "dim": 2,
             "channel": 960,
             "scale": 1.0,
@@ -2874,7 +2874,7 @@
                 1
             ]
         },
-        "_features_features_15_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643788678848_drop_level_output": {
+        "_features_features_15_conv_conv_5_poly_PolyAct_output_0_refreshed140643788678848_drop_level_output": {
             "dim": 2,
             "channel": 960,
             "scale": 1.0,
@@ -3028,7 +3028,7 @@
                 1
             ]
         },
-        "_features_features_16_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_16_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 960,
             "scale": 1.0,
@@ -3072,7 +3072,7 @@
                 1
             ]
         },
-        "_features_features_16_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_16_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 960,
             "scale": 1.0,
@@ -3182,7 +3182,7 @@
                 1
             ]
         },
-        "_features_features_17_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_features_features_17_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 960,
             "scale": 1.0,
@@ -3226,7 +3226,7 @@
                 1
             ]
         },
-        "_features_features_17_conv_conv_5_poly_SimplePolyrelu_output_0": {
+        "_features_features_17_conv_conv_5_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 960,
             "scale": 1.0,
@@ -3248,7 +3248,7 @@
                 1
             ]
         },
-        "_features_features_17_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed": {
+        "_features_features_17_conv_conv_5_poly_PolyAct_output_0_refreshed": {
             "dim": 2,
             "channel": 960,
             "scale": 1.0,
@@ -3270,7 +3270,7 @@
                 1
             ]
         },
-        "_features_features_17_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643788833536_drop_level_output": {
+        "_features_features_17_conv_conv_5_poly_PolyAct_output_0_refreshed140643788833536_drop_level_output": {
             "dim": 2,
             "channel": 960,
             "scale": 1.0,
@@ -3336,7 +3336,7 @@
                 1
             ]
         },
-        "_conv_conv_2_poly_SimplePolyrelu_output_0": {
+        "_conv_conv_2_poly_PolyAct_output_0": {
             "dim": 2,
             "channel": 1280,
             "scale": 1.0,
@@ -3454,8 +3454,8 @@
             "level_cost": 1,
             "style": "big_size"
         },
-        "_features_features_0_features_0_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_0_features_0_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 32,
             "channel_output": 32,
             "ckks_parameter_id_input": "param0",
@@ -3464,9 +3464,9 @@
                 "_features_features_0_features_0_0_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_0_features_0_2_poly_SimplePolyrelu_output_0"
+                "_features_features_0_features_0_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_0_features_0_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_0_features_0_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -3500,7 +3500,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_0_features_0_2_poly_SimplePolyrelu_output_0"
+                "_features_features_0_features_0_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_1_conv_conv_0_Conv_output_0"
@@ -3520,8 +3520,8 @@
             "level_cost": 1,
             "style": "multiplexed"
         },
-        "_features_features_1_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_1_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 32,
             "channel_output": 32,
             "ckks_parameter_id_input": "param0",
@@ -3530,9 +3530,9 @@
                 "_features_features_1_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_1_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_1_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_1_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_1_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -3566,7 +3566,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_1_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_1_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_1_conv_conv_3_Conv_output_0"
@@ -3636,8 +3636,8 @@
             "level_cost": 1,
             "style": "multiplexed"
         },
-        "_features_features_2_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_2_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 96,
             "channel_output": 96,
             "ckks_parameter_id_input": "param0",
@@ -3646,9 +3646,9 @@
                 "_features_features_2_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_2_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_2_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_2_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_2_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -3682,7 +3682,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_2_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_2_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_2_conv_conv_3_Conv_output_0"
@@ -3702,8 +3702,8 @@
             "level_cost": 2,
             "style": "multiplexed"
         },
-        "_features_features_2_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_2_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 96,
             "channel_output": 96,
             "ckks_parameter_id_input": "param0",
@@ -3712,9 +3712,9 @@
                 "_features_features_2_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_2_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_2_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_2_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_2_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -3732,17 +3732,17 @@
                 1
             ]
         },
-        "_features_features_2_conv_conv_5_poly_SimplePolyrelu_output_0_bootstrap": {
+        "_features_features_2_conv_conv_5_poly_PolyAct_output_0_bootstrap": {
             "type": "bootstrapping",
             "channel_input": 96,
             "channel_output": 96,
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_2_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_2_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
-                "_features_features_2_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_2_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "level_cost": -8
         },
@@ -3753,10 +3753,10 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_2_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_2_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "feature_output": [
-                "_features_features_2_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643788465600_drop_level_output"
+                "_features_features_2_conv_conv_5_poly_PolyAct_output_0_refreshed140643788465600_drop_level_output"
             ],
             "level_cost": 1
         },
@@ -3776,7 +3776,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_2_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643788465600_drop_level_output"
+                "_features_features_2_conv_conv_5_poly_PolyAct_output_0_refreshed140643788465600_drop_level_output"
             ],
             "feature_output": [
                 "_features_features_2_conv_conv_6_Conv_output_0"
@@ -3846,8 +3846,8 @@
             ],
             "level_cost": 4
         },
-        "_features_features_3_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_3_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 144,
             "channel_output": 144,
             "ckks_parameter_id_input": "param0",
@@ -3856,9 +3856,9 @@
                 "_features_features_3_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_3_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_3_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_3_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_3_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -3892,7 +3892,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_3_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_3_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_3_conv_conv_3_Conv_output_0"
@@ -3926,7 +3926,7 @@
             ],
             "level_cost": -7
         },
-        "_features_features_3_conv_conv_5_poly_SimplePolyrelu_drop_level_idx0_ts1774592594003912": {
+        "_features_features_3_conv_conv_5_poly_PolyAct_drop_level_idx0_ts1774592594003912": {
             "type": "drop_level",
             "channel_input": 144,
             "channel_output": 144,
@@ -3940,8 +3940,8 @@
             ],
             "level_cost": 2
         },
-        "_features_features_3_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_3_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 144,
             "channel_output": 144,
             "ckks_parameter_id_input": "param0",
@@ -3950,9 +3950,9 @@
                 "_features_features_3_conv_conv_3_Conv_output_0_refreshed140643787500480_drop_level_output"
             ],
             "feature_output": [
-                "_features_features_3_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_3_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_3_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_3_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -3986,7 +3986,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_3_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_3_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_3_conv_conv_6_Conv_output_0"
@@ -4071,7 +4071,7 @@
             ],
             "level_cost": -8
         },
-        "_features_features_4_conv_conv_2_poly_SimplePolyrelu_drop_level_idx0_ts1774592594003878": {
+        "_features_features_4_conv_conv_2_poly_PolyAct_drop_level_idx0_ts1774592594003878": {
             "type": "drop_level",
             "channel_input": 144,
             "channel_output": 144,
@@ -4085,8 +4085,8 @@
             ],
             "level_cost": 1
         },
-        "_features_features_4_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_4_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 144,
             "channel_output": 144,
             "ckks_parameter_id_input": "param0",
@@ -4095,9 +4095,9 @@
                 "_features_features_4_conv_conv_0_Conv_output_0_refreshed140643787505088_drop_level_output"
             ],
             "feature_output": [
-                "_features_features_4_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_4_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_4_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_4_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -4131,7 +4131,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_4_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_4_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_4_conv_conv_3_Conv_output_0"
@@ -4151,8 +4151,8 @@
             "level_cost": 2,
             "style": "multiplexed"
         },
-        "_features_features_4_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_4_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 144,
             "channel_output": 144,
             "ckks_parameter_id_input": "param0",
@@ -4161,9 +4161,9 @@
                 "_features_features_4_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_4_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_4_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_4_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_4_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -4181,17 +4181,17 @@
                 1
             ]
         },
-        "_features_features_4_conv_conv_5_poly_SimplePolyrelu_output_0_bootstrap": {
+        "_features_features_4_conv_conv_5_poly_PolyAct_output_0_bootstrap": {
             "type": "bootstrapping",
             "channel_input": 144,
             "channel_output": 144,
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_4_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_4_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
-                "_features_features_4_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_4_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "level_cost": -2
         },
@@ -4202,10 +4202,10 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_4_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_4_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "feature_output": [
-                "_features_features_4_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643787504768_drop_level_output"
+                "_features_features_4_conv_conv_5_poly_PolyAct_output_0_refreshed140643787504768_drop_level_output"
             ],
             "level_cost": 7
         },
@@ -4225,7 +4225,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_4_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643787504768_drop_level_output"
+                "_features_features_4_conv_conv_5_poly_PolyAct_output_0_refreshed140643787504768_drop_level_output"
             ],
             "feature_output": [
                 "_features_features_4_conv_conv_6_Conv_output_0"
@@ -4309,8 +4309,8 @@
             ],
             "level_cost": 9
         },
-        "_features_features_5_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_5_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 192,
             "channel_output": 192,
             "ckks_parameter_id_input": "param0",
@@ -4319,9 +4319,9 @@
                 "_features_features_5_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_5_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_5_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_5_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_5_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -4355,7 +4355,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_5_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_5_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_5_conv_conv_3_Conv_output_0"
@@ -4375,8 +4375,8 @@
             "level_cost": 1,
             "style": "multiplexed"
         },
-        "_features_features_5_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_5_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 192,
             "channel_output": 192,
             "ckks_parameter_id_input": "param0",
@@ -4385,9 +4385,9 @@
                 "_features_features_5_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_5_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_5_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_5_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_5_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -4405,17 +4405,17 @@
                 1
             ]
         },
-        "_features_features_5_conv_conv_5_poly_SimplePolyrelu_output_0_bootstrap": {
+        "_features_features_5_conv_conv_5_poly_PolyAct_output_0_bootstrap": {
             "type": "bootstrapping",
             "channel_input": 192,
             "channel_output": 192,
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_5_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_5_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
-                "_features_features_5_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_5_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "level_cost": -2
         },
@@ -4426,10 +4426,10 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_5_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_5_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "feature_output": [
-                "_features_features_5_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643787499200_drop_level_output"
+                "_features_features_5_conv_conv_5_poly_PolyAct_output_0_refreshed140643787499200_drop_level_output"
             ],
             "level_cost": 7
         },
@@ -4449,7 +4449,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_5_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643787499200_drop_level_output"
+                "_features_features_5_conv_conv_5_poly_PolyAct_output_0_refreshed140643787499200_drop_level_output"
             ],
             "feature_output": [
                 "_features_features_5_conv_conv_6_Conv_output_0"
@@ -4548,8 +4548,8 @@
             ],
             "level_cost": 4
         },
-        "_features_features_6_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_6_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 192,
             "channel_output": 192,
             "ckks_parameter_id_input": "param0",
@@ -4558,9 +4558,9 @@
                 "_features_features_6_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_6_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_6_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_6_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_6_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -4594,7 +4594,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_6_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_6_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_6_conv_conv_3_Conv_output_0"
@@ -4614,8 +4614,8 @@
             "level_cost": 1,
             "style": "multiplexed"
         },
-        "_features_features_6_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_6_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 192,
             "channel_output": 192,
             "ckks_parameter_id_input": "param0",
@@ -4624,9 +4624,9 @@
                 "_features_features_6_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_6_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_6_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_6_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_6_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -4644,17 +4644,17 @@
                 1
             ]
         },
-        "_features_features_6_conv_conv_5_poly_SimplePolyrelu_output_0_bootstrap": {
+        "_features_features_6_conv_conv_5_poly_PolyAct_output_0_bootstrap": {
             "type": "bootstrapping",
             "channel_input": 192,
             "channel_output": 192,
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_6_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_6_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
-                "_features_features_6_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_6_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "level_cost": -7
         },
@@ -4665,10 +4665,10 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_6_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_6_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "feature_output": [
-                "_features_features_6_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643787502592_drop_level_output"
+                "_features_features_6_conv_conv_5_poly_PolyAct_output_0_refreshed140643787502592_drop_level_output"
             ],
             "level_cost": 2
         },
@@ -4688,7 +4688,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_6_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643787502592_drop_level_output"
+                "_features_features_6_conv_conv_5_poly_PolyAct_output_0_refreshed140643787502592_drop_level_output"
             ],
             "feature_output": [
                 "_features_features_6_conv_conv_6_Conv_output_0"
@@ -4759,8 +4759,8 @@
             "level_cost": 2,
             "style": "multiplexed"
         },
-        "_features_features_7_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_7_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 192,
             "channel_output": 192,
             "ckks_parameter_id_input": "param0",
@@ -4769,9 +4769,9 @@
                 "_features_features_7_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_7_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_7_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_7_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_7_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -4789,17 +4789,17 @@
                 1
             ]
         },
-        "_features_features_7_conv_conv_2_poly_SimplePolyrelu_output_0_bootstrap": {
+        "_features_features_7_conv_conv_2_poly_PolyAct_output_0_bootstrap": {
             "type": "bootstrapping",
             "channel_input": 192,
             "channel_output": 192,
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_7_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_7_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
-                "_features_features_7_conv_conv_2_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_7_conv_conv_2_poly_PolyAct_output_0_refreshed"
             ],
             "level_cost": -7
         },
@@ -4810,10 +4810,10 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_7_conv_conv_2_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_7_conv_conv_2_poly_PolyAct_output_0_refreshed"
             ],
             "feature_output": [
-                "_features_features_7_conv_conv_2_poly_SimplePolyrelu_output_0_refreshed140643787501632_drop_level_output"
+                "_features_features_7_conv_conv_2_poly_PolyAct_output_0_refreshed140643787501632_drop_level_output"
             ],
             "level_cost": 2
         },
@@ -4833,7 +4833,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_7_conv_conv_2_poly_SimplePolyrelu_output_0_refreshed140643787501632_drop_level_output"
+                "_features_features_7_conv_conv_2_poly_PolyAct_output_0_refreshed140643787501632_drop_level_output"
             ],
             "feature_output": [
                 "_features_features_7_conv_conv_3_Conv_output_0"
@@ -4853,8 +4853,8 @@
             "level_cost": 2,
             "style": "multiplexed"
         },
-        "_features_features_7_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_7_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 192,
             "channel_output": 192,
             "ckks_parameter_id_input": "param0",
@@ -4863,9 +4863,9 @@
                 "_features_features_7_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_7_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_7_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_7_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_7_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -4899,7 +4899,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_7_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_7_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_7_conv_conv_6_Conv_output_0"
@@ -4997,8 +4997,8 @@
             ],
             "level_cost": -9
         },
-        "_features_features_8_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_8_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 384,
             "channel_output": 384,
             "ckks_parameter_id_input": "param0",
@@ -5007,9 +5007,9 @@
                 "_features_features_8_conv_conv_0_Conv_output_0_refreshed"
             ],
             "feature_output": [
-                "_features_features_8_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_8_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_8_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_8_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -5043,7 +5043,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_8_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_8_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_8_conv_conv_3_Conv_output_0"
@@ -5063,8 +5063,8 @@
             "level_cost": 1,
             "style": "multiplexed"
         },
-        "_features_features_8_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_8_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 384,
             "channel_output": 384,
             "ckks_parameter_id_input": "param0",
@@ -5073,9 +5073,9 @@
                 "_features_features_8_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_8_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_8_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_8_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_8_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -5109,7 +5109,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_8_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_8_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_8_conv_conv_6_Conv_output_0"
@@ -5222,8 +5222,8 @@
             ],
             "level_cost": -9
         },
-        "_features_features_9_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_9_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 384,
             "channel_output": 384,
             "ckks_parameter_id_input": "param0",
@@ -5232,9 +5232,9 @@
                 "_features_features_9_conv_conv_0_Conv_output_0_refreshed"
             ],
             "feature_output": [
-                "_features_features_9_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_9_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_9_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_9_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -5268,7 +5268,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_9_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_9_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_9_conv_conv_3_Conv_output_0"
@@ -5288,8 +5288,8 @@
             "level_cost": 1,
             "style": "multiplexed"
         },
-        "_features_features_9_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_9_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 384,
             "channel_output": 384,
             "ckks_parameter_id_input": "param0",
@@ -5298,9 +5298,9 @@
                 "_features_features_9_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_9_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_9_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_9_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_9_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -5334,7 +5334,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_9_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_9_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_9_conv_conv_6_Conv_output_0"
@@ -5447,7 +5447,7 @@
             ],
             "level_cost": -4
         },
-        "_features_features_10_conv_conv_2_poly_SimplePolyrelu_drop_level_idx0_ts1774592594004014": {
+        "_features_features_10_conv_conv_2_poly_PolyAct_drop_level_idx0_ts1774592594004014": {
             "type": "drop_level",
             "channel_input": 384,
             "channel_output": 384,
@@ -5461,8 +5461,8 @@
             ],
             "level_cost": 5
         },
-        "_features_features_10_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_10_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 384,
             "channel_output": 384,
             "ckks_parameter_id_input": "param0",
@@ -5471,9 +5471,9 @@
                 "_features_features_10_conv_conv_0_Conv_output_0_refreshed140643788462272_drop_level_output"
             ],
             "feature_output": [
-                "_features_features_10_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_10_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_10_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_10_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -5507,7 +5507,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_10_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_10_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_10_conv_conv_3_Conv_output_0"
@@ -5541,7 +5541,7 @@
             ],
             "level_cost": -5
         },
-        "_features_features_10_conv_conv_5_poly_SimplePolyrelu_drop_level_idx0_ts1774592594003744": {
+        "_features_features_10_conv_conv_5_poly_PolyAct_drop_level_idx0_ts1774592594003744": {
             "type": "drop_level",
             "channel_input": 384,
             "channel_output": 384,
@@ -5555,8 +5555,8 @@
             ],
             "level_cost": 4
         },
-        "_features_features_10_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_10_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 384,
             "channel_output": 384,
             "ckks_parameter_id_input": "param0",
@@ -5565,9 +5565,9 @@
                 "_features_features_10_conv_conv_3_Conv_output_0_refreshed140643787490624_drop_level_output"
             ],
             "feature_output": [
-                "_features_features_10_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_10_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_10_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_10_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -5601,7 +5601,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_10_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_10_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_10_conv_conv_6_Conv_output_0"
@@ -5686,8 +5686,8 @@
             "level_cost": 2,
             "style": "multiplexed"
         },
-        "_features_features_11_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_11_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 384,
             "channel_output": 384,
             "ckks_parameter_id_input": "param0",
@@ -5696,9 +5696,9 @@
                 "_features_features_11_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_11_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_11_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_11_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_11_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -5732,7 +5732,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_11_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_11_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_11_conv_conv_3_Conv_output_0"
@@ -5752,8 +5752,8 @@
             "level_cost": 1,
             "style": "multiplexed"
         },
-        "_features_features_11_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_11_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 384,
             "channel_output": 384,
             "ckks_parameter_id_input": "param0",
@@ -5762,9 +5762,9 @@
                 "_features_features_11_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_11_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_11_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_11_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_11_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -5782,17 +5782,17 @@
                 1
             ]
         },
-        "_features_features_11_conv_conv_5_poly_SimplePolyrelu_output_0_bootstrap": {
+        "_features_features_11_conv_conv_5_poly_PolyAct_output_0_bootstrap": {
             "type": "bootstrapping",
             "channel_input": 384,
             "channel_output": 384,
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_11_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_11_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
-                "_features_features_11_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_11_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "level_cost": -2
         },
@@ -5803,10 +5803,10 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_11_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_11_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "feature_output": [
-                "_features_features_11_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643784179008_drop_level_output"
+                "_features_features_11_conv_conv_5_poly_PolyAct_output_0_refreshed140643784179008_drop_level_output"
             ],
             "level_cost": 7
         },
@@ -5826,7 +5826,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_11_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643784179008_drop_level_output"
+                "_features_features_11_conv_conv_5_poly_PolyAct_output_0_refreshed140643784179008_drop_level_output"
             ],
             "feature_output": [
                 "_features_features_11_conv_conv_6_Conv_output_0"
@@ -5910,8 +5910,8 @@
             ],
             "level_cost": 2
         },
-        "_features_features_12_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_12_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 576,
             "channel_output": 576,
             "ckks_parameter_id_input": "param0",
@@ -5920,9 +5920,9 @@
                 "_features_features_12_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_12_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_12_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_12_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_12_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -5956,7 +5956,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_12_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_12_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_12_conv_conv_3_Conv_output_0"
@@ -5976,8 +5976,8 @@
             "level_cost": 1,
             "style": "multiplexed"
         },
-        "_features_features_12_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_12_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 576,
             "channel_output": 576,
             "ckks_parameter_id_input": "param0",
@@ -5986,9 +5986,9 @@
                 "_features_features_12_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_12_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_12_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_12_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_12_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -6006,17 +6006,17 @@
                 1
             ]
         },
-        "_features_features_12_conv_conv_5_poly_SimplePolyrelu_output_0_bootstrap": {
+        "_features_features_12_conv_conv_5_poly_PolyAct_output_0_bootstrap": {
             "type": "bootstrapping",
             "channel_input": 576,
             "channel_output": 576,
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_12_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_12_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
-                "_features_features_12_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_12_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "level_cost": -9
         },
@@ -6036,7 +6036,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_12_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_12_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "feature_output": [
                 "_features_features_12_conv_conv_6_Conv_output_0"
@@ -6135,7 +6135,7 @@
             ],
             "level_cost": -7
         },
-        "_features_features_13_conv_conv_2_poly_SimplePolyrelu_drop_level_idx0_ts1774592594003703": {
+        "_features_features_13_conv_conv_2_poly_PolyAct_drop_level_idx0_ts1774592594003703": {
             "type": "drop_level",
             "channel_input": 576,
             "channel_output": 576,
@@ -6149,8 +6149,8 @@
             ],
             "level_cost": 2
         },
-        "_features_features_13_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_13_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 576,
             "channel_output": 576,
             "ckks_parameter_id_input": "param0",
@@ -6159,9 +6159,9 @@
                 "_features_features_13_conv_conv_0_Conv_output_0_refreshed140643787489984_drop_level_output"
             ],
             "feature_output": [
-                "_features_features_13_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_13_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_13_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_13_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -6195,7 +6195,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_13_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_13_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_13_conv_conv_3_Conv_output_0"
@@ -6215,8 +6215,8 @@
             "level_cost": 1,
             "style": "multiplexed"
         },
-        "_features_features_13_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_13_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 576,
             "channel_output": 576,
             "ckks_parameter_id_input": "param0",
@@ -6225,9 +6225,9 @@
                 "_features_features_13_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_13_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_13_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_13_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_13_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -6245,17 +6245,17 @@
                 1
             ]
         },
-        "_features_features_13_conv_conv_5_poly_SimplePolyrelu_output_0_bootstrap": {
+        "_features_features_13_conv_conv_5_poly_PolyAct_output_0_bootstrap": {
             "type": "bootstrapping",
             "channel_input": 576,
             "channel_output": 576,
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_13_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_13_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
-                "_features_features_13_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_13_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "level_cost": -9
         },
@@ -6275,7 +6275,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_13_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_13_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "feature_output": [
                 "_features_features_13_conv_conv_6_Conv_output_0"
@@ -6346,8 +6346,8 @@
             "level_cost": 2,
             "style": "multiplexed"
         },
-        "_features_features_14_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_14_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 576,
             "channel_output": 576,
             "ckks_parameter_id_input": "param0",
@@ -6356,9 +6356,9 @@
                 "_features_features_14_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_14_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_14_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_14_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_14_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -6392,7 +6392,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_14_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_14_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_14_conv_conv_3_Conv_output_0"
@@ -6426,7 +6426,7 @@
             ],
             "level_cost": -5
         },
-        "_features_features_14_conv_conv_5_poly_SimplePolyrelu_drop_level_idx0_ts1774592594003507": {
+        "_features_features_14_conv_conv_5_poly_PolyAct_drop_level_idx0_ts1774592594003507": {
             "type": "drop_level",
             "channel_input": 576,
             "channel_output": 576,
@@ -6440,8 +6440,8 @@
             ],
             "level_cost": 4
         },
-        "_features_features_14_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_14_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 576,
             "channel_output": 576,
             "ckks_parameter_id_input": "param0",
@@ -6450,9 +6450,9 @@
                 "_features_features_14_conv_conv_3_Conv_output_0_refreshed140643788742656_drop_level_output"
             ],
             "feature_output": [
-                "_features_features_14_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_14_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_14_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_14_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -6486,7 +6486,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_14_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_14_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_14_conv_conv_6_Conv_output_0"
@@ -6570,8 +6570,8 @@
             ],
             "level_cost": 7
         },
-        "_features_features_15_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_15_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 960,
             "channel_output": 960,
             "ckks_parameter_id_input": "param0",
@@ -6580,9 +6580,9 @@
                 "_features_features_15_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_15_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_15_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_15_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_15_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -6616,7 +6616,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_15_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_15_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_15_conv_conv_3_Conv_output_0"
@@ -6636,8 +6636,8 @@
             "level_cost": 1,
             "style": "multiplexed"
         },
-        "_features_features_15_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_15_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 960,
             "channel_output": 960,
             "ckks_parameter_id_input": "param0",
@@ -6646,9 +6646,9 @@
                 "_features_features_15_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_15_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_15_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_15_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_15_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -6666,17 +6666,17 @@
                 1
             ]
         },
-        "_features_features_15_conv_conv_5_poly_SimplePolyrelu_output_0_bootstrap": {
+        "_features_features_15_conv_conv_5_poly_PolyAct_output_0_bootstrap": {
             "type": "bootstrapping",
             "channel_input": 960,
             "channel_output": 960,
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_15_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_15_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
-                "_features_features_15_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_15_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "level_cost": -2
         },
@@ -6687,10 +6687,10 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_15_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_15_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "feature_output": [
-                "_features_features_15_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643788678848_drop_level_output"
+                "_features_features_15_conv_conv_5_poly_PolyAct_output_0_refreshed140643788678848_drop_level_output"
             ],
             "level_cost": 7
         },
@@ -6710,7 +6710,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_15_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643788678848_drop_level_output"
+                "_features_features_15_conv_conv_5_poly_PolyAct_output_0_refreshed140643788678848_drop_level_output"
             ],
             "feature_output": [
                 "_features_features_15_conv_conv_6_Conv_output_0"
@@ -6823,8 +6823,8 @@
             ],
             "level_cost": -9
         },
-        "_features_features_16_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_16_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 960,
             "channel_output": 960,
             "ckks_parameter_id_input": "param0",
@@ -6833,9 +6833,9 @@
                 "_features_features_16_conv_conv_0_Conv_output_0_refreshed"
             ],
             "feature_output": [
-                "_features_features_16_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_16_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_16_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_16_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -6869,7 +6869,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_16_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_16_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_16_conv_conv_3_Conv_output_0"
@@ -6889,8 +6889,8 @@
             "level_cost": 1,
             "style": "multiplexed"
         },
-        "_features_features_16_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_16_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 960,
             "channel_output": 960,
             "ckks_parameter_id_input": "param0",
@@ -6899,9 +6899,9 @@
                 "_features_features_16_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_16_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_16_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_16_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_16_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -6935,7 +6935,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_16_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_16_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_16_conv_conv_6_Conv_output_0"
@@ -7020,8 +7020,8 @@
             "level_cost": 2,
             "style": "multiplexed"
         },
-        "_features_features_17_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_17_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 960,
             "channel_output": 960,
             "ckks_parameter_id_input": "param0",
@@ -7030,9 +7030,9 @@
                 "_features_features_17_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_17_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_17_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_17_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_17_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -7066,7 +7066,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_17_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_features_features_17_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_features_features_17_conv_conv_3_Conv_output_0"
@@ -7086,8 +7086,8 @@
             "level_cost": 1,
             "style": "multiplexed"
         },
-        "_features_features_17_conv_conv_5_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_features_features_17_conv_conv_5_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 960,
             "channel_output": 960,
             "ckks_parameter_id_input": "param0",
@@ -7096,9 +7096,9 @@
                 "_features_features_17_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
-                "_features_features_17_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_17_conv_conv_5_poly_PolyAct_output_0"
             ],
-            "weight_path": "_features_features_17_conv_conv_5_poly_SimplePolyrelu.weight",
+            "weight_path": "_features_features_17_conv_conv_5_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -7116,17 +7116,17 @@
                 1
             ]
         },
-        "_features_features_17_conv_conv_5_poly_SimplePolyrelu_output_0_bootstrap": {
+        "_features_features_17_conv_conv_5_poly_PolyAct_output_0_bootstrap": {
             "type": "bootstrapping",
             "channel_input": 960,
             "channel_output": 960,
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_17_conv_conv_5_poly_SimplePolyrelu_output_0"
+                "_features_features_17_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
-                "_features_features_17_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_17_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "level_cost": -8
         },
@@ -7137,10 +7137,10 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_17_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed"
+                "_features_features_17_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
             "feature_output": [
-                "_features_features_17_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643788833536_drop_level_output"
+                "_features_features_17_conv_conv_5_poly_PolyAct_output_0_refreshed140643788833536_drop_level_output"
             ],
             "level_cost": 1
         },
@@ -7160,7 +7160,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_features_features_17_conv_conv_5_poly_SimplePolyrelu_output_0_refreshed140643788833536_drop_level_output"
+                "_features_features_17_conv_conv_5_poly_PolyAct_output_0_refreshed140643788833536_drop_level_output"
             ],
             "feature_output": [
                 "_features_features_17_conv_conv_6_Conv_output_0"
@@ -7216,8 +7216,8 @@
             "level_cost": 2,
             "style": "multiplexed"
         },
-        "_conv_conv_2_poly_SimplePolyrelu": {
-            "type": "simple_polyrelu",
+        "_conv_conv_2_poly_PolyAct": {
+            "type": "polyact",
             "channel_input": 1280,
             "channel_output": 1280,
             "ckks_parameter_id_input": "param0",
@@ -7226,9 +7226,9 @@
                 "_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
-                "_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_conv_conv_2_poly_PolyAct_output_0"
             ],
-            "weight_path": "_conv_conv_2_poly_SimplePolyrelu.weight",
+            "weight_path": "_conv_conv_2_poly_PolyAct.weight",
             "zero_skip": [
                 1,
                 1
@@ -7261,7 +7261,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_conv_conv_2_poly_SimplePolyrelu_output_0"
+                "_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
                 "_avgpool_GlobalAveragePool_output_0"

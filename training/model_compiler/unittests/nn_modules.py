@@ -663,6 +663,33 @@ class SingleConv1dE2E(nn.Module):
         return x
 
 
+class DepthwiseConv1d(nn.Module):
+    """Depthwise Conv1d (groups=in_channels). Covers dw_conv1d."""
+
+    def __init__(self, channels=8, stride=1):
+        super().__init__()
+        self.conv0 = nn.Conv1d(channels, channels, kernel_size=3, bias=True, padding=1, stride=stride, groups=channels)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
+class Conv1dReshapeAndDense(nn.Module):
+    """Conv1d → Flatten → Dense pipeline."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv1d(in_channels=4, out_channels=4, kernel_size=3, bias=True, padding=1)
+        self.dense0 = nn.Linear(in_features=256, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = x.view(x.size(0), -1)
+        x = self.dense0(x)
+        return x
+
+
 class ConcatModel(nn.Module):
     """Two conv branches concatenated. Covers concat_layer."""
 
