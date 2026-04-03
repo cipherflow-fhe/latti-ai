@@ -259,11 +259,7 @@ void MultiplexedConv1DPackedLayer::prepare_weight() {
     }
 }
 
-<<<<<<< HEAD
-void ParMultiplexedConv1DPackedLayer::prepare_weight_for_lazy() {
-=======
 void MultiplexedConv1DPackedLayer::prepare_weight_for_lazy() {
->>>>>>> dev
     uint32_t half_kernel_shape = std::floor(kernel_shape / 2);
     // Generate kernel masks
     kernel_masks_.clear();
