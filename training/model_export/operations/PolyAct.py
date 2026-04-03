@@ -24,8 +24,8 @@ from onnx import NodeProto
 log = logging.getLogger(__name__)
 
 
-class Simple_PolyreluComputeNode(ComputeNode):
-    """Compute node for Simple_Polyrelu operation"""
+class PolyActComputeNode(ComputeNode):
+    """Compute node for PolyAct operation"""
 
     def __init__(
         self,
@@ -36,8 +36,8 @@ class Simple_PolyreluComputeNode(ComputeNode):
         module_path: str = '',
         degree: int = 4,
     ):
-        super(Simple_PolyreluComputeNode, self).__init__(layer_id, layer_type, feature_input, feature_output)
-        self.layer_type = 'simple_polyrelu'
+        super(PolyActComputeNode, self).__init__(layer_id, layer_type, feature_input, feature_output)
+        self.layer_type = 'polyact'
         self.module_path = module_path
         self.degree = degree
         feature_output[0].channel = feature_input[0].channel
@@ -48,9 +48,9 @@ class Simple_PolyreluComputeNode(ComputeNode):
         feature_output[0].skip = feature_input[0].skip
 
     @staticmethod
-    def from_onnx_node(x: NodeProto, features_nodes) -> 'Simple_PolyreluComputeNode':
+    def from_onnx_node(x: NodeProto, features_nodes) -> 'PolyActComputeNode':
         layer_id = format_id(x.name)
-        layer_type = 'simple_polyrelu'
+        layer_type = 'polyact'
         feature_input = [features_nodes[format_id(x.input[0])]]
         feature_output = [features_nodes[format_id(x.output[0])]]
 
@@ -72,17 +72,17 @@ class Simple_PolyreluComputeNode(ComputeNode):
             if attr.name == 'degree':
                 degree = attr.i
 
-        return Simple_PolyreluComputeNode(layer_id, layer_type, feature_input, feature_output, module_path, degree)
+        return PolyActComputeNode(layer_id, layer_type, feature_input, feature_output, module_path, degree)
 
     @override
     def to_torch_code(self) -> dict[str, list[str]]:
-        log.debug('Generating simple_polyrelu code')
+        log.debug('Generating polyact code')
         init_str, forward_str = [], []
         params_str = {}
         params_str['num_features'] = self.feature_input[0].channel
         params_str['num_tensors'] = 2
         params = dict_to_args(params_str)
-        init_str.append(f'self.{self.layer_id} = Simple_PolyreluComputeNode({params})')
+        init_str.append(f'self.{self.layer_id} = PolyActComputeNode({params})')
         return {'init': init_str, 'forward': forward_str}
 
     @override

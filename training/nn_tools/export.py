@@ -353,7 +353,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
     import numpy as np
     import h5py
     from .activations import RangeNormPoly2d as _RangeNormPoly2d
-    from .activations import Simple_Polyrelu as _Simple_Polyrelu
+    from .activations import PolyAct as _PolyAct
 
     sd = model.state_dict()
 
@@ -361,7 +361,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
         return sd[key].detach().cpu().numpy()
 
     # Collect leaf modules in traversal order
-    target_types = (nn.Conv2d, nn.Conv1d, nn.BatchNorm2d, _RangeNormPoly2d, _Simple_Polyrelu, nn.Linear)
+    target_types = (nn.Conv2d, nn.Conv1d, nn.BatchNorm2d, _RangeNormPoly2d, _PolyAct, nn.Linear)
     modules_list = [(name, mod) for name, mod in model.named_modules() if isinstance(mod, target_types)]
 
     fused = {}
@@ -406,7 +406,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
                 log.info('Poly coeffs:  %s  (%d coeffs x %d ch)', name, coeffs.shape[0], coeffs.shape[1])
             i += 1
 
-        elif isinstance(mod, _Simple_Polyrelu):
+        elif isinstance(mod, _PolyAct):
             # Determine channel count from preceding Conv/BN layer
             num_channels = 1
             for j in range(i - 1, -1, -1):
@@ -417,7 +417,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
                 elif isinstance(prev_mod, nn.Conv2d):
                     num_channels = prev_mod.out_channels
                     break
-            # Simple_Polyrelu has no per-channel normalization, equivalent to s = 1
+            # PolyAct has no per-channel normalization, equivalent to s = 1
             s = np.ones(num_channels)
             coeffs = _compute_poly_coeffs(s, 1.0, 0.0, mod.hermite_coeffs)
             fused[f'{name}.weight'] = coeffs.flatten()
