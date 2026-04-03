@@ -49,7 +49,7 @@ Conv1DPackedLayer::Conv1DPackedLayer(const CkksParameter& param_in,
 
 void Conv1DPackedLayer::prepare_weight() {
     uint32_t shape_ct = input_shape * skip;
-    uint32_t half_kernel_shape = kernel_shape / 2;
+    uint32_t half_kernel_shape = std::floor(kernel_shape / 2);
     uint32_t slot_count = div_ceil(param_.get_n(), 2);
     vector<vector<double>> kernel_mask(kernel_shape);
 
@@ -141,7 +141,7 @@ void Conv1DPackedLayer::prepare_weight() {
 }
 
 void Conv1DPackedLayer::prepare_weight_lazy() {
-    uint32_t half_kernel_shape = kernel_shape / 2;
+    uint32_t half_kernel_shape = std::floor(kernel_shape / 2);
     uint32_t shape_ct = input_shape * skip;
 
     // Generate kernel masks
