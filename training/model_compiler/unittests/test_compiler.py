@@ -992,6 +992,14 @@ class TestE2EMultipleLayer(CompilerTestBase):
         )
         self.assertTrue(check_dropped_levels_per_subgraph(graph))
 
+    def test_e2e_conv1d_reshape_dense(self):
+        """Conv1d → Flatten → Dense pipeline, multiplexed."""
+        model = nn_modules.Conv1dReshapeAndDense()
+        graph, score = self._export_compile_and_deploy(
+            model, (1, 4, 64), 'conv1d_reshape_dense', style='multiplexed', do_constant_folding=True
+        )
+        self.assertTrue(check_reshape_sp_info_propagation(graph))
+
     # ── No-BTP tests (poly_n=8192) ──
 
     def test_e2e_poly_n_8192(self):
