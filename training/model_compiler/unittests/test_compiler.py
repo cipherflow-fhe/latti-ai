@@ -1100,10 +1100,10 @@ class TestE2EMultipleLayer(CompilerTestBase):
         self.assertIsNotNone(graph)
 
     def test_e2e_mux_conv_large_channel(self):
-        """Conv1d → Reshape → Dense pipeline."""
-        model = nn_modules.Conv1dReshapeAndDense()
+        """Large-channel conv triggering multiplexed. Covers mux_conv_varied_*."""
+        model = nn_modules.MuxConvLargeChannel()
         graph, score = self._export_compile_and_deploy(
-            model, (1, 4, 64), 'conv1d_reshape_dense', style='multiplexed', do_constant_folding=True
+            model, (1, 32, 32, 32), 'mux_conv_large_channel', style='multiplexed'
         )
         self.assertIsNotNone(graph)
 

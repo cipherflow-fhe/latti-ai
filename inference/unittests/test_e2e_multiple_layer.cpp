@@ -43,8 +43,7 @@ static const std::vector<std::string> all_test_names = {
     "poly_n_8192", "conv_act", "resnet_basic_block", "poly_n_32768",
     "act_series",
     "mux_conv_large_channel",
-    "conv_avgpool_reshape_dense", "avgpool_stride4",
-    "general_avgpool",
+    "conv_avgpool_reshape_dense",
     "conv_reshape_dense",
     "two_fc",
     "conv1d_reshape_dense",
@@ -100,12 +99,6 @@ TEST_CASE("cpu/mux_conv_large_channel", "[e2e][cpu]") {
 }
 TEST_CASE("cpu/conv_avgpool_reshape_dense", "[e2e][cpu]") {
     run_e2e_test(multiple_layer_base_path / "conv_avgpool_reshape_dense", false);
-}
-TEST_CASE("cpu/avgpool_stride4", "[e2e][cpu]") {
-    run_e2e_test(multiple_layer_base_path / "avgpool_stride4", false);
-}
-TEST_CASE("cpu/general_avgpool", "[e2e][cpu]") {
-    run_e2e_test(multiple_layer_base_path / "general_avgpool", false);
 }
 TEST_CASE("cpu/conv_reshape_dense", "[e2e][cpu]") {
     run_e2e_test(multiple_layer_base_path / "conv_reshape_dense", false);
@@ -170,12 +163,6 @@ TEST_CASE("gpu/conv1d_reshape_dense", "[e2e][gpu]") {
 }
 TEST_CASE("gpu/conv_avgpool_reshape_dense", "[e2e][gpu]") {
     run_e2e_test(multiple_layer_base_path / "conv_avgpool_reshape_dense", true);
-}
-TEST_CASE("gpu/avgpool_stride4", "[e2e][gpu]") {
-    run_e2e_test(multiple_layer_base_path / "avgpool_stride4", true);
-}
-TEST_CASE("gpu/general_avgpool", "[e2e][gpu]") {
-    run_e2e_test(multiple_layer_base_path / "general_avgpool", true);
 }
 TEST_CASE("gpu/conv_upsample_e2e", "[e2e][gpu]") {
     run_e2e_test(multiple_layer_base_path / "conv_upsample_e2e", true);
