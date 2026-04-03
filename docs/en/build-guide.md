@@ -28,7 +28,7 @@ This document contains the complete build and installation guide for the Latti-A
 | Dependency | Version | Description |
 |------------|---------|-------------|
 | CUDA Toolkit | >= 12.0 | GPU compute support |
-| HEonGPU | 1.1 | GPU acceleration library (requires pre-build)|
+| HEonGPU | 1.1 | GPU acceleration library (auto-built during cmake configure) |
 
 ---
 
@@ -56,28 +56,22 @@ git clone --recursive https://github.com/cipherflow-fhe/latti-ai.git  # This may
 cd latti-ai
 ```
 
-### Step 2: Build and install HEonGPU (GPU Acceleration Library)
+### Step 2: Build Project
 
-> If the build hangs at `-- CPM: Adding package CCCL@2.5.0`, see [CCCL Package Hangs](#cccl-package-hangs).
-
-> If compilation fails with a missing `cstdint` header, see [Missing cstdint Header](#missing-cstdint-header).
+HEonGPU is built automatically during cmake configure if not already installed.
 
 ```bash
-cd inference/lattisense/HEonGPU
-cmake -B build \
-  -DCMAKE_CUDA_ARCHITECTURES=<arch> \
-  -DCMAKE_CUDA_COMPILER=<path/to/cuda>/bin/nvcc \
-  -DCMAKE_INSTALL_PREFIX=<path/to/HEonGPU>/install
-cmake --build build --parallel $(nproc) --target install
-```
-
-### Step 3: Build Project
-
-```bash
-cd ../../..  # Return to project root
 cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=<arch>
 cmake --build build -j$(nproc)
 ```
+
+> **Slow CCCL download?** Use a mirror to speed up the first build:
+> ```bash
+> cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=<arch> \
+>   -DHEONGPU_CCCL_GIT_URL=https://gitee.com/nvidia_mirror/cccl.git
+> ```
+>
+> If compilation fails with a missing `cstdint` header, see [Missing cstdint Header](#missing-cstdint-header).
 
 ---
 
@@ -87,7 +81,7 @@ cmake --build build -j$(nproc)
 |--------|---------|-------------|
 | `INFERENCE_SDK_ENABLE_GPU` | OFF | Enable GPU acceleration |
 | `LATTISENSE_CUDA_ARCH` | - | CUDA architecture code (required for GPU build) |
-
+| `HEONGPU_CCCL_GIT_URL` | (none) | Override CCCL git URL (e.g. gitee mirror for faster download in China) |
 
 Example:
 ```bash
@@ -138,10 +132,18 @@ latti-ai/
 
 ### CCCL Package Hangs
 
-If the build hangs at `-- CPM: Adding package CCCL@2.5.0`:
-1. Edit `build/_deps/rapids-cmake-src/rapids-cmake/cpm/versions.json`
-2. Change line 16 `git_url` to: `"git_url": "https://gitee.com/Vizl/cccl.git"`
-3. Re-run the cmake command
+If the build hangs at `Adding package CCCL@2.5.0`, use a CCCL mirror:
+
+```bash
+cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=<arch> \
+  -DHEONGPU_CCCL_GIT_URL=https://gitee.com/nvidia_mirror/cccl.git
+```
+
+You can also set `CPM_SOURCE_CACHE` to avoid re-downloading on rebuilds:
+
+```bash
+export CPM_SOURCE_CACHE="$HOME/.cache/cpm"
+```
 
 ### Missing cstdint Header
 

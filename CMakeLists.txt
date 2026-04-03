@@ -21,6 +21,11 @@ message(STATUS "INFERENCE_SDK_ENABLE_GPU: ${INFERENCE_SDK_ENABLE_GPU}")
 
 # Configure lattisense options before add_subdirectory
 set(LATTISENSE_ENABLE_GPU ${INFERENCE_SDK_ENABLE_GPU} CACHE BOOL "Enable GPU in lattisense" FORCE)
+
+# Forward HEONGPU_CCCL_GIT_URL to lattisense (optional CCCL mirror for faster downloads)
+if(DEFINED HEONGPU_CCCL_GIT_URL)
+    set(HEONGPU_CCCL_GIT_URL "${HEONGPU_CCCL_GIT_URL}" CACHE STRING "CCCL git mirror URL for HEonGPU" FORCE)
+endif()
 set(LATTISENSE_BUILD_MODE "SHARED" CACHE STRING "Lattisense build mode" FORCE)
 set(LATTISENSE_BUILD_TESTS OFF CACHE BOOL "Build lattisense unit tests" FORCE)
 
