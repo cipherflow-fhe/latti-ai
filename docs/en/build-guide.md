@@ -18,8 +18,8 @@ This document contains the complete build and installation guide for the Latti-A
 
 | Dependency | Version | Description |
 |------------|---------|-------------|
-| CMake | >= 3.13 | Build system |
-| C++ Compiler | GCC 12  | C++17/20 support required |
+| CMake | >= 3.26.4 | Build system |
+| C++ Compiler | GCC >= 9  | C++17 support required |
 | Go | >= 1.18 | For building Lattigo crypto library |
 | Python | >=3.10 | For computation graph compiler |
 
