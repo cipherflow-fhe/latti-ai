@@ -939,7 +939,9 @@ class TestE2ESingleLayer(CompilerTestBase):
                     test_name = f'conv2d_s{stride[0]}_k{kernel_size}_cin1_cout1_{input_shape[0]}x{input_shape[1]}'
                     with self.subTest(test_name=test_name):
                         model = nn_modules.MultiChannelConv(1, 1, stride=stride[0], kernel_size=kernel_size)
-                        self._export_compile_and_deploy(model, (1, 1, *input_shape), test_name)
+                        graph, score = self._export_compile_and_deploy(model, (1, 1, *input_shape), test_name)
+                        # Single conv should be 1 level with smallest poly degree
+                        self.assertEqual(self._max_feature_level(graph), 1)
             # Multi-channel tests (includes former test_conv, test_conv_mch_s1/s2 configs)
             configs = [
                 (32, 32, (8, 8)),  # was test_conv
@@ -954,12 +956,13 @@ class TestE2ESingleLayer(CompilerTestBase):
                 test_name = f'conv2d_s{stride[0]}_k3_cin{in_ch}_cout{out_ch}_{input_shape[0]}x{input_shape[1]}'
                 with self.subTest(test_name=test_name):
                     model = nn_modules.MultiChannelConv(in_ch, out_ch, stride=stride[0], kernel_size=3)
-                    self._export_compile_and_deploy(model, (1, in_ch, *input_shape), test_name)
+                    graph, score = self._export_compile_and_deploy(model, (1, in_ch, *input_shape), test_name)
+                    self.assertEqual(self._max_feature_level(graph), 1)
 
     # ── Conv2d depthwise ──
 
     def test_conv2d_depthwise(self):
-        """Depthwise Conv2d, parameter sweep from test_gen_layers."""
+        """Depthwise Conv2d (multiplexed), parameter sweep from test_gen_layers."""
         for stride in [(1, 1), (2, 2)]:
             for channels in [4, 8, 32]:
                 for input_shape in [(16, 16), (32, 32)]:
@@ -972,6 +975,16 @@ class TestE2ESingleLayer(CompilerTestBase):
                             self._export_compile_and_deploy(
                                 model, (1, channels, *input_shape), test_name, style='multiplexed'
                             )
+
+    def test_conv2d_depthwise_ordinary(self):
+        """Depthwise Conv2d (ordinary packing), parameter sweep."""
+        for stride in [(1, 1), (2, 2)]:
+            for channels in [4, 8, 32]:
+                for kernel_size in [1, 3, 5]:
+                    test_name = f'dw_conv2d_ordinary_s{stride[0]}_k{kernel_size}_ch{channels}'
+                    with self.subTest(test_name=test_name):
+                        model = nn_modules.DepthwiseConv(channels, stride=stride[0], kernel_size=kernel_size)
+                        self._export_compile_and_deploy(model, (1, channels, 32, 32), test_name, style='ordinary')
 
     # ── Mux Conv2d ──
 
