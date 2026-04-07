@@ -440,6 +440,17 @@ class CompilerTestBase(unittest.TestCase):
         temp_onnx.unlink(missing_ok=True)
         temp_json.unlink(missing_ok=True)
 
+        # Update test manifest (append test_name so C++ auto-discovers only valid tests)
+        manifest_path = self.e2e_base_path / 'test_manifest.json'
+        if manifest_path.exists():
+            with open(manifest_path, 'r') as f:
+                manifest = set(json.load(f))
+        else:
+            manifest = set()
+        manifest.add(test_name)
+        with open(manifest_path, 'w') as f:
+            json.dump(sorted(manifest), f, indent=2)
+
         print(f'  [E2E] {test_name} -> {server_dir}')
         return graph, score
 
@@ -956,6 +967,129 @@ class TestE2ESingleLayer(CompilerTestBase):
         """Reshape → poly_n=8192, no BTP."""
         model = nn_modules.SingleReshape()
         self._export_compile_and_deploy(model, (1, 16, 4, 4), 'single_reshape')
+
+    # ── Parameter sweep tests (mirroring test_gen_layers.py coverage) ──
+
+    # ── Conv2d ordinary packing (照搬 test_conv2d_packed 参数) ──
+
+    def test_conv2d_packed(self):
+        """Conv2d ordinary packing, parameter sweep from test_gen_layers."""
+        for stride in [(1, 1), (2, 2)]:
+            # Single-channel tests
+            input_shapes = [(4, 4), (8, 8), (16, 16), (32, 32)] if stride == (1, 1) else [(32, 32)]
+            for input_shape in input_shapes:
+                for kernel_size in [1, 3, 5]:
+                    test_name = f'conv2d_s{stride[0]}_k{kernel_size}_cin1_cout1_{input_shape[0]}x{input_shape[1]}'
+                    with self.subTest(test_name=test_name):
+                        model = nn_modules.MultiChannelConv(1, 1, stride=stride[0], kernel_size=kernel_size)
+                        self._export_compile_and_deploy(model, (1, 1, *input_shape), test_name)
+            # Multi-channel tests
+            for in_ch in [3, 4, 16]:
+                for out_ch in [3, 4, 32]:
+                    test_name = f'conv2d_s{stride[0]}_k3_cin{in_ch}_cout{out_ch}'
+                    with self.subTest(test_name=test_name):
+                        model = nn_modules.MultiChannelConv(in_ch, out_ch, stride=stride[0], kernel_size=3)
+                        self._export_compile_and_deploy(model, (1, in_ch, 32, 32), test_name)
+
+    # ── Conv2d depthwise (照搬 test_conv2d_depthwise 参数) ──
+
+    def test_conv2d_depthwise(self):
+        """Depthwise Conv2d, parameter sweep from test_gen_layers."""
+        for stride in [(1, 1), (2, 2)]:
+            for channels in [4, 8, 32]:
+                for input_shape in [(16, 16), (32, 32)]:
+                    for kernel_size in [1, 3, 5]:
+                        test_name = (
+                            f'dw_conv2d_s{stride[0]}_k{kernel_size}_ch{channels}_{input_shape[0]}x{input_shape[1]}'
+                        )
+                        with self.subTest(test_name=test_name):
+                            model = nn_modules.DepthwiseConv(channels, stride=stride[0], kernel_size=kernel_size)
+                            self._export_compile_and_deploy(
+                                model, (1, channels, *input_shape), test_name, style='multiplexed'
+                            )
+
+    # ── Mux Conv2d (照搬 test_mux_conv2d_packed 参数) ──
+
+    def test_mux_conv2d_packed(self):
+        """Multiplexed Conv2d, parameter sweep from test_gen_layers."""
+        # Varied channels
+        for in_ch in [3, 4, 16]:
+            for out_ch in [3, 4, 32]:
+                test_name = f'mux_conv2d_cin{in_ch}_cout{out_ch}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.MultiChannelConv(in_ch, out_ch, stride=1, kernel_size=3)
+                    self._export_compile_and_deploy(model, (1, in_ch, 32, 32), test_name, style='multiplexed')
+        # Varied kernel sizes
+        for kernel_size in [1, 3, 5]:
+            test_name = f'mux_conv2d_k{kernel_size}'
+            with self.subTest(test_name=test_name):
+                model = nn_modules.MultiChannelConv(32, 32, stride=1, kernel_size=kernel_size)
+                self._export_compile_and_deploy(model, (1, 32, 32, 32), test_name, style='multiplexed')
+
+    # ── Conv1d (照搬 test_conv1d_layer 参数) ──
+
+    def test_conv1d_params(self):
+        """Conv1d ordinary, parameter sweep from test_gen_layers."""
+        for stride in [1, 2]:
+            for input_shape in [32, 64]:
+                test_name = f'conv1d_s{stride}_len{input_shape}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.SingleConv1dE2E(in_channels=4, out_channels=4, stride=stride)
+                    self._export_compile_and_deploy(model, (1, 4, input_shape), test_name)
+
+    # ── Avgpool2d (照搬 test_avgpool2d_layer 参数) ──
+
+    def test_avgpool2d_params(self):
+        """Avgpool2d, parameter sweep from test_gen_layers."""
+        for stride in [2, 4, 8]:
+            for shape in [8, 16, 32]:
+                if shape < stride:
+                    continue
+                test_name = f'avgpool2d_s{stride}_{shape}x{shape}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.SingleAvgpool2d(kernel_size=stride, stride=stride)
+                    self._export_compile_and_deploy(model, (1, 32, shape, shape), test_name, style='multiplexed')
+
+    # ── Adaptive Avgpool2d (照搬 test_adaptive_avgpool2d_layer 参数) ──
+
+    def test_adaptive_avgpool2d(self):
+        """Adaptive AvgPool2d, parameter sweep from test_gen_layers."""
+        for stride in [2, 4]:
+            for shape in [8, 16, 32]:
+                if shape < stride:
+                    continue
+                output_size = shape // stride
+                test_name = f'adaptive_avgpool2d_s{stride}_{shape}x{shape}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.SingleAdaptiveAvgpool2d(output_size=(output_size, output_size))
+                    self._export_compile_and_deploy(model, (1, 32, shape, shape), test_name, style='multiplexed')
+
+    # ── Avgpool1d (照搬 test_avgpool1d_layer 参数) ──
+
+    def test_avgpool1d_params(self):
+        """Avgpool1d, parameter sweep from test_gen_layers."""
+        for stride in [2, 4, 8]:
+            for shape in [8, 16, 32]:
+                if shape < stride:
+                    continue
+                test_name = f'avgpool1d_s{stride}_len{shape}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.SingleAvgpool1d(kernel_size=stride, stride=stride)
+                    self._export_compile_and_deploy(model, (1, 32, shape), test_name, style='multiplexed')
+
+    # ── Adaptive Avgpool1d (照搬 test_adaptive_avgpool1d_layer 参数) ──
+
+    def test_adaptive_avgpool1d(self):
+        """Adaptive AvgPool1d, parameter sweep from test_gen_layers."""
+        for stride in [2, 4]:
+            for shape in [8, 16, 32]:
+                if shape < stride:
+                    continue
+                output_size = shape // stride
+                test_name = f'adaptive_avgpool1d_s{stride}_len{shape}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.SingleAdaptiveAvgpool1d(output_size=output_size)
+                    self._export_compile_and_deploy(model, (1, 32, shape), test_name, style='multiplexed')
 
 
 class TestE2EMultipleLayer(CompilerTestBase):
