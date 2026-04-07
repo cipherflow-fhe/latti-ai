@@ -23,7 +23,7 @@ from inference.lattisense.frontend.custom_task import *
 
 import numpy as np
 
-op_class = 'MultConv2DPackedDepthwiseLayer'
+op_class = 'MultiplexedConv2DPackedLayerDepthwise'
 
 
 class MultiplexedConv2DPackedLayerDepthwise:

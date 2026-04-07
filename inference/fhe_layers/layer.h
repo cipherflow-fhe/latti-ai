@@ -21,7 +21,7 @@
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include "util.h"
 
-namespace ls = cxx_sdk_v2;
+namespace ls = lattisense;
 
 class Layer {
 public:

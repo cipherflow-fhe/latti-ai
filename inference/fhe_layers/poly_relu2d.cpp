@@ -23,7 +23,7 @@
 #include <functional>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 PolyRelu2D::PolyRelu2D(const CkksParameter& param_in,
                        const Duo& input_shape_in,
@@ -192,8 +192,8 @@ PolyRelu2D::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx,
             }
         }
     } else {
-        pack_scale = cached_coeff_scale.at(idx);
-        target_level = cached_level_order.at(idx);
+        pack_scale = cached_bsgs_coeff_scale.at(idx);
+        target_level = cached_bsgs_level_order.at(idx);
     }
     auto result = ctx.encode_ringt(feature_tmp_pack, pack_scale);
     return result;
