@@ -63,7 +63,7 @@
 #include <lattisense/lib/nlohmann/json.hpp>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 namespace fs = std::filesystem;
 
 fs::path base_path = "../hetero";

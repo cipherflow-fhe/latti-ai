@@ -24,7 +24,7 @@ from inference.model_generator.layers.poly_relu_base import PolyReluBase
 
 import numpy as np
 
-op_class = 'PolyReluLayer'
+op_class = 'PolyRelu2D'
 
 
 class PolyRelu2D(PolyReluBase):

@@ -23,7 +23,7 @@
 #include "util.h"
 #include "fhe_layers/fhe_layers.h"
 
-namespace ls = cxx_sdk_v2;
+namespace ls = lattisense;
 
 enum class ComputeDevice { CPU, GPU, FPGA };
 
@@ -231,10 +231,18 @@ public:
     void run_task(bool is_mpc = false);
     void run_task_sdk(bool is_mpc = false);
     void run_task_plaintext(bool is_mpc = false);
+    void run_task_lazy(bool is_mpc = false);
 
     void set_feature(const std::string& feature_id, std::unique_ptr<FeatureEncrypted> feature);
     const FeatureEncrypted& get_feature(const std::string& feature_id);
     Feature0DEncrypted get_ciphertext_output_feature0D(const std::string& feature_id);
     Feature1DEncrypted get_ciphertext_output_feature1D(const std::string& feature_id);
     Feature2DEncrypted get_ciphertext_output_feature2D(const std::string& feature_id);
+
+private:
+    // Prepare CustomData wrappers for all layer objects (keyed by layer_id)
+    std::vector<std::pair<std::string, fhe_ops_lib::CustomData>> prepare_layer_data_sources();
+
+    // Register the encode_pt custom executor
+    void register_custom_executors(std::unordered_map<std::string, ExecutorFunc>& executors);
 };

@@ -19,7 +19,7 @@
 #include "avgpool2d_layer.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 Avgpool2DLayer::Avgpool2DLayer(const Duo& shape_in, const Duo& stride_in) : n_block_per_ct(0) {
     shape[0] = shape_in[0];
@@ -158,12 +158,12 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         result_ct[idx] = x.data[idx].copy();
         for (int i = log2_stride_0 - 1; i >= 0; --i) {
-            cxx_sdk_v2::CkksCiphertext ct_tmp =
+            lattisense::CkksCiphertext ct_tmp =
                 ctx_copy.rotate(result_ct[idx], pow(2, i) * shape[1] * skip[0] * skip[1]);
             result_ct[idx] = ctx_copy.add(result_ct[idx], ct_tmp);
         }
         for (int j = log2_stride_1 - 1; j >= 0; --j) {
-            cxx_sdk_v2::CkksCiphertext ct_tmp = ctx_copy.rotate(result_ct[idx], pow(2, j) * skip[1]);
+            lattisense::CkksCiphertext ct_tmp = ctx_copy.rotate(result_ct[idx], pow(2, j) * skip[1]);
             result_ct[idx] = ctx_copy.add(result_ct[idx], ct_tmp);
         }
         vector<int32_t> steps;
@@ -184,12 +184,12 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
             int32_t r_num = -r_num0 - r_num1 - r_num2 + l_num0 + l_num1 + l_num2;
             steps.push_back(r_num);
         }
-        std::map<int32_t, cxx_sdk_v2::CkksCiphertext> s_rots = ctx_copy.rotate(result_ct[idx], steps);
+        std::map<int32_t, lattisense::CkksCiphertext> s_rots = ctx_copy.rotate(result_ct[idx], steps);
         for (uint32_t i = 0; i < n_valid; i++) {
             int out_channel_pos = (idx * x.n_channel_per_ct + i) % (x.n_channel_per_ct * stride[0] * stride[1]);
             auto& pt_ringt = select_tensor_pt[out_channel_pos];
             auto pt = ctx_copy.ringt_to_mul(pt_ringt, level_);
-            cxx_sdk_v2::CkksCiphertext c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], pt);
+            lattisense::CkksCiphertext c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], pt);
             result_tmp[idx * x.n_channel_per_ct + i] =
                 move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
         }
@@ -199,7 +199,7 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
     CkksCiphertext sp;
     for (int i = 0; i < x.n_channel; i++) {
         int p = i % (stride[0] * stride[1] * x.n_channel_per_ct);
-        cxx_sdk_v2::CkksCiphertext c_m_s = result_tmp[i].copy();
+        lattisense::CkksCiphertext c_m_s = result_tmp[i].copy();
         if (p == 0) {
             sp = move(c_m_s);
         } else {

@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
 
-op_class = 'InverseMultiplexedDepthwiseConv2d'
+op_class = 'InverseMultiplexedConv2DLayerDepthwise'
 
 
 class InverseMultiplexedDepthwiseConv2DLayer:

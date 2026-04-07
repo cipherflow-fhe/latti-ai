@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.poly_relu_base import PolyReluBase
 
-op_class = 'PolyRelu1DLayer'
+op_class = 'PolyRelu1D'
 
 
 class PolyRelu1D(PolyReluBase):

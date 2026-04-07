@@ -21,7 +21,7 @@
 
 #include "interface/inference_server.h"
 
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 InferenceServer::InferenceServer(const std::string& server_dir, bool use_gpu)
     : server_dir_(server_dir), use_gpu_(use_gpu) {}
@@ -92,7 +92,7 @@ void InferenceServer::load_model() {
 
     init_ = std::make_unique<InitInferenceProcess>(server_dir_.string() + "/", false);
     init_->init_parameters(needs_btp_);
-    init_->is_lazy = false;
+    init_->is_lazy = true;
     init_->load_model_prepare();
 
     fp_ = std::make_unique<InferenceProcess>(init_.get(), true);
@@ -143,7 +143,7 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
     std::cout << "[Server] Device: " << (use_gpu_ ? "GPU" : "CPU") << std::endl;
     Timer timer;
     timer.start();
-    fp_->run_task();
+    fp_->run_task_lazy();
     timer.stop();
     timer.print("Encrypted inference time");
     std::cout << "[Server] Done." << std::endl;

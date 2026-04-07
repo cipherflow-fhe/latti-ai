@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
 
-op_class = 'Conv2DepthwiseLayer'
+op_class = 'Conv2DPackedDepthwiseLayer'
 
 
 class Conv2DPackedDepthwiseLayer:

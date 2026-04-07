@@ -22,7 +22,7 @@
 #include "multiplexed_conv2d_pack_layer.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 CkksCiphertext sum_slot(CkksContext& ctx, CkksCiphertext& x, uint32_t m, uint32_t p) {
     CkksCiphertext result = x.copy();
@@ -430,14 +430,138 @@ void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation_lazy() 
     }
 }
 
-CkksPlaintextRingt
-MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const {
-    // Extract indices from j
+void MultiplexedConv2DPackedLayer::prepare_weight_for_reduct_rot_lazy() {
+    uint32_t pad0 = std::floor(kernel_shape_[0] / 2);
+    uint32_t pad1 = std::floor(kernel_shape_[1] / 2);
+
+    uint32_t padding_shape[] = {pad0, pad1};
+    uint32_t input_shape_ct[2];
+    input_shape_ct[0] = input_shape_[0] * skip_[0];
+    input_shape_ct[1] = input_shape_[1] * skip_[1];
+
+    // Cache values shared with post_skip_rotation_lazy
+    cached_input_shape_ct[0] = input_shape_ct[0];
+    cached_input_shape_ct[1] = input_shape_ct[1];
+    cached_input_block_size = input_shape_ct[0] * input_shape_ct[1];
+    cached_kernel_size = kernel_shape_[0] * kernel_shape_[1];
+    cached_total_skip = skip_[0] * skip_[1];
+
+    cached_bias_skip[0] = zero_inserted_skip[0];
+    cached_bias_skip[1] = zero_inserted_skip[1];
+    cached_skip_prod = cached_bias_skip[0] * cached_bias_skip[1];
+    cached_bias_n_channel_per_ct =
+        n_channel_per_ct * stride_[0] * stride_[1] / (upsample_factor[0] * upsample_factor[1]);
+    cached_total_block_size = n_block_per_ct * input_shape_[0] * skip_[0] * input_shape_[1] * skip_[1];
+
+    // reduct_rot specific
+    cached_skip_out_prod = (skip_[0] * stride_[0] / upsample_factor[0]) * (skip_[1] * stride_[1] / upsample_factor[1]);
+
+    bias_level_down = (stride_[0] == 1 && stride_[1] == 1 && skip_[0] == 1 && skip_[1] == 1) ? 1 : 2;
+
+    kernel_masks_.clear();
+    for (int i = 0; i < kernel_shape_[0]; i++) {
+        for (int j = 0; j < kernel_shape_[1]; j++) {
+            vector<double> mask;
+            mask.reserve(input_shape_ct[0] * input_shape_ct[1]);
+            for (int i_s = 0; i_s < (int)input_shape_ct[0]; i_s++) {
+                for (int j_s = 0; j_s < (int)input_shape_ct[1]; j_s++) {
+                    if (i * skip_[0] + i_s - padding_shape[0] * skip_[0] >= 0 &&
+                        i * skip_[0] + i_s - padding_shape[0] * skip_[0] < (int)input_shape_ct[0] &&
+                        j * skip_[1] + j_s - padding_shape[1] * skip_[1] >= 0 &&
+                        j * skip_[1] + j_s - padding_shape[1] * skip_[1] < (int)input_shape_ct[1]) {
+                        mask.push_back(1.0);
+                    } else {
+                        mask.push_back(0.0);
+                    }
+                }
+            }
+            kernel_masks_.push_back(mask);
+        }
+    }
+
+    input_rotate_units_.clear();
+    input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
+    input_rotate_units_.push_back(skip_[1] * 1);
+
+    use_reduct_rot = true;
+}
+
+CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_reduct_rot(CkksContext& ctx,
+                                                                                           int ct_idx,
+                                                                                           int j,
+                                                                                           int k) const {
+    // ct_idx = output_ct_group * skip_out_prod + sub_pos
+    uint32_t sub_pos = ct_idx % cached_skip_out_prod;
+    uint32_t output_ct_group = ct_idx / cached_skip_out_prod;
+
     int packed_in_channel_idx = j / n_block_per_ct;
     int block_idx = j % n_block_per_ct;
     int kernel_idx = k;
 
-    // Use cached values
+    auto& mask = kernel_masks_[kernel_idx];
+    int base_channel_in = packed_in_channel_idx * n_channel_per_ct;
+    int total_skip = skip_[0] * skip_[1];
+
+    vector<double> w(N / 2, 0.0);
+    for (int linear_idx = 0; linear_idx < n_block_per_ct * cached_input_block_size; ++linear_idx) {
+        int t = linear_idx / cached_input_block_size;
+        int shape_linear = linear_idx % cached_input_block_size;
+        int shape_i = shape_linear / cached_input_shape_ct[1];
+        int shape_j = shape_linear % cached_input_shape_ct[1];
+        int kernel_shape_i = kernel_idx / kernel_shape_[1];
+        int kernel_shape_j = kernel_idx % kernel_shape_[1];
+
+        uint32_t channel_in = base_channel_in + (block_idx * total_skip + t * total_skip + (shape_j % skip_[1]) +
+                                                 (shape_i % skip_[0]) * skip_[1]) %
+                                                    n_channel_per_ct;
+        uint32_t channel_out = output_ct_group * n_block_per_ct * cached_skip_out_prod +
+                               ((t + n_block_per_ct) % n_block_per_ct) * cached_skip_out_prod + sub_pos;
+
+        w[linear_idx] = (channel_in >= n_in_channel_ || channel_out >= n_out_channel_) ?
+                            0 :
+                            weight_.get(channel_out, channel_in, kernel_shape_i, kernel_shape_j) *
+                                mask[shape_i * cached_input_shape_ct[1] + shape_j];
+    }
+    return ctx.encode_ringt(w, weight_scale);
+}
+
+CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_bias_pt_for_index_reduct_rot(CkksContext& ctx,
+                                                                                       int bpt_idx) const {
+    // Same layout as post_skip bias: indexed by n_packed_out_channel
+    vector<double> bias_vec(N / 2, 0.0);
+    for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
+        int j = linear_idx / (input_shape_[0] * skip_[0] * input_shape_[1] * skip_[1]);
+        int residual = linear_idx % (input_shape_[0] * skip_[0] * input_shape_[1] * skip_[1]);
+        int h = residual / (input_shape_[1] * skip_[1]);
+        int k = residual % (input_shape_[1] * skip_[1]);
+
+        int channel = bpt_idx * cached_bias_n_channel_per_ct + j * cached_skip_prod +
+                      cached_bias_skip[1] * (h % cached_bias_skip[0]) + k % cached_bias_skip[1];
+        if (channel >= n_out_channel_ || (h % (stride_[0] * skip_[0])) >= cached_bias_skip[0] ||
+            (k % (stride_[1] * skip_[1])) >= cached_bias_skip[1])
+            continue;
+
+        int index = j * (input_shape_[0] * skip_[0] * input_shape_[1] * skip_[1]) + h * input_shape_[1] * skip_[1] + k;
+        bias_vec[index] = bias_.get(channel);
+    }
+    return ctx.encode_ringt(bias_vec, ctx.get_parameter().get_default_scale());
+}
+
+CkksPlaintextRingt
+MultiplexedConv2DPackedLayer::generate_mask_pt_for_indices_reduct_rot(CkksContext& ctx, int ct_idx, int i) const {
+    // In reduct_rot, block i of ct_idx has channel_local = i * skip_out_prod + sub_pos
+    uint32_t sub_pos = ct_idx % cached_skip_out_prod;
+    uint32_t channel_local = i * cached_skip_out_prod + sub_pos;
+    auto si = select_tensor(channel_local);
+    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_ - 1));
+}
+
+CkksPlaintextRingt
+MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const {
+    int packed_in_channel_idx = j / n_block_per_ct;
+    int block_idx = j % n_block_per_ct;
+    int kernel_idx = k;
+
     auto& mask = kernel_masks_[kernel_idx];
     vector<double> w(N / 2, 0.0);
     int base_channel_in = packed_in_channel_idx * n_channel_per_ct;
@@ -460,7 +584,6 @@ MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, i
                             weight_.get(channel_out, channel_in, kernel_shape_i, kernel_shape_j) *
                                 mask[shape_i * cached_input_shape_ct[1] + shape_j];
     }
-
     return ctx.encode_ringt(w, weight_scale);
 }
 
@@ -522,7 +645,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core(CkksContext& ctx, 
     }
 
     int rotated_size = input_rotated_x_skip.size();
-    std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(rotated_size);
+    std::vector<std::vector<lattisense::CkksCiphertext>> rotated_x(rotated_size);
     parallel_for(rotated_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<CkksCiphertext> rotations = populate_rotations_2_sides(ctx_copy, input_rotated_x_skip[ct_idx],
                                                                       kernel_shape_[0], input_rotate_units_[0]);
@@ -610,7 +733,7 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
     }
 
     int rotated_size = input_rotated_x.size();
-    std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(rotated_size);
+    std::vector<std::vector<lattisense::CkksCiphertext>> rotated_x(rotated_size);
     parallel_for(rotated_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<CkksCiphertext> rotations =
             populate_rotations_2_sides(ctx_copy, input_rotated_x[ct_idx], kernel_shape_[0], input_rotate_units_[0]);
@@ -764,7 +887,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core_for_reduct_rot(Ckk
 
     // 2. Kernel direction rotations (same as post_skip)
     int rotated_size = input_rotated_x.size();
-    std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(rotated_size);
+    std::vector<std::vector<lattisense::CkksCiphertext>> rotated_x(rotated_size);
     parallel_for(rotated_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<CkksCiphertext> rotations =
             populate_rotations_2_sides(ctx_copy, input_rotated_x[ct_idx], kernel_shape_[0], input_rotate_units_[0]);

@@ -350,6 +350,63 @@ class DensePackedLayer:
             result.append(s)
         return result
 
+    def call_1d_multiplexed_custom_compute(self, x: list, dense_data_source, n):
+        """Corresponds to C++ run_1d_multiplexed with lazy weight generation."""
+        N_half = n // 2
+        shape = int(self.input_shape[0])
+        skip_val = int(self.skip[0])
+        invalid_fill_val = int(self.invalid_fill[0])
+        block_stride = skip_val
+        block_size = shape * block_stride
+        n_block_per_ct = N_half // block_size
+        valid_sub = skip_val // invalid_fill_val
+        n_valid_per_ct = n_block_per_ct * valid_sub
+        n_actual_channels = self.n_in_channel // shape
+        n_block_input = int(np.ceil(n_actual_channels / n_valid_per_ct)) * n_block_per_ct
+        n_packed_out = int(np.ceil(self.n_out_channel / n_block_per_ct))
+        x_size = len(x)
+
+        rotated_cts = []
+        for x_id in range(x_size):
+            rotated_cts.append(self.populate_rotations_1_side(x[x_id], n_block_per_ct - 1, block_size))
+
+        result = []
+        for out_group in range(n_packed_out):
+            x_ct_list = []
+            w_pt_list = []
+            for rot_idx in range(n_block_input):
+                group = rot_idx // n_block_per_ct
+                offset = rot_idx % n_block_per_ct
+                x_ct_list.append(rotated_cts[group][offset])
+                w_pt = CkksPlaintextRingtNode(f'encode_pt_{out_group}_{rot_idx}')
+                custom_compute(
+                    inputs=[dense_data_source],
+                    output=w_pt,
+                    type='encode_pt',
+                    attributes={'op_class': op_class, 'type': 'weight_pt', 'i': out_group, 'j': rot_idx},
+                )
+                w_pt_list.append(w_pt)
+
+            s = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+            s = rescale(s)
+            b_pt = CkksPlaintextRingtNode(f'encode_pt_{out_group}')
+            custom_compute(
+                inputs=[dense_data_source],
+                output=b_pt,
+                type='encode_pt',
+                attributes={'op_class': op_class, 'type': 'bias_pt', 'i': out_group},
+            )
+            s = add(s, b_pt)
+
+            n_fold = block_size
+            while n_fold > 1:
+                rotated = rotate_cols(s, n_fold // 2)
+                s = add(s, rotated[0])
+                n_fold //= 2
+
+            result.append(s)
+        return result
+
     def call_multiplexed_custom_compute(self, x: list[DataNode], dense_data_source, n):
         """Corresponds to C++ run_core_mult_pack with lazy weight generation."""
         input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]

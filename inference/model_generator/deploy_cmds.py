@@ -77,7 +77,7 @@ def set_param(param_name):
     set_fhe_param(param)
 
 
-def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordinary'):
+def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordinary', lazy=False):
     n = _FHE_PARAMS[param_name].poly_modulus_degree
     set_param(param_name)
     task_config_info = read_config(os.path.join(task_path, 'task_config.json'))
@@ -185,20 +185,29 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         block_shape,
                     )
 
-                weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes(layer_id)
-
-                layer_output_nodes = big_conv.call(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]],
-                    weight_pt,
-                    bias_pt,
-                    n,
-                    repack_mask_pt=repack_mask_pt,
-                )
-                feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-                input_args.append(Argument(f'convw_{layer_id}', weight_pt))
-                input_args.append(Argument(f'convb_{layer_id}', bias_pt))
-                if repack_mask_pt is not None:
-                    input_args.append(Argument(f'repack_mask_{layer_id}', [repack_mask_pt]))
+                if lazy:
+                    conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
+                    layer_output_nodes = big_conv.call_custom_compute(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                        conv_data_source,
+                        n,
+                    )
+                    feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                    input_args.append(Argument(f'{layer_id}', [conv_data_source]))
+                else:
+                    weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes(layer_id)
+                    layer_output_nodes = big_conv.call(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                        weight_pt,
+                        bias_pt,
+                        n,
+                        repack_mask_pt=repack_mask_pt,
+                    )
+                    feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                    input_args.append(Argument(f'convw_{layer_id}', weight_pt))
+                    input_args.append(Argument(f'convb_{layer_id}', bias_pt))
+                    if repack_mask_pt is not None:
+                        input_args.append(Argument(f'repack_mask_{layer_id}', [repack_mask_pt]))
             else:
                 if style == 'ordinary':
                     if groups == n_out_channel and groups != 1:
@@ -226,14 +235,23 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                             n_packed_out_channel,
                         )
 
-                    weight_pt, bias_pt = conv0_layer.make_pt_nodes(layer_id)
-                    input_args.append(Argument(f'convw_{layer_id}', weight_pt))
-                    input_args.append(Argument(f'convb_{layer_id}', bias_pt))
-                    layer_output_nodes = conv0_layer.call(
-                        feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt
-                    )
-                    feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                    if lazy:
+                        conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
+                        layer_output_nodes = conv0_layer.call_custom_compute(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source
+                        )
+                        feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                        input_args.append(Argument(f'{layer_id}', [conv_data_source]))
+                    else:
+                        weight_pt, bias_pt = conv0_layer.make_pt_nodes(layer_id)
+                        input_args.append(Argument(f'convw_{layer_id}', weight_pt))
+                        input_args.append(Argument(f'convb_{layer_id}', bias_pt))
+                        layer_output_nodes = conv0_layer.call(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt
+                        )
+                        feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                 if style == 'multiplexed':
+                    n_in_channel_per_ct = pack
                     n_in_channel_per_ct = pack
                     if groups == n_out_channel and groups != 1:
                         conv0_layer = MultiplexedConv2DPackedLayerDepthwise(
@@ -260,15 +278,23 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                             n_packed_out_channel,
                         )
 
-                    weight_pt, bias_pt, mask_pt = conv0_layer.make_pt_nodes(layer_id)
-                    if mask_pt:
-                        input_args.append(Argument(f'convm_{layer_id}', mask_pt))
-                    input_args.append(Argument(f'convw_{layer_id}', weight_pt))
-                    input_args.append(Argument(f'convb_{layer_id}', bias_pt))
-                    layer_output_nodes = conv0_layer.call(
-                        feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, mask_pt
-                    )
-                    feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                    if lazy:
+                        conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
+                        layer_output_nodes = conv0_layer.call_custom_compute(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source
+                        )
+                        feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                        input_args.append(Argument(f'{layer_id}', [conv_data_source]))
+                    else:
+                        weight_pt, bias_pt, mask_pt = conv0_layer.make_pt_nodes(layer_id)
+                        if mask_pt:
+                            input_args.append(Argument(f'convm_{layer_id}', mask_pt))
+                        input_args.append(Argument(f'convw_{layer_id}', weight_pt))
+                        input_args.append(Argument(f'convb_{layer_id}', bias_pt))
+                        layer_output_nodes = conv0_layer.call(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, mask_pt
+                        )
+                        feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif layer_config['type'] in ('batchnorm2d', 'dropout', 'constmul', 'identity'):
             layer_output_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
@@ -294,32 +320,59 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 skip_0d = feat['skip'] if not isinstance(feat['skip'], list) else feat['skip'][0]
                 n_channel_per_ct_0d = int(n // 2 // skip_0d)
                 polyrelu = PolyRelu0D(order, skip_0d, n_channel_per_ct_0d)
-                weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
-                layer_output_nodes = polyrelu.call_bsgs_feature0d(feature_id_in_nodes, weight_pt)
+                if lazy:
+                    poly_data_source = CustomDataNode(type='poly_data_source', id=f'{layer_id}')
+                    layer_output_nodes = polyrelu.call_bsgs_feature0d_lazy(
+                        feature_id_in_nodes, poly_data_source, layer_id
+                    )
+                    input_args.append(Argument(f'{layer_id}', [poly_data_source]))
+                else:
+                    weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
+                    layer_output_nodes = polyrelu.call_bsgs_feature0d(feature_id_in_nodes, weight_pt)
 
             elif dim == 1:
                 shape_1d = feat['shape'][0]
                 skip_1d = feat['skip'] if not isinstance(feat['skip'], list) else feat['skip'][0]
+                if lazy:
+                    poly_data_source = CustomDataNode(type='poly_data_source', id=f'{layer_id}')
                 if style == 'multiplexed':
                     n_channel_per_ct_1d = int(n // 2 // shape_1d)
                     polyrelu = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
-                    weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
-                    layer_output_nodes = polyrelu.call_bsgs_mux(feature_id_in_nodes, weight_pt)
+                    if lazy:
+                        layer_output_nodes = polyrelu.call_bsgs_mux_lazy(
+                            feature_id_in_nodes, poly_data_source, layer_id
+                        )
+                    else:
+                        weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
+                        layer_output_nodes = polyrelu.call_bsgs_mux(feature_id_in_nodes, weight_pt)
                 else:
                     n_channel_per_ct_1d = int(n // 2 // shape_1d // skip_1d)
                     polyrelu = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
-                    weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
-                    layer_output_nodes = polyrelu.call_bsgs_skip(feature_id_in_nodes, weight_pt)
+                    if lazy:
+                        layer_output_nodes = polyrelu.call_bsgs_skip_lazy(
+                            feature_id_in_nodes, poly_data_source, layer_id
+                        )
+                    else:
+                        weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
+                        layer_output_nodes = polyrelu.call_bsgs_skip(feature_id_in_nodes, weight_pt)
+                if lazy:
+                    input_args.append(Argument(f'{layer_id}', [poly_data_source]))
 
             else:  # dim == 2
                 input_shape = feat['shape']
                 polyrelu = PolyRelu2D(input_shape, order, skip, pack)
-                weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
-                layer_output_nodes = polyrelu.call_bsgs_feature2d(feature_id_in_nodes, weight_pt)
+                if lazy:
+                    poly_data_source = CustomDataNode(type='poly_data_source', id=f'{layer_id}')
+                    layer_output_nodes = polyrelu.call_bsgs_lazy(feature_id_in_nodes, poly_data_source, layer_id)
+                    input_args.append(Argument(f'{layer_id}', [poly_data_source]))
+                else:
+                    weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
+                    layer_output_nodes = polyrelu.call_bsgs_feature2d(feature_id_in_nodes, weight_pt)
 
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-            for i in range(len(weight_pt)):
-                input_args.append(Argument(f'poly_reluw_{layer_id}_{i}', weight_pt[i]))
+            if not lazy:
+                for i in range(len(weight_pt)):
+                    input_args.append(Argument(f'poly_reluw_{layer_id}_{i}', weight_pt[i]))
 
         elif layer_config['type'] == 'conv1d':
             input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape'][0]
@@ -342,18 +395,26 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         n_channel_per_ct,
                         n_packed_ct,
                     )
-                    weight_pt, bias_pt, block_select_pt = conv1d.make_pt_nodes(layer_id)
-                    layer_output_nodes = conv1d.call(
-                        feature_id_to_nodes_map[layer_input_feature_ids[0]],
-                        weight_pt,
-                        bias_pt,
-                        block_select_pt if block_select_pt else None,
-                    )
-                    feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-                    input_args.append(Argument(f'convw_{layer_id}', weight_pt))
-                    input_args.append(Argument(f'convb_{layer_id}', bias_pt))
-                    if block_select_pt:
-                        input_args.append(Argument(f'convm_{layer_id}', block_select_pt))
+                    if lazy:
+                        conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
+                        layer_output_nodes = conv1d.call_custom_compute(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source
+                        )
+                        feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                        input_args.append(Argument(f'{layer_id}', [conv_data_source]))
+                    else:
+                        weight_pt, bias_pt, block_select_pt = conv1d.make_pt_nodes(layer_id)
+                        layer_output_nodes = conv1d.call(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                            weight_pt,
+                            bias_pt,
+                            block_select_pt if block_select_pt else None,
+                        )
+                        feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                        input_args.append(Argument(f'convw_{layer_id}', weight_pt))
+                        input_args.append(Argument(f'convb_{layer_id}', bias_pt))
+                        if block_select_pt:
+                            input_args.append(Argument(f'convm_{layer_id}', block_select_pt))
                 else:
                     conv1d = MultiplexedConv1DPackedLayer(
                         n_out_channel,
@@ -366,18 +427,26 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         n_packed_in_channel,
                         n_packed_out_channel,
                     )
-                    weight_pt, bias_pt, block_select_pt = conv1d.make_pt_nodes(layer_id)
-                    layer_output_nodes = conv1d.call(
-                        feature_id_to_nodes_map[layer_input_feature_ids[0]],
-                        weight_pt,
-                        bias_pt,
-                        block_select_pt if block_select_pt else None,
-                    )
-                    feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-                    input_args.append(Argument(f'convw_{layer_id}', weight_pt))
-                    input_args.append(Argument(f'convb_{layer_id}', bias_pt))
-                    if block_select_pt:
-                        input_args.append(Argument(f'convm_{layer_id}', block_select_pt))
+                    if lazy:
+                        conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
+                        layer_output_nodes = conv1d.call_custom_compute(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source
+                        )
+                        feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                        input_args.append(Argument(f'{layer_id}', [conv_data_source]))
+                    else:
+                        weight_pt, bias_pt, block_select_pt = conv1d.make_pt_nodes(layer_id)
+                        layer_output_nodes = conv1d.call(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                            weight_pt,
+                            bias_pt,
+                            block_select_pt if block_select_pt else None,
+                        )
+                        feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                        input_args.append(Argument(f'convw_{layer_id}', weight_pt))
+                        input_args.append(Argument(f'convb_{layer_id}', bias_pt))
+                        if block_select_pt:
+                            input_args.append(Argument(f'convm_{layer_id}', block_select_pt))
             else:
                 n_channel_per_ct = int(n // 2 // input_shape // skip_1d)
                 n_pack_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
@@ -393,13 +462,21 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     n_pack_in_channel,
                     n_packed_out_channel,
                 )
-                weight_pt, bias_pt = conv1d.make_pt_nodes(layer_id)
-                layer_output_nodes = conv1d.call(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt
-                )
-                feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-                input_args.append(Argument(f'convw_{layer_id}', weight_pt))
-                input_args.append(Argument(f'convb_{layer_id}', bias_pt))
+                if lazy:
+                    conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
+                    layer_output_nodes = conv1d.call_custom_compute(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source
+                    )
+                    feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                    input_args.append(Argument(f'{layer_id}', [conv_data_source]))
+                else:
+                    weight_pt, bias_pt = conv1d.make_pt_nodes(layer_id)
+                    layer_output_nodes = conv1d.call(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt
+                    )
+                    feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                    input_args.append(Argument(f'convw_{layer_id}', weight_pt))
+                    input_args.append(Argument(f'convb_{layer_id}', bias_pt))
 
         elif layer_config['type'] == 'mult_scalar':
             mult_scalar_layer = MultScalarLayer()
@@ -485,13 +562,22 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 n_channel_per_ct=pack,
                 level=level,
             )
-            select_tensor_pt = upsample_layer.make_pt_nodes(layer_id, n_in_channel)
-            layer_output_nodes = upsample_layer.call(
-                feature_id_to_nodes_map[layer_input_feature_ids[0]],
-                select_tensor_pt,
-                n_in_channel,
-            )
-            input_args.append(Argument(f'upsample_select_pt_{layer_id}', select_tensor_pt))
+            if lazy:
+                upsample_data_source = CustomDataNode(type='upsample_data_source', id=f'{layer_id}')
+                layer_output_nodes = upsample_layer.call_custom_compute(
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                    upsample_data_source,
+                    n_in_channel,
+                )
+                input_args.append(Argument(f'{layer_id}', [upsample_data_source]))
+            else:
+                select_tensor_pt = upsample_layer.make_pt_nodes(layer_id, n_in_channel)
+                layer_output_nodes = upsample_layer.call(
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                    select_tensor_pt,
+                    n_in_channel,
+                )
+                input_args.append(Argument(f'upsample_select_pt_{layer_id}', select_tensor_pt))
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif 'avgpool' in layer_config['type']:
@@ -565,12 +651,19 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     n_packed_in_feature,
                     n_packed_out_feature,
                 )
-                weight_pt, bias_pt = fc_layer.make_pt_nodes_skip_0d(layer_id)
-                input_args.append(Argument(f'densew_{layer_id}', weight_pt))
-                input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
-                layer_output_nodes = fc_layer.call_skip_0d(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, skip_0d
-                )
+                if lazy:
+                    dense_data_source = CustomDataNode(type='fc_data_source', id=f'{layer_id}')
+                    input_args.append(Argument(f'{layer_id}', [dense_data_source]))
+                    layer_output_nodes = fc_layer.call_skip_0d_custom_compute(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]], dense_data_source, skip_0d
+                    )
+                else:
+                    weight_pt, bias_pt = fc_layer.make_pt_nodes_skip_0d(layer_id)
+                    input_args.append(Argument(f'densew_{layer_id}', weight_pt))
+                    input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
+                    layer_output_nodes = fc_layer.call_skip_0d(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, skip_0d
+                    )
             else:
                 special_info = config_info['feature'][layer_input_feature_ids[0]]['special_info']
                 special_shape = special_info['shape']
@@ -595,12 +688,19 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         math.ceil(n_in_channel / n_channel_per_ct_1d),
                         math.ceil(n_out_channel / n_block_per_ct),
                     )
-                    weight_pt, bias_pt = dense.make_pt_nodes_1d_multiplexed(layer_id, n)
-                    input_args.append(Argument(f'densew_{layer_id}', weight_pt))
-                    input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
-                    layer_output_nodes = dense.call_1d_multiplexed(
-                        feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, n
-                    )
+                    if lazy:
+                        dense_data_source = CustomDataNode(type='fc_data_source', id=f'{layer_id}')
+                        input_args.append(Argument(f'{layer_id}', [dense_data_source]))
+                        layer_output_nodes = dense.call_1d_multiplexed_custom_compute(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], dense_data_source, n
+                        )
+                    else:
+                        weight_pt, bias_pt = dense.make_pt_nodes_1d_multiplexed(layer_id, n)
+                        input_args.append(Argument(f'densew_{layer_id}', weight_pt))
+                        input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
+                        layer_output_nodes = dense.call_1d_multiplexed(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, n
+                        )
                 else:
                     # 2D multiplexed: special_shape=[H, W], special_skip=[s0, s1]
                     dense = DensePackedLayer(
@@ -613,12 +713,19 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         n_out_channel,
                         invalid_fill=invalid_fill,
                     )
-                    weight_pt, bias_pt = dense.make_pt_nodes_multiplexed(layer_id, n)
-                    input_args.append(Argument(f'densew_{layer_id}', weight_pt))
-                    input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
-                    layer_output_nodes = dense.call_multiplexed(
-                        feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, n
-                    )
+                    if lazy:
+                        dense_data_source = CustomDataNode(type='fc_data_source', id=f'{layer_id}')
+                        input_args.append(Argument(f'{layer_id}', [dense_data_source]))
+                        layer_output_nodes = dense.call_multiplexed_custom_compute(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], dense_data_source, n
+                        )
+                    else:
+                        weight_pt, bias_pt = dense.make_pt_nodes_multiplexed(layer_id, n)
+                        input_args.append(Argument(f'densew_{layer_id}', weight_pt))
+                        input_args.append(Argument(f'denseb_{layer_id}', bias_pt))
+                        layer_output_nodes = dense.call_multiplexed(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, n
+                        )
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         else:
@@ -626,7 +733,9 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
     output_args = [Argument(output_id, feature_id_to_nodes_map[output_id]) for output_id in task_output_feature_ids]
 
-    process_custom_task(input_args=input_args, output_args=output_args, output_instruction_path=task_path)
+    process_custom_task(
+        input_args=input_args, output_args=output_args, output_instruction_path=task_path, fpga_acc=False
+    )
 
 
 if __name__ == '__main__':
@@ -637,6 +746,9 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='FPGA config generator.')
     parser.add_argument('task_path', type=str, help='Path of the server directory')
+    parser.add_argument(
+        '--lazy', action='store_true', help='Use lazy weight generation (encode_pt custom compute nodes)'
+    )
     args = parser.parse_args()
 
     task_path = args.task_path
@@ -645,4 +757,4 @@ if __name__ == '__main__':
 
     for _, is_fpga in config['server_task'].items():
         if is_fpga['enable_fpga']:
-            gen_custom_task(os.path.join(task_path, 'server'), use_gpu=True)
+            gen_custom_task(os.path.join(task_path, 'server'), use_gpu=True, lazy=args.lazy)
