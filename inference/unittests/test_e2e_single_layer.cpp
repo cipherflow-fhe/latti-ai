@@ -74,3 +74,416 @@ TEST_CASE("gpu/all", "[batch][gpu][e2e]") {
     }
 }
 #endif
+
+// == Individual tests (visible in TestMate sidebar) ===========================
+
+// ── Conv2d big_size ──
+
+TEST_CASE("cpu/conv_big_size", "[e2e][cpu]") {
+    for (auto& [h, s, label] : std::vector<std::tuple<int, int, std::string>>{
+             {256, 2, "output_gt_block"}, {128, 2, "output_eq_block"}, {128, 4, "output_lt_block"}}) {
+        auto name =
+            "conv_big_size_" + label + "_s" + std::to_string(s) + "_" + std::to_string(h) + "x" + std::to_string(h);
+        SECTION(name) {
+            run_e2e_test(single_layer_base_path / name, false);
+        }
+    }
+}
+
+// ── DW Conv2d big_size ──
+
+TEST_CASE("cpu/dw_conv_big_size", "[e2e][cpu]") {
+    for (auto& [h, s, label] : std::vector<std::tuple<int, int, std::string>>{
+             {256, 2, "output_gt_block"}, {128, 2, "output_eq_block"}, {128, 4, "output_lt_block"}}) {
+        auto name =
+            "dw_conv_big_size_" + label + "_s" + std::to_string(s) + "_" + std::to_string(h) + "x" + std::to_string(h);
+        SECTION(name) {
+            run_e2e_test(single_layer_base_path / name, false);
+        }
+    }
+}
+
+// ── DW Conv1d ──
+
+TEST_CASE("cpu/dw_conv1d", "[e2e][cpu]") {
+    run_e2e_test(single_layer_base_path / "dw_conv1d", false);
+}
+
+// ── Dense ──
+
+TEST_CASE("cpu/dense", "[e2e][cpu]") {
+    run_e2e_test(single_layer_base_path / "dense", false);
+}
+
+// ── Avgpool big_size ──
+
+TEST_CASE("cpu/avgpool_big_size", "[e2e][cpu]") {
+    for (auto& [h, s, label] : std::vector<std::tuple<int, int, std::string>>{
+             {256, 2, "output_gt_block"}, {128, 2, "output_eq_block"}, {128, 4, "output_lt_block"}}) {
+        auto name =
+            "avgpool_big_size_" + label + "_s" + std::to_string(s) + "_" + std::to_string(h) + "x" + std::to_string(h);
+        SECTION(name) {
+            run_e2e_test(single_layer_base_path / name, false);
+        }
+    }
+}
+
+// ── General avgpool ──
+
+TEST_CASE("cpu/general_avgpool", "[e2e][cpu]") {
+    run_e2e_test(single_layer_base_path / "general_avgpool", false);
+}
+
+// ── Add ──
+
+TEST_CASE("cpu/add", "[e2e][cpu]") {
+    run_e2e_test(single_layer_base_path / "add", false);
+}
+
+// ── Activation ──
+
+TEST_CASE("cpu/act", "[e2e][cpu]") {
+    run_e2e_test(single_layer_base_path / "act", false);
+}
+
+// ── Conv2d packed ──
+
+TEST_CASE("cpu/conv2d_packed", "[e2e][cpu]") {
+    for (int s : {1, 2}) {
+        auto input_shapes = (s == 1) ? std::vector<int>{4, 8, 16, 32} : std::vector<int>{32};
+        for (int is : input_shapes) {
+            for (int k : {1, 3, 5}) {
+                auto name = "conv2d_s" + std::to_string(s) + "_k" + std::to_string(k) + "_cin1_cout1_" +
+                            std::to_string(is) + "x" + std::to_string(is);
+                SECTION(name) {
+                    run_e2e_test(single_layer_base_path / name, false);
+                }
+            }
+        }
+        for (auto& [ci, co, is] : std::vector<std::tuple<int, int, int>>{
+                 {32, 32, 8}, {3, 16, 32}, {3, 4, 32}, {4, 4, 32}, {4, 32, 32}, {16, 16, 32}, {16, 32, 32}}) {
+            auto name = "conv2d_s" + std::to_string(s) + "_k3_cin" + std::to_string(ci) + "_cout" + std::to_string(co) +
+                        "_" + std::to_string(is) + "x" + std::to_string(is);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, false);
+            }
+        }
+    }
+}
+
+// ── Conv2d depthwise (multiplexed) ──
+
+TEST_CASE("cpu/conv2d_depthwise", "[e2e][cpu]") {
+    for (int s : {1, 2}) {
+        for (int ch : {4, 8, 32}) {
+            for (int is : {16, 32}) {
+                for (int k : {1, 3, 5}) {
+                    auto name = "dw_conv2d_s" + std::to_string(s) + "_k" + std::to_string(k) + "_ch" +
+                                std::to_string(ch) + "_" + std::to_string(is) + "x" + std::to_string(is);
+                    SECTION(name) {
+                        run_e2e_test(single_layer_base_path / name, false);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Conv2d depthwise (ordinary) ──
+
+TEST_CASE("cpu/conv2d_depthwise_ordinary", "[e2e][cpu]") {
+    for (int s : {1, 2}) {
+        for (int ch : {4, 8, 32}) {
+            for (int k : {1, 3, 5}) {
+                auto name =
+                    "dw_conv2d_ordinary_s" + std::to_string(s) + "_k" + std::to_string(k) + "_ch" + std::to_string(ch);
+                SECTION(name) {
+                    run_e2e_test(single_layer_base_path / name, false);
+                }
+            }
+        }
+    }
+}
+
+// ── Mux Conv2d ──
+
+TEST_CASE("cpu/mux_conv2d_packed", "[e2e][cpu]") {
+    for (int ci : {3, 4, 16}) {
+        for (int co : {3, 4, 32}) {
+            auto name = "mux_conv2d_cin" + std::to_string(ci) + "_cout" + std::to_string(co);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, false);
+            }
+        }
+    }
+    for (int k : {1, 3, 5}) {
+        auto name = "mux_conv2d_k" + std::to_string(k);
+        SECTION(name) {
+            run_e2e_test(single_layer_base_path / name, false);
+        }
+    }
+}
+
+// ── Conv1d ──
+
+TEST_CASE("cpu/conv1d_params", "[e2e][cpu]") {
+    for (int s : {1, 2}) {
+        for (int len : {32, 64}) {
+            auto name = "conv1d_s" + std::to_string(s) + "_len" + std::to_string(len);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, false);
+            }
+        }
+    }
+}
+
+// ── Avgpool2d ──
+
+TEST_CASE("cpu/avgpool2d_params", "[e2e][cpu]") {
+    for (int s : {2, 4, 8}) {
+        for (int sh : {8, 16, 32}) {
+            if (sh < s)
+                continue;
+            auto name = "avgpool2d_s" + std::to_string(s) + "_" + std::to_string(sh) + "x" + std::to_string(sh);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, false);
+            }
+        }
+    }
+}
+
+// ── Adaptive Avgpool2d ──
+
+TEST_CASE("cpu/adaptive_avgpool2d", "[e2e][cpu]") {
+    for (int s : {2, 4}) {
+        for (int sh : {8, 16, 32}) {
+            if (sh < s)
+                continue;
+            auto name =
+                "adaptive_avgpool2d_s" + std::to_string(s) + "_" + std::to_string(sh) + "x" + std::to_string(sh);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, false);
+            }
+        }
+    }
+}
+
+// ── Avgpool1d ──
+
+TEST_CASE("cpu/avgpool1d_params", "[e2e][cpu]") {
+    for (int s : {2, 4, 8}) {
+        for (int sh : {8, 16, 32}) {
+            if (sh < s)
+                continue;
+            auto name = "avgpool1d_s" + std::to_string(s) + "_len" + std::to_string(sh);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, false);
+            }
+        }
+    }
+}
+
+// ── Adaptive Avgpool1d ──
+
+TEST_CASE("cpu/adaptive_avgpool1d", "[e2e][cpu]") {
+    for (int s : {2, 4}) {
+        for (int sh : {8, 16, 32}) {
+            if (sh < s)
+                continue;
+            auto name = "adaptive_avgpool1d_s" + std::to_string(s) + "_len" + std::to_string(sh);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, false);
+            }
+        }
+    }
+}
+
+// == GPU individual tests =====================================================
+
+#ifdef INFERENCE_SDK_ENABLE_GPU
+
+TEST_CASE("gpu/conv_big_size", "[e2e][gpu]") {
+    for (auto& [h, s, label] : std::vector<std::tuple<int, int, std::string>>{
+             {256, 2, "output_gt_block"}, {128, 2, "output_eq_block"}, {128, 4, "output_lt_block"}}) {
+        auto name =
+            "conv_big_size_" + label + "_s" + std::to_string(s) + "_" + std::to_string(h) + "x" + std::to_string(h);
+        SECTION(name) {
+            run_e2e_test(single_layer_base_path / name, true);
+        }
+    }
+}
+
+TEST_CASE("gpu/dw_conv_big_size", "[e2e][gpu]") {
+    for (auto& [h, s, label] : std::vector<std::tuple<int, int, std::string>>{
+             {256, 2, "output_gt_block"}, {128, 2, "output_eq_block"}, {128, 4, "output_lt_block"}}) {
+        auto name =
+            "dw_conv_big_size_" + label + "_s" + std::to_string(s) + "_" + std::to_string(h) + "x" + std::to_string(h);
+        SECTION(name) {
+            run_e2e_test(single_layer_base_path / name, true);
+        }
+    }
+}
+
+TEST_CASE("gpu/dw_conv1d", "[e2e][gpu]") {
+    run_e2e_test(single_layer_base_path / "dw_conv1d", true);
+}
+TEST_CASE("gpu/dense", "[e2e][gpu]") {
+    run_e2e_test(single_layer_base_path / "dense", true);
+}
+
+TEST_CASE("gpu/avgpool_big_size", "[e2e][gpu]") {
+    for (auto& [h, s, label] : std::vector<std::tuple<int, int, std::string>>{
+             {256, 2, "output_gt_block"}, {128, 2, "output_eq_block"}, {128, 4, "output_lt_block"}}) {
+        auto name =
+            "avgpool_big_size_" + label + "_s" + std::to_string(s) + "_" + std::to_string(h) + "x" + std::to_string(h);
+        SECTION(name) {
+            run_e2e_test(single_layer_base_path / name, true);
+        }
+    }
+}
+
+TEST_CASE("gpu/general_avgpool", "[e2e][gpu]") {
+    run_e2e_test(single_layer_base_path / "general_avgpool", true);
+}
+TEST_CASE("gpu/add", "[e2e][gpu]") {
+    run_e2e_test(single_layer_base_path / "add", true);
+}
+TEST_CASE("gpu/act", "[e2e][gpu]") {
+    run_e2e_test(single_layer_base_path / "act", true);
+}
+
+TEST_CASE("gpu/conv2d_packed", "[e2e][gpu]") {
+    for (int s : {1, 2}) {
+        auto input_shapes = (s == 1) ? std::vector<int>{4, 8, 16, 32} : std::vector<int>{32};
+        for (int is : input_shapes) {
+            for (int k : {1, 3, 5}) {
+                auto name = "conv2d_s" + std::to_string(s) + "_k" + std::to_string(k) + "_cin1_cout1_" +
+                            std::to_string(is) + "x" + std::to_string(is);
+                SECTION(name) {
+                    run_e2e_test(single_layer_base_path / name, true);
+                }
+            }
+        }
+        for (auto& [ci, co, is] : std::vector<std::tuple<int, int, int>>{
+                 {32, 32, 8}, {3, 16, 32}, {3, 4, 32}, {4, 4, 32}, {4, 32, 32}, {16, 16, 32}, {16, 32, 32}}) {
+            auto name = "conv2d_s" + std::to_string(s) + "_k3_cin" + std::to_string(ci) + "_cout" + std::to_string(co) +
+                        "_" + std::to_string(is) + "x" + std::to_string(is);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, true);
+            }
+        }
+    }
+}
+
+TEST_CASE("gpu/conv2d_depthwise", "[e2e][gpu]") {
+    for (int s : {1, 2}) {
+        for (int ch : {4, 8, 32}) {
+            for (int is : {16, 32}) {
+                for (int k : {1, 3, 5}) {
+                    auto name = "dw_conv2d_s" + std::to_string(s) + "_k" + std::to_string(k) + "_ch" +
+                                std::to_string(ch) + "_" + std::to_string(is) + "x" + std::to_string(is);
+                    SECTION(name) {
+                        run_e2e_test(single_layer_base_path / name, true);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("gpu/conv2d_depthwise_ordinary", "[e2e][gpu]") {
+    for (int s : {1, 2}) {
+        for (int ch : {4, 8, 32}) {
+            for (int k : {1, 3, 5}) {
+                auto name =
+                    "dw_conv2d_ordinary_s" + std::to_string(s) + "_k" + std::to_string(k) + "_ch" + std::to_string(ch);
+                SECTION(name) {
+                    run_e2e_test(single_layer_base_path / name, true);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("gpu/mux_conv2d_packed", "[e2e][gpu]") {
+    for (int ci : {3, 4, 16}) {
+        for (int co : {3, 4, 32}) {
+            auto name = "mux_conv2d_cin" + std::to_string(ci) + "_cout" + std::to_string(co);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, true);
+            }
+        }
+    }
+    for (int k : {1, 3, 5}) {
+        auto name = "mux_conv2d_k" + std::to_string(k);
+        SECTION(name) {
+            run_e2e_test(single_layer_base_path / name, true);
+        }
+    }
+}
+
+TEST_CASE("gpu/conv1d_params", "[e2e][gpu]") {
+    for (int s : {1, 2}) {
+        for (int len : {32, 64}) {
+            auto name = "conv1d_s" + std::to_string(s) + "_len" + std::to_string(len);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, true);
+            }
+        }
+    }
+}
+
+TEST_CASE("gpu/avgpool2d_params", "[e2e][gpu]") {
+    for (int s : {2, 4, 8}) {
+        for (int sh : {8, 16, 32}) {
+            if (sh < s)
+                continue;
+            auto name = "avgpool2d_s" + std::to_string(s) + "_" + std::to_string(sh) + "x" + std::to_string(sh);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, true);
+            }
+        }
+    }
+}
+
+TEST_CASE("gpu/adaptive_avgpool2d", "[e2e][gpu]") {
+    for (int s : {2, 4}) {
+        for (int sh : {8, 16, 32}) {
+            if (sh < s)
+                continue;
+            auto name =
+                "adaptive_avgpool2d_s" + std::to_string(s) + "_" + std::to_string(sh) + "x" + std::to_string(sh);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, true);
+            }
+        }
+    }
+}
+
+TEST_CASE("gpu/avgpool1d_params", "[e2e][gpu]") {
+    for (int s : {2, 4, 8}) {
+        for (int sh : {8, 16, 32}) {
+            if (sh < s)
+                continue;
+            auto name = "avgpool1d_s" + std::to_string(s) + "_len" + std::to_string(sh);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, true);
+            }
+        }
+    }
+}
+
+TEST_CASE("gpu/adaptive_avgpool1d", "[e2e][gpu]") {
+    for (int s : {2, 4}) {
+        for (int sh : {8, 16, 32}) {
+            if (sh < s)
+                continue;
+            auto name = "adaptive_avgpool1d_s" + std::to_string(s) + "_len" + std::to_string(sh);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, true);
+            }
+        }
+    }
+}
+
+#endif

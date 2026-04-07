@@ -843,25 +843,52 @@ class TestE2ESingleLayer(CompilerTestBase):
         with open(manifest_path, 'w') as f:
             json.dump([], f)
 
-    # ── Conv2d (big_size only — small-size covered by test_conv2d_packed) ──
+    # ── Conv2d big_size (3 scenarios: output > / == / < block_shape) ──
 
-    def test_conv_with_stride_big_size(self):
-        """Conv stride=2 with big_size input (128×128), multiplexed."""
-        model = nn_modules.SingleConv(2)
-        graph, score = self._export_compile_and_deploy(
-            model, (1, 32, 128, 128), 'conv_with_stride_big_size', style='multiplexed'
-        )
-        self.assertIsNotNone(graph)
+    def test_conv_big_size(self):
+        """Conv2d big_size: output_shape vs block_shape (block_shape=[64,64] for these inputs).
 
-    # ── Conv2d depthwise (big_size only — small-size covered by test_conv2d_depthwise) ──
+        - output > block:  256x256 s=2 -> 128x128, level_cost=1
+        - output == block: 128x128 s=2 ->  64x64,  level_cost=1
+        - output < block:  128x128 s=4 ->  32x32,  level_cost=2
+        """
+        cases = [
+            # (input_h, stride, expected_level_cost, label)
+            (256, 2, 1, 'output_gt_block'),
+            (128, 2, 1, 'output_eq_block'),
+            (128, 4, 2, 'output_lt_block'),
+        ]
+        for input_h, stride, expected_level_cost, label in cases:
+            test_name = f'conv_big_size_{label}_s{stride}_{input_h}x{input_h}'
+            with self.subTest(test_name=test_name):
+                model = nn_modules.SingleConv(stride)
+                graph, score = self._export_compile_and_deploy(
+                    model, (1, 32, input_h, input_h), test_name, style='multiplexed'
+                )
+                self.assertIsNotNone(graph)
+
+    # ── DW Conv2d big_size (3 scenarios) ──
 
     def test_dw_conv_big_size(self):
-        """Depthwise conv stride=2 with big_size input (256×256), multiplexed."""
-        model = nn_modules.DepthwiseConv(channels=32, stride=2)
-        graph, score = self._export_compile_and_deploy(
-            model, (1, 32, 256, 256), 'dw_conv_big_size', style='multiplexed'
-        )
-        self.assertIsNotNone(graph)
+        """DW Conv2d big_size: output_shape vs block_shape.
+
+        - output > block:  256x256 s=2 -> 128x128, level_cost=1
+        - output == block: 128x128 s=2 ->  64x64,  level_cost=1
+        - output < block:  128x128 s=4 ->  32x32,  level_cost=2
+        """
+        cases = [
+            (256, 2, 1, 'output_gt_block'),
+            (128, 2, 1, 'output_eq_block'),
+            (128, 4, 2, 'output_lt_block'),
+        ]
+        for input_h, stride, expected_level_cost, label in cases:
+            test_name = f'dw_conv_big_size_{label}_s{stride}_{input_h}x{input_h}'
+            with self.subTest(test_name=test_name):
+                model = nn_modules.DepthwiseConv(channels=32, stride=stride)
+                graph, score = self._export_compile_and_deploy(
+                    model, (1, 32, input_h, input_h), test_name, style='multiplexed'
+                )
+                self.assertIsNotNone(graph)
 
     # ── Conv1d (DW only — ordinary covered by test_conv1d_params) ──
 
@@ -882,10 +909,27 @@ class TestE2ESingleLayer(CompilerTestBase):
     # ── Pooling (big_size and general only — standard covered by sweeps) ──
 
     def test_avgpool_big_size(self):
-        """Avgpool with big_size input (256×256), multiplexed style."""
-        model = nn_modules.SingleAvgpool2d()
-        graph, score = self._export_compile_and_deploy(model, (1, 5, 256, 256), 'avgpool_big_size', style='multiplexed')
-        self.assertTrue(check_feature_scale(graph))
+        """Avgpool2d big_size: output_shape vs block_shape.
+
+        - output > block:  256x256 s=2 -> 128x128, level_cost=0
+        - output == block: 128x128 s=2 ->  64x64,  level_cost=0
+        - output < block:  128x128 s=4 ->  32x32,  level_cost=1 (repack needed)
+        """
+        cases = [
+            # (input_h, ch, kernel_stride, expected_level_cost, label)
+            (256, 5, 2, 0, 'output_gt_block'),
+            (128, 32, 2, 0, 'output_eq_block'),
+            (128, 32, 4, 1, 'output_lt_block'),
+        ]
+        for input_h, ch, stride, expected_level_cost, label in cases:
+            test_name = f'avgpool_big_size_{label}_s{stride}_{input_h}x{input_h}'
+            with self.subTest(test_name=test_name):
+                model = nn_modules.SingleAvgpool2d(kernel_size=stride, stride=stride)
+                graph, score = self._export_compile_and_deploy(
+                    model, (1, ch, input_h, input_h), test_name, style='multiplexed'
+                )
+                self.assertTrue(check_feature_scale(graph))
+                self.assertIsNotNone(graph)
 
     def test_general_avgpool(self):
         """General avgpool (kernel_size=3, stride=2) replaced with depthwise conv for FHE."""
