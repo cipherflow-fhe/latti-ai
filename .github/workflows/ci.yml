@@ -65,11 +65,7 @@ jobs:
           nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
           echo "=== CUDA arch: ${{ steps.cuda-arch.outputs.arch }} ==="
 
-      - name: Configure git mirrors
-        run: |
-          git config --global url."https://gitee.com/mirrors/cccl.git".insteadOf "https://github.com/nvidia/cccl.git"
-
-      - name: Build HEonGPU (cached)
+      - name: Restore HEonGPU cache
         run: |
           CUDA_ARCH="${{ steps.cuda-arch.outputs.arch }}"
           HEONGPU_COMMIT=$(git -C inference/lattisense/HEonGPU rev-parse HEAD)
@@ -79,29 +75,31 @@ jobs:
             cp -a "${CACHE_DIR}/install" inference/lattisense/HEonGPU/install
             cp -a "${CACHE_DIR}/build" inference/lattisense/HEonGPU/build
           else
-            echo "Building HEonGPU from scratch (arch=${CUDA_ARCH})"
-            cd inference/lattisense/HEonGPU
-            rm -rf build install
-            cmake -S . -B build \
-              -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH} \
-              -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
-              -DCMAKE_INSTALL_PREFIX=$(pwd)/install
-            cmake --build build -j$(nproc)
-            cmake --install build
-            cd $GITHUB_WORKSPACE
+            echo "No cache found, HEonGPU will be built automatically during cmake configure"
+          fi
+
+      - name: Build (GPU mode)
+        run: |
+          CUDA_ARCH="${{ steps.cuda-arch.outputs.arch }}"
+          cmake -B build \
+            -DINFERENCE_SDK_ENABLE_GPU=ON \
+            -DLATTISENSE_CUDA_ARCH=${CUDA_ARCH} \
+            -DHEONGPU_CCCL_GIT_URL=https://gitee.com/nvidia_mirror/cccl.git
+          cmake --build build -j$(nproc)
+
+      - name: Save HEonGPU cache
+        run: |
+          CUDA_ARCH="${{ steps.cuda-arch.outputs.arch }}"
+          HEONGPU_COMMIT=$(git -C inference/lattisense/HEonGPU rev-parse HEAD)
+          CACHE_DIR="/opt/heongpu-cache/${HEONGPU_COMMIT}-arch${CUDA_ARCH}"
+          if [ ! -d "${CACHE_DIR}/install/lib" ] && [ -d "inference/lattisense/HEonGPU/install/lib" ]; then
+            echo "Saving HEonGPU build to cache"
             mkdir -p "${CACHE_DIR}"
             cp -a inference/lattisense/HEonGPU/install "${CACHE_DIR}/"
             cp -a inference/lattisense/HEonGPU/build "${CACHE_DIR}/"
             # Keep only the 3 most recent caches
             ls -dt /opt/heongpu-cache/*/ 2>/dev/null | tail -n +4 | xargs rm -rf 2>/dev/null || true
           fi
-
-      - name: Build (GPU mode)
-        run: |
-          CUDA_ARCH="${{ steps.cuda-arch.outputs.arch }}"
-          mkdir -p build && cd build
-          cmake .. -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=${CUDA_ARCH}
-          make -j$(nproc)
 
       - name: Run compiler tests
         run: |
@@ -161,10 +159,10 @@ jobs:
         timeout-minutes: 30
         run: |
           docker run --rm latti-ai:latest bash -c "
-            cd /workspace/build
-            cmake ..
-            make -j\$(nproc)
-            cd inference/unittests
+            cd /workspace
+            cmake -B build
+            cmake --build build -j\$(nproc)
+            cd build/inference/unittests
             python test_gen_layers.py TestLayerExport.test_sq
             ./test_data_structs
             ./test_fhe_layers_hetero 'sq*'
