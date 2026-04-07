@@ -54,6 +54,5 @@ public:
     Duo skip;
     uint32_t n_block_per_ct;
     bool need_repack = false;
-    int level_ = 0;
     uint32_t n_channel_ = 0;
 };
