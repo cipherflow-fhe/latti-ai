@@ -65,6 +65,49 @@ class Conv2DPackedDepthwiseLayer:
         self.input_rotate_units = [skip[0] * self.input_shape_ct[1], skip[0] * 1]
         self.input_rotate_ranges = [padding_shape[1], padding_shape[0]]
 
+    def get_fhe_op_count(self) -> dict[str, int]:
+        """Count FHE primitive operations in call(), mirroring its structure exactly.
+
+        'rotate' is the total primitive RotateColUnit count via NAF decomposition.
+
+        input_rotate_units[0] = skip[0] * input_shape_ct[1] = skip[0]*input_shape[1]*skip[1] (power of 2)
+        input_rotate_units[1] = skip[0]                                                       (power of 2)
+        Because both units are powers of 2: naf_weight(i * unit) == naf_weight(i).
+
+        gen_rotated_x over n_packed_out_channel cts:
+          row direction: populate_rotations_2_sides(c, range_h, unit_0)
+            steps: [-range_h*unit_0, ..., -1*unit_0, 1*unit_0, ..., range_h*unit_0]
+            primitive rotates per ct = 2 * sum(naf_weight(i) for i in 1..range_h)
+          col direction: (2*range_h+1) calls of populate_rotations_2_sides(r, range_w, unit_1)
+            steps per call: [-range_w*unit_1, ..., range_w*unit_1] (excluding 0)
+            primitive rotates per ct = (2*range_h+1) * 2 * sum(naf_weight(i) for i in 1..range_w)
+
+        per output packed channel (= n_packed_out_channel):
+          terms = kernel_h * kernel_w
+          mult_plain: terms, add: terms (accumulate + bias), rescale: 1
+        """
+        from inference.model_generator.layers.fhe_op_utils import naf_weight
+
+        range_h, range_w = self.input_rotate_ranges
+        kh, kw = self.kernel_shape
+
+        rots_row = 2 * sum(naf_weight(i) for i in range(1, range_h + 1))
+        rots_col = (2 * range_h + 1) * 2 * sum(naf_weight(i) for i in range(1, range_w + 1))
+        rotate_total = self.n_packed_in_channel * (rots_row + rots_col)
+
+        terms_per_out = kh * kw
+        mult_plain_total = self.n_packed_out_channel * terms_per_out
+        add_total = self.n_packed_out_channel * terms_per_out  # (terms-1) accumulate + 1 bias
+        rescale_total = self.n_packed_out_channel
+
+        return {
+            'rotate': rotate_total,
+            'mult_plain': mult_plain_total,
+            'mult': 0,
+            'add': add_total,
+            'rescale': rescale_total,
+        }
+
     @staticmethod
     def populate_rotations_1_side(x: DataNode, n_rotation: int, unit: int) -> list[DataNode]:
         result: list[DataNode] = [x]

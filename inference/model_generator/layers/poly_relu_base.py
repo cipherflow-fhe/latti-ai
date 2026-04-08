@@ -76,6 +76,76 @@ class PolyReluBase:
             add_deps(p)
         return required, to_compute
 
+    def get_fhe_op_count(self, n_ct: int) -> dict[str, int]:
+        """Count FHE primitive operations in _run_bsgs_core() for n_ct input ciphertexts.
+
+        Per ciphertext:
+          Power construction (to_compute powers via mult_relin + rescale):
+            len(to_compute) - 1  mult (relin) + rescale each  (power 1 is free)
+          Baby polynomial build per giant step g (giant_steps total):
+            (baby_steps - 1) mult_plain + rescale  (baby_step terms, b>=1)
+            (baby_steps - 2) add  (accumulate baby_poly)
+            1 add  (coeff0_pt)
+          Giant combine per g>0 where giant_power <= order:
+            1 mult (relin, bp * x_giant) + 1 rescale + 1 add  (result += term)
+            or 1 mult_plain (coeff0 only) + 1 rescale + 1 add
+        drop_level calls are free (no crypto cost).
+        """
+        order = self.order
+        baby_steps = int(np.ceil(np.sqrt(order + 1)))
+        giant_steps = int(np.ceil((order + 1) / baby_steps))
+
+        power_info = self._compute_power_info(order)
+        required, to_compute = self._determine_required_powers(order, baby_steps, giant_steps, power_info)
+
+        # Powers: each needs 1 mult_relin + 1 rescale (excluding power 1)
+        n_powers = len(to_compute) - 1  # subtract power 1
+        mult_powers = n_powers
+        rescale_powers = n_powers
+
+        # Baby polys per giant step
+        mult_plain_baby = 0
+        rescale_baby = 0
+        add_baby = 0
+        for g in range(giant_steps):
+            n_terms = 0
+            has_coeff0 = False
+            for b in range(baby_steps):
+                idx = g * baby_steps + b
+                if idx > order:
+                    break
+                if b == 0:
+                    has_coeff0 = True
+                else:
+                    n_terms += 1
+            mult_plain_baby += n_terms  # rescale(mult(x_copy, w_pt)) per term
+            rescale_baby += n_terms
+            if n_terms > 1:
+                add_baby += n_terms - 1  # accumulate baby_poly
+            if has_coeff0 and n_terms > 0:
+                add_baby += 1  # add coeff0_pt to baby_poly
+
+        # Giant combine: for g in 1..giant_steps-1 where g*baby_steps <= order
+        mult_giant = 0
+        rescale_giant = 0
+        add_giant = 0
+        for g in range(1, giant_steps):
+            if g * baby_steps > order:
+                break
+            mult_giant += 1  # relin(mult(bp, x_giant)) or mult(x_giant, coeff0)
+            rescale_giant += 1
+            add_giant += 1  # result[x_idx] += term
+
+        per_ct = {
+            'mult': mult_powers + mult_giant,
+            'mult_plain': mult_plain_baby,
+            'rescale': rescale_powers + rescale_baby + rescale_giant,
+            'add': add_baby + add_giant,
+            'rotate': 0,
+        }
+
+        return {k: v * n_ct for k, v in per_ct.items()}
+
     @staticmethod
     def compute_bsgs_level_cost(order):
         """Level cost of BSGS algorithm. Matches C++ bsgs_output_level logic."""

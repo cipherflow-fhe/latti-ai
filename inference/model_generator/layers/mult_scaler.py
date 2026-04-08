@@ -43,6 +43,19 @@ class MultScalarLayer:
         """Return weight_pt list with n_input_nodes elements."""
         return [CkksPlaintextRingtNode(f'mult_scalar_{layer_id}_{i}') for i in range(n_input_nodes)]
 
+    def get_fhe_op_count(self, n_ct: int) -> dict[str, int]:
+        """Count FHE primitive operations in call() for n_ct input ciphertexts.
+
+        Per ct: 1 mult (ct-pt) + 1 rescale.
+        """
+        return {
+            'rotate': 0,
+            'mult_plain': n_ct,
+            'mult': 0,
+            'add': 0,
+            'rescale': n_ct,
+        }
+
     def call(self, x1: list[DataNode], weight_pt: list[DataNode]):
         result: list[DataNode] = list()
 

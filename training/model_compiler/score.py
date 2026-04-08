@@ -15,8 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import sys
+from pathlib import Path
 
 import networkx as nx
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from components import (
     ComputeNode,
@@ -25,6 +29,26 @@ from components import (
     LayerAbstractGraph,
     config,
 )
+from inference.model_generator.layers.activation_layer import SquareLayer
+from inference.model_generator.layers.add_pack import AddLayer
+from inference.model_generator.layers.avgpool1d_layer import Avgpool1DLayer
+from inference.model_generator.layers.avgpool2d_layer import Avgpool2DLayer
+from inference.model_generator.layers.conv1d_packed_layer import Conv1DPackedLayer
+from inference.model_generator.layers.conv2d_depthwise import Conv2DPackedDepthwiseLayer
+from inference.model_generator.layers.conv2d_packed_layer import Conv2DPackedLayer
+from inference.model_generator.layers.dense_packed_layer import DensePackedLayer
+from inference.model_generator.layers.inverse_multiplexed_conv2d_layer import InverseMultiplexedConv2DLayer
+from inference.model_generator.layers.mult_scaler import MultScalarLayer
+from inference.model_generator.layers.multiplexed_conv1d_pack_layer import MultiplexedConv1DPackedLayer
+from inference.model_generator.layers.multiplexed_conv2d_pack_layer import MultiplexedConv2DPackedLayer
+from inference.model_generator.layers.multiplexed_conv2d_pack_layer_depthwise import (
+    MultiplexedConv2DPackedLayerDepthwise,
+)
+from inference.model_generator.layers.multiplexed_dw_conv1d_pack_layer import MultiplexedDWConv1DPackedLayer
+from inference.model_generator.layers.poly_relu0d import PolyRelu0D
+from inference.model_generator.layers.poly_relu1d import PolyRelu1D
+from inference.model_generator.layers.poly_relu2d import PolyRelu2D
+from inference.model_generator.layers.upsample_layer import UpsampleNearestLayer
 
 
 def get_multithread_rate_for_btp(task_num: int):
@@ -265,16 +289,16 @@ class FheScoreParam:
             self.kernel_shape = compute_node.kernel_shape
         if compute_node.layer_type in {'avgpool1d', 'avgpool2d'}:
             self.stride = compute_node.stride
-        if preds[0].dim == 2:
+        if preds[0].dim != 0:
             self.input_shape = preds[0].shape
             self.output_shape = succs[0].shape
             self.input_skip = dag.nodes[preds[0]]['skip']
             self.output_skip = dag.nodes[succs[0]]['skip']
-        else:
-            self.input_shape = preds[0].sp_info['shape']
-            self.output_shape = succs[0].sp_info['shape']
-            self.input_skip = preds[0].sp_info['skip']
-            self.output_skip = succs[0].sp_info['skip']
+        # else:
+        #     self.input_shape = preds[0].sp_info['shape']
+        #     self.output_shape = succs[0].sp_info['shape']
+        #     self.input_skip = preds[0].sp_info['skip']
+        #     self.output_skip = succs[0].sp_info['skip']
 
         self.pack = dag.nodes[preds[0]]['pack_num']
         self.pack_out = dag.nodes[succs[0]]['pack_num']
@@ -283,184 +307,349 @@ class FheScoreParam:
         self.output_channel = compute_node.channel_output
         self.n_packed_in = math.ceil(self.input_channel / self.pack)
         self.n_packed_out = math.ceil(self.output_channel / self.pack_out)
+        # self.level = level
         if level > 0:
             self.mult_score = mult_time[self.input_degree][level]
             self.mult_plain_score = mult_plain_time[self.input_degree][level]
             self.rescale_score = rescale_time[self.input_degree][level]
+        else:
+            self.mult_score = 0
+            self.mult_plain_score = 0
+            self.rescale_score = 0
         self.rotate_score = rotate_time[self.input_degree][level]
         self.add_score = add_time[self.input_degree][level]
 
     def get_score(self) -> float:
-        compute_score = 0.0
-        if 'conv' in self.compute_node.layer_type:
-            if self.compute_node.dim == 2:
-                if config.style == 'ordinary':
-                    if self.compute_node.groups == 1:
-                        n_mult_and_add_score = (
-                            (
-                                self.n_packed_in
-                                * self.pack
-                                * self.n_packed_out
-                                * self.kernel_shape[0]
-                                * self.kernel_shape[1]
-                            )
-                            * (self.mult_plain_score + self.add_score)
-                            / get_multithread_rate(self.n_packed_out)
-                        ) + self.n_packed_out * self.rescale_score / get_multithread_rate(self.n_packed_out)
-                    else:
-                        n_mult_and_add_score = (
-                            (self.n_packed_out * self.kernel_shape[0] * self.kernel_shape[1])
-                            * (self.mult_plain_score + self.add_score)
-                            / get_multithread_rate(self.n_packed_out)
-                        ) + self.n_packed_out * self.rescale_score / get_multithread_rate(self.n_packed_out)
+        """Compute layer latency score by instantiating the exact inference layer class,
+        calling get_fhe_op_count() to get primitive op counts, then multiplying by per-op
+        timing constants.
 
-                    if self.compute_node.groups == 1:
-                        n_rotate_step_1 = self.n_packed_in * (self.pack - 1)
-                        n_rotate_step_2 = (
-                            self.n_packed_in
-                            * self.pack
-                            * (self.kernel_shape[0] - 1 + self.kernel_shape[0] * (self.kernel_shape[1] - 1))
-                        )
-                        n_rotate_score = (
-                            n_rotate_step_1 / get_multithread_rate(self.n_packed_in)
-                            + n_rotate_step_2 / get_multithread_rate(self.n_packed_in * self.pack)
-                        ) * self.rotate_score
-                    else:
-                        n_rotate_step = self.n_packed_in * (
-                            self.kernel_shape[0] - 1 + self.kernel_shape[0] * (self.kernel_shape[1] - 1)
-                        )
-                        n_rotate_score = n_rotate_step / get_multithread_rate(self.n_packed_in) * self.rotate_score
+        op_counts keys: 'rotate', 'mult_plain', 'mult', 'add', 'rescale'
+        """
+        preds: list[FeatureNode] = list(self.dag.predecessors(self.compute_node))
+        n = self.input_degree  # poly_modulus_degree = 2*N_slots
+        layer_type = self.compute_node.layer_type
+        style = config.style
+
+        op_counts = self._build_layer_and_get_op_count(preds, n, layer_type, style)
+        score = (
+            op_counts['rotate'] * self.rotate_score
+            + op_counts['mult_plain'] * self.mult_plain_score
+            + op_counts['mult'] * self.mult_score
+            + op_counts['add'] * self.add_score
+            + op_counts['rescale'] * self.rescale_score
+        )
+        return score * self.acc_rate
+
+    def _build_layer_and_get_op_count(self, preds, n, layer_type, style):
+        """Instantiate the matching inference layer and return its get_fhe_op_count() dict.
+        Returns None if the layer type is not handled here.
+        """
+        node = self.compute_node
+        n_in = self.input_channel
+        n_out = self.output_channel
+        pack = self.pack
+        n_packed_in = self.n_packed_in  # ceil(n_in / pack)
+        n_packed_out = self.n_packed_out  # ceil(n_out / pack_out)
+
+        # ── conv2d ──────────────────────────────────────────────────────────
+        if layer_type == 'conv2d' and node.dim == 2:
+            input_shape = self.input_shape
+            kernel_shape = node.kernel_shape
+            stride = node.stride
+            skip = self.input_skip
+            groups = node.groups
+            is_depthwise = groups == n_out and groups != 1
+            is_big_size = getattr(node, 'is_big_size', False)
+
+            if is_big_size:
+                block_shape = config.block_shape
+                padding = [-1, -1]
+                next_stride = [
+                    math.ceil(input_shape[0] / block_shape[0]) // stride[0],
+                    math.ceil(input_shape[1] / block_shape[1]) // stride[1],
+                ]
+                layer = InverseMultiplexedConv2DLayer(
+                    n_out,
+                    n_in,
+                    input_shape,
+                    padding,
+                    kernel_shape,
+                    stride,
+                    next_stride,
+                    skip,
+                    block_shape,
+                )
+                return layer.get_fhe_op_count(n)
+
+            if style == 'ordinary':
+                if is_depthwise:
+                    layer = Conv2DPackedDepthwiseLayer(
+                        n_out,
+                        n_in,
+                        input_shape,
+                        kernel_shape,
+                        stride,
+                        skip,
+                        pack,
+                        n_packed_in,
+                        n_packed_out,
+                    )
                 else:
-                    x_size = (
-                        math.ceil(self.input_channel / self.pack)
-                        * math.ceil(self.input_shape[0] / config.block_shape[0])
-                        * math.ceil(self.input_shape[1] / config.block_shape[1])
+                    layer = Conv2DPackedLayer(
+                        n_out,
+                        n_in,
+                        input_shape,
+                        kernel_shape,
+                        stride,
+                        skip,
+                        pack,
+                        n_packed_in,
+                        n_packed_out,
                     )
+                return layer.get_fhe_op_count()
 
-                    n_block_per_ct = math.ceil(self.pack / (self.input_skip[0] * self.input_skip[1]))
-                    rotate_num1 = x_size / get_multithread_rate_for_block_rotation(x_size) * (n_block_per_ct - 1)
-                    rotated_size = x_size * n_block_per_ct
-                    rotate_num2 = (
-                        rotated_size
-                        / get_multithread_rate_for_kernel_rotation(rotated_size)
-                        * (self.kernel_shape[0] * self.kernel_shape[1] - 1)
-                    )
-                    weight_size = math.ceil(self.output_channel / n_block_per_ct)
-
-                    if self.stride[0] != 1 and self.input_skip[0] != 1:
-                        rotate_num3 = (
-                            weight_size
-                            / get_multithread_rate_for_weight_ops(weight_size)
-                            * (math.log2(self.input_skip[0]) * 2 + n_block_per_ct)
-                        )
-                    else:
-                        rotate_num3 = (
-                            weight_size
-                            / get_multithread_rate_for_weight_ops(weight_size)
-                            * (math.log2(self.input_skip[0]))
-                            * 2
-                        )
-
-                    n_in_ct = math.ceil(self.input_channel / self.pack)
-                    n_out_ct = math.ceil(self.output_channel / self.pack_out)
-                    if self.stride[0] != 1:
-                        mult_num = weight_size * (
-                            n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1] + n_block_per_ct
-                        )
-                    else:
-                        mult_num = weight_size * (
-                            n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1]
-                        )
-                    mult_num = mult_num / get_multithread_rate_for_weight_ops(weight_size)
-                    add_num = (
-                        weight_size
-                        / get_multithread_rate_for_weight_ops(weight_size)
-                        * (
-                            (math.log2(self.input_skip[0])) * 2
-                            + n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1]
-                        )
-                        + n_out_ct
-                    )
-
-                    n_rescale_score = (
-                        weight_size
-                        / get_multithread_rate_for_weight_ops(weight_size)
-                        * n_block_per_ct
-                        * self.rescale_score
-                    )
-                    n_mult_and_add_score = mult_num * self.mult_plain_score + add_num * self.add_score + n_rescale_score
-                    n_rotate_score = (rotate_num1 + rotate_num2 + rotate_num3) * self.rotate_score
+            # style == 'multiplexed'
+            n_in_channel_per_ct = pack
+            if is_depthwise:
+                layer = MultiplexedConv2DPackedLayerDepthwise(
+                    n_out,
+                    n_in,
+                    input_shape,
+                    kernel_shape,
+                    stride,
+                    skip,
+                    n_in_channel_per_ct,
+                    n_packed_in,
+                    n_packed_out,
+                )
             else:
-                # conv1d: cost derived from Conv1DPackedLayer::run_core
-                # step 1 - populate_rotations_1_side: (pack-1) rotations per input ct
-                n_rotate_step_1 = self.n_packed_in * (self.pack - 1)
-                # step 2 - populate_rotations_2_sides: (kernel_shape-1) rotations per rotated ct
-                n_rotate_step_2 = self.n_packed_in * self.pack * (self.kernel_shape[0] - 1)
-                n_rotate_score = (
-                    n_rotate_step_1 / get_multithread_rate(self.n_packed_in)
-                    + n_rotate_step_2 / get_multithread_rate(self.n_packed_in * self.pack)
-                ) * self.rotate_score
-                # step 3 - mult_add: n_packed_in*pack*kernel_shape mults+adds per output ct, then rescale
-                n_mult_and_add_score = (
-                    (self.n_packed_in * self.pack * self.n_packed_out * self.kernel_shape[0])
-                    * (self.mult_plain_score + self.add_score)
-                    / get_multithread_rate(self.n_packed_out)
-                ) + self.n_packed_out * self.rescale_score / get_multithread_rate(self.n_packed_out)
-            compute_score = n_mult_and_add_score + n_rotate_score
-
-            return compute_score * self.acc_rate
-        elif 'fc' in self.compute_node.layer_type:
-            if config.style == 'ordinary':
-                pred_node = list(self.dag.predecessors(self.compute_node))[0]
-                num = math.log2(self.dag.nodes[pred_node]['skip'][0])
-                n_mult_plain_score = (self.n_packed_in * self.pack * self.n_packed_out) * self.mult_plain_score
-                n_add_score = (self.n_packed_in * (self.pack - 1) + self.n_packed_out * num) * self.add_score
-                n_rotate_score = (
-                    self.n_packed_in * (self.pack - 1) / get_multithread_rate(self.n_packed_in)
-                    + self.n_packed_out * num
-                ) * self.rotate_score
-                compute_score = n_mult_plain_score + n_add_score + n_rotate_score
-                return compute_score * self.acc_rate
-            else:
-                n_block_input = math.ceil(self.input_channel / (self.input_skip[0] * self.input_skip[1]))
-                n_num_pre_ct = (
-                    self.input_degree
-                    / 2
-                    / (self.input_skip[0] * self.input_skip[1] * self.input_shape[0] * self.input_shape[1])
+                layer = MultiplexedConv2DPackedLayer(
+                    n_out,
+                    n_in,
+                    input_shape,
+                    kernel_shape,
+                    stride,
+                    skip,
+                    pack,
+                    n_packed_in,
+                    n_packed_out,
                 )
+            return layer.get_fhe_op_count()
 
-                n_packed_out_feature_for_mult_pack = math.ceil(self.output_channel / n_num_pre_ct)
-                x_size = math.ceil(self.input_channel / self.pack)
-                acc_rate = get_multithread_rate(n_packed_out_feature_for_mult_pack)
-                rot_time = (n_block_input - 1) * x_size + n_packed_out_feature_for_mult_pack / acc_rate * (
-                    math.log2(self.input_shape[0] * self.input_shape[1] * self.input_skip[0] * self.input_skip[1])
-                )
-                mult_time = n_packed_out_feature_for_mult_pack / acc_rate * (x_size * n_block_input)
+        # ── conv1d ──────────────────────────────────────────────────────────
+        elif layer_type == 'conv1d' and node.dim == 1:
+            input_shape_1d = self.input_shape[0]
+            kernel_shape_1d = node.kernel_shape[0]
+            stride_1d = node.stride[0]
+            skip_1d = self.input_skip[0] if isinstance(self.input_skip, list) else self.input_skip
+            groups = node.groups
+            is_depthwise = groups == n_out and groups != 1
 
-                add_time = n_packed_out_feature_for_mult_pack / acc_rate * (x_size * n_block_input + 1)
+            if style == 'multiplexed':
+                n_channel_per_ct = math.ceil(n // 2 / input_shape_1d)
+                n_packed_in_ch = math.ceil(n_in / n_channel_per_ct)
+                n_packed_out_ch = math.ceil(n_out / n_channel_per_ct)
+                if is_depthwise:
+                    n_packed_ct = math.ceil(n_out / n_channel_per_ct)
+                    layer = MultiplexedDWConv1DPackedLayer(
+                        n_out,
+                        input_shape_1d,
+                        kernel_shape_1d,
+                        stride_1d,
+                        skip_1d,
+                        n_channel_per_ct,
+                        n_packed_ct,
+                    )
+                else:
+                    layer = MultiplexedConv1DPackedLayer(
+                        n_out,
+                        n_in,
+                        input_shape_1d,
+                        kernel_shape_1d,
+                        stride_1d,
+                        skip_1d,
+                        n_channel_per_ct,
+                        n_packed_in_ch,
+                        n_packed_out_ch,
+                    )
+                return layer.get_fhe_op_count()
 
-                rescale_time = n_packed_out_feature_for_mult_pack / acc_rate
-                return (
-                    rot_time * self.rotate_score
-                    + mult_time * self.mult_plain_score
-                    + add_time * self.add_score
-                    + rescale_time * self.rescale_score
-                )
-        elif 'polyact' in self.compute_node.layer_type:
-            compute_score = (self.n_packed_in * (self.mult_score + self.add_score)) * (
-                math.ceil(math.log2(self.compute_node.order)) + 1
+            # style == 'ordinary'
+            n_channel_per_ct = int(n // 2 // input_shape_1d // skip_1d)
+            n_pack_in = math.ceil(n_in / n_channel_per_ct)
+            n_packed_out_ch = math.ceil(n_out / (n_channel_per_ct * stride_1d))
+            layer = Conv1DPackedLayer(
+                n_out,
+                n_in,
+                input_shape_1d,
+                kernel_shape_1d,
+                stride_1d,
+                skip_1d,
+                n_channel_per_ct,
+                n_pack_in,
+                n_packed_out_ch,
             )
-            return compute_score * self.acc_rate
-        elif self.compute_node.layer_type in {'avgpool1d', 'avgpool2d'}:
-            num = self.n_packed_in * (self.stride[0] - 1 + math.log2(self.stride[0]))
-            n_add_score = num * self.add_score
-            n_rotate_score = num * self.rotate_score
-            compute_score = n_add_score + n_rotate_score
-            return compute_score * self.acc_rate
-        elif 'add2d' == self.compute_node.layer_type:
-            n_add_score = self.n_packed_in * self.add_score
-            compute_score = n_add_score
-            return compute_score * self.acc_rate
+            return layer.get_fhe_op_count()
+
+        # ── fc0 (dense) ──────────────────────────────────────────────────────
+        elif 'fc' in layer_type:
+            from components import ReshapeComputeNode
+
+            pred = preds[0]
+            # pred_node = next(self.dag.predecessors(self.compute_node), None)
+            pred_com = next(self.dag.predecessors(pred), None)
+
+            if pred.dim == 0:
+                sp_info = pred.sp_info
+                special_shape = sp_info.get('shape', [1, 1])
+                if not (pred_com and isinstance(pred_com, ReshapeComputeNode)):
+                    # call_skip_0d path
+                    skip_0d = sp_info['skip'][0] if isinstance(sp_info.get('skip'), list) else 1
+                    n_channel_per_ct = int(n // 2 // skip_0d)
+                    pack_0d = n_channel_per_ct
+                    n_packed_in_feat = math.ceil(n_in / n_channel_per_ct)
+                    n_packed_out_feat = math.ceil(n_out / n_channel_per_ct)
+                    layer = DensePackedLayer(
+                        n_out,
+                        n_in,
+                        [1, 1],
+                        [1, 1],
+                        pack_0d,
+                        n_packed_in_feat,
+                        n_packed_out_feat,
+                    )
+                    return layer.get_fhe_op_count_skip_0d(n_packed_in_feat, skip_0d)
+
+                elif len(special_shape) == 1:
+                    # 1D multiplexed
+                    shape_1d = int(special_shape[0])
+                    skip_list = sp_info.get('skip', [1])
+                    skip_1d = int(skip_list[0]) if isinstance(skip_list, list) else int(skip_list)
+                    invalid_fill = sp_info.get('invalid_fill', [1])
+                    invalid_fill_1d = int(invalid_fill[0]) if isinstance(invalid_fill, list) else int(invalid_fill)
+                    block_size = shape_1d * skip_1d
+                    n_block_per_ct = int(n // 2) // block_size
+                    valid_sub = skip_1d // invalid_fill_1d
+                    n_channel_per_ct_1d = n_block_per_ct * valid_sub
+                    layer = DensePackedLayer(
+                        n_out,
+                        n_in,
+                        [shape_1d, 1],
+                        [skip_1d, 1],
+                        n_channel_per_ct_1d,
+                        math.ceil(n_in / n_channel_per_ct_1d),
+                        math.ceil(n_out / n_block_per_ct),
+                        invalid_fill=[invalid_fill_1d, 1],
+                    )
+                    n_input_ct = math.ceil(n_in / n_channel_per_ct_1d)
+                    return layer.get_fhe_op_count_1d_multiplexed(n_input_ct, n)
+
+                else:
+                    # 2D multiplexed
+                    special_skip = sp_info.get('skip', [1, 1])
+                    invalid_fill = sp_info.get('invalid_fill', [1, 1])
+                    n_ct_mult = math.ceil(
+                        n // 2 / (special_shape[0] * special_skip[0] * special_shape[1] * special_skip[1])
+                    )
+                    layer = DensePackedLayer(
+                        n_out,
+                        n_in,
+                        special_shape,
+                        special_skip,
+                        n_ct_mult,
+                        n_in,
+                        n_out,
+                        invalid_fill=invalid_fill,
+                    )
+                    n_input_ct = math.ceil(n_in / pack)
+                    return layer.get_fhe_op_count_multiplexed(n_input_ct, n)
+            return None
+
+        # ── avgpool ──────────────────────────────────────────────────────────
+        elif layer_type == 'avgpool2d':
+            input_shape = self.input_shape
+            stride = node.stride
+            skip = self.input_skip
+            n_input_ct = n_packed_in
+            layer = Avgpool2DLayer(stride, input_shape, channel=n_in, skip=skip)
+            is_adaptive = getattr(node, 'is_adaptive_avgpool', True)
+            is_big_size = getattr(node, 'is_big_size', False)
+            if is_big_size:
+                block_shape = config.block_shape
+                block_expansion = [
+                    math.ceil(input_shape[0] / block_shape[0]),
+                    math.ceil(input_shape[1] / block_shape[1]),
+                ]
+                return layer.get_fhe_op_count_interleaved(n_input_ct, n)
+            if is_adaptive:
+                if style == 'ordinary':
+                    return layer.get_fhe_op_count_adaptive(n_input_ct, n)
+                return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack)
+            # non-adaptive multiplexed
+            return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack)
+
+        elif layer_type == 'avgpool1d':
+            input_shape = self.input_shape
+            stride = node.stride
+            skip_1d = self.input_skip[0] if isinstance(self.input_skip, list) else self.input_skip
+            layer = Avgpool1DLayer(stride[0], input_shape[0], channel=n_in, skip=skip_1d)
+            is_adaptive = getattr(node, 'is_adaptive_avgpool', True)
+            if is_adaptive:
+                return layer.get_fhe_op_count_adaptive(n_input_ct, n)
+            return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack)
+
+        # ── polyact / activation ─────────────────────────────────────────────
+        elif layer_type == 'polyact':
+            pred = preds[0]
+            order = getattr(node, 'order', 0)
+            if pred.dim == 0:
+                skip_0d = pred.sp_info['skip'][0] if isinstance(pred.sp_info.get('skip'), list) else 1
+                n_channel_per_ct_0d = int(n // 2 // skip_0d)
+                layer = PolyRelu0D(order, skip_0d, n_channel_per_ct_0d)
+                n_input_ct = n_packed_in
+                return layer.get_fhe_op_count_bsgs_feature0d(n_input_ct)
+            if pred.dim == 1:
+                shape_1d = pred.shape[0]
+                skip_1d = pred.sp_info['skip'][0] if isinstance(pred.sp_info.get('skip'), list) else 1
+                if style == 'multiplexed':
+                    n_channel_per_ct_1d = int(n // 2 // shape_1d)
+                    layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
+                    return layer.get_fhe_op_count_bsgs_mux(n_packed_in)
+                n_channel_per_ct_1d = int(n // 2 // shape_1d // skip_1d)
+                layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
+                return layer.get_fhe_op_count_bsgs_skip(n_packed_in)
+            # dim == 2
+            input_shape = self.input_shape
+            skip = self.input_skip
+            layer = PolyRelu2D(input_shape, order, skip, pack)
+            return layer.get_fhe_op_count_call(n_packed_in)
+
+        # ── mult_scalar ──────────────────────────────────────────────────────
+        elif layer_type == 'mult_scalar':
+            layer = MultScalarLayer()
+            return layer.get_fhe_op_count(n_packed_in)
+
+        # ── add / add2d ──────────────────────────────────────────────────────
+        elif layer_type in ('add', 'add2d'):
+            layer = AddLayer()
+            return layer.get_fhe_op_count(n_packed_in)
+
+        # ── upsample_nearest ────────────────────────────────────────────────
+        elif layer_type in ('upsample_nearest', 'resize'):
+            input_shape = self.input_shape
+            skip = self.input_skip
+            upsample_factor = getattr(node, 'upsample_factor', [1, 1])
+            layer = UpsampleNearestLayer(
+                shape=input_shape,
+                skip=skip,
+                upsample_factor=upsample_factor,
+                n_channel_per_ct=pack,
+                level=self.input_mult_level,
+            )
+            return layer.get_fhe_op_count(n_in)
+        else:
+            raise NotImplementedError(f"Unsupported layer type: '{layer_type}'")
 
 
 class MpcScoreParam:

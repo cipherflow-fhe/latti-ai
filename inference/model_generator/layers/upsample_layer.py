@@ -63,6 +63,78 @@ class UpsampleNearestLayer:
         # Calculate the number of blocks per ciphertext
         self.n_block_per_ct = (n_channel_per_ct + skip[0] * skip[1] - 1) // (skip[0] * skip[1])
 
+    def get_fhe_op_count(self, n_channel: int) -> dict[str, int]:
+        """Count FHE primitive operations in call() for n_channel total channels.
+
+        Stage 1 (per input ct, n_ct = ceil(n_channel / n_channel_per_ct)):
+          - hoisted rotations: simulate r_num steps, sum naf_weight for unique non-zero steps per ct
+          - n_channel mult (ct-pt mask) + n_channel rescale
+        Stage 2: (n_channel - n_packed_out) adds for repacking
+        Stage 3: per output ct: log2(factor_h) rotate+add + log2(factor_w) rotate+add
+          (steps are powers of 2, naf_weight = 1 each)
+        """
+        import math
+        from inference.model_generator.layers.fhe_op_utils import naf_weight
+
+        factor_h, factor_w = self.upsample_factor
+        out_channels_per_ct = self.n_channel_per_ct // (factor_h * factor_w)
+        n_ct = math.ceil(n_channel / self.n_channel_per_ct)
+        n_packed_out = math.ceil(n_channel / out_channels_per_ct)
+
+        # Stage 1: simulate step computation per ct, sum naf_weight for unique non-zero steps
+        rotate_stage1 = 0
+        for idx in range(n_ct):
+            steps = []
+            for i in range(self.n_channel_per_ct):
+                channel_id = idx * self.n_channel_per_ct + i
+                if channel_id >= n_channel:
+                    steps.append(0)
+                    continue
+                rp = channel_id % out_channels_per_ct
+                r_num0 = (
+                    (rp // (self.skip[0] * self.skip[1] // (factor_h * factor_w)))
+                    * self.skip[0]
+                    * self.skip[1]
+                    * self.shape[0]
+                    * self.shape[1]
+                )
+                r_num1 = (
+                    ((rp % (self.skip[0] * self.skip[1] // (factor_h * factor_w))) // (self.skip[1] // factor_w))
+                    * self.shape[1]
+                    * self.skip[1]
+                )
+                r_num2 = rp % (self.skip[1] // factor_w)
+                lp = channel_id % self.n_channel_per_ct
+                l_num0 = (
+                    (lp // (self.skip[0] * self.skip[1])) * self.skip[0] * self.skip[1] * self.shape[0] * self.shape[1]
+                )
+                l_num1 = ((lp % (self.skip[0] * self.skip[1])) // self.skip[1]) * self.shape[1] * self.skip[1]
+                l_num2 = lp % self.skip[1]
+                r_num = -r_num0 - r_num1 - r_num2 + l_num0 + l_num1 + l_num2
+                steps.append(r_num)
+            unique_non_zero = set(s for s in steps if s != 0)
+            rotate_stage1 += sum(naf_weight(s) for s in unique_non_zero)
+
+        mult_stage1 = n_channel
+        rescale_stage1 = n_channel
+
+        # Stage 2: repacking adds
+        add_stage2 = n_channel - n_packed_out
+
+        # Stage 3: nearest-neighbor replication (steps are powers of 2, naf_weight = 1 each)
+        log2_h = int(math.ceil(math.log2(factor_h))) if factor_h > 1 else 0
+        log2_w = int(math.ceil(math.log2(factor_w))) if factor_w > 1 else 0
+        rotate_stage3 = n_packed_out * (log2_h + log2_w)
+        add_stage3 = n_packed_out * (log2_h + log2_w)
+
+        return {
+            'rotate': rotate_stage1 + rotate_stage3,
+            'mult_plain': mult_stage1,
+            'mult': 0,
+            'add': add_stage2 + add_stage3,
+            'rescale': rescale_stage1,
+        }
+
     def make_pt_nodes(self, layer_id, n_channel):
         """Return select_tensor_pt list.
 

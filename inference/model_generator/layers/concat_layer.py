@@ -37,6 +37,32 @@ class ConcatLayer:
         """
         pass
 
+    def get_fhe_op_count(
+        self, total_channels: int, n_channel_per_ct: int, input_n_channels: list[int] | None = None
+    ) -> dict[str, int]:
+        """Count FHE primitive operations.
+
+        call() / call_multiple_inputs(): pure list merge, zero FHE ops.
+        call_multiple_inputs_uneven(): total_channels mult (mask) + up to total_channels rotate
+          + (total_channels - n_out_ct) add + n_out_ct rescale.
+          n_out_ct = ceil(total_channels / n_channel_per_ct).
+        Pass input_n_channels to get the uneven-concat count; omit for the even fast path.
+        """
+        import math
+
+        if input_n_channels is None:
+            # call() / call_multiple_inputs(): no FHE ops
+            return {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0}
+        # call_multiple_inputs_uneven()
+        n_out_ct = math.ceil(total_channels / n_channel_per_ct)
+        return {
+            'rotate': total_channels,  # one potential rotate per global channel
+            'mult_plain': total_channels,  # one mask mult per global channel
+            'mult': 0,
+            'add': total_channels - n_out_ct,  # accumulate into each output ct
+            'rescale': n_out_ct,
+        }
+
     def call(self, x1: list[CkksCiphertextNode], x2: list[CkksCiphertextNode]) -> list[CkksCiphertextNode]:
         """
         Concatenate two input feature maps (along channel dimension)
@@ -60,6 +86,14 @@ class ConcatLayer:
         for elem in x2:
             result.append(elem)
         return result
+
+    def get_fhe_op_count_multiple_inputs(self) -> dict[str, int]:
+        """Count FHE primitive operations in call_multiple_inputs().
+
+        call_multiple_inputs() is a fast path that simply merges node lists.
+        No homomorphic operations are performed.
+        """
+        return {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0}
 
     def call_multiple_inputs(self, inputs: list[list[CkksCiphertextNode]]) -> list[CkksCiphertextNode]:
         """
@@ -85,6 +119,74 @@ class ConcatLayer:
                 result.append(elem)
 
         return result
+
+    def get_fhe_op_count_multiple_inputs_uneven(
+        self,
+        input_n_channels: list[int],
+        n_channel_per_ct: int,
+        shape: list[int],
+        skip: list[int],
+    ) -> dict[str, int]:
+        """Count FHE primitive operations in call_multiple_inputs_uneven().
+
+        'rotate' is the total primitive RotateColUnit count, computed by simulating
+        each rot_step and applying NAF decomposition (matching get_glk_col() in
+        custom_task.py). Each rotate_cols call costs naf_weight(rot_step) primitives.
+
+        Per global channel:
+          - 1 mult_plain (mask)
+          - naf_weight(rot_step) primitive rotates (0 when rot_step == 0)
+        Per output ct:
+          - (n_channels_in_ct - 1) adds
+          - 1 rescale
+        where n_out_ct = ceil(total_channels / n_channel_per_ct).
+        """
+        import math
+        from inference.model_generator.layers.fhe_op_utils import naf_weight
+
+        n_channel_per_block = skip[0] * skip[1]
+        block_size = skip[0] * shape[0] * skip[1] * shape[1]
+        total_channels = sum(input_n_channels)
+        n_out_ct = math.ceil(total_channels / n_channel_per_ct)
+
+        total_rotate = 0
+        for out_ct_idx in range(n_out_ct):
+            for ch_in_ct in range(n_channel_per_ct):
+                global_ch = out_ct_idx * n_channel_per_ct + ch_in_ct
+                if global_ch >= total_channels:
+                    break
+
+                local_ch = global_ch
+                for n_ch in input_n_channels:
+                    if local_ch < n_ch:
+                        break
+                    local_ch -= n_ch
+
+                src_channel_in_ct = local_ch % n_channel_per_ct
+                src_block = src_channel_in_ct // n_channel_per_block
+                src_offset = src_channel_in_ct % n_channel_per_block
+                src_cx = src_offset // skip[1]
+                src_cy = src_offset % skip[1]
+                src_slot_base = src_block * block_size + src_cx * (shape[1] * skip[1]) + src_cy
+
+                dst_channel_in_ct = ch_in_ct
+                dst_block = dst_channel_in_ct // n_channel_per_block
+                dst_offset = dst_channel_in_ct % n_channel_per_block
+                dst_cx = dst_offset // skip[1]
+                dst_cy = dst_offset % skip[1]
+                dst_slot_base = dst_block * block_size + dst_cx * (shape[1] * skip[1]) + dst_cy
+
+                rot_step = -(dst_slot_base - src_slot_base)
+                if rot_step != 0:
+                    total_rotate += naf_weight(rot_step)
+
+        return {
+            'rotate': total_rotate,
+            'mult_plain': total_channels,
+            'mult': 0,
+            'add': total_channels - n_out_ct,
+            'rescale': n_out_ct,
+        }
 
     def call_multiple_inputs_uneven(
         self,

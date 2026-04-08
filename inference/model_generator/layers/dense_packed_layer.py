@@ -56,6 +56,134 @@ class DensePackedLayer:
 
         self.mark: int = 0
 
+    def get_fhe_op_count_skip_0d(self, n_input_ct: int, skip_0d: int) -> dict[str, int]:
+        """Count FHE primitive operations in call_skip_0d().
+
+        Baby-step rotations per input ct: steps b*skip_0d for b in 1..bsgs_bs-1.
+        Per output packed feature, per input ct, per giant step g:
+          - inner accumulate: bsgs_bs mult_plain + (bsgs_bs-1) add
+          - giant-step rotate (g > 0): step = g*bsgs_bs*skip_0d, cost = naf_weight(step)
+          - add partial to total (g > 0): 1 add
+        After all g: 1 rescale + 1 add (bias).
+        """
+        from inference.model_generator.layers.fhe_op_utils import naf_weight
+
+        bsgs_bs = int(math.ceil(math.sqrt(self.pack)))
+        bsgs_gs = int(math.ceil(self.pack / bsgs_bs))
+
+        rotate_baby = n_input_ct * sum(naf_weight(b * skip_0d) for b in range(1, bsgs_bs))
+        rotate_giant = (
+            self.n_packed_out_feature * n_input_ct * sum(naf_weight(g * bsgs_bs * skip_0d) for g in range(1, bsgs_gs))
+        )
+        rotate_total = rotate_baby + rotate_giant
+
+        mult_plain_total = self.n_packed_out_feature * n_input_ct * bsgs_gs * bsgs_bs
+        # adds: (bsgs_bs-1) inner + (bsgs_gs-1) outer per (out,in_ct) + 1 bias per out
+        add_total = (
+            self.n_packed_out_feature * n_input_ct * (bsgs_gs * (bsgs_bs - 1) + (bsgs_gs - 1))
+            + self.n_packed_out_feature
+        )
+        rescale_total = self.n_packed_out_feature
+
+        return {
+            'rotate': rotate_total,
+            'mult_plain': mult_plain_total,
+            'mult': 0,
+            'add': add_total,
+            'rescale': rescale_total,
+        }
+
+    def get_fhe_op_count_multiplexed(self, n_input_ct: int, n: int) -> dict[str, int]:
+        """Count FHE primitive operations in call_multiplexed().
+
+        input_ct_shape = [input_shape[0]*skip[0], input_shape[1]*skip[1]]
+        block_size = input_ct_shape[0] * input_ct_shape[1]  (power of 2)
+        n_num_pre_ct = ceil(N/2 / (block_size))
+        n_block_input = ceil(n_channel / (n_num_pre_ct * n_channel_per_block)) * n_num_pre_ct
+        n_packed_out = ceil(n_out_channel / n_num_pre_ct)
+
+        Rotations per input ct: steps k*block_size for k in 1..n_num_pre_ct-1.
+          block_size is power of 2, so naf_weight(k*block_size) = naf_weight(k).
+        Per output packed feature:
+          mult_plain: n_block_input, add: n_block_input-1 (accumulate) + 1 (bias), rescale: 1
+          fold: log2(block_size) rotate + log2(block_size) add
+        """
+        from inference.model_generator.layers.fhe_op_utils import naf_weight
+
+        input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
+        N_half = int(n / 2)
+        n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
+        valid_skip_0 = self.skip[0] // self.invalid_fill[0]
+        valid_skip_1 = self.skip[1] // self.invalid_fill[1]
+        n_channel_per_block = valid_skip_0 * valid_skip_1
+        n_channel = self.n_in_channel // (self.input_shape[0] * self.input_shape[1])
+        n_block_input = int(np.ceil(n_channel / (n_num_pre_ct * n_channel_per_block))) * n_num_pre_ct
+        n_packed_out = int(np.ceil(self.n_out_channel / n_num_pre_ct))
+        block_size = input_ct_shape[0] * input_ct_shape[1]
+        log2_block = int(math.log2(block_size))
+
+        rotate_expand = n_input_ct * sum(naf_weight(k) for k in range(1, n_num_pre_ct))
+        rotate_fold = n_packed_out * log2_block
+        rotate_total = rotate_expand + rotate_fold
+
+        mult_plain_total = n_packed_out * n_block_input
+        add_total = n_packed_out * (n_block_input - 1 + 1 + log2_block)  # accum + bias + fold
+        rescale_total = n_packed_out
+
+        return {
+            'rotate': rotate_total,
+            'mult_plain': mult_plain_total,
+            'mult': 0,
+            'add': add_total,
+            'rescale': rescale_total,
+        }
+
+    def get_fhe_op_count_1d_multiplexed(self, n_input_ct: int, n: int) -> dict[str, int]:
+        """Count FHE primitive operations in call_1d_multiplexed().
+
+        block_size = shape * skip  (power of 2)
+        n_block_per_ct = N/2 // block_size
+        n_valid_per_ct = n_block_per_ct * (skip // invalid_fill)
+        n_actual_channels = n_in_channel // shape
+        n_block_input = ceil(n_actual_channels / n_valid_per_ct) * n_block_per_ct
+        n_packed_out = ceil(n_out_channel / n_block_per_ct)
+
+        Rotations per input ct: steps k*block_size for k in 1..n_block_per_ct-1.
+          block_size is power of 2, so naf_weight(k*block_size) = naf_weight(k).
+        Per output group: mult_plain: n_block_input, add: n_block_input (accum + bias),
+          rescale: 1, fold: log2(block_size) rotate + log2(block_size) add.
+        """
+        from inference.model_generator.layers.fhe_op_utils import naf_weight
+
+        N_half = n // 2
+        shape = int(self.input_shape[0])
+        skip_val = int(self.skip[0])
+        invalid_fill_val = int(self.invalid_fill[0])
+        block_size = shape * skip_val
+        n_block_per_ct = N_half // block_size
+        valid_sub = skip_val // invalid_fill_val
+        n_valid_per_ct = n_block_per_ct * valid_sub
+        n_actual_channels = self.n_in_channel // shape
+        n_block_input = int(np.ceil(n_actual_channels / n_valid_per_ct)) * n_block_per_ct
+        n_packed_out = int(np.ceil(self.n_out_channel / n_block_per_ct))
+        log2_block = int(math.log2(block_size))
+
+        rotate_expand = n_input_ct * sum(naf_weight(k) for k in range(1, n_block_per_ct))
+        rotate_fold = n_packed_out * log2_block
+        rotate_total = rotate_expand + rotate_fold
+
+        mult_plain_total = n_packed_out * n_block_input
+        add_total = n_packed_out * (n_block_input + log2_block)  # accum(n_block_input-1) + bias + fold
+        rescale_total = n_packed_out
+
+        return {
+            'rotate': rotate_total,
+            'mult_plain': mult_plain_total,
+            'mult': 0,
+            'add': add_total,
+            'rescale': rescale_total,
+        }
+
     @staticmethod
     def populate_rotations_1_side(x: CkksCiphertextNode, n_rotation: int, unit: int) -> list[DataNode]:
         result: list[DataNode] = [x]
