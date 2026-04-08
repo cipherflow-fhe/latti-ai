@@ -26,6 +26,19 @@ class AddLayer:
     def __init__(self):
         return
 
+    def get_fhe_op_count(self, n_ct: int) -> dict[str, int]:
+        """Count FHE primitive operations in call() for n_ct pairs.
+
+        Per pair: 1 add.
+        """
+        return {
+            'rotate': 0,
+            'mult_plain': 0,
+            'mult': 0,
+            'add': n_ct,
+            'rescale': 0,
+        }
+
     def call(
         self,
         x1: list[DataNode],

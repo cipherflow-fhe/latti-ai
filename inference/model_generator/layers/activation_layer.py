@@ -26,6 +26,19 @@ class SquareLayer:
     def __init__(self, level):
         self.level = level
 
+    def get_fhe_op_count(self, n_ct: int) -> dict[str, int]:
+        """Count FHE primitive operations in call() for n_ct input ciphertexts.
+
+        Per ct: 1 mult_relin (ct-ct mult) + 1 rescale.
+        """
+        return {
+            'rotate': 0,
+            'mult_plain': 0,
+            'mult': n_ct,
+            'add': 0,
+            'rescale': n_ct,
+        }
+
     def call(self, x: list[CkksCiphertextNode]):
         res: list[CkksCiphertextNode] = list()
         for i in range(len(x)):

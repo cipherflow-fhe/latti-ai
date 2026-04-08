@@ -73,6 +73,115 @@ class MultiplexedConv2DPackedLayer:
         self.zero_inserted_skip[0] = self.skip[0] * self.stride[0] / self.upsample_factor[0]
         self.zero_inserted_skip[1] = self.skip[1] * self.stride[1] / self.upsample_factor[1]
 
+    def get_fhe_op_count(self) -> dict[str, int]:
+        """Count FHE primitive operations in call(), mirroring its structure exactly.
+
+        step 1 - block direction: populate_rotations_1_side over n_packed_in_channel cts:
+          unit = input_shape[0]*skip[0]*input_shape[1]*skip[1] (power of 2)
+          steps: [1*unit, ..., (n_block_per_ct-1)*unit]
+          naf_weight(i*unit) = naf_weight(i) since unit is power of 2
+          primitive rotates = n_packed_in_channel * sum(naf_weight(i) for i in 1..n_block_per_ct-1)
+
+        step 2 - kernel direction: gen_rotated_x over n_packed_in_channel*n_block_per_ct cts:
+          input_rotate_units[0] = skip[0]*input_shape[1]*skip[1] (power of 2)
+          input_rotate_units[1] = skip[1] (power of 2)
+          row direction: populate_rotations_2_sides(c, kh, unit_0), fc0=kh//2
+            primitive rotates per ct = sum(naf_weight(i) for i in range(-fc0,kh-fc0) if i!=0)
+          col direction: kh calls of populate_rotations_2_sides(r, kw, unit_1), fc1=kw//2
+            primitive rotates per ct = kh * sum(naf_weight(j) for j in range(-fc1,kw-fc1) if j!=0)
+
+        step 3 - per output group (size_0 = ceil(n_out_channel / n_block_per_ct)):
+          mult_plain: size_1 * kernel_size  (size_1 = n_packed_in_channel * n_block_per_ct)
+          add: same - 1 (accumulate)
+          rescale: 1
+          sum_slot steps are powers of 2 -> floor(log2(skip)) rotates/adds each
+
+        stride=1,skip=1 path: +1 add (bias) per output group
+        stride>1 path: simulate rot_step per (ct_idx, i) with naf_weight;
+          valid_n mult (mask) + valid_n rescale; accumulate adds + bias adds
+        """
+        from inference.model_generator.layers.fhe_op_utils import naf_weight
+
+        n_pack_in_channel = int(np.ceil(self.n_in_channel / self.n_channel_per_ct))
+        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
+        size_0 = int(np.ceil(self.n_out_channel / self.n_block_per_ct))
+        size_1 = n_pack_in_channel * self.n_block_per_ct
+        kh, kw = self.kernel_shape
+
+        # step 1: block rotations (unit is power of 2, naf_weight(i*unit) = naf_weight(i))
+        rotate_block = self.n_packed_in_channel * sum(naf_weight(i) for i in range(1, self.n_block_per_ct))
+
+        # step 2: kernel rotations (units are powers of 2)
+        fc0 = kh // 2
+        fc1 = kw // 2
+        rots_row = sum(naf_weight(i) for i in range(-fc0, kh - fc0) if i != 0)
+        rots_col = kh * sum(naf_weight(j) for j in range(-fc1, kw - fc1) if j != 0)
+        rotate_kernel = (self.n_packed_in_channel * self.n_block_per_ct) * (rots_row + rots_col)
+
+        log2_skip0 = int(np.floor(np.log2(self.skip[0]))) if self.skip[0] > 1 else 0
+        log2_skip1 = int(np.floor(np.log2(self.skip[1]))) if self.skip[1] > 1 else 0
+        rotate_sum_slot = size_0 * (log2_skip0 + log2_skip1)
+
+        mult_plain_total = size_0 * size_1 * kernel_size
+        add_accum = size_0 * (size_1 * kernel_size - 1)
+        add_sum_slot = size_0 * (log2_skip0 + log2_skip1)
+
+        if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
+            rotate_stride = 0
+            mult_stride = 0
+            rescale_stride = 0
+            add_bias = size_0  # one bias add per group
+            rescale_base = size_0
+        else:
+            # Simulate rot_step for each (ct_idx, i), cost = naf_weight(rot_step)
+            rotate_stride = 0
+            for ct_idx in range(size_0):
+                valid_n = min(self.n_block_per_ct, self.n_out_channel - ct_idx * self.n_block_per_ct)
+                steps = []
+                for i in range(valid_n):
+                    n_block = (ct_idx * self.n_block_per_ct + i) % (
+                        self.n_channel_per_ct
+                        * self.stride[0]
+                        * self.stride[1]
+                        / (self.upsample_factor[0] * self.upsample_factor[1])
+                    )
+                    n_block_residue = (
+                        np.floor(n_block / (self.zero_inserted_skip[0] * self.zero_inserted_skip[1]))
+                        * self.skip[0]
+                        * self.skip[1]
+                        * self.input_shape[0]
+                        * self.input_shape[1]
+                    )
+                    n_skip = (
+                        np.floor(
+                            (n_block % (self.zero_inserted_skip[0] * self.zero_inserted_skip[1]))
+                            / self.zero_inserted_skip[1]
+                        )
+                        * self.input_shape[1]
+                        * self.skip[1]
+                    )
+                    rot_step = (
+                        -n_block_residue
+                        - n_skip
+                        - n_block % self.zero_inserted_skip[1]
+                        + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
+                    )
+                    steps.append(int(rot_step))
+                rotate_stride += sum(naf_weight(s) for s in steps)
+            n_packed_out = self.n_packed_out_channel
+            mult_stride = self.n_out_channel
+            rescale_stride = self.n_out_channel
+            add_bias = n_packed_out * 2  # bias add + accumulate per output ct
+            rescale_base = size_0
+
+        return {
+            'rotate': rotate_block + rotate_kernel + rotate_sum_slot + rotate_stride,
+            'mult_plain': mult_plain_total + mult_stride,
+            'mult': 0,
+            'add': add_accum + add_sum_slot + add_bias,
+            'rescale': rescale_base + rescale_stride,
+        }
+
     @staticmethod
     def populate_rotations_1_side(x: CkksCiphertextNode, n_rotation: int, unit: int) -> list[DataNode]:
         result: list[CkksCiphertextNode] = [x]

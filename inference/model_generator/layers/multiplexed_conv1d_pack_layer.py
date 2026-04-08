@@ -57,6 +57,94 @@ class MultiplexedConv1DPackedLayer:
         self.input_shape_ct: int = input_shape * skip
         self.n_block_per_ct: int = int(np.ceil(n_channel_per_ct / skip))
 
+    def get_fhe_op_count(self) -> dict[str, int]:
+        """Count FHE primitive operations in call(), mirroring its structure exactly.
+
+        gen_rotated_x over n_packed_in_channel cts:
+          per ct: populate_rotations_2_sides(kernel_shape, skip) — fc=kernel_shape//2
+            steps i*skip for i in range(-fc, kernel_shape-fc) if i!=0
+            primitive rotates per ct = sum(naf_weight(i*skip) for those i)
+
+        Per output group (n_out_groups = ceil(n_out_channel / n_block_per_ct)):
+          block rotations for b>0: kernel_shape calls of rotate_cols(rotated_x[in_ct][k],[b*input_shape_ct])
+            per (in_ct, b): kernel_shape * naf_weight(b * input_shape_ct) rotates
+          mult_plain: n_packed_in_channel * n_block_per_ct * kernel_shape per group
+          add (accumulate): same - 1
+          sum_slot(skip, 1): floor(log2(skip)) rotate + add each (steps are powers of 2)
+          rescale: 1 per group
+
+        No-rearrange path: n_out_groups add (bias).
+        Rearrange path (skip>1 or stride>1):
+          n_out_channel mult (select) + n_out_channel rescale
+          + simulate rotation = target_base - source_base per (po, ch_local) with naf_weight
+          + (n_out_channel - n_packed_out) add (accumulate) + n_packed_out add (bias)
+        """
+        from inference.model_generator.layers.fhe_op_utils import naf_weight
+
+        n_out_groups = int(np.ceil(self.n_out_channel / self.n_block_per_ct))
+        n_packed_out = int(np.ceil(self.n_out_channel / self.n_channel_per_ct))
+        terms_per_group = self.n_packed_in_channel * self.n_block_per_ct * self.kernel_shape
+
+        # Kernel rotations: steps i*skip for i in range(-fc, ks-fc) if i!=0
+        fc = self.kernel_shape // 2
+        rots_per_ct = sum(naf_weight(i * self.skip) for i in range(-fc, self.kernel_shape - fc) if i != 0)
+        rotate_kernel = self.n_packed_in_channel * rots_per_ct
+
+        # Block rotations: kernel_shape * naf_weight(b * input_shape_ct) per (wg, in_ct, b>0)
+        rotate_block = (
+            n_out_groups
+            * self.n_packed_in_channel
+            * self.kernel_shape
+            * sum(naf_weight(b * self.input_shape_ct) for b in range(1, self.n_block_per_ct))
+        )
+
+        log2_skip = int(np.floor(np.log2(self.skip))) if self.skip > 1 else 0
+        rotate_sum_slot = n_out_groups * log2_skip
+
+        mult_plain_total = n_out_groups * terms_per_group
+        add_accum = n_out_groups * (terms_per_group - 1)
+        add_sum_slot = n_out_groups * log2_skip
+        rescale_base = n_out_groups
+
+        needs_rearrange = self.skip > 1 or self.stride > 1
+        if not needs_rearrange:
+            rotate_rearrange = 0
+            mult_rearrange = 0
+            rescale_rearrange = 0
+            add_bias = n_out_groups
+        else:
+            # Simulate rotation = target_base - source_base per (po, ch_local)
+            skip_out = self.skip * self.stride
+            output_shape_val = self.input_shape // self.stride
+            rotate_rearrange = 0
+            for po in range(n_packed_out):
+                for ch_local in range(self.n_channel_per_ct):
+                    out_ch = po * self.n_channel_per_ct + ch_local
+                    if out_ch >= self.n_out_channel:
+                        break
+                    wg = out_ch // self.n_block_per_ct
+                    t = out_ch % self.n_block_per_ct
+                    if wg >= n_out_groups:
+                        break
+                    source_base = t * self.input_shape_ct
+                    group = ch_local // skip_out
+                    ch_offset = ch_local % skip_out
+                    target_base = group * (output_shape_val * skip_out) + ch_offset
+                    rotation = target_base - source_base
+                    if rotation != 0:
+                        rotate_rearrange += naf_weight(rotation)
+            mult_rearrange = self.n_out_channel  # select tensor mult per channel
+            rescale_rearrange = self.n_out_channel
+            add_bias = (self.n_out_channel - n_packed_out) + n_packed_out  # accumulate + bias
+
+        return {
+            'rotate': rotate_kernel + rotate_block + rotate_sum_slot + rotate_rearrange,
+            'mult_plain': mult_plain_total + mult_rearrange,
+            'mult': 0,
+            'add': add_accum + add_sum_slot + add_bias,
+            'rescale': rescale_base + rescale_rearrange,
+        }
+
     @staticmethod
     def populate_rotations_2_sides(x: CkksCiphertextNode, n_rotation: int, unit: int) -> list[CkksCiphertextNode]:
         filter_center = n_rotation // 2

@@ -37,6 +37,26 @@ class Avgpool2DLayer:
         if skip[0] & (skip[0] - 1) != 0 or skip[1] & (skip[1] - 1) != 0:
             raise ValueError(f'skip must be powers of 2, got: [{skip[0]}, {skip[1]}]')
 
+    def get_fhe_op_count(self, n_ct: int) -> dict[str, int]:
+        """Count FHE primitive operations in call() for n_ct input ciphertexts.
+
+        call() per ct:
+          - (stride[0]-1) rotations + (stride[0]-1) adds  (horizontal accumulation)
+          - log2(stride[0]) rotations + log2(stride[0]) adds  (binary fold)
+        Note: call() only folds along one dimension (stride[0]), matching the code.
+        """
+        import math
+
+        stride = self.stride[0]
+        rot_add_per_ct = (stride - 1) + int(math.log2(stride))
+        return {
+            'rotate': n_ct * rot_add_per_ct,
+            'mult_plain': 0,
+            'mult': 0,
+            'add': n_ct * rot_add_per_ct,
+            'rescale': 0,
+        }
+
     def call(self, x: list[DataNode]):
         res: list[DataNode] = list()
         for i in range(len(x)):
@@ -52,6 +72,38 @@ class Avgpool2DLayer:
                 step /= 2
             res.append(rr)
         return res
+
+    def get_fhe_op_count_adaptive(self, n_ct: int, n: int) -> dict[str, int]:
+        """Count FHE primitive operations in run_adaptive_avgpool() for n_ct input ciphertexts.
+
+        rotate_cols(x, step) internally decomposes `step` via NAF into ±2^k sub-steps,
+        each costing one RotateColUnit primitive. All steps here are powers of 2
+        (stride and skip are both required to be powers of 2), so each rotate_cols
+        call costs exactly 1 primitive rotate.
+
+        Per ct:
+          - log2(stride[0]) rotate_cols calls × 1 primitive each (height accumulation,
+            steps: 2^i * shape[0] * skip[0] * skip[1], all powers of 2)
+          - log2(stride[1]) rotate_cols calls × 1 primitive each (width accumulation,
+            steps: 2^j * skip[1], all powers of 2)
+          - floor(log2(n_rot)) rotate_cols calls × 1 primitive each (slot fill,
+            steps: 2^r * channel * shape[0] * shape[1], all powers of 2)
+        where n_rot = floor(n / 2 / (channel * shape[0] * shape[1])).
+        """
+        import math
+
+        log2_stride_0 = int(math.ceil(math.log2(self.stride[0]))) if self.stride[0] > 1 else 0
+        log2_stride_1 = int(math.ceil(math.log2(self.stride[1]))) if self.stride[1] > 1 else 0
+        n_rot = int(np.floor(n / 2 / (self.channel * self.shape[0] * self.shape[1])))
+        fill_steps = int(np.floor(np.log2(n_rot))) if n_rot > 1 else 0
+        rot_add_per_ct = log2_stride_0 + log2_stride_1 + fill_steps
+        return {
+            'rotate': n_ct * rot_add_per_ct,
+            'mult_plain': 0,
+            'mult': 0,
+            'add': n_ct * rot_add_per_ct,
+            'rescale': 0,
+        }
 
     def run_adaptive_avgpool(self, x: list[DataNode], n: int):
         # n: number of valid slots in a ciphertext
@@ -78,6 +130,54 @@ class Avgpool2DLayer:
                 res = add(res, rotate_cols(res, (2**r) * self.channel * self.shape[0] * self.shape[1])[0])
             result.append(res)
         return result
+
+    def get_fhe_op_count_interleaved(self, x_size: int, N: int) -> dict[str, int]:
+        """Count FHE primitive operations in call_interleaved_avgpool().
+
+        'rotate' is the total primitive RotateColUnit count computed via NAF
+        decomposition. Stage 2 step for channel index k is k * output_h * output_w;
+        since output_h * output_w is a power of 2 (shape and stride are powers of 2),
+        naf_weight(k * 2^m) == naf_weight(k), so the cost reduces to summing
+        naf_weight(k) for k in 1..n_channel_per_ct_out-1, multiplied by n_packed_out.
+
+        Stage 1: (stride[0]*stride[1] - 1) adds per output ct (no rotations).
+        Stage 2 (channel repacking, only when n_channel_per_ct_out > 1):
+          - sum(naf_weight(k) for k in 1..n_channel_per_ct_out-1) * n_packed_out rotates
+          - (n_channel_per_ct_out - 1) * n_packed_out adds
+        """
+        out_size = x_size // (self.stride[0] * self.stride[1])
+        adds_stage1 = out_size * (self.stride[0] * self.stride[1] - 1)
+
+        import math
+        from inference.model_generator.layers.fhe_op_utils import naf_weight
+
+        output_h = self.shape[0] // self.stride[0]
+        output_w = self.shape[1] // self.stride[1]
+        n_channel_per_ct_out = 1
+        if 2 * output_h * output_w < N:
+            n_channel_per_ct_out = N // (2 * output_h * output_w)
+
+        if n_channel_per_ct_out <= 1:
+            return {
+                'rotate': 0,
+                'mult_plain': 0,
+                'mult': 0,
+                'add': adds_stage1,
+                'rescale': 0,
+            }
+
+        n_packed_out = math.ceil(out_size / n_channel_per_ct_out)
+        # naf_weight(k * output_h * output_w) == naf_weight(k) since output_h*output_w is 2^m
+        rots_per_pack = sum(naf_weight(k) for k in range(1, n_channel_per_ct_out))
+        rots_stage2 = n_packed_out * rots_per_pack
+        adds_stage2 = n_packed_out * (n_channel_per_ct_out - 1)
+        return {
+            'rotate': rots_stage2,
+            'mult_plain': 0,
+            'mult': 0,
+            'add': adds_stage1 + adds_stage2,
+            'rescale': 0,
+        }
 
     def call_interleaved_avgpool(self, x: list, block_expansion, N: int):
         """
@@ -147,6 +247,70 @@ class Avgpool2DLayer:
         n_select_pt = min(n_channel, out_channels_per_ct)
         select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)]
         return select_tensor_pt, n_channel_per_ct
+
+    def get_fhe_op_count_multiplexed(self, x_size: int, n_channel: int, n_channel_per_ct: int) -> dict[str, int]:
+        """Count FHE primitive operations in call_multiplexed_avgpool().
+
+        'rotate' is the total primitive RotateColUnit count.
+        Stage 1 steps are powers of 2: naf_weight = 1 each.
+        Stage 2: hoisted rotation — for each input ct the unique non-zero steps are
+        collected, then rotate_cols is called once per unique step. The primitive
+        rotate count is sum(naf_weight(s) for s in unique_non_zero_steps) per ct.
+        Steps are simulated exactly as in call_multiplexed_avgpool().
+        """
+        import math
+        from inference.model_generator.layers.fhe_op_utils import naf_weight
+
+        stride = self.stride
+        shape = self.shape
+        skip = self.skip
+        log2_stride_0 = int(math.ceil(math.log2(stride[0]))) if stride[0] > 1 else 0
+        log2_stride_1 = int(math.ceil(math.log2(stride[1]))) if stride[1] > 1 else 0
+        out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
+
+        total_rotate = 0
+        total_mult_plain = 0
+        total_rescale = 0
+        total_add = 0
+
+        for idx in range(x_size):
+            # Stage 1: all steps are powers of 2, naf_weight = 1
+            total_rotate += log2_stride_0 + log2_stride_1
+            total_add += log2_stride_0 + log2_stride_1
+
+            # Stage 2: simulate step computation, sum naf_weight of unique non-zero steps
+            n_valid = min(n_channel_per_ct, n_channel - idx * n_channel_per_ct)
+            steps = []
+            for i in range(n_valid):
+                channel_id = idx * n_channel_per_ct + i
+                rp = channel_id % out_channels_per_ct
+                r_num0 = (rp // (skip[0] * skip[1] * stride[0] * stride[1])) * skip[0] * skip[1] * shape[0] * shape[1]
+                r_num1 = (
+                    ((rp % (skip[0] * skip[1] * stride[0] * stride[1])) // (stride[1] * skip[1])) * shape[1] * skip[1]
+                )
+                r_num2 = rp % (skip[1] * stride[1])
+                lp = channel_id % n_channel_per_ct
+                l_num0 = (lp // (skip[0] * skip[1])) * skip[0] * skip[1] * shape[0] * shape[1]
+                l_num1 = ((lp % (skip[0] * skip[1])) // skip[1]) * shape[1] * skip[1]
+                l_num2 = lp % skip[1]
+                steps.append(-r_num0 - r_num1 - r_num2 + l_num0 + l_num1 + l_num2)
+
+            unique_non_zero = set(s for s in steps if s != 0)
+            total_rotate += sum(naf_weight(s) for s in unique_non_zero)
+            total_mult_plain += n_valid
+            total_rescale += n_valid
+
+        # Stage 3
+        n_out_cts = math.ceil(n_channel / out_channels_per_ct)
+        total_add += n_channel - n_out_cts
+
+        return {
+            'rotate': total_rotate,
+            'mult_plain': total_mult_plain,
+            'mult': 0,
+            'add': total_add,
+            'rescale': total_rescale,
+        }
 
     def call_multiplexed_avgpool(
         self, x: list[CkksCiphertextNode], select_tensor_pt, n_channel: int, n_channel_per_ct: int

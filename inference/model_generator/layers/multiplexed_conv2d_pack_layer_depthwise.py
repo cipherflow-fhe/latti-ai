@@ -73,6 +73,94 @@ class MultiplexedConv2DPackedLayerDepthwise:
         self.zero_inserted_skip[0] = self.skip[0] * self.stride[0] / self.upsample_factor[0]
         self.zero_inserted_skip[1] = self.skip[1] * self.stride[1] / self.upsample_factor[1]
 
+    def get_fhe_op_count(self) -> dict[str, int]:
+        """Count FHE primitive operations in call(), mirroring its structure exactly.
+
+        Depthwise: no block-direction rotation step (each ct is processed independently).
+        gen_rotated_x over n_packed_in_channel cts:
+          input_rotate_units[0] = skip[0]*input_shape[1]*skip[1] (power of 2)
+          input_rotate_units[1] = skip[1] (power of 2)
+          row direction: populate_rotations_2_sides(c, kh, unit_0), fc0=kh//2
+            primitive rotates per ct = sum(naf_weight(i) for i in range(-fc0,kh-fc0) if i!=0)
+          col direction: kh calls of populate_rotations_2_sides(r, kw, unit_1), fc1=kw//2
+            primitive rotates per ct = kh * sum(naf_weight(j) for j in range(-fc1,kw-fc1) if j!=0)
+
+        Per input ct (= n_packed_in_channel):
+          mult_plain: kernel_size, add: kernel_size-1, rescale: 1
+
+        stride=1 path: n_packed_in_channel add (bias).
+        stride>1 path: simulate rot_step per (ct_idx, i) with naf_weight;
+          valid_n mult + valid_n rescale; accumulate + bias adds.
+        """
+        from inference.model_generator.layers.fhe_op_utils import naf_weight
+
+        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
+        kh, kw = self.kernel_shape
+
+        # Kernel rotations: units are powers of 2
+        fc0 = kh // 2
+        fc1 = kw // 2
+        rots_row = sum(naf_weight(i) for i in range(-fc0, kh - fc0) if i != 0)
+        rots_col = kh * sum(naf_weight(j) for j in range(-fc1, kw - fc1) if j != 0)
+        rotate_kernel = self.n_packed_in_channel * (rots_row + rots_col)
+
+        mult_plain_total = self.n_packed_in_channel * kernel_size
+        add_accum = self.n_packed_in_channel * (kernel_size - 1)
+        rescale_base = self.n_packed_in_channel
+
+        if self.stride[0] == 1:
+            # stride=1: just add bias per ct
+            rotate_stride = 0
+            mult_stride = 0
+            rescale_stride = 0
+            add_bias = self.n_packed_in_channel
+        else:
+            # Simulate rot_step for each (ct_idx, i), cost = naf_weight(rot_step)
+            rotate_stride = 0
+            for ct_idx in range(self.n_packed_in_channel):
+                steps = []
+                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[0]):
+                    if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
+                        r_n_block = int(
+                            (ct_idx * self.n_channel_per_ct + i)
+                            / int(self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1])
+                        )
+                        r_n_block_residue = (ct_idx * self.n_channel_per_ct + i) % int(
+                            self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1]
+                        )
+                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[0] * self.skip[0])))
+                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[0] * self.skip[0])
+                        n_block = int(np.floor((ct_idx * self.n_channel_per_ct + i) / int(self.skip[0] * self.skip[1])))
+                        n_block_residue = int(
+                            np.floor((ct_idx * self.n_channel_per_ct + i)) % int(self.skip[0] * self.skip[1])
+                        )
+                        n_stride_skip = int(np.floor(n_block_residue / self.skip[0]))
+                        n_stride_skip_residue = n_block_residue % self.skip[0]
+                        rot_step = (
+                            (r_n_block - n_block)
+                            * self.skip[0]
+                            * self.skip[1]
+                            * self.input_shape[0]
+                            * self.input_shape[1]
+                            + (r_n_stride_skip - n_stride_skip) * self.skip[0] * self.input_shape[0]
+                            + (r_n_stride_skip_residue - n_stride_skip_residue)
+                        )
+                        steps.append(-rot_step)
+                rotate_stride += sum(naf_weight(s) for s in steps)
+            n_packed_out = self.n_packed_out_channel
+            valid_n_total = self.n_out_channel
+            mult_stride = valid_n_total
+            rescale_stride = valid_n_total
+            add_bias = n_packed_out + (valid_n_total - n_packed_out)  # bias + accumulate
+
+        return {
+            'rotate': rotate_kernel + rotate_stride,
+            'mult_plain': mult_plain_total + mult_stride,
+            'mult': 0,
+            'add': add_accum + add_bias,
+            'rescale': rescale_base + rescale_stride,
+        }
+
     @staticmethod
     def populate_rotations_1_side(x: CkksCiphertextNode, n_rotation: int, unit: int) -> list[DataNode]:
         result: list[CkksCiphertextNode] = [x]

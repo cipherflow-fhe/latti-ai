@@ -53,6 +53,74 @@ class MultiplexedDWConv1DPackedLayer:
         self.input_shape_ct: int = input_shape * skip
         self.n_block_per_ct: int = int(np.ceil(n_channel_per_ct / skip))
 
+    def get_fhe_op_count(self) -> dict[str, int]:
+        """Count FHE primitive operations in call(), mirroring its structure exactly.
+
+        Depthwise: each ct is processed independently (no cross-ct loop).
+        gen_rotated_x over n_packed_ct cts:
+          per ct: populate_rotations_2_sides(kernel_shape, skip) — fc=kernel_shape//2
+            steps i*skip for i in range(-fc, kernel_shape-fc) if i!=0
+            primitive rotates per ct = sum(naf_weight(i*skip) for those i)
+
+        Per ct (n_packed_ct total):
+          mult_plain: kernel_shape, add: kernel_shape-1, rescale: 1
+
+        No-rearrange path (skip==1 and stride==1): n_packed_ct add (bias).
+        Rearrange path:
+          n_channel mult (select) + n_channel rescale
+          + simulate rotation = target_base - source_base per (po, ch_local) with naf_weight
+          + (n_channel - n_packed_out) add (accumulate) + n_packed_out add (bias)
+        """
+        from inference.model_generator.layers.fhe_op_utils import naf_weight
+
+        n_packed_out = int(np.ceil(self.n_channel / self.n_channel_per_ct))
+
+        # Kernel rotations: steps i*skip for i in range(-fc, ks-fc) if i!=0
+        fc = self.kernel_shape // 2
+        rots_per_ct = sum(naf_weight(i * self.skip) for i in range(-fc, self.kernel_shape - fc) if i != 0)
+        rotate_kernel = self.n_packed_ct * rots_per_ct
+
+        mult_plain_total = self.n_packed_ct * self.kernel_shape
+        add_accum = self.n_packed_ct * (self.kernel_shape - 1)
+        rescale_base = self.n_packed_ct
+
+        needs_rearrange = self.skip > 1 or self.stride > 1
+        if not needs_rearrange:
+            rotate_rearrange = 0
+            mult_rearrange = 0
+            rescale_rearrange = 0
+            add_bias = self.n_packed_ct
+        else:
+            # Simulate rotation = target_base - source_base per (po, ch_local)
+            skip_out = self.skip * self.stride
+            output_shape_val = self.input_shape // self.stride
+            rotate_rearrange = 0
+            for po in range(n_packed_out):
+                for ch_local in range(self.n_channel_per_ct):
+                    ch = po * self.n_channel_per_ct + ch_local
+                    if ch >= self.n_channel:
+                        break
+                    t = ch_local // self.skip
+                    j_val = ch_local % self.skip
+                    source_base = t * self.input_shape_ct + j_val
+                    group = ch_local // skip_out
+                    ch_offset = ch_local % skip_out
+                    target_base = group * (output_shape_val * skip_out) + ch_offset
+                    rotation = target_base - source_base
+                    if rotation != 0:
+                        rotate_rearrange += naf_weight(rotation)
+            mult_rearrange = self.n_channel
+            rescale_rearrange = self.n_channel
+            add_bias = (self.n_channel - n_packed_out) + n_packed_out
+
+        return {
+            'rotate': rotate_kernel + rotate_rearrange,
+            'mult_plain': mult_plain_total + mult_rearrange,
+            'mult': 0,
+            'add': add_accum + add_bias,
+            'rescale': rescale_base + rescale_rearrange,
+        }
+
     @staticmethod
     def populate_rotations_2_sides(x: CkksCiphertextNode, n_rotation: int, unit: int) -> list[CkksCiphertextNode]:
         filter_center = n_rotation // 2
