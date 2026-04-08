@@ -218,6 +218,7 @@ void InitInferenceProcess::init_dense_layer(const string& key, const json& layer
         uint32_t invalid_fill_1d = feature_input.invalid_fill[0] > 0 ? feature_input.invalid_fill[0] : 1;
         dense->normal_dense = false;
         if (is_lazy) {
+            dense->prepare_weight_for_1d_multiplexed_lazy(shape_1d, skip_1d, invalid_fill_1d);
         } else {
             dense->prepare_weight_for_1d_multiplexed(shape_1d, skip_1d, invalid_fill_1d);
         }
@@ -232,6 +233,7 @@ void InitInferenceProcess::init_dense_layer(const string& key, const json& layer
         }
     } else {
         if (is_lazy) {
+            dense->prepare_weight_0d_skip_lazy(feature_input.skip[0]);
         } else {
             dense->prepare_weight_0d_skip(feature_input.skip[0]);
         }
@@ -1364,10 +1366,19 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
             }
             if (layer_type == "add2d") {
                 FeatureNode feature_input0(json_features[feature_input[0]]);
-                FeatureNode feature_input1(json_features[feature_input[1]]);
-                auto& input0 = p_feature2d_x[feature_input[0]];
-                auto& input1 = p_feature2d_x[feature_input[1]];
-                result = fp->ckks_adds[key]->run_plaintext(input0, input1);
+                if (feature_input0.dim == 2) {
+                    auto& input0 = p_feature2d_x[feature_input[0]];
+                    auto& input1 = p_feature2d_x[feature_input[1]];
+                    result = fp->ckks_adds[key]->run_plaintext(input0, input1);
+                } else if (feature_input0.dim == 1) {
+                    auto& input0 = p_feature1d_x[feature_input[0]];
+                    auto& input1 = p_feature1d_x[feature_input[1]];
+                    result1d = fp->ckks_adds[key]->run_plaintext_1d(input0, input1);
+                } else {
+                    auto& input0 = p_feature0d_x[feature_input[0]];
+                    auto& input1 = p_feature0d_x[feature_input[1]];
+                    result0d = fp->ckks_adds[key]->run_plaintext_0d(input0, input1);
+                }
             }
             if (layer_type == "poly_relu2d" || layer_type == "polyact") {
                 FeatureNode feature_input0(json_features[feature_input[0]]);
@@ -1758,7 +1769,12 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
         } else if (op_class == "DensePackedLayer") {
             auto* layer = static_cast<DensePackedLayer*>(layer_ptr);
-            if (layer->normal_dense) {
+            if (layer->is_1d_multiplexed) {
+                if (type == "weight_pt")
+                    pt = layer->generate_weight_pt_for_1d_multiplexed(ckks_ctx, i, j);
+                else
+                    pt = layer->generate_bias_pt_for_1d_multiplexed(ckks_ctx, i);
+            } else if (layer->normal_dense) {
                 if (type == "weight_pt")
                     pt = layer->generate_weight_0d_pt_for_indices(ckks_ctx, i, j);
                 else

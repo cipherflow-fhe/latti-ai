@@ -589,6 +589,80 @@ void DensePackedLayer::prepare_weight_for_1d_multiplexed(uint32_t input_shape_in
     });
 }
 
+void DensePackedLayer::prepare_weight_for_1d_multiplexed_lazy(uint32_t input_shape_in,
+                                                              uint32_t skip_in,
+                                                              uint32_t invalid_fill_in) {
+    input_shape_1d = input_shape_in;
+    skip_1d = skip_in;
+    invalid_fill_1d = invalid_fill_in;
+
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
+    N_half = ctx.get_parameter().get_n() / 2;
+
+    uint32_t block_stride = skip_1d;
+    uint32_t block_size = input_shape_1d * block_stride;
+
+    int n_blocks = N_half / (int)block_size;
+    int valid_sub = (int)skip_1d / (int)invalid_fill_1d;
+    int n_valid_per_ct_1d = n_blocks * valid_sub;
+    n_block_per_ct_1d = n_blocks;
+
+    int n_actual_channels = n_in_feature / (int)input_shape_1d;
+    n_block_input_1d = div_ceil(n_actual_channels, n_valid_per_ct_1d) * n_block_per_ct_1d;
+
+    normal_dense = false;
+    is_1d_multiplexed = true;
+}
+
+CkksPlaintextRingt
+DensePackedLayer::generate_weight_pt_for_1d_multiplexed(CkksContext& ctx, int out_group, int rot_idx) const {
+    uint32_t block_stride = skip_1d;
+    uint32_t block_size = input_shape_1d * block_stride;
+    int valid_sub = (int)skip_1d / (int)invalid_fill_1d;
+
+    vector<double> w(N_half, 0.0);
+    int group = rot_idx / n_block_per_ct_1d;
+    int offset = rot_idx % n_block_per_ct_1d;
+
+    for (int i = 0; i < N_half; i++) {
+        int local_block = i / (int)block_size;
+        int pos_in_block = i % (int)block_size;
+        int data_idx = pos_in_block / (int)block_stride;
+        int sub = pos_in_block % (int)block_stride;
+
+        if (sub >= valid_sub)
+            continue;
+
+        int out_ch = out_group * n_block_per_ct_1d + local_block;
+        if (out_ch >= (int)n_out_feature)
+            continue;
+
+        int rotated_block = (offset + local_block) % n_block_per_ct_1d + group * n_block_per_ct_1d;
+        int in_ch = rotated_block * valid_sub + sub;
+        int in_flat = in_ch * (int)input_shape_1d + data_idx;
+
+        if (in_flat < (int)n_in_feature) {
+            w[i] = weight.get(out_ch, in_flat);
+        }
+    }
+    return ctx.encode_ringt(w, modified_scale);
+}
+
+CkksPlaintextRingt DensePackedLayer::generate_bias_pt_for_1d_multiplexed(CkksContext& ctx, int out_group) const {
+    uint32_t block_stride = skip_1d;
+    uint32_t block_size = input_shape_1d * block_stride;
+
+    vector<double> b(N_half, 0.0);
+    for (int local_block = 0; local_block < n_block_per_ct_1d; local_block++) {
+        int out_ch = out_group * n_block_per_ct_1d + local_block;
+        if (out_ch < (int)n_out_feature) {
+            int slot = local_block * (int)block_size;
+            b[slot] = bias.get(out_ch);
+        }
+    }
+    return ctx.encode_ringt(b, param_.get_default_scale());
+}
+
 Feature0DEncrypted DensePackedLayer::run_1d_multiplexed(CkksContext& ctx, const Feature0DEncrypted& x) {
     uint32_t block_stride = skip_1d;  // skip already contains invalid_fill
     uint32_t block_size = input_shape_1d * block_stride;
