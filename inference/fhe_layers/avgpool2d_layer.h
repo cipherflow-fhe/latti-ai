@@ -41,9 +41,18 @@ public:
                         const Duo& shape_in);
     Feature2DEncrypted run_multiplexed_avgpool(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     Feature2DEncrypted run_split_avgpool(ls::CkksContext& ctx, const Feature2DEncrypted& x, const Duo block_expansion);
+    void prepare_weight_repack(const ls::CkksParameter& param_in,
+                               uint32_t n_channel,
+                               int level,
+                               const Duo& second_stage_stride,
+                               const Duo& block_shape_in);
     std::vector<ls::CkksPlaintextRingt> select_tensor_pt;
+    ls::CkksPlaintextRingt repack_mask_pt;
     Duo shape;
     Duo stride;
+    Duo block_shape;
     Duo skip;
     uint32_t n_block_per_ct;
+    bool need_repack = false;
+    uint32_t n_channel_ = 0;
 };
