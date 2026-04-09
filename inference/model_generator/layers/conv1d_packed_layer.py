@@ -16,10 +16,13 @@
 
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
+
 
 op_class = 'Conv1DPackedLayer'
 
@@ -54,8 +57,14 @@ class Conv1DPackedLayer:
         self.n_packed_out_channel: int = n_packed_out_channel
         self.input_shape_ct: int = input_shape * skip
 
-    def get_fhe_op_count(self) -> dict[str, int]:
-        """Count FHE primitive operations in call(), mirroring its structure exactly.
+    def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call(), grouped by level.
+
+        Returns a dict keyed by level:
+          {
+            level:   rotate(step1+step2) + mult_plain + add(accum) + rescale,
+            level-1: add(bias),
+          }
 
         'rotate' is the total primitive RotateColUnit count, computed via NAF
         decomposition of each step (matching get_glk_col() in custom_task.py).
@@ -74,10 +83,12 @@ class Conv1DPackedLayer:
 
         step 3 - ct_pt_mult_accumulate + rescale + bias add per output packed channel:
           mult_plain: n_packed_out_channel * n_packed_in_channel*rot_num * kernel_shape
-          add:        n_packed_out_channel * (n_packed_in_channel*rot_num*kernel_shape - 1 + 1)
-          rescale:    n_packed_out_channel
+          add(accum): n_packed_out_channel * (terms-1)  [at level]
+          rescale:    n_packed_out_channel               [level → level-1]
+          add(bias):  n_packed_out_channel               [at level-1]
         """
-        from inference.model_generator.layers.fhe_op_utils import naf_weight
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
 
         rot_num = min(self.n_in_channel, self.pack)
         n_in_packed = self.n_packed_in_channel
@@ -85,26 +96,23 @@ class Conv1DPackedLayer:
         unit_1 = self.input_shape_ct  # input_shape * skip
 
         # Step 1: naf_weight(i * unit_1) for i in 1..rot_num-1
-        rotate_step1 = n_in_packed * sum(naf_weight(i * unit_1) for i in range(1, rot_num))
+        ops[lv]['rotate'] += n_in_packed * sum(naf_weight(i * unit_1) for i in range(1, rot_num))
 
         # Step 2: naf_weight(i * skip) for i in [-filter_center..ks-1-filter_center], i != 0
         filter_center = ks // 2
-        rotate_step2 = (n_in_packed * rot_num) * sum(
+        ops[lv]['rotate'] += (n_in_packed * rot_num) * sum(
             naf_weight(i * self.skip) for i in range(-filter_center, ks - filter_center) if i != 0
         )
 
         terms_per_out = n_in_packed * rot_num * ks
-        mult_plain_total = self.n_packed_out_channel * terms_per_out
-        add_total = self.n_packed_out_channel * terms_per_out  # (terms-1) accumulate + 1 bias
-        rescale_total = self.n_packed_out_channel
+        ops[lv]['mult_plain'] += self.n_packed_out_channel * terms_per_out
+        ops[lv]['add'] += self.n_packed_out_channel * (terms_per_out - 1)  # accumulate
+        ops[lv]['rescale'] += self.n_packed_out_channel
+        lv -= 1
 
-        return {
-            'rotate': rotate_step1 + rotate_step2,
-            'mult_plain': mult_plain_total,
-            'mult': 0,
-            'add': add_total,
-            'rescale': rescale_total,
-        }
+        ops[lv]['add'] += self.n_packed_out_channel  # bias
+
+        return dict(ops)
 
     @staticmethod
     def populate_rotations_1_side(x: CkksCiphertextNode, n_rotation: int, unit: int) -> list[CkksCiphertextNode]:

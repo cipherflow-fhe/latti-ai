@@ -15,11 +15,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+import numpy as np
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
+
 
 op_class = 'Conv2DepthwiseLayer'
 
@@ -65,8 +69,15 @@ class Conv2DPackedDepthwiseLayer:
         self.input_rotate_units = [skip[0] * self.input_shape_ct[1], skip[0] * 1]
         self.input_rotate_ranges = [padding_shape[1], padding_shape[0]]
 
-    def get_fhe_op_count(self) -> dict[str, int]:
-        """Count FHE primitive operations in call(), mirroring its structure exactly.
+    def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call(), grouped by level.
+
+        Returns a dict keyed by level:
+          {
+            level:   rotate_kernel + mult_plain + add_accum + rescale_base,
+            level-1: add(bias)  [stride=1]  or  mult_plain(select)+rescale  [stride>1],
+            level-2: rotate_stride + add(bias+accum)  [stride>1 only],
+          }
 
         'rotate' is the total primitive RotateColUnit count via NAF decomposition.
 
@@ -84,29 +95,72 @@ class Conv2DPackedDepthwiseLayer:
 
         per output packed channel (= n_packed_out_channel):
           terms = kernel_h * kernel_w
-          mult_plain: terms, add: terms (accumulate + bias), rescale: 1
+          mult_plain: terms, add(accum): terms-1, rescale: 1  [level → level-1]
+          stride=1: add(bias): 1  [level-1]
+          stride>1: mult_plain(select): valid_n_total + rescale: valid_n_total  [level-1 → level-2]
+                    rotate_stride + add(bias+accum)  [level-2]
         """
-        from inference.model_generator.layers.fhe_op_utils import naf_weight
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
 
         range_h, range_w = self.input_rotate_ranges
         kh, kw = self.kernel_shape
 
         rots_row = 2 * sum(naf_weight(i) for i in range(1, range_h + 1))
         rots_col = (2 * range_h + 1) * 2 * sum(naf_weight(i) for i in range(1, range_w + 1))
-        rotate_total = self.n_packed_in_channel * (rots_row + rots_col)
+        ops[lv]['rotate'] += self.n_packed_in_channel * (rots_row + rots_col)
 
         terms_per_out = kh * kw
-        mult_plain_total = self.n_packed_out_channel * terms_per_out
-        add_total = self.n_packed_out_channel * terms_per_out  # (terms-1) accumulate + 1 bias
-        rescale_total = self.n_packed_out_channel
+        ops[lv]['mult_plain'] += self.n_packed_out_channel * terms_per_out
+        ops[lv]['add'] += self.n_packed_out_channel * (terms_per_out - 1)  # accumulate
+        ops[lv]['rescale'] += self.n_packed_out_channel
+        lv -= 1
 
-        return {
-            'rotate': rotate_total,
-            'mult_plain': mult_plain_total,
-            'mult': 0,
-            'add': add_total,
-            'rescale': rescale_total,
-        }
+        if self.stride[0] == 1:
+            ops[lv]['add'] += self.n_packed_out_channel  # bias
+        else:
+            # Simulate rot_step for each (ct_idx, i)
+            rotate_stride = 0
+            for ct_idx in range(self.n_packed_in_channel):
+                steps = []
+                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[0]):
+                    if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
+                        r_n_block = int(
+                            (ct_idx * self.n_channel_per_ct + i)
+                            / int(self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1])
+                        )
+                        r_n_block_residue = (ct_idx * self.n_channel_per_ct + i) % int(
+                            self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1]
+                        )
+                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[0] * self.skip[0])))
+                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[0] * self.skip[0])
+                        n_block = int(np.floor((ct_idx * self.n_channel_per_ct + i) / int(self.skip[0] * self.skip[1])))
+                        n_block_residue = int(
+                            np.floor((ct_idx * self.n_channel_per_ct + i)) % int(self.skip[0] * self.skip[1])
+                        )
+                        n_stride_skip = int(np.floor(n_block_residue / self.skip[0]))
+                        n_stride_skip_residue = n_block_residue % self.skip[0]
+                        rot_step = (
+                            (r_n_block - n_block)
+                            * self.skip[0]
+                            * self.skip[1]
+                            * self.input_shape[0]
+                            * self.input_shape[1]
+                            + (r_n_stride_skip - n_stride_skip) * self.skip[0] * self.input_shape[0]
+                            + (r_n_stride_skip_residue - n_stride_skip_residue)
+                        )
+                        steps.append(-rot_step)
+                rotate_stride += sum(naf_weight(s) for s in steps)
+            n_packed_out = self.n_packed_out_channel
+            valid_n_total = self.n_out_channel
+            ops[lv]['mult_plain'] += valid_n_total
+            ops[lv]['rescale'] += valid_n_total
+            lv -= 1
+
+            ops[lv]['rotate'] += rotate_stride
+            ops[lv]['add'] += n_packed_out + (valid_n_total - n_packed_out)  # bias + accumulate
+
+        return dict(ops)
 
     @staticmethod
     def populate_rotations_1_side(x: DataNode, n_rotation: int, unit: int) -> list[DataNode]:

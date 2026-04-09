@@ -21,6 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
+
 
 op_class = 'InverseMultiplexedConv2d'
 
@@ -83,8 +85,6 @@ class InverseMultiplexedConv2DLayer:
         No-repack packing: step = -channel_idx * output_pixels (output_pixels is power of 2),
           naf_weight(channel_idx * output_pixels) = naf_weight(channel_idx).
         """
-        from inference.model_generator.layers.fhe_op_utils import naf_weight
-
         pad0, pad1 = self.padding[0], self.padding[1]
         stride0, stride1 = self.stride[0], self.stride[1]
         stride_next0, stride_next1 = self.stride_next[0], self.stride_next[1]
