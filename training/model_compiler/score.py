@@ -332,13 +332,31 @@ class FheScoreParam:
         style = config.style
 
         op_counts = self._build_layer_and_get_op_count(preds, n, layer_type, style)
-        score = (
-            op_counts['rotate'] * self.rotate_score
-            + op_counts['mult_plain'] * self.mult_plain_score
-            + op_counts['mult'] * self.mult_score
-            + op_counts['add'] * self.add_score
-            + op_counts['rescale'] * self.rescale_score
-        )
+        # op_counts may be a flat dict {str: int} (single level) or a level-grouped
+        # dict {int: {str: int}} when ops span multiple levels (e.g. MultiplexedConv1D).
+        if op_counts and isinstance(next(iter(op_counts)), int):
+            score = 0.0
+            for lv, ops in op_counts.items():
+                r_score = rotate_time[self.input_degree][lv]
+                mp_score = mult_plain_time[self.input_degree][lv] if lv > 0 else 0
+                m_score = mult_time[self.input_degree][lv] if lv > 0 else 0
+                a_score = add_time[self.input_degree][lv]
+                rs_score = rescale_time[self.input_degree][lv] if lv > 0 else 0
+                score += (
+                    ops['rotate'] * r_score
+                    + ops['mult_plain'] * mp_score
+                    + ops['mult'] * m_score
+                    + ops['add'] * a_score
+                    + ops['rescale'] * rs_score
+                )
+        else:
+            score = (
+                op_counts['rotate'] * self.rotate_score
+                + op_counts['mult_plain'] * self.mult_plain_score
+                + op_counts['mult'] * self.mult_score
+                + op_counts['add'] * self.add_score
+                + op_counts['rescale'] * self.rescale_score
+            )
         return score * self.acc_rate
 
     def _build_layer_and_get_op_count(self, preds, n, layer_type, style):
@@ -407,7 +425,7 @@ class FheScoreParam:
                         n_packed_in,
                         n_packed_out,
                     )
-                return layer.get_fhe_op_count()
+                return layer.get_fhe_op_count(self.input_mult_level)
 
             # style == 'multiplexed'
             n_in_channel_per_ct = pack
@@ -435,7 +453,7 @@ class FheScoreParam:
                     n_packed_in,
                     n_packed_out,
                 )
-            return layer.get_fhe_op_count()
+            return layer.get_fhe_op_count(self.input_mult_level)
 
         # ── conv1d ──────────────────────────────────────────────────────────
         elif layer_type == 'conv1d' and node.dim == 1:
@@ -473,7 +491,7 @@ class FheScoreParam:
                         n_packed_in_ch,
                         n_packed_out_ch,
                     )
-                return layer.get_fhe_op_count()
+                return layer.get_fhe_op_count(self.input_mult_level)
 
             # style == 'ordinary'
             n_channel_per_ct = int(n // 2 // input_shape_1d // skip_1d)
@@ -490,7 +508,7 @@ class FheScoreParam:
                 n_pack_in,
                 n_packed_out_ch,
             )
-            return layer.get_fhe_op_count()
+            return layer.get_fhe_op_count(self.input_mult_level)
 
         # ── fc0 (dense) ──────────────────────────────────────────────────────
         elif 'fc' in layer_type:
@@ -519,7 +537,7 @@ class FheScoreParam:
                         n_packed_in_feat,
                         n_packed_out_feat,
                     )
-                    return layer.get_fhe_op_count_skip_0d(n_packed_in_feat, skip_0d)
+                    return layer.get_fhe_op_count_skip_0d(n_packed_in_feat, skip_0d, self.input_mult_level)
 
                 elif len(special_shape) == 1:
                     # 1D multiplexed
@@ -543,7 +561,7 @@ class FheScoreParam:
                         invalid_fill=[invalid_fill_1d, 1],
                     )
                     n_input_ct = math.ceil(n_in / n_channel_per_ct_1d)
-                    return layer.get_fhe_op_count_1d_multiplexed(n_input_ct, n)
+                    return layer.get_fhe_op_count_1d_multiplexed(n_input_ct, n, self.input_mult_level)
 
                 else:
                     # 2D multiplexed
@@ -563,7 +581,7 @@ class FheScoreParam:
                         invalid_fill=invalid_fill,
                     )
                     n_input_ct = math.ceil(n_in / pack)
-                    return layer.get_fhe_op_count_multiplexed(n_input_ct, n)
+                    return layer.get_fhe_op_count_multiplexed(n_input_ct, n, self.input_mult_level)
             return None
 
         # ── avgpool ──────────────────────────────────────────────────────────
@@ -581,13 +599,13 @@ class FheScoreParam:
                     math.ceil(input_shape[0] / block_shape[0]),
                     math.ceil(input_shape[1] / block_shape[1]),
                 ]
-                return layer.get_fhe_op_count_interleaved(n_input_ct, n)
+                return layer.get_fhe_op_count_interleaved(n_input_ct, n, self.input_mult_level)
             if is_adaptive:
                 if style == 'ordinary':
-                    return layer.get_fhe_op_count_adaptive(n_input_ct, n)
-                return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack)
+                    return layer.get_fhe_op_count_adaptive(n_input_ct, n, self.input_mult_level)
+                return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack, self.input_mult_level)
             # non-adaptive multiplexed
-            return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack)
+            return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack, self.input_mult_level)
 
         elif layer_type == 'avgpool1d':
             input_shape = self.input_shape
@@ -596,8 +614,8 @@ class FheScoreParam:
             layer = Avgpool1DLayer(stride[0], input_shape[0], channel=n_in, skip=skip_1d)
             is_adaptive = getattr(node, 'is_adaptive_avgpool', True)
             if is_adaptive:
-                return layer.get_fhe_op_count_adaptive(n_input_ct, n)
-            return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack)
+                return layer.get_fhe_op_count_adaptive(n_input_ct, n, self.input_mult_level)
+            return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack, self.input_mult_level)
 
         # ── polyact / activation ─────────────────────────────────────────────
         elif layer_type == 'polyact':
@@ -608,32 +626,32 @@ class FheScoreParam:
                 n_channel_per_ct_0d = int(n // 2 // skip_0d)
                 layer = PolyRelu0D(order, skip_0d, n_channel_per_ct_0d)
                 n_input_ct = n_packed_in
-                return layer.get_fhe_op_count_bsgs_feature0d(n_input_ct)
+                return layer.get_fhe_op_count_bsgs_feature0d(n_input_ct, self.input_mult_level)
             if pred.dim == 1:
                 shape_1d = pred.shape[0]
                 skip_1d = pred.sp_info['skip'][0] if isinstance(pred.sp_info.get('skip'), list) else 1
                 if style == 'multiplexed':
                     n_channel_per_ct_1d = int(n // 2 // shape_1d)
                     layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
-                    return layer.get_fhe_op_count_bsgs_mux(n_packed_in)
+                    return layer.get_fhe_op_count_bsgs_mux(n_packed_in, self.input_mult_level)
                 n_channel_per_ct_1d = int(n // 2 // shape_1d // skip_1d)
                 layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
-                return layer.get_fhe_op_count_bsgs_skip(n_packed_in)
+                return layer.get_fhe_op_count_bsgs_skip(n_packed_in, self.input_mult_level)
             # dim == 2
             input_shape = self.input_shape
             skip = self.input_skip
             layer = PolyRelu2D(input_shape, order, skip, pack)
-            return layer.get_fhe_op_count_call(n_packed_in)
+            return layer.get_fhe_op_count_call(n_packed_in, self.input_mult_level)
 
         # ── mult_scalar ──────────────────────────────────────────────────────
         elif layer_type == 'mult_scalar':
             layer = MultScalarLayer()
-            return layer.get_fhe_op_count(n_packed_in)
+            return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
 
         # ── add / add2d ──────────────────────────────────────────────────────
         elif layer_type in ('add', 'add2d'):
             layer = AddLayer()
-            return layer.get_fhe_op_count(n_packed_in)
+            return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
 
         # ── upsample_nearest ────────────────────────────────────────────────
         elif layer_type in ('upsample_nearest', 'resize'):
@@ -647,7 +665,7 @@ class FheScoreParam:
                 n_channel_per_ct=pack,
                 level=self.input_mult_level,
             )
-            return layer.get_fhe_op_count(n_in)
+            return layer.get_fhe_op_count(n_in, self.input_mult_level)
         else:
             raise NotImplementedError(f"Unsupported layer type: '{layer_type}'")
 

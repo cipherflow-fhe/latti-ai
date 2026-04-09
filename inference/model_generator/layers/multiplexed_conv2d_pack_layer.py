@@ -15,13 +15,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+import numpy as np
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
 
-import numpy as np
 
 op_class = 'MultConv2DPackedLayer'
 
@@ -73,8 +75,15 @@ class MultiplexedConv2DPackedLayer:
         self.zero_inserted_skip[0] = self.skip[0] * self.stride[0] / self.upsample_factor[0]
         self.zero_inserted_skip[1] = self.skip[1] * self.stride[1] / self.upsample_factor[1]
 
-    def get_fhe_op_count(self) -> dict[str, int]:
-        """Count FHE primitive operations in call(), mirroring its structure exactly.
+    def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call(), grouped by level.
+
+        Returns a dict keyed by level:
+          {
+            level:   rotate_block + rotate_kernel + rotate_sum_slot + mult_plain + add_accum + add_sum_slot + rescale_base,
+            level-1: add(bias)  [stride=1,skip=1]  or  mult(mask)+rescale  [stride>1],
+            level-2: rotate_stride + add_bias  [stride>1 only],
+          }
 
         step 1 - block direction: populate_rotations_1_side over n_packed_in_channel cts:
           unit = input_shape[0]*skip[0]*input_shape[1]*skip[1] (power of 2)
@@ -93,14 +102,16 @@ class MultiplexedConv2DPackedLayer:
         step 3 - per output group (size_0 = ceil(n_out_channel / n_block_per_ct)):
           mult_plain: size_1 * kernel_size  (size_1 = n_packed_in_channel * n_block_per_ct)
           add: same - 1 (accumulate)
-          rescale: 1
+          rescale: 1  [level → level-1]
           sum_slot steps are powers of 2 -> floor(log2(skip)) rotates/adds each
 
-        stride=1,skip=1 path: +1 add (bias) per output group
-        stride>1 path: simulate rot_step per (ct_idx, i) with naf_weight;
-          valid_n mult (mask) + valid_n rescale; accumulate adds + bias adds
+        stride=1,skip=1 path (at level-1): +1 add (bias) per output group
+        stride>1 path (at level-1): simulate rot_step per (ct_idx, i) with naf_weight;
+          valid_n mult (mask) + valid_n rescale;  [level-1 → level-2]
+          (at level-2): rotate_stride + add_bias
         """
-        from inference.model_generator.layers.fhe_op_utils import naf_weight
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
 
         n_pack_in_channel = int(np.ceil(self.n_in_channel / self.n_channel_per_ct))
         kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
@@ -109,31 +120,32 @@ class MultiplexedConv2DPackedLayer:
         kh, kw = self.kernel_shape
 
         # step 1: block rotations (unit is power of 2, naf_weight(i*unit) = naf_weight(i))
-        rotate_block = self.n_packed_in_channel * sum(naf_weight(i) for i in range(1, self.n_block_per_ct))
+        ops[lv]['rotate'] += self.n_packed_in_channel * sum(naf_weight(i) for i in range(1, self.n_block_per_ct))
 
         # step 2: kernel rotations (units are powers of 2)
         fc0 = kh // 2
         fc1 = kw // 2
         rots_row = sum(naf_weight(i) for i in range(-fc0, kh - fc0) if i != 0)
         rots_col = kh * sum(naf_weight(j) for j in range(-fc1, kw - fc1) if j != 0)
-        rotate_kernel = (self.n_packed_in_channel * self.n_block_per_ct) * (rots_row + rots_col)
+        ops[lv]['rotate'] += (self.n_packed_in_channel * self.n_block_per_ct) * (rots_row + rots_col)
 
         log2_skip0 = int(np.floor(np.log2(self.skip[0]))) if self.skip[0] > 1 else 0
         log2_skip1 = int(np.floor(np.log2(self.skip[1]))) if self.skip[1] > 1 else 0
-        rotate_sum_slot = size_0 * (log2_skip0 + log2_skip1)
+        ops[lv]['rotate'] += size_0 * (log2_skip0 + log2_skip1)
 
-        mult_plain_total = size_0 * size_1 * kernel_size
-        add_accum = size_0 * (size_1 * kernel_size - 1)
-        add_sum_slot = size_0 * (log2_skip0 + log2_skip1)
+        ops[lv]['mult_plain'] += size_0 * size_1 * kernel_size
+        ops[lv]['add'] += size_0 * (size_1 * kernel_size - 1)  # accumulate
+        ops[lv]['add'] += size_0 * (log2_skip0 + log2_skip1)  # sum_slot
 
         if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
-            rotate_stride = 0
-            mult_stride = 0
-            rescale_stride = 0
-            add_bias = size_0  # one bias add per group
-            rescale_base = size_0
+            ops[lv]['rescale'] += size_0
+            lv -= 1
+            ops[lv]['add'] += size_0  # bias
         else:
-            # Simulate rot_step for each (ct_idx, i), cost = naf_weight(rot_step)
+            ops[lv]['rescale'] += size_0
+            lv -= 1
+
+            # Simulate rot_step for each (ct_idx, i)
             rotate_stride = 0
             for ct_idx in range(size_0):
                 valid_n = min(self.n_block_per_ct, self.n_out_channel - ct_idx * self.n_block_per_ct)
@@ -169,18 +181,14 @@ class MultiplexedConv2DPackedLayer:
                     steps.append(int(rot_step))
                 rotate_stride += sum(naf_weight(s) for s in steps)
             n_packed_out = self.n_packed_out_channel
-            mult_stride = self.n_out_channel
-            rescale_stride = self.n_out_channel
-            add_bias = n_packed_out * 2  # bias add + accumulate per output ct
-            rescale_base = size_0
+            ops[lv]['mult_plain'] += self.n_out_channel
+            ops[lv]['rescale'] += self.n_out_channel
+            lv -= 1
 
-        return {
-            'rotate': rotate_block + rotate_kernel + rotate_sum_slot + rotate_stride,
-            'mult_plain': mult_plain_total + mult_stride,
-            'mult': 0,
-            'add': add_accum + add_sum_slot + add_bias,
-            'rescale': rescale_base + rescale_stride,
-        }
+            ops[lv]['rotate'] += rotate_stride
+            ops[lv]['add'] += n_packed_out * 2  # bias add + accumulate per output ct
+
+        return dict(ops)
 
     @staticmethod
     def populate_rotations_1_side(x: CkksCiphertextNode, n_rotation: int, unit: int) -> list[DataNode]:

@@ -15,11 +15,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+import math
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
 
 
 class UpsampleNearestLayer:
@@ -63,18 +66,24 @@ class UpsampleNearestLayer:
         # Calculate the number of blocks per ciphertext
         self.n_block_per_ct = (n_channel_per_ct + skip[0] * skip[1] - 1) // (skip[0] * skip[1])
 
-    def get_fhe_op_count(self, n_channel: int) -> dict[str, int]:
-        """Count FHE primitive operations in call() for n_channel total channels.
+    def get_fhe_op_count(self, n_channel: int, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call() for n_channel total channels, grouped by level.
+
+        Returns a dict keyed by level:
+          {
+            level:   rotate_stage1 + mult_plain×n_channel + rescale×n_channel,
+            level-1: add_stage2 + rotate_stage3 + add_stage3,
+          }
 
         Stage 1 (per input ct, n_ct = ceil(n_channel / n_channel_per_ct)):
           - hoisted rotations: simulate r_num steps, sum naf_weight for unique non-zero steps per ct
-          - n_channel mult (ct-pt mask) + n_channel rescale
-        Stage 2: (n_channel - n_packed_out) adds for repacking
-        Stage 3: per output ct: log2(factor_h) rotate+add + log2(factor_w) rotate+add
+          - n_channel mult (ct-pt mask) + n_channel rescale  [level → level-1]
+        Stage 2 (at level-1): (n_channel - n_packed_out) adds for repacking
+        Stage 3 (at level-1): per output ct: log2(factor_h) rotate+add + log2(factor_w) rotate+add
           (steps are powers of 2, naf_weight = 1 each)
         """
-        import math
-        from inference.model_generator.layers.fhe_op_utils import naf_weight
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
 
         factor_h, factor_w = self.upsample_factor
         out_channels_per_ct = self.n_channel_per_ct // (factor_h * factor_w)
@@ -115,25 +124,21 @@ class UpsampleNearestLayer:
             unique_non_zero = set(s for s in steps if s != 0)
             rotate_stage1 += sum(naf_weight(s) for s in unique_non_zero)
 
-        mult_stage1 = n_channel
-        rescale_stage1 = n_channel
+        ops[lv]['rotate'] += rotate_stage1
+        ops[lv]['mult_plain'] += n_channel
+        ops[lv]['rescale'] += n_channel
+        lv -= 1
 
-        # Stage 2: repacking adds
-        add_stage2 = n_channel - n_packed_out
+        # Stage 2: repacking adds (at level-1)
+        ops[lv]['add'] += n_channel - n_packed_out
 
         # Stage 3: nearest-neighbor replication (steps are powers of 2, naf_weight = 1 each)
         log2_h = int(math.ceil(math.log2(factor_h))) if factor_h > 1 else 0
         log2_w = int(math.ceil(math.log2(factor_w))) if factor_w > 1 else 0
-        rotate_stage3 = n_packed_out * (log2_h + log2_w)
-        add_stage3 = n_packed_out * (log2_h + log2_w)
+        ops[lv]['rotate'] += n_packed_out * (log2_h + log2_w)
+        ops[lv]['add'] += n_packed_out * (log2_h + log2_w)
 
-        return {
-            'rotate': rotate_stage1 + rotate_stage3,
-            'mult_plain': mult_stage1,
-            'mult': 0,
-            'add': add_stage2 + add_stage3,
-            'rescale': rescale_stage1,
-        }
+        return dict(ops)
 
     def make_pt_nodes(self, layer_id, n_channel):
         """Return select_tensor_pt list.
@@ -249,8 +254,6 @@ class UpsampleNearestLayer:
                 res.append(sp)
 
         # Stage 3: Nearest neighbor replication via rotation and addition
-        import math
-
         log2_upsample_0 = int(math.ceil(math.log2(factor_h))) if factor_h > 1 else 0
         log2_upsample_1 = int(math.ceil(math.log2(factor_w))) if factor_w > 1 else 0
 
@@ -411,8 +414,6 @@ class UpsampleNearestLayer:
                 res.append(sp)
 
         # Stage 3: Use rotation and addition to replicate data (implements nearest neighbor upsampling) (C++ lines 150-161)
-        import math
-
         log2_upsample_0 = int(math.ceil(math.log2(factor_h))) if factor_h > 1 else 0
         log2_upsample_1 = int(math.ceil(math.log2(factor_w))) if factor_w > 1 else 0
 

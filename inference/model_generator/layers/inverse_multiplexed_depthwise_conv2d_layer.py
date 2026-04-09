@@ -21,6 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
+
 
 op_class = 'InverseMultiplexedDepthwiseConv2d'
 
@@ -304,8 +306,6 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         block_shape1 = self.block_shape[1]
         kernel_size = kernel_shape0 * kernel_shape1
         n_temp = self.n_out_channel * stride_next0 * stride_next1
-
-        from inference.model_generator.layers.fhe_op_utils import naf_weight
 
         # Stage 1: simulate nested loops to get exact primitive rotate count
         total_rots_stage1 = 0

@@ -16,6 +16,7 @@
 
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -26,18 +27,19 @@ class SquareLayer:
     def __init__(self, level):
         self.level = level
 
-    def get_fhe_op_count(self, n_ct: int) -> dict[str, int]:
-        """Count FHE primitive operations in call() for n_ct input ciphertexts.
+    def get_fhe_op_count(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call() for n_ct input ciphertexts, grouped by level.
 
-        Per ct: 1 mult_relin (ct-ct mult) + 1 rescale.
+        Per ct: 1 mult_relin (ct-ct mult) + 1 rescale  [level → level-1]
         """
-        return {
-            'rotate': 0,
-            'mult_plain': 0,
-            'mult': n_ct,
-            'add': 0,
-            'rescale': n_ct,
-        }
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+
+        ops[lv]['mult'] += n_ct
+        ops[lv]['rescale'] += n_ct
+        lv -= 1
+
+        return dict(ops)
 
     def call(self, x: list[CkksCiphertextNode]):
         res: list[CkksCiphertextNode] = list()

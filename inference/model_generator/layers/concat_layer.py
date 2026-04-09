@@ -15,11 +15,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+import math
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
 
 
 class ConcatLayer:
@@ -38,30 +41,34 @@ class ConcatLayer:
         pass
 
     def get_fhe_op_count(
-        self, total_channels: int, n_channel_per_ct: int, input_n_channels: list[int] | None = None
-    ) -> dict[str, int]:
-        """Count FHE primitive operations.
+        self, total_channels: int, n_channel_per_ct: int, level: int, input_n_channels: list[int] | None = None
+    ) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations, grouped by level.
 
         call() / call_multiple_inputs(): pure list merge, zero FHE ops.
         call_multiple_inputs_uneven(): total_channels mult (mask) + up to total_channels rotate
           + (total_channels - n_out_ct) add + n_out_ct rescale.
           n_out_ct = ceil(total_channels / n_channel_per_ct).
         Pass input_n_channels to get the uneven-concat count; omit for the even fast path.
+
+        All rescale ops are at level (no ops after rescale), so level-1 is unused.
         """
-        import math
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
 
         if input_n_channels is None:
-            # call() / call_multiple_inputs(): no FHE ops
-            return {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0}
+            # call() / call_multiple_inputs(): no FHE ops — return empty level dict
+            ops[lv]  # ensure the level key exists with zero values
+            return dict(ops)
+
         # call_multiple_inputs_uneven()
         n_out_ct = math.ceil(total_channels / n_channel_per_ct)
-        return {
-            'rotate': total_channels,  # one potential rotate per global channel
-            'mult_plain': total_channels,  # one mask mult per global channel
-            'mult': 0,
-            'add': total_channels - n_out_ct,  # accumulate into each output ct
-            'rescale': n_out_ct,
-        }
+        ops[lv]['rotate'] += total_channels
+        ops[lv]['mult_plain'] += total_channels
+        ops[lv]['add'] += total_channels - n_out_ct
+        ops[lv]['rescale'] += n_out_ct
+
+        return dict(ops)
 
     def call(self, x1: list[CkksCiphertextNode], x2: list[CkksCiphertextNode]) -> list[CkksCiphertextNode]:
         """
@@ -87,13 +94,16 @@ class ConcatLayer:
             result.append(elem)
         return result
 
-    def get_fhe_op_count_multiple_inputs(self) -> dict[str, int]:
-        """Count FHE primitive operations in call_multiple_inputs().
+    def get_fhe_op_count_multiple_inputs(self, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call_multiple_inputs(), grouped by level.
 
         call_multiple_inputs() is a fast path that simply merges node lists.
         No homomorphic operations are performed.
         """
-        return {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0}
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+        ops[lv]  # ensure the level key exists with zero values
+        return dict(ops)
 
     def call_multiple_inputs(self, inputs: list[list[CkksCiphertextNode]]) -> list[CkksCiphertextNode]:
         """
@@ -126,8 +136,9 @@ class ConcatLayer:
         n_channel_per_ct: int,
         shape: list[int],
         skip: list[int],
-    ) -> dict[str, int]:
-        """Count FHE primitive operations in call_multiple_inputs_uneven().
+        level: int,
+    ) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call_multiple_inputs_uneven(), grouped by level.
 
         'rotate' is the total primitive RotateColUnit count, computed by simulating
         each rot_step and applying NAF decomposition (matching get_glk_col() in
@@ -140,9 +151,11 @@ class ConcatLayer:
           - (n_channels_in_ct - 1) adds
           - 1 rescale
         where n_out_ct = ceil(total_channels / n_channel_per_ct).
+
+        All ops are at level (rescale is the final op, nothing after it).
         """
-        import math
-        from inference.model_generator.layers.fhe_op_utils import naf_weight
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
 
         n_channel_per_block = skip[0] * skip[1]
         block_size = skip[0] * shape[0] * skip[1] * shape[1]
@@ -180,13 +193,12 @@ class ConcatLayer:
                 if rot_step != 0:
                     total_rotate += naf_weight(rot_step)
 
-        return {
-            'rotate': total_rotate,
-            'mult_plain': total_channels,
-            'mult': 0,
-            'add': total_channels - n_out_ct,
-            'rescale': n_out_ct,
-        }
+        ops[lv]['rotate'] += total_rotate
+        ops[lv]['mult_plain'] += total_channels
+        ops[lv]['add'] += total_channels - n_out_ct
+        ops[lv]['rescale'] += n_out_ct
+
+        return dict(ops)
 
     def call_multiple_inputs_uneven(
         self,
@@ -224,7 +236,6 @@ class ConcatLayer:
         for n_ch in input_n_channels:
             channel_offsets.append(total_channels)
             total_channels += n_ch
-        import math
 
         n_out_ct = math.ceil(total_channels / n_channel_per_ct)
 

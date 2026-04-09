@@ -15,14 +15,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+import math
+import numpy as np
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
 
-import math
-import numpy as np
 
 op_class = 'DensePackedLayer'
 
@@ -56,8 +58,8 @@ class DensePackedLayer:
 
         self.mark: int = 0
 
-    def get_fhe_op_count_skip_0d(self, n_input_ct: int, skip_0d: int) -> dict[str, int]:
-        """Count FHE primitive operations in call_skip_0d().
+    def get_fhe_op_count_skip_0d(self, n_input_ct: int, skip_0d: int, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call_skip_0d(), grouped by level.
 
         Baby-step rotations per input ct: steps b*skip_0d for b in 1..bsgs_bs-1.
         Per output packed feature, per input ct, per giant step g:
@@ -65,8 +67,13 @@ class DensePackedLayer:
           - giant-step rotate (g > 0): step = g*bsgs_bs*skip_0d, cost = naf_weight(step)
           - add partial to total (g > 0): 1 add
         After all g: 1 rescale + 1 add (bias).
+
+        Level structure:
+          level:   rotate_baby + rotate_giant + mult_plain + add_accum + rescale
+          level-1: add_bias
         """
-        from inference.model_generator.layers.fhe_op_utils import naf_weight
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
 
         bsgs_bs = int(math.ceil(math.sqrt(self.pack)))
         bsgs_gs = int(math.ceil(self.pack / bsgs_bs))
@@ -78,23 +85,22 @@ class DensePackedLayer:
         rotate_total = rotate_baby + rotate_giant
 
         mult_plain_total = self.n_packed_out_feature * n_input_ct * bsgs_gs * bsgs_bs
-        # adds: (bsgs_bs-1) inner + (bsgs_gs-1) outer per (out,in_ct) + 1 bias per out
-        add_total = (
-            self.n_packed_out_feature * n_input_ct * (bsgs_gs * (bsgs_bs - 1) + (bsgs_gs - 1))
-            + self.n_packed_out_feature
-        )
+        # accumulate adds: (bsgs_bs-1) inner + (bsgs_gs-1) outer per (out,in_ct)
+        add_accum = self.n_packed_out_feature * n_input_ct * (bsgs_gs * (bsgs_bs - 1) + (bsgs_gs - 1))
         rescale_total = self.n_packed_out_feature
 
-        return {
-            'rotate': rotate_total,
-            'mult_plain': mult_plain_total,
-            'mult': 0,
-            'add': add_total,
-            'rescale': rescale_total,
-        }
+        ops[lv]['rotate'] += rotate_total
+        ops[lv]['mult_plain'] += mult_plain_total
+        ops[lv]['add'] += add_accum
+        ops[lv]['rescale'] += rescale_total
+        lv -= 1
 
-    def get_fhe_op_count_multiplexed(self, n_input_ct: int, n: int) -> dict[str, int]:
-        """Count FHE primitive operations in call_multiplexed().
+        ops[lv]['add'] += self.n_packed_out_feature  # bias
+
+        return dict(ops)
+
+    def get_fhe_op_count_multiplexed(self, n_input_ct: int, n: int, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call_multiplexed(), grouped by level.
 
         input_ct_shape = [input_shape[0]*skip[0], input_shape[1]*skip[1]]
         block_size = input_ct_shape[0] * input_ct_shape[1]  (power of 2)
@@ -107,8 +113,13 @@ class DensePackedLayer:
         Per output packed feature:
           mult_plain: n_block_input, add: n_block_input-1 (accumulate) + 1 (bias), rescale: 1
           fold: log2(block_size) rotate + log2(block_size) add
+
+        Level structure:
+          level:   rotate_expand + mult_plain + add_accum + rescale
+          level-1: rotate_fold + add_fold + add_bias
         """
-        from inference.model_generator.layers.fhe_op_utils import naf_weight
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
 
         input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
         N_half = int(n / 2)
@@ -123,23 +134,20 @@ class DensePackedLayer:
         log2_block = int(math.log2(block_size))
 
         rotate_expand = n_input_ct * sum(naf_weight(k) for k in range(1, n_num_pre_ct))
-        rotate_fold = n_packed_out * log2_block
-        rotate_total = rotate_expand + rotate_fold
+        ops[lv]['rotate'] += rotate_expand
+        ops[lv]['mult_plain'] += n_packed_out * n_block_input
+        ops[lv]['add'] += n_packed_out * (n_block_input - 1)  # accumulate
+        ops[lv]['rescale'] += n_packed_out
+        lv -= 1
 
-        mult_plain_total = n_packed_out * n_block_input
-        add_total = n_packed_out * (n_block_input - 1 + 1 + log2_block)  # accum + bias + fold
-        rescale_total = n_packed_out
+        ops[lv]['rotate'] += n_packed_out * log2_block  # fold
+        ops[lv]['add'] += n_packed_out * log2_block  # fold adds
+        ops[lv]['add'] += n_packed_out  # bias
 
-        return {
-            'rotate': rotate_total,
-            'mult_plain': mult_plain_total,
-            'mult': 0,
-            'add': add_total,
-            'rescale': rescale_total,
-        }
+        return dict(ops)
 
-    def get_fhe_op_count_1d_multiplexed(self, n_input_ct: int, n: int) -> dict[str, int]:
-        """Count FHE primitive operations in call_1d_multiplexed().
+    def get_fhe_op_count_1d_multiplexed(self, n_input_ct: int, n: int, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call_1d_multiplexed(), grouped by level.
 
         block_size = shape * skip  (power of 2)
         n_block_per_ct = N/2 // block_size
@@ -152,8 +160,13 @@ class DensePackedLayer:
           block_size is power of 2, so naf_weight(k*block_size) = naf_weight(k).
         Per output group: mult_plain: n_block_input, add: n_block_input (accum + bias),
           rescale: 1, fold: log2(block_size) rotate + log2(block_size) add.
+
+        Level structure:
+          level:   rotate_expand + mult_plain + add_accum + rescale
+          level-1: rotate_fold + add_fold + add_bias
         """
-        from inference.model_generator.layers.fhe_op_utils import naf_weight
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
 
         N_half = n // 2
         shape = int(self.input_shape[0])
@@ -169,20 +182,17 @@ class DensePackedLayer:
         log2_block = int(math.log2(block_size))
 
         rotate_expand = n_input_ct * sum(naf_weight(k) for k in range(1, n_block_per_ct))
-        rotate_fold = n_packed_out * log2_block
-        rotate_total = rotate_expand + rotate_fold
+        ops[lv]['rotate'] += rotate_expand
+        ops[lv]['mult_plain'] += n_packed_out * n_block_input
+        ops[lv]['add'] += n_packed_out * (n_block_input - 1)  # accumulate
+        ops[lv]['rescale'] += n_packed_out
+        lv -= 1
 
-        mult_plain_total = n_packed_out * n_block_input
-        add_total = n_packed_out * (n_block_input + log2_block)  # accum(n_block_input-1) + bias + fold
-        rescale_total = n_packed_out
+        ops[lv]['rotate'] += n_packed_out * log2_block  # fold
+        ops[lv]['add'] += n_packed_out * log2_block  # fold adds
+        ops[lv]['add'] += n_packed_out  # bias
 
-        return {
-            'rotate': rotate_total,
-            'mult_plain': mult_plain_total,
-            'mult': 0,
-            'add': add_total,
-            'rescale': rescale_total,
-        }
+        return dict(ops)
 
     @staticmethod
     def populate_rotations_1_side(x: CkksCiphertextNode, n_rotation: int, unit: int) -> list[DataNode]:

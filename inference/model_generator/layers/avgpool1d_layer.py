@@ -14,12 +14,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
 import numpy as np
 
 
@@ -37,8 +40,8 @@ class Avgpool1DLayer:
         if skip & (skip - 1) != 0:
             raise ValueError(f'skip must be a power of 2, got: {skip}')
 
-    def get_fhe_op_count_adaptive(self, n_ct: int, n: int) -> dict[str, int]:
-        """Count FHE primitive operations in run_adaptive_avgpool() for n_ct input ciphertexts.
+    def get_fhe_op_count_adaptive(self, n_ct: int, n: int, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in run_adaptive_avgpool() for n_ct input ciphertexts, grouped by level.
 
         rotate_cols(x, step) internally decomposes `step` via NAF into ±2^k sub-steps,
         each costing one RotateColUnit primitive. All steps here are powers of 2
@@ -51,20 +54,19 @@ class Avgpool1DLayer:
           - floor(log2(n_rot)) rotate_cols calls × 1 primitive each (slot fill,
             steps: 2^r * channel * shape, all powers of 2)
         where n_rot = floor(n / 2 / (channel * shape)).
+        No rescale, so all ops are at a single level key.
         """
-        import math
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
 
         log2_stride = int(math.ceil(math.log2(self.stride))) if self.stride > 1 else 0
         n_rot = int(np.floor(n / 2 / (self.channel * self.shape)))
         fill_steps = int(np.floor(np.log2(n_rot))) if n_rot > 1 else 0
         rot_add_per_ct = log2_stride + fill_steps
-        return {
-            'rotate': n_ct * rot_add_per_ct,
-            'mult_plain': 0,
-            'mult': 0,
-            'add': n_ct * rot_add_per_ct,
-            'rescale': 0,
-        }
+        ops[lv]['rotate'] += n_ct * rot_add_per_ct
+        ops[lv]['add'] += n_ct * rot_add_per_ct
+
+        return dict(ops)
 
     def run_adaptive_avgpool(self, x: list[DataNode], n: int):
         x_size = len(x)
@@ -85,17 +87,23 @@ class Avgpool1DLayer:
             result.append(res)
         return result
 
-    def get_fhe_op_count_multiplexed(self, x_size: int, n_channel: int, n_channel_per_ct: int) -> dict[str, int]:
-        """Count FHE primitive operations in call_multiplexed_avgpool().
+    def get_fhe_op_count_multiplexed(
+        self, x_size: int, n_channel: int, n_channel_per_ct: int, level: int
+    ) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call_multiplexed_avgpool(), grouped by level.
 
         'rotate' is the total primitive RotateColUnit count.
         Stage 1 steps are powers of 2: naf_weight = 1 each.
         Stage 2: hoisted rotation — unique non-zero steps per ct are simulated
         exactly as in call_multiplexed_avgpool(); primitive rotate count is
         sum(naf_weight(s) for s in unique_non_zero_steps) per ct.
+
+        Level structure:
+          level:   Stage 1 rotate + Stage 2 rotate + mult_plain + rescale
+          level-1: Stage 3 add (channel repacking)
         """
-        import math
-        from inference.model_generator.layers.fhe_op_utils import naf_weight
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
 
         stride = self.stride
         shape = self.shape
@@ -103,15 +111,10 @@ class Avgpool1DLayer:
         log2_stride = int(math.ceil(math.log2(stride))) if stride > 1 else 0
         out_channels_per_ct = n_channel_per_ct * stride
 
-        total_rotate = 0
-        total_mult_plain = 0
-        total_rescale = 0
-        total_add = 0
-
         for idx in range(x_size):
             # Stage 1: steps are powers of 2, naf_weight = 1
-            total_rotate += log2_stride
-            total_add += log2_stride
+            ops[lv]['rotate'] += log2_stride
+            ops[lv]['add'] += log2_stride
 
             # Stage 2: simulate step computation, sum naf_weight of unique non-zero steps
             n_valid = min(n_channel_per_ct, n_channel - idx * n_channel_per_ct)
@@ -127,27 +130,21 @@ class Avgpool1DLayer:
                 steps.append(-r_num0 - r_num1 + l_num0 + l_num1)
 
             unique_non_zero = set(s for s in steps if s != 0)
-            total_rotate += sum(naf_weight(s) for s in unique_non_zero)
-            total_mult_plain += n_valid
-            total_rescale += n_valid
+            ops[lv]['rotate'] += sum(naf_weight(s) for s in unique_non_zero)
+            ops[lv]['mult_plain'] += n_valid
+            ops[lv]['rescale'] += n_valid
 
-        # Stage 3
+        lv -= 1
+
+        # Stage 3: channel repacking adds (at level-1)
         n_out_cts = math.ceil(n_channel / out_channels_per_ct)
-        total_add += n_channel - n_out_cts
+        ops[lv]['add'] += n_channel - n_out_cts
 
-        return {
-            'rotate': total_rotate,
-            'mult_plain': total_mult_plain,
-            'mult': 0,
-            'add': total_add,
-            'rescale': total_rescale,
-        }
+        return dict(ops)
 
     def call_multiplexed_avgpool(
         self, x: list[CkksCiphertextNode], select_tensor_pt, n_channel: int, n_channel_per_ct: int
     ):
-        import math
-
         x_size = len(x)
         stride = self.stride
         shape = self.shape
