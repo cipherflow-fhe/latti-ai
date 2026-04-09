@@ -187,6 +187,15 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                         attributes={'op_class': op_class, 'type': 'bias_pt', 'i': ct_idx},
                     )
                     s = add(s, b_pt)
+                    # For the first output, consume unused input CTs so all appear in the graph
+                    if ct_idx == 0 and r_i2 == 0 and r_j2 == 0:
+                        used = self.get_used_input_indices()
+                        total = self.n_in_channel * stride0 * stride1 * stride_next0 * stride_next1
+                        for idx in range(total):
+                            if idx not in used:
+                                zero_ct = sub(x[idx], x[idx])
+                                dropped_ct = drop_level(zero_ct, 1)
+                                s = add(s, dropped_ct)
                     temp_res[out_ct_idx] = s
 
         if self.need_repack:
@@ -354,6 +363,15 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                     partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
                     s = rescale(partial_sum)
                     s = add(s, bias_pt[ct_idx])
+                    # For the first output, consume unused input CTs so all appear in the graph
+                    if ct_idx == 0 and r_i2 == 0 and r_j2 == 0:
+                        used = self.get_used_input_indices()
+                        total = self.n_in_channel * stride0 * stride1 * stride_next0 * stride_next1
+                        for idx in range(total):
+                            if idx not in used:
+                                zero_ct = sub(x[idx], x[idx])
+                                dropped_ct = drop_level(zero_ct, 1)
+                                s = add(s, dropped_ct)
                     temp_res[out_ct_idx] = s
 
         if self.need_repack:
