@@ -30,9 +30,6 @@ import json
 import transforms
 
 
-order = 4
-
-
 def process_levels(graph: LayerAbstractGraph):
     if config.set_max_level:
         for node in graph.dag.nodes:
@@ -102,9 +99,8 @@ def substitute_layers_for_btp(subgraph: LayerAbstractGraph):
     for compute in all_nodes_in_topo_sort:
         if not isinstance(compute, ComputeNode):
             continue
-        if compute.layer_type == 'relu2d' or compute.layer_type == 'simple_polyrelu':
+        if compute.layer_type == 'relu2d' or compute.layer_type == 'polyact':
             compute.layer_type = config.approx_poly_type
-            subgraph.dag.nodes[compute]['level_cost'] = math.ceil(math.log2(compute.order)) + 1
 
 
 def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = True):

@@ -35,7 +35,7 @@
 #   ├── MultScalarComputeNode         – element-wise scalar multiply
 #   ├── MultCoeffComputeNode          – multiply by a fixed scalar coefficient
 #   ├── ReshapeComputeNode            – reshape / flatten
-#   └── ActivationComputeNode         – activation functions (simple_polyrelu, relu2d,
+#   └── ActivationComputeNode         – activation functions (polyact, relu2d,
 #                                       square, sigmoid)
 #
 #   LayerAbstractGraph                – DAG of FeatureNode / ComputeNode; owns from_json
@@ -281,9 +281,9 @@ class GlobalConfig:
             cls._instance.graph_type = config_dict.get('GRAPH_TYPE', 'btp')
             cls._instance.style = config_dict.get('STYLE', 'multiplexed')
             cls._instance.mpc_refresh = config_dict.get('MPC_REFRESH', False)
-            cls._instance.approx_poly_type = config_dict.get('APPROX_POLY_TYPE', 'simple_polyrelu')
+            cls._instance.approx_poly_type = config_dict.get('APPROX_POLY_TYPE', 'polyact')
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
-            cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'simple_polyrelu']
+            cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'polyact']
             cls._instance.single_thread = config_dict.get('SINGLE_THREAD', False)
 
         return cls._instance
@@ -605,7 +605,7 @@ class ReshapeComputeNode(ComputeNode):
 
 
 class ActivationComputeNode(ComputeNode):
-    """Represents activation layers: simple_polyrelu, relu2d, square, sigmoid."""
+    """Represents activation layers: polyact, relu2d, square, sigmoid."""
 
     def __init__(
         self,
@@ -790,11 +790,11 @@ class LayerAbstractGraph:
             elif layer_type == 'mult_coeff':
                 compute_node = MultCoeffComputeNode(key, layer_type, layer_json['coeff'], channel_input, channel_output)
 
-            elif layer_type in ('simple_polyrelu', 'relu2d', 'square', 'sigmoid'):
+            elif layer_type in ('polyact', 'relu2d', 'square', 'sigmoid'):
                 if layer_type == 'relu2d' and not config.mpc_refresh:
                     raise ValueError('Relu2d is not supported in current mode')
                 compute_node = ActivationComputeNode(key, layer_type, channel_input, channel_output)
-                if layer_type in ('simple_polyrelu', 'relu2d'):
+                if layer_type in ('polyact', 'relu2d'):
                     compute_node.path = layer_json.get('weight_path', '')
                     compute_node.order = layer_json.get('order', 0)
 
@@ -865,7 +865,7 @@ class LayerAbstractGraph:
             if (
                 'square' in layer_type
                 or 'relu2d' == layer_type
-                or 'simple_polyrelu' == layer_type
+                or 'polyact' == layer_type
                 or 'reshape' in layer_type
                 or 'add' in layer_type
                 or 'constmul' in layer_type
@@ -923,7 +923,7 @@ class LayerAbstractGraph:
                     absorb_path.append(layer.bn_absorb_path)
                 if layer.vec_scale_path:
                     if not YOLO_TYPE:
-                        absorb_type.append('simple_polyrelu')
+                        absorb_type.append('polyact')
                         absorb_path.append(layer.vec_scale_path)
                 if not IS_BALANCE:
                     layer.weight_scale = layer.scale_up * layer.scale_down
@@ -996,7 +996,7 @@ class LayerAbstractGraph:
                     absorb_path.append(layer.bn_absorb_path)
                 if layer.vec_scale_path:
                     if not YOLO_TYPE:
-                        absorb_type.append('simple_polyrelu')
+                        absorb_type.append('polyact')
                         absorb_path.append(layer.vec_scale_path)
                 base_string = layer.parameter_paths['weight'].rsplit('.', 1)[0] + '.bias'
                 layer_type = 'fc0'
@@ -1046,7 +1046,7 @@ class LayerAbstractGraph:
                 absorb_type = list()
                 absorb_path = list()
                 if layer.vec_scale_path:
-                    absorb_type.append('simple_polyrelu')
+                    absorb_type.append('polyact')
                     absorb_path.append(layer.vec_scale_path)
                 if not IS_BALANCE:
                     layer.weight_scale = layer.scale_up * layer.scale_down
@@ -1110,15 +1110,16 @@ class LayerAbstractGraph:
         for layer in compute_list:
             layer_id = layer.layer_id
             layer_type = layer.layer_type
-            if 'simple_polyrelu' == layer_type:
+            if 'polyact' == layer_type:
                 # layers[layer_id]['weight_path'] = layer_id + '.weight'
                 layers[layer_id]['weight_path'] = layer.path
                 layers[layer_id]['zero_skip'] = layer.zero_skip
                 layers[layer_id]['is_big_size'] = layer.is_big_size
                 layers[layer_id]['is_absorb_polyrelu'] = IS_ABSORB_POLYRELU
+                layers[layer_id]['style'] = config.style
             if 'level_cost' in self.dag.nodes[layer]:
                 layers[layer_id]['level_cost'] = self.dag.nodes[layer]['level_cost']
-            if 'simple_polyrelu' == layer.layer_type:
+            if 'polyact' == layer.layer_type:
                 layers[layer_id]['order'] = layer.order
                 if not IS_BALANCE:
                     layer.weight_scale = layer.scale_up * layer.scale_down

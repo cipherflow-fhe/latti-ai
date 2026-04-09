@@ -33,7 +33,7 @@ class AveragePoolComputeNode(ComputeNode):
         layer_type: str,
         feature_input: list[FeatureNode],
         feature_output: list[FeatureNode],
-        kernel_shape: list = [8, 8],
+        kernel_shape: list,
         stride: list = [1, 1],
         pads: list = [1, 1],
     ):

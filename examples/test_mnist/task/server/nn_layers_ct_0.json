@@ -80,7 +80,7 @@
                 2
             ]
         },
-        "_relu1_Simple_Polyrelu_output_0": {
+        "_relu1_PolyAct_output_0": {
             "dim": 2,
             "channel": 16,
             "scale": 1.0,
@@ -146,7 +146,7 @@
                 4
             ]
         },
-        "_relu2_Simple_Polyrelu_output_0": {
+        "_relu2_PolyAct_output_0": {
             "dim": 2,
             "channel": 32,
             "scale": 1.0,
@@ -260,8 +260,8 @@
             "running_var_path": "bn1.running_var",
             "level_cost": 0
         },
-        "_relu1_Simple_Polyrelu": {
-            "type": "simple_polyrelu",
+        "_relu1_PolyAct": {
+            "type": "polyact",
             "channel_input": 16,
             "channel_output": 16,
             "ckks_parameter_id_input": "param0",
@@ -270,7 +270,7 @@
                 "_bn1_BatchNormalization_output_0"
             ],
             "feature_output": [
-                "_relu1_Simple_Polyrelu_output_0"
+                "_relu1_PolyAct_output_0"
             ],
             "weight_path": "relu1.weight",
             "zero_skip": [
@@ -306,7 +306,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_relu1_Simple_Polyrelu_output_0"
+                "_relu1_PolyAct_output_0"
             ],
             "feature_output": [
                 "_conv2_Conv_output_0"
@@ -344,8 +344,8 @@
             "running_var_path": "bn2.running_var",
             "level_cost": 0
         },
-        "_relu2_Simple_Polyrelu": {
-            "type": "simple_polyrelu",
+        "_relu2_PolyAct": {
+            "type": "polyact",
             "channel_input": 32,
             "channel_output": 32,
             "ckks_parameter_id_input": "param0",
@@ -354,7 +354,7 @@
                 "_bn2_BatchNormalization_output_0"
             ],
             "feature_output": [
-                "_relu2_Simple_Polyrelu_output_0"
+                "_relu2_PolyAct_output_0"
             ],
             "weight_path": "relu2.weight",
             "zero_skip": [
@@ -381,7 +381,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_relu2_Simple_Polyrelu_output_0"
+                "_relu2_PolyAct_output_0"
             ],
             "feature_output": [
                 "_flatten_Flatten_output_0"

@@ -654,11 +654,11 @@ class TestCompiler(CompilerTestBase):
 
     def test_resnet_20(self):
         from nn_tools import prepare_for_fhe
-        from nn_tools.activations import Simple_Polyrelu
+        from nn_tools.activations import PolyAct
         from resnet import resnet20
 
         model = resnet20()
-        prepare_for_fhe(model, poly_module=Simple_Polyrelu, input_size=(1, 3, 32, 32))
+        prepare_for_fhe(model, poly_module=PolyAct, input_size=(1, 3, 32, 32))
 
         graph, score = self._export_and_compile(model, (1, 3, 32, 32), style='multiplexed', replace=False)
         self.assertEqual(check_level_cost(graph), True)

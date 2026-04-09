@@ -24,6 +24,8 @@ from onnx import NodeProto
 
 log = logging.getLogger(__name__)
 
+DEFAULT_DROPOUT_RATIO = 0.4
+
 
 class DropoutComputeNode(ComputeNode):
     """Compute node for Dropout operation"""
@@ -34,7 +36,7 @@ class DropoutComputeNode(ComputeNode):
         layer_type: str,
         feature_input: list[FeatureNode],
         feature_output: list[FeatureNode],
-        ratio: int = 0.4,
+        ratio: float = DEFAULT_DROPOUT_RATIO,
     ):
         super().__init__(layer_id, layer_type, feature_input, feature_output)
         feature_output[0].shape = feature_input[0].shape
@@ -51,7 +53,7 @@ class DropoutComputeNode(ComputeNode):
         if 'ratio' in x.attribute:
             p = x.attribute[0].f  # Get dropout probability p
         else:
-            p = 0.4
+            p = DEFAULT_DROPOUT_RATIO
         return DropoutComputeNode(layer_id, layer_type, feature_input, feature_output, p)
 
     @override
