@@ -82,10 +82,12 @@ TEST_CASE("gpu/all", "[batch][gpu][e2e]") {
 TEST_CASE("cpu/conv_big_size", "[e2e][cpu]") {
     for (auto& [h, s, label] : std::vector<std::tuple<int, int, std::string>>{
              {256, 2, "output_gt_block"}, {128, 2, "output_eq_block"}, {128, 4, "output_lt_block"}}) {
-        auto name =
-            "conv_big_size_" + label + "_s" + std::to_string(s) + "_" + std::to_string(h) + "x" + std::to_string(h);
-        SECTION(name) {
-            run_e2e_test(single_layer_base_path / name, false);
+        for (int k : {1, 3}) {
+            auto name = "conv_big_size_" + label + "_s" + std::to_string(s) + "_k" + std::to_string(k) + "_" +
+                        std::to_string(h) + "x" + std::to_string(h);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, false);
+            }
         }
     }
 }
@@ -95,10 +97,12 @@ TEST_CASE("cpu/conv_big_size", "[e2e][cpu]") {
 TEST_CASE("cpu/dw_conv_big_size", "[e2e][cpu]") {
     for (auto& [h, s, label] : std::vector<std::tuple<int, int, std::string>>{
              {256, 2, "output_gt_block"}, {128, 2, "output_eq_block"}, {128, 4, "output_lt_block"}}) {
-        auto name =
-            "dw_conv_big_size_" + label + "_s" + std::to_string(s) + "_" + std::to_string(h) + "x" + std::to_string(h);
-        SECTION(name) {
-            run_e2e_test(single_layer_base_path / name, false);
+        for (int k : {1, 3}) {
+            auto name = "dw_conv_big_size_" + label + "_s" + std::to_string(s) + "_k" + std::to_string(k) + "_" +
+                        std::to_string(h) + "x" + std::to_string(h);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, false);
+            }
         }
     }
 }
@@ -305,10 +309,12 @@ TEST_CASE("cpu/adaptive_avgpool1d", "[e2e][cpu]") {
 TEST_CASE("gpu/conv_big_size", "[e2e][gpu]") {
     for (auto& [h, s, label] : std::vector<std::tuple<int, int, std::string>>{
              {256, 2, "output_gt_block"}, {128, 2, "output_eq_block"}, {128, 4, "output_lt_block"}}) {
-        auto name =
-            "conv_big_size_" + label + "_s" + std::to_string(s) + "_" + std::to_string(h) + "x" + std::to_string(h);
-        SECTION(name) {
-            run_e2e_test(single_layer_base_path / name, true);
+        for (int k : {1, 3}) {
+            auto name = "conv_big_size_" + label + "_s" + std::to_string(s) + "_k" + std::to_string(k) + "_" +
+                        std::to_string(h) + "x" + std::to_string(h);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, true);
+            }
         }
     }
 }
@@ -316,10 +322,12 @@ TEST_CASE("gpu/conv_big_size", "[e2e][gpu]") {
 TEST_CASE("gpu/dw_conv_big_size", "[e2e][gpu]") {
     for (auto& [h, s, label] : std::vector<std::tuple<int, int, std::string>>{
              {256, 2, "output_gt_block"}, {128, 2, "output_eq_block"}, {128, 4, "output_lt_block"}}) {
-        auto name =
-            "dw_conv_big_size_" + label + "_s" + std::to_string(s) + "_" + std::to_string(h) + "x" + std::to_string(h);
-        SECTION(name) {
-            run_e2e_test(single_layer_base_path / name, true);
+        for (int k : {1, 3}) {
+            auto name = "dw_conv_big_size_" + label + "_s" + std::to_string(s) + "_k" + std::to_string(k) + "_" +
+                        std::to_string(h) + "x" + std::to_string(h);
+            SECTION(name) {
+                run_e2e_test(single_layer_base_path / name, true);
+            }
         }
     }
 }
