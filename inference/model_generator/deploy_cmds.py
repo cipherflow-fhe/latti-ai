@@ -602,9 +602,21 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         math.ceil(input_shape[1] / block_shape[1]),
                     ]
                 )
+                # Check if output < block_shape (repack needed)
+                output_shape = [input_shape[i] // stride[i] for i in range(len(stride))]
+                need_repack = any(output_shape[i] < block_shape[i] for i in range(len(stride)))
+                repack_mask_pt = None
+                if need_repack:
+                    repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}')
                 layer_output_nodes = avgpool.call_interleaved_avgpool(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]], block_expansion, N=n
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                    block_expansion,
+                    N=n,
+                    repack_mask_pt=repack_mask_pt,
+                    block_shape=block_shape if need_repack else None,
                 )
+                if repack_mask_pt is not None:
+                    input_args.append(Argument(f'repack_mask_{layer_id}', [repack_mask_pt]))
             else:
                 if is_adaptive:
                     # level_cost=0: only rotations + adds, normalization absorbed into adjacent layers

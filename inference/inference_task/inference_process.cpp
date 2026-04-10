@@ -552,6 +552,13 @@ void InitInferenceProcess::init_fhe_avgpool_layer(const string& key,
     bool is_big_size = layer["is_big_size"];
     if (is_big_size) {
         auto avgpool = make_unique<Avgpool2DLayer>(feature_input.shape, stride);
+        // Check if output < block_shape (repack needed)
+        Duo output_shape = {feature_input.shape[0] / stride[0], feature_input.shape[1] / stride[1]};
+        if (output_shape[0] < block_shape[0] || output_shape[1] < block_shape[1]) {
+            Duo second_stage_stride = {block_shape[0] / output_shape[0], block_shape[1] / output_shape[1]};
+            avgpool->prepare_weight_repack(param, feature_input.channel, feature_input.level, second_stage_stride,
+                                           block_shape);
+        }
         ckks_avgpool[key] = move(avgpool);
     } else {
         if (is_adaptive) {
@@ -1047,6 +1054,10 @@ void InferenceProcess::run_task(bool is_mpc) {
                         cxx_args.push_back(
                             CxxVectorArgument{"convw_" + key, &(fp->ckks_big_conv2ds.at(key)->weight_pt)});
                         cxx_args.push_back(CxxVectorArgument{"convb_" + key, &(fp->ckks_big_conv2ds.at(key)->bias_pt)});
+                        if (fp->ckks_big_conv2ds.at(key)->need_repack) {
+                            cxx_args.push_back(CxxVectorArgument{"repack_mask_" + key,
+                                                                 &(fp->ckks_big_conv2ds.at(key)->repack_mask_pt)});
+                        }
                     } else {
                         if (fp->pack_style == "multiplexed") {
                             if (layer.value()["stride"][0] == 1 and d_input_node.skip[0] == 1) {
@@ -1072,6 +1083,10 @@ void InferenceProcess::run_task(bool is_mpc) {
                             CxxVectorArgument{"convw_" + key, &(fp->ckks_big_dw_conv2ds.at(key)->weight_pt)});
                         cxx_args.push_back(
                             CxxVectorArgument{"convb_" + key, &(fp->ckks_big_dw_conv2ds.at(key)->bias_pt)});
+                        if (fp->ckks_big_dw_conv2ds.at(key)->need_repack) {
+                            cxx_args.push_back(CxxVectorArgument{"repack_mask_" + key,
+                                                                 &(fp->ckks_big_dw_conv2ds.at(key)->repack_mask_pt)});
+                        }
                     } else if (fp->pack_style == "multiplexed") {
                         if (layer.value()["stride"][0] == 1) {
                         } else {
@@ -1109,7 +1124,12 @@ void InferenceProcess::run_task(bool is_mpc) {
                     continue;
                 } else {
                     if (is_big_size) {
-                        continue;
+                        if (fp->ckks_avgpool.at(key)->need_repack) {
+                            cxx_args.push_back(
+                                CxxVectorArgument{"repack_mask_" + key, &(fp->ckks_avgpool.at(key)->repack_mask_pt)});
+                        } else {
+                            continue;
+                        }
                     } else {
                         cxx_args.push_back(CxxVectorArgument{"select_tensor_pt_" + key,
                                                              &(fp->ckks_avgpool.at(key)->select_tensor_pt)});

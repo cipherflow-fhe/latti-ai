@@ -78,7 +78,8 @@ class AveragePoolComputeNode(ComputeNode):
         attrs = ComputeNode.get_attr_value_dict(x)
         stride = attrs['strides']
         kernel_shape = attrs['kernel_shape']
-        pads = attrs['pads'][len(kernel_shape) : :]
+        pads_raw = attrs.get('pads', [0] * len(kernel_shape) * 2)
+        pads = pads_raw[len(kernel_shape) : :]
 
         spatial_dims = len(kernel_shape)
         layer_type = f'avgpool{spatial_dims}d'
