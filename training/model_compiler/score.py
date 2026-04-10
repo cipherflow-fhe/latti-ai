@@ -38,6 +38,9 @@ from inference.model_generator.layers.conv2d_depthwise import Conv2DPackedDepthw
 from inference.model_generator.layers.conv2d_packed_layer import Conv2DPackedLayer
 from inference.model_generator.layers.dense_packed_layer import DensePackedLayer
 from inference.model_generator.layers.inverse_multiplexed_conv2d_layer import InverseMultiplexedConv2DLayer
+from inference.model_generator.layers.inverse_multiplexed_depthwise_conv2d_layer import (
+    InverseMultiplexedDepthwiseConv2DLayer,
+)
 from inference.model_generator.layers.mult_scaler import MultScalarLayer
 from inference.model_generator.layers.multiplexed_conv1d_pack_layer import MultiplexedConv1DPackedLayer
 from inference.model_generator.layers.multiplexed_conv2d_pack_layer import MultiplexedConv2DPackedLayer
@@ -387,18 +390,31 @@ class FheScoreParam:
                     math.ceil(input_shape[0] / block_shape[0]) // stride[0],
                     math.ceil(input_shape[1] / block_shape[1]) // stride[1],
                 ]
-                layer = InverseMultiplexedConv2DLayer(
-                    n_out,
-                    n_in,
-                    input_shape,
-                    padding,
-                    kernel_shape,
-                    stride,
-                    next_stride,
-                    skip,
-                    block_shape,
-                )
-                return layer.get_fhe_op_count(n)
+                if is_depthwise:
+                    layer = InverseMultiplexedDepthwiseConv2DLayer(
+                        n_out,
+                        n_in,
+                        input_shape,
+                        padding,
+                        kernel_shape,
+                        stride,
+                        next_stride,
+                        skip,
+                        block_shape,
+                    )
+                else:
+                    layer = InverseMultiplexedConv2DLayer(
+                        n_out,
+                        n_in,
+                        input_shape,
+                        padding,
+                        kernel_shape,
+                        stride,
+                        next_stride,
+                        skip,
+                        block_shape,
+                    )
+                return layer.get_fhe_op_count(self.input_mult_level, n)
 
             if style == 'ordinary':
                 if is_depthwise:
