@@ -191,11 +191,16 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                     if ct_idx == 0 and r_i2 == 0 and r_j2 == 0:
                         used = self.get_used_input_indices()
                         total = self.n_in_channel * stride0 * stride1 * stride_next0 * stride_next1
+                        zero_cts = []
                         for idx in range(total):
                             if idx not in used:
-                                zero_ct = sub(x[idx], x[idx])
-                                dropped_ct = drop_level(zero_ct, 1)
-                                s = add(s, dropped_ct)
+                                zero_cts.append(sub(x[idx], x[idx]))
+                        if zero_cts:
+                            sum_zero = zero_cts[0]
+                            for zc in zero_cts[1:]:
+                                sum_zero = add(sum_zero, zc)
+                            sum_zero = sub(sum_zero, sum_zero)
+                            s = add(s, drop_level(sum_zero, 1))
                     temp_res[out_ct_idx] = s
 
         if self.need_repack:
@@ -367,11 +372,16 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                     if ct_idx == 0 and r_i2 == 0 and r_j2 == 0:
                         used = self.get_used_input_indices()
                         total = self.n_in_channel * stride0 * stride1 * stride_next0 * stride_next1
+                        zero_cts = []
                         for idx in range(total):
                             if idx not in used:
-                                zero_ct = sub(x[idx], x[idx])
-                                dropped_ct = drop_level(zero_ct, 1)
-                                s = add(s, dropped_ct)
+                                zero_cts.append(sub(x[idx], x[idx]))
+                        if zero_cts:
+                            sum_zero = zero_cts[0]
+                            for zc in zero_cts[1:]:
+                                sum_zero = add(sum_zero, zc)
+                            sum_zero = sub(sum_zero, sum_zero)
+                            s = add(s, drop_level(sum_zero, 1))
                     temp_res[out_ct_idx] = s
 
         if self.need_repack:
