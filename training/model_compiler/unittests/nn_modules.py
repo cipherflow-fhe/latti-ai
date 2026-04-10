@@ -19,9 +19,12 @@ import torch.nn as nn
 
 
 class SingleConv(nn.Module):
-    def __init__(self, stride=1):
+    def __init__(self, stride=1, kernel_size=3):
         super().__init__()
-        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=stride)
+        padding = kernel_size // 2
+        self.conv0 = nn.Conv2d(
+            in_channels=32, out_channels=32, kernel_size=kernel_size, bias=True, padding=padding, stride=stride
+        )
 
     def forward(self, x):
         x = self.conv0(x)
@@ -71,9 +74,9 @@ class SingleAvgpool2d(nn.Module):
 
 
 class SingleAvgpool1d(nn.Module):
-    def __init__(self):
+    def __init__(self, kernel_size=2, stride=None, padding=0):
         super().__init__()
-        self.pool0 = nn.AvgPool1d(kernel_size=2, padding=0)
+        self.pool0 = nn.AvgPool1d(kernel_size=kernel_size, stride=stride, padding=padding)
 
     def forward(self, x):
         x = self.pool0(x)
@@ -603,9 +606,12 @@ class ConvAvgpoolReshapeAndDense(nn.Module):
 class MultiChannelConv(nn.Module):
     """Conv2d with different input/output channels. Covers conv_mch_s1/s2."""
 
-    def __init__(self, in_channels=3, out_channels=16, stride=1):
+    def __init__(self, in_channels=3, out_channels=16, stride=1, kernel_size=3):
         super().__init__()
-        self.conv0 = nn.Conv2d(in_channels, out_channels, kernel_size=3, bias=True, padding=1, stride=stride)
+        padding = kernel_size // 2
+        self.conv0 = nn.Conv2d(
+            in_channels, out_channels, kernel_size=kernel_size, bias=True, padding=padding, stride=stride
+        )
 
     def forward(self, x):
         x = self.conv0(x)
@@ -615,9 +621,12 @@ class MultiChannelConv(nn.Module):
 class DepthwiseConv(nn.Module):
     """Depthwise Conv2d (groups=in_channels). Covers dw_*ch_s*."""
 
-    def __init__(self, channels=32, stride=1):
+    def __init__(self, channels=32, stride=1, kernel_size=3):
         super().__init__()
-        self.conv0 = nn.Conv2d(channels, channels, kernel_size=3, bias=True, padding=1, stride=stride, groups=channels)
+        padding = kernel_size // 2
+        self.conv0 = nn.Conv2d(
+            channels, channels, kernel_size=kernel_size, bias=True, padding=padding, stride=stride, groups=channels
+        )
 
     def forward(self, x):
         x = self.conv0(x)
@@ -656,9 +665,11 @@ class MuxConvLargeChannel(nn.Module):
 class SingleConv1dE2E(nn.Module):
     """Conv1d for E2E test. Covers conv1d."""
 
-    def __init__(self):
+    def __init__(self, in_channels=4, out_channels=4, stride=1):
         super().__init__()
-        self.conv0 = nn.Conv1d(in_channels=4, out_channels=4, kernel_size=3, bias=True, padding=1)
+        self.conv0 = nn.Conv1d(
+            in_channels=in_channels, out_channels=out_channels, kernel_size=3, bias=True, padding=1, stride=stride
+        )
 
     def forward(self, x):
         x = self.conv0(x)
@@ -761,3 +772,25 @@ class ConvUpsample(nn.Module):
         x = self.conv0(x)
         x = self.resize(x)
         return x
+
+
+class SingleAdaptiveAvgpool2d(nn.Module):
+    """AdaptiveAvgPool2d for E2E test. Covers adaptive_avgpool2d_layer."""
+
+    def __init__(self, output_size=(1, 1)):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d(output_size=output_size)
+
+    def forward(self, x):
+        return self.pool(x)
+
+
+class SingleAdaptiveAvgpool1d(nn.Module):
+    """AdaptiveAvgPool1d for E2E test. Covers adaptive_avgpool1d_layer."""
+
+    def __init__(self, output_size=1):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool1d(output_size=output_size)
+
+    def forward(self, x):
+        return self.pool(x)

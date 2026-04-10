@@ -133,6 +133,7 @@ void Avgpool2DLayer::prepare_weight(const CkksParameter& param_in,
     n_block_per_ct = div_ceil(n_channel_per_ct, (skip[0] * skip[1]));
     shape = shape_in;
     level_ = level;
+    n_channel_ = n_channel;
     uint32_t out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1];
     uint32_t n_select_pt = std::min((uint32_t)n_channel, out_channels_per_ct);
     select_tensor_pt.clear();
@@ -142,6 +143,28 @@ void Avgpool2DLayer::prepare_weight(const CkksParameter& param_in,
         CkksPlaintextRingt p_st = ctx.encode_ringt(si, ctx.get_parameter().get_q(level));
         select_tensor_pt[i] = move(p_st);
     }
+}
+
+void Avgpool2DLayer::prepare_weight_repack(const CkksParameter& param_in,
+                                           uint32_t n_channel,
+                                           int level,
+                                           const Duo& second_stage_stride,
+                                           const Duo& block_shape_in) {
+    CkksContext ctx = CkksContext::create_empty_context(param_in);
+    need_repack = true;
+    level_ = level;
+    n_channel_ = n_channel;
+    block_shape = block_shape_in;
+
+    // Generate repack mask: 1.0 at every second_stage_stride position within block
+    int N = ctx.get_parameter().get_n();
+    vector<double> mask_vec(N / 2, 0.0);
+    for (uint32_t row = 0; row < block_shape[0]; row += second_stage_stride[0]) {
+        for (uint32_t col = 0; col < block_shape[1]; col += second_stage_stride[1]) {
+            mask_vec[row * block_shape[1] + col] = 1.0;
+        }
+    }
+    repack_mask_pt = ctx.encode_ringt(mask_vec, ctx.get_parameter().get_q(level));
 }
 
 Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, const Feature2DEncrypted& x) {
@@ -223,19 +246,39 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
 
 Feature2DEncrypted
 Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x, const Duo block_expansion) {
+    int N = ctx.get_parameter().get_n();
     uint32_t x_size = x.data.size();
-    uint32_t out_size = x_size / (stride[0] * stride[1]);
+
+    // Determine first_stage_stride and second_stage_stride
+    Duo first_stage_stride, second_stage_stride;
+    if (need_repack) {
+        first_stage_stride[0] = block_expansion[0];
+        first_stage_stride[1] = block_expansion[1];
+        second_stage_stride[0] = stride[0] / first_stage_stride[0];
+        second_stage_stride[1] = stride[1] / first_stage_stride[1];
+    } else {
+        first_stage_stride[0] = stride[0];
+        first_stage_stride[1] = stride[1];
+        second_stage_stride[0] = 1;
+        second_stage_stride[1] = 1;
+    }
+
+    // Stage 1: Interleaved cross-block sum
+    uint32_t out_size = x_size / (first_stage_stride[0] * first_stage_stride[1]);
     vector<CkksCiphertext> res;
     res.resize(out_size);
 
     parallel_for(x.n_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int channel_idx) {
-        int base_idx = channel_idx * (block_expansion[0] / stride[0]) * (block_expansion[1] / stride[1]);
+        int base_idx =
+            channel_idx * (block_expansion[0] / first_stage_stride[0]) * (block_expansion[1] / first_stage_stride[1]);
         for (int row_idx = 0; row_idx < block_expansion[0]; row_idx++) {
             for (int col_idx = 0; col_idx < block_expansion[1]; col_idx++) {
                 int ct_idx =
                     channel_idx * block_expansion[0] * block_expansion[1] + row_idx * block_expansion[1] + col_idx;
-                int out_idx = base_idx + (row_idx / stride[0]) * (block_expansion[1] / stride[1]) + col_idx / stride[1];
-                if (row_idx % stride[0] == 0 && col_idx % stride[1] == 0) {
+                int out_idx = base_idx +
+                              (row_idx / first_stage_stride[0]) * (block_expansion[1] / first_stage_stride[1]) +
+                              col_idx / first_stage_stride[1];
+                if (row_idx % first_stage_stride[0] == 0 && col_idx % first_stage_stride[1] == 0) {
                     res[out_idx] = x.data[ct_idx].copy();
                 } else {
                     res[out_idx] = ctx_copy.add(res[out_idx], x.data[ct_idx]);
@@ -244,7 +287,84 @@ Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x,
         }
     });
 
-    int N = ctx.get_parameter().get_n();
+    if (need_repack) {
+        // Stage 2: Adaptive avgpool within block (rotation sum with second_stage_stride)
+        uint32_t log2_ss0 = (second_stage_stride[0] > 1) ? (uint32_t)std::ceil(std::log2(second_stage_stride[0])) : 0;
+        uint32_t log2_ss1 = (second_stage_stride[1] > 1) ? (uint32_t)std::ceil(std::log2(second_stage_stride[1])) : 0;
+        parallel_for(out_size, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
+            for (int i = (int)log2_ss0 - 1; i >= 0; i--) {
+                long step = (1L << i) * block_shape[1];
+                auto rotated = ctx_copy.rotate(res[idx], step);
+                res[idx] = ctx_copy.add(res[idx], rotated);
+            }
+            for (int j = (int)log2_ss1 - 1; j >= 0; j--) {
+                long step = (1L << j);
+                auto rotated = ctx_copy.rotate(res[idx], step);
+                res[idx] = ctx_copy.add(res[idx], rotated);
+            }
+        });
+
+        // Stage 3: Repack (mask + rotate + accumulate + rescale)
+        uint32_t out_skip0 = second_stage_stride[0];
+        uint32_t out_skip1 = second_stage_stride[1];
+        uint32_t n_channel_per_block = out_skip0 * out_skip1;
+        uint32_t n_block_per_ct_out = (N / 2) / (block_shape[0] * block_shape[1]);
+        uint32_t n_channel_per_ct_repack = n_channel_per_block * n_block_per_ct_out;
+        uint32_t n_out_ct = div_ceil(n_channel_, n_channel_per_ct_repack);
+
+        // Step 3a: mask all channels with the shared repack mask
+        parallel_for(n_channel_, th_nums, ctx, [&](CkksContext& ctx_copy, int c) {
+            auto mask_mul = ctx_copy.ringt_to_mul(repack_mask_pt, level_);
+            res[c] = ctx_copy.mult_plain_mul(res[c], mask_mul);
+        });
+
+        // Step 3b: rotate + accumulate, grouped by output CT
+        vector<CkksCiphertext> repack_res(n_out_ct);
+        parallel_for(n_out_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int out_ct_idx) {
+            CkksCiphertext sum(0);
+            bool first = true;
+            for (uint32_t ch_in_ct = 0; ch_in_ct < n_channel_per_ct_repack; ch_in_ct++) {
+                uint32_t c = out_ct_idx * n_channel_per_ct_repack + ch_in_ct;
+                if (c >= n_channel_)
+                    break;
+
+                uint32_t block_idx_val = ch_in_ct / n_channel_per_block;
+                uint32_t ch_in_block = ch_in_ct % n_channel_per_block;
+                uint32_t cx = ch_in_block / out_skip1;
+                uint32_t cy = ch_in_block % out_skip1;
+
+                long rot_step =
+                    -((long)cx * block_shape[1] + cy + (long)block_idx_val * block_shape[0] * block_shape[1]);
+                CkksCiphertext rotated;
+                if (rot_step == 0) {
+                    rotated = res[c].copy();
+                } else {
+                    rotated = ctx_copy.rotate(res[c], rot_step);
+                }
+
+                if (first) {
+                    sum = move(rotated);
+                    first = false;
+                } else {
+                    sum = ctx_copy.add(sum, rotated);
+                }
+            }
+            repack_res[out_ct_idx] = ctx_copy.rescale(sum, ctx_copy.get_parameter().get_default_scale());
+        });
+
+        Feature2DEncrypted result(&ctx, x.level - 1);
+        result.data = move(repack_res);
+        result.n_channel = x.n_channel;
+        result.n_channel_per_ct = n_channel_per_ct_repack;
+        result.skip[0] = out_skip0;
+        result.skip[1] = out_skip1;
+        result.shape[0] = block_shape[0] / second_stage_stride[0];
+        result.shape[1] = block_shape[1] / second_stage_stride[1];
+        result.level = x.level - 1;
+        return result;
+    }
+
+    // No repack: existing packing logic (output >= block)
     int output_h = shape[0] / stride[0];
     int output_w = shape[1] / stride[1];
 
