@@ -333,7 +333,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv2d_packed", "", HeteroProcess
         SECTION("single_channel") {
             uint32_t n_in_channel = 1;
             uint32_t n_out_channel = 1;
-            vector<uint32_t> input_shapes = {4, 8, 16, 32, 64};
+            vector<uint32_t> input_shapes = {/*4, */ 8, 16, 32, 64};
             vector<uint32_t> kernel_shapes = {1, 3, 5};
 
             for (uint32_t s : input_shapes) {

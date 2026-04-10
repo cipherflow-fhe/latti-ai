@@ -175,52 +175,16 @@ CkksPlaintext MultiplexedDWConv1DPackedLayer::generate_select_tensor_pt_for_inde
 // ---------------------------------------------------------------------------
 
 void MultiplexedDWConv1DPackedLayer::prepare_weight() {
-    uint32_t half_kernel_shape = kernel_shape / 2;
-    uint32_t input_block_size = input_shape * skip;
-
-    // Build kernel boundary masks (same-padding, stride filtering).
-    vector<vector<double>> kernel_mask(kernel_shape);
-    for (int i = 0; i < (int)kernel_shape; i++) {
-        kernel_mask[i].resize(input_shape, 0.0);
-        for (int data_idx = 0; data_idx < (int)input_shape; data_idx++) {
-            bool valid_pos = true;
-            if (i < (int)half_kernel_shape && data_idx < (int)(half_kernel_shape - i)) {
-                valid_pos = false;
-            } else if (i >= (int)(kernel_shape - half_kernel_shape) &&
-                       data_idx >= (int)(input_shape - (i - half_kernel_shape))) {
-                valid_pos = false;
-            }
-            if (valid_pos && data_idx % stride == 0) {
-                kernel_mask[i][data_idx] = 1.0;
-            }
-        }
-    }
+    prepare_weight_for_lazy();
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
+    uint32_t input_block_size = input_shape * skip;
 
-    // weight_pt[ct_idx][kernel_idx]
-    weight_pt.clear();
     weight_pt.resize(n_packed_ct);
-
     for (int ct_idx = 0; ct_idx < (int)n_packed_ct; ct_idx++) {
         weight_pt[ct_idx].resize(kernel_shape);
-
         for (int kernel_idx = 0; kernel_idx < (int)kernel_shape; kernel_idx++) {
-            vector<double> w(param_.get_n() / 2, 0.0);
-
-            for (int linear_idx = 0; linear_idx < n_block_per_ct * (int)input_block_size; linear_idx++) {
-                int t = linear_idx / (int)input_block_size;
-                int shape_linear = linear_idx % (int)input_block_size;
-                int channel_index = shape_linear % skip;
-                int data_idx = shape_linear / skip;
-
-                uint32_t channel = ct_idx * n_channel_per_ct + (t * skip + channel_index) % n_channel_per_ct;
-
-                if (channel < n_channel) {
-                    w[linear_idx] = weight.get(channel, 0, kernel_idx) * kernel_mask[kernel_idx][data_idx];
-                }
-            }
-            weight_pt[ct_idx][kernel_idx] = ctx.encode_ringt(w, weight_scale);
+            weight_pt[ct_idx][kernel_idx] = generate_weight_pt_for_indices(ctx, ct_idx, kernel_idx);
         }
     }
 
@@ -229,37 +193,13 @@ void MultiplexedDWConv1DPackedLayer::prepare_weight() {
     if (!needs_rearrange) {
         bias_pt.resize(n_packed_ct);
         for (int ct_idx = 0; ct_idx < (int)n_packed_ct; ct_idx++) {
-            vector<double> bias_data(param_.get_n() / 2, 0.0);
-            for (int t = 0; t < n_block_per_ct; t++) {
-                int ch = ct_idx * n_block_per_ct + t;
-                if (ch < (int)n_channel) {
-                    for (int data_idx = 0; data_idx < (int)input_shape; data_idx++) {
-                        bias_data[t * (int)input_block_size + data_idx] = bias.get(ch);
-                    }
-                }
-            }
-            bias_pt[ct_idx] = ctx.encode_ringt(bias_data, ctx.get_parameter().get_default_scale());
+            bias_pt[ct_idx] = generate_bias_pt_for_index(ctx, ct_idx);
         }
     } else {
-        uint32_t skip_out = skip * stride;
-        uint32_t output_shape = input_shape / stride;
         uint32_t n_packed_out = div_ceil(n_channel, n_channel_per_ct);
-
         bias_pt.resize(n_packed_out);
         for (int po = 0; po < (int)n_packed_out; po++) {
-            vector<double> bias_data(param_.get_n() / 2, 0.0);
-            for (int ch_local = 0; ch_local < (int)n_channel_per_ct; ch_local++) {
-                int ch = po * n_channel_per_ct + ch_local;
-                if (ch < (int)n_channel) {
-                    int group = ch_local / (int)skip_out;
-                    int ch_offset = ch_local % (int)skip_out;
-                    for (int out_idx = 0; out_idx < (int)output_shape; out_idx++) {
-                        int slot_idx = group * (int)(output_shape * skip_out) + out_idx * (int)skip_out + ch_offset;
-                        bias_data[slot_idx] = bias.get(ch);
-                    }
-                }
-            }
-            bias_pt[po] = ctx.encode_ringt(bias_data, ctx.get_parameter().get_q(level_ - 1));
+            bias_pt[po] = generate_bias_pt_for_index(ctx, po);
         }
 
         block_select_pt.resize(min(n_channel_per_ct, n_channel));
