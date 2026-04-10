@@ -16,11 +16,14 @@
 
 import math
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
+
 
 op_class = 'InverseMultiplexedConv2d'
 
@@ -67,6 +70,130 @@ class InverseMultiplexedConv2DLayer:
         if self.need_repack:
             self.stride = [input_shape[0] // block_shape[0], input_shape[1] // block_shape[1]]
             self.stride_next = [1, 1]
+
+    def get_fhe_op_count(self, level: int, N: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call(), grouped by level.
+
+        Returns a dict keyed by level:
+          {
+            level:   rotate (stage1) + mult_plain (accumulate) + add (accumulate) + rescale,
+            level-1: add (bias)
+                     [+ mult_plain(mask) + rotate(repack) + add(repack) + rescale(repack)  if need_repack]
+                     [or + rotate(pack) + add(pack)                                         if n_channel_per_ct_out > 1],
+          }
+
+        Rotation phase (build rotated_x): simulate nested loops for each n_in_channel,
+          compute step = row_step*block_shape[1] + col_step, sum naf_weight for non-zero steps.
+
+        Accumulate phase (per out_ct_idx x r_i2 x r_j2):
+          terms = n_in_channel * kernel_h * kernel_w
+          mult_plain: terms, add: terms-1 (accumulate), rescale: 1  [level -> level-1]
+          n_out_channel * stride_next[0] * stride_next[1] such groups.
+
+        Bias add at level-1: 1 add per group.
+
+        Repack path (at level-1): n_out_channel mult_plain (mask) + simulate rot_steps with naf_weight
+          + adds + rescale per out_ct.
+        No-repack packing (at level-1): step = -channel_idx * output_pixels (output_pixels is power of 2),
+          naf_weight(channel_idx * output_pixels) = naf_weight(channel_idx).
+        """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+
+        pad0, pad1 = self.padding[0], self.padding[1]
+        stride0, stride1 = self.stride[0], self.stride[1]
+        stride_next0, stride_next1 = self.stride_next[0], self.stride_next[1]
+        kh, kw = self.kernel_shape
+        block_shape1 = self.block_shape[1]
+        n_groups = self.n_out_channel * stride_next0 * stride_next1
+        terms = self.n_in_channel * kh * kw
+
+        # Rotation phase: simulate nested loops (no level change)
+        for _ in range(self.n_in_channel):
+            for r_i2 in range(stride_next0):
+                for r_j2 in range(stride_next1):
+                    for row_seg_idx in range(stride0):
+                        for col_seg_idx in range(stride1):
+                            split_ks0 = (kh - 1 - row_seg_idx) // stride0 + 1
+                            split_ks1 = (kw - 1 - col_seg_idx) // stride1 + 1
+                            for u_s in range(split_ks0):
+                                for v_s in range(split_ks1):
+                                    begin_row = (row_seg_idx - pad0 + stride0 * (u_s + r_i2)) % (stride0 * stride_next0)
+                                    begin_row = (begin_row + stride0 * stride_next0) % (stride0 * stride_next0)
+                                    begin_col = (col_seg_idx - pad1 + stride1 * (v_s + r_j2)) % (stride1 * stride_next1)
+                                    begin_col = (begin_col + stride1 * stride_next1) % (stride1 * stride_next1)
+                                    row_step = (row_seg_idx - pad0 + stride0 * (u_s + r_i2) - begin_row) // (
+                                        stride0 * stride_next0
+                                    )
+                                    col_step = (col_seg_idx - pad1 + stride1 * (v_s + r_j2) - begin_col) // (
+                                        stride1 * stride_next1
+                                    )
+                                    step = int(row_step * block_shape1 + col_step)
+                                    if step != 0:
+                                        ops[lv]['rotate'] += naf_weight(step)
+
+        # Accumulate phase at lv: mult_plain + add(accumulate) + rescale  [lv -> lv-1]
+        ops[lv]['mult_plain'] += n_groups * terms
+        ops[lv]['add'] += n_groups * (terms - 1)
+        ops[lv]['rescale'] += n_groups
+        lv -= 1
+
+        # Bias add at lv (= level-1)
+        ops[lv]['add'] += n_groups
+
+        # Packing / repack phase
+        output_area = self.input_shape[0] / stride0 * self.input_shape[1] / stride1
+        n_channel_per_ct_out = 1
+        if 2 * output_area < N:
+            n_channel_per_ct_out = int(N / (2 * output_area))
+
+        if self.need_repack:
+            output_shape0 = self.input_shape[0] // self.orig_stride[0]
+            output_shape1 = self.input_shape[1] // self.orig_stride[1]
+            out_skip0 = self.block_shape[0] // output_shape0
+            out_skip1 = self.block_shape[1] // output_shape1
+            n_channel_per_block = out_skip0 * out_skip1
+            n_block_per_ct_repack = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct_repack
+            n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
+
+            # mask mult for all n_out_channel items at lv (= level-1)
+            ops[lv]['mult_plain'] += self.n_out_channel
+
+            # simulate rot_steps and accumulate adds at lv
+            for out_ct_idx in range(n_out_ct):
+                for ch_in_ct in range(n_channel_per_ct_out_repack):
+                    c = out_ct_idx * n_channel_per_ct_out_repack + ch_in_ct
+                    if c >= self.n_out_channel:
+                        break
+                    block_idx = ch_in_ct // n_channel_per_block
+                    ch_in_block = ch_in_ct % n_channel_per_block
+                    cx = ch_in_block // out_skip1
+                    cy = ch_in_block % out_skip1
+                    rot_step = -(cx * self.block_shape[1] + cy + block_idx * self.block_shape[0] * self.block_shape[1])
+                    if rot_step != 0:
+                        ops[lv]['rotate'] += naf_weight(rot_step)
+                    if ch_in_ct > 0 and c < self.n_out_channel:
+                        ops[lv]['add'] += 1
+
+            ops[lv]['rescale'] += n_out_ct
+            return dict(ops)
+
+        n_temp = n_groups
+        if n_channel_per_ct_out <= 1:
+            return dict(ops)
+
+        # Normal packing at lv (= level-1):
+        # step = -channel_idx * output_pixels; output_pixels is power of 2
+        # naf_weight(k * output_pixels) = naf_weight(k) since output_pixels is power of 2
+        n_packed_normal = math.ceil(n_temp / n_channel_per_ct_out)
+        ops[lv]['rotate'] += sum(
+            naf_weight(out_ct_idx % n_channel_per_ct_out)
+            for out_ct_idx in range(n_temp)
+            if out_ct_idx % n_channel_per_ct_out != 0
+        )
+        ops[lv]['add'] += n_temp - n_packed_normal
+        return dict(ops)
 
     def get_used_input_indices(self) -> set:
         """Return the set of input CT indices that are actually used in the convolution.

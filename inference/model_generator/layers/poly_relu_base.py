@@ -15,13 +15,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+import numpy as np
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
-
-import numpy as np
 
 
 class PolyReluBase:
@@ -75,6 +75,110 @@ class PolyReluBase:
         for p in list(required):
             add_deps(p)
         return required, to_compute
+
+    def get_fhe_op_count(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in _run_bsgs_core() for n_ct input ciphertexts, grouped by level.
+
+        Per ciphertext:
+          Power construction (to_compute powers via mult_relin + rescale):
+            len(to_compute) - 1  mult (relin) + rescale each  (power 1 is free)
+          Baby polynomial build per giant step g (giant_steps total):
+            (baby_steps - 1) mult_plain + rescale  (baby_step terms, b>=1)
+            (baby_steps - 2) add  (accumulate baby_poly)
+            1 add  (coeff0_pt)
+          Giant combine per g>0 where giant_power <= order:
+            1 mult (relin, bp * x_giant) + 1 rescale + 1 add  (result += term)
+            or 1 mult_plain (coeff0 only) + 1 rescale + 1 add
+        drop_level calls are free (no crypto cost).
+
+        Level tracking follows BSGS depth: power construction consumes levels,
+        then baby polys and giant combine share levels. The function uses
+        compute_bsgs_level_cost() to determine total levels consumed and
+        distributes ops across levels accordingly.
+        """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+
+        order = self.order
+        baby_steps = int(np.ceil(np.sqrt(order + 1)))
+        giant_steps = int(np.ceil((order + 1) / baby_steps))
+
+        power_info = self._compute_power_info(order)
+        required, to_compute = self._determine_required_powers(order, baby_steps, giant_steps, power_info)
+
+        # Build power depth map to know which level each power is computed at
+        power_depth = {1: 0}
+        for n in sorted(to_compute):
+            if n <= 1:
+                continue
+            _, a, b = power_info[n]
+            power_depth[n] = max(power_depth[a], power_depth[b]) + 1
+
+        # Powers: each needs 1 mult_relin + 1 rescale (excluding power 1)
+        # Group by depth: power at depth d is computed at level (level - d + 1)... but for
+        # simplicity (as in the flat version), we track per-ct total and distribute to the
+        # appropriate level based on depth.
+        # Powers at depth d consume level (level - d) → (level - d - 1)
+        # We aggregate by input level minus depth.
+        n_powers = len(to_compute) - 1  # subtract power 1
+
+        # Baby polys and giant combine operate at bsgs_output_level = max_power_level - 1
+        # max_depth of required powers
+        max_depth = max(power_depth[p] for p in required)
+        bsgs_output_level = level - max_depth - 1
+
+        # Power construction: ops at varying levels from level-1 down to level-max_depth
+        # Group mult+rescale by depth
+        for n in sorted(to_compute):
+            if n <= 1:
+                continue
+            d = power_depth[n]
+            lv_power = level - d  # mult at level-d, rescale from level-d → level-d-1
+            ops[lv_power]['mult'] += n_ct
+            ops[lv_power]['rescale'] += n_ct
+
+        # Baby polys per giant step (at bsgs_output_level + 1 → bsgs_output_level)
+        mult_plain_baby = 0
+        rescale_baby = 0
+        add_baby = 0
+        for g in range(giant_steps):
+            n_terms = 0
+            has_coeff0 = False
+            for b in range(baby_steps):
+                idx = g * baby_steps + b
+                if idx > order:
+                    break
+                if b == 0:
+                    has_coeff0 = True
+                else:
+                    n_terms += 1
+            mult_plain_baby += n_terms
+            rescale_baby += n_terms
+            if n_terms > 1:
+                add_baby += n_terms - 1
+            if has_coeff0 and n_terms > 0:
+                add_baby += 1
+
+        baby_level = bsgs_output_level + 1  # baby mult_plain+rescale go at bsgs_output_level+1
+        ops[baby_level]['mult_plain'] += mult_plain_baby * n_ct
+        ops[baby_level]['rescale'] += rescale_baby * n_ct
+        ops[bsgs_output_level]['add'] += add_baby * n_ct
+
+        # Giant combine (at bsgs_output_level + 1 → bsgs_output_level)
+        mult_giant = 0
+        rescale_giant = 0
+        add_giant = 0
+        for g in range(1, giant_steps):
+            if g * baby_steps > order:
+                break
+            mult_giant += 1
+            rescale_giant += 1
+            add_giant += 1
+
+        ops[bsgs_output_level + 1]['mult'] += mult_giant * n_ct
+        ops[bsgs_output_level + 1]['rescale'] += rescale_giant * n_ct
+        ops[bsgs_output_level]['add'] += add_giant * n_ct
+
+        return dict(ops)
 
     @staticmethod
     def compute_bsgs_level_cost(order):
