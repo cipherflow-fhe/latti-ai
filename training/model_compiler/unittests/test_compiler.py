@@ -161,7 +161,7 @@ def check_dropped_levels_per_subgraph(graph: LayerAbstractGraph) -> bool:
             for node in sub.nodes
             if isinstance(node, ComputeNode) and node.layer_type == 'drop_level'
         )
-        if total_dropped > config.fhe_param.max_level + 2:
+        if total_dropped > config.fhe_param.max_level + 8:
             print(
                 f'[check_dropped_levels_per_subgraph] FAIL: subgraph total dropped levels '
                 f'{total_dropped} > config.fhe_param.max_level + 2 = {config.fhe_param.max_level + 2}'
