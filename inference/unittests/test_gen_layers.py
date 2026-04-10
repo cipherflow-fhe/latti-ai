@@ -348,10 +348,8 @@ class TestLayerExport(unittest.TestCase):
                             weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes('_conv1')
                             output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_pt)
 
-                            used_indices = big_conv.get_used_input_indices()
-                            used_input_ct = [input_ct[i] for i in sorted(used_indices)]
                             input_args = list()
-                            input_args.append(Argument('input_0', used_input_ct))
+                            input_args.append(Argument('input_0', input_ct))
                             input_args.append(Argument('convw__conv1', weight_pt))
                             input_args.append(Argument('convb__conv1', bias_pt))
                             if repack_mask_pt is not None:
@@ -427,10 +425,8 @@ class TestLayerExport(unittest.TestCase):
                     weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes('_conv1')
                     output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_pt)
 
-                    used_indices = big_conv.get_used_input_indices()
-                    used_input_ct = [input_ct[i] for i in sorted(used_indices)]
                     input_args = list()
-                    input_args.append(Argument('input_0', used_input_ct))
+                    input_args.append(Argument('input_0', input_ct))
                     input_args.append(Argument('convw__conv1', weight_pt))
                     input_args.append(Argument('convb__conv1', bias_pt))
                     if repack_mask_pt is not None:

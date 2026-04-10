@@ -793,17 +793,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "inv_mux_conv", "", HeteroProcesso
                                     ("input_shape_" + to_string(input_shape[0]) + "_" + to_string(input_shape[1])) /
                                     ("level_" + to_string(init_level)) / "server";
 
-                                // Filter input CTs to only include those actually used by the layer
-                                auto used_indices = conv_layer.get_used_input_indices();
-                                vector<CkksCiphertext> used_input_data;
-                                for (auto idx : used_indices) {
-                                    used_input_data.push_back(std::move(input_feature.data[idx]));
-                                }
-
                                 auto arg_names = read_arg_names(project_path);
                                 for (const auto& name : arg_names) {
                                     if (name.rfind("input", 0) == 0)
-                                        cxx_args.push_back({name, &used_input_data});
+                                        cxx_args.push_back({name, &input_feature.data});
                                     else if (name.rfind("convw_", 0) == 0)
                                         cxx_args.push_back({name, &conv_layer.weight_pt});
                                     else if (name.rfind("convb_", 0) == 0)
@@ -915,17 +908,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "inv_mux_conv_repack", "", HeteroP
                         vector<CkksPlaintextRingt> repack_mask_vec;
                         repack_mask_vec.push_back(conv_layer.generate_repack_mask_pt(this->context));
 
-                        // Filter input CTs to only include those actually used by the layer
-                        auto used_indices = conv_layer.get_used_input_indices();
-                        vector<CkksCiphertext> used_input_data;
-                        for (auto idx : used_indices) {
-                            used_input_data.push_back(std::move(input_feature.data[idx]));
-                        }
-
                         auto arg_names = read_arg_names(project_path);
                         for (const auto& name : arg_names) {
                             if (name.rfind("input", 0) == 0)
-                                cxx_args.push_back({name, &used_input_data});
+                                cxx_args.push_back({name, &input_feature.data});
                             else if (name.rfind("convw_", 0) == 0)
                                 cxx_args.push_back({name, &conv_layer.weight_pt});
                             else if (name.rfind("convb_", 0) == 0)
