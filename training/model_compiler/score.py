@@ -602,10 +602,12 @@ class FheScoreParam:
                 return layer.get_fhe_op_count_interleaved(n_input_ct, n, self.input_mult_level)
             if is_adaptive:
                 if style == 'ordinary':
-                    return layer.get_fhe_op_count_adaptive(n_input_ct, n, self.input_mult_level)
+                    return layer.get_fhe_op_count(n_input_ct, n, self.input_mult_level)
+                else:
+                    return layer.get_fhe_op_count_adaptive(n_input_ct, n_in, self.input_mult_level)
+            else:
+                # non-adaptive multiplexed
                 return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack, self.input_mult_level)
-            # non-adaptive multiplexed
-            return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack, self.input_mult_level)
 
         elif layer_type == 'avgpool1d':
             input_shape = self.input_shape
@@ -613,9 +615,15 @@ class FheScoreParam:
             skip_1d = self.input_skip[0] if isinstance(self.input_skip, list) else self.input_skip
             layer = Avgpool1DLayer(stride[0], input_shape[0], channel=n_in, skip=skip_1d)
             is_adaptive = getattr(node, 'is_adaptive_avgpool', True)
+            if is_big_size:
+                raise ('unsuport avgpool1d in big_size')
             if is_adaptive:
-                return layer.get_fhe_op_count_adaptive(n_input_ct, n, self.input_mult_level)
-            return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack, self.input_mult_level)
+                if style == 'ordinary':
+                    raise ('unsuport avgpool1d in ordinary and is_adaptive')
+                else:
+                    return layer.get_fhe_op_count_adaptive(n_input_ct, n, self.input_mult_level)
+            else:
+                return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack, self.input_mult_level)
 
         # ── polyact / activation ─────────────────────────────────────────────
         elif layer_type == 'polyact':
