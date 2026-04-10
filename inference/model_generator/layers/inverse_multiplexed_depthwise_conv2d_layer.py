@@ -16,6 +16,7 @@
 
 import math
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -284,17 +285,24 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}') if self.need_repack else None
         return weight_pt, bias_pt, repack_mask_pt
 
-    def get_fhe_op_count_call(self, N: int) -> dict[str, int]:
-        """Count FHE primitive operations in call().
+    def get_fhe_op_count(self, level: int, N: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call(), grouped by level.
 
-        'rotate' is the total primitive RotateColUnit count, computed by simulating
-        each rotate_cols step and applying NAF decomposition (matching get_glk_col()
-        in custom_task.py).
+        Returns a dict keyed by level:
+          {
+            level:   rotate (stage1) + mult_plain (accumulate) + add (accumulate) + rescale,
+            level-1: add (bias)
+                     [+ mult_plain(mask) + rotate(repack) + add(repack) + rescale(repack)  if need_repack]
+                     [or + rotate(pack) + add(pack)                                         if n_channel_per_ct_out > 1],
+          }
 
         Stage 1: steps are `row_step * block_shape1 + col_step` — simulated exactly.
-        Stage 3a: rot_step = -(cx*block_shape1 + cy + block_idx*block_shape0*block_shape1) — simulated.
-        Stage 3b: step = -k * output_pixels; naf_weight(k * 2^m) == naf_weight(k).
+        Stage 3a (repack): rot_step = -(cx*block_shape1 + cy + block_idx*block_shape0*block_shape1) — simulated.
+        Stage 3b (normal pack): step = -k * output_pixels; naf_weight(k * 2^m) == naf_weight(k).
         """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+
         pad0 = self.padding[0]
         pad1 = self.padding[1]
         stride0 = self.stride[0]
@@ -305,10 +313,9 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         kernel_shape1 = self.kernel_shape[1]
         block_shape1 = self.block_shape[1]
         kernel_size = kernel_shape0 * kernel_shape1
-        n_temp = self.n_out_channel * stride_next0 * stride_next1
+        n_groups = self.n_out_channel * stride_next0 * stride_next1
 
-        # Stage 1: simulate nested loops to get exact primitive rotate count
-        total_rots_stage1 = 0
+        # Stage 1: simulate nested loops (no level change)
         for out_channel_idx in range(self.n_out_channel):
             for r_i2 in range(stride_next0):
                 for r_j2 in range(stride_next1):
@@ -330,12 +337,16 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                                     )
                                     step = int(row_step * block_shape1 + col_step)
                                     if step != 0:
-                                        total_rots_stage1 += naf_weight(step)
+                                        ops[lv]['rotate'] += naf_weight(step)
 
-        # Stage 2
-        total_mult_plain = n_temp * kernel_size
-        total_add_stage2 = n_temp * kernel_size  # (kernel_size-1) accumulate + 1 bias
-        total_rescale_stage2 = n_temp
+        # Accumulate phase at lv: mult_plain + add(accumulate) + rescale  [lv -> lv-1]
+        ops[lv]['mult_plain'] += n_groups * kernel_size
+        ops[lv]['add'] += n_groups * (kernel_size - 1)
+        ops[lv]['rescale'] += n_groups
+        lv -= 1
+
+        # Bias add at lv (= level-1)
+        ops[lv]['add'] += n_groups
 
         if self.need_repack:
             output_shape0 = self.input_shape[0] // self.orig_stride[0]
@@ -347,10 +358,10 @@ class InverseMultiplexedDepthwiseConv2DLayer:
             n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 
-            # Stage 3a: shared mask mult + simulate rot_steps
-            total_mult_plain += n_temp
-            rots_stage3 = 0
-            adds_stage3 = 0
+            # Stage 3a: mask mult for all n_groups items at lv (= level-1)
+            ops[lv]['mult_plain'] += n_groups
+
+            # simulate rot_steps and accumulate adds at lv
             for out_ct_idx in range(n_out_ct):
                 for ch_in_ct in range(n_channel_per_ct_out_repack):
                     c = out_ct_idx * n_channel_per_ct_out_repack + ch_in_ct
@@ -362,43 +373,29 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                     cy = ch_in_block % out_skip1
                     rot_step = -(cx * self.block_shape[1] + cy + block_idx * self.block_shape[0] * self.block_shape[1])
                     if rot_step != 0:
-                        rots_stage3 += naf_weight(rot_step)
+                        ops[lv]['rotate'] += naf_weight(rot_step)
                     if ch_in_ct > 0 and c < self.n_out_channel:
-                        adds_stage3 += 1
-            return {
-                'rotate': total_rots_stage1 + rots_stage3,
-                'mult_plain': total_mult_plain,
-                'mult': 0,
-                'add': total_add_stage2 + adds_stage3,
-                'rescale': total_rescale_stage2 + n_out_ct,
-            }
+                        ops[lv]['add'] += 1
 
-        # Stage 3b: normal packing
+            ops[lv]['rescale'] += n_out_ct
+            return dict(ops)
+
+        # Stage 3b: normal packing at lv (= level-1)
         output_pixels = (self.input_shape[0] // stride0) * (self.input_shape[1] // stride1)
         n_channel_per_ct_out = 1
         if 2 * output_pixels < N:
             n_channel_per_ct_out = int(N / (2 * output_pixels))
 
         if n_channel_per_ct_out <= 1:
-            return {
-                'rotate': total_rots_stage1,
-                'mult_plain': total_mult_plain,
-                'mult': 0,
-                'add': total_add_stage2,
-                'rescale': total_rescale_stage2,
-            }
+            return dict(ops)
 
         # step = -k * output_pixels; naf_weight(k * 2^m) == naf_weight(k)
         n_out_ct_normal = math.ceil(self.n_out_channel / n_channel_per_ct_out) * stride_next0 * stride_next1
-        rots_stage3 = sum(naf_weight(k % n_channel_per_ct_out) for k in range(n_temp) if k % n_channel_per_ct_out != 0)
-        adds_stage3 = n_temp - n_out_ct_normal
-        return {
-            'rotate': total_rots_stage1 + rots_stage3,
-            'mult_plain': total_mult_plain,
-            'mult': 0,
-            'add': total_add_stage2 + adds_stage3,
-            'rescale': total_rescale_stage2,
-        }
+        ops[lv]['rotate'] += sum(
+            naf_weight(k % n_channel_per_ct_out) for k in range(n_groups) if k % n_channel_per_ct_out != 0
+        )
+        ops[lv]['add'] += n_groups - n_out_ct_normal
+        return dict(ops)
 
     def call(
         self, x: list[CkksCiphertextNode], weight_pt, bias_pt, N: int, conv_data_source=None, repack_mask_pt=None
