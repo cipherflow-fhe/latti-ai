@@ -537,7 +537,7 @@ class FheScoreParam:
             if pred.dim == 0:
                 sp_info = pred.sp_info
                 special_shape = sp_info.get('shape', [1, 1])
-                if not (pred_com and isinstance(pred_com, ReshapeComputeNode)):
+                if not (pred_com and pred.has_sp_info):
                     # call_skip_0d path
                     skip_0d = sp_info['skip'][0] if isinstance(sp_info.get('skip'), list) else 1
                     n_channel_per_ct = int(n // 2 // skip_0d)

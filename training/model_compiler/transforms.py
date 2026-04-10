@@ -398,6 +398,7 @@ def process_special_info(
         return False
     # 2d -> 0d, 1d->0d: reshape
     if (preds[0].dim == 2 or preds[0].dim == 1) and succ.dim == 0:
+        succ.has_sp_info = True
         succ.sp_info['skip'] = graph.dag.nodes[preds[0]]['skip'].copy()
         succ.sp_info['shape'] = preds[0].shape
         succ.sp_info['invalid_fill'] = preds[0].invalid_fill
@@ -407,6 +408,15 @@ def process_special_info(
     # 0d -> 0d
     if preds[0].dim == 0 and succ.dim == 0:
         graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip'].copy()
+        if len(preds) > 1 and not all(p.has_sp_info == preds[0].has_sp_info for p in preds[1:]):
+            raise ValueError(
+                f'Multi-input 0d->0d: all inputs must share the same has_sp_info, got {[p.has_sp_info for p in preds]}'
+            )
+        if preds[0].has_sp_info and 'fc' not in compute_node.layer_type:
+            succ.has_sp_info = True
+            succ.sp_info = preds[0].sp_info.copy()
+        else:
+            succ.has_sp_info = False
         return True
 
 
