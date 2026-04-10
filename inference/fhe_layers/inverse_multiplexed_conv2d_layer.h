@@ -44,6 +44,7 @@ public:
     std::vector<ls::CkksPlaintextRingt> bias_pt;
     ls::CkksPlaintextRingt repack_mask_pt;
     bool normal_conv = true;
+    bool need_repack = false;
     // Helper functions to generate weights/bias on-demand
     ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx,
                                                           int out_channel_idx,
@@ -67,7 +68,6 @@ private:
     Duo skip;
     Duo padding_shape;
     Duo orig_stride;
-    bool need_repack = false;
     Array<double, 4> weight;
     Array<double, 1> bias;
     std::vector<std::vector<double>> kernel_masks;

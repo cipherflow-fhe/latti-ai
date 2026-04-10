@@ -79,21 +79,42 @@ class Avgpool2DLayer:
             result.append(res)
         return result
 
-    def call_interleaved_avgpool(self, x: list, block_expansion, N: int):
+    def call_interleaved_avgpool(self, x: list, block_expansion, N: int, repack_mask_pt=None, block_shape=None):
         """
         Interleaved (split) avgpool computation graph.
 
-        Corresponds to C++ run_split_avgpool() (avgpool2d_layer.cpp:224-245).
+        Corresponds to C++ run_split_avgpool() (avgpool2d_layer.cpp).
 
-        Adds stride[0]*stride[1] ciphertexts together per output position.
-        No level consumption (only adds, no mult/rescale).
+        When output_shape >= block_shape (no repack):
+          Single-stage cross-block sum. Level cost = 0.
+
+        When output_shape < block_shape (repack needed):
+          Stage 1: Cross-block sum with first_stage_stride (= block_expansion).
+          Stage 2: In-block adaptive avgpool with second_stage_stride.
+          Stage 3: Repack (mask mult + rotate + accumulate + rescale). Level cost = 1.
         """
+        import math
+
+        need_repack = repack_mask_pt is not None
+
+        if need_repack:
+            first_stage_stride = list(block_expansion)
+            second_stage_stride = [self.stride[i] // first_stage_stride[i] for i in range(2)]
+        else:
+            first_stage_stride = list(self.stride)
+            second_stage_stride = [1, 1]
+
+        # Stage 1: Interleaved cross-block sum
         x_size = len(x)
-        out_size = x_size // (self.stride[0] * self.stride[1])
+        out_size = x_size // (first_stage_stride[0] * first_stage_stride[1])
         res = [None] * out_size
 
         for channel_idx in range(self.channel):
-            base_idx = channel_idx * (block_expansion[0] // self.stride[0]) * (block_expansion[1] // self.stride[1])
+            base_idx = (
+                channel_idx
+                * (block_expansion[0] // first_stage_stride[0])
+                * (block_expansion[1] // first_stage_stride[1])
+            )
             for row_idx in range(block_expansion[0]):
                 for col_idx in range(block_expansion[1]):
                     ct_idx = (
@@ -101,14 +122,60 @@ class Avgpool2DLayer:
                     )
                     out_idx = (
                         base_idx
-                        + (row_idx // self.stride[0]) * (block_expansion[1] // self.stride[1])
-                        + col_idx // self.stride[1]
+                        + (row_idx // first_stage_stride[0]) * (block_expansion[1] // first_stage_stride[1])
+                        + col_idx // first_stage_stride[1]
                     )
-                    if row_idx % self.stride[0] == 0 and col_idx % self.stride[1] == 0:
+                    if row_idx % first_stage_stride[0] == 0 and col_idx % first_stage_stride[1] == 0:
                         res[out_idx] = x[ct_idx]
                     else:
                         res[out_idx] = add(res[out_idx], x[ct_idx])
 
+        if need_repack:
+            # Stage 2: Adaptive avgpool within block (rotation sum with second_stage_stride)
+            log2_ss0 = int(np.ceil(np.log2(second_stage_stride[0]))) if second_stage_stride[0] > 1 else 0
+            log2_ss1 = int(np.ceil(np.log2(second_stage_stride[1]))) if second_stage_stride[1] > 1 else 0
+            for idx in range(len(res)):
+                r = res[idx]
+                for i in range(log2_ss0 - 1, -1, -1):
+                    r = add(r, rotate_cols(r, [int(2**i * block_shape[1])])[0])
+                for j in range(log2_ss1 - 1, -1, -1):
+                    r = add(r, rotate_cols(r, [int(2**j)])[0])
+                res[idx] = r
+
+            # Stage 3: Repack (mask + rotate + accumulate + rescale)
+            out_skip0 = second_stage_stride[0]
+            out_skip1 = second_stage_stride[1]
+            n_channel_per_block = out_skip0 * out_skip1
+            n_block_per_ct = (N // 2) // (block_shape[0] * block_shape[1])
+            n_channel_per_ct_out = n_channel_per_block * n_block_per_ct
+            n_out_ct = math.ceil(self.channel / n_channel_per_ct_out)
+
+            # Step 3a: mask all channels
+            for c in range(len(res)):
+                res[c] = mult(res[c], repack_mask_pt)
+
+            # Step 3b: rotate + accumulate
+            repack_res = [None] * n_out_ct
+            for out_ct_idx in range(n_out_ct):
+                packed = None
+                for ch_in_ct in range(n_channel_per_ct_out):
+                    c = out_ct_idx * n_channel_per_ct_out + ch_in_ct
+                    if c >= self.channel:
+                        break
+                    block_idx = ch_in_ct // n_channel_per_block
+                    ch_in_block = ch_in_ct % n_channel_per_block
+                    cx = ch_in_block // out_skip1
+                    cy = ch_in_block % out_skip1
+                    rot_step = -(cx * block_shape[1] + cy + block_idx * block_shape[0] * block_shape[1])
+                    if rot_step == 0:
+                        rotated = res[c]
+                    else:
+                        rotated = rotate_cols(res[c], [rot_step])[0]
+                    packed = rotated if packed is None else add(packed, rotated)
+                repack_res[out_ct_idx] = rescale(packed)
+            return repack_res
+
+        # No repack: existing packing logic (output >= block)
         output_h = self.shape[0] // self.stride[0]
         output_w = self.shape[1] // self.stride[1]
 
