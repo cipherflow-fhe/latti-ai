@@ -19,22 +19,15 @@
 #pragma once
 
 #include <cxx_sdk_v2/cxx_fhe_task.h>
-#include "util.h"
+
+#include <vector>
 
 namespace ls = cxx_sdk_v2;
 
-class Layer {
-public:
-    Layer() = default;
-    explicit Layer(const ls::CkksParameter& param) : param_(param.copy()) {}
-    virtual ~Layer() = default;
+std::vector<ls::CkksCiphertext>
+populate_rotations_1_side(ls::CkksContext& ctx, const ls::CkksCiphertext& x, int n_rotation, int unit);
 
-    Layer(const Layer&) = delete;
-    Layer& operator=(const Layer&) = delete;
-    Layer(Layer&&) noexcept = default;
-    Layer& operator=(Layer&&) noexcept = default;
+std::vector<ls::CkksCiphertext>
+populate_rotations_2_sides(ls::CkksContext& ctx, const ls::CkksCiphertext& x, int n_rotation, int unit);
 
-protected:
-    ls::CkksParameter param_;
-    uint32_t level_ = 0;
-};
+uint32_t next_pow2(uint32_t x);

@@ -17,18 +17,12 @@
  */
 
 #include "par_block_col_major_cpmm.h"
+#include "layer_util.h"
 #include <cassert>
 #include <cmath>
 
 using namespace std;
 using namespace cxx_sdk_v2;
-
-static uint32_t next_pow2_cpmm(uint32_t x) {
-    uint32_t p = 1;
-    while (p < x)
-        p *= 2;
-    return p;
-}
 
 ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
                                            const Duo& shape_A,
@@ -48,7 +42,7 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
     assert(n_per_head_ <= d_ && "per-head width must fit in one block column");
 
     n_slot_ = param_.get_n() / 2;
-    n_h_padded_ = next_pow2_cpmm(n_heads);
+    n_h_padded_ = next_pow2(n_heads);
 
     // Determine chunk sizing (same logic as ParBlockColMajorTranspose/CCMM)
     if (n_slot_ >= n_h_padded_ * d_ * d_) {

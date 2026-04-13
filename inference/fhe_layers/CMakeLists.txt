@@ -1,5 +1,6 @@
 add_library(fhe_layers
   layer.cpp
+  layer_util.cpp
   conv2d_layer.cpp
   upsample_layer.cpp
   upsample_nearest_layer.cpp
