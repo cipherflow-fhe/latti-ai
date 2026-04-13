@@ -321,24 +321,24 @@ void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation_lazy() 
 
 CkksPlaintextRingt
 MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const {
-    const int packed_in_channel_idx = j / n_block_per_ct;
-    const int block_idx = j % n_block_per_ct;
-    const int kernel_idx = k;
+    const Duo packed_input_pos = div_mod(static_cast<uint32_t>(j), n_block_per_ct);
+    const uint32_t kernel_idx = static_cast<uint32_t>(k);
 
     auto& mask = kernel_masks_[kernel_idx];
     vector<double> w(N / 2, 0.0);
-    const int base_channel_in = packed_in_channel_idx * n_channel_per_ct;
+    const uint32_t base_channel_in = packed_input_pos[0] * n_channel_per_ct;
+    const Duo kernel_pos = div_mod(kernel_idx, kernel_shape_[1]);
 
-    for (int linear_idx = 0; linear_idx < n_block_per_ct * cached_input_block_size; ++linear_idx) {
-        const int block_offset = linear_idx / cached_input_block_size;
-        const int shape_linear = linear_idx % cached_input_block_size;
-        const Duo input_pos = div_mod(static_cast<uint32_t>(shape_linear), cached_input_shape_ct[1]);
-        const Duo kernel_pos = div_mod(static_cast<uint32_t>(kernel_idx), kernel_shape_[1]);
+    for (uint32_t linear_idx = 0; linear_idx < n_block_per_ct * cached_input_block_size; ++linear_idx) {
+        const Duo block_pos = div_mod(linear_idx, static_cast<uint32_t>(cached_input_block_size));
+        const Duo input_pos = div_mod(block_pos[1], cached_input_shape_ct[1]);
 
-        uint32_t channel_in = base_channel_in + (block_idx * cached_total_skip + block_offset * cached_total_skip +
-                                                 (input_pos[1] % skip_[1]) + (input_pos[0] % skip_[0]) * skip_[1]) %
-                                                    n_channel_per_ct;
-        uint32_t channel_out = ct_idx * n_block_per_ct + (block_offset + n_block_per_ct) % n_block_per_ct;
+        const uint32_t channel_in =
+            base_channel_in + (packed_input_pos[1] * cached_total_skip + block_pos[0] * cached_total_skip +
+                               (input_pos[1] % skip_[1]) + (input_pos[0] % skip_[0]) * skip_[1]) %
+                                  n_channel_per_ct;
+        const uint32_t channel_out =
+            static_cast<uint32_t>(ct_idx) * n_block_per_ct + (block_pos[0] + n_block_per_ct) % n_block_per_ct;
 
         w[linear_idx] = (channel_in >= n_in_channel_ || channel_out >= n_out_channel_) ?
                             0 :
@@ -355,22 +355,19 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_bias_pt_for_index(Ckks
 
     vector<double> bias_vec(N / 2, 0.0);
 
-    for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
-        const int block_idx = linear_idx / cached_input_block_size;
-        const int residual = linear_idx % cached_input_block_size;
-        const Duo input_pos = {static_cast<uint32_t>(residual / input_shape_ct[1]),
-                               static_cast<uint32_t>(residual % input_shape_ct[1])};
+    for (uint32_t linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
+        const Duo block_pos = div_mod(linear_idx, static_cast<uint32_t>(cached_input_block_size));
+        const Duo input_pos = div_mod(block_pos[1], input_shape_ct[1]);
 
-        const int channel = bpt_idx * cached_bias_n_channel_per_ct + block_idx * cached_skip_prod +
-                            cached_bias_skip[1] * (input_pos[0] % cached_bias_skip[0]) +
-                            input_pos[1] % cached_bias_skip[1];
+        const uint32_t channel =
+            static_cast<uint32_t>(bpt_idx) * cached_bias_n_channel_per_ct + block_pos[0] * cached_skip_prod +
+            cached_bias_skip[1] * (input_pos[0] % cached_bias_skip[0]) + input_pos[1] % cached_bias_skip[1];
         if (channel >= n_out_channel_ || (input_pos[0] % skip_stride[0]) >= cached_bias_skip[0] ||
             (input_pos[1] % skip_stride[1]) >= cached_bias_skip[1]) {
             continue;
         }
 
-        const int index = block_idx * cached_input_block_size + residual;
-        bias_vec[index] = bias_.get(channel);
+        bias_vec[linear_idx] = bias_.get(channel);
     }
 
     return ctx.encode_ringt(bias_vec, ctx.get_parameter().get_default_scale());
