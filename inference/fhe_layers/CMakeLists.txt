@@ -1,5 +1,7 @@
-add_library(fhe_layers 
-  conv2d_layer.cpp 
+add_library(fhe_layers
+  layer.cpp
+  layer_util.cpp
+  conv2d_layer.cpp
   upsample_layer.cpp
   upsample_nearest_layer.cpp
   inverse_multiplexed_conv2d_layer.cpp

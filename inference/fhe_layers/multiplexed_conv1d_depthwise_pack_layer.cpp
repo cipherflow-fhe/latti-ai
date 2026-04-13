@@ -18,6 +18,7 @@
 
 #include "multiplexed_conv1d_depthwise_pack_layer.h"
 #include "conv2d_layer.h"
+#include "layer_util.h"
 #include "util.h"
 #include <cmath>
 
@@ -305,7 +306,7 @@ vector<CkksCiphertext> MultiplexedDWConv1DPackedLayer::run_core(CkksContext& ctx
     vector<vector<CkksCiphertext>> rotated_x(n_ct);
 
     parallel_for(n_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        rotated_x[ct_idx] = Conv2DLayer::populate_rotations_2_sides(ctx_copy, x[ct_idx], kernel_shape, skip);
+        rotated_x[ct_idx] = populate_rotations_2_sides(ctx_copy, x[ct_idx], kernel_shape, skip);
     });
 
     // ======== 2: mult + add over kernel positions (no cross-ct sum) ========

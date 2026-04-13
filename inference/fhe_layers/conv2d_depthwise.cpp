@@ -28,6 +28,7 @@
 #endif
 
 #include "conv2d_depthwise.h"
+#include "layer_util.h"
 #include "util.h"
 
 using namespace std;
