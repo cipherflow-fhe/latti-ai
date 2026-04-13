@@ -173,7 +173,7 @@ vector<CkksCiphertext> Conv1DPackedLayer::run_core(CkksContext& ctx, std::vector
     vector<CkksCiphertext> input_rotated_x;
     uint32_t rot_num = (n_channel_in < n_channel_per_ct) ? n_channel_in : n_channel_per_ct;
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
-        rotated_tmp[x_id] = Conv2DLayer::populate_rotations_1_side(ctx_copy, x[x_id], rot_num - 1, input_shape * skip);
+        rotated_tmp[x_id] = Layer::populate_rotations_1_side(ctx_copy, x[x_id], rot_num - 1, input_shape * skip);
     });
 
     for (auto& y : rotated_tmp) {
@@ -184,7 +184,7 @@ vector<CkksCiphertext> Conv1DPackedLayer::run_core(CkksContext& ctx, std::vector
     std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(rotated_size);
     parallel_for(rotated_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<CkksCiphertext> rotations =
-            Conv2DLayer::populate_rotations_2_sides(ctx_copy, input_rotated_x[ct_idx], kernel_shape, skip);
+            Layer::populate_rotations_2_sides(ctx_copy, input_rotated_x[ct_idx], kernel_shape, skip);
         move(rotations.begin(), rotations.end(), back_inserter(rotated_x[ct_idx]));
     });
 

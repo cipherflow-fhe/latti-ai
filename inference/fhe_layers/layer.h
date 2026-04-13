@@ -34,6 +34,12 @@ public:
     Layer(Layer&&) noexcept = default;
     Layer& operator=(Layer&&) noexcept = default;
 
+    static std::vector<ls::CkksCiphertext>
+    populate_rotations_1_side(ls::CkksContext& ctx, const ls::CkksCiphertext& x, int n_rotation, int unit);
+
+    static std::vector<ls::CkksCiphertext>
+    populate_rotations_2_sides(ls::CkksContext& ctx, const ls::CkksCiphertext& x, int n_rotation, int unit);
+
 protected:
     ls::CkksParameter param_;
     uint32_t level_ = 0;

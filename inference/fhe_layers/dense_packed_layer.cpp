@@ -229,7 +229,7 @@ vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, co
     int block_size = input_shape_ct_mult[0] * input_shape_ct_mult[1];
     vector<vector<CkksCiphertext>> rotated_cts(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
-        rotated_cts[x_id] = Conv2DLayer::populate_rotations_1_side(ctx_copy, x[x_id], n_block_per_ct - 1, block_size);
+        rotated_cts[x_id] = Layer::populate_rotations_1_side(ctx_copy, x[x_id], n_block_per_ct - 1, block_size);
     });
 
     vector<CkksCiphertext> result;
@@ -303,7 +303,7 @@ vector<CkksCiphertext> DensePackedLayer::run_core_0d(CkksContext& ctx, const vec
     // Step 1: Baby-step rotations (bs-1 rotations per input CT)
     vector<vector<CkksCiphertext>> baby_rots(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_id) {
-        baby_rots[ct_id] = Conv2DLayer::populate_rotations_1_side(ctx_copy, x[ct_id], bsgs_bs - 1, skip);
+        baby_rots[ct_id] = Layer::populate_rotations_1_side(ctx_copy, x[ct_id], bsgs_bs - 1, skip);
     });
 
     vector<CkksCiphertext> result;
@@ -501,7 +501,7 @@ Feature0DEncrypted DensePackedLayer::run_1d_multiplexed(CkksContext& ctx, const 
     vector<vector<CkksCiphertext>> rotated_cts(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
         rotated_cts[x_id] =
-            Conv2DLayer::populate_rotations_1_side(ctx_copy, x.data[x_id], n_block_per_ct_1d - 1, (int)block_size);
+            Layer::populate_rotations_1_side(ctx_copy, x.data[x_id], n_block_per_ct_1d - 1, (int)block_size);
     });
 
     vector<CkksCiphertext> result(n_packed_out);
