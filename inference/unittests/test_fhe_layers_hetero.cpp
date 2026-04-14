@@ -1143,7 +1143,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_multiplexed_feature2d", "", He
 
     for (auto& cfg : configs) {
         SECTION("shape=" + str(cfg.shape) + " skip=" + str(cfg.skip) + " inv=" + str(cfg.invalid_fill)) {
-            auto input_3d = gen_random_array<3>({n_in_channel, cfg.shape[0], cfg.shape[1]}, 0.1);
+            uint32_t n_channel_3d = n_in_channel / (cfg.shape[0] * cfg.shape[1]);
+            auto input_3d = gen_random_array<3>({n_channel_3d, cfg.shape[0], cfg.shape[1]}, 0.1);
             auto input_1d = Array<double, 1>::from_array_1d(input_3d.to_array_1d());
 
             Feature2DEncrypted input_feature(&this->context, init_level, cfg.skip, cfg.invalid_fill);

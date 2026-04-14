@@ -243,7 +243,8 @@ vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, co
     // rotated_cts[x_id][rot] = x_rep[x_id] rotated by rot * block_size slots.
     vector<vector<CkksCiphertext>> rotated_cts(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
-        rotated_cts[x_id] = populate_rotations_1_side(ctx_copy, x[x_id], n_block_per_ct - 1, block_size);
+        int n_rotations = std::min(n_block_input, n_block_per_ct);
+        rotated_cts[x_id] = populate_rotations_1_side(ctx_copy, x_rep[x_id], n_rotations - 1, block_size);
     });
 
     vector<CkksCiphertext> result;
