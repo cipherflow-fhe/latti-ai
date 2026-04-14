@@ -71,8 +71,8 @@ public:
 
     // Helper functions for prepare_weight_for_1d_multiplexed_lazy
     ls::CkksPlaintextRingt
-    generate_weight_pt_for_1d_multiplexed(ls::CkksContext& ctx, int out_group, int rot_idx) const;
-    ls::CkksPlaintextRingt generate_bias_pt_for_1d_multiplexed(ls::CkksContext& ctx, int out_group) const;
+    generate_weight_pt_1d_mult_for_indices(ls::CkksContext& ctx, int out_group, int rot_idx) const;
+    ls::CkksPlaintextRingt generate_bias_pt_1d_mult_for_index(ls::CkksContext& ctx, int out_group) const;
 
 protected:
     uint32_t n_out_feature;

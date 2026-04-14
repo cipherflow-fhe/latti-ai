@@ -17,18 +17,12 @@
  */
 
 #include "par_block_col_major_transpose.h"
+#include "layer_util.h"
 #include <cassert>
 #include <cmath>
 
 using namespace std;
 using namespace lattisense;
-
-static uint32_t next_pow2(uint32_t x) {
-    uint32_t p = 1;
-    while (p < x)
-        p *= 2;
-    return p;
-}
 
 ParBlockColMajorTranspose::ParBlockColMajorTranspose(const CkksParameter& param_in,
                                                      const Duo& shape,

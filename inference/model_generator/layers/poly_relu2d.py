@@ -15,7 +15,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+import numpy as np
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -50,6 +52,81 @@ class PolyRelu2D(PolyReluBase):
         self.block_shape[1] = int(self.input_shape[1] * self.skip[1] / self.block_expansion[1])
         if self.block_shape[0] & (self.block_shape[0] - 1) != 0 or self.block_shape[1] & (self.block_shape[1] - 1) != 0:
             raise ValueError(f'block_shape must be powers of 2, got: [{self.block_shape[0]}, {self.block_shape[1]}]')
+
+    def get_fhe_op_count_call(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call() for n_ct input ciphertexts, grouped by level.
+
+        order != 4 (Horner evaluation), per ct:
+          - (order-1) mult (relin) + rescale  (one per intermediate step)
+          - (order-1) add  (add weight_pt[order_idx] before each mult)
+          - 1 add  (final coeff0)
+          Each rescale reduces level by 1; ops distributed level → level-1 → ... → level-(order-1).
+
+        order == 4 (fixed BSGS), per ct:
+          Power construction (powers 2..baby_steps), simple doubling/chaining:
+            (baby_steps - 1) mult (relin) + rescale
+          Giant power updates (current_giant_power *= x_giant for giant_step in 2..giant_steps-2):
+            max(0, giant_steps - 3) mult (relin) + rescale
+          Baby poly per giant step (baby_steps-1 non-zero terms each):
+            giant_steps * (baby_steps - 1) mult_plain + rescale
+            giant_steps * (baby_steps - 2) add  (accumulate terms b>=2)
+            giant_steps * 1 add  (add coeff0_pt at b==1)
+          Giant combine (giant_step > 0):
+            (giant_steps - 1) mult (relin) + rescale + add
+        """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+
+        order = self.order
+        n_ct = int(n_ct)
+
+        if order != 4:
+            # Horner evaluation: each step does add + mult + rescale at current level
+            # Level goes from `level` down by 1 each rescale
+            # Final add (coeff0) is at level-(order-1) (after last rescale)
+            lv = level
+            for step in range(order - 1):
+                ops[lv]['mult'] += n_ct
+                ops[lv]['rescale'] += n_ct
+                ops[lv]['add'] += n_ct  # add weight_pt before mult
+                lv -= 1
+            ops[lv]['add'] += n_ct  # final coeff0 add
+        else:
+            baby_steps = int(np.ceil(np.sqrt(order + 1)))
+            giant_steps = int(np.ceil((order + 1) / baby_steps))
+
+            # Power construction: baby_steps-1 mult+rescale, each at successive levels
+            lv = level
+            for _ in range(baby_steps - 1):
+                ops[lv]['mult'] += n_ct
+                ops[lv]['rescale'] += n_ct
+                lv -= 1
+
+            # Giant power updates: at current lv
+            giant_power_updates = max(0, giant_steps - 3)
+            for _ in range(giant_power_updates):
+                ops[lv]['mult'] += n_ct
+                ops[lv]['rescale'] += n_ct
+                lv -= 1
+
+            # Baby poly and giant combine share the same level pair
+            # Baby poly: mult_plain+rescale at lv, add at lv-1
+            # Giant combine: mult+rescale at lv, add at lv-1
+            mult_plain_baby = giant_steps * (baby_steps - 1)
+            rescale_baby = giant_steps * (baby_steps - 1)
+            add_baby = giant_steps * (baby_steps - 2 + 1)
+
+            mult_giant_comb = giant_steps - 1
+            rescale_giant_comb = giant_steps - 1
+            add_giant_comb = giant_steps - 1
+
+            ops[lv]['mult_plain'] += mult_plain_baby * n_ct
+            ops[lv]['rescale'] += rescale_baby * n_ct
+            ops[lv]['mult'] += mult_giant_comb * n_ct
+            ops[lv]['rescale'] += rescale_giant_comb * n_ct
+            lv -= 1
+            ops[lv]['add'] += (add_baby + add_giant_comb) * n_ct
+
+        return dict(ops)
 
     def call(self, x: list[CkksCiphertextNode], weight_pt):
         x = list(x)  # shallow copy to avoid mutating caller's list
@@ -292,6 +369,15 @@ class PolyRelu2D(PolyReluBase):
                         if giant_step < giant_steps - 1 and giant_step > 1:
                             current_giant_power = rescale(relin(mult(current_giant_power, x_giant)))
         return result
+
+    def get_fhe_op_count_bsgs_feature2d(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call_bsgs_feature2d() for n_ct input ciphertexts, grouped by level.
+
+        call_bsgs_feature2d() delegates entirely to _run_bsgs_core(), so the op
+        count is identical to PolyReluBase.get_fhe_op_count().
+        See PolyReluBase.get_fhe_op_count() for the detailed breakdown.
+        """
+        return self.get_fhe_op_count(n_ct, level)
 
     def call_bsgs_feature2d(self, x: list[CkksCiphertextNode], weight_pt):
         """BSGS with pre-computed weight plaintexts (eager mode)."""

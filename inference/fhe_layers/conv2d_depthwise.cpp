@@ -28,6 +28,7 @@
 #endif
 
 #include "conv2d_depthwise.h"
+#include "layer_util.h"
 #include "util.h"
 
 using namespace std;
@@ -50,42 +51,7 @@ Conv2DPackedDepthwiseLayer::Conv2DPackedDepthwiseLayer(const CkksParameter& para
 }
 
 void Conv2DPackedDepthwiseLayer::prepare_weight() {
-    const std::array<uint32_t, 2> padding{kernel_shape_[0] / 2, kernel_shape_[1] / 2};
-
-    const std::array<uint32_t, 2> input_shape_ct{input_shape_[0] * skip_[0], input_shape_[1] * skip_[1]};
-
-    const double encode_pt_scale = modified_scale_;
-    const double bias_scale = param_.get_default_scale();
-
-    kernel_masks_.clear();
-    for (uint32_t ki = 0; ki < kernel_shape_[0]; ki++) {
-        for (uint32_t kj = 0; kj < kernel_shape_[1]; kj++) {
-            std::vector<double> mask;
-            mask.reserve(input_shape_ct[0] * input_shape_ct[1]);
-
-            for (uint32_t i_s = 0; i_s < input_shape_ct[0]; i_s++) {
-                for (uint32_t j_s = 0; j_s < input_shape_ct[1]; j_s++) {
-                    const bool valid_i =
-                        (ki * skip_[0] + i_s >= padding[0]) && (ki * skip_[0] + i_s - padding[0] < input_shape_ct[0]);
-                    const bool valid_j =
-                        (kj * skip_[1] + j_s >= padding[1]) && (kj * skip_[1] + j_s - padding[1] < input_shape_ct[1]);
-                    const bool aligned_stride =
-                        (i_s % (skip_[0] * stride_[0]) == 0) && (j_s % (skip_[1] * stride_[1]) == 0);
-
-                    if (valid_i && valid_j && aligned_stride) {
-                        mask.push_back(1.0);
-                    } else {
-                        mask.push_back(0.0);
-                    }
-                }
-            }
-            kernel_masks_.push_back(std::move(mask));
-        }
-    }
-
-    input_rotate_units_.clear();
-    input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
-    input_rotate_units_.push_back(skip_[0] * 1);
+    prepare_weight_lazy();
 
     weight_pt_.clear();
     bias_pt_.clear();
@@ -95,59 +61,14 @@ void Conv2DPackedDepthwiseLayer::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
     ctx.resize_copies(n_packed_out_ct_);
 
-#ifdef _OPENMP
-#    pragma omp parallel for schedule(dynamic)
-#endif
-    for (int packed_out_ct_idx = 0; packed_out_ct_idx < static_cast<int>(n_packed_out_ct_); packed_out_ct_idx++) {
-        auto ctx_copy = ctx.make_public_context();
-
-        std::vector<CkksPlaintextRingt> encoded_kernels;
-        for (uint32_t ki = 0; ki < kernel_shape_[0]; ki++) {
-            for (uint32_t kj = 0; kj < kernel_shape_[1]; kj++) {
-                const uint32_t mask_idx = ki * kernel_shape_[1] + kj;
-                const auto& mask = kernel_masks_[mask_idx];
-
-                std::vector<double> packed_weights;
-                packed_weights.reserve(n_channel_per_ct_ * input_shape_ct[0] * input_shape_ct[1]);
-
-                for (uint32_t pack_idx = 0; pack_idx < n_channel_per_ct_; pack_idx++) {
-                    const uint32_t out_ch_idx = packed_out_ct_idx * n_channel_per_ct_ + pack_idx;
-                    if (out_ch_idx < n_out_channel_) {
-                        const double weight_val = weight_.get(out_ch_idx, 0, ki, kj);
-                        for (uint32_t slot = 0; slot < input_shape_ct[0] * input_shape_ct[1]; slot++) {
-                            packed_weights.push_back(weight_val * mask[slot]);
-                        }
-                    } else {
-                        packed_weights.insert(packed_weights.end(), input_shape_ct[0] * input_shape_ct[1], 0.0);
-                    }
-                }
-
-                auto encoded = ctx_copy.encode_ringt(packed_weights, encode_pt_scale);
-                encoded_kernels.push_back(std::move(encoded));
-            }
+    const uint32_t kernel_size = kernel_shape_[0] * kernel_shape_[1];
+    parallel_for(n_packed_out_ct_, th_nums, ctx, [&](CkksContext& ctx_copy, int packed_out_ct_idx) {
+        weight_pt_[packed_out_ct_idx].resize(kernel_size);
+        for (uint32_t k = 0; k < kernel_size; k++) {
+            weight_pt_[packed_out_ct_idx][k] = generate_weight_pt_for_indices(ctx_copy, packed_out_ct_idx, k);
         }
-        weight_pt_[packed_out_ct_idx] = std::move(encoded_kernels);
-
-        std::vector<double> packed_bias;
-        for (uint32_t pack_idx = 0; pack_idx < n_channel_per_ct_; pack_idx++) {
-            const uint32_t out_ch_idx = packed_out_ct_idx * n_channel_per_ct_ + pack_idx;
-
-            for (uint32_t i = 0; i < input_shape_ct[0]; i++) {
-                for (uint32_t j = 0; j < input_shape_ct[1]; j++) {
-                    const bool is_output_position =
-                        (i % (skip_[0] * stride_[0]) == 0) && (j % (skip_[1] * stride_[1]) == 0);
-                    if (is_output_position && out_ch_idx < n_out_channel_) {
-                        packed_bias.push_back(bias_.get(out_ch_idx));
-                    } else {
-                        packed_bias.push_back(0.0);
-                    }
-                }
-            }
-        }
-
-        auto encoded_bias = ctx_copy.encode_ringt(packed_bias, bias_scale);
-        bias_pt_[packed_out_ct_idx] = std::move(encoded_bias);
-    }
+        bias_pt_[packed_out_ct_idx] = generate_bias_pt_for_index(ctx_copy, packed_out_ct_idx);
+    });
 }
 
 void Conv2DPackedDepthwiseLayer::mult_add(CkksContext* ctx,

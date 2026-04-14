@@ -1791,9 +1791,9 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             auto* layer = static_cast<DensePackedLayer*>(layer_ptr);
             if (layer->is_1d_multiplexed) {
                 if (type == "weight_pt")
-                    pt = layer->generate_weight_pt_for_1d_multiplexed(ckks_ctx, i, j);
+                    pt = layer->generate_weight_pt_1d_mult_for_indices(ckks_ctx, i, j);
                 else
-                    pt = layer->generate_bias_pt_for_1d_multiplexed(ckks_ctx, i);
+                    pt = layer->generate_bias_pt_1d_mult_for_index(ckks_ctx, i);
             } else if (layer->normal_dense) {
                 if (type == "weight_pt")
                     pt = layer->generate_weight_0d_pt_for_indices(ckks_ctx, i, j);
