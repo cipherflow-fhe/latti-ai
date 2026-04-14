@@ -723,8 +723,8 @@ class TestLayerExport(unittest.TestCase):
             n_channel_per_block = valid_skip_0 * valid_skip_1
             n_channel = n_in_channel // (shape[0] * shape[1])
             n_channel_per_ct = int((N / 2) / (shape[0] * shape[1]) / (invalid_fill[0] * invalid_fill[1]))
-            n_input_ct = max(1, int(np.ceil(n_in_channel / n_channel_per_ct)))
-            n_block_input = n_input_ct * n_num_per_ct
+            n_input_ct = max(1, int(np.ceil(n_channel / n_channel_per_block / n_num_per_ct)) * 1)
+            n_block_input = int(np.ceil(n_channel / n_channel_per_block))
 
             input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_input_ct)]
             weight_pt = [
@@ -759,6 +759,7 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
+                fpga_acc=False,
             )
 
     def test_poly_relu_bsgs_feature2d(self):
