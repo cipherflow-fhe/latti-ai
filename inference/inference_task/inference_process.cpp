@@ -1404,7 +1404,7 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 FeatureNode feature_input0(json_features[feature_input[0]]);
                 auto input0 = p_feature0d_x[feature_input[0]];
                 result0d = fp->ckks_denses[key]
-                               ->plaintext_call(Array<double, 1>::from_array_1d(input0), feature_input0.scale)
+                               ->run_plaintext(Array<double, 1>::from_array_1d(input0), feature_input0.scale)
                                .to_array_1d();
             }
             if (layer_type == "reshape") {
@@ -1423,12 +1423,12 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 bool is_big_size = layer.value()["is_big_size"];
                 if (is_adaptive_avgpool) {
                     result =
-                        Array<double, 3>::from_array_3d(fp->ckks_avgpool[key]->plaintext_call(input0).to_array_3d());
+                        Array<double, 3>::from_array_3d(fp->ckks_avgpool[key]->run_plaintext(input0).to_array_3d());
                 } else {
                     if (is_big_size) {
-                        result = fp->ckks_avgpool[key]->plaintext_call(input0);
+                        result = fp->ckks_avgpool[key]->run_plaintext(input0);
                     } else {
-                        result = fp->ckks_avgpool[key]->plaintext_call_multiplexed(input0);
+                        result = fp->ckks_avgpool[key]->run_plaintext_multiplexed(input0);
                     }
                 }
             }
@@ -1437,12 +1437,12 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 bool is_adaptive_avgpool = layer.value()["is_adaptive_avgpool"];
                 bool is_big_size = layer.value()["is_big_size"];
                 if (is_adaptive_avgpool) {
-                    result1d = fp->ckks_avgpool1d[key]->plaintext_call(input0);
+                    result1d = fp->ckks_avgpool1d[key]->run_plaintext(input0);
                 } else {
                     if (is_big_size) {
-                        result1d = fp->ckks_avgpool1d[key]->plaintext_call(input0);
+                        result1d = fp->ckks_avgpool1d[key]->run_plaintext(input0);
                     } else {
-                        result1d = fp->ckks_avgpool1d[key]->plaintext_call_multiplexed(input0);
+                        result1d = fp->ckks_avgpool1d[key]->run_plaintext_multiplexed(input0);
                     }
                 }
             }
@@ -1452,12 +1452,12 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 if (style == "multiplexed") {
                     int groups = layer.value().value("groups", 1);
                     if (groups == (int)input0.get_shape()[0] && groups != 1) {
-                        result1d = fp->ckks_multiplexed_dw_conv1ds[key]->plaintext_call(input0);
+                        result1d = fp->ckks_multiplexed_dw_conv1ds[key]->run_plaintext(input0);
                     } else {
-                        result1d = fp->ckks_multiplexed_conv1ds[key]->plaintext_call(input0);
+                        result1d = fp->ckks_multiplexed_conv1ds[key]->run_plaintext(input0);
                     }
                 } else {
-                    result1d = fp->ckks_conv1ds[key]->plaintext_call(input0);
+                    result1d = fp->ckks_conv1ds[key]->run_plaintext(input0);
                 }
             }
             if (result.get_size() != 0) {
