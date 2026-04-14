@@ -15,13 +15,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+import numpy as np
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
 
-import numpy as np
 
 op_class = 'MultiplexedDWConv1DPackedLayer'
 
@@ -52,6 +54,77 @@ class MultiplexedDWConv1DPackedLayer:
         self.n_packed_ct: int = n_packed_ct
         self.input_shape_ct: int = input_shape * skip
         self.n_block_per_ct: int = int(np.ceil(n_channel_per_ct / skip))
+
+    def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call(), grouped by level.
+
+        Returns a dict keyed by level:
+          {
+            level:   ops that run at input level (before base rescale),
+            level-1: ops that run after the base rescale (rearrange path only),
+            level-2: ops that run after the rearrange rescale (rearrange path only),
+          }
+
+        Depthwise: each ct is processed independently (no cross-ct loop).
+        gen_rotated_x over n_packed_ct cts:
+          per ct: populate_rotations_2_sides(kernel_shape, skip) — fc=kernel_shape//2
+            steps i*skip for i in range(-fc, kernel_shape-fc) if i!=0
+            primitive rotates per ct = sum(naf_weight(i*skip) for those i)
+
+        Per ct (n_packed_ct total):
+          mult_plain: kernel_shape, add: kernel_shape-1, rescale: 1  [level → level-1]
+
+        No-rearrange path (at level-1): n_packed_ct add (bias).
+        Rearrange path (at level-1):
+          n_channel mult (select) + n_channel rescale  [level-1 → level-2]
+          (at level-2): simulate rotation + (n_channel - n_packed_out) add + n_packed_out add (bias)
+        """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+
+        n_packed_out = int(np.ceil(self.n_channel / self.n_channel_per_ct))
+
+        # Kernel rotations at lv
+        fc = self.kernel_shape // 2
+        rots_per_ct = sum(naf_weight(i * self.skip) for i in range(-fc, self.kernel_shape - fc) if i != 0)
+        ops[lv]['rotate'] += self.n_packed_ct * rots_per_ct
+
+        # mult_plain + accumulate + rescale at lv
+        ops[lv]['mult_plain'] += self.n_packed_ct * self.kernel_shape
+        ops[lv]['add'] += self.n_packed_ct * (self.kernel_shape - 1)
+        ops[lv]['rescale'] += self.n_packed_ct
+        lv -= 1
+
+        # bias / rearrange at lv (= level-1)
+        needs_rearrange = self.skip > 1 or self.stride > 1
+        if not needs_rearrange:
+            ops[lv]['add'] += self.n_packed_ct  # bias
+        else:
+            # select mult_plain + rescale per channel (level-1 → level-2)
+            ops[lv]['mult_plain'] += self.n_channel
+            ops[lv]['rescale'] += self.n_channel
+            lv -= 1
+
+            # rotate + accumulate + bias at level-2
+            skip_out = self.skip * self.stride
+            output_shape_val = self.input_shape // self.stride
+            for po in range(n_packed_out):
+                for ch_local in range(self.n_channel_per_ct):
+                    ch = po * self.n_channel_per_ct + ch_local
+                    if ch >= self.n_channel:
+                        break
+                    t = ch_local // self.skip
+                    j_val = ch_local % self.skip
+                    source_base = t * self.input_shape_ct + j_val
+                    group = ch_local // skip_out
+                    ch_offset = ch_local % skip_out
+                    target_base = group * (output_shape_val * skip_out) + ch_offset
+                    rotation = target_base - source_base
+                    if rotation != 0:
+                        ops[lv]['rotate'] += naf_weight(rotation)
+            ops[lv]['add'] += (self.n_channel - n_packed_out) + n_packed_out
+
+        return dict(ops)
 
     @staticmethod
     def populate_rotations_2_sides(x: CkksCiphertextNode, n_rotation: int, unit: int) -> list[CkksCiphertextNode]:

@@ -16,11 +16,14 @@
 
 import math
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
+
 
 op_class = 'InverseMultiplexedConv2DLayerDepthwise'
 
@@ -295,6 +298,118 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_out_channel)]
         repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}') if self.need_repack else None
         return weight_pt, bias_pt, repack_mask_pt
+
+    def get_fhe_op_count(self, level: int, N: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call(), grouped by level.
+
+        Returns a dict keyed by level:
+          {
+            level:   rotate (stage1) + mult_plain (accumulate) + add (accumulate) + rescale,
+            level-1: add (bias)
+                     [+ mult_plain(mask) + rotate(repack) + add(repack) + rescale(repack)  if need_repack]
+                     [or + rotate(pack) + add(pack)                                         if n_channel_per_ct_out > 1],
+          }
+
+        Stage 1: steps are `row_step * block_shape1 + col_step` — simulated exactly.
+        Stage 3a (repack): rot_step = -(cx*block_shape1 + cy + block_idx*block_shape0*block_shape1) — simulated.
+        Stage 3b (normal pack): step = -k * output_pixels; naf_weight(k * 2^m) == naf_weight(k).
+        """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+
+        pad0 = self.padding[0]
+        pad1 = self.padding[1]
+        stride0 = self.stride[0]
+        stride1 = self.stride[1]
+        stride_next0 = self.stride_next[0]
+        stride_next1 = self.stride_next[1]
+        kernel_shape0 = self.kernel_shape[0]
+        kernel_shape1 = self.kernel_shape[1]
+        block_shape1 = self.block_shape[1]
+        kernel_size = kernel_shape0 * kernel_shape1
+        n_groups = self.n_out_channel * stride_next0 * stride_next1
+
+        # Stage 1: simulate nested loops (no level change)
+        for out_channel_idx in range(self.n_out_channel):
+            for r_i2 in range(stride_next0):
+                for r_j2 in range(stride_next1):
+                    for row_seg_idx in range(stride0):
+                        for col_seg_idx in range(stride1):
+                            split_ks0 = (kernel_shape0 - 1 - row_seg_idx) // stride0 + 1
+                            split_ks1 = (kernel_shape1 - 1 - col_seg_idx) // stride1 + 1
+                            for u_s in range(split_ks0):
+                                for v_s in range(split_ks1):
+                                    begin_row = (row_seg_idx - pad0 + stride0 * (u_s + r_i2)) % (stride0 * stride_next0)
+                                    begin_row = (begin_row + stride0 * stride_next0) % (stride0 * stride_next0)
+                                    begin_col = (col_seg_idx - pad1 + stride1 * (v_s + r_j2)) % (stride1 * stride_next1)
+                                    begin_col = (begin_col + stride1 * stride_next1) % (stride1 * stride_next1)
+                                    row_step = (row_seg_idx - pad0 + stride0 * (u_s + r_i2) - begin_row) // (
+                                        stride0 * stride_next0
+                                    )
+                                    col_step = (col_seg_idx - pad1 + stride1 * (v_s + r_j2) - begin_col) // (
+                                        stride1 * stride_next1
+                                    )
+                                    step = int(row_step * block_shape1 + col_step)
+                                    if step != 0:
+                                        ops[lv]['rotate'] += naf_weight(step)
+
+        # Accumulate phase at lv: mult_plain + add(accumulate) + rescale  [lv -> lv-1]
+        ops[lv]['mult_plain'] += n_groups * kernel_size
+        ops[lv]['add'] += n_groups * (kernel_size - 1)
+        ops[lv]['rescale'] += n_groups
+        lv -= 1
+
+        # Bias add at lv (= level-1)
+        ops[lv]['add'] += n_groups
+
+        if self.need_repack:
+            output_shape0 = self.input_shape[0] // self.orig_stride[0]
+            output_shape1 = self.input_shape[1] // self.orig_stride[1]
+            out_skip0 = self.block_shape[0] // output_shape0
+            out_skip1 = self.block_shape[1] // output_shape1
+            n_channel_per_block = out_skip0 * out_skip1
+            n_block_per_ct = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
+            n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
+
+            # Stage 3a: mask mult for all n_groups items at lv (= level-1)
+            ops[lv]['mult_plain'] += n_groups
+
+            # simulate rot_steps and accumulate adds at lv
+            for out_ct_idx in range(n_out_ct):
+                for ch_in_ct in range(n_channel_per_ct_out_repack):
+                    c = out_ct_idx * n_channel_per_ct_out_repack + ch_in_ct
+                    if c >= self.n_out_channel:
+                        break
+                    block_idx = ch_in_ct // n_channel_per_block
+                    ch_in_block = ch_in_ct % n_channel_per_block
+                    cx = ch_in_block // out_skip1
+                    cy = ch_in_block % out_skip1
+                    rot_step = -(cx * self.block_shape[1] + cy + block_idx * self.block_shape[0] * self.block_shape[1])
+                    if rot_step != 0:
+                        ops[lv]['rotate'] += naf_weight(rot_step)
+                    if ch_in_ct > 0 and c < self.n_out_channel:
+                        ops[lv]['add'] += 1
+
+            ops[lv]['rescale'] += n_out_ct
+            return dict(ops)
+
+        # Stage 3b: normal packing at lv (= level-1)
+        output_pixels = (self.input_shape[0] // stride0) * (self.input_shape[1] // stride1)
+        n_channel_per_ct_out = 1
+        if 2 * output_pixels < N:
+            n_channel_per_ct_out = int(N / (2 * output_pixels))
+
+        if n_channel_per_ct_out <= 1:
+            return dict(ops)
+
+        # step = -k * output_pixels; naf_weight(k * 2^m) == naf_weight(k)
+        n_out_ct_normal = math.ceil(self.n_out_channel / n_channel_per_ct_out) * stride_next0 * stride_next1
+        ops[lv]['rotate'] += sum(
+            naf_weight(k % n_channel_per_ct_out) for k in range(n_groups) if k % n_channel_per_ct_out != 0
+        )
+        ops[lv]['add'] += n_groups - n_out_ct_normal
+        return dict(ops)
 
     def call(
         self, x: list[CkksCiphertextNode], weight_pt, bias_pt, N: int, conv_data_source=None, repack_mask_pt=None

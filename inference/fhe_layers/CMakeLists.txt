@@ -1,5 +1,7 @@
-add_library(fhe_layers 
-  conv2d_layer.cpp 
+add_library(fhe_layers
+  layer.cpp
+  layer_util.cpp
+  conv2d_layer.cpp
   upsample_layer.cpp
   upsample_nearest_layer.cpp
   inverse_multiplexed_conv2d_layer.cpp
@@ -39,3 +41,8 @@ target_include_directories(fhe_layers PUBLIC
   ${CMAKE_SOURCE_DIR}/data_structs/
 )
 target_link_libraries(fhe_layers PUBLIC lattisense)
+
+target_precompile_headers(fhe_layers PRIVATE
+  <nlohmann/json.hpp>
+  <cxx_sdk_v2/cxx_fhe_task.h>
+)

@@ -172,34 +172,14 @@ def run_btp_compilation(
     Returns:
         (best_graph, best_score): best_graph is None if all runs failed
     """
-    print(f'Step 4: Starting {num_experiments} parallel BTP compilations with {num_workers} processes...')
-
-    # Prepare arguments for each run
-    args_list = [(copy.deepcopy(pt_graph), temperature) for _ in range(num_experiments)]
-
-    # Run compilations in parallel
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        results = list(executor.map(run_single_compile, args_list))
-
-    # Filter out failed results
-    valid_results = [(score, graph) for score, graph in results if graph is not None]
-    failed_count = num_experiments - len(valid_results)
-
-    print(f'\n=== Summary ===')
-    print(f'Total runs: {num_experiments}')
-    print(f'Successful: {len(valid_results)}')
-    print(f'Failed (level limit exceeded): {failed_count}')
-
-    if not valid_results:
-        print('ERROR: All runs failed! No valid results to save.')
-        return None, float('inf')
+    print(f'Step 4: Starting DP compilation of pt_graph with temperature={temperature}')
 
     # Find the best result
-    best_score, best_graph = min(valid_results, key=lambda x: x[0])
+    score, graph = run_single_compile((pt_graph, temperature))
 
     print(f'\n=== Results ===')
-    print(f'Best score: {best_score}')
-    return best_graph, best_score
+    print(f'Final score: {score}')
+    return graph, score
 
 
 def post_process(graph: LayerAbstractGraph):

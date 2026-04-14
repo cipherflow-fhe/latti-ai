@@ -86,6 +86,15 @@ make -j$(nproc)
 
 We use [clang-format](https://clang.llvm.org/docs/ClangFormat.html) with the configuration in `.clang-format` (4-space indentation, 120 character line limit, Attach brace style).
 
+Code conventions for C++ code:
+- Variables, functions, and namespaces use snake_case.
+- Constants use ALL_CAPS.
+- Class and struct names use UpperCamelCase.
+- Private member variables use a trailing underscore, for example `weights_`.
+- Private member functions use a leading underscore, for example `_run_core()`.
+- Public APIs should include documentation comments.
+- Check these rules routinely during C++ code review and refactoring.
+
 Format your code before committing:
 
 ```bash
@@ -99,6 +108,15 @@ pre-commit run --all-files
 ### Python
 
 We use [Ruff](https://docs.astral.sh/ruff/) with the configuration in `ruff.toml` (120 character line limit, single quotes).
+
+Code conventions for Python code:
+- Variables, functions, and modules use `snake_case`.
+- Constants use `ALL_CAPS`.
+- Class names use `UpperCamelCase`.
+- Intended private variables use a leading underscore, for example `_weights`.
+- Intended private functions use a leading underscore, for example `_run_core()`.
+- Public APIs should include docstrings.
+- Check these rules routinely during Python code review and refactoring.
 
 ```bash
 pre-commit run ruff --all-files

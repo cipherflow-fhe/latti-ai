@@ -70,13 +70,13 @@ vector<double> UpsampleNearestLayer::select_tensor(int num) const {
 }
 
 void UpsampleNearestLayer::prepare_weight() {
+    prepare_weight_lazy();
+
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    select_tensor_pt.clear();
-    select_tensor_pt.resize(n_channel_per_ct / (upsample_factor[0] * upsample_factor[1]));
-    for (int i = 0; i < n_channel_per_ct / (upsample_factor[0] * upsample_factor[1]); i++) {
-        vector<double> si = select_tensor(i);
-        CkksPlaintextRingt p_si = ctx.encode_ringt(si, ctx.get_parameter().get_q(level_));
-        select_tensor_pt[i] = move(p_si);
+    int n = n_channel_per_ct / (upsample_factor[0] * upsample_factor[1]);
+    select_tensor_pt.resize(n);
+    for (int i = 0; i < n; i++) {
+        select_tensor_pt[i] = generate_select_tensor_pt_for_index(ctx, i);
     }
 }
 

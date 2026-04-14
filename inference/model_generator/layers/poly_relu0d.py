@@ -43,6 +43,15 @@ class PolyRelu0D(PolyReluBase):
         self.skip = skip
         self.n_channel_per_ct = n_channel_per_ct
 
+    def get_fhe_op_count_bsgs_feature0d(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call_bsgs_feature0d() for n_ct input ciphertexts, grouped by level.
+
+        call_bsgs_feature0d() delegates entirely to _run_bsgs_core(), so the op
+        count is identical to PolyReluBase.get_fhe_op_count().
+        See PolyReluBase.get_fhe_op_count() for the detailed breakdown.
+        """
+        return self.get_fhe_op_count(n_ct, level)
+
     def call_bsgs_feature0d(self, x: list, weight_pt):
         """BSGS with pre-computed weight plaintexts (eager mode).
 

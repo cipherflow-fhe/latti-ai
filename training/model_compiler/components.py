@@ -324,6 +324,7 @@ class FeatureNode:
         self.scale_down = 1
         self.invalid_fill = [1, 1]
         self.sp_info = {'skip': [1, 1], 'invalid_fill': [1, 1], 'shape': [1, 1]}
+        self.has_sp_info = False
 
     def __repr__(self) -> str:
         return f'{self.node_id}'
@@ -1171,8 +1172,8 @@ class LayerAbstractGraph:
                         'depth': depth,
                         'pack_num': pack_num,
                     }
-                    pred_compute = next(self.dag.predecessors(feature), None)
-                    if isinstance(pred_compute, ReshapeComputeNode):
+                    # pred_compute = next(self.dag.predecessors(feature), None)
+                    if feature.has_sp_info:
                         feature_dict['special_info'] = feature.sp_info
                     features[key] = feature_dict
                 elif dim in (1, 2):

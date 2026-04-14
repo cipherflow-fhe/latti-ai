@@ -16,6 +16,7 @@
 
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -42,6 +43,20 @@ class MultScalarLayer:
     def make_pt_nodes(self, layer_id, n_input_nodes):
         """Return weight_pt list with n_input_nodes elements."""
         return [CkksPlaintextRingtNode(f'mult_scalar_{layer_id}_{i}') for i in range(n_input_nodes)]
+
+    def get_fhe_op_count(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call() for n_ct input ciphertexts, grouped by level.
+
+        Per ct: 1 mult (ct-pt) + 1 rescale  [level → level-1]
+        """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+
+        ops[lv]['mult_plain'] += n_ct
+        ops[lv]['rescale'] += n_ct
+        lv -= 1
+
+        return dict(ops)
 
     def call(self, x1: list[DataNode], weight_pt: list[DataNode]):
         result: list[DataNode] = list()
