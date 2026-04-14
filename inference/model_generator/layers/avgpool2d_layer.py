@@ -57,9 +57,6 @@ class Avgpool2DLayer:
         # n: number of valid slots in a ciphertext
         x_size = len(x)
 
-        # If ciphertext slots are not full, need to rotate to fill them
-        n_rot = int(np.floor(n / 2 / (self.channel * self.shape[0] * self.shape[1])))
-
         log2_stride_0 = int(np.ceil(np.log2(self.stride[0])))
         log2_stride_1 = int(np.ceil(np.log2(self.stride[1])))
 
@@ -73,9 +70,6 @@ class Avgpool2DLayer:
             for j in range(log2_stride_1 - 1, 0 - 1, -1):
                 ct_tmp = rotate_cols(res, (2**j) * self.skip[1])
                 res = add(res, ct_tmp[0])
-
-            for r in range(0, int(np.floor(np.log2(n_rot))) if n_rot > 1 else 0):
-                res = add(res, rotate_cols(res, (2**r) * self.channel * self.shape[0] * self.shape[1])[0])
             result.append(res)
         return result
 

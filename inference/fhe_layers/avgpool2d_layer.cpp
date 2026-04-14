@@ -72,24 +72,18 @@ Feature2DEncrypted Avgpool2DLayer::run_adaptive_avgpool(CkksContext& ctx, const 
     result.data.resize(x_size);
     Duo skip = x.skip;
     Duo shape = x.shape;
-    int n_rot = (ctx.get_parameter().get_n() / 2) / (x.n_channel * x.shape[0] * x.shape[1]);
 
     int log2_stride_0 = static_cast<int>(std::ceil(std::log2(stride[0])));
     int log2_stride_1 = static_cast<int>(std::ceil(std::log2(stride[1])));
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         result.data[idx] = x.data[idx].copy();
         for (int i = log2_stride_0 - 1; i >= 0; --i) {
-            auto ct_tmp = ctx_copy.rotate(result.data[idx], pow(2, i) * shape[0] * skip[0] * skip[1]);
+            auto ct_tmp = ctx_copy.rotate(result.data[idx], (int)pow(2, i) * shape[0] * skip[0] * skip[1]);
             result.data[idx] = ctx_copy.add(result.data[idx], ct_tmp);
         }
         for (int j = log2_stride_1 - 1; j >= 0; --j) {
-            auto ct_tmp = ctx_copy.rotate(result.data[idx], pow(2, j) * skip[1]);
+            auto ct_tmp = ctx_copy.rotate(result.data[idx], (int)pow(2, j) * skip[1]);
             result.data[idx] = ctx_copy.add(result.data[idx], ct_tmp);
-        }
-        int n_rot_iters = (n_rot > 1) ? static_cast<int>(std::floor(std::log2(n_rot))) : 0;
-        for (int r = 0; r < n_rot_iters; r++) {
-            result.data[idx] = ctx_copy.add(
-                result.data[idx], ctx_copy.rotate(result.data[idx], pow(2, r) * x.n_channel * x.shape[0] * x.shape[1]));
         }
     });
     result.n_channel = x.n_channel;
