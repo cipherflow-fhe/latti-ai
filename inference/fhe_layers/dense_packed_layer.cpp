@@ -186,7 +186,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed_lazy(const Duo& input_s
     int valid_skip_1 = special_skip[1] / invalid_fill_in[1];
     int n_channel_per_block = valid_skip_0 * valid_skip_1;
     int n_channel = n_in_feature / (special_input_shape[0] * special_input_shape[1]);
-    n_block_input = div_ceil(n_channel, n_block_per_ct * n_channel_per_block) * n_block_per_ct;
+    n_block_input = div_ceil(n_channel, n_channel_per_block);
 }
 
 CkksPlaintextRingt DensePackedLayer::generate_weight_pt_mult_pack_for_indices(CkksContext& ctx,
@@ -210,10 +210,10 @@ CkksPlaintextRingt DensePackedLayer::generate_weight_pt_mult_pack_for_indices(Ck
         int y = shape_j / special_skip[1];
         if (cx < valid_skip_0 && cy < valid_skip_1 && x < (int)special_input_shape[0] &&
             y < (int)special_input_shape[1] && block_i < n_out_feature) {
-            int rotated_block =
-                ((n_block_input_idx + i / (input_shape_ct_mult[0] * input_shape_ct_mult[1]) + n_block_per_ct) %
-                     n_block_per_ct +
-                 int(n_block_input_idx / n_block_per_ct) * n_block_per_ct);
+            int rotated_block = ((n_block_input_idx + i / (input_shape_ct_mult[0] * input_shape_ct_mult[1])) %
+                                     std::min(n_block_input, n_block_per_ct) +
+                                 int(n_block_input_idx / std::min(n_block_input, n_block_per_ct)) *
+                                     std::min(n_block_input, n_block_per_ct));
             int in_ch = rotated_block * n_channel_per_block + cx * n_channel_per_block_col + cy;
             int line_i = in_ch * spatial_size + x * special_input_shape[1] + y;
             if (line_i >= n_in_feature || block_i > n_out_feature) {
@@ -268,14 +268,14 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_
     int n_packed_out_feature_for_mult_pack = div_ceil(n_out_feature, n_block_per_ct);
     weight_pt.resize(n_packed_out_feature_for_mult_pack);
     bias_pt.resize(n_packed_out_feature_for_mult_pack);
-    int n_block_input_local = div_ceil(n_channel, n_block_per_ct * n_channel_per_block) * n_block_per_ct;
+    int n_block_input_local = div_ceil(n_channel, n_channel_per_block);  // = n_used_blocks
 
     // Sync cached members so run_core_mult_pack works correctly in eager mode too
     input_shape_ct_mult[0] = input_shape_ct[0];
     input_shape_ct_mult[1] = input_shape_ct[1];
     this->N_half = N_half;
     this->n_block_per_ct = n_block_per_ct;
-    n_block_input = n_block_input_local;
+    this->n_block_input = n_block_input_local;
 
     parallel_for(
         n_packed_out_feature_for_mult_pack, th_nums, ctx, [&](CkksContext& ctx_copy, int packed_out_feature_idx) {
@@ -308,9 +308,10 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_
                     if (cx < valid_skip_0 && cy < valid_skip_1 && x < (int)special_input_shape[0] &&
                         y < (int)special_input_shape[1] && block_i < n_out_feature) {
                         int local_block = i / (input_shape_ct[0] * input_shape_ct[1]);
-                        int group = n_block_input_idx / n_block_per_ct;
-                        int offset = n_block_input_idx % n_block_per_ct;
-                        int rotated_block = (offset + local_block) % n_block_per_ct + group * n_block_per_ct;
+                        int modulus = std::min(n_block_input_local, n_block_per_ct);
+                        int group = n_block_input_idx / modulus;
+                        int offset = n_block_input_idx % modulus;
+                        int rotated_block = (offset + local_block) % modulus + group * modulus;
                         int in_ch = rotated_block * n_channel_per_block + cx * n_channel_per_block_col + cy;
                         int line_i = in_ch * spatial_size + x * special_input_shape[1] + y;
                         if (line_i >= n_in_feature || block_i > n_out_feature) {
@@ -331,12 +332,26 @@ vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, co
     int n_packed_out_feature_for_mult_pack =
         weight_pt.empty() ? div_ceil(n_out_feature, n_block_per_ct) : (int)weight_pt.size();
 
-    // Each input ct contributes n_block_pre_ct rotations (one per block slot within the ct).
-    // rotated_cts[x_id][rot] = x[x_id] rotated by rot * block_size slots.
     int block_size = input_shape_ct_mult[0] * input_shape_ct_mult[1];
+
+    // Replicate input data across CT blocks so dense only needs n_block_input iterations
+    int n_rot_factor = (n_block_input > 0 && n_block_input < n_block_per_ct) ? n_block_per_ct / n_block_input : 1;
+    int n_rep_iters = (n_rot_factor > 1) ? static_cast<int>(std::floor(std::log2(n_rot_factor))) : 0;
+
+    vector<CkksCiphertext> x_rep(x_size);
+    parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
+        x_rep[x_id] = x[x_id].copy();
+        for (int r = 0; r < n_rep_iters; r++) {
+            x_rep[x_id] =
+                ctx_copy.add(x_rep[x_id], ctx_copy.rotate(x_rep[x_id], -(int)pow(2, r) * n_block_input * block_size));
+        }
+    });
+
+    // rotated_cts[x_id][rot] = x_rep[x_id] rotated by rot * block_size slots.
     vector<vector<CkksCiphertext>> rotated_cts(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
-        rotated_cts[x_id] = Conv2DLayer::populate_rotations_1_side(ctx_copy, x[x_id], n_block_per_ct - 1, block_size);
+        int n_rotations = std::min(n_block_input, n_block_per_ct);
+        rotated_cts[x_id] = Conv2DLayer::populate_rotations_1_side(ctx_copy, x_rep[x_id], n_rotations - 1, block_size);
     });
 
     vector<CkksCiphertext> result;
@@ -346,10 +361,11 @@ vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, co
         n_packed_out_feature_for_mult_pack, th_nums, ctx, [&](CkksContext& ctx_copy, int packed_out_feature_idx) {
             CkksCiphertext s(0);
             int num_inputs = weight_pt.empty() ? n_block_input : weight_pt[packed_out_feature_idx].size();
+            int modulus = std::min(n_block_input, n_block_per_ct);
             for (int in_feature_idx = 0; in_feature_idx < num_inputs; in_feature_idx++) {
                 // in_feature_idx encodes (group, offset): group = which input ct, offset = rotation within ct.
-                int group = in_feature_idx / n_block_per_ct;
-                int offset = in_feature_idx % n_block_per_ct;
+                int group = in_feature_idx / modulus;
+                int offset = in_feature_idx % modulus;
                 auto& x_ct = rotated_cts[group][offset];
 
                 CkksPlaintextRingt w_pt_rt_owned;

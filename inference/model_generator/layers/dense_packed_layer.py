@@ -92,7 +92,7 @@ class DensePackedLayer:
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
         n_channel_per_block = valid_skip_0 * valid_skip_1
         n_channel = self.n_in_channel // (self.input_shape[0] * self.input_shape[1])
-        n_block_input = int(np.ceil(n_channel / (n_num_pre_ct * n_channel_per_block))) * n_num_pre_ct
+        n_block_input = int(np.ceil(n_channel / n_channel_per_block))  # = n_used_blocks
         n_packed_out = int(np.ceil(self.n_out_channel / n_num_pre_ct))
         weight_pt = [
             [CkksPlaintextRingtNode(f'densew_{layer_id}_{i}_{j}') for j in range(n_block_input)]
@@ -223,15 +223,24 @@ class DensePackedLayer:
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
         n_channel_per_block = valid_skip_0 * valid_skip_1
         n_channel = self.n_in_channel // (self.input_shape[0] * self.input_shape[1])
-        n_block_input = int(np.ceil(n_channel / (n_num_pre_ct * n_channel_per_block))) * n_num_pre_ct
+        n_block_input = int(np.ceil(n_channel / n_channel_per_block))
         n_packed_out_feature_for_mult_pack = int(np.ceil(self.n_out_channel / n_num_pre_ct))
 
-        # Each input ct contributes n_num_pre_ct rotations (one per block slot within the ct).
-        # rotated_cts[x_id][rot] = x[x_id] rotated by rot * block_size slots.
         block_size = input_ct_shape[0] * input_ct_shape[1]
+
+        # Replicate input data across CT blocks inside the dense layer
+        n_rot_factor = n_num_pre_ct // n_block_input if 0 < n_block_input < n_num_pre_ct else 1
+        n_rep_iters = int(np.floor(np.log2(n_rot_factor))) if n_rot_factor > 1 else 0
+
+        x_rep = list(x)
+        for x_id in range(x_size):
+            for r in range(n_rep_iters):
+                x_rep[x_id] = add(x_rep[x_id], rotate_cols(x_rep[x_id], -(2**r) * n_block_input * block_size)[0])
+
+        n_rotations_per_ct = min(n_block_input, n_num_pre_ct)
         rotated_cts = []
         for x_id in range(x_size):
-            rotated_cts.append(self.populate_rotations_1_side(x[x_id], n_num_pre_ct - 1, block_size))
+            rotated_cts.append(self.populate_rotations_1_side(x_rep[x_id], n_rotations_per_ct - 1, block_size))
 
         result = []
 
@@ -418,14 +427,25 @@ class DensePackedLayer:
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
         n_channel_per_block = valid_skip_0 * valid_skip_1
         n_channel = self.n_in_channel // (self.input_shape[0] * self.input_shape[1])
-        n_block_input = int(np.ceil(n_channel / (n_num_pre_ct * n_channel_per_block))) * n_num_pre_ct
+        n_block_input = int(np.ceil(n_channel / n_channel_per_block))
         n_packed_out_feature_for_mult_pack = int(np.ceil(self.n_out_channel / n_num_pre_ct))
 
-        # Each input ct contributes n_num_pre_ct rotations (one per block slot within the ct).
         block_size = input_ct_shape[0] * input_ct_shape[1]
+
+        # Replicate input data across CT blocks inside the dense layer
+        n_rot_factor = n_num_pre_ct // n_block_input if n_block_input > 0 and n_block_input < n_num_pre_ct else 1
+        n_rep_iters = int(np.floor(np.log2(n_rot_factor))) if n_rot_factor > 1 else 0
+
+        x_rep = list(x)
+        for x_id in range(x_size):
+            for r in range(n_rep_iters):
+                x_rep[x_id] = add(x_rep[x_id], rotate_cols(x_rep[x_id], -(2**r) * n_block_input * block_size)[0])
+
+        # rotated_cts[x_id][rot] = x_rep[x_id] rotated by rot * block_size
+        n_rotations_per_ct = min(n_block_input, n_num_pre_ct)
         rotated_cts = []
         for x_id in range(x_size):
-            rotated_cts.append(self.populate_rotations_1_side(x[x_id], n_num_pre_ct - 1, block_size))
+            rotated_cts.append(self.populate_rotations_1_side(x_rep[x_id], n_rotations_per_ct - 1, block_size))
 
         result = []
 
