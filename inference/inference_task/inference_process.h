@@ -103,7 +103,7 @@ public:
     json json_layers;
     Duo block_shape;
     bool is_absorb_polyrelu;
-    std::map<std::string, std::unique_ptr<ls::CkksParameter>> ckks_parameters;
+    std::map<std::string, UPtr<ls::CkksParameter>> ckks_parameters;
     bool fpga_loaded = false;
 
     bool is_lazy = false;
@@ -173,6 +173,17 @@ private:
         set_layer(key, std::move(layer));
     }
 
+    template <int dim>
+    Array<double, dim> _load_h5_tensor(const json& layer,
+                                       const hid_t& h5_file,
+                                       const std::string& tensor_name,
+                                       const std::array<uint64_t, dim>& shape) const {
+        const std::string path_key = tensor_name + "_path";
+        const std::string scale_key = tensor_name + "_scale";
+        const double scale = layer.contains(scale_key) ? layer[scale_key].get<double>() : 1.0;
+        return h5_to_array<dim>(h5_file, layer.at(path_key).get<std::string>(), shape, scale);
+    }
+
     std::map<std::string, UPtr<Layer>> ckks_layers_;
 
 public:
@@ -219,8 +230,8 @@ public:
     json json_features;
     json json_layers;
 
-    std::map<std::string, std::unique_ptr<FeatureEncrypted>> intermediate_result;
-    std::map<std::string, std::unique_ptr<ls::CkksContext>> ckks_contexts;
+    std::map<std::string, UPtr<FeatureEncrypted>> intermediate_result;
+    std::map<std::string, UPtr<ls::CkksContext>> ckks_contexts;
 
     std::map<std::string, Array<double, 3>> p_feature2d_x;
     std::map<std::string, Array<double, 2>> p_feature1d_x;
@@ -231,7 +242,7 @@ public:
     void run_task_sdk(bool is_mpc = false);
     void run_task_plaintext(bool is_mpc = false);
 
-    void set_feature(const std::string& feature_id, std::unique_ptr<FeatureEncrypted> feature);
+    void set_feature(const std::string& feature_id, UPtr<FeatureEncrypted> feature);
     const FeatureEncrypted& get_feature(const std::string& feature_id);
     Feature0DEncrypted get_ciphertext_output_feature0D(const std::string& feature_id);
     Feature1DEncrypted get_ciphertext_output_feature1D(const std::string& feature_id);

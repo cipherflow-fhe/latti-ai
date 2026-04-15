@@ -30,8 +30,8 @@ class Conv1DPackedLayer : public Layer {
 public:
     Conv1DPackedLayer(const ls::CkksParameter& param_in,
                       const uint32_t input_shape_in,
-                      const Array<double, 3>& weight_in,
-                      const Array<double, 1>& bias_in,
+                      Array<double, 3>&& weight_in,
+                      Array<double, 1>&& bias_in,
                       const uint32_t stride_in,
                       const uint32_t skip_in,
                       uint32_t pack_in,

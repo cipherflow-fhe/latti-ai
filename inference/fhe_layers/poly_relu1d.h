@@ -43,7 +43,7 @@ public:
     // For mode 1: n_channel_per_ct = N/2 / (shape*skip)
     // For mode 2: call prepare_weight_bsgs_mux / prepare_weight_bsgs_mux_lazy instead
     PolyRelu1D(const ls::CkksParameter& param_in,
-               const Array<double, 2>& weight_in,
+               Array<double, 2>&& weight_in,
                uint32_t level_in,
                int order_in,
                int skip_in,

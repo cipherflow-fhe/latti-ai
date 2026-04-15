@@ -36,14 +36,14 @@ using namespace cxx_sdk_v2;
 
 Conv2DPackedDepthwiseLayer::Conv2DPackedDepthwiseLayer(const CkksParameter& param,
                                                        const Duo& input_shape,
-                                                       const Array<double, 4>& weight,
-                                                       const Array<double, 1>& bias,
+                                                       Array<double, 4>&& weight,
+                                                       Array<double, 1>&& bias,
                                                        const Duo& stride,
                                                        const Duo& skip,
                                                        uint32_t n_channel_per_ct,
                                                        uint32_t level,
                                                        double residual_scale)
-    : Conv2DLayer(param, input_shape, weight, bias, stride, skip), n_channel_per_ct_(n_channel_per_ct),
+    : Conv2DLayer(param, input_shape, move(weight), move(bias), stride, skip), n_channel_per_ct_(n_channel_per_ct),
       n_packed_in_ct_(div_ceil(n_in_channel_, n_channel_per_ct)),
       n_packed_out_ct_(div_ceil(n_out_channel_, n_channel_per_ct)) {
     level_ = level;

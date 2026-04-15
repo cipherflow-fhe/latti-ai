@@ -24,8 +24,8 @@ class InverseMultiplexedConv2DLayerDepthwise : public Layer {
 public:
     InverseMultiplexedConv2DLayerDepthwise(const ls::CkksParameter& param_in,
                                            const Duo& input_shape_in,
-                                           const Array<double, 4>& weight_in,
-                                           const Array<double, 1>& bias_in,
+                                           Array<double, 4>&& weight_in,
+                                           Array<double, 1>&& bias_in,
                                            const Array<int, 1>& padding_in,
                                            const Duo& stride_in,
                                            const Duo& stride_next_in,

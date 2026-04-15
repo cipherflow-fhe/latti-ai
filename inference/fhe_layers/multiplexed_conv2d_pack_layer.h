@@ -25,8 +25,8 @@ class MultiplexedConv2DPackedLayer : public Conv2DLayer {
 public:
     MultiplexedConv2DPackedLayer(const ls::CkksParameter& param_in,
                                  const Duo& input_shape_in,
-                                 const Array<double, 4>& weight_in,
-                                 const Array<double, 1>& bias_in,
+                                 Array<double, 4>&& weight_in,
+                                 Array<double, 1>&& bias_in,
                                  const Duo& stride_in,
                                  const Duo& skip_in,
                                  uint32_t n_channel_per_ct_in,
@@ -91,4 +91,5 @@ private:
     int cached_total_block_size = 0;
 };
 
-ls::CkksCiphertext sum_slot(ls::CkksContext& ctx, ls::CkksCiphertext& x, uint32_t m, uint32_t p);
+cxx_sdk_v2::CkksCiphertext
+sum_slot(cxx_sdk_v2::CkksContext& ctx, cxx_sdk_v2::CkksCiphertext& x, uint32_t m, uint32_t p);

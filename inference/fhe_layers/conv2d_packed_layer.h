@@ -26,8 +26,8 @@ class Conv2DPackedLayer : public Conv2DLayer {
 public:
     Conv2DPackedLayer(const ls::CkksParameter& param,
                       const Duo& input_shape,
-                      const Array<double, 4>& weight,
-                      const Array<double, 1>& bias,
+                      Array<double, 4>&& weight,
+                      Array<double, 1>&& bias,
                       const Duo& stride,
                       const Duo& skip,
                       uint32_t n_channel_per_ct,

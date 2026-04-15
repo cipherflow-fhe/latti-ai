@@ -124,13 +124,13 @@ void InitInferenceProcess::init_parameters(bool is_bootstrapping) {
         for (auto& param : json_params.items()) {
             string key = param.key();
             auto btp_param = CkksBtpParameter::create_parameter();
-            ckks_parameters[key] = make_unique<CkksParameter>(move(btp_param.get_ckks_parameter()));
+            ckks_parameters[key] = MakeU<CkksParameter>(move(btp_param.get_ckks_parameter()));
         }
     } else {
         for (auto& param : json_params.items()) {
             string key = param.key();
             int n = param.value()["poly_modulus_degree"];
-            ckks_parameters[key] = make_unique<CkksParameter>(CkksParameter::create_parameter(n));
+            ckks_parameters[key] = MakeU<CkksParameter>(CkksParameter::create_parameter(n));
         }
     }
 }
@@ -141,30 +141,24 @@ void InitInferenceProcess::init_conv_layer(const string& key, const json& layer,
     int out_level = feature_output.level;
     int groups = layer["groups"];
     uint32_t channel_input = feature_input.channel / groups;
-    Array<double, 4> weight;
-
-    double weight_scale = layer["weight_scale"];
-    double bias_scale = layer["bias_scale"];
-
-    weight = h5_to_array<4>(h5_file, layer["weight_path"],
-                            {feature_output.channel, channel_input, layer["kernel_shape"][0], layer["kernel_shape"][1]},
-                            weight_scale);
-    Array<double, 1> bias = h5_to_array<1>(h5_file, layer["bias_path"], {feature_output.channel}, bias_scale);
+    auto weight =
+        _load_h5_tensor<4>(layer, h5_file, "weight",
+                           {feature_output.channel, channel_input, layer["kernel_shape"][0], layer["kernel_shape"][1]});
+    auto bias = _load_h5_tensor<1>(layer, h5_file, "bias", {feature_output.channel});
     CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
-    double default_scale = DEFAULT_SCALE;
     double residual_scale = 1.0;
 
     Duo stride = {layer["stride"][0], layer["stride"][1]};
 
     if (layer["groups"] == 1) {
         auto conv_layer =
-            make_unique<Conv2DPackedLayer>(param, feature_input.shape, weight, bias, stride, feature_input.skip,
-                                           feature_input.pack_channel_per_ciphertext, out_level + 1, residual_scale);
+            MakeU<Conv2DPackedLayer>(param, feature_input.shape, move(weight), move(bias), stride, feature_input.skip,
+                                     feature_input.pack_channel_per_ciphertext, out_level + 1, residual_scale);
         _prepare_layer(key, move(conv_layer));
     } else {
-        auto dw_layer = make_unique<Conv2DPackedDepthwiseLayer>(
-            param, feature_input.shape, weight, bias, stride, feature_input.skip,
-            feature_input.pack_channel_per_ciphertext, out_level + 1, residual_scale);
+        auto dw_layer = MakeU<Conv2DPackedDepthwiseLayer>(param, feature_input.shape, move(weight), move(bias), stride,
+                                                          feature_input.skip, feature_input.pack_channel_per_ciphertext,
+                                                          out_level + 1, residual_scale);
         _prepare_layer(key, move(dw_layer));
     }
 }
@@ -173,8 +167,6 @@ void InitInferenceProcess::init_conv1d_layer(const string& key, const json& laye
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     int out_level = feature_output.level;
-    double weight_scale = layer["weight_scale"];
-    double bias_scale = layer["bias_scale"];
     uint32_t input_shape = feature_input.shape[0];
     uint32_t kernel_shape = layer["kernel_shape"][0];
     uint32_t stride = layer["stride"][0];
@@ -182,37 +174,36 @@ void InitInferenceProcess::init_conv1d_layer(const string& key, const json& laye
     uint32_t n_channel_per_ct = feature_input.pack_channel_per_ciphertext;
     CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
 
-    Array<double, 3> weight = h5_to_array<3>(
-        h5_file, layer["weight_path"],
-        {(uint64_t)feature_output.channel, (uint64_t)feature_input.channel, (uint64_t)kernel_shape}, weight_scale);
-    Array<double, 1> bias = h5_to_array<1>(h5_file, layer["bias_path"], {(uint64_t)feature_output.channel}, bias_scale);
+    auto weight =
+        _load_h5_tensor<3>(layer, h5_file, "weight",
+                           {(uint64_t)feature_output.channel, (uint64_t)feature_input.channel, (uint64_t)kernel_shape});
+    auto bias = _load_h5_tensor<1>(layer, h5_file, "bias", {(uint64_t)feature_output.channel});
 
     string style = layer.value("style", string("ordinary"));
     if (style == "multiplexed") {
         int groups = layer["groups"];
         if (groups == (int)feature_output.channel && groups != 1) {
             // Depthwise conv1d: weight shape [n_channel, 1, kernel_shape]
-            Array<double, 3> dw_weight =
-                h5_to_array<3>(h5_file, layer["weight_path"],
-                               {(uint64_t)feature_output.channel, 1, (uint64_t)kernel_shape}, weight_scale);
-            auto conv_layer = make_unique<MultiplexedDWConv1DPackedLayer>(param, input_shape, dw_weight, bias, stride,
-                                                                          skip, n_channel_per_ct, out_level + 1);
+            auto dw_weight = _load_h5_tensor<3>(layer, h5_file, "weight",
+                                                {(uint64_t)feature_output.channel, 1, (uint64_t)kernel_shape});
+            auto conv_layer = MakeU<MultiplexedDWConv1DPackedLayer>(param, input_shape, move(dw_weight), move(bias),
+                                                                    stride, skip, n_channel_per_ct, out_level + 1);
             _prepare_layer(key, move(conv_layer));
         } else {
-            auto conv_layer = make_unique<MultiplexedConv1DPackedLayer>(param, input_shape, weight, bias, stride, skip,
-                                                                        n_channel_per_ct, out_level + 1);
+            auto conv_layer = MakeU<MultiplexedConv1DPackedLayer>(param, input_shape, move(weight), move(bias), stride,
+                                                                  skip, n_channel_per_ct, out_level + 1);
             _prepare_layer(key, move(conv_layer));
         }
     } else {
-        auto conv_layer = make_unique<Conv1DPackedLayer>(param, input_shape, weight, bias, stride, skip,
-                                                         n_channel_per_ct, out_level + 1);
+        auto conv_layer = MakeU<Conv1DPackedLayer>(param, input_shape, move(weight), move(bias), stride, skip,
+                                                   n_channel_per_ct, out_level + 1);
         _prepare_layer(key, move(conv_layer));
     }
 }
 
 void InitInferenceProcess::init_square_layer(const string& key, const json& layer, const hid_t& h5_file) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
-    auto squar2d = make_unique<SquareLayer>(*ckks_parameters.at(feature_input.ckks_parameter_id));
+    auto squar2d = MakeU<SquareLayer>(*ckks_parameters.at(feature_input.ckks_parameter_id));
     _prepare_layer(key, move(squar2d));
 }
 
@@ -220,19 +211,16 @@ void InitInferenceProcess::init_dense_layer(const string& key, const json& layer
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     int out_level = feature_output.level;
-    double weight_scale = layer["weight_scale"];
-    double bias_scale = layer["bias_scale"];
-    Array<double, 2> weight;
-    weight =
-        h5_to_array<2>(h5_file, layer["weight_path"], {feature_output.channel, feature_input.channel}, weight_scale);
 
-    auto bias = h5_to_array<1>(h5_file, layer["bias_path"], {feature_output.channel}, bias_scale);
+    auto weight = _load_h5_tensor<2>(layer, h5_file, "weight", {feature_output.channel, feature_input.channel});
+    auto bias = _load_h5_tensor<1>(layer, h5_file, "bias", {feature_output.channel});
+
     CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
     double residual_scale = 1.0;
 
-    auto dense = make_unique<DensePackedLayer>(*ckks_parameters.at(feature_input.ckks_parameter_id), weight, bias,
-                                               feature_input.pack_channel_per_ciphertext, feature_input.level, 0,
-                                               residual_scale);
+    auto dense =
+        MakeU<DensePackedLayer>(*ckks_parameters.at(feature_input.ckks_parameter_id), move(weight), move(bias),
+                                feature_input.pack_channel_per_ciphertext, feature_input.level, 0, residual_scale);
     if (feature_input.special_info_dim == 1) {
         uint32_t shape_1d = feature_input.shape[0];
         uint32_t skip_1d = feature_input.special_skip[0];
@@ -262,7 +250,7 @@ void InitInferenceProcess::init_add_layer(const string& key, const json& layer, 
     FeatureNode feature_input1(json_features[layer["feature_input"][1].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     CkksParameter& param = *ckks_parameters.at(feature_input0.ckks_parameter_id);
-    auto add2d = make_unique<AddLayer>(*ckks_parameters.at(feature_input0.ckks_parameter_id));
+    auto add2d = MakeU<AddLayer>(*ckks_parameters.at(feature_input0.ckks_parameter_id));
     add2d->target_ckks_scale = feature_output.ckks_scale;
     _prepare_layer(key, move(add2d));
 }
@@ -288,16 +276,16 @@ void InitInferenceProcess::init_mult_scalar_layer(const string& key,
     for (int i = 0; i < feature_input0.channel; i++) {
         weight.set(i, scale);
     }
-    auto mult_scalar = make_unique<MultScalarLayer>(param, feature_input0.shape, weight, feature_input0.skip,
-                                                    feature_input0.pack_channel_per_ciphertext, feature_input0.level,
-                                                    upsample_factor, block_expansion);
+    auto mult_scalar = MakeU<MultScalarLayer>(param, feature_input0.shape, move(weight), feature_input0.skip,
+                                              feature_input0.pack_channel_per_ciphertext, feature_input0.level,
+                                              upsample_factor, block_expansion);
     _prepare_layer(key, move(mult_scalar), [](MultScalarLayer& layer) { layer.prepare_weight(); });
 }
 
 void InitInferenceProcess::init_drop_level_layer(const string& key, const json& layer) {
     FeatureNode feature_input0(json_features[layer["feature_input"][0].get<string>()]);
     CkksParameter& param = *ckks_parameters.at(feature_input0.ckks_parameter_id);
-    auto drop_level = make_unique<DropLevelLayer>();
+    auto drop_level = MakeU<DropLevelLayer>();
 
     _prepare_layer(key, move(drop_level));
 }
@@ -305,12 +293,12 @@ void InitInferenceProcess::init_drop_level_layer(const string& key, const json& 
 void InitInferenceProcess::init_reshape_layer(const string& key, const json& layer) {
     FeatureNode feature_input0(json_features[layer["feature_input"][0].get<string>()]);
 
-    auto reshape = make_unique<ReshapeLayer>(*ckks_parameters.at(feature_input0.ckks_parameter_id));
+    auto reshape = MakeU<ReshapeLayer>(*ckks_parameters.at(feature_input0.ckks_parameter_id));
     _prepare_layer(key, move(reshape));
 }
 
 void InitInferenceProcess::init_concat_layer(const string& key, const json& layer) {
-    auto concat = make_unique<ConcatLayer>();
+    auto concat = MakeU<ConcatLayer>();
 
     auto feature_inputs = layer["feature_input"].get<vector<string>>();
     vector<uint32_t> input_n_channels;
@@ -351,8 +339,8 @@ void InitInferenceProcess::init_upsample_layer(const string& key, const json& la
     Duo block_expansion = {feature_input.shape[0] / block_shape[0], feature_input.shape[1] / block_shape[1]};
     Duo upsample_factor_in = {layer["upsample_factor_in"][0], layer["upsample_factor_in"][1]};
 
-    auto upsample = make_unique<UpsampleLayer>(param, block_expansion, upsample_factor_in, feature_input.level,
-                                               feature_input.channel, feature_input.pack_channel_per_ciphertext);
+    auto upsample = MakeU<UpsampleLayer>(param, block_expansion, upsample_factor_in, feature_input.level,
+                                         feature_input.channel, feature_input.pack_channel_per_ciphertext);
     _prepare_layer(key, move(upsample), [](UpsampleLayer& layer) { layer.prepare_data(); });
 }
 
@@ -364,8 +352,8 @@ void InitInferenceProcess::init_upsample_nearest_layer(const string& key, const 
     Duo upsample_factor_in = {layer["upsample_factor"][0], layer["upsample_factor"][1]};
 
     auto upsample_nearest =
-        make_unique<UpsampleNearestLayer>(param, feature_input.shape, feature_input.skip, upsample_factor_in,
-                                          feature_input.pack_channel_per_ciphertext, feature_input.level);
+        MakeU<UpsampleNearestLayer>(param, feature_input.shape, feature_input.skip, upsample_factor_in,
+                                    feature_input.pack_channel_per_ciphertext, feature_input.level);
     _prepare_layer(key, move(upsample_nearest));
 }
 
@@ -379,21 +367,19 @@ void InitInferenceProcess::init_multiplexed_conv_layer(const string& key,
     bool is_big_size = layer["is_big_size"];
     Duo block_expansion = {feature_input.shape[0] / block_shape_in[0], feature_input.shape[1] / block_shape_in[1]};
     uint32_t channel_input = feature_input.channel / groups;
-    Array<double, 4> weight;
-    double weight_scale = layer["weight_scale"];
-    double bias_scale = layer["bias_scale"];
 
+    Array<double, 4> weight;
     if (key.find("ConvTranspose") != std::string::npos) {
-        weight = h5_to_array<4>(
-            h5_file, layer["weight_path"],
-            {channel_input, feature_output.channel, layer["kernel_shape"][0], layer["kernel_shape"][1]}, weight_scale);
+        weight = _load_h5_tensor<4>(
+            layer, h5_file, "weight",
+            {channel_input, feature_output.channel, layer["kernel_shape"][0], layer["kernel_shape"][1]});
         weight = transpose_weight(weight);
     } else {
-        weight = h5_to_array<4>(
-            h5_file, layer["weight_path"],
-            {feature_output.channel, channel_input, layer["kernel_shape"][0], layer["kernel_shape"][1]}, weight_scale);
+        weight = _load_h5_tensor<4>(
+            layer, h5_file, "weight",
+            {feature_output.channel, channel_input, layer["kernel_shape"][0], layer["kernel_shape"][1]});
     }
-    Array<double, 1> bias = h5_to_array<1>(h5_file, layer["bias_path"], {feature_output.channel}, bias_scale);
+    auto bias = _load_h5_tensor<1>(layer, h5_file, "bias", {feature_output.channel});
 
     CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
     double residual_scale = 1.0;
@@ -411,13 +397,13 @@ void InitInferenceProcess::init_multiplexed_conv_layer(const string& key,
                 padding.set(0, -1);
                 padding.set(1, -1);
             }
-            auto inv_conv_layer = make_unique<InverseMultiplexedConv2DLayer>(
-                param, feature_input.shape, weight, bias, padding, stride, next_stride, feature_input.skip,
+            auto inv_conv_layer = MakeU<InverseMultiplexedConv2DLayer>(
+                param, feature_input.shape, move(weight), move(bias), padding, stride, next_stride, feature_input.skip,
                 block_shape_in, feature_input.level, residual_scale);
             _prepare_layer(key, move(inv_conv_layer));
         } else {
-            auto mux_conv_layer = make_unique<MultiplexedConv2DPackedLayer>(
-                param, feature_input.shape, weight, bias, stride, feature_input.skip,
+            auto mux_conv_layer = MakeU<MultiplexedConv2DPackedLayer>(
+                param, feature_input.shape, move(weight), move(bias), stride, feature_input.skip,
                 feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale, upsample_factor_in);
             _prepare_layer(key, move(mux_conv_layer));
         }
@@ -432,13 +418,13 @@ void InitInferenceProcess::init_multiplexed_conv_layer(const string& key,
                 padding.set(0, -1);
                 padding.set(1, -1);
             }
-            auto inv_dw_conv_layer = make_unique<InverseMultiplexedConv2DLayerDepthwise>(
-                param, feature_input.shape, weight, bias, padding, stride, next_stride, feature_input.skip,
+            auto inv_dw_conv_layer = MakeU<InverseMultiplexedConv2DLayerDepthwise>(
+                param, feature_input.shape, move(weight), move(bias), padding, stride, next_stride, feature_input.skip,
                 block_shape_in, feature_input.level, residual_scale);
             _prepare_layer(key, move(inv_dw_conv_layer));
         } else {
-            auto mux_dw_layer = make_unique<MultiplexedConv2DPackedLayerDepthwise>(
-                param, feature_input.shape, weight, bias, stride, feature_input.skip,
+            auto mux_dw_layer = MakeU<MultiplexedConv2DPackedLayerDepthwise>(
+                param, feature_input.shape, move(weight), move(bias), stride, feature_input.skip,
                 feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale);
             _prepare_layer(key, move(mux_dw_layer));
         }
@@ -453,8 +439,7 @@ void InitInferenceProcess::init_poly_relu_layer(const string& key,
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     uint32_t order = layer["order"];
-    double weight_scale = layer["weight_scale"];
-    auto weight = h5_to_array<2>(h5_file, layer["weight_path"], {order + 1, feature_input.channel}, weight_scale);
+    auto weight = _load_h5_tensor<2>(layer, h5_file, "weight", {order + 1, feature_input.channel});
 
     CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
 
@@ -462,7 +447,7 @@ void InitInferenceProcess::init_poly_relu_layer(const string& key,
         int skip_val = feature_input.skip[0];
         int shape_val = feature_input.shape[0];
         string style = layer.value("style", string("ordinary"));
-        auto layer_poly_relu = make_unique<PolyRelu1D>(param, weight, feature_input.level, order, skip_val, shape_val);
+        auto layer_poly_relu = MakeU<PolyRelu1D>(param, move(weight), feature_input.level, order, skip_val, shape_val);
         if (style == "multiplexed") {
             _prepare_layer(
                 key, move(layer_poly_relu), [&](PolyRelu1D& layer) { layer.prepare_weight_bsgs_mux_lazy(); },
@@ -472,10 +457,10 @@ void InitInferenceProcess::init_poly_relu_layer(const string& key,
         }
     } else if (feature_input.dim == 0) {
         if (is_absorb) {
-            weight = h5_to_array<2>(h5_file, layer["weight_path"], {order, feature_input.channel}, weight_scale);
+            weight = _load_h5_tensor<2>(layer, h5_file, "weight", {order, feature_input.channel});
         }
         int ciphertext_skip = feature_input.skip[0];
-        auto layer_poly_relu = make_unique<PolyRelu0D>(param, weight, feature_input.level, order, ciphertext_skip);
+        auto layer_poly_relu = MakeU<PolyRelu0D>(param, move(weight), feature_input.level, order, ciphertext_skip);
         if (feature_input.invalid_fill[0] == 0 || feature_input.invalid_fill[1] == 0) {
             // Mode 1: direct 0D pack — channel ch at slot ch * ciphertext_skip
             _prepare_layer(key, move(layer_poly_relu));
@@ -493,13 +478,13 @@ void InitInferenceProcess::init_poly_relu_layer(const string& key,
     } else {
         Duo zero_skip_in = {layer["zero_skip"][0], layer["zero_skip"][1]};
         if (is_absorb) {
-            weight = h5_to_array<2>(h5_file, layer["weight_path"], {order, feature_input.channel}, weight_scale);
+            weight = _load_h5_tensor<2>(layer, h5_file, "weight", {order, feature_input.channel});
         }
         Duo block_expansion = {div_ceil(feature_input.shape[0], block_shape_in[0]),
                                div_ceil(feature_input.shape[1], block_shape_in[1])};
-        auto layer_poly_relu = make_unique<PolyRelu2D>(param, feature_input.shape, order, weight, feature_input.skip,
-                                                       feature_input.pack_channel_per_ciphertext, feature_input.level,
-                                                       zero_skip_in, block_expansion, pack_style != "multiplexed");
+        auto layer_poly_relu = MakeU<PolyRelu2D>(param, feature_input.shape, order, move(weight), feature_input.skip,
+                                                 feature_input.pack_channel_per_ciphertext, feature_input.level,
+                                                 zero_skip_in, block_expansion, pack_style != "multiplexed");
         if (is_absorb) {
             _prepare_layer(key, move(layer_poly_relu));
         } else {
@@ -521,7 +506,7 @@ void InitInferenceProcess::init_fhe_avgpool_layer(const string& key,
     Duo stride = {layer["stride"][0], layer["stride"][1]};
     bool is_big_size = layer["is_big_size"];
     if (is_big_size) {
-        auto avgpool = make_unique<Avgpool2DLayer>(feature_input.shape, stride);
+        auto avgpool = MakeU<Avgpool2DLayer>(feature_input.shape, stride);
         // Check if output < block_shape (repack needed)
         Duo output_shape = {feature_input.shape[0] / stride[0], feature_input.shape[1] / stride[1]};
         if (output_shape[0] < block_shape[0] || output_shape[1] < block_shape[1]) {
@@ -535,10 +520,10 @@ void InitInferenceProcess::init_fhe_avgpool_layer(const string& key,
         }
     } else {
         if (is_adaptive) {
-            auto avgpool = make_unique<Avgpool2DLayer>(feature_input.shape, stride);
+            auto avgpool = MakeU<Avgpool2DLayer>(feature_input.shape, stride);
             _prepare_layer(key, move(avgpool));
         } else {
-            auto avgpool = make_unique<Avgpool2DLayer>(feature_input.shape, stride);
+            auto avgpool = MakeU<Avgpool2DLayer>(feature_input.shape, stride);
             _prepare_layer(key, move(avgpool), [&](Avgpool2DLayer& layer) {
                 layer.prepare_weight(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
                                      feature_input.level, feature_input.skip, feature_input.shape);
@@ -553,14 +538,14 @@ void InitInferenceProcess::init_fhe_avgpool1d_layer(const string& key, const jso
     uint32_t stride = layer["stride"][0];
     bool is_big_size = layer["is_big_size"];
     if (is_big_size) {
-        auto avgpool = make_unique<Avgpool1DLayer>(feature_input.shape[0], stride);
+        auto avgpool = MakeU<Avgpool1DLayer>(feature_input.shape[0], stride);
         _prepare_layer(key, move(avgpool));
     } else {
         if (is_adaptive) {
-            auto avgpool = make_unique<Avgpool1DLayer>(feature_input.shape[0], stride);
+            auto avgpool = MakeU<Avgpool1DLayer>(feature_input.shape[0], stride);
             _prepare_layer(key, move(avgpool));
         } else {
-            auto avgpool = make_unique<Avgpool1DLayer>(feature_input.shape[0], stride);
+            auto avgpool = MakeU<Avgpool1DLayer>(feature_input.shape[0], stride);
             _prepare_layer(key, move(avgpool), [&](Avgpool1DLayer& layer) {
                 layer.prepare_weight(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
                                      feature_input.level, feature_input.skip[0], feature_input.shape[0]);
@@ -657,7 +642,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
 
             const string& feature_output_id = feature_output[0];
             FeatureNode feature_input_node(json_features[feature_input[0]]);
-            unique_ptr<FeatureEncrypted> result;
+            UPtr<FeatureEncrypted> result;
             auto& context = *ckks_contexts.at(feature_input_node.ckks_parameter_id);
             cout << ">>> LAYER: " << key << " type=" << layer_type << endl;
             if (layer_type == "conv2d") {
@@ -669,29 +654,29 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                         if (layer.value()["groups"] == 1) {
                             bool is_big_size = layer.value()["is_big_size"];
                             if (is_big_size) {
-                                result = make_unique<Feature2DEncrypted>(
+                                result = MakeU<Feature2DEncrypted>(
                                     fp->get_layer<InverseMultiplexedConv2DLayer>(key).run(context, input2D));
                             } else {
-                                result = make_unique<Feature2DEncrypted>(
+                                result = MakeU<Feature2DEncrypted>(
                                     fp->get_layer<MultiplexedConv2DPackedLayer>(key).run_for_post_skip_rotation(
                                         context, input2D));
                             }
                         } else {
                             bool is_big_size = layer.value()["is_big_size"];
                             if (is_big_size) {
-                                result = make_unique<Feature2DEncrypted>(
+                                result = MakeU<Feature2DEncrypted>(
                                     fp->get_layer<InverseMultiplexedConv2DLayerDepthwise>(key).run(context, input2D));
                             } else {
-                                result = make_unique<Feature2DEncrypted>(
+                                result = MakeU<Feature2DEncrypted>(
                                     fp->get_layer<MultiplexedConv2DPackedLayerDepthwise>(key).run(context, input2D));
                             }
                         }
                     } else {
                         if (layer.value()["groups"] == 1) {
-                            result = make_unique<Feature2DEncrypted>(
-                                fp->get_layer<Conv2DPackedLayer>(key).run(context, input2D));
+                            result =
+                                MakeU<Feature2DEncrypted>(fp->get_layer<Conv2DPackedLayer>(key).run(context, input2D));
                         } else {
-                            result = make_unique<Feature2DEncrypted>(
+                            result = MakeU<Feature2DEncrypted>(
                                 fp->get_layer<Conv2DPackedDepthwiseLayer>(key).run(context, input2D));
                         }
                         const Feature2DEncrypted& res = dynamic_cast<const Feature2DEncrypted&>(*result);
@@ -708,19 +693,19 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     Feature2DEncrypted refresh_result = input2D.refresh_ciphertext();
                     if (maximum_refreshed_level > output_feature_node.level) {
-                        result = make_unique<Feature2DEncrypted>(
+                        result = MakeU<Feature2DEncrypted>(
                             refresh_result.drop_level(maximum_refreshed_level - output_feature_node.level));
                     } else {
-                        result = make_unique<Feature2DEncrypted>(move(refresh_result));
+                        result = MakeU<Feature2DEncrypted>(move(refresh_result));
                     }
                 } else if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
                     Feature0DEncrypted refresh_result = input0D.refresh_ciphertext();
                     if (maximum_refreshed_level > output_feature_node.level) {
-                        result = make_unique<Feature0DEncrypted>(
+                        result = MakeU<Feature0DEncrypted>(
                             refresh_result.drop_level(maximum_refreshed_level - output_feature_node.level));
                     } else {
-                        result = make_unique<Feature0DEncrypted>(move(refresh_result));
+                        result = MakeU<Feature0DEncrypted>(move(refresh_result));
                     }
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted or Feature0DEncrypted");
@@ -730,10 +715,10 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
-                    result = make_unique<Feature2DEncrypted>(input2D.copy());
+                    result = MakeU<Feature2DEncrypted>(input2D.copy());
                 } else if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
-                    result = make_unique<Feature0DEncrypted>(input0D.copy());
+                    result = MakeU<Feature0DEncrypted>(input0D.copy());
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted or Feature0DEncrypted");
                 }
@@ -743,10 +728,10 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
 
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
-                    result = make_unique<Feature2DEncrypted>(fp->get_layer<SquareLayer>(key).call(context, input2D));
+                    result = MakeU<Feature2DEncrypted>(fp->get_layer<SquareLayer>(key).call(context, input2D));
                 } else if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
-                    result = make_unique<Feature0DEncrypted>(fp->get_layer<SquareLayer>(key).call(context, input0D));
+                    result = MakeU<Feature0DEncrypted>(fp->get_layer<SquareLayer>(key).call(context, input0D));
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted ");
                 }
@@ -759,7 +744,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 const Feature2DEncrypted& input1 =
                     dynamic_cast<const Feature2DEncrypted&>(get_feature(feature_input[1]));
                 if (input0.dim == 2 && input1.dim == 2) {
-                    result = make_unique<Feature2DEncrypted>(fp->get_layer<AddLayer>(key).run(context, input0, input1));
+                    result = MakeU<Feature2DEncrypted>(fp->get_layer<AddLayer>(key).run(context, input0, input1));
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted");
                 }
@@ -771,7 +756,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
 
                 if (input0.dim == 2) {
                     auto res = fp->get_layer<MultScalarLayer>(key).run(context, input0);
-                    result = make_unique<Feature2DEncrypted>(move(res));
+                    result = MakeU<Feature2DEncrypted>(move(res));
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted");
                 }
@@ -783,10 +768,10 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
-                    result = make_unique<Feature2DEncrypted>(input2D.drop_level(n_level_to_drop));
+                    result = MakeU<Feature2DEncrypted>(input2D.drop_level(n_level_to_drop));
                 } else if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
-                    result = make_unique<Feature0DEncrypted>(input0D.drop_level(n_level_to_drop));
+                    result = MakeU<Feature0DEncrypted>(input0D.drop_level(n_level_to_drop));
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted or Feature0DEncrypted");
                 }
@@ -797,13 +782,13 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
                     if (d_input_node.special_info_dim == 1) {
-                        result = make_unique<Feature0DEncrypted>(
+                        result = MakeU<Feature0DEncrypted>(
                             fp->get_layer<DensePackedLayer>(key).run_1d_multiplexed(context, input0D));
                     } else if (d_input_node.special_info_dim == 2) {
-                        result = make_unique<Feature0DEncrypted>(
+                        result = MakeU<Feature0DEncrypted>(
                             fp->get_layer<DensePackedLayer>(key).run_2d_multiplexed(context, input0D));
                     } else {
-                        result = make_unique<Feature0DEncrypted>(
+                        result = MakeU<Feature0DEncrypted>(
                             fp->get_layer<DensePackedLayer>(key).run_0d_skip(context, input0D));
                     }
                 } else {
@@ -815,7 +800,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
-                    result = make_unique<Feature0DEncrypted>(fp->get_layer<ReshapeLayer>(key).call(context, input2D));
+                    result = MakeU<Feature0DEncrypted>(fp->get_layer<ReshapeLayer>(key).call(context, input2D));
                 } else if (feature_node.dim == 1) {
                     const Feature1DEncrypted& input1D = dynamic_cast<const Feature1DEncrypted&>(feature_node);
                     Feature0DEncrypted out(&context, input1D.level);
@@ -827,7 +812,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     out.level = input1D.level;
                     out.n_channel = input1D.n_channel;
                     out.n_channel_per_ct = input1D.n_channel_per_ct;
-                    result = make_unique<Feature0DEncrypted>(move(out));
+                    result = MakeU<Feature0DEncrypted>(move(out));
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted or Feature1DEncrypted");
                 }
@@ -842,23 +827,21 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                         bool is_adaptive_avgpool = layer.value()["is_adaptive_avgpool"];
                         bool is_big_size = layer.value()["is_big_size"];
                         if (is_adaptive_avgpool) {
-                            result = make_unique<Feature2DEncrypted>(
+                            result = MakeU<Feature2DEncrypted>(
                                 fp->get_layer<Avgpool2DLayer>(key).run_adaptive_avgpool(context, input2D));
                         } else {
                             if (is_big_size) {
                                 Duo block_expansion = {feature_input_node.shape[0] / block_shape[0],
                                                        feature_input_node.shape[1] / block_shape[1]};
-                                result = make_unique<Feature2DEncrypted>(
-                                    fp->get_layer<Avgpool2DLayer>(key).run_split_avgpool(context, input2D,
-                                                                                         block_expansion));
+                                result = MakeU<Feature2DEncrypted>(fp->get_layer<Avgpool2DLayer>(key).run_split_avgpool(
+                                    context, input2D, block_expansion));
                             } else {
-                                result = make_unique<Feature2DEncrypted>(
+                                result = MakeU<Feature2DEncrypted>(
                                     fp->get_layer<Avgpool2DLayer>(key).run_multiplexed_avgpool(context, input2D));
                             }
                         }
                     } else {
-                        result =
-                            make_unique<Feature2DEncrypted>(fp->get_layer<Avgpool2DLayer>(key).run(context, input2D));
+                        result = MakeU<Feature2DEncrypted>(fp->get_layer<Avgpool2DLayer>(key).run(context, input2D));
                     }
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted");
@@ -873,13 +856,13 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     bool is_adaptive_avgpool = layer.value()["is_adaptive_avgpool"];
                     bool is_big_size = layer.value()["is_big_size"];
                     if (is_adaptive_avgpool) {
-                        result = make_unique<Feature1DEncrypted>(
+                        result = MakeU<Feature1DEncrypted>(
                             fp->get_layer<Avgpool1DLayer>(key).run_adaptive_avgpool(context, input1D));
                     } else {
                         if (is_big_size) {
                             throw runtime_error("avgpool1d does not support big_size mode");
                         } else {
-                            result = make_unique<Feature1DEncrypted>(
+                            result = MakeU<Feature1DEncrypted>(
                                 fp->get_layer<Avgpool1DLayer>(key).run_multiplexed_avgpool(context, input1D));
                         }
                     }
@@ -899,15 +882,15 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                         throw runtime_error("input is not available, expect Feature2DEncrypted");
                     }
                 }
-                result = make_unique<Feature2DEncrypted>(
-                    fp->get_layer<ConcatLayer>(key).run_multiple_inputs(context, inputs));
+                result =
+                    MakeU<Feature2DEncrypted>(fp->get_layer<ConcatLayer>(key).run_multiple_inputs(context, inputs));
                 fhe_timer.stop();
             } else if (layer_type == "upsample") {
                 fhe_timer.start();
                 const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
-                    result = make_unique<Feature2DEncrypted>(fp->get_layer<UpsampleLayer>(key).run(context, input2D));
+                    result = MakeU<Feature2DEncrypted>(fp->get_layer<UpsampleLayer>(key).run(context, input2D));
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted");
                 }
@@ -917,8 +900,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
-                    result =
-                        make_unique<Feature2DEncrypted>(fp->get_layer<UpsampleNearestLayer>(key).run(context, input2D));
+                    result = MakeU<Feature2DEncrypted>(fp->get_layer<UpsampleNearestLayer>(key).run(context, input2D));
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted");
                 }
@@ -929,17 +911,16 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     if (fp->is_absorb_polyrelu) {
-                        result = make_unique<Feature2DEncrypted>(fp->get_layer<PolyRelu2D>(key).run(context, input2D));
+                        result = MakeU<Feature2DEncrypted>(fp->get_layer<PolyRelu2D>(key).run(context, input2D));
                     } else {
-                        result =
-                            make_unique<Feature2DEncrypted>(fp->get_layer<PolyRelu2D>(key).run_bsgs(context, input2D));
+                        result = MakeU<Feature2DEncrypted>(fp->get_layer<PolyRelu2D>(key).run_bsgs(context, input2D));
                     }
                 } else if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
-                    result = make_unique<Feature0DEncrypted>(fp->get_layer<PolyRelu0D>(key).run(context, input0D));
+                    result = MakeU<Feature0DEncrypted>(fp->get_layer<PolyRelu0D>(key).run(context, input0D));
                 } else if (feature_node.dim == 1) {
                     const Feature1DEncrypted& input1D = dynamic_cast<const Feature1DEncrypted&>(feature_node);
-                    result = make_unique<Feature1DEncrypted>(fp->get_layer<PolyRelu1D>(key).run(context, input1D));
+                    result = MakeU<Feature1DEncrypted>(fp->get_layer<PolyRelu1D>(key).run(context, input1D));
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted or Feature0DEncrypted");
                 }
@@ -953,16 +934,14 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     if (style == "multiplexed") {
                         int groups = layer.value().value("groups", 1);
                         if (groups == (int)input1D.n_channel && groups != 1) {
-                            result =
-                                make_unique<Feature1DEncrypted>(fp->get_layer<MultiplexedDWConv1DPackedLayer>(key).run(
-                                    context, const_cast<Feature1DEncrypted&>(input1D)));
+                            result = MakeU<Feature1DEncrypted>(fp->get_layer<MultiplexedDWConv1DPackedLayer>(key).run(
+                                context, const_cast<Feature1DEncrypted&>(input1D)));
                         } else {
-                            result =
-                                make_unique<Feature1DEncrypted>(fp->get_layer<MultiplexedConv1DPackedLayer>(key).run(
-                                    context, const_cast<Feature1DEncrypted&>(input1D)));
+                            result = MakeU<Feature1DEncrypted>(fp->get_layer<MultiplexedConv1DPackedLayer>(key).run(
+                                context, const_cast<Feature1DEncrypted&>(input1D)));
                         }
                     } else {
-                        result = make_unique<Feature1DEncrypted>(fp->get_layer<Conv1DPackedLayer>(key).run(
+                        result = MakeU<Feature1DEncrypted>(fp->get_layer<Conv1DPackedLayer>(key).run(
                             context, const_cast<Feature1DEncrypted&>(input1D)));
                     }
                 } else {
@@ -990,7 +969,7 @@ void InferenceProcess::run_task(bool is_mpc) {
     Duo block_shape = fp->block_shape;
 
     vector<CxxVectorArgument> cxx_args;
-    unique_ptr<FeatureEncrypted> result;
+    UPtr<FeatureEncrypted> result;
 
     vector<vector<CkksCiphertext>> ct_data(json_data["input_feature"].size());
     for (int i = 0; i < json_data["input_feature"].size(); i++) {
@@ -1029,7 +1008,7 @@ void InferenceProcess::run_task(bool is_mpc) {
 
         const string& feature_output_id = feature_output[0];
         FeatureNode feature_input_node(json_features[feature_input[0]]);
-        unique_ptr<FeatureEncrypted> result;
+        UPtr<FeatureEncrypted> result;
         auto& context = *ckks_contexts.at(feature_input_node.ckks_parameter_id);
         if (layer_type == "conv2d") {
             FeatureNode d_input_node(json_features[feature_input[0]]);
@@ -1195,7 +1174,7 @@ void InferenceProcess::run_task(bool is_mpc) {
 
     string context_id;
     int level;
-    vector<unique_ptr<FeatureEncrypted>> output_features(json_data["output_feature"].size());
+    vector<UPtr<FeatureEncrypted>> output_features(json_data["output_feature"].size());
     for (int out_idx = 0; out_idx < (int)json_data["output_feature"].size(); out_idx++) {
         auto ki = json_data["output_feature"][out_idx];
         FeatureNode feature_output(json_features[ki.get<string>()]);
@@ -1206,7 +1185,7 @@ void InferenceProcess::run_task(bool is_mpc) {
         double encode_scale = output_context->get_parameter().get_default_scale();
 
         if (feature_output.dim == 2) {
-            auto output = make_unique<Feature2DEncrypted>(output_context, feature_output.level);
+            auto output = MakeU<Feature2DEncrypted>(output_context, feature_output.level);
             output->shape = feature_output.shape;
             output->skip = feature_output.skip;
             output->n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
@@ -1217,7 +1196,7 @@ void InferenceProcess::run_task(bool is_mpc) {
             cxx_args.push_back(CxxVectorArgument{ki, &output->data});
             output_features[out_idx] = move(output);
         } else if (feature_output.dim == 0) {
-            auto output = make_unique<Feature0DEncrypted>(output_context, feature_output.level);
+            auto output = MakeU<Feature0DEncrypted>(output_context, feature_output.level);
             output->skip = feature_output.skip[0];
             output->n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
             output->n_channel = feature_output.channel;
@@ -1227,7 +1206,7 @@ void InferenceProcess::run_task(bool is_mpc) {
             cxx_args.push_back(CxxVectorArgument{ki, &output->data});
             output_features[out_idx] = move(output);
         } else if (feature_output.dim == 1) {
-            auto output = make_unique<Feature1DEncrypted>(output_context, feature_output.level, feature_output.skip[0]);
+            auto output = MakeU<Feature1DEncrypted>(output_context, feature_output.level, feature_output.skip[0]);
             output->shape = feature_output.shape[0];
             output->n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
             output->n_channel = feature_output.channel;
@@ -1244,13 +1223,13 @@ void InferenceProcess::run_task(bool is_mpc) {
     // Dynamically create and run task executors based on the compute_device configuration
     switch (compute_device) {
         case ComputeDevice::CPU: {
-            auto task = make_unique<FheTaskCpu>(fp->project_path);
+            auto task = MakeU<FheTaskCpu>(fp->project_path);
             fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
         case ComputeDevice::GPU: {
-            auto task = make_unique<FheTaskGpu>(fp->project_path);
+            auto task = MakeU<FheTaskGpu>(fp->project_path);
             fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
@@ -1478,7 +1457,7 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
     }
 }
 
-void InferenceProcess::set_feature(const string& feature_id, unique_ptr<FeatureEncrypted> feature) {
+void InferenceProcess::set_feature(const string& feature_id, UPtr<FeatureEncrypted> feature) {
     intermediate_result[feature_id] = move(feature);
 }
 

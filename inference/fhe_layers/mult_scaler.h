@@ -26,7 +26,7 @@ class MultScalarLayer : public Layer {
 public:
     MultScalarLayer(const ls::CkksParameter& param_in,
                     const Duo& input_shape_in,
-                    const Array<double, 1>& weight_in,
+                    Array<double, 1>&& weight_in,
                     const Duo& skip_in,
                     uint32_t n_channel_per_ct_in,
                     uint32_t level_in,
