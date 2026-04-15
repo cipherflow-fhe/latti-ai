@@ -459,7 +459,6 @@ void PolyRelu0D::prepare_weight_0d_skip() {
     weight_pt.resize(order + 1);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(order + 1);
     parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int ct_idx = 0; ct_idx < n_packed_out_channel; ct_idx++) {
             vector<double> feature_tmp_pack(ctx_copy.get_parameter().get_n() / 2, 0.0);
@@ -535,7 +534,6 @@ void PolyRelu0D::prepare_weight_2d_multiplexed(const Duo& input_shape_in, const 
     weight_pt.resize(order + 1);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(order + 1);
     parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int ct_idx = 0; ct_idx < n_packed_out_channel; ct_idx++) {
             weight_pt[idx].push_back(generate_weight_pt_multiplexed(ctx_copy, idx, ct_idx));

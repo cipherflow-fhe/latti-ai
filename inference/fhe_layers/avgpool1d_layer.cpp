@@ -164,7 +164,7 @@ Feature1DEncrypted Avgpool1DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
     return result;
 }
 
-Array<double, 2> Avgpool1DLayer::plaintext_call(const Array<double, 2>& x) {
+Array<double, 2> Avgpool1DLayer::run_plaintext(const Array<double, 2>& x) {
     std::array<uint64_t, 2UL> input_shape = x.get_shape();
     uint64_t output_length = input_shape[1] / stride;
     Array<double, 2> result({input_shape[0], output_length});
@@ -180,7 +180,7 @@ Array<double, 2> Avgpool1DLayer::plaintext_call(const Array<double, 2>& x) {
     return result;
 }
 
-Array<double, 2> Avgpool1DLayer::plaintext_call_multiplexed(const Array<double, 2>& x) {
+Array<double, 2> Avgpool1DLayer::run_plaintext_multiplexed(const Array<double, 2>& x) {
     std::array<uint64_t, 2UL> input_shape = x.get_shape();
     uint64_t output_length = input_shape[1] / stride;
     Array<double, 2> result({input_shape[0], output_length});

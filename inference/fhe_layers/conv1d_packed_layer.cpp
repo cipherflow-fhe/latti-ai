@@ -246,7 +246,7 @@ void Conv1DPackedLayer::mult_add(CkksContext* ctx,
     }
 }
 
-Array<double, 2> Conv1DPackedLayer::plaintext_call(const Array<double, 2>& x) {
+Array<double, 2> Conv1DPackedLayer::run_plaintext(const Array<double, 2>& x) {
     Array<double, 2> output({n_channel_out, input_shape / stride});
     uint32_t padding_shape = kernel_shape / 2;
     Array<double, 2> padding_input({n_channel_in, input_shape + padding_shape * 2});

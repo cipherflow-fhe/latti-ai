@@ -73,7 +73,6 @@ void PolyRelu2D::prepare_weight() {
     weight_pt.resize(order);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(order);
     parallel_for(order, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int n_packed_out_channel_idx = 0; n_packed_out_channel_idx < n_packed_out_channel;
              n_packed_out_channel_idx++) {
@@ -290,7 +289,6 @@ void PolyRelu2D::prepare_weight_bsgs() {
     weight_pt.resize(order + 1);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(order + 1);
 
     parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int n_packed_out_channel_idx = 0; n_packed_out_channel_idx < n_packed_out_channel;

@@ -29,8 +29,8 @@ class Avgpool1DLayer : public Layer {
 public:
     Avgpool1DLayer(uint32_t shape_in, uint32_t stride_in);
     Feature1DEncrypted run_adaptive_avgpool(ls::CkksContext& ctx, const Feature1DEncrypted& x);
-    Array<double, 2> plaintext_call(const Array<double, 2>& x);
-    Array<double, 2> plaintext_call_multiplexed(const Array<double, 2>& x);
+    Array<double, 2> run_plaintext(const Array<double, 2>& x);
+    Array<double, 2> run_plaintext_multiplexed(const Array<double, 2>& x);
     std::vector<double> select_tensor(int num);
     void prepare_weight(const ls::CkksParameter& param_in,
                         int n_channel_per_ct,

@@ -139,7 +139,6 @@ void MultiplexedConv2DPackedLayer::prepare_weight_for_reduct_rot() {
     bias_pt.resize(n_packed_out_channel);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(n_weight_pt);
 
     int kernel_size = kernel_shape_[0] * kernel_shape_[1];
     int input_block_size = input_shape_ct[0] * input_shape_ct[1];
@@ -251,7 +250,6 @@ void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation() {
     bias_pt.resize(n_packed_out_channel);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(n_weight_pt);
 
     parallel_for(n_weight_pt, th_nums, ctx, [&](CkksContext& ctx_copy, int weight_pt_num_idx) {
         for (int j = 0; j < n_packed_in_channel * n_block_per_ct; ++j) {

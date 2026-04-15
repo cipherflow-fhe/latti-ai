@@ -113,7 +113,6 @@ void InverseMultiplexedConv2DLayer::prepare_weight() {
     bias_pt.resize(n_out_channel);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(n_out_channel);
 
     int total_kernel_count = kernel_shape[0] * kernel_shape[1] * stride_next[0] * stride_next[1];
     parallel_for(n_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int out_channel_idx) {

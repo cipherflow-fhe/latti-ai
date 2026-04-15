@@ -248,10 +248,10 @@ void MultiplexedDWConv1DPackedLayer::prepare_weight_for_lazy() {
 }
 
 // ---------------------------------------------------------------------------
-// plaintext_call  (reference implementation for correctness verification)
+// run_plaintext  (reference implementation for correctness verification)
 // ---------------------------------------------------------------------------
 
-Array<double, 2> MultiplexedDWConv1DPackedLayer::plaintext_call(const Array<double, 2>& x) {
+Array<double, 2> MultiplexedDWConv1DPackedLayer::run_plaintext(const Array<double, 2>& x) {
     uint32_t output_shape = input_shape / stride;
     Array<double, 2> output({n_channel, output_shape});
     uint32_t padding = kernel_shape / 2;
