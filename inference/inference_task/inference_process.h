@@ -20,6 +20,8 @@
 
 #include <hdf5.h>
 
+#include <stdexcept>
+
 #include "util.h"
 #include "fhe_layers/fhe_layers.h"
 
@@ -144,29 +146,63 @@ public:
     void init_upsample_nearest_layer(const std::string& key, const json& layer);
     void init_conv1d_layer(const std::string& key, const json& layer, const hid_t& h5_file);
 
-    std::map<std::string, std::unique_ptr<Conv2DPackedLayer>> ckks_conv2ds;
-    std::map<std::string, std::unique_ptr<Conv2DPackedDepthwiseLayer>> ckks_dw_conv2ds;
-    std::map<std::string, std::unique_ptr<SquareLayer>> ckks_squares;
-    std::map<std::string, std::unique_ptr<DensePackedLayer>> ckks_denses;
-    std::map<std::string, std::unique_ptr<AddLayer>> ckks_adds;
-    std::map<std::string, std::unique_ptr<MultScalarLayer>> ckks_mult_scalar;
-    std::map<std::string, std::unique_ptr<DropLevelLayer>> ckks_drop_level;
-    std::map<std::string, std::unique_ptr<ReshapeLayer>> ckks_reshape;
-    std::map<std::string, std::unique_ptr<Avgpool2DLayer>> ckks_avgpool;
-    std::map<std::string, std::unique_ptr<PolyRelu2D>> ckks_poly_relu;
-    std::map<std::string, std::unique_ptr<Avgpool1DLayer>> ckks_avgpool1d;
-    std::map<std::string, std::unique_ptr<PolyRelu0D>> ckks_poly_relu_0d;
-    std::map<std::string, std::unique_ptr<PolyRelu1D>> ckks_poly_relu_1d;
-    std::map<std::string, std::unique_ptr<MultiplexedConv2DPackedLayer>> ckks_multiplexed_conv2ds;
-    std::map<std::string, std::unique_ptr<InverseMultiplexedConv2DLayer>> ckks_big_conv2ds;
-    std::map<std::string, std::unique_ptr<InverseMultiplexedConv2DLayerDepthwise>> ckks_big_dw_conv2ds;
-    std::map<std::string, std::unique_ptr<MultiplexedConv2DPackedLayerDepthwise>> ckks_multiplexed_dw_conv2ds;
-    std::map<std::string, std::unique_ptr<ConcatLayer>> ckks_concat;
-    std::map<std::string, std::unique_ptr<UpsampleLayer>> ckks_upsample;
-    std::map<std::string, std::unique_ptr<UpsampleNearestLayer>> ckks_upsample_nearest;
-    std::map<std::string, std::unique_ptr<Conv1DPackedLayer>> ckks_conv1ds;
-    std::map<std::string, std::unique_ptr<MultiplexedConv1DPackedLayer>> ckks_multiplexed_conv1ds;
-    std::map<std::string, std::unique_ptr<MultiplexedDWConv1DPackedLayer>> ckks_multiplexed_dw_conv1ds;
+private:
+    template <typename T> void _prepare_layer(const std::string& key, UPtr<T> layer) {
+        if (is_lazy) {
+            layer->prepare_weight_lazy();
+        } else {
+            layer->prepare_weight();
+        }
+        set_layer(key, std::move(layer));
+    }
+
+    template <typename T, typename PrepareFn>
+    void _prepare_layer(const std::string& key, UPtr<T> layer, const PrepareFn& prepare) {
+        prepare(*layer);
+        set_layer(key, std::move(layer));
+    }
+
+    template <typename T, typename LazyFn, typename EagerFn>
+    void
+    _prepare_layer(const std::string& key, UPtr<T> layer, const LazyFn& prepare_lazy, const EagerFn& prepare_eager) {
+        if (is_lazy) {
+            prepare_lazy(*layer);
+        } else {
+            prepare_eager(*layer);
+        }
+        set_layer(key, std::move(layer));
+    }
+
+    std::map<std::string, UPtr<Layer>> ckks_layers_;
+
+public:
+    template <typename T> T& get_layer(const std::string& key) {
+        auto it = ckks_layers_.find(key);
+        if (it == ckks_layers_.end()) {
+            throw std::runtime_error("layer not found: " + key);
+        }
+        auto* layer = dynamic_cast<T*>(it->second.get());
+        if (layer == nullptr) {
+            throw std::runtime_error("layer type mismatch: " + key);
+        }
+        return *layer;
+    }
+
+    template <typename T> const T& get_layer(const std::string& key) const {
+        auto it = ckks_layers_.find(key);
+        if (it == ckks_layers_.end()) {
+            throw std::runtime_error("layer not found: " + key);
+        }
+        auto* layer = dynamic_cast<const T*>(it->second.get());
+        if (layer == nullptr) {
+            throw std::runtime_error("layer type mismatch: " + key);
+        }
+        return *layer;
+    }
+
+    template <typename T> void set_layer(const std::string& key, UPtr<T> layer) {
+        ckks_layers_[key] = std::move(layer);
+    }
 };
 
 class InferenceProcess {

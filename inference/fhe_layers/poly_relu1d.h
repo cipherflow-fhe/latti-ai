@@ -49,6 +49,13 @@ public:
                int skip_in,
                int shape_in);
 
+    void prepare_weight() override {
+        prepare_weight_bsgs();
+    }
+    void prepare_weight_lazy() override {
+        prepare_weight_bsgs_lazy();
+    }
+
     // Mode 1 — skip pack
     void prepare_weight_bsgs();
     void prepare_weight_bsgs_lazy();

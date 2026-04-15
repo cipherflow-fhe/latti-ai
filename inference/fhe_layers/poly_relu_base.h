@@ -89,6 +89,13 @@ public:
                int order_in,
                int skip_in);
 
+    void prepare_weight() override {
+        prepare_weight_0d_skip();
+    }
+    void prepare_weight_lazy() override {
+        prepare_weight_0d_skip_lazy();
+    }
+
     // Mode 1: direct 0D pack — channel ch at slot ch*ciphertext_skip
     void prepare_weight_0d_skip();
     void prepare_weight_0d_skip_lazy();

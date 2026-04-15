@@ -33,8 +33,8 @@ public:
                const Duo& block_expansion_in = {1, 1},
                bool is_ordinary_pack_in = false);
 
-    void prepare_weight();
-    void prepare_weight_lazy();
+    void prepare_weight() override;
+    void prepare_weight_lazy() override;
     void prepare_weight_bsgs();
     void prepare_weight_bsgs_lazy();
     void prepare_weight_hornor();

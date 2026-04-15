@@ -34,6 +34,12 @@ public:
                                  double residual_scale = 1.0,
                                  const Duo& upsample_factor_in = {1, 1});
 
+    void prepare_weight() override {
+        prepare_weight_for_post_skip_rotation();
+    }
+    void prepare_weight_lazy() override {
+        prepare_weight_for_post_skip_rotation_lazy();
+    }
     // virtual void prepare_weight_for_reduct_rot();
     virtual void prepare_weight_for_post_skip_rotation();
     virtual void prepare_weight_for_post_skip_rotation_lazy();

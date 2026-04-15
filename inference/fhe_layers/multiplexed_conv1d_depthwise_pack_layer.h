@@ -42,7 +42,10 @@ public:
                                    uint32_t level_in,
                                    double residual_scale = 1.0);
 
-    void prepare_weight();
+    void prepare_weight() override;
+    void prepare_weight_lazy() override {
+        prepare_weight_for_lazy();
+    }
     void prepare_weight_for_lazy();
 
     // On-demand helpers (for lazy mode)

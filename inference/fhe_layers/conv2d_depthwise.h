@@ -34,8 +34,8 @@ public:
                                uint32_t level,
                                double residual_scale = 1.0);
 
-    void prepare_weight();
-    void prepare_weight_lazy();
+    void prepare_weight() override;
+    void prepare_weight_lazy() override;
 
     virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
 
