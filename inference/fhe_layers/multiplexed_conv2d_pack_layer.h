@@ -94,11 +94,6 @@ private:
     int cached_total_block_size = 0;
     // For reduct_rot
     uint32_t cached_skip_out_prod = 0;
-
-    // Loop-packing: actual number of filled blocks per input CT when n_in_channel_ < n_channel_per_ct.
-    // Set by prepare_weight_for_post_skip_rotation_lazy(); used by generate_weight_pt_for_indices()
-    // and run_core_for_post_skip_rotation() to reduce block rotations and weight entries.
-    int cached_n_actual_blocks = 0;
 };
 
 ls::CkksCiphertext sum_slot(ls::CkksContext& ctx, ls::CkksCiphertext& x, uint32_t m, uint32_t p);

@@ -1357,6 +1357,7 @@ class TestLayerExport(unittest.TestCase):
                                 / f'mux_dw_conv1d_ch_{n_channel}_input_{input_shape}_kernel_{kernel_shape}_skip_{skip}_stride_{stride}'
                                 / f'level_{init_level}'
                                 / 'server',
+                                fpga_acc=False,
                             )
 
     def test_fc_1d_multiplexed(self):
