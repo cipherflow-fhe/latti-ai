@@ -66,15 +66,15 @@ vector<double> MultiplexedConv2DPackedLayer::select_tensor(int num) const {
 
 MultiplexedConv2DPackedLayer::MultiplexedConv2DPackedLayer(const CkksParameter& param_in,
                                                            const Duo& input_shape_in,
-                                                           const Array<double, 4>& weight_in,
-                                                           const Array<double, 1>& bias_in,
+                                                           Array<double, 4>&& weight_in,
+                                                           Array<double, 1>&& bias_in,
                                                            const Duo& stride_in,
                                                            const Duo& skip_in,
                                                            uint32_t n_channel_per_ct_in,
                                                            uint32_t level_in,
                                                            double residual_scale,
                                                            const Duo& upsample_factor_in)
-    : Conv2DLayer(param_in, input_shape_in, weight_in, bias_in, stride_in, skip_in),
+    : Conv2DLayer(param_in, input_shape_in, move(weight_in), move(bias_in), stride_in, skip_in),
       upsample_factor(upsample_factor_in), zero_inserted_skip(skip_in * stride_in / upsample_factor_in) {
     const uint32_t output_channels_per_ct = n_channel_per_ct_in * prod(stride_in) / prod(upsample_factor);
 

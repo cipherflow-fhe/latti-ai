@@ -27,6 +27,9 @@
 
 class Avgpool1DLayer : public Layer {
 public:
+    using Layer::prepare_weight;
+    using Layer::prepare_weight_lazy;
+
     Avgpool1DLayer(uint32_t shape_in, uint32_t stride_in);
     Feature1DEncrypted run_adaptive_avgpool(ls::CkksContext& ctx, const Feature1DEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x);

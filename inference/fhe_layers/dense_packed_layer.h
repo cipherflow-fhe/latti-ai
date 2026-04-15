@@ -24,8 +24,8 @@
 class DensePackedLayer : public Layer {
 public:
     DensePackedLayer(const ls::CkksParameter& param_in,
-                     const Array<double, 2>& weight_in,
-                     const Array<double, 1>& bias_in,
+                     Array<double, 2>&& weight_in,
+                     Array<double, 1>&& bias_in,
                      uint32_t pack_in,
                      uint32_t level_in,
                      int mark_in,
