@@ -75,18 +75,6 @@ class MultiplexedConv2DPackedLayer:
         self.zero_inserted_skip[0] = self.skip[0] * self.stride[0] / self.upsample_factor[0]
         self.zero_inserted_skip[1] = self.skip[1] * self.stride[1] / self.upsample_factor[1]
 
-        # Loop-packing: actual filled blocks per input CT when n_in_channel < n_channel_per_ct.
-        # The doubling replication is only valid when n_block_per_ct / n_actual_blocks is a
-        # power of 2.  Fall back to n_block_per_ct (no optimisation) otherwise.
-        n_actual_blocks_raw = int(np.ceil(min(n_in_channel, n_channel_per_ct) / (skip[0] * skip[1])))
-        if n_actual_blocks_raw < self.n_block_per_ct:
-            rot_factor = self.n_block_per_ct // n_actual_blocks_raw
-            divisible = self.n_block_per_ct % n_actual_blocks_raw == 0
-            power_of_2 = (rot_factor & (rot_factor - 1)) == 0
-            self.n_actual_blocks = n_actual_blocks_raw if (divisible and power_of_2) else self.n_block_per_ct
-        else:
-            self.n_actual_blocks = n_actual_blocks_raw
-
     def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call(), grouped by level.
 
@@ -252,27 +240,11 @@ class MultiplexedConv2DPackedLayer:
         # 0. Create unified data source node (containing all weight/bias/mask data)
         # This node acts as a "pointer", created only once, all encode_pt nodes reference it
 
-        # 1. Block direction rotation with loop-packing replication.
-        # When n_in_channel < n_channel_per_ct, only n_actual_blocks blocks carry real data.
-        # Replicate with the doubling trick so every block slot is filled, then only
-        # n_actual_blocks rotations are needed (mirrors C++ run_core_for_post_skip_rotation).
-        input_ct_size = self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
-        n_actual_blocks = self.n_actual_blocks
-        n_rot_factor = self.n_block_per_ct // n_actual_blocks if n_actual_blocks < self.n_block_per_ct else 1
-        n_rep_iters = int(np.floor(np.log2(n_rot_factor))) if n_rot_factor > 1 else 0
-
-        x_rep = list(x)
-        for x_id in range(len(x)):
-            for r in range(n_rep_iters):
-                x_rep[x_id] = add(
-                    x_rep[x_id],
-                    rotate_cols(x_rep[x_id], [-(2**r) * n_actual_blocks * input_ct_size])[0],
-                )
-
+        # 1. Block direction rotation
         block_rotations: list[CkksCiphertextNode] = list()
-        for x_ct in x_rep:
+        for x_ct in x:
             block_rotations += MultiplexedConv2DPackedLayer.populate_rotations_1_side(
-                x_ct, n_actual_blocks - 1, input_ct_size
+                x_ct, self.n_block_per_ct - 1, self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
             )
         # 2. Kernel direction rotation
         kernel_rotations = self.gen_rotated_x(block_rotations)
@@ -282,7 +254,7 @@ class MultiplexedConv2DPackedLayer:
 
         n_pack_in_channel = int(np.ceil(self.n_in_channel / self.n_channel_per_ct))
         size_0 = int(np.ceil(self.n_out_channel / self.n_block_per_ct))
-        size_1 = int(n_pack_in_channel * n_actual_blocks)
+        size_1 = int(n_pack_in_channel * self.n_block_per_ct)
         size_2 = int(self.kernel_shape[0] * self.kernel_shape[1])
         for ct_idx in range(size_0):
             partial_sum: DataNode | None = None
@@ -408,8 +380,7 @@ class MultiplexedConv2DPackedLayer:
         n_pack_in_channel = _math.ceil(self.n_in_channel / self.n_channel_per_ct)
         kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
         size_0 = _math.ceil(self.n_out_channel / self.n_block_per_ct)
-        # Use n_actual_blocks (loop-packed count) instead of n_block_per_ct
-        size_1 = n_pack_in_channel * self.n_actual_blocks
+        size_1 = n_pack_in_channel * self.n_block_per_ct
 
         weight_pt = [
             [
@@ -433,24 +404,11 @@ class MultiplexedConv2DPackedLayer:
         return weight_pt, bias_pt, mask_pt
 
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mast_pt) -> list[CkksCiphertextNode]:
-        # 1. Block direction rotation with loop-packing replication (same logic as call_custom_compute).
-        input_ct_size = self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
-        n_actual_blocks = self.n_actual_blocks
-        n_rot_factor = self.n_block_per_ct // n_actual_blocks if n_actual_blocks < self.n_block_per_ct else 1
-        n_rep_iters = int(np.floor(np.log2(n_rot_factor))) if n_rot_factor > 1 else 0
-
-        x_rep = list(x)
-        for x_id in range(len(x)):
-            for r in range(n_rep_iters):
-                x_rep[x_id] = add(
-                    x_rep[x_id],
-                    rotate_cols(x_rep[x_id], [-(2**r) * n_actual_blocks * input_ct_size])[0],
-                )
-
+        # 1. block direction rotation
         block_rotations: list[CkksCiphertextNode] = list()
-        for x_ct in x_rep:
+        for x_ct in x:
             block_rotations += MultiplexedConv2DPackedLayer.populate_rotations_1_side(
-                x_ct, n_actual_blocks - 1, input_ct_size
+                x_ct, self.n_block_per_ct - 1, self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
             )
         # 2. Kernel direction rotation
         kernel_rotations = self.gen_rotated_x(block_rotations)
