@@ -144,7 +144,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed_lazy(const Duo& input_s
     int valid_skip_1 = special_skip[1] / invalid_fill_in[1];
     int n_channel_per_block = valid_skip_0 * valid_skip_1;
     int n_channel = n_in_feature / (special_input_shape[0] * special_input_shape[1]);
-    n_block_input = div_ceil(n_channel, n_channel_per_block);
+    n_block_input = div_ceil(n_channel, n_channel_per_block * n_block_per_ct) * n_block_per_ct;
 }
 
 CkksPlaintextRingt DensePackedLayer::generate_weight_pt_mult_pack_for_indices(CkksContext& ctx,
