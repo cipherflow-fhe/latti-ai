@@ -79,7 +79,7 @@ public:
     std::vector<ls::CkksCiphertext> data;
     std::vector<ls::CkksCompressedCiphertext> data_compress;
 
-    Bytes serialize() const;
+    Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;
     Feature1DEncrypted copy() const;
 };

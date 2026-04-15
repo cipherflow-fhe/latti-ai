@@ -103,7 +103,7 @@ void parallel_for_with_extra_level_context(int n,
     }
 }
 
-FeatureEncrypted::FeatureEncrypted() : ckks_scale{DEFAULT_SCALE}, multiplier{1.0} {}
+FeatureEncrypted::FeatureEncrypted() {}
 
 FeatureEncrypted::~FeatureEncrypted() {}
 
