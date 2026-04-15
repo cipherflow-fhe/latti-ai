@@ -179,7 +179,7 @@ public:
                                           PackType pack_type = PackType::MultiplexedPacking);
     void decompress();
 
-    Bytes serialize() const;
+    Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;
     Feature2DEncrypted drop_level(int drop_level_num) const;
     Feature2DEncrypted copy() const;

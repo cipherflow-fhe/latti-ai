@@ -28,18 +28,16 @@ using namespace std;
 using namespace cxx_sdk_v2;
 
 DensePackedLayer::DensePackedLayer(const CkksParameter& param_in,
-                                   const Array<double, 2>& weight_in,
-                                   const Array<double, 1>& bias_in,
+                                   Array<double, 2>&& weight_in,
+                                   Array<double, 1>&& bias_in,
                                    uint32_t pack_in,
                                    uint32_t level_in,
                                    int mark_in,
                                    double residual_scale)
-    : Layer(param_in) {
-    auto weight_shape = weight_in.get_shape();
+    : Layer(param_in), weight(move(weight_in)), bias(move(bias_in)) {
+    auto weight_shape = weight.get_shape();
     n_out_feature = weight_shape[0];
     n_in_feature = weight_shape[1];
-    weight = weight_in.copy();
-    bias = bias_in.copy();
     n_channel_per_ct = pack_in;
     n_packed_in_feature = div_ceil(n_in_feature, n_channel_per_ct);
     n_packed_out_feature = div_ceil(n_out_feature, n_channel_per_ct);

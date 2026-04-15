@@ -34,15 +34,18 @@ class MultiplexedDWConv1DPackedLayer : public Layer {
 public:
     MultiplexedDWConv1DPackedLayer(const ls::CkksParameter& param_in,
                                    uint32_t input_shape_in,
-                                   const Array<double, 3>& weight_in,  // [n_channel, 1, kernel]
-                                   const Array<double, 1>& bias_in,
+                                   Array<double, 3>&& weight_in,  // [n_channel, 1, kernel]
+                                   Array<double, 1>&& bias_in,
                                    uint32_t stride_in,
                                    uint32_t skip_in,
                                    uint32_t n_channel_per_ct_in,
                                    uint32_t level_in,
                                    double residual_scale = 1.0);
 
-    void prepare_weight();
+    void prepare_weight() override;
+    void prepare_weight_lazy() override {
+        prepare_weight_for_lazy();
+    }
     void prepare_weight_for_lazy();
 
     // On-demand helpers (for lazy mode)

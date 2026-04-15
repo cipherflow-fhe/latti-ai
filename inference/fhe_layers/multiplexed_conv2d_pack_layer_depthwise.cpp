@@ -28,14 +28,14 @@ using namespace cxx_sdk_v2;
 
 MultiplexedConv2DPackedLayerDepthwise::MultiplexedConv2DPackedLayerDepthwise(const CkksParameter& param_in,
                                                                              const Duo& input_shape_in,
-                                                                             const Array<double, 4>& weight_in,
-                                                                             const Array<double, 1>& bias_in,
+                                                                             Array<double, 4>&& weight_in,
+                                                                             Array<double, 1>&& bias_in,
                                                                              const Duo& stride_in,
                                                                              const Duo& skip_in,
                                                                              uint32_t n_channel_per_ct_in,
                                                                              uint32_t level_in,
                                                                              double residual_scale)
-    : Conv2DLayer(param_in, input_shape_in, weight_in, bias_in, stride_in, skip_in) {
+    : Conv2DLayer(param_in, input_shape_in, move(weight_in), move(bias_in), stride_in, skip_in) {
     const uint32_t output_channels_per_ct = n_channel_per_ct_in * prod(stride_);
 
     n_channel_per_ct = n_channel_per_ct_in;

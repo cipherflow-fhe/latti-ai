@@ -25,16 +25,16 @@ class MultiplexedConv2DPackedLayerDepthwise : public Conv2DLayer {
 public:
     MultiplexedConv2DPackedLayerDepthwise(const ls::CkksParameter& param_in,
                                           const Duo& input_shape_in,
-                                          const Array<double, 4>& weight_in,
-                                          const Array<double, 1>& bias_in,
+                                          Array<double, 4>&& weight_in,
+                                          Array<double, 1>&& bias_in,
                                           const Duo& stride_in,
                                           const Duo& skip_in,
                                           uint32_t n_channel_per_ct_in,
                                           uint32_t level_in,
                                           double residual_scale = 1.0);
 
-    virtual void prepare_weight();
-    virtual void prepare_weight_lazy();
+    void prepare_weight() override;
+    void prepare_weight_lazy() override;
 
     virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     virtual std::vector<double> select_tensor(int num) const;

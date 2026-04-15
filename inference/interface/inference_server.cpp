@@ -95,7 +95,7 @@ void InferenceServer::load_model() {
     init_->is_lazy = false;
     init_->load_model_prepare();
 
-    fp_ = std::make_unique<InferenceProcess>(init_.get(), true);
+    fp_ = std::make_unique<InferenceProcess>(init_.get());
     for (auto& key : input_keys_) {
         fp_->available_keys.push_back(key);
     }
@@ -152,13 +152,13 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
     std::map<std::string, Bytes> encrypted_outputs;
     for (auto& [name, param] : output_params_) {
         if (param.dim == 0) {
-            auto output_ct = fp_->get_ciphertext_output_feature0D(name);
+            auto output_ct = fp_->get_ciphertext_output_feature<Feature0DEncrypted>(name);
             encrypted_outputs[name] = output_ct.serialize();
         } else if (param.dim == 1) {
-            auto output_ct = fp_->get_ciphertext_output_feature1D(name);
+            auto output_ct = fp_->get_ciphertext_output_feature<Feature1DEncrypted>(name);
             encrypted_outputs[name] = output_ct.serialize();
         } else {
-            auto output_ct = fp_->get_ciphertext_output_feature2D(name);
+            auto output_ct = fp_->get_ciphertext_output_feature<Feature2DEncrypted>(name);
             encrypted_outputs[name] = output_ct.serialize();
         }
     }
