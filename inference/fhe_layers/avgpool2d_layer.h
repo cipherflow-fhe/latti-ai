@@ -30,8 +30,8 @@ public:
     Avgpool2DLayer(const Duo& shape_in, const Duo& stride_in);
     Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     Feature2DEncrypted run_adaptive_avgpool(ls::CkksContext& ctx, const Feature2DEncrypted& x);
-    Array<double, 3> plaintext_call(const Array<double, 3>& x);
-    Array<double, 3> plaintext_call_multiplexed(const Array<double, 3>& x);
+    Array<double, 3> run_plaintext(const Array<double, 3>& x);
+    Array<double, 3> run_plaintext_multiplexed(const Array<double, 3>& x);
     std::vector<double> select_tensor(int num);
     void prepare_weight(const ls::CkksParameter& param_in,
                         int n_channel_per_ct,

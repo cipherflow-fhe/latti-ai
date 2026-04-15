@@ -63,7 +63,6 @@ void MultScalarLayer::prepare_weight() {
     weight_pt.clear();
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(n_packed_out_channel);
     weight_pt.resize(n_packed_out_channel);
     double pack_scale = ctx.get_parameter().get_q(level_);
     parallel_for(n_packed_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int n_packed_out_channel_idx) {
