@@ -98,13 +98,31 @@ def calculate_compute_score_for_graph(
     for compute in grow.nodes:
         if not isinstance(compute, ComputeNode):
             continue
-        if compute.layer_type in ['conv2d', 'fc0', 'add2d', 'polyact', 'avgpool1d', 'avgpool2d']:
-            pred = next(enclosing_graph.predecessors(compute))
-            s_param = FheScoreParam(enclosing_graph, compute, param_dict, enclosing_graph.nodes[pred]['level'])
-            score = s_param.get_score()
-            enclosing_graph.nodes[compute]['score'] = score
-            compute_score += score
+        compute_score += get_compute_score(enclosing_graph, compute, param_dict)
     return compute_score
+
+
+def get_compute_score(
+    enclosing_graph: nx.DiGraph,
+    compute: ComputeNode,
+    param_dict: dict[str, FheParameter],
+) -> float:
+    if compute.layer_type in ['conv2d', 'fc0', 'add2d', 'polyact', 'avgpool1d', 'avgpool2d']:
+        preds = list(enclosing_graph.predecessors(compute))
+        level = min(enclosing_graph.nodes[p]['level'] for p in preds)
+        s_param = FheScoreParam(enclosing_graph, compute, param_dict, level)
+        score = s_param.get_score()
+        return score
+    else:
+        return 0.0
+
+
+def get_restoring_score(dag, restore_node, param_dict):
+    if not config.mpc_refresh:
+        s_param = BtpScoreParam(dag, restore_node, param_dict)
+    else:
+        s_param = MpcScoreParam(dag, restore_node, param_dict)
+    return s_param.get_score()
 
 
 def update_btp_to_mpc_refresh(graph: LayerAbstractGraph):
@@ -115,11 +133,13 @@ def update_btp_to_mpc_refresh(graph: LayerAbstractGraph):
 
 
 class NodeLevel(NamedTuple):
-    node_id: str
+    node_idx: int
     level: int
 
 
-AUX_LV = 99999
+# Auxiliary level used to indicate the node is refreshed to max level by a restore node,
+# and can be used for absorbing later nodes without generating new restore nodes.
+AUX_LV = 255
 
 
 class GraphPartitioner:
@@ -177,97 +197,85 @@ class GraphPartitioner:
     def generate_solutions(
         self,
         new_node: FeatureNode,
-        frontier: list[FeatureNode],
-        frontier_solutions: dict[tuple[NodeLevel, ...], tuple[float, nx.DiGraph]],
+        frontier: list[NodeLevel],
+        frontier_solutions: dict[tuple[int], tuple[float, np.ndarray]],
         processed_feature_nodes: set[FeatureNode],
+        node_to_idx: dict[FeatureNode, int],
+        idx_to_node: dict[int, FeatureNode],
         dag: nx.DiGraph,
     ):
         leading_comp: ComputeNode = next(dag.predecessors(new_node))
         predecessors: list[FeatureNode] = list(dag.predecessors(leading_comp))
+        pred_frontier = [f for f in frontier if idx_to_node[f.node_idx] in predecessors]
+        other_frontier = [f for f in frontier if idx_to_node[f.node_idx] not in predecessors]
+        frontier = pred_frontier + other_frontier
+
         new_frontier = frontier.copy()
-        new_frontier.append(new_node)
+        new_frontier.append(NodeLevel(node_to_idx[new_node], 0))
         processed_feature_nodes.add(new_node)
-        nodes_became_internal: list[FeatureNode] = []
-        for node in frontier:
+        nodes_became_internal: list[int] = []
+        for node_max_lv in frontier:
             internal_flag = True
-            for comp in dag.successors(node):
+            for comp in dag.successors(idx_to_node[node_max_lv.node_idx]):
                 for succ in dag.successors(comp):
                     if succ not in processed_feature_nodes:
                         internal_flag = False
             if internal_flag:
-                nodes_became_internal.append(node)
-
-        for n in nodes_became_internal:
-            new_frontier.remove(n)
-        new_frontier_ids = [nd.node_id for nd in new_frontier]
+                nodes_became_internal.append(node_max_lv.node_idx)
+                new_frontier.remove(node_max_lv)
 
         new_frontier_solutions = dict()
 
         for terminal_lv in range(config.fhe_param.max_level + 1):
-            for node_lv_tuple in frontier_solutions.keys():
-                admissible = True
-                min_level = config.fhe_param.max_level
-                for node_lv in node_lv_tuple:
-                    if node_lv.node_id not in (node.node_id for node in predecessors):
-                        continue
-                    min_level = min(min_level, node_lv.level)
-                    if min_level - dag.nodes[leading_comp]['level_cost'] < terminal_lv:
-                        admissible = False
-                        break
-                if not admissible:
+            frontier_lvs = []
+            dag.nodes[new_node]['level'] = terminal_lv
+            for node_max_lv in pred_frontier:
+                frontier_lvs.append(
+                    list(range(dag.nodes[leading_comp]['level_cost'], node_max_lv.level + 1)) + [AUX_LV]
+                )
+            for node_max_lv in other_frontier:
+                frontier_lvs.append(list(range(node_max_lv.level + 1)) + [AUX_LV])
+
+            frontier_lv_product = product(*frontier_lvs)
+
+            lowest_cost = float('inf')
+            best_lv_comb = None
+            best_sol_graph_vec = None
+            for lv_comb in frontier_lv_product:
+                frontier_key = []
+                new_frontier_key = []
+                for node_max_lv, lv in zip(frontier, lv_comb):
+                    frontier_key.append(NodeLevel(node_max_lv.node_idx, lv))
+                    if node_max_lv.node_idx not in nodes_became_internal:
+                        new_frontier_key.append(NodeLevel(node_max_lv.node_idx, lv))
+                new_frontier_key.append(NodeLevel(node_to_idx[new_node], terminal_lv))
+
+                frontier_key.sort(key=lambda x: x.node_idx)
+
+                if tuple(frontier_key) not in frontier_solutions:
                     continue
 
-                initial_score = frontier_solutions[node_lv_tuple][0]
-                sol_graph = frontier_solutions[node_lv_tuple][1].copy()
-                sol_graph.add_node(leading_comp, **dag.nodes[leading_comp])
-                sol_graph.add_node(new_node, **dag.nodes[new_node])
-                for pred in predecessors:
-                    pred_lv = next((lv for n, lv in node_lv_tuple if n == pred.node_id), None)
-                    if pred_lv is None:
-                        raise ValueError('Predecessor node level must exist in the frontier state key')
+                initial_score, sol_graph_vec = frontier_solutions[tuple(frontier_key)]
 
-                    # if the predecessor node is at auxiliary level, it means we have added a restoring node immediately after it,
-                    # so we should connect the leading compute node to the restoring node instead of the original predecessor node.
-                    if pred_lv == AUX_LV:
-                        restoring_node = next(sol_graph.successors(pred))
-                        restored_node = next(sol_graph.successors(restoring_node))
-                        sol_graph.add_edge(restored_node, leading_comp)
-                    else:
-                        sol_graph.add_edge(pred, leading_comp)
-                sol_graph.add_edge(leading_comp, new_node)
+                for node_max_lv, lv in zip(frontier, lv_comb):
+                    dag.nodes[idx_to_node[node_max_lv.node_idx]]['level'] = lv
 
-                frontier_key = []
-                for node_lv in node_lv_tuple:
-                    if node_lv.node_id in new_frontier_ids:
-                        frontier_key.append(node_lv)
+                sol_cost = initial_score + get_compute_score(dag, leading_comp, self.param_dict)
 
-                sol_graph_ab = LayerAbstractGraph()
-                sol_graph_ab.dag = sol_graph
-                sol_graph_ab.dag.nodes[new_node]['level'] = terminal_lv
-                frontier_key.append(NodeLevel(new_node.node_id, terminal_lv))
-                frontier_key.sort(key=lambda x: x[0])
-                frontier_key_tuple = tuple(frontier_key)
-
-                if config.mpc_refresh:
-                    transforms.absorb_scale(sol_graph_ab, config.mpc_refresh)
-                    update_subgraph_node_param(sol_graph, self.param_dict, 'param0')
-                    change_skip_for_graph(sol_graph_ab)
-                    update_subgraph_node_param(sol_graph, self.param_dict, 'param0', True)
-
-                self.process_btp_level_cost(sol_graph)
-
-                grow = sol_graph.subgraph(predecessors + [leading_comp, new_node]).copy()
-                sol_cost = initial_score + calculate_compute_score_for_graph(sol_graph, grow, self.param_dict)
-
+                new_frontier_key_tuple = tuple(new_frontier_key)
                 if (
-                    frontier_key_tuple not in new_frontier_solutions
-                    or sol_cost < new_frontier_solutions[frontier_key_tuple][0]
+                    new_frontier_key_tuple not in new_frontier_solutions
+                    or sol_cost < new_frontier_solutions[new_frontier_key_tuple][0]
                 ):
-                    new_frontier_solutions[frontier_key_tuple] = (sol_cost, sol_graph)
+                    new_sol_graph_vec = sol_graph_vec.copy()
+                    new_sol_graph_vec[node_to_idx[new_node]] = terminal_lv
+                    new_frontier_solutions[new_frontier_key_tuple] = (sol_cost, new_sol_graph_vec)
 
             # leaf nodes only need lv=0 solutions.
             if len(list(dag.successors(new_node))) == 0:
                 break
+
+            new_frontier[-1] = NodeLevel(node_to_idx[new_node], terminal_lv)
 
             if (
                 terminal_lv == 0
@@ -277,18 +285,18 @@ class GraphPartitioner:
                 and dag.nodes[leading_comp]['level_cost'] > 0
             ):
                 aux_lv_solutions = {}
-                for k in new_frontier_solutions.keys():
-                    new_node_lv_idx = [node_lv.node_id for node_lv in k].index(new_node.node_id)
-                    if k[new_node_lv_idx].level != 0:
-                        continue
-
+                for k, solution in new_frontier_solutions.items():
+                    new_node_lv_idx = k.index(NodeLevel(node_to_idx[new_node], terminal_lv))
+                    assert k[new_node_lv_idx].level == 0
                     sol_key = list(k)
-                    sol_key[new_node_lv_idx] = NodeLevel(new_node.node_id, AUX_LV)
-                    sol_graph_aux_lv = new_frontier_solutions[k][1].copy()
-                    sol_aux_lv_score = self.restore_level_at(sol_graph_aux_lv, new_node)
+                    sol_key[new_node_lv_idx] = NodeLevel(node_to_idx[new_node], AUX_LV)
+
+                    sol_graph_vec_aux_lv = solution[1].copy()
+                    sol_graph_vec_aux_lv[node_to_idx[new_node]] = AUX_LV
+                    sol_aux_lv_score = get_restoring_score(dag, leading_comp, self.param_dict)
                     aux_lv_solutions[tuple(sol_key)] = (
-                        new_frontier_solutions[k][0] + sol_aux_lv_score,
-                        sol_graph_aux_lv,
+                        lowest_cost + sol_aux_lv_score,
+                        sol_graph_vec_aux_lv,
                     )
 
                 new_frontier_solutions |= aux_lv_solutions
@@ -297,13 +305,9 @@ class GraphPartitioner:
 
     def restore_level_at(self, new_graph: nx.DiGraph, node: FeatureNode):
         restore_node = transforms.add_btp_layer(
-            new_graph, node, self.param_dict, config.fhe_param.max_level - config.fhe_param.max_level
+            new_graph, node, self.param_dict, config.fhe_param.max_level - new_graph.nodes[node]['level']
         )
-        if not config.mpc_refresh:
-            s_param = BtpScoreParam(new_graph, restore_node, self.param_dict)
-        else:
-            s_param = MpcScoreParam(new_graph, restore_node, self.param_dict)
-        score = s_param.get_score()
+        score = get_restoring_score(new_graph, restore_node, self.param_dict)
         new_graph.nodes[restore_node]['score'] = score
         succ = list(new_graph.successors(restore_node))[0]
         new_graph.nodes[succ]['level'] = config.fhe_param.max_level
@@ -314,40 +318,52 @@ class GraphPartitioner:
         if len(H.nodes) == 0:
             return 0.0, nx.DiGraph()
 
+        # for node in H.nodes:
+        #     if isinstance(node, FeatureNode):
+        #         node.ckks_parameter_id = 'param0'
         sorted_nodes = list(nx.topological_sort(H))
-        frontier: list[FeatureNode] = []
+
+        node_to_idx = {}
+        idx_to_node = {}
+        for idx, node in enumerate(sorted_nodes):
+            if isinstance(node, FeatureNode):
+                node_to_idx[node] = idx
+                idx_to_node[idx] = node
+        frontier: list[NodeLevel] = []
         processed_feature_nodes: set[FeatureNode] = set()
 
         # the frontier_solutions dict stores the best solution for each combination of levels (plus an auxiliary lv) of the frontier nodes,
-        # e.g. {(NodeLevel(node1,level2), NodeLevel(node2,level3), NodeLevel(node3, level1)): (cost, modified_graph)},
+        # e.g. {(node1_index, level2, node2_index, level3, node3_index, level1): (cost, graph_vec)},
         # where the nodes are sorted by their id to ensure unique representation of the frontier state.
-        frontier_solutions: dict[tuple[NodeLevel, ...], tuple[float, nx.DiGraph]] = {}
+        frontier_solutions: dict[tuple, float] = {}
         for start_idx, node in enumerate(sorted_nodes):
             if isinstance(node, FeatureNode) and len(list(H.predecessors(node))) == 0:
-                frontier.append(node)
+                frontier.append(NodeLevel(node_to_idx[node], config.fhe_param.max_level))
                 processed_feature_nodes.add(node)
             else:
                 break
 
+        frontier_indices = [x.node_idx for x in frontier]
         for lv_comb in product(range(config.fhe_param.max_level + 1), repeat=len(frontier)):
-            nodes_and_lv = sorted(zip(frontier, lv_comb), key=lambda x: x[0])
-            frontier_state_key = tuple(NodeLevel(node.node_id, lv) for node, lv in nodes_and_lv)
+            init_graph_vec = np.zeros(len(sorted_nodes), dtype=np.uint8)
+            node_lv: list[NodeLevel] = []
+            for idx, lv in zip(frontier_indices, lv_comb):
+                node_lv.append(NodeLevel(idx, lv))
+                init_graph_vec[idx] = lv
 
-            new_graph = H.subgraph(frontier).copy()
-            for node, lv in nodes_and_lv:
-                new_graph.nodes[node]['level'] = lv
-            frontier_solutions[frontier_state_key] = (0.0, new_graph)
+            node_lv.sort(key=lambda x: x.node_idx)
+            frontier_solutions[tuple(node_lv)] = (0.0, init_graph_vec)
 
         for node in sorted_nodes[start_idx + 1 :]:
             if isinstance(node, FeatureNode):
                 # print(f"Processing {node.node_id}, frontier num of nodes: {len(frontier)}")
                 frontier, frontier_solutions = self.generate_solutions(
-                    node, frontier, frontier_solutions, processed_feature_nodes, H
+                    node, frontier, frontier_solutions, processed_feature_nodes, node_to_idx, idx_to_node, H
                 )
             self.pbar.update(1)
 
-        final_solution_frontier = tuple(sorted((NodeLevel(node.node_id, 0) for node in frontier), key=lambda x: x[0]))
-        final_score, final_dag = frontier_solutions[final_solution_frontier]
+        final_solution_frontier = tuple(sorted((NodeLevel(x.node_idx, 0) for x in frontier), key=lambda x: x.node_idx))
+        final_score, final_dag_vec = frontier_solutions[final_solution_frontier]
 
         temp_ab = LayerAbstractGraph()
         temp_ab.dag = final_dag
