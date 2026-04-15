@@ -53,7 +53,7 @@ public:
     Feature1DEncrypted run(ls::CkksContext& ctx, Feature1DEncrypted& x);
     virtual std::vector<double> select_tensor(int num) const;
 
-    Array<double, 2> plaintext_call(const Array<double, 2>& x);
+    Array<double, 2> run_plaintext(const Array<double, 2>& x);
 
     // weight_pt[ct_idx][kernel_idx]
     std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt;

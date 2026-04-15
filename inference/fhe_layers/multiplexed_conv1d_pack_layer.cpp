@@ -227,7 +227,7 @@ void MultiplexedConv1DPackedLayer::prepare_weight_for_lazy() {
     block_select_pt.clear();
 }
 
-Array<double, 2> MultiplexedConv1DPackedLayer::plaintext_call(const Array<double, 2>& x) {
+Array<double, 2> MultiplexedConv1DPackedLayer::run_plaintext(const Array<double, 2>& x) {
     Array<double, 2> output({n_channel_out, input_shape / stride});
     uint32_t padding_shape = kernel_shape / 2;
     Array<double, 2> padding_input({n_channel_in, input_shape + padding_shape * 2});

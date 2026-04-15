@@ -41,7 +41,7 @@ public:
     void prepare_weight_lazy();
 
     virtual Feature1DEncrypted run(ls::CkksContext& ctx, Feature1DEncrypted& x);
-    Array<double, 2> plaintext_call(const Array<double, 2>& x);
+    Array<double, 2> run_plaintext(const Array<double, 2>& x);
 
     ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
     ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;

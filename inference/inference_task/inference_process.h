@@ -57,46 +57,9 @@ public:
     int level = 0;
     double ckks_scale = 0.0;
 
-    FeatureNode(const json& json_data)
-        : dim(json_data["dim"]), channel(json_data["channel"]), scale(json_data["scale"]),
-          ckks_parameter_id(json_data["ckks_parameter_id"]), pack_channel_per_ciphertext(json_data["pack_num"]),
-          level(json_data["level"]), ckks_scale(0.0) {
-        if (dim == 2) {
-            shape[0] = json_data["shape"][0];
-            shape[1] = json_data["shape"][1];
-            skip[0] = json_data["skip"][0];
-            skip[1] = json_data["skip"][1];
-            if (json_data.contains("invalid_fill")) {
-                invalid_fill[0] = json_data["invalid_fill"][0];
-                invalid_fill[1] = json_data["invalid_fill"][1];
-            }
-        }
-        if (dim == 1) {
-            shape[0] = json_data["shape"][0];
-            skip[0] = json_data["skip"][0];
-        }
-        if (dim == 0) {
-            skip[0] = json_data["skip"];
-            if (json_data.contains("special_info")) {
-                auto& si = json_data["special_info"];
-                skip[0] = json_data["skip"];
-                special_info_dim = si["invalid_fill"].size();
-                if (special_info_dim == 2) {
-                    shape[0] = si["shape"][0];
-                    shape[1] = si["shape"][1];
-                    special_skip[0] = si["skip"][0];
-                    special_skip[1] = si["skip"][1];
-                    invalid_fill[0] = si["invalid_fill"][0];
-                    invalid_fill[1] = si["invalid_fill"][1];
-                } else {
-                    // special_info_dim == 1: from 1D feature
-                    shape[0] = si["shape"][0];
-                    special_skip[0] = si["skip"][0];
-                    invalid_fill[0] = si["invalid_fill"][0];
-                }
-            }
-        }
-    }
+    FeatureNode(const json& json_data);
+
+    int get_n_ciphertexts(const Duo& block_shape) const;
 };
 
 template <int dim>
