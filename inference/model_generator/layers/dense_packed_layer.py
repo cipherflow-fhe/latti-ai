@@ -230,7 +230,7 @@ class DensePackedLayer:
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
         n_channel_per_block = valid_skip_0 * valid_skip_1
         n_channel = self.n_in_channel // (self.input_shape[0] * self.input_shape[1])
-        n_block_input = int(np.ceil(n_channel / n_channel_per_block))  # = n_used_blocks
+        n_block_input = int(np.ceil(n_channel / (n_channel_per_block * n_num_pre_ct))) * n_num_pre_ct
         n_packed_out = int(np.ceil(self.n_out_channel / n_num_pre_ct))
         weight_pt = [
             [CkksPlaintextRingtNode(f'densew_{layer_id}_{i}_{j}') for j in range(n_block_input)]
@@ -361,7 +361,7 @@ class DensePackedLayer:
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
         n_channel_per_block = valid_skip_0 * valid_skip_1
         n_channel = self.n_in_channel // (self.input_shape[0] * self.input_shape[1])
-        n_block_input = int(np.ceil(n_channel / n_channel_per_block))
+        n_block_input = int(np.ceil(n_channel / (n_channel_per_block * n_num_pre_ct))) * n_num_pre_ct
         n_packed_out_feature_for_mult_pack = int(np.ceil(self.n_out_channel / n_num_pre_ct))
 
         block_size = input_ct_shape[0] * input_ct_shape[1]
@@ -565,7 +565,7 @@ class DensePackedLayer:
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
         n_channel_per_block = valid_skip_0 * valid_skip_1
         n_channel = self.n_in_channel // (self.input_shape[0] * self.input_shape[1])
-        n_block_input = int(np.ceil(n_channel / n_channel_per_block))
+        n_block_input = int(np.ceil(n_channel / (n_channel_per_block * n_num_pre_ct))) * n_num_pre_ct
         n_packed_out_feature_for_mult_pack = int(np.ceil(self.n_out_channel / n_num_pre_ct))
 
         block_size = input_ct_shape[0] * input_ct_shape[1]
