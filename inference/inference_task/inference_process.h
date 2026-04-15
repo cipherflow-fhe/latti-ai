@@ -86,28 +86,13 @@ public:
     virtual ~InitInferenceProcess();
 
     std::filesystem::path project_path;
-    std::string task_type;
     std::string pack_style;
-    int n_task;
-    std::string output_id;
-    std::string input_id;
-    json task_input_param;
-    json task_output_param;
-    int start_task_id;
-    int end_task_id;
-    bool enable_fpga = false;
-    json server_task;
-    std::filesystem::path current_json_path;
+    Duo block_shape;
+    bool is_absorb_polyrelu;
     json json_data;
     json json_features;
     json json_layers;
-    Duo block_shape;
-    bool is_absorb_polyrelu;
-    std::map<std::string, UPtr<ls::CkksParameter>> ckks_parameters;
-    bool fpga_loaded = false;
-
     bool is_lazy = false;
-
     // Time statistics
     double total_fhe_time = 0.0;
     double total_fpga_time = 0.0;
@@ -115,38 +100,63 @@ public:
     virtual void init_parameters(bool is_bootstrapping = false);
     virtual void load_model_prepare();
 
-    std::string get_abs_filename(const std::string& json_filename);
-    virtual void init_conv_layer(const std::string& key, const json& layer, const hid_t& h5_file);
-    virtual void init_square_layer(const std::string& key, const json& layer, const hid_t& h5_file);
-    virtual void init_dense_layer(const std::string& key, const json& layer, const hid_t& h5_file);
-    virtual void init_add_layer(const std::string& key, const json& layer, const std::string& block_input_feature);
-    virtual void init_reshape_layer(const std::string& key, const json& layer);
-    virtual void init_mult_scalar_layer(const std::string& key,
-                                        const json& layer,
-                                        const hid_t& h5_file,
-                                        const Duo& block_shape = {128, 256});
-    virtual void init_drop_level_layer(const std::string& key, const json& layer);
-    virtual void init_fhe_avgpool_layer(const std::string& key,
-                                        const json& layer,
-                                        const bool& is_adaptive = true,
-                                        const Duo& block_shape = {128, 256});
-    virtual void init_fhe_avgpool1d_layer(const std::string& key, const json& layer, const bool& is_adaptive = true);
-    void init_multiplexed_conv_layer(const std::string& key,
-                                     const json& layer,
-                                     const hid_t& h5_file,
-                                     const Duo& block_shape_in = {128, 256});
+    template <typename T> T& get_layer(const std::string& key) {
+        auto it = ckks_layers_.find(key);
+        if (it == ckks_layers_.end()) {
+            throw std::runtime_error("layer not found: " + key);
+        }
+        auto* layer = dynamic_cast<T*>(it->second.get());
+        if (layer == nullptr) {
+            throw std::runtime_error("layer type mismatch: " + key);
+        }
+        return *layer;
+    }
 
-    void init_poly_relu_layer(const std::string& key,
-                              const json& layer,
-                              const hid_t& h5_file,
-                              bool is_absorb = true,
-                              const Duo& block_shape_in = {128, 256});
-    void init_concat_layer(const std::string& key, const json& layer);
-    void init_upsample_layer(const std::string& key, const json& layer, const Duo& block_shape = {128, 256});
-    void init_upsample_nearest_layer(const std::string& key, const json& layer);
-    void init_conv1d_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    template <typename T> const T& get_layer(const std::string& key) const {
+        auto it = ckks_layers_.find(key);
+        if (it == ckks_layers_.end()) {
+            throw std::runtime_error("layer not found: " + key);
+        }
+        auto* layer = dynamic_cast<const T*>(it->second.get());
+        if (layer == nullptr) {
+            throw std::runtime_error("layer type mismatch: " + key);
+        }
+        return *layer;
+    }
+
+    template <typename T> void set_layer(const std::string& key, UPtr<T> layer) {
+        ckks_layers_[key] = std::move(layer);
+    }
 
 private:
+    virtual void _init_conv_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    virtual void _init_square_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    virtual void _init_dense_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    virtual void _init_add_layer(const std::string& key, const json& layer, const std::string& block_input_feature);
+    virtual void _init_reshape_layer(const std::string& key, const json& layer);
+    virtual void _init_mult_scalar_layer(const std::string& key,
+                                         const json& layer,
+                                         const hid_t& h5_file,
+                                         const Duo& block_shape = {128, 256});
+    virtual void _init_drop_level_layer(const std::string& key, const json& layer);
+    virtual void _init_fhe_avgpool_layer(const std::string& key,
+                                         const json& layer,
+                                         const bool& is_adaptive = true,
+                                         const Duo& block_shape = {128, 256});
+    virtual void _init_fhe_avgpool1d_layer(const std::string& key, const json& layer, const bool& is_adaptive = true);
+    void _init_multiplexed_conv_layer(const std::string& key,
+                                      const json& layer,
+                                      const hid_t& h5_file,
+                                      const Duo& block_shape_in = {128, 256});
+    void _init_poly_relu_layer(const std::string& key,
+                               const json& layer,
+                               const hid_t& h5_file,
+                               bool is_absorb = true,
+                               const Duo& block_shape_in = {128, 256});
+    void _init_concat_layer(const std::string& key, const json& layer);
+    void _init_upsample_layer(const std::string& key, const json& layer, const Duo& block_shape = {128, 256});
+    void _init_upsample_nearest_layer(const std::string& key, const json& layer);
+    void _init_conv1d_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     template <typename T> void _prepare_layer(const std::string& key, UPtr<T> layer) {
         if (is_lazy) {
             layer->prepare_weight_lazy();
@@ -184,53 +194,18 @@ private:
         return h5_to_array<dim>(h5_file, layer.at(path_key).get<std::string>(), shape, scale);
     }
 
+    std::map<std::string, UPtr<ls::CkksParameter>> ckks_parameters_;
     std::map<std::string, UPtr<Layer>> ckks_layers_;
-
-public:
-    template <typename T> T& get_layer(const std::string& key) {
-        auto it = ckks_layers_.find(key);
-        if (it == ckks_layers_.end()) {
-            throw std::runtime_error("layer not found: " + key);
-        }
-        auto* layer = dynamic_cast<T*>(it->second.get());
-        if (layer == nullptr) {
-            throw std::runtime_error("layer type mismatch: " + key);
-        }
-        return *layer;
-    }
-
-    template <typename T> const T& get_layer(const std::string& key) const {
-        auto it = ckks_layers_.find(key);
-        if (it == ckks_layers_.end()) {
-            throw std::runtime_error("layer not found: " + key);
-        }
-        auto* layer = dynamic_cast<const T*>(it->second.get());
-        if (layer == nullptr) {
-            throw std::runtime_error("layer type mismatch: " + key);
-        }
-        return *layer;
-    }
-
-    template <typename T> void set_layer(const std::string& key, UPtr<T> layer) {
-        ckks_layers_[key] = std::move(layer);
-    }
 };
 
 class InferenceProcess {
 public:
     InferenceProcess() {}
-    InferenceProcess(InitInferenceProcess* fp_in, bool is_fpga_in);
+    InferenceProcess(InitInferenceProcess* fp_in);
     virtual ~InferenceProcess();
     InitInferenceProcess* fp;
-    int task_num;
-    bool is_fpga;
     ComputeDevice compute_device = ComputeDevice::CPU;  // Default to CPU mode
-    Array1D template_vec;
-    json json_data;
-    json json_features;
-    json json_layers;
 
-    std::map<std::string, UPtr<FeatureEncrypted>> intermediate_result;
     std::map<std::string, UPtr<ls::CkksContext>> ckks_contexts;
 
     std::map<std::string, Array<double, 3>> p_feature2d_x;
@@ -243,8 +218,11 @@ public:
     void run_task_plaintext(bool is_mpc = false);
 
     void set_feature(const std::string& feature_id, UPtr<FeatureEncrypted> feature);
-    const FeatureEncrypted& get_feature(const std::string& feature_id);
-    Feature0DEncrypted get_ciphertext_output_feature0D(const std::string& feature_id);
-    Feature1DEncrypted get_ciphertext_output_feature1D(const std::string& feature_id);
-    Feature2DEncrypted get_ciphertext_output_feature2D(const std::string& feature_id);
+    template <typename T> T get_ciphertext_output_feature(const std::string& feature_id) {
+        return dynamic_cast<const T&>(_get_feature(feature_id)).copy();
+    }
+
+private:
+    std::map<std::string, UPtr<FeatureEncrypted>> intermediate_result_;
+    const FeatureEncrypted& _get_feature(const std::string& feature_id);
 };

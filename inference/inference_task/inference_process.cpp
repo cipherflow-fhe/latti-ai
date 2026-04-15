@@ -28,7 +28,7 @@ bool normal_output = false;
 
 Node::Node() {}
 
-InferenceProcess::InferenceProcess(InitInferenceProcess* fp_in, bool is_fpga_in) : task_num(0), is_fpga(is_fpga_in) {
+InferenceProcess::InferenceProcess(InitInferenceProcess* fp_in) {
     fp = fp_in;
 }
 
@@ -99,14 +99,7 @@ int FeatureNode::get_n_ciphertexts(const Duo& block_shape) const {
 InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool is_fpga)
     : project_path(project_path_in) {
     const json& config = read_json(project_path / "task_config.json");
-    task_type = config["task_type"].get<string>();
     pack_style = config["pack_style"].get<string>();
-    n_task = (int)config["task_num"];
-    start_task_id = (int)config["server_start_id"];
-    end_task_id = (int)config["server_end_id"];
-    task_input_param = config["task_input_param"];
-    task_output_param = config["task_output_param"];
-    server_task = config["server_task"];
     if (config["block_shape"].size() == 1) {
         block_shape = {config["block_shape"][0], config["block_shape"][0]};
     } else {
@@ -124,18 +117,18 @@ void InitInferenceProcess::init_parameters(bool is_bootstrapping) {
         for (auto& param : json_params.items()) {
             string key = param.key();
             auto btp_param = CkksBtpParameter::create_parameter();
-            ckks_parameters[key] = MakeU<CkksParameter>(move(btp_param.get_ckks_parameter()));
+            ckks_parameters_[key] = MakeU<CkksParameter>(move(btp_param.get_ckks_parameter()));
         }
     } else {
         for (auto& param : json_params.items()) {
             string key = param.key();
             int n = param.value()["poly_modulus_degree"];
-            ckks_parameters[key] = MakeU<CkksParameter>(CkksParameter::create_parameter(n));
+            ckks_parameters_[key] = MakeU<CkksParameter>(CkksParameter::create_parameter(n));
         }
     }
 }
 
-void InitInferenceProcess::init_conv_layer(const string& key, const json& layer, const hid_t& h5_file) {
+void InitInferenceProcess::_init_conv_layer(const string& key, const json& layer, const hid_t& h5_file) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     int out_level = feature_output.level;
@@ -145,7 +138,7 @@ void InitInferenceProcess::init_conv_layer(const string& key, const json& layer,
         _load_h5_tensor<4>(layer, h5_file, "weight",
                            {feature_output.channel, channel_input, layer["kernel_shape"][0], layer["kernel_shape"][1]});
     auto bias = _load_h5_tensor<1>(layer, h5_file, "bias", {feature_output.channel});
-    CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
+    CkksParameter& param = *ckks_parameters_.at(feature_input.ckks_parameter_id);
     double residual_scale = 1.0;
 
     Duo stride = {layer["stride"][0], layer["stride"][1]};
@@ -163,7 +156,7 @@ void InitInferenceProcess::init_conv_layer(const string& key, const json& layer,
     }
 }
 
-void InitInferenceProcess::init_conv1d_layer(const string& key, const json& layer, const hid_t& h5_file) {
+void InitInferenceProcess::_init_conv1d_layer(const string& key, const json& layer, const hid_t& h5_file) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     int out_level = feature_output.level;
@@ -172,7 +165,7 @@ void InitInferenceProcess::init_conv1d_layer(const string& key, const json& laye
     uint32_t stride = layer["stride"][0];
     uint32_t skip = feature_input.skip[0];
     uint32_t n_channel_per_ct = feature_input.pack_channel_per_ciphertext;
-    CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
+    CkksParameter& param = *ckks_parameters_.at(feature_input.ckks_parameter_id);
 
     auto weight =
         _load_h5_tensor<3>(layer, h5_file, "weight",
@@ -201,13 +194,13 @@ void InitInferenceProcess::init_conv1d_layer(const string& key, const json& laye
     }
 }
 
-void InitInferenceProcess::init_square_layer(const string& key, const json& layer, const hid_t& h5_file) {
+void InitInferenceProcess::_init_square_layer(const string& key, const json& layer, const hid_t& h5_file) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
-    auto squar2d = MakeU<SquareLayer>(*ckks_parameters.at(feature_input.ckks_parameter_id));
+    auto squar2d = MakeU<SquareLayer>(*ckks_parameters_.at(feature_input.ckks_parameter_id));
     _prepare_layer(key, move(squar2d));
 }
 
-void InitInferenceProcess::init_dense_layer(const string& key, const json& layer, const hid_t& h5_file) {
+void InitInferenceProcess::_init_dense_layer(const string& key, const json& layer, const hid_t& h5_file) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     int out_level = feature_output.level;
@@ -215,11 +208,11 @@ void InitInferenceProcess::init_dense_layer(const string& key, const json& layer
     auto weight = _load_h5_tensor<2>(layer, h5_file, "weight", {feature_output.channel, feature_input.channel});
     auto bias = _load_h5_tensor<1>(layer, h5_file, "bias", {feature_output.channel});
 
-    CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
+    CkksParameter& param = *ckks_parameters_.at(feature_input.ckks_parameter_id);
     double residual_scale = 1.0;
 
     auto dense =
-        MakeU<DensePackedLayer>(*ckks_parameters.at(feature_input.ckks_parameter_id), move(weight), move(bias),
+        MakeU<DensePackedLayer>(*ckks_parameters_.at(feature_input.ckks_parameter_id), move(weight), move(bias),
                                 feature_input.pack_channel_per_ciphertext, feature_input.level, 0, residual_scale);
     if (feature_input.special_info_dim == 1) {
         uint32_t shape_1d = feature_input.shape[0];
@@ -245,20 +238,20 @@ void InitInferenceProcess::init_dense_layer(const string& key, const json& layer
     }
 }
 
-void InitInferenceProcess::init_add_layer(const string& key, const json& layer, const string& block_input_feature) {
+void InitInferenceProcess::_init_add_layer(const string& key, const json& layer, const string& block_input_feature) {
     FeatureNode feature_input0(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_input1(json_features[layer["feature_input"][1].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
-    CkksParameter& param = *ckks_parameters.at(feature_input0.ckks_parameter_id);
-    auto add2d = MakeU<AddLayer>(*ckks_parameters.at(feature_input0.ckks_parameter_id));
+    CkksParameter& param = *ckks_parameters_.at(feature_input0.ckks_parameter_id);
+    auto add2d = MakeU<AddLayer>(*ckks_parameters_.at(feature_input0.ckks_parameter_id));
     add2d->target_ckks_scale = feature_output.ckks_scale;
     _prepare_layer(key, move(add2d));
 }
 
-void InitInferenceProcess::init_mult_scalar_layer(const string& key,
-                                                  const json& layer,
-                                                  const hid_t& h5_file,
-                                                  const Duo& block_shape) {
+void InitInferenceProcess::_init_mult_scalar_layer(const string& key,
+                                                   const json& layer,
+                                                   const hid_t& h5_file,
+                                                   const Duo& block_shape) {
     FeatureNode feature_input0(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output0(json_features[layer["feature_output"][0].get<string>()]);
 
@@ -269,7 +262,7 @@ void InitInferenceProcess::init_mult_scalar_layer(const string& key,
         block_expansion = {1, 1};
     }
     Duo upsample_factor = {1, 1};
-    CkksParameter& param = *ckks_parameters.at(feature_input0.ckks_parameter_id);
+    CkksParameter& param = *ckks_parameters_.at(feature_input0.ckks_parameter_id);
 
     double scale = layer["weight_scale"];
     auto weight = gen_random_array<1>({feature_input0.channel}, 1.0);
@@ -282,22 +275,22 @@ void InitInferenceProcess::init_mult_scalar_layer(const string& key,
     _prepare_layer(key, move(mult_scalar), [](MultScalarLayer& layer) { layer.prepare_weight(); });
 }
 
-void InitInferenceProcess::init_drop_level_layer(const string& key, const json& layer) {
+void InitInferenceProcess::_init_drop_level_layer(const string& key, const json& layer) {
     FeatureNode feature_input0(json_features[layer["feature_input"][0].get<string>()]);
-    CkksParameter& param = *ckks_parameters.at(feature_input0.ckks_parameter_id);
+    CkksParameter& param = *ckks_parameters_.at(feature_input0.ckks_parameter_id);
     auto drop_level = MakeU<DropLevelLayer>();
 
     _prepare_layer(key, move(drop_level));
 }
 
-void InitInferenceProcess::init_reshape_layer(const string& key, const json& layer) {
+void InitInferenceProcess::_init_reshape_layer(const string& key, const json& layer) {
     FeatureNode feature_input0(json_features[layer["feature_input"][0].get<string>()]);
 
-    auto reshape = MakeU<ReshapeLayer>(*ckks_parameters.at(feature_input0.ckks_parameter_id));
+    auto reshape = MakeU<ReshapeLayer>(*ckks_parameters_.at(feature_input0.ckks_parameter_id));
     _prepare_layer(key, move(reshape));
 }
 
-void InitInferenceProcess::init_concat_layer(const string& key, const json& layer) {
+void InitInferenceProcess::_init_concat_layer(const string& key, const json& layer) {
     auto concat = MakeU<ConcatLayer>();
 
     auto feature_inputs = layer["feature_input"].get<vector<string>>();
@@ -324,18 +317,18 @@ void InitInferenceProcess::init_concat_layer(const string& key, const json& laye
 
     if (has_uneven) {
         _prepare_layer(key, move(concat), [&](ConcatLayer& layer) {
-            layer.prepare_mask_data(*ckks_parameters.at(ckks_param_id), input_n_channels, pack, shape, skip, level);
+            layer.prepare_mask_data(*ckks_parameters_.at(ckks_param_id), input_n_channels, pack, shape, skip, level);
         });
     } else {
         _prepare_layer(key, move(concat));
     }
 }
 
-void InitInferenceProcess::init_upsample_layer(const string& key, const json& layer, const Duo& block_shape) {
+void InitInferenceProcess::_init_upsample_layer(const string& key, const json& layer, const Duo& block_shape) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
 
-    CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
+    CkksParameter& param = *ckks_parameters_.at(feature_input.ckks_parameter_id);
     Duo block_expansion = {feature_input.shape[0] / block_shape[0], feature_input.shape[1] / block_shape[1]};
     Duo upsample_factor_in = {layer["upsample_factor_in"][0], layer["upsample_factor_in"][1]};
 
@@ -344,11 +337,11 @@ void InitInferenceProcess::init_upsample_layer(const string& key, const json& la
     _prepare_layer(key, move(upsample), [](UpsampleLayer& layer) { layer.prepare_data(); });
 }
 
-void InitInferenceProcess::init_upsample_nearest_layer(const string& key, const json& layer) {
+void InitInferenceProcess::_init_upsample_nearest_layer(const string& key, const json& layer) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
 
-    CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
+    CkksParameter& param = *ckks_parameters_.at(feature_input.ckks_parameter_id);
     Duo upsample_factor_in = {layer["upsample_factor"][0], layer["upsample_factor"][1]};
 
     auto upsample_nearest =
@@ -357,10 +350,10 @@ void InitInferenceProcess::init_upsample_nearest_layer(const string& key, const 
     _prepare_layer(key, move(upsample_nearest));
 }
 
-void InitInferenceProcess::init_multiplexed_conv_layer(const string& key,
-                                                       const json& layer,
-                                                       const hid_t& h5_file,
-                                                       const Duo& block_shape_in) {
+void InitInferenceProcess::_init_multiplexed_conv_layer(const string& key,
+                                                        const json& layer,
+                                                        const hid_t& h5_file,
+                                                        const Duo& block_shape_in) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     int groups = layer["groups"];
@@ -381,7 +374,7 @@ void InitInferenceProcess::init_multiplexed_conv_layer(const string& key,
     }
     auto bias = _load_h5_tensor<1>(layer, h5_file, "bias", {feature_output.channel});
 
-    CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
+    CkksParameter& param = *ckks_parameters_.at(feature_input.ckks_parameter_id);
     double residual_scale = 1.0;
     Duo stride = {layer["stride"][0], layer["stride"][1]};
     Duo upsample_factor_in = {layer["upsample_factor_in"][0], layer["upsample_factor_in"][1]};
@@ -431,17 +424,17 @@ void InitInferenceProcess::init_multiplexed_conv_layer(const string& key,
     }
 }
 
-void InitInferenceProcess::init_poly_relu_layer(const string& key,
-                                                const json& layer,
-                                                const hid_t& h5_file,
-                                                bool is_absorb,
-                                                const Duo& block_shape_in) {
+void InitInferenceProcess::_init_poly_relu_layer(const string& key,
+                                                 const json& layer,
+                                                 const hid_t& h5_file,
+                                                 bool is_absorb,
+                                                 const Duo& block_shape_in) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     uint32_t order = layer["order"];
     auto weight = _load_h5_tensor<2>(layer, h5_file, "weight", {order + 1, feature_input.channel});
 
-    CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
+    CkksParameter& param = *ckks_parameters_.at(feature_input.ckks_parameter_id);
 
     if (feature_input.dim == 1) {
         int skip_val = feature_input.skip[0];
@@ -495,13 +488,13 @@ void InitInferenceProcess::init_poly_relu_layer(const string& key,
     }
 }
 
-void InitInferenceProcess::init_fhe_avgpool_layer(const string& key,
-                                                  const json& layer,
-                                                  const bool& is_adaptive,
-                                                  const Duo& block_shape) {
+void InitInferenceProcess::_init_fhe_avgpool_layer(const string& key,
+                                                   const json& layer,
+                                                   const bool& is_adaptive,
+                                                   const Duo& block_shape) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
-    CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
+    CkksParameter& param = *ckks_parameters_.at(feature_input.ckks_parameter_id);
     Duo block_expansion = {feature_input.shape[0] / block_shape[0], feature_input.shape[1] / block_shape[1]};
     Duo stride = {layer["stride"][0], layer["stride"][1]};
     bool is_big_size = layer["is_big_size"];
@@ -532,9 +525,9 @@ void InitInferenceProcess::init_fhe_avgpool_layer(const string& key,
     }
 }
 
-void InitInferenceProcess::init_fhe_avgpool1d_layer(const string& key, const json& layer, const bool& is_adaptive) {
+void InitInferenceProcess::_init_fhe_avgpool1d_layer(const string& key, const json& layer, const bool& is_adaptive) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
-    CkksParameter& param = *ckks_parameters.at(feature_input.ckks_parameter_id);
+    CkksParameter& param = *ckks_parameters_.at(feature_input.ckks_parameter_id);
     uint32_t stride = layer["stride"][0];
     bool is_big_size = layer["is_big_size"];
     if (is_big_size) {
@@ -555,55 +548,51 @@ void InitInferenceProcess::init_fhe_avgpool1d_layer(const string& key, const jso
 }
 
 void InitInferenceProcess::load_model_prepare() {
-    current_json_path = project_path;
-    json_data = read_json(current_json_path / "nn_layers_ct_0.json");
+    json_data = read_json(project_path / "nn_layers_ct_0.json");
     json_features = json_data.at("feature");
     json_layers = json_data.at("layer");
     string block_input_feature = json_data["input_feature"][0];
-    auto block_shape = this->block_shape;
 
     string h5_filename = project_path / "model_parameters.h5";
     hid_t h5_file = H5Fopen(h5_filename.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
-    json config_json = read_json(project_path / "task_config.json");
     for (auto& layer : json_layers.items()) {
         const string& key = layer.key();
-        // cout << "key=" << key << endl;
         const json& value = layer.value();
         const string& layer_type = value["type"].get<string>();
         if (layer_type == "conv2d") {
             if (pack_style == "multiplexed") {
-                init_multiplexed_conv_layer(key, value, h5_file, block_shape);
+                _init_multiplexed_conv_layer(key, value, h5_file, block_shape);
             } else {
-                init_conv_layer(key, value, h5_file);
+                _init_conv_layer(key, value, h5_file);
             }
         } else if (layer_type == "square2d") {
-            init_square_layer(key, value, h5_file);
+            _init_square_layer(key, value, h5_file);
         } else if (layer_type == "fc0") {
-            init_dense_layer(key, value, h5_file);
+            _init_dense_layer(key, value, h5_file);
         } else if (layer_type == "add2d") {
-            init_add_layer(key, value, block_input_feature);
+            _init_add_layer(key, value, block_input_feature);
         } else if (layer_type == "reshape") {
-            init_reshape_layer(key, value);
+            _init_reshape_layer(key, value);
         } else if (layer_type == "drop_level") {
-            init_drop_level_layer(key, value);
+            _init_drop_level_layer(key, value);
         } else if (layer_type == "concat2d") {
-            init_concat_layer(key, value);
+            _init_concat_layer(key, value);
         } else if (layer_type == "upsample") {
-            init_upsample_layer(key, value, block_shape);
+            _init_upsample_layer(key, value, block_shape);
         } else if (layer_type == "upsample_nearest") {
-            init_upsample_nearest_layer(key, value);
+            _init_upsample_nearest_layer(key, value);
         } else if (layer_type == "mult_scalar") {
-            init_mult_scalar_layer(key, value, h5_file, block_shape);
+            _init_mult_scalar_layer(key, value, h5_file, block_shape);
         } else if (layer_type == "poly_relu2d" || layer_type == "polyact") {
-            init_poly_relu_layer(key, value, h5_file, is_absorb_polyrelu, block_shape);
+            _init_poly_relu_layer(key, value, h5_file, is_absorb_polyrelu, block_shape);
         } else if (layer_type == "avgpool2d") {
             bool is_adaptive_avgpool = value["is_adaptive_avgpool"];
-            init_fhe_avgpool_layer(key, value, is_adaptive_avgpool, block_shape);
+            _init_fhe_avgpool_layer(key, value, is_adaptive_avgpool, block_shape);
         } else if (layer_type == "avgpool1d") {
             bool is_adaptive_avgpool = value["is_adaptive_avgpool"];
-            init_fhe_avgpool1d_layer(key, value, is_adaptive_avgpool);
+            _init_fhe_avgpool1d_layer(key, value, is_adaptive_avgpool);
         } else if (layer_type == "conv1d") {
-            init_conv1d_layer(key, value, h5_file);
+            _init_conv1d_layer(key, value, h5_file);
         }
     }
     H5Fclose(h5_file);
@@ -614,10 +603,9 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
     fp->total_fhe_time = 0.0;
     fp->total_fpga_time = 0.0;
 
-    json_data = read_json(fp->project_path / "nn_layers_ct_0.json");
-    string block_input_feature = json_data["input_feature"][0];
-    json_features = json_data.at("feature");
-    json_layers = json_data.at("layer");
+    const json& json_features = fp->json_features;
+    json json_layers = fp->json_layers;
+    string block_input_feature = fp->json_data["input_feature"][0];
     auto block_shape = fp->block_shape;
 
     // Time statistics for FHE and MPC operations
@@ -631,7 +619,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
             auto feature_output = layer.value()["feature_output"].get<vector<string>>();
             bool tag = false;
             for (const auto& fi : feature_input) {
-                if (intermediate_result.find(fi) == intermediate_result.end()) {
+                if (intermediate_result_.find(fi) == intermediate_result_.end()) {
                     tag = true;
                     break;
                 }
@@ -647,7 +635,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
             cout << ">>> LAYER: " << key << " type=" << layer_type << endl;
             if (layer_type == "conv2d") {
                 fhe_timer.start();
-                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     if (fp->pack_style == "multiplexed") {
@@ -687,7 +675,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.stop();
             } else if (layer_type == "bootstrapping") {
                 const int maximum_refreshed_level = 9;
-                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 FeatureNode output_feature_node(json_features[feature_output_id]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
@@ -712,7 +700,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 }
             } else if (layer_type == "batchnorm" || layer_type == "batchnorm2d" || layer_type == "dropout" ||
                        layer_type == "mul" || layer_type == "identity") {
-                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     result = MakeU<Feature2DEncrypted>(input2D.copy());
@@ -724,7 +712,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 }
             } else if (layer_type == "square2d") {
                 fhe_timer.start();
-                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
 
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
@@ -740,9 +728,9 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.start();
                 double target_ckks_scale = json_features[feature_output[0]]["ckks_scale"];
                 const Feature2DEncrypted& input0 =
-                    dynamic_cast<const Feature2DEncrypted&>(get_feature(feature_input[0]));
+                    dynamic_cast<const Feature2DEncrypted&>(_get_feature(feature_input[0]));
                 const Feature2DEncrypted& input1 =
-                    dynamic_cast<const Feature2DEncrypted&>(get_feature(feature_input[1]));
+                    dynamic_cast<const Feature2DEncrypted&>(_get_feature(feature_input[1]));
                 if (input0.dim == 2 && input1.dim == 2) {
                     result = MakeU<Feature2DEncrypted>(fp->get_layer<AddLayer>(key).run(context, input0, input1));
                 } else {
@@ -752,7 +740,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
             } else if (layer_type == "mult_scalar") {
                 fhe_timer.start();
                 const Feature2DEncrypted& input0 =
-                    dynamic_cast<const Feature2DEncrypted&>(get_feature(feature_input[0]));
+                    dynamic_cast<const Feature2DEncrypted&>(_get_feature(feature_input[0]));
 
                 if (input0.dim == 2) {
                     auto res = fp->get_layer<MultScalarLayer>(key).run(context, input0);
@@ -765,7 +753,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 FeatureNode d_input_node(json_features[feature_input[0]]);
                 FeatureNode d_output_node(json_features[feature_output[0]]);
                 int n_level_to_drop = d_input_node.level - d_output_node.level;
-                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     result = MakeU<Feature2DEncrypted>(input2D.drop_level(n_level_to_drop));
@@ -778,7 +766,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
             } else if (layer_type == "fc0" || layer_type == "fc1") {
                 fhe_timer.start();
                 FeatureNode d_input_node(json_features[feature_input[0]]);
-                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
                     if (d_input_node.special_info_dim == 1) {
@@ -797,7 +785,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.stop();
             } else if (layer_type == "reshape") {
                 fhe_timer.start();
-                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     result = MakeU<Feature0DEncrypted>(fp->get_layer<ReshapeLayer>(key).call(context, input2D));
@@ -819,7 +807,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.stop();
             } else if (layer_type == "avgpool2d") {
                 fhe_timer.start();
-                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
 
@@ -849,7 +837,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.stop();
             } else if (layer_type == "avgpool1d") {
                 fhe_timer.start();
-                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 if (feature_node.dim == 1) {
                     const Feature1DEncrypted& input1D = dynamic_cast<const Feature1DEncrypted&>(feature_node);
 
@@ -874,7 +862,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.start();
                 vector<Feature2DEncrypted> inputs;
                 for (const auto& input_name : feature_input) {
-                    const FeatureEncrypted& input_feature_node = get_feature(input_name);
+                    const FeatureEncrypted& input_feature_node = _get_feature(input_name);
                     if (input_feature_node.dim == 2) {
                         const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(input_feature_node);
                         inputs.emplace_back(input2D.copy());
@@ -887,7 +875,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.stop();
             } else if (layer_type == "upsample") {
                 fhe_timer.start();
-                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     result = MakeU<Feature2DEncrypted>(fp->get_layer<UpsampleLayer>(key).run(context, input2D));
@@ -897,7 +885,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.stop();
             } else if (layer_type == "upsample_nearest") {
                 fhe_timer.start();
-                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     result = MakeU<Feature2DEncrypted>(fp->get_layer<UpsampleNearestLayer>(key).run(context, input2D));
@@ -907,7 +895,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.stop();
             } else if (layer_type == "poly_relu2d" || layer_type == "polyact") {
                 fhe_timer.start();
-                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     if (fp->is_absorb_polyrelu) {
@@ -927,7 +915,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.stop();
             } else if (layer_type == "conv1d") {
                 fhe_timer.start();
-                const FeatureEncrypted& feature_node = get_feature(feature_input[0]);
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 if (feature_node.dim == 1) {
                     const Feature1DEncrypted& input1D = dynamic_cast<const Feature1DEncrypted&>(feature_node);
                     string style = layer.value().value("style", string("ordinary"));
@@ -962,21 +950,20 @@ void InferenceProcess::run_task(bool is_mpc) {
     fp->total_fhe_time = 0.0;
     fp->total_fpga_time = 0.0;
 
-    json_data = read_json(fp->project_path / "nn_layers_ct_0.json");
-    string block_input_feature = json_data["input_feature"][0];
-    json_features = json_data.at("feature");
-    json_layers = json_data.at("layer");
+    const json& json_features = fp->json_features;
+    const json& json_layers = fp->json_layers;
+    string block_input_feature = fp->json_data["input_feature"][0];
     Duo block_shape = fp->block_shape;
 
     vector<CxxVectorArgument> cxx_args;
     UPtr<FeatureEncrypted> result;
 
-    vector<vector<CkksCiphertext>> ct_data(json_data["input_feature"].size());
-    for (int i = 0; i < json_data["input_feature"].size(); i++) {
-        auto ki = json_data["input_feature"][i];
+    vector<vector<CkksCiphertext>> ct_data(fp->json_data["input_feature"].size());
+    for (int i = 0; i < fp->json_data["input_feature"].size(); i++) {
+        auto ki = fp->json_data["input_feature"][i];
         FeatureNode feature_input(json_features[ki.get<string>()]);
         if (feature_input.dim == 2) {
-            const Feature2DEncrypted& input = dynamic_cast<const Feature2DEncrypted&>(get_feature(ki));
+            const Feature2DEncrypted& input = dynamic_cast<const Feature2DEncrypted&>(_get_feature(ki));
             auto _size = input.data.size();
             for (int j = 0; j < _size; j++) {
                 ct_data[i].push_back(input.data[j].copy());
@@ -984,14 +971,14 @@ void InferenceProcess::run_task(bool is_mpc) {
             cxx_args.push_back(CxxVectorArgument{ki, &ct_data[i]});
         }
         if (feature_input.dim == 0) {
-            const Feature0DEncrypted& input = dynamic_cast<const Feature0DEncrypted&>(get_feature(ki));
+            const Feature0DEncrypted& input = dynamic_cast<const Feature0DEncrypted&>(_get_feature(ki));
             for (int j = 0; j < input.data.size(); j++) {
                 ct_data[i].push_back(input.data[j].copy());
             }
             cxx_args.push_back(CxxVectorArgument{ki, &ct_data[i]});
         }
         if (feature_input.dim == 1) {
-            const Feature1DEncrypted& input = dynamic_cast<const Feature1DEncrypted&>(get_feature(ki));
+            const Feature1DEncrypted& input = dynamic_cast<const Feature1DEncrypted&>(_get_feature(ki));
             for (int j = 0; j < input.data.size(); j++) {
                 ct_data[i].push_back(input.data[j].copy());
             }
@@ -1174,9 +1161,9 @@ void InferenceProcess::run_task(bool is_mpc) {
 
     string context_id;
     int level;
-    vector<UPtr<FeatureEncrypted>> output_features(json_data["output_feature"].size());
-    for (int out_idx = 0; out_idx < (int)json_data["output_feature"].size(); out_idx++) {
-        auto ki = json_data["output_feature"][out_idx];
+    vector<UPtr<FeatureEncrypted>> output_features(fp->json_data["output_feature"].size());
+    for (int out_idx = 0; out_idx < (int)fp->json_data["output_feature"].size(); out_idx++) {
+        auto ki = fp->json_data["output_feature"][out_idx];
         FeatureNode feature_output(json_features[ki.get<string>()]);
         context_id = feature_output.ckks_parameter_id;
         level = feature_output.level;
@@ -1241,16 +1228,15 @@ void InferenceProcess::run_task(bool is_mpc) {
         case ComputeDevice::FPGA: throw runtime_error("FPGA mode should use run_task_fpga() instead of run_task_cpu()");
         default: throw runtime_error("Unknown compute device type");
     }
-    for (int out_idx = 0; out_idx < (int)json_data["output_feature"].size(); out_idx++) {
-        auto ki = json_data["output_feature"][out_idx];
+    for (int out_idx = 0; out_idx < (int)fp->json_data["output_feature"].size(); out_idx++) {
+        auto ki = fp->json_data["output_feature"][out_idx];
         set_feature(ki, move(output_features[out_idx]));
     }
 }
 
 void InferenceProcess::run_task_plaintext(bool is_mpc) {
-    const json& json_data = read_json(fp->project_path / "nn_layers_ct_0.json");
-    json json_features = json_data.at("feature");
-    json json_layers = json_data.at("layer");
+    const json& json_features = fp->json_features;
+    json json_layers = fp->json_layers;
 
     while (json_layers.size() > 0) {
         for (auto& layer : json_layers.items()) {
@@ -1458,24 +1444,9 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
 }
 
 void InferenceProcess::set_feature(const string& feature_id, UPtr<FeatureEncrypted> feature) {
-    intermediate_result[feature_id] = move(feature);
+    intermediate_result_[feature_id] = move(feature);
 }
 
-const FeatureEncrypted& InferenceProcess::get_feature(const std::string& feature_id) {
-    return *intermediate_result[feature_id];
-}
-
-Feature0DEncrypted InferenceProcess::get_ciphertext_output_feature0D(const std::string& feature_id) {
-    const Feature0DEncrypted& output = dynamic_cast<const Feature0DEncrypted&>(get_feature(feature_id));
-    return output.copy();
-}
-
-Feature2DEncrypted InferenceProcess::get_ciphertext_output_feature2D(const std::string& feature_id) {
-    const Feature2DEncrypted& output = dynamic_cast<const Feature2DEncrypted&>(get_feature(feature_id));
-    return output.copy();
-}
-
-Feature1DEncrypted InferenceProcess::get_ciphertext_output_feature1D(const std::string& feature_id) {
-    const Feature1DEncrypted& output = dynamic_cast<const Feature1DEncrypted&>(get_feature(feature_id));
-    return output.copy();
+const FeatureEncrypted& InferenceProcess::_get_feature(const std::string& feature_id) {
+    return *intermediate_result_[feature_id];
 }
