@@ -387,7 +387,7 @@ Feature0DEncrypted DensePackedLayer::run_0d_skip(CkksContext& ctx, const Feature
     return result;
 }
 
-Array<double, 1> DensePackedLayer::plaintext_call(const Array<double, 1>& x, double multiplier) {
+Array<double, 1> DensePackedLayer::run_plaintext(const Array<double, 1>& x, double multiplier) {
     Array<double, 1> result({n_out_feature});
     double value = 1.0 / multiplier;
 

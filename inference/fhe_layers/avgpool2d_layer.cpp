@@ -404,7 +404,7 @@ Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x,
     return result;
 }
 
-Array<double, 3> Avgpool2DLayer::plaintext_call(const Array<double, 3>& x) {
+Array<double, 3> Avgpool2DLayer::run_plaintext(const Array<double, 3>& x) {
     std::array<uint64_t, 3UL> input_shape = x.get_shape();
     uint64_t output_height = input_shape[1] / stride[0];
     uint64_t output_width = input_shape[2] / stride[1];
@@ -426,7 +426,7 @@ Array<double, 3> Avgpool2DLayer::plaintext_call(const Array<double, 3>& x) {
     return result;
 }
 
-Array<double, 3> Avgpool2DLayer::plaintext_call_multiplexed(const Array<double, 3>& x) {
+Array<double, 3> Avgpool2DLayer::run_plaintext_multiplexed(const Array<double, 3>& x) {
     std::array<uint64_t, 3UL> input_shape = x.get_shape();
     uint64_t output_height = input_shape[1] / stride[0];
     uint64_t output_width = input_shape[2] / stride[1];
