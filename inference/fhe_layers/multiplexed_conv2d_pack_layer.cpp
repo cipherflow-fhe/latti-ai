@@ -246,7 +246,7 @@ void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation() {
     bias_pt.clear();
     weight_pt.resize(n_weight_pt);
     for (int i = 0; i < n_weight_pt; i++) {
-        weight_pt[i].resize(n_packed_in_channel * cached_n_actual_blocks);
+        weight_pt[i].resize(n_packed_in_channel * n_block_per_ct);
     }
     bias_pt.resize(n_packed_out_channel);
 
@@ -254,7 +254,7 @@ void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation() {
     ctx.resize_copies(n_weight_pt);
 
     parallel_for(n_weight_pt, th_nums, ctx, [&](CkksContext& ctx_copy, int weight_pt_num_idx) {
-        for (int j = 0; j < n_packed_in_channel * cached_n_actual_blocks; ++j) {
+        for (int j = 0; j < n_packed_in_channel * n_block_per_ct; ++j) {
             weight_pt[weight_pt_num_idx][j].resize(kernel_size);
             for (int k = 0; k < kernel_size; ++k) {
                 weight_pt[weight_pt_num_idx][j][k] = generate_weight_pt_for_indices(ctx_copy, weight_pt_num_idx, j, k);
@@ -287,21 +287,6 @@ void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation_lazy() 
     cached_input_block_size = prod(input_shape_ct);
     cached_kernel_size = prod(kernel_shape_);
     cached_total_skip = prod(skip_);
-
-    // Loop-packing: when n_in_channel_ < n_channel_per_ct only n_actual_blocks blocks
-    // carry real data; the rest are zero.  Caching this drives both weight encoding and
-    // the replication step in run_core_for_post_skip_rotation.
-    // The doubling replication is only valid when n_block_per_ct / n_actual_blocks is a
-    // power of 2 (so every block slot gets filled).  Fall back otherwise.
-    int n_actual_blocks_raw = (int)div_ceil(std::min(n_in_channel_, n_channel_per_ct), (uint32_t)prod(skip_));
-    if (n_actual_blocks_raw < (int)n_block_per_ct) {
-        int rot_factor = (int)n_block_per_ct / n_actual_blocks_raw;
-        bool divisible = ((int)n_block_per_ct % n_actual_blocks_raw == 0);
-        bool power_of_2 = (rot_factor & (rot_factor - 1)) == 0;
-        cached_n_actual_blocks = (divisible && power_of_2) ? n_actual_blocks_raw : (int)n_block_per_ct;
-    } else {
-        cached_n_actual_blocks = n_actual_blocks_raw;
-    }
 
     // Cache bias-related values
     cached_bias_skip = zero_inserted_skip;
@@ -463,20 +448,15 @@ MultiplexedConv2DPackedLayer::generate_mask_pt_for_indices_reduct_rot(CkksContex
 
 CkksPlaintextRingt
 MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const {
-    // j is in the loop-packed space: packed_in_channel_idx * n_actual_blocks + block_idx
-    int packed_in_channel_idx = j / cached_n_actual_blocks;
-    int block_idx = j % cached_n_actual_blocks;
+    // Extract indices from j
+    int packed_in_channel_idx = j / n_block_per_ct;
+    int block_idx = j % n_block_per_ct;
     int kernel_idx = k;
 
     // Use cached values
     auto& mask = kernel_masks_[kernel_idx];
     vector<double> w(N / 2, 0.0);
     int base_channel_in = packed_in_channel_idx * n_channel_per_ct;
-
-    // Loop-pack modulus: with n_actual_blocks-periodic input, rotating by block_idx steps
-    // means position t sees original block (t + block_idx) % n_actual_blocks.
-    // channel_in cycles with period n_actual_blocks * total_skip instead of n_channel_per_ct.
-    int loop_period = cached_n_actual_blocks * cached_total_skip;
 
     for (int linear_idx = 0; linear_idx < n_block_per_ct * cached_input_block_size; ++linear_idx) {
         int t = linear_idx / cached_input_block_size;
@@ -488,7 +468,7 @@ MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, i
 
         uint32_t channel_in = base_channel_in + (block_idx * cached_total_skip + t * cached_total_skip +
                                                  (shape_j % skip_[1]) + (shape_i % skip_[0]) * skip_[1]) %
-                                                    loop_period;
+                                                    n_channel_per_ct;
         uint32_t channel_out = ct_idx * n_block_per_ct + (t + n_block_per_ct) % n_block_per_ct;
 
         w[linear_idx] = (channel_in >= n_in_channel_ || channel_out >= n_out_channel_) ?
@@ -641,29 +621,11 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
     vector<CkksCiphertext> result_ct;
     result_ct.resize(n_out_channel_);
 
-    // Loop-packing: if n_in_channel_ < n_channel_per_ct, input CT has only
-    // cached_n_actual_blocks filled blocks.  Replicate with the doubling trick so every
-    // block slot carries data, then only n_actual_blocks block rotations are needed.
-    // Weight encoding already uses loop_period = n_actual_blocks * total_skip as modulus.
-    int n_actual_blocks = cached_n_actual_blocks;
-    int n_rot_factor =
-        (n_actual_blocks > 0 && n_actual_blocks < (int)n_block_per_ct) ? (int)n_block_per_ct / n_actual_blocks : 1;
-    int n_rep_iters = (n_rot_factor > 1) ? (int)std::floor(std::log2((double)n_rot_factor)) : 0;
-
-    uint32_t x_size = x.size();
-    vector<CkksCiphertext> x_rep(x_size);
-    parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
-        x_rep[x_id] = x[x_id].copy();
-        for (int r = 0; r < n_rep_iters; r++) {
-            x_rep[x_id] = ctx_copy.add(
-                x_rep[x_id], ctx_copy.rotate(x_rep[x_id], -(int)std::pow(2, r) * n_actual_blocks * (int)input_ct_size));
-        }
-    });
-
     vector<CkksCiphertext> input_rotated_x;
+    uint32_t x_size = x.size();
     vector<vector<CkksCiphertext>> rotated_tmp(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
-        rotated_tmp[x_id] = populate_rotations_1_side(ctx_copy, x_rep[x_id], n_actual_blocks - 1, input_ct_size);
+        rotated_tmp[x_id] = populate_rotations_1_side(ctx_copy, x[x_id], n_block_per_ct - 1, input_ct_size);
     });
     for (auto& y : rotated_tmp) {
         move(y.begin(), y.end(), back_inserter(input_rotated_x));
@@ -687,8 +649,7 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
     }
     parallel_for(n_weight, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         CkksCiphertext s(0);
-        uint32_t n_j =
-            weight_pt.empty() ? (uint32_t)(n_packed_in_channel * n_actual_blocks) : (uint32_t)weight_pt[ct_idx].size();
+        uint32_t n_j = weight_pt.empty() ? n_packed_in_channel * n_block_per_ct : weight_pt[ct_idx].size();
         for (int j = 0; j < n_j; j++) {
             uint32_t n_k = weight_pt.empty() ? cached_kernel_size : weight_pt[ct_idx][j].size();
             for (int k = 0; k < n_k; k++) {
