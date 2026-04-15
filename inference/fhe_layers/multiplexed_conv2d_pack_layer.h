@@ -74,7 +74,7 @@ private:
     Duo zero_inserted_skip;
 
     // Cached values for on-demand generation
-    uint32_t cached_input_shape_ct[2] = {0, 0};
+    Duo cached_input_shape_ct = {0, 0};
     int cached_input_block_size = 0;
     int cached_kernel_size = 0;
     int cached_total_skip = 0;

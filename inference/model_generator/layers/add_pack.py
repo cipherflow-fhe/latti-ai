@@ -16,6 +16,7 @@
 
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -25,6 +26,18 @@ from inference.lattisense.frontend.custom_task import *
 class AddLayer:
     def __init__(self):
         return
+
+    def get_fhe_op_count(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call() for n_ct pairs, grouped by level.
+
+        Per pair: 1 add (no rescale, all ops at level).
+        """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+
+        ops[lv]['add'] += n_ct
+
+        return dict(ops)
 
     def call(
         self,

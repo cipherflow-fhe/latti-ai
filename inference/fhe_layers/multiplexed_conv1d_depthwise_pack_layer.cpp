@@ -18,6 +18,7 @@
 
 #include "multiplexed_conv1d_depthwise_pack_layer.h"
 #include "conv2d_layer.h"
+#include "layer_util.h"
 #include "util.h"
 #include <cmath>
 
@@ -247,10 +248,10 @@ void MultiplexedDWConv1DPackedLayer::prepare_weight_for_lazy() {
 }
 
 // ---------------------------------------------------------------------------
-// plaintext_call  (reference implementation for correctness verification)
+// run_plaintext  (reference implementation for correctness verification)
 // ---------------------------------------------------------------------------
 
-Array<double, 2> MultiplexedDWConv1DPackedLayer::plaintext_call(const Array<double, 2>& x) {
+Array<double, 2> MultiplexedDWConv1DPackedLayer::run_plaintext(const Array<double, 2>& x) {
     uint32_t output_shape = input_shape / stride;
     Array<double, 2> output({n_channel, output_shape});
     uint32_t padding = kernel_shape / 2;
@@ -305,7 +306,7 @@ vector<CkksCiphertext> MultiplexedDWConv1DPackedLayer::run_core(CkksContext& ctx
     vector<vector<CkksCiphertext>> rotated_x(n_ct);
 
     parallel_for(n_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        rotated_x[ct_idx] = Conv2DLayer::populate_rotations_2_sides(ctx_copy, x[ct_idx], kernel_shape, skip);
+        rotated_x[ct_idx] = populate_rotations_2_sides(ctx_copy, x[ct_idx], kernel_shape, skip);
     });
 
     // ======== 2: mult + add over kernel positions (no cross-ct sum) ========

@@ -18,6 +18,7 @@
 
 #include "conv1d_packed_layer.h"
 #include "conv2d_layer.h"
+#include "layer_util.h"
 #include "util.h"
 
 using namespace std;
@@ -173,7 +174,7 @@ vector<CkksCiphertext> Conv1DPackedLayer::run_core(CkksContext& ctx, std::vector
     vector<CkksCiphertext> input_rotated_x;
     uint32_t rot_num = (n_channel_in < n_channel_per_ct) ? n_channel_in : n_channel_per_ct;
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
-        rotated_tmp[x_id] = Conv2DLayer::populate_rotations_1_side(ctx_copy, x[x_id], rot_num - 1, input_shape * skip);
+        rotated_tmp[x_id] = populate_rotations_1_side(ctx_copy, x[x_id], rot_num - 1, input_shape * skip);
     });
 
     for (auto& y : rotated_tmp) {
@@ -184,7 +185,7 @@ vector<CkksCiphertext> Conv1DPackedLayer::run_core(CkksContext& ctx, std::vector
     std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(rotated_size);
     parallel_for(rotated_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<CkksCiphertext> rotations =
-            Conv2DLayer::populate_rotations_2_sides(ctx_copy, input_rotated_x[ct_idx], kernel_shape, skip);
+            populate_rotations_2_sides(ctx_copy, input_rotated_x[ct_idx], kernel_shape, skip);
         move(rotations.begin(), rotations.end(), back_inserter(rotated_x[ct_idx]));
     });
 
@@ -245,7 +246,7 @@ void Conv1DPackedLayer::mult_add(CkksContext* ctx,
     }
 }
 
-Array<double, 2> Conv1DPackedLayer::plaintext_call(const Array<double, 2>& x) {
+Array<double, 2> Conv1DPackedLayer::run_plaintext(const Array<double, 2>& x) {
     Array<double, 2> output({n_channel_out, input_shape / stride});
     uint32_t padding_shape = kernel_shape / 2;
     Array<double, 2> padding_input({n_channel_in, input_shape + padding_shape * 2});

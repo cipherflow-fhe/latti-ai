@@ -980,7 +980,7 @@ Encrypted fully-connected (dense) layer with packed ciphertext layout. Supports 
 - `Feature0DEncrypted run_0d(CkksContext& ctx, const Feature0DEncrypted& x)` — Execute on 0D encrypted input (0D packing with BSGS)
 - `Feature0DEncrypted run_mult_park(CkksContext& ctx, const Feature2DEncrypted& x)` — Execute on 2D encrypted input (mult-pack)
 - `Feature0DEncrypted run_mult_park(CkksContext& ctx, const Feature0DEncrypted& x)` — Execute on 0D encrypted input (mult-pack)
-- `Array<double, 1> plaintext_call(const Array<double, 1>& x, double multiplier = 1.0)` — Execute on plaintext input (for debugging)
+- `Array<double, 1> run_plaintext(const Array<double, 1>& x, double multiplier = 1.0)` — Execute on plaintext input (for debugging)
 
 ---
 

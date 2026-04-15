@@ -50,6 +50,52 @@ FeatureNode::FeatureNode(const string& node_id_in,
     skip[1] = skip_in[1];
 }
 
+FeatureNode::FeatureNode(const json& json_data)
+    : dim(json_data["dim"]), channel(json_data["channel"]), scale(json_data["scale"]),
+      ckks_parameter_id(json_data["ckks_parameter_id"]), pack_channel_per_ciphertext(json_data["pack_num"]),
+      level(json_data["level"]), ckks_scale(0.0) {
+    if (dim == 2) {
+        shape = {json_data["shape"][0], json_data["shape"][1]};
+        skip = {json_data["skip"][0], json_data["skip"][1]};
+        if (json_data.contains("invalid_fill")) {
+            invalid_fill = {json_data["invalid_fill"][0], json_data["invalid_fill"][1]};
+        }
+    }
+    if (dim == 1) {
+        shape[0] = json_data["shape"][0];
+        skip[0] = json_data["skip"][0];
+    }
+    if (dim == 0) {
+        skip[0] = json_data["skip"];
+        if (json_data.contains("special_info")) {
+            auto& si = json_data["special_info"];
+            skip[0] = json_data["skip"];
+            special_info_dim = si["invalid_fill"].size();
+            if (special_info_dim == 2) {
+                shape = {si["shape"][0], si["shape"][1]};
+                special_skip = {si["skip"][0], si["skip"][1]};
+                invalid_fill = {si["invalid_fill"][0], si["invalid_fill"][1]};
+            } else {
+                // special_info_dim == 1: from 1D feature
+                shape[0] = si["shape"][0];
+                special_skip[0] = si["skip"][0];
+                invalid_fill[0] = si["invalid_fill"][0];
+            }
+        }
+    }
+}
+
+int FeatureNode::get_n_ciphertexts(const Duo& block_shape) const {
+    int n_ciphertexts = div_ceil(channel, (uint32_t)pack_channel_per_ciphertext);
+    if (dim == 2) {
+        if (shape[0] > block_shape[0] || shape[1] > block_shape[1]) {
+            Duo out_block_expansion = {shape[0] / block_shape[0], shape[1] / block_shape[1]};
+            n_ciphertexts *= out_block_expansion[0] * out_block_expansion[1];
+        }
+    }
+    return n_ciphertexts;
+}
+
 InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool is_fpga)
     : project_path(project_path_in) {
     const json& config = read_json(project_path / "task_config.json");
@@ -64,7 +110,7 @@ InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool i
     if (config["block_shape"].size() == 1) {
         block_shape = {config["block_shape"][0], config["block_shape"][0]};
     } else {
-        block_shape = config["block_shape"];
+        block_shape = {config["block_shape"][0], config["block_shape"][1]};
     }
     is_absorb_polyrelu = config["is_absorb_polyrelu"];
     Timer timer(true);
@@ -1193,27 +1239,50 @@ void InferenceProcess::run_task(bool is_mpc) {
 
     string context_id;
     int level;
-    // Each output feature needs its own z_list so that cxx_args entries point to
-    // independent vectors of the correct size for check_signatures validation.
-    vector<vector<CkksCiphertext>> z_lists(json_data["output_feature"].size());
+    vector<unique_ptr<FeatureEncrypted>> output_features(json_data["output_feature"].size());
     for (int out_idx = 0; out_idx < (int)json_data["output_feature"].size(); out_idx++) {
         auto ki = json_data["output_feature"][out_idx];
         FeatureNode feature_output(json_features[ki.get<string>()]);
         context_id = feature_output.ckks_parameter_id;
         level = feature_output.level;
-        int n_out_num = div_ceil(feature_output.channel, feature_output.pack_channel_per_ciphertext);
-        if (feature_output.shape[0] > block_shape[0] || feature_output.shape[1] > block_shape[1]) {
-            Duo out_block_expansion = {feature_output.shape[0] / block_shape[0],
-                                       feature_output.shape[1] / block_shape[1]};
-            n_out_num *= out_block_expansion[0] * out_block_expansion[1];
+        int n_out_num = feature_output.get_n_ciphertexts(block_shape);
+        auto* output_context = ckks_contexts.at(feature_output.ckks_parameter_id).get();
+        double encode_scale = output_context->get_parameter().get_default_scale();
+
+        if (feature_output.dim == 2) {
+            auto output = make_unique<Feature2DEncrypted>(output_context, feature_output.level);
+            output->shape = feature_output.shape;
+            output->skip = feature_output.skip;
+            output->n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
+            output->n_channel = feature_output.channel;
+            for (int i = 0; i < n_out_num; i++) {
+                output->data.push_back(output_context->new_ciphertext(feature_output.level, encode_scale));
+            }
+            cxx_args.push_back(CxxVectorArgument{ki, &output->data});
+            output_features[out_idx] = move(output);
+        } else if (feature_output.dim == 0) {
+            auto output = make_unique<Feature0DEncrypted>(output_context, feature_output.level);
+            output->skip = feature_output.skip[0];
+            output->n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
+            output->n_channel = feature_output.channel;
+            for (int i = 0; i < n_out_num; i++) {
+                output->data.push_back(output_context->new_ciphertext(feature_output.level, encode_scale));
+            }
+            cxx_args.push_back(CxxVectorArgument{ki, &output->data});
+            output_features[out_idx] = move(output);
+        } else if (feature_output.dim == 1) {
+            auto output = make_unique<Feature1DEncrypted>(output_context, feature_output.level, feature_output.skip[0]);
+            output->shape = feature_output.shape[0];
+            output->n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
+            output->n_channel = feature_output.channel;
+            for (int i = 0; i < n_out_num; i++) {
+                output->data.push_back(output_context->new_ciphertext(feature_output.level, encode_scale));
+            }
+            cxx_args.push_back(CxxVectorArgument{ki, &output->data});
+            output_features[out_idx] = move(output);
+        } else {
+            throw runtime_error("Unsupported output feature dimension");
         }
-        double encode_scale =
-            ckks_contexts.at(feature_output.ckks_parameter_id).get()->get_parameter().get_default_scale();
-        for (int i = 0; i < n_out_num; i++) {
-            z_lists[out_idx].push_back((*ckks_contexts.at(feature_output.ckks_parameter_id))
-                                           .new_ciphertext(feature_output.level, encode_scale));
-        }
-        cxx_args.push_back(CxxVectorArgument{ki, &z_lists[out_idx]});
     }
 
     // Dynamically create and run task executors based on the compute_device configuration
@@ -1239,34 +1308,7 @@ void InferenceProcess::run_task(bool is_mpc) {
     }
     for (int out_idx = 0; out_idx < (int)json_data["output_feature"].size(); out_idx++) {
         auto ki = json_data["output_feature"][out_idx];
-        FeatureNode feature_output(json_features[ki.get<string>()]);
-        if (feature_output.dim == 2) {
-            Feature2DEncrypted f2d(ckks_contexts.at(feature_output.ckks_parameter_id).get(), feature_output.level);
-            f2d.data = move(z_lists[out_idx]);
-            f2d.shape = feature_output.shape;
-            f2d.skip = feature_output.skip;
-            f2d.n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
-            f2d.n_channel = feature_output.channel;
-            result = make_unique<Feature2DEncrypted>(move(f2d));
-        }
-        if (feature_output.dim == 0) {
-            Feature0DEncrypted f0d(ckks_contexts.at(feature_output.ckks_parameter_id).get(), feature_output.level);
-            f0d.data = move(z_lists[out_idx]);
-            f0d.skip = feature_output.skip[0];
-            f0d.n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
-            f0d.n_channel = feature_output.channel;
-            result = make_unique<Feature0DEncrypted>(move(f0d));
-        }
-        if (feature_output.dim == 1) {
-            Feature1DEncrypted f1d(ckks_contexts.at(feature_output.ckks_parameter_id).get(), feature_output.level,
-                                   feature_output.skip[0]);
-            f1d.data = move(z_lists[out_idx]);
-            f1d.shape = feature_output.shape[0];
-            f1d.n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
-            f1d.n_channel = feature_output.channel;
-            result = make_unique<Feature1DEncrypted>(move(f1d));
-        }
-        set_feature(ki, move(result));
+        set_feature(ki, move(output_features[out_idx]));
     }
 }
 
@@ -1404,7 +1446,7 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 FeatureNode feature_input0(json_features[feature_input[0]]);
                 auto input0 = p_feature0d_x[feature_input[0]];
                 result0d = fp->ckks_denses[key]
-                               ->plaintext_call(Array<double, 1>::from_array_1d(input0), feature_input0.scale)
+                               ->run_plaintext(Array<double, 1>::from_array_1d(input0), feature_input0.scale)
                                .to_array_1d();
             }
             if (layer_type == "reshape") {
@@ -1423,12 +1465,12 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 bool is_big_size = layer.value()["is_big_size"];
                 if (is_adaptive_avgpool) {
                     result =
-                        Array<double, 3>::from_array_3d(fp->ckks_avgpool[key]->plaintext_call(input0).to_array_3d());
+                        Array<double, 3>::from_array_3d(fp->ckks_avgpool[key]->run_plaintext(input0).to_array_3d());
                 } else {
                     if (is_big_size) {
-                        result = fp->ckks_avgpool[key]->plaintext_call(input0);
+                        result = fp->ckks_avgpool[key]->run_plaintext(input0);
                     } else {
-                        result = fp->ckks_avgpool[key]->plaintext_call_multiplexed(input0);
+                        result = fp->ckks_avgpool[key]->run_plaintext_multiplexed(input0);
                     }
                 }
             }
@@ -1437,12 +1479,12 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 bool is_adaptive_avgpool = layer.value()["is_adaptive_avgpool"];
                 bool is_big_size = layer.value()["is_big_size"];
                 if (is_adaptive_avgpool) {
-                    result1d = fp->ckks_avgpool1d[key]->plaintext_call(input0);
+                    result1d = fp->ckks_avgpool1d[key]->run_plaintext(input0);
                 } else {
                     if (is_big_size) {
-                        result1d = fp->ckks_avgpool1d[key]->plaintext_call(input0);
+                        result1d = fp->ckks_avgpool1d[key]->run_plaintext(input0);
                     } else {
-                        result1d = fp->ckks_avgpool1d[key]->plaintext_call_multiplexed(input0);
+                        result1d = fp->ckks_avgpool1d[key]->run_plaintext_multiplexed(input0);
                     }
                 }
             }
@@ -1452,12 +1494,12 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 if (style == "multiplexed") {
                     int groups = layer.value().value("groups", 1);
                     if (groups == (int)input0.get_shape()[0] && groups != 1) {
-                        result1d = fp->ckks_multiplexed_dw_conv1ds[key]->plaintext_call(input0);
+                        result1d = fp->ckks_multiplexed_dw_conv1ds[key]->run_plaintext(input0);
                     } else {
-                        result1d = fp->ckks_multiplexed_conv1ds[key]->plaintext_call(input0);
+                        result1d = fp->ckks_multiplexed_conv1ds[key]->run_plaintext(input0);
                     }
                 } else {
-                    result1d = fp->ckks_conv1ds[key]->plaintext_call(input0);
+                    result1d = fp->ckks_conv1ds[key]->run_plaintext(input0);
                 }
             }
             if (result.get_size() != 0) {

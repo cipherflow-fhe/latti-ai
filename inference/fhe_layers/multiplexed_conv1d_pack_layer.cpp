@@ -18,6 +18,7 @@
 
 #include "multiplexed_conv1d_pack_layer.h"
 #include "conv2d_layer.h"
+#include "layer_util.h"
 #include "util.h"
 #include <cmath>
 
@@ -226,7 +227,7 @@ void MultiplexedConv1DPackedLayer::prepare_weight_for_lazy() {
     block_select_pt.clear();
 }
 
-Array<double, 2> MultiplexedConv1DPackedLayer::plaintext_call(const Array<double, 2>& x) {
+Array<double, 2> MultiplexedConv1DPackedLayer::run_plaintext(const Array<double, 2>& x) {
     Array<double, 2> output({n_channel_out, input_shape / stride});
     uint32_t padding_shape = kernel_shape / 2;
     Array<double, 2> padding_input({n_channel_in, input_shape + padding_shape * 2});
@@ -285,7 +286,7 @@ vector<CkksCiphertext> MultiplexedConv1DPackedLayer::run_core(CkksContext& ctx, 
     std::vector<std::vector<CkksCiphertext>> rotated_x(rotated_size);
 
     parallel_for(rotated_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        rotated_x[ct_idx] = Conv2DLayer::populate_rotations_2_sides(ctx_copy, x[ct_idx], kernel_shape, skip);
+        rotated_x[ct_idx] = populate_rotations_2_sides(ctx_copy, x[ct_idx], kernel_shape, skip);
     });
 
     // ======== 2: mult + add ========

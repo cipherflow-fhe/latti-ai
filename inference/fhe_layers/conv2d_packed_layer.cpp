@@ -17,6 +17,7 @@
  */
 
 #include "conv2d_packed_layer.h"
+#include "layer_util.h"
 #include "util.h"
 
 #include <array>
@@ -63,7 +64,6 @@ void Conv2DPackedLayer::prepare_weight() {
     const uint32_t kernel_size = kernel_shape_[0] * kernel_shape_[1];
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(n_packed_ct_out_);
 
     parallel_for(n_packed_ct_out_, th_nums, ctx, [&](CkksContext& ctx_copy, int packed_out_ct_idx) {
         weight_pt_[packed_out_ct_idx].resize(n_packed_ct_in_ * n_channel_per_ct_);
