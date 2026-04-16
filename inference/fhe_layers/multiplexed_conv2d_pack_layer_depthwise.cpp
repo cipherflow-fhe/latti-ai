@@ -351,6 +351,9 @@ Array<double, 3> MultiplexedConv2DPackedLayerDepthwise::run_plaintext(const Arra
     }
 
     Array<double, 3> result({n_out_channel_, output_shape[0], output_shape[1]});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int out_channel_idx = 0; out_channel_idx < n_out_channel_; out_channel_idx++) {
         for (const Duo& output_pos : duo_range(output_shape)) {
             double sum = bias_[out_channel_idx];

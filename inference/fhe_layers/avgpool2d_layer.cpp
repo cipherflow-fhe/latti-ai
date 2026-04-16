@@ -403,6 +403,9 @@ Array<double, 3> Avgpool2DLayer::run_plaintext(const Array<double, 3>& x) {
     uint64_t output_height = input_shape[1] / stride[0];
     uint64_t output_width = input_shape[2] / stride[1];
     Array<double, 3> result({input_shape[0], output_height, output_width});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int idx = 0; idx < input_shape[0]; idx++) {
         vector<vector<double>> output(output_height, vector<double>(output_width, 0.0));
         for (int i = 0; i < output_height; i++) {
@@ -425,6 +428,9 @@ Array<double, 3> Avgpool2DLayer::run_plaintext_multiplexed(const Array<double, 3
     uint64_t output_height = input_shape[1] / stride[0];
     uint64_t output_width = input_shape[2] / stride[1];
     Array<double, 3> result({input_shape[0], output_height, output_width});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int idx = 0; idx < input_shape[0]; idx++) {
         vector<vector<double>> output(output_height, vector<double>(output_width, 0.0));
         for (int i = 0; i < output_height; i++) {

@@ -544,6 +544,9 @@ Array<double, 3> InverseMultiplexedConv2DLayerDepthwise::run_plaintext(const Arr
     }
     uint32_t output_shape[]{input_shape[0] / orig_stride[0], input_shape[1] / orig_stride[1]};
     Array<double, 3> result({n_out_channel, output_shape[0], output_shape[1]});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int out_channel_idx = 0; out_channel_idx < n_out_channel; out_channel_idx++) {
         // Depthwise: each output channel only convolves with its own input channel, no sum across channels
         for (int i = 0; i < output_shape[0]; i++) {

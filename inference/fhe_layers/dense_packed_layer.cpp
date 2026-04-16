@@ -406,6 +406,9 @@ Array<double, 1> DensePackedLayer::run_plaintext(const Array<double, 1>& x, doub
     Array<double, 1> result({n_out_feature});
     double value = 1.0 / multiplier;
 
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int out_feature_idx = 0; out_feature_idx < n_out_feature; out_feature_idx++) {
         double s = bias[out_feature_idx];
         for (int in_feature_idx = 0; in_feature_idx < n_in_feature; in_feature_idx++) {

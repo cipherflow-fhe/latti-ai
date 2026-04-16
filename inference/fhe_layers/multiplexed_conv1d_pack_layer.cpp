@@ -242,6 +242,9 @@ Array<double, 2> MultiplexedConv1DPackedLayer::run_plaintext(const Array<double,
         }
     }
 
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int i = 0; i < n_channel_out; i++) {
         for (int j = 0; j < input_shape / stride; j++) {
             double s = bias[i];

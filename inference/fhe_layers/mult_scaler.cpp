@@ -113,6 +113,9 @@ Feature2DEncrypted MultScalarLayer::run(CkksContext& ctx, const Feature2DEncrypt
 Array<double, 3> MultScalarLayer::run_plaintext(const Array<double, 3>& x) {
     int n_out_channel = x.get_shape()[0];
     Array<double, 3> result({x.get_shape()[0], x.get_shape()[1], x.get_shape()[2]});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int in_channel_idx = 0; in_channel_idx < n_out_channel; in_channel_idx++) {
         for (int i = 0; i < input_shape[0]; i++) {
             for (int j = 0; j < input_shape[1]; j++) {

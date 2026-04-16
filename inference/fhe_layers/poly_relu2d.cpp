@@ -246,6 +246,9 @@ Feature2DEncrypted PolyRelu2D::run(CkksContext& ctx, const Feature2DEncrypted& x
 Array<double, 3> PolyRelu2D::run_plaintext_absorb_case(const Array<double, 3>& x) {
     int n_out_channel = x.get_shape()[0];
     Array<double, 3> result({x.get_shape()[0], x.get_shape()[1], x.get_shape()[2]});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int in_channel_idx = 0; in_channel_idx < n_out_channel; in_channel_idx++) {
         for (int i = 0; i < input_shape[0]; i++) {
             for (int j = 0; j < input_shape[1]; j++) {
@@ -264,13 +267,19 @@ Array<double, 3> PolyRelu2D::run_plaintext_absorb_case(const Array<double, 3>& x
 Array<double, 3> PolyRelu2D::run_plaintext_for_non_absorb_case(const Array<double, 3>& x) {
     int n_out_channel = x.get_shape()[0];
     Array<double, 3> result({x.get_shape()[0], x.get_shape()[1], x.get_shape()[2]});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int in_channel_idx = 0; in_channel_idx < n_out_channel; in_channel_idx++) {
         for (int i = 0; i < input_shape[0]; i++) {
             for (int j = 0; j < input_shape[1]; j++) {
                 if (i % zero_skip[0] == 0 && j % zero_skip[1] == 0) {
-                    auto p = weight.get(0, in_channel_idx);
-                    for (int k = 1; k < order + 1; k++) {
-                        p += weight.get(k, in_channel_idx) * pow(x.get(in_channel_idx, i, j), k);
+                    // Horner: w[order] * x^order + ... + w[1]*x + w[0]
+                    // = ((...(w[order] * x + w[order-1]) * x + ...) * x + w[1]) * x + w[0]
+                    double xv = x.get(in_channel_idx, i, j);
+                    double p = weight.get(order, in_channel_idx);
+                    for (int k = order - 1; k >= 0; k--) {
+                        p = p * xv + weight.get(k, in_channel_idx);
                     }
                     result.set(in_channel_idx, i, j, p);
                 }
