@@ -58,4 +58,4 @@ set_target_properties(latti_inference PROPERTIES
     BUILD_WITH_INSTALL_RPATH ON
 )
 
-install(TARGETS latti_inference DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/..)
+install(TARGETS latti_inference DESTINATION ${CMAKE_CURRENT_SOURCE_DIR})
