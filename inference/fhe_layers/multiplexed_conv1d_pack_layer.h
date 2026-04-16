@@ -30,14 +30,17 @@ class MultiplexedConv1DPackedLayer : public Layer {
 public:
     MultiplexedConv1DPackedLayer(const ls::CkksParameter& param_in,
                                  uint32_t input_shape_in,
-                                 const Array<double, 3>& weight_in,
-                                 const Array<double, 1>& bias_in,
+                                 Array<double, 3>&& weight_in,
+                                 Array<double, 1>&& bias_in,
                                  uint32_t stride_in,
                                  uint32_t skip_in,
                                  uint32_t n_channel_per_ct_in,
                                  uint32_t level_in,
                                  double residual_scale = 1.0);
-    void prepare_weight();
+    void prepare_weight() override;
+    void prepare_weight_lazy() override {
+        prepare_weight_for_lazy();
+    }
     void prepare_weight_for_lazy();
 
     // Helper functions to generate weights/bias on-demand (for lazy mode)
@@ -49,7 +52,7 @@ public:
     Feature1DEncrypted run(ls::CkksContext& ctx, Feature1DEncrypted& x);
     virtual std::vector<double> select_tensor(int num) const;
 
-    Array<double, 2> plaintext_call(const Array<double, 2>& x);
+    Array<double, 2> run_plaintext(const Array<double, 2>& x);
 
     std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> weight_pt;
     std::vector<ls::CkksPlaintextRingt> bias_pt;

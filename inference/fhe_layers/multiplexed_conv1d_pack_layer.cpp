@@ -27,14 +27,14 @@ using namespace lattisense;
 
 MultiplexedConv1DPackedLayer::MultiplexedConv1DPackedLayer(const CkksParameter& param_in,
                                                            uint32_t input_shape_in,
-                                                           const Array<double, 3>& weight_in,
-                                                           const Array<double, 1>& bias_in,
+                                                           Array<double, 3>&& weight_in,
+                                                           Array<double, 1>&& bias_in,
                                                            uint32_t stride_in,
                                                            uint32_t skip_in,
                                                            uint32_t n_channel_per_ct_in,
                                                            uint32_t level_in,
                                                            double residual_scale)
-    : Layer(param_in), weight(weight_in.copy()), bias(bias_in.copy()) {
+    : Layer(param_in), weight(move(weight_in)), bias(move(bias_in)) {
     input_shape = input_shape_in;
     skip = skip_in;
     stride = stride_in;
@@ -227,7 +227,7 @@ void MultiplexedConv1DPackedLayer::prepare_weight_for_lazy() {
     block_select_pt.clear();
 }
 
-Array<double, 2> MultiplexedConv1DPackedLayer::plaintext_call(const Array<double, 2>& x) {
+Array<double, 2> MultiplexedConv1DPackedLayer::run_plaintext(const Array<double, 2>& x) {
     Array<double, 2> output({n_channel_out, input_shape / stride});
     uint32_t padding_shape = kernel_shape / 2;
     Array<double, 2> padding_input({n_channel_in, input_shape + padding_shape * 2});
@@ -242,6 +242,9 @@ Array<double, 2> MultiplexedConv1DPackedLayer::plaintext_call(const Array<double
         }
     }
 
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int i = 0; i < n_channel_out; i++) {
         for (int j = 0; j < input_shape / stride; j++) {
             double s = bias[i];

@@ -28,11 +28,11 @@ using namespace lattisense;
 // ======================== PolyReluBase ========================
 
 PolyReluBase::PolyReluBase(const CkksParameter& param_in,
-                           const Array<double, 2>& weight_in,
+                           Array<double, 2>&& weight_in,
                            uint32_t n_channel_per_ct_in,
                            uint32_t level_in,
                            int order_in)
-    : Layer(param_in), weight(weight_in.copy()) {
+    : Layer(param_in), weight(move(weight_in)) {
     order = order_in;
     level_ = level_in;
     n_channel_per_ct = n_channel_per_ct_in;
@@ -444,11 +444,11 @@ std::vector<CkksCiphertext> PolyReluBase::run_core_bsgs(CkksContext& ctx, const 
 // ======================== PolyRelu0D ========================
 
 PolyRelu0D::PolyRelu0D(const CkksParameter& param_in,
-                       const Array<double, 2>& weight_in,
+                       Array<double, 2>&& weight_in,
                        uint32_t level_in,
                        int order_in,
                        int ciphertext_skip_in)
-    : PolyReluBase(param_in, weight_in, param_in.get_n() / 2 / ciphertext_skip_in, level_in, order_in),
+    : PolyReluBase(param_in, move(weight_in), param_in.get_n() / 2 / ciphertext_skip_in, level_in, order_in),
       ciphertext_skip(ciphertext_skip_in) {}
 
 void PolyRelu0D::prepare_weight_0d_skip() {
@@ -459,7 +459,6 @@ void PolyRelu0D::prepare_weight_0d_skip() {
     weight_pt.resize(order + 1);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(order + 1);
     parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int ct_idx = 0; ct_idx < n_packed_out_channel; ct_idx++) {
             vector<double> feature_tmp_pack(ctx_copy.get_parameter().get_n() / 2, 0.0);
@@ -535,7 +534,6 @@ void PolyRelu0D::prepare_weight_2d_multiplexed(const Duo& input_shape_in, const 
     weight_pt.resize(order + 1);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(order + 1);
     parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int ct_idx = 0; ct_idx < n_packed_out_channel; ct_idx++) {
             weight_pt[idx].push_back(generate_weight_pt_multiplexed(ctx_copy, idx, ct_idx));

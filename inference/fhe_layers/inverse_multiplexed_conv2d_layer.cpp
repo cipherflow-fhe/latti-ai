@@ -26,8 +26,8 @@ using namespace lattisense;
 
 InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter& param_in,
                                                              const Duo& input_shape_in,
-                                                             const Array<double, 4>& weight_in,
-                                                             const Array<double, 1>& bias_in,
+                                                             Array<double, 4>&& weight_in,
+                                                             Array<double, 1>&& bias_in,
                                                              const Array<int, 1>& padding_in,
                                                              const Duo& stride_in,
                                                              const Duo& stride_next_in,
@@ -35,12 +35,12 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
                                                              const Duo& block_shape_in,
                                                              uint32_t level_in,
                                                              double residual_scale)
-    : Layer(param_in) {
+    : Layer(param_in), weight(move(weight_in)), bias(move(bias_in)) {
     block_shape[0] = block_shape_in[0];
     block_shape[1] = block_shape_in[1];
     input_shape[0] = input_shape_in[0];
     input_shape[1] = input_shape_in[1];
-    std::array<uint64_t, 4UL> weight_shape = weight_in.get_shape();
+    std::array<uint64_t, 4UL> weight_shape = weight.get_shape();
     n_out_channel = weight_shape[0];
     n_in_channel = weight_shape[1];
     kernel_shape[0] = weight_shape[2];
@@ -94,8 +94,6 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
                                     std::to_string(block_shape[1]) + "]");
     }
 
-    weight = weight_in.copy();
-    bias = bias_in.copy();
     level_ = level_in;
     weight_scale = param_.get_q(level_) * residual_scale;
     N = param_in.get_n();
@@ -113,7 +111,6 @@ void InverseMultiplexedConv2DLayer::prepare_weight() {
     bias_pt.resize(n_out_channel);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(n_out_channel);
 
     int total_kernel_count = kernel_shape[0] * kernel_shape[1] * stride_next[0] * stride_next[1];
     parallel_for(n_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int out_channel_idx) {
@@ -543,6 +540,9 @@ Array<double, 3> InverseMultiplexedConv2DLayer::run_plaintext(const Array<double
     }
     uint32_t output_shape[]{input_shape[0] / orig_stride[0], input_shape[1] / orig_stride[1]};
     Array<double, 3> result({n_out_channel, output_shape[0], output_shape[1]});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int out_channel_idx = 0; out_channel_idx < n_out_channel; out_channel_idx++) {
         vector<vector<double>> output_channel(output_shape[0], vector<double>(output_shape[1], bias[out_channel_idx]));
         for (int in_channel_idx = 0; in_channel_idx < n_in_channel; in_channel_idx++) {

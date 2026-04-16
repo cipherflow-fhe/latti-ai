@@ -36,14 +36,14 @@ using namespace lattisense;
 
 Conv2DPackedLayer::Conv2DPackedLayer(const CkksParameter& param,
                                      const Duo& input_shape,
-                                     const Array<double, 4>& weight,
-                                     const Array<double, 1>& bias,
+                                     Array<double, 4>&& weight,
+                                     Array<double, 1>&& bias,
                                      const Duo& stride,
                                      const Duo& skip,
                                      uint32_t n_channel_per_ct,
                                      uint32_t level,
                                      double residual_scale)
-    : Conv2DLayer(param, input_shape, weight, bias, stride, skip), n_channel_per_ct_(n_channel_per_ct),
+    : Conv2DLayer(param, input_shape, move(weight), move(bias), stride, skip), n_channel_per_ct_(n_channel_per_ct),
       n_packed_ct_in_(div_ceil(n_in_channel_, n_channel_per_ct)),
       n_packed_ct_out_(div_ceil(n_out_channel_, n_channel_per_ct)),
       weight_scale_(param_.get_q(level) * residual_scale) {
@@ -64,7 +64,6 @@ void Conv2DPackedLayer::prepare_weight() {
     const uint32_t kernel_size = kernel_shape_[0] * kernel_shape_[1];
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(n_packed_ct_out_);
 
     parallel_for(n_packed_ct_out_, th_nums, ctx, [&](CkksContext& ctx_copy, int packed_out_ct_idx) {
         weight_pt_[packed_out_ct_idx].resize(n_packed_ct_in_ * n_channel_per_ct_);

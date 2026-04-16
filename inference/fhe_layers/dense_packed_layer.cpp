@@ -28,18 +28,16 @@ using namespace std;
 using namespace lattisense;
 
 DensePackedLayer::DensePackedLayer(const CkksParameter& param_in,
-                                   const Array<double, 2>& weight_in,
-                                   const Array<double, 1>& bias_in,
+                                   Array<double, 2>&& weight_in,
+                                   Array<double, 1>&& bias_in,
                                    uint32_t pack_in,
                                    uint32_t level_in,
                                    int mark_in,
                                    double residual_scale)
-    : Layer(param_in) {
-    auto weight_shape = weight_in.get_shape();
+    : Layer(param_in), weight(move(weight_in)), bias(move(bias_in)) {
+    auto weight_shape = weight.get_shape();
     n_out_feature = weight_shape[0];
     n_in_feature = weight_shape[1];
-    weight = weight_in.copy();
-    bias = bias_in.copy();
     n_channel_per_ct = pack_in;
     n_packed_in_feature = div_ceil(n_in_feature, n_channel_per_ct);
     n_packed_out_feature = div_ceil(n_out_feature, n_channel_per_ct);
@@ -129,6 +127,7 @@ CkksPlaintextRingt DensePackedLayer::generate_bias_0d_pt_for_index(CkksContext& 
 void DensePackedLayer::prepare_weight_for_2d_multiplexed_lazy(const Duo& input_shape_in,
                                                               const Duo& skip_in,
                                                               const Duo& invalid_fill_in) {
+    normal_dense = false;
     special_input_shape[0] = input_shape_in[0];
     special_input_shape[1] = input_shape_in[1];
     special_skip[0] = skip_in[0];
@@ -144,7 +143,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed_lazy(const Duo& input_s
     int valid_skip_1 = special_skip[1] / invalid_fill_in[1];
     int n_channel_per_block = valid_skip_0 * valid_skip_1;
     int n_channel = n_in_feature / (special_input_shape[0] * special_input_shape[1]);
-    n_block_input = div_ceil(n_channel, n_channel_per_block);
+    n_block_input = div_ceil(n_channel, n_channel_per_block * n_block_per_ct) * n_block_per_ct;
 }
 
 CkksPlaintextRingt DensePackedLayer::generate_weight_pt_mult_pack_for_indices(CkksContext& ctx,
@@ -402,10 +401,13 @@ Feature0DEncrypted DensePackedLayer::run_0d_skip(CkksContext& ctx, const Feature
     return result;
 }
 
-Array<double, 1> DensePackedLayer::plaintext_call(const Array<double, 1>& x, double multiplier) {
+Array<double, 1> DensePackedLayer::run_plaintext(const Array<double, 1>& x, double multiplier) {
     Array<double, 1> result({n_out_feature});
     double value = 1.0 / multiplier;
 
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int out_feature_idx = 0; out_feature_idx < n_out_feature; out_feature_idx++) {
         double s = bias[out_feature_idx];
         for (int in_feature_idx = 0; in_feature_idx < n_in_feature; in_feature_idx++) {

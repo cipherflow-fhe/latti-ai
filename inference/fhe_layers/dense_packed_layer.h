@@ -24,8 +24,8 @@
 class DensePackedLayer : public Layer {
 public:
     DensePackedLayer(const ls::CkksParameter& param_in,
-                     const Array<double, 2>& weight_in,
-                     const Array<double, 1>& bias_in,
+                     Array<double, 2>&& weight_in,
+                     Array<double, 1>&& bias_in,
                      uint32_t pack_in,
                      uint32_t level_in,
                      int mark_in,
@@ -46,7 +46,7 @@ public:
     virtual Feature0DEncrypted run_0d_skip(ls::CkksContext& ctx, const Feature0DEncrypted& x);
     virtual Feature0DEncrypted run_2d_multiplexed(ls::CkksContext& ctx, const Feature0DEncrypted& x);
     virtual Feature0DEncrypted run_1d_multiplexed(ls::CkksContext& ctx, const Feature0DEncrypted& x);
-    Array<double, 1> plaintext_call(const Array<double, 1>& x, double multiplier = 1.0);
+    Array<double, 1> run_plaintext(const Array<double, 1>& x, double multiplier = 1.0);
 
     std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt;
     std::vector<ls::CkksPlaintextRingt> bias_pt;

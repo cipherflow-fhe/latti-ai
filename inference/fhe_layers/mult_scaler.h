@@ -26,13 +26,15 @@ class MultScalarLayer : public Layer {
 public:
     MultScalarLayer(const ls::CkksParameter& param_in,
                     const Duo& input_shape_in,
-                    const Array<double, 1>& weight_in,
+                    Array<double, 1>&& weight_in,
                     const Duo& skip_in,
                     uint32_t n_channel_per_ct_in,
                     uint32_t level_in,
                     const Duo& upsample_factor_in = {1, 1},
                     const Duo& block_expansion_in = {1, 1});
-    virtual void prepare_weight();
+    void prepare_weight() override;
+    void prepare_weight_lazy() override;
+    ls::CkksPlaintextRingt generate_weight_pt_for_index(ls::CkksContext& ctx, int i) const;
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
     Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     virtual Array<double, 3> run_plaintext(const Array<double, 3>& x);

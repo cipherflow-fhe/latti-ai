@@ -252,7 +252,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                 if style == 'multiplexed':
                     n_in_channel_per_ct = pack
-                    n_in_channel_per_ct = pack
                     if groups == n_out_channel and groups != 1:
                         conv0_layer = MultiplexedConv2DPackedLayerDepthwise(
                             n_out_channel,
@@ -481,10 +480,16 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         elif layer_config['type'] == 'mult_scalar':
             mult_scalar_layer = MultScalarLayer()
             input_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
-            pt = mult_scalar_layer.make_pt_nodes(layer_id, len(input_nodes))
-            layer_output_nodes = mult_scalar_layer.call(input_nodes, pt)
-            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-            input_args.append(Argument(f'mult_scalar_{layer_id}', pt))
+            if lazy:
+                conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
+                layer_output_nodes = mult_scalar_layer.call_custom_compute(input_nodes, conv_data_source)
+                feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                input_args.append(Argument(f'{layer_id}', [conv_data_source]))
+            else:
+                pt = mult_scalar_layer.make_pt_nodes(layer_id, len(input_nodes))
+                layer_output_nodes = mult_scalar_layer.call(input_nodes, pt)
+                feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                input_args.append(Argument(f'mult_scalar_{layer_id}', pt))
 
         elif layer_config['type'] == 'mult_coeff':
             raise ValueError(
@@ -628,21 +633,52 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         )
                 else:
                     # level_cost=1: non-adaptive avgpool needs mult+rescale (select_tensor)
-                    if is_1d:
+                    if is_1d and lazy:
+                        avg_data_source = CustomDataNode(type='avg_data_source', id=f'{layer_id}')
+                        layer_output_nodes = avgpool.call_custom_compute_multiplexed_avgpool(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                            avg_data_source,
+                            n_in_channel,
+                            n,
+                        )
+                        input_args.append(Argument(f'{layer_id}', [avg_data_source]))
+                    elif is_1d:
                         n_channel_per_ct = int(math.ceil(n / 2 / input_shape[0]))
                         out_channels_per_ct = n_channel_per_ct * stride[0]
+                        n_select_pt = min(n_in_channel, out_channels_per_ct)
+                        select_tensor_pt = [
+                            CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)
+                        ]
+                        layer_output_nodes = avgpool.call_multiplexed_avgpool(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                            select_tensor_pt,
+                            n_in_channel,
+                            n_channel_per_ct,
+                        )
+                        input_args.append(Argument(f'select_tensor_pt_{layer_id}', select_tensor_pt))
+                    elif lazy:
+                        avg_data_source = CustomDataNode(type='avg_data_source', id=f'{layer_id}')
+                        layer_output_nodes = avgpool.call_custom_compute_multiplexed_avgpool(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                            avg_data_source,
+                            n_in_channel,
+                            n,
+                        )
+                        input_args.append(Argument(f'{layer_id}', [avg_data_source]))
                     else:
                         n_channel_per_ct = int(math.ceil(n / 2 / (input_shape[0] * input_shape[1])))
                         out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
-                    n_select_pt = min(n_in_channel, out_channels_per_ct)
-                    select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)]
-                    layer_output_nodes = avgpool.call_multiplexed_avgpool(
-                        feature_id_to_nodes_map[layer_input_feature_ids[0]],
-                        select_tensor_pt,
-                        n_in_channel,
-                        n_channel_per_ct,
-                    )
-                    input_args.append(Argument(f'select_tensor_pt_{layer_id}', select_tensor_pt))
+                        n_select_pt = min(n_in_channel, out_channels_per_ct)
+                        select_tensor_pt = [
+                            CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)
+                        ]
+                        layer_output_nodes = avgpool.call_multiplexed_avgpool(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                            select_tensor_pt,
+                            n_in_channel,
+                            n_channel_per_ct,
+                        )
+                        input_args.append(Argument(f'select_tensor_pt_{layer_id}', select_tensor_pt))
 
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
