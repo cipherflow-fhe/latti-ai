@@ -210,3 +210,22 @@ class Avgpool1DLayer:
                 res.append(sp)
 
         return res
+
+    def call_custom_compute_multiplexed_avgpool(self, x: list, avg_data_source, n_channel: int, n: int) -> list:
+        """Lazy path for 1D multiplexed avgpool: generate select_tensor_pt on-demand."""
+        n_channel_per_ct = int(math.ceil(n / 2 / self.shape))
+        out_channels_per_ct = n_channel_per_ct * self.stride
+        n_select_pt = min(n_channel, out_channels_per_ct)
+
+        select_tensor_pt = []
+        for i in range(n_select_pt):
+            w_pt = CkksPlaintextRingtNode(f'encode_pt_select_1d_{i}')
+            custom_compute(
+                inputs=[avg_data_source],
+                output=w_pt,
+                type='encode_pt',
+                attributes={'op_class': 'Avgpool1DLayer', 'type': 'select_pt', 'i': i},
+            )
+            select_tensor_pt.append(w_pt)
+
+        return self.call_multiplexed_avgpool(x, select_tensor_pt, n_channel, n_channel_per_ct)

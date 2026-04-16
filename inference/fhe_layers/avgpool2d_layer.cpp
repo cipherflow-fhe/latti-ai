@@ -98,7 +98,7 @@ Feature2DEncrypted Avgpool2DLayer::run_adaptive_avgpool(CkksContext& ctx, const 
     return result;
 }
 
-vector<double> Avgpool2DLayer::select_tensor(int num) {
+vector<double> Avgpool2DLayer::select_tensor(int num) const {
     vector<double> tensor;
     for (int k = 0; k < n_block_per_ct; k++) {
         for (int i = 0; i < shape[0] * skip[0]; i++) {
@@ -114,6 +114,25 @@ vector<double> Avgpool2DLayer::select_tensor(int num) {
         }
     }
     return tensor;
+}
+
+void Avgpool2DLayer::prepare_weight_lazy(const CkksParameter& param_in,
+                                         int n_channel_per_ct,
+                                         int n_channel,
+                                         int level,
+                                         const Duo& skip_in,
+                                         const Duo& shape_in) {
+    // 仅缓存参数，不预编码 select_tensor_pt
+    skip = skip_in;
+    n_block_per_ct = div_ceil(n_channel_per_ct, (skip[0] * skip[1]));
+    shape = shape_in;
+    level_ = level;
+    n_channel_ = n_channel;
+}
+
+CkksPlaintextRingt Avgpool2DLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int i) const {
+    vector<double> si = select_tensor(i);
+    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_));
 }
 
 void Avgpool2DLayer::prepare_weight(const CkksParameter& param_in,

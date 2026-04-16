@@ -35,13 +35,20 @@ public:
     Feature2DEncrypted run_adaptive_avgpool(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     Array<double, 3> run_plaintext(const Array<double, 3>& x);
     Array<double, 3> run_plaintext_multiplexed(const Array<double, 3>& x);
-    std::vector<double> select_tensor(int num);
+    std::vector<double> select_tensor(int num) const;
     void prepare_weight(const ls::CkksParameter& param_in,
                         int n_channel_per_ct,
                         int n_channel,
                         int level,
                         const Duo& skip_in,
                         const Duo& shape_in);
+    void prepare_weight_lazy(const ls::CkksParameter& param_in,
+                             int n_channel_per_ct,
+                             int n_channel,
+                             int level,
+                             const Duo& skip_in,
+                             const Duo& shape_in);
+    ls::CkksPlaintextRingt generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int i) const;
     Feature2DEncrypted run_multiplexed_avgpool(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     Feature2DEncrypted run_split_avgpool(ls::CkksContext& ctx, const Feature2DEncrypted& x, const Duo block_expansion);
     void prepare_weight_repack(const ls::CkksParameter& param_in,
