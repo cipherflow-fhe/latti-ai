@@ -25,8 +25,8 @@ class MultiplexedConv2DPackedLayer : public Conv2DLayer {
 public:
     MultiplexedConv2DPackedLayer(const ls::CkksParameter& param_in,
                                  const Duo& input_shape_in,
-                                 const Array<double, 4>& weight_in,
-                                 const Array<double, 1>& bias_in,
+                                 Array<double, 4>&& weight_in,
+                                 Array<double, 1>&& bias_in,
                                  const Duo& stride_in,
                                  const Duo& skip_in,
                                  uint32_t n_channel_per_ct_in,
@@ -34,8 +34,13 @@ public:
                                  double residual_scale = 1.0,
                                  const Duo& upsample_factor_in = {1, 1});
 
-    virtual void prepare_weight_for_reduct_rot();
-    virtual void prepare_weight_for_reduct_rot_lazy();
+    void prepare_weight() override {
+        prepare_weight_for_post_skip_rotation();
+    }
+    void prepare_weight_lazy() override {
+        prepare_weight_for_post_skip_rotation_lazy();
+    }
+    // virtual void prepare_weight_for_reduct_rot();
     virtual void prepare_weight_for_post_skip_rotation();
     virtual void prepare_weight_for_post_skip_rotation_lazy();
 

@@ -25,13 +25,13 @@ using namespace lattisense;
 // ======================== PolyRelu1D ========================
 
 PolyRelu1D::PolyRelu1D(const CkksParameter& param_in,
-                       const Array<double, 2>& weight_in,
+                       Array<double, 2>&& weight_in,
                        uint32_t level_in,
                        int order_in,
                        int skip_in,
                        int shape_in)
     : PolyReluBase(param_in,
-                   weight_in,
+                   move(weight_in),
                    param_in.get_n() / 2 / (shape_in * skip_in),  // n_channel_per_ct for mode 1
                    level_in,
                    order_in),

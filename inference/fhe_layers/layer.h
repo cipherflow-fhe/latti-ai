@@ -29,6 +29,9 @@ public:
     explicit Layer(const ls::CkksParameter& param) : param_(param.copy()) {}
     virtual ~Layer() = default;
 
+    virtual void prepare_weight() {}
+    virtual void prepare_weight_lazy() {}
+
     Layer(const Layer&) = delete;
     Layer& operator=(const Layer&) = delete;
     Layer(Layer&&) noexcept = default;

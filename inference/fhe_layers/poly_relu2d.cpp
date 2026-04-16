@@ -28,14 +28,14 @@ using namespace lattisense;
 PolyRelu2D::PolyRelu2D(const CkksParameter& param_in,
                        const Duo& input_shape_in,
                        const int order_in,
-                       const Array<double, 2>& weight_in,
+                       Array<double, 2>&& weight_in,
                        const Duo& skip_in,
                        uint32_t n_channel_per_ct_in,
                        uint32_t level_in,
                        const Duo& zero_skip_in,
                        const Duo& block_expansion_in,
                        bool is_ordinary_pack_in)
-    : PolyReluBase(param_in, weight_in, n_channel_per_ct_in, level_in, order_in), input_shape(input_shape_in),
+    : PolyReluBase(param_in, move(weight_in), n_channel_per_ct_in, level_in, order_in), input_shape(input_shape_in),
       skip(skip_in) {
     if ((input_shape[0] & (input_shape[0] - 1)) != 0 || (input_shape[1] & (input_shape[1] - 1)) != 0) {
         throw std::invalid_argument("input_shape must be powers of 2, got: [" + std::to_string(input_shape[0]) + ", " +

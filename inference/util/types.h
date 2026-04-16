@@ -20,7 +20,14 @@
 
 #include <cstdint>
 #include <vector>
+#include <memory>
 #include <array>
+
+template <typename T> using UPtr = std::unique_ptr<T>;
+
+template <typename T, typename... Args> auto MakeU(Args&&... args) -> decltype(auto) {
+    return std::make_unique<T>(std::forward<Args>(args)...);
+}
 
 using Array1D = std::vector<double>;
 using Array1DUint = std::vector<uint64_t>;
