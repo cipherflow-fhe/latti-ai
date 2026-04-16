@@ -63,7 +63,7 @@ Feature1DEncrypted Avgpool1DLayer::run_adaptive_avgpool(CkksContext& ctx, const 
     return result;
 }
 
-vector<double> Avgpool1DLayer::select_tensor(int num) {
+vector<double> Avgpool1DLayer::select_tensor(int num) const {
     vector<double> tensor;
     for (int k = 0; k < n_block_per_ct; k++) {
         for (int i = 0; i < shape * skip; i++) {
@@ -75,6 +75,23 @@ vector<double> Avgpool1DLayer::select_tensor(int num) {
         }
     }
     return tensor;
+}
+
+void Avgpool1DLayer::prepare_weight_lazy(const CkksParameter& param_in,
+                                         int n_channel_per_ct,
+                                         int n_channel,
+                                         int level,
+                                         uint32_t skip_in,
+                                         uint32_t shape_in) {
+    skip = skip_in;
+    n_block_per_ct = div_ceil(n_channel_per_ct, skip);
+    shape = shape_in;
+    level_ = level;
+}
+
+CkksPlaintextRingt Avgpool1DLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int i) const {
+    vector<double> si = select_tensor(i);
+    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_));
 }
 
 void Avgpool1DLayer::prepare_weight(const CkksParameter& param_in,
@@ -164,10 +181,13 @@ Feature1DEncrypted Avgpool1DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
     return result;
 }
 
-Array<double, 2> Avgpool1DLayer::plaintext_call(const Array<double, 2>& x) {
+Array<double, 2> Avgpool1DLayer::run_plaintext(const Array<double, 2>& x) {
     std::array<uint64_t, 2UL> input_shape = x.get_shape();
     uint64_t output_length = input_shape[1] / stride;
     Array<double, 2> result({input_shape[0], output_length});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int idx = 0; idx < input_shape[0]; idx++) {
         for (int i = 0; i < output_length; i++) {
             double sum = 0.0;
@@ -180,10 +200,13 @@ Array<double, 2> Avgpool1DLayer::plaintext_call(const Array<double, 2>& x) {
     return result;
 }
 
-Array<double, 2> Avgpool1DLayer::plaintext_call_multiplexed(const Array<double, 2>& x) {
+Array<double, 2> Avgpool1DLayer::run_plaintext_multiplexed(const Array<double, 2>& x) {
     std::array<uint64_t, 2UL> input_shape = x.get_shape();
     uint64_t output_length = input_shape[1] / stride;
     Array<double, 2> result({input_shape[0], output_length});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int idx = 0; idx < input_shape[0]; idx++) {
         for (int i = 0; i < output_length; i++) {
             double sum = 0.0;

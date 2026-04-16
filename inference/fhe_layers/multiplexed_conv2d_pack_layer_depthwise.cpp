@@ -28,14 +28,14 @@ using namespace lattisense;
 
 MultiplexedConv2DPackedLayerDepthwise::MultiplexedConv2DPackedLayerDepthwise(const CkksParameter& param_in,
                                                                              const Duo& input_shape_in,
-                                                                             const Array<double, 4>& weight_in,
-                                                                             const Array<double, 1>& bias_in,
+                                                                             Array<double, 4>&& weight_in,
+                                                                             Array<double, 1>&& bias_in,
                                                                              const Duo& stride_in,
                                                                              const Duo& skip_in,
                                                                              uint32_t n_channel_per_ct_in,
                                                                              uint32_t level_in,
                                                                              double residual_scale)
-    : Conv2DLayer(param_in, input_shape_in, weight_in, bias_in, stride_in, skip_in) {
+    : Conv2DLayer(param_in, input_shape_in, move(weight_in), move(bias_in), stride_in, skip_in) {
     const uint32_t output_channels_per_ct = n_channel_per_ct_in * prod(stride_);
 
     n_channel_per_ct = n_channel_per_ct_in;
@@ -56,7 +56,6 @@ void MultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
     bias_pt.resize(n_packed_out_channel);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(n_packed_in_channel);
 
     parallel_for(n_packed_in_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int n_packed_out_channel_idx) {
         weight_pt[n_packed_out_channel_idx].resize(kernel_size);
@@ -352,6 +351,9 @@ Array<double, 3> MultiplexedConv2DPackedLayerDepthwise::run_plaintext(const Arra
     }
 
     Array<double, 3> result({n_out_channel_, output_shape[0], output_shape[1]});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int out_channel_idx = 0; out_channel_idx < n_out_channel_; out_channel_idx++) {
         for (const Duo& output_pos : duo_range(output_shape)) {
             double sum = bias_[out_channel_idx];

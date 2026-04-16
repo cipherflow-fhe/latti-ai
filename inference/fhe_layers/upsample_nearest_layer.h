@@ -34,8 +34,8 @@ public:
                          const uint32_t& n_channel_per_ct_in,
                          const uint32_t& level_in);
     std::vector<double> select_tensor(int num) const;
-    void prepare_weight();
-    void prepare_weight_lazy();
+    void prepare_weight() override;
+    void prepare_weight_lazy() override;
     Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     Array<double, 3> run_plaintext(const Array<double, 3>& x);
 
@@ -51,7 +51,7 @@ public:
 
 private:
     // Cached values for on-demand generation
-    uint32_t cached_block_size;
-    uint32_t cached_skip_div_upsample_0;
-    uint32_t cached_skip_div_upsample_1;
+    uint32_t cached_block_size = 0;
+    uint32_t cached_skip_div_upsample_0 = 0;
+    uint32_t cached_skip_div_upsample_1 = 0;
 };

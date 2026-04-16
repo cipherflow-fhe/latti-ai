@@ -36,14 +36,14 @@ using namespace lattisense;
 
 Conv2DPackedDepthwiseLayer::Conv2DPackedDepthwiseLayer(const CkksParameter& param,
                                                        const Duo& input_shape,
-                                                       const Array<double, 4>& weight,
-                                                       const Array<double, 1>& bias,
+                                                       Array<double, 4>&& weight,
+                                                       Array<double, 1>&& bias,
                                                        const Duo& stride,
                                                        const Duo& skip,
                                                        uint32_t n_channel_per_ct,
                                                        uint32_t level,
                                                        double residual_scale)
-    : Conv2DLayer(param, input_shape, weight, bias, stride, skip), n_channel_per_ct_(n_channel_per_ct),
+    : Conv2DLayer(param, input_shape, move(weight), move(bias), stride, skip), n_channel_per_ct_(n_channel_per_ct),
       n_packed_in_ct_(div_ceil(n_in_channel_, n_channel_per_ct)),
       n_packed_out_ct_(div_ceil(n_out_channel_, n_channel_per_ct)) {
     level_ = level;
@@ -59,7 +59,6 @@ void Conv2DPackedDepthwiseLayer::prepare_weight() {
     bias_pt_.resize(n_packed_out_ct_);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(n_packed_out_ct_);
 
     const uint32_t kernel_size = kernel_shape_[0] * kernel_shape_[1];
     parallel_for(n_packed_out_ct_, th_nums, ctx, [&](CkksContext& ctx_copy, int packed_out_ct_idx) {

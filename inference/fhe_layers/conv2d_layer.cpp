@@ -36,13 +36,12 @@ using namespace lattisense;
 
 Conv2DLayer::Conv2DLayer(const CkksParameter& param,
                          const Duo& input_shape,
-                         const Array<double, 4>& weight,
-                         const Array<double, 1>& bias,
+                         Array<double, 4>&& weight,
+                         Array<double, 1>&& bias,
                          const Duo& stride,
                          const Duo& skip)
-    : Layer(param), input_shape_(input_shape), stride_(stride), skip_(skip), weight_(weight.copy()),
-      bias_(bias.copy()) {
-    const auto weight_shape = weight.get_shape();
+    : Layer(param), input_shape_(input_shape), stride_(stride), skip_(skip), weight_(move(weight)), bias_(move(bias)) {
+    const auto weight_shape = weight_.get_shape();
     n_out_channel_ = weight_shape[0];
     n_in_channel_ = weight_shape[1];
     kernel_shape_ = {static_cast<uint32_t>(weight_shape[2]), static_cast<uint32_t>(weight_shape[3])};
