@@ -1462,7 +1462,6 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
     vector<CxxVectorArgument> cxx_args;
     unique_ptr<FeatureEncrypted> result;
 
-    // 1. 准备输入密文
     vector<vector<CkksCiphertext>> ct_data(json_data["input_feature"].size());
     for (int i = 0; i < (int)json_data["input_feature"].size(); i++) {
         auto ki = json_data["input_feature"][i];
