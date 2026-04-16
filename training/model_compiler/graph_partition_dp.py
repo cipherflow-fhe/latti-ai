@@ -125,6 +125,28 @@ def get_restoring_score(dag, restore_node, param_dict):
     return s_param.get_score()
 
 
+def reconstruct_graph_from_vec(
+    graph_vec: np.ndarray, template_graph: nx.DiGraph, node_to_idx: dict[FeatureNode, int]
+) -> nx.DiGraph:
+    new_graph = nx.DiGraph()
+    idx_to_node = {idx: node for node, idx in node_to_idx.items()}
+    for node in template_graph.nodes:
+        if isinstance(node, ComputeNode):
+            new_graph.add_node(node, **template_graph.nodes[node])
+        else:
+            node_idx = node_to_idx[node]
+            new_node = copy.deepcopy(node)
+            new_graph.add_node(new_node, **template_graph.nodes[node])
+            new_graph.nodes[new_node]['level'] = graph_vec[node_idx]
+
+    for u, v in template_graph.edges:
+        u_node = idx_to_node[node_to_idx[u]] if isinstance(u, FeatureNode) else u
+        v_node = idx_to_node[node_to_idx[v]] if isinstance(v, FeatureNode) else v
+        new_graph.add_edge(u_node, v_node)
+
+    return new_graph
+
+
 def update_btp_to_mpc_refresh(graph: LayerAbstractGraph):
     for node in graph.dag.nodes:
         if isinstance(node, ComputeNode):
@@ -231,16 +253,13 @@ class GraphPartitioner:
             dag.nodes[new_node]['level'] = terminal_lv
             for node_max_lv in pred_frontier:
                 frontier_lvs.append(
-                    list(range(dag.nodes[leading_comp]['level_cost'], node_max_lv.level + 1)) + [AUX_LV]
+                    list(range(dag.nodes[leading_comp]['level_cost'] + terminal_lv, node_max_lv.level + 1)) + [AUX_LV]
                 )
             for node_max_lv in other_frontier:
                 frontier_lvs.append(list(range(node_max_lv.level + 1)) + [AUX_LV])
 
             frontier_lv_product = product(*frontier_lvs)
 
-            lowest_cost = float('inf')
-            best_lv_comb = None
-            best_sol_graph_vec = None
             for lv_comb in frontier_lv_product:
                 frontier_key = []
                 new_frontier_key = []
@@ -297,7 +316,7 @@ class GraphPartitioner:
                     sol_graph_vec_aux_lv[node_to_idx[new_node]] = AUX_LV
                     sol_aux_lv_score = get_restoring_score(dag, leading_comp, self.param_dict)
                     aux_lv_solutions[tuple(sol_key)] = (
-                        lowest_cost + sol_aux_lv_score,
+                        solution[0] + sol_aux_lv_score,
                         sol_graph_vec_aux_lv,
                     )
 
@@ -325,12 +344,14 @@ class GraphPartitioner:
         #         node.ckks_parameter_id = 'param0'
         sorted_nodes = list(nx.topological_sort(H))
 
+        idx = 0
         node_to_idx = {}
         idx_to_node = {}
-        for idx, node in enumerate(sorted_nodes):
+        for node in sorted_nodes:
             if isinstance(node, FeatureNode):
                 node_to_idx[node] = idx
                 idx_to_node[idx] = node
+                idx += 1
         frontier: list[NodeLevel] = []
         processed_feature_nodes: set[FeatureNode] = set()
 
@@ -347,7 +368,7 @@ class GraphPartitioner:
 
         frontier_indices = [x.node_idx for x in frontier]
         for lv_comb in product(range(config.fhe_param.max_level + 1), repeat=len(frontier)):
-            init_graph_vec = np.zeros(len(sorted_nodes), dtype=np.uint8)
+            init_graph_vec = np.zeros(len(node_to_idx), dtype=np.uint8)
             node_lv: list[NodeLevel] = []
             for idx, lv in zip(frontier_indices, lv_comb):
                 node_lv.append(NodeLevel(idx, lv))
@@ -366,6 +387,8 @@ class GraphPartitioner:
 
         final_solution_frontier = tuple(sorted((NodeLevel(x.node_idx, 0) for x in frontier), key=lambda x: x.node_idx))
         final_score, final_dag_vec = frontier_solutions[final_solution_frontier]
+
+        final_dag = reconstruct_graph_from_vec(final_dag_vec, H, node_to_idx)
 
         temp_ab = LayerAbstractGraph()
         temp_ab.dag = final_dag
