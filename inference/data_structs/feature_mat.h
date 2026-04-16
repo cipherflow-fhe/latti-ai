@@ -24,6 +24,7 @@
 class FeatureMatEncrypted : public FeatureEncrypted {
 public:
     Duo shape = {0, 0};  // {rows (L), cols (C)}
+    uint32_t matmul_block_size = 0;
     std::vector<ls::CkksCiphertext> data;
     std::vector<ls::CkksCompressedCiphertext> data_compress;
 
@@ -48,5 +49,7 @@ public:
 
     void decompress();
 
+    Bytes serialize() const override;
+    void deserialize(const Bytes& bytes) override;
     FeatureMatEncrypted drop_level(int n_level_to_drop) const;
 };

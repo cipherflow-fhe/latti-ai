@@ -23,13 +23,13 @@ using namespace lattisense;
 
 MultScalarLayer::MultScalarLayer(const CkksParameter& param_in,
                                  const Duo& input_shape_in,
-                                 const Array<double, 1>& weight_in,
+                                 Array<double, 1>&& weight_in,
                                  const Duo& skip_in,
                                  uint32_t n_channel_per_ct_in,
                                  uint32_t level_in,
                                  const Duo& upsample_factor_in,
                                  const Duo& block_expansion_in)
-    : Layer(param_in), input_shape(input_shape_in), weight(weight_in.copy()), skip(skip_in) {
+    : Layer(param_in), input_shape(input_shape_in), weight(move(weight_in)), skip(skip_in) {
     if ((input_shape[0] & (input_shape[0] - 1)) != 0 || (input_shape[1] & (input_shape[1] - 1)) != 0) {
         throw std::invalid_argument("input_shape must be powers of 2, got: [" + std::to_string(input_shape[0]) + ", " +
                                     std::to_string(input_shape[1]) + "]");
