@@ -30,18 +30,12 @@ class Conv2DLayer : public Layer {
 public:
     Conv2DLayer(const ls::CkksParameter& param,
                 const Duo& input_shape,
-                const Array<double, 4>& weight,
-                const Array<double, 1>& bias,
+                Array<double, 4>&& weight,
+                Array<double, 1>&& bias,
                 const Duo& stride,
                 const Duo& skip);
 
     Array<double, 3> run_plaintext(const Array<double, 3>& x, double multiplier = 1.0);
-
-    static std::vector<ls::CkksCiphertext>
-    populate_rotations_1_side(ls::CkksContext& ctx, const ls::CkksCiphertext& x, int n_rotation, int unit);
-
-    static std::vector<ls::CkksCiphertext>
-    populate_rotations_2_sides(ls::CkksContext& ctx, const ls::CkksCiphertext& x, int n_rotation, int unit);
 
     Array<double, 4> weight_;
 
@@ -64,13 +58,8 @@ protected:
 
     std::vector<int> input_rotate_units_;
 
-    void compute_output_element(Array<double, 3>& result,
-                                uint32_t out_ch,
-                                uint32_t out_i,
-                                uint32_t out_j,
-                                const std::vector<double>& padded_input,
-                                uint32_t padded_h,
-                                uint32_t padded_w,
-                                const std::array<uint32_t, 2>& output_shape,
-                                double weight_scale) const;
+    double compute_output_element(uint32_t out_ch,
+                                  const Duo& output_pos,
+                                  const Array<double, 3>& padded_input,
+                                  double weight_scale) const;
 };

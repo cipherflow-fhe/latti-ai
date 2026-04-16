@@ -25,13 +25,13 @@ using namespace cxx_sdk_v2;
 // ======================== PolyRelu1D ========================
 
 PolyRelu1D::PolyRelu1D(const CkksParameter& param_in,
-                       const Array<double, 2>& weight_in,
+                       Array<double, 2>&& weight_in,
                        uint32_t level_in,
                        int order_in,
                        int skip_in,
                        int shape_in)
     : PolyReluBase(param_in,
-                   weight_in,
+                   move(weight_in),
                    param_in.get_n() / 2 / (shape_in * skip_in),  // n_channel_per_ct for mode 1
                    level_in,
                    order_in),
@@ -96,7 +96,6 @@ void PolyRelu1D::prepare_weight_bsgs() {
     weight_pt.resize(order + 1);
 
     CkksContext ctx = CkksContext::create_empty_context(param_);
-    ctx.resize_copies(order + 1);
     parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int ct_idx = 0; ct_idx < n_ct; ct_idx++) {
             weight_pt[idx].push_back(generate_weight_pt_skip1d(ctx_copy, idx, ct_idx));
@@ -112,7 +111,6 @@ void PolyRelu1D::prepare_weight_bsgs_mux() {
     weight_pt.resize(order + 1);
 
     CkksContext ctx = CkksContext::create_empty_context(param_);
-    ctx.resize_copies(order + 1);
     parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int ct_idx = 0; ct_idx < n_ct; ct_idx++) {
             weight_pt[idx].push_back(generate_weight_pt_mux1d(ctx_copy, idx, ct_idx));

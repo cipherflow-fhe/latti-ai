@@ -34,7 +34,7 @@ struct PowerInfo {
 class PolyReluBase : public Layer {
 public:
     PolyReluBase(const ls::CkksParameter& param_in,
-                 const Array<double, 2>& weight_in,
+                 Array<double, 2>&& weight_in,
                  uint32_t n_channel_per_ct_in,
                  uint32_t level_in,
                  int order_in);
@@ -84,10 +84,17 @@ public:
     //   Case 1 (Feature0DEncrypted::pack): n_channel_per_ct = N/2 / skip
     //   Case 2 (ReshapeLayer):             n_channel_per_ct = N/2 / (shape[0]*skip2d[0]*shape[1]*skip2d[1])
     PolyRelu0D(const ls::CkksParameter& param_in,
-               const Array<double, 2>& weight_in,
+               Array<double, 2>&& weight_in,
                uint32_t level_in,
                int order_in,
                int skip_in);
+
+    void prepare_weight() override {
+        prepare_weight_0d_skip();
+    }
+    void prepare_weight_lazy() override {
+        prepare_weight_0d_skip_lazy();
+    }
 
     // Mode 1: direct 0D pack — channel ch at slot ch*ciphertext_skip
     void prepare_weight_0d_skip();

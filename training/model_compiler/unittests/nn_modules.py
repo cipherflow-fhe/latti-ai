@@ -19,9 +19,12 @@ import torch.nn as nn
 
 
 class SingleConv(nn.Module):
-    def __init__(self, stride=1):
+    def __init__(self, stride=1, kernel_size=3):
         super().__init__()
-        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=stride)
+        padding = kernel_size // 2
+        self.conv0 = nn.Conv2d(
+            in_channels=32, out_channels=32, kernel_size=kernel_size, bias=True, padding=padding, stride=stride
+        )
 
     def forward(self, x):
         x = self.conv0(x)

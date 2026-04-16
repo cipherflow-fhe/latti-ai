@@ -24,8 +24,8 @@
 class DensePackedLayer : public Layer {
 public:
     DensePackedLayer(const ls::CkksParameter& param_in,
-                     const Array<double, 2>& weight_in,
-                     const Array<double, 1>& bias_in,
+                     Array<double, 2>&& weight_in,
+                     Array<double, 1>&& bias_in,
                      uint32_t pack_in,
                      uint32_t level_in,
                      int mark_in,
@@ -40,11 +40,13 @@ public:
                                                         const Duo& invalid_fill_in = {1, 1});
     virtual void
     prepare_weight_for_1d_multiplexed(uint32_t input_shape_in, uint32_t skip_in, uint32_t invalid_fill_in = 1);
+    virtual void
+    prepare_weight_for_1d_multiplexed_lazy(uint32_t input_shape_in, uint32_t skip_in, uint32_t invalid_fill_in = 1);
 
     virtual Feature0DEncrypted run_0d_skip(ls::CkksContext& ctx, const Feature0DEncrypted& x);
     virtual Feature0DEncrypted run_2d_multiplexed(ls::CkksContext& ctx, const Feature0DEncrypted& x);
     virtual Feature0DEncrypted run_1d_multiplexed(ls::CkksContext& ctx, const Feature0DEncrypted& x);
-    Array<double, 1> plaintext_call(const Array<double, 1>& x, double multiplier = 1.0);
+    Array<double, 1> run_plaintext(const Array<double, 1>& x, double multiplier = 1.0);
 
     std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt;
     std::vector<ls::CkksPlaintextRingt> bias_pt;
@@ -65,6 +67,11 @@ public:
                                                                     int packed_out_feature_idx,
                                                                     int n_block_input_idx) const;
     ls::CkksPlaintextRingt generate_bias_pt_mult_pack_for_index(ls::CkksContext& ctx, int packed_out_feature_idx) const;
+
+    // Helper functions for prepare_weight_for_1d_multiplexed_lazy
+    ls::CkksPlaintextRingt
+    generate_weight_pt_1d_mult_for_indices(ls::CkksContext& ctx, int out_group, int rot_idx) const;
+    ls::CkksPlaintextRingt generate_bias_pt_1d_mult_for_index(ls::CkksContext& ctx, int out_group) const;
 
 protected:
     uint32_t n_out_feature;

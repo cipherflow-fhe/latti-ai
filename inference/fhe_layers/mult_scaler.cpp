@@ -23,13 +23,13 @@ using namespace cxx_sdk_v2;
 
 MultScalarLayer::MultScalarLayer(const CkksParameter& param_in,
                                  const Duo& input_shape_in,
-                                 const Array<double, 1>& weight_in,
+                                 Array<double, 1>&& weight_in,
                                  const Duo& skip_in,
                                  uint32_t n_channel_per_ct_in,
                                  uint32_t level_in,
                                  const Duo& upsample_factor_in,
                                  const Duo& block_expansion_in)
-    : Layer(param_in), input_shape(input_shape_in), weight(weight_in.copy()), skip(skip_in) {
+    : Layer(param_in), input_shape(input_shape_in), weight(move(weight_in)), skip(skip_in) {
     if ((input_shape[0] & (input_shape[0] - 1)) != 0 || (input_shape[1] & (input_shape[1] - 1)) != 0) {
         throw std::invalid_argument("input_shape must be powers of 2, got: [" + std::to_string(input_shape[0]) + ", " +
                                     std::to_string(input_shape[1]) + "]");
@@ -63,7 +63,6 @@ void MultScalarLayer::prepare_weight() {
     weight_pt.clear();
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(n_packed_out_channel);
     weight_pt.resize(n_packed_out_channel);
     double pack_scale = ctx.get_parameter().get_q(level_);
     parallel_for(n_packed_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int n_packed_out_channel_idx) {

@@ -20,7 +20,14 @@
 
 #include <cstdint>
 #include <vector>
+#include <memory>
 #include <array>
+
+template <typename T> using UPtr = std::unique_ptr<T>;
+
+template <typename T, typename... Args> auto MakeU(Args&&... args) -> decltype(auto) {
+    return std::make_unique<T>(std::forward<Args>(args)...);
+}
 
 using Array1D = std::vector<double>;
 using Array1DUint = std::vector<uint64_t>;
@@ -67,4 +74,49 @@ inline Duo div_mod(uint32_t p, uint32_t q) {
 }
 inline bool operator==(const Duo& a, const Duo& b) {
     return (a[0] == b[0]) && (a[1] == b[1]);
+}
+
+struct DuoIterator {
+    Duo current;
+    Duo limit;
+
+    const Duo& operator*() const {
+        return current;
+    }
+
+    DuoIterator& operator++() {
+        ++current[1];
+        if (current[1] >= limit[1]) {
+            current[1] = 0;
+            ++current[0];
+        }
+        return *this;
+    }
+
+    bool operator==(const DuoIterator& other) const {
+        return current == other.current && limit == other.limit;
+    }
+
+    bool operator!=(const DuoIterator& other) const {
+        return !(*this == other);
+    }
+};
+
+struct DuoRange {
+    Duo limit;
+
+    DuoIterator begin() const {
+        if (limit[0] == 0 || limit[1] == 0) {
+            return end();
+        }
+        return {{0, 0}, limit};
+    }
+
+    DuoIterator end() const {
+        return {{limit[0], 0}, limit};
+    }
+};
+
+inline DuoRange duo_range(const Duo& limit) {
+    return {limit};
 }
