@@ -258,7 +258,9 @@ class GraphPartitioner:
                 initial_score, sol_graph_vec = frontier_solutions[tuple(frontier_key)]
 
                 for node_max_lv, lv in zip(frontier, lv_comb):
-                    dag.nodes[idx_to_node[node_max_lv.node_idx]]['level'] = lv
+                    dag.nodes[idx_to_node[node_max_lv.node_idx]]['level'] = (
+                        lv if lv < AUX_LV else config.fhe_param.max_level
+                    )
 
                 sol_cost = initial_score + get_compute_score(dag, leading_comp, self.param_dict)
 
