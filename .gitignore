@@ -55,6 +55,9 @@ resnet_new/
 
 # CLAUDE.md
 CLAUDE.md
+.codex
+AGENTS.md
+.superpowers
 
 # Task plan files
 *plan.md
