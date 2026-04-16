@@ -252,7 +252,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                 if style == 'multiplexed':
                     n_in_channel_per_ct = pack
-                    n_in_channel_per_ct = pack
                     if groups == n_out_channel and groups != 1:
                         conv0_layer = MultiplexedConv2DPackedLayerDepthwise(
                             n_out_channel,
