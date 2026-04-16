@@ -208,6 +208,9 @@ Array<double, 3> UpsampleNearestLayer::run_plaintext(const Array<double, 3>& x) 
     uint64_t output_height = input_shape[1] * upsample_factor[0];
     uint64_t output_width = input_shape[2] * upsample_factor[1];
     Array<double, 3> result({input_shape[0], output_height, output_width});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (uint64_t idx = 0; idx < input_shape[0]; idx++) {
         for (uint64_t i = 0; i < input_shape[1]; i++) {
             for (uint64_t j = 0; j < input_shape[2]; j++) {

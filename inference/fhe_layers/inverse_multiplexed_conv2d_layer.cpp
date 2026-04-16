@@ -542,6 +542,9 @@ Array<double, 3> InverseMultiplexedConv2DLayer::run_plaintext(const Array<double
     }
     uint32_t output_shape[]{input_shape[0] / orig_stride[0], input_shape[1] / orig_stride[1]};
     Array<double, 3> result({n_out_channel, output_shape[0], output_shape[1]});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int out_channel_idx = 0; out_channel_idx < n_out_channel; out_channel_idx++) {
         vector<vector<double>> output_channel(output_shape[0], vector<double>(output_shape[1], bias[out_channel_idx]));
         for (int in_channel_idx = 0; in_channel_idx < n_in_channel; in_channel_idx++) {

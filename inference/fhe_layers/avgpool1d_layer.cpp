@@ -168,6 +168,9 @@ Array<double, 2> Avgpool1DLayer::run_plaintext(const Array<double, 2>& x) {
     std::array<uint64_t, 2UL> input_shape = x.get_shape();
     uint64_t output_length = input_shape[1] / stride;
     Array<double, 2> result({input_shape[0], output_length});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int idx = 0; idx < input_shape[0]; idx++) {
         for (int i = 0; i < output_length; i++) {
             double sum = 0.0;
@@ -184,6 +187,9 @@ Array<double, 2> Avgpool1DLayer::run_plaintext_multiplexed(const Array<double, 2
     std::array<uint64_t, 2UL> input_shape = x.get_shape();
     uint64_t output_length = input_shape[1] / stride;
     Array<double, 2> result({input_shape[0], output_length});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int idx = 0; idx < input_shape[0]; idx++) {
         for (int i = 0; i < output_length; i++) {
             double sum = 0.0;

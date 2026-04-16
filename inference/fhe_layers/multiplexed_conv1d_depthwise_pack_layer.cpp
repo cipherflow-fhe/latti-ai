@@ -256,6 +256,9 @@ Array<double, 2> MultiplexedDWConv1DPackedLayer::run_plaintext(const Array<doubl
     Array<double, 2> output({n_channel, output_shape});
     uint32_t padding = kernel_shape / 2;
 
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int ch = 0; ch < (int)n_channel; ch++) {
         for (int j = 0; j < (int)output_shape; j++) {
             double s = bias.get(ch);
