@@ -1689,7 +1689,7 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         } else if (op_class == "Conv2DPackedDepthwiseLayer") {
             auto* layer = static_cast<Conv2DPackedDepthwiseLayer*>(layer_ptr);
             if (type == "weight_pt")
-                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j);
+                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, k);
             else
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
         } else if (op_class == "InverseMultiplexedConv2DLayer") {
@@ -1703,7 +1703,7 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         } else if (op_class == "InverseMultiplexedConv2DLayerDepthwise") {
             auto* layer = static_cast<InverseMultiplexedConv2DLayerDepthwise*>(layer_ptr);
             if (type == "weight_pt")
-                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j);
+                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, k);
             else if (type == "bias_pt")
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
             else
