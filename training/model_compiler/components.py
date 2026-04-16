@@ -373,6 +373,7 @@ class ComputeNode:
         self.bias_scale = 1
         self.weight_scale_list = [1, 1, 1, 1, 1]
         self.path = ''
+        self.poly_path = ''
 
     def __repr__(self) -> str:
         return f'ComputeNode: {self.layer_id}'
@@ -950,6 +951,7 @@ class LayerAbstractGraph:
                     'absorb_type': absorb_type,
                     'absorb_path': absorb_path,
                     'is_big_size': layer.is_big_size,
+                    'poly_path': layer.poly_path,
                 }
             if 'pool' in layer_type:
                 if 'avgpool' in layer_type:
@@ -1018,6 +1020,7 @@ class LayerAbstractGraph:
                     'bias_scale': layer.bias_scale,
                     'absorb_type': absorb_type,
                     'absorb_path': absorb_path,
+                    'poly_path': layer.poly_path,
                 }
             if 'batchnorm' in layer_type:
                 layers[layer_id] = {
@@ -1067,6 +1070,7 @@ class LayerAbstractGraph:
                     'weight_path': layer_id + '.weight',
                     'weight_scale_list': layer.weight_scale_list,
                     'is_big_size': layer.is_big_size,
+                    'poly_path': layer.poly_path,
                 }
 
             if 'maxpool' == layer_type:

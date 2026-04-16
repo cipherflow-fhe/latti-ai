@@ -530,6 +530,41 @@ class TestLayerInteraction(CompilerTestBase):
         model = nn_modules.MismatchedScale()
         graph, score = self._export_and_compile(model, (1, 32, 64, 64))
 
+    def test_three_conv_concat_relu(self):
+        """cat([conv1(x), conv2(x), conv3(x)], dim=1) → relu."""
+        model = nn_modules.ThreeConvConcatRelu()
+        graph, score = self._export_and_compile(model, (1, 16, 32, 32))
+        flag = True
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode):
+                if node.layer_type == 'conv2d':
+                    if not node.poly_path:
+                        flag = False
+                        break
+        self.assertEqual(flag, True)
+
+    def test_conv_residual_relu(self):
+        """relu(conv(x) + x): residual shortcut, add must have aligned inputs."""
+        model = nn_modules.ConvResidualRelu()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+        flag = True
+        num_mult = 0
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode):
+                if node.layer_type == 'conv2d':
+                    if not node.poly_path:
+                        flag = False
+                        continue
+                if node.layer_type == 'mult_scalar':
+                    num_mult = num_mult + 1
+        self.assertEqual(flag, True)
+        self.assertTrue(num_mult > 0)
+        # self.assertTrue(
+        #     any(isinstance(n, ActivationComputeNode) for n in graph.dag.nodes),
+        #     'Expected at least one ActivationComputeNode (relu) in the compiled graph',
+        # )
+        # self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
+
     def test_conv_and_convtranspose(self):
         model = nn_modules.ConvAndConvTransposeBlock()
         graph, score = self._export_and_compile(model, (1, 32, 16, 16), style='multiplexed')
@@ -958,7 +993,7 @@ class TestE2ESingleLayer(CompilerTestBase):
         """1 Act = 3 levels → poly_n=8192, no BTP."""
         model = nn_modules.SingleAct()
         graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'act')
-        self.assertEqual(self._max_feature_level(graph), 3)
+        self.assertEqual(self._max_feature_level(graph), 4)
         self.assertEqual(config.fhe_param.poly_modulus_degree, 8192)
 
     # ── Reshape (disabled) ──

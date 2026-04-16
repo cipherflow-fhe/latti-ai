@@ -268,6 +268,33 @@ class MismatchedScale(nn.Module):
         return x
 
 
+class ConvResidualRelu(nn.Module):
+    """relu(conv(x) + x): residual shortcut with relu on the sum."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        return self.relu(self.conv(x) + x)
+
+
+class ThreeConvConcatRelu(nn.Module):
+    """cat([conv1, conv2, conv3], dim=1) → relu."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(16, 8, kernel_size=3, padding=1, bias=False)
+        self.conv2 = nn.Conv2d(16, 8, kernel_size=3, padding=1, bias=False)
+        self.conv3 = nn.Conv2d(16, 8, kernel_size=3, padding=1, bias=False)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        s = torch.cat([self.conv1(x), self.conv2(x), self.conv3(x)], dim=1)
+        return self.relu(s)
+
+
 class Unit(nn.Module):
     def __init__(self, pairs: int = 2):
         super().__init__()
