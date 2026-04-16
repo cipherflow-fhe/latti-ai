@@ -279,7 +279,9 @@ void InitInferenceProcess::_init_mult_scalar_layer(const string& key,
     auto mult_scalar = MakeU<MultScalarLayer>(param, feature_input0.shape, move(weight), feature_input0.skip,
                                               feature_input0.pack_channel_per_ciphertext, feature_input0.level,
                                               upsample_factor, block_expansion);
-    _prepare_layer(key, move(mult_scalar), [](MultScalarLayer& layer) { layer.prepare_weight(); });
+    _prepare_layer(
+        key, move(mult_scalar), [](MultScalarLayer& layer) { layer.prepare_weight_lazy(); },
+        [](MultScalarLayer& layer) { layer.prepare_weight(); });
 }
 
 void InitInferenceProcess::_init_drop_level_layer(const string& key, const json& layer) {
@@ -524,10 +526,16 @@ void InitInferenceProcess::_init_fhe_avgpool_layer(const string& key,
             _prepare_layer(key, move(avgpool));
         } else {
             auto avgpool = MakeU<Avgpool2DLayer>(feature_input.shape, stride);
-            _prepare_layer(key, move(avgpool), [&](Avgpool2DLayer& layer) {
-                layer.prepare_weight(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
-                                     feature_input.level, feature_input.skip, feature_input.shape);
-            });
+            _prepare_layer(
+                key, move(avgpool),
+                [&](Avgpool2DLayer& layer) {
+                    layer.prepare_weight_lazy(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
+                                              feature_input.level, feature_input.skip, feature_input.shape);
+                },
+                [&](Avgpool2DLayer& layer) {
+                    layer.prepare_weight(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
+                                         feature_input.level, feature_input.skip, feature_input.shape);
+                });
         }
     }
 }
@@ -546,10 +554,16 @@ void InitInferenceProcess::_init_fhe_avgpool1d_layer(const string& key, const js
             _prepare_layer(key, move(avgpool));
         } else {
             auto avgpool = MakeU<Avgpool1DLayer>(feature_input.shape[0], stride);
-            _prepare_layer(key, move(avgpool), [&](Avgpool1DLayer& layer) {
-                layer.prepare_weight(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
-                                     feature_input.level, feature_input.skip[0], feature_input.shape[0]);
-            });
+            _prepare_layer(
+                key, move(avgpool),
+                [&](Avgpool1DLayer& layer) {
+                    layer.prepare_weight_lazy(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
+                                              feature_input.level, feature_input.skip[0], feature_input.shape[0]);
+                },
+                [&](Avgpool1DLayer& layer) {
+                    layer.prepare_weight(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
+                                         feature_input.level, feature_input.skip[0], feature_input.shape[0]);
+                });
         }
     }
 }
@@ -1484,10 +1498,37 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         }
     }
 
-    // 2. 准备层数据源（CustomData）
+    // 2. 按层顺序注册所有权重参数（eager pt_ringt + CustomData）
     auto layer_data_sources = prepare_layer_data_sources();
-    for (auto& [key, custom_data] : layer_data_sources) {
-        cxx_args.push_back(CxxVectorArgument{key, &custom_data});
+    // 用 map 方便按名查找
+    unordered_map<string, fhe_ops_lib::CustomData*> data_source_map;
+    for (auto& [k, v] : layer_data_sources)
+        data_source_map[k] = &v;
+
+    for (const auto& layer : json_layers.items()) {
+        const string& key = layer.key();
+        const string& layer_type = layer.value()["type"].get<string>();
+        if (layer_type == "avgpool2d") {
+            FeatureNode d_input_node(json_features[layer.value()["feature_input"][0].get<string>()]);
+            if (d_input_node.dim == 2) {
+                bool is_big_size = layer.value()["is_big_size"];
+                bool is_adaptive = layer.value()["is_adaptive_avgpool"];
+                if (is_big_size && fp->get_layer<Avgpool2DLayer>(key).need_repack) {
+                    cxx_args.push_back(
+                        CxxVectorArgument{"repack_mask_" + key, &(fp->get_layer<Avgpool2DLayer>(key).repack_mask_pt)});
+                } else if (!is_big_size && !is_adaptive && data_source_map.count(key)) {
+                    cxx_args.push_back(CxxVectorArgument{key, data_source_map[key]});
+                }
+            }
+        } else if (layer_type == "avgpool1d") {
+            bool is_big_size = layer.value()["is_big_size"];
+            bool is_adaptive = layer.value()["is_adaptive_avgpool"];
+            if (!is_big_size && !is_adaptive && data_source_map.count(key)) {
+                cxx_args.push_back(CxxVectorArgument{key, data_source_map[key]});
+            }
+        } else if (data_source_map.count(key)) {
+            cxx_args.push_back(CxxVectorArgument{key, data_source_map[key]});
+        }
     }
 
     // 3. 准备输出密文
@@ -1644,8 +1685,28 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
                 data_sources.emplace_back(
                     key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<Conv1DPackedLayer>(key))));
             }
+        } else if (layer_type == "mult_scalar") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<MultScalarLayer>(key))));
+        } else if (layer_type == "avgpool2d") {
+            FeatureNode d_input_node(fp->json_features[layer.value()["feature_input"][0].get<string>()]);
+            if (d_input_node.dim == 2) {
+                bool is_big_size = layer.value()["is_big_size"];
+                bool is_adaptive = layer.value()["is_adaptive_avgpool"];
+                if (!is_big_size && !is_adaptive) {
+                    data_sources.emplace_back(
+                        key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<Avgpool2DLayer>(key))));
+                }
+            }
+        } else if (layer_type == "avgpool1d") {
+            bool is_big_size = layer.value()["is_big_size"];
+            bool is_adaptive = layer.value()["is_adaptive_avgpool"];
+            if (!is_big_size && !is_adaptive) {
+                data_sources.emplace_back(
+                    key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<Avgpool1DLayer>(key))));
+            }
         }
-        // avgpool, mult_scalar, concat 等无 lazy 权重生成，跳过
+        // avgpool, concat 等无 lazy 权重生成，跳过
     }
     return data_sources;
 }
@@ -1771,6 +1832,15 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             pt = layer->generate_weight_pt_for_non_absorb_indices(ckks_ctx, i, j);
         } else if (op_class == "UpsampleNearestLayer") {
             auto* layer = static_cast<UpsampleNearestLayer*>(layer_ptr);
+            pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
+        } else if (op_class == "MultScalarLayer") {
+            auto* layer = static_cast<MultScalarLayer*>(layer_ptr);
+            pt = layer->generate_weight_pt_for_index(ckks_ctx, i);
+        } else if (op_class == "Avgpool2DLayer") {
+            auto* layer = static_cast<Avgpool2DLayer*>(layer_ptr);
+            pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
+        } else if (op_class == "Avgpool1DLayer") {
+            auto* layer = static_cast<Avgpool1DLayer*>(layer_ptr);
             pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
         } else {
             throw runtime_error("encode_pt: unknown op_class: " + op_class);
