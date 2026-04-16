@@ -24,6 +24,20 @@
 
 namespace py = pybind11;
 
+// Convert Bytes (vector<uint8_t>) to Python bytes object
+static py::bytes to_pybytes(const Bytes& b) {
+    return py::bytes(reinterpret_cast<const char*>(b.data()), b.size());
+}
+
+// Convert map<string, Bytes> to dict[str, bytes]
+static py::dict to_pybytes_dict(const std::map<std::string, Bytes>& m) {
+    py::dict d;
+    for (auto& [k, v] : m) {
+        d[py::cast(k)] = to_pybytes(v);
+    }
+    return d;
+}
+
 PYBIND11_MODULE(latti_inference, m) {
     m.doc() = "Python bindings for latti-ai FHE inference engine";
 
@@ -34,8 +48,15 @@ PYBIND11_MODULE(latti_inference, m) {
     py::class_<InferenceClient>(m, "InferenceClient")
         .def(py::init<const std::string&>(), py::arg("client_dir"))
         .def("setup", &InferenceClient::setup, py::call_guard<py::gil_scoped_release>())
-        .def("export_eval_context", &InferenceClient::export_eval_context, py::call_guard<py::gil_scoped_release>())
-        .def("encrypt", &InferenceClient::encrypt, py::arg("input_csvs"), py::call_guard<py::gil_scoped_release>())
+        .def(
+            "export_eval_context", [](const InferenceClient& self) { return to_pybytes(self.export_eval_context()); },
+            py::call_guard<py::gil_scoped_release>())
+        .def(
+            "encrypt",
+            [](const InferenceClient& self, const std::map<std::string, std::string>& input_csvs) {
+                return to_pybytes_dict(self.encrypt(input_csvs));
+            },
+            py::arg("input_csvs"), py::call_guard<py::gil_scoped_release>())
         .def("decrypt", &InferenceClient::decrypt, py::arg("encrypted_outputs"),
              py::call_guard<py::gil_scoped_release>());
 
@@ -44,8 +65,12 @@ PYBIND11_MODULE(latti_inference, m) {
         .def("import_eval_context", &InferenceServer::import_eval_context, py::arg("eval_context"),
              py::call_guard<py::gil_scoped_release>())
         .def("load_model", &InferenceServer::load_model, py::call_guard<py::gil_scoped_release>())
-        .def("evaluate", &InferenceServer::evaluate, py::arg("encrypted_inputs"),
-             py::call_guard<py::gil_scoped_release>())
+        .def(
+            "evaluate",
+            [](InferenceServer& self, const std::map<std::string, Bytes>& encrypted_inputs) {
+                return to_pybytes_dict(self.evaluate(encrypted_inputs));
+            },
+            py::arg("encrypted_inputs"), py::call_guard<py::gil_scoped_release>())
         .def("evaluate_plaintext", &InferenceServer::evaluate_plaintext, py::arg("input_csvs"),
              py::call_guard<py::gil_scoped_release>());
 }

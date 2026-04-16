@@ -17,8 +17,11 @@
 cmake_minimum_required(VERSION 3.13)
 project(latti_inference_bindings)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 find_package(pybind11 REQUIRED)
-find_package(HDF5 COMPONENTS CXX HL)
+find_package(HDF5 REQUIRED COMPONENTS CXX)
 find_package(OpenMP REQUIRED)
 
 set(LATTI_AI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
@@ -38,6 +41,7 @@ link_directories(${LATTI_AI_BUILD}/inference/lattisense)
 link_directories(${LATTI_AI_BUILD}/inference)
 
 pybind11_add_module(latti_inference bindings.cpp)
+target_compile_options(latti_inference PRIVATE -maes)
 target_link_libraries(latti_inference PRIVATE
     inference_interface
     inference_task
@@ -46,6 +50,12 @@ target_link_libraries(latti_inference PRIVATE
     lattisense
     ${HDF5_CXX_LIBRARIES}
     OpenMP::OpenMP_CXX
+)
+
+# Set RPATH so the .so can find shared libs relative to itself
+set_target_properties(latti_inference PROPERTIES
+    INSTALL_RPATH "$ORIGIN;$ORIGIN/../../../build/inference/lattisense"
+    BUILD_WITH_INSTALL_RPATH ON
 )
 
 install(TARGETS latti_inference DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/..)
