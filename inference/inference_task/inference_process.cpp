@@ -1526,6 +1526,10 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
             if (!is_big_size && !is_adaptive && data_source_map.count(key)) {
                 cxx_args.push_back(CxxVectorArgument{key, data_source_map[key]});
             }
+        } else if (layer_type == "concat2d") {
+            if (!fp->get_layer<ConcatLayer>(key).mask_pt.empty()) {
+                cxx_args.push_back(CxxVectorArgument{"concat_mask_" + key, &(fp->get_layer<ConcatLayer>(key).mask_pt)});
+            }
         } else if (data_source_map.count(key)) {
             cxx_args.push_back(CxxVectorArgument{key, data_source_map[key]});
         }
