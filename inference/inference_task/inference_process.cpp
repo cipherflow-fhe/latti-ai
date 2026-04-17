@@ -1799,12 +1799,16 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             auto* layer = static_cast<MultiplexedConv1DPackedLayer*>(layer_ptr);
             if (type == "weight_pt")
                 pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j, k);
+            else if (type == "select_pt")
+                pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
             else
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
         } else if (op_class == "MultiplexedDWConv1DPackedLayer") {
             auto* layer = static_cast<MultiplexedDWConv1DPackedLayer*>(layer_ptr);
             if (type == "weight_pt")
                 pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j);
+            else if (type == "select_pt")
+                pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
             else
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
         } else if (op_class == "DensePackedLayer") {
