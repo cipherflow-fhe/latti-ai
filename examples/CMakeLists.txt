@@ -26,7 +26,7 @@ add_test(NAME example-cifar10-cpu
 add_test(NAME example-imagenet-cpu
     COMMAND inference --task-dir ${EXAMPLES_DIR}/test_imagenet/task --input ${EXAMPLES_DIR}/test_imagenet/task/client/img.csv --verify)
 add_test(NAME example-retina-dkd-cpu
-    COMMAND inference --task-dir ${EXAMPLES_DIR}/test_retina_dkd/task --input ${EXAMPLES_DIR}/test_retina_dkd/task/client/img.csv --verify)
+    COMMAND inference --task-dir ${EXAMPLES_DIR}/test_retina_dkd/task512 --input ${EXAMPLES_DIR}/test_retina_dkd/task/client/img.csv --verify)
 
 set_tests_properties(example-mnist-cpu PROPERTIES LABELS "example;example-cpu;mnist")
 set_tests_properties(example-cifar10-cpu PROPERTIES LABELS "example;example-cpu;cifar10")
@@ -41,7 +41,7 @@ add_test(NAME example-cifar10-gpu
 add_test(NAME example-imagenet-gpu
     COMMAND inference --task-dir ${EXAMPLES_DIR}/test_imagenet/task --input ${EXAMPLES_DIR}/test_imagenet/task/client/img.csv --verify --gpu)
 add_test(NAME example-retina-dkd-gpu
-    COMMAND inference --task-dir ${EXAMPLES_DIR}/test_retina_dkd/task --input ${EXAMPLES_DIR}/test_retina_dkd/task/client/img.csv --verify --gpu)
+    COMMAND inference --task-dir ${EXAMPLES_DIR}/test_retina_dkd/task512 --input ${EXAMPLES_DIR}/test_retina_dkd/task/client/img.csv --verify --gpu)
 
 set_tests_properties(example-mnist-gpu PROPERTIES LABELS "example;example-gpu;mnist")
 set_tests_properties(example-cifar10-gpu PROPERTIES LABELS "example;example-gpu;cifar10")
