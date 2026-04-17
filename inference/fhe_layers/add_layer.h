@@ -28,6 +28,8 @@ public:
     double target_ckks_scale = DEFAULT_SCALE;
     Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x0, const Feature2DEncrypted& x1);
     Array<double, 3> run_plaintext(const Array<double, 3>& x0, const Array<double, 3>& x1);
+    Array<double, 2> run_plaintext_1d(const Array<double, 2>& x0, const Array<double, 2>& x1);
+    std::vector<double> run_plaintext_0d(const std::vector<double>& x0, const std::vector<double>& x1);
     void
     add(ls::CkksContext* ctx, const Feature2DEncrypted& x0, const Feature2DEncrypted& x1, Feature2DEncrypted& result);
 };

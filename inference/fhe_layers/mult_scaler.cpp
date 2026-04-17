@@ -19,7 +19,7 @@
 #include "mult_scaler.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 MultScalarLayer::MultScalarLayer(const CkksParameter& param_in,
                                  const Duo& input_shape_in,
@@ -56,8 +56,36 @@ MultScalarLayer::MultScalarLayer(const CkksParameter& param_in,
     }
 }
 
+void MultScalarLayer::prepare_weight_lazy() {
+    // 仅缓存参数，不预编码 weight_pt
+}
+
+CkksPlaintextRingt MultScalarLayer::generate_weight_pt_for_index(CkksContext& ctx, int i) const {
+    const int skip_prod = skip[0] * skip[1];
+    int channel = weight.get_shape()[0];
+    const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
+    double pack_scale = ctx.get_parameter().get_q(level_);
+
+    vector<double> feature_tmp_pack(ctx.get_parameter().get_n() / 2);
+    for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
+        int block_i = linear_idx / (block_shape[0] * block_shape[1]);
+        int residual = linear_idx % (block_shape[0] * block_shape[1]);
+        int shape_i = residual / block_shape[1];
+        int shape_j = residual % block_shape[1];
+
+        int channel_idx = i * n_channel_per_ct / block_expansion[0] / block_expansion[1] + block_i * skip_prod +
+                          (skip[1] * (shape_i % skip[0]) + shape_j % skip[1]);
+        if (channel_idx >= channel || (shape_i % pre_skip[0]) >= skip[0] || (shape_j % pre_skip[1]) >= skip[1])
+            continue;
+
+        int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;
+        feature_tmp_pack[index] = weight.get(channel_idx);
+    }
+    return ctx.encode_ringt(feature_tmp_pack, pack_scale);
+}
+
 void MultScalarLayer::prepare_weight() {
-    int skip_prod = skip[0] * skip[1];
+    const int skip_prod = skip[0] * skip[1];
     int channel = weight.get_shape()[0];
     int n_packed_out_channel = div_ceil(channel, n_channel_per_ct) * block_expansion[0] * block_expansion[1];
     weight_pt.clear();
@@ -113,6 +141,9 @@ Feature2DEncrypted MultScalarLayer::run(CkksContext& ctx, const Feature2DEncrypt
 Array<double, 3> MultScalarLayer::run_plaintext(const Array<double, 3>& x) {
     int n_out_channel = x.get_shape()[0];
     Array<double, 3> result({x.get_shape()[0], x.get_shape()[1], x.get_shape()[2]});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int in_channel_idx = 0; in_channel_idx < n_out_channel; in_channel_idx++) {
         for (int i = 0; i < input_shape[0]; i++) {
             for (int j = 0; j < input_shape[1]; j++) {

@@ -17,12 +17,12 @@
  */
 
 #include "inference_process.h"
-#include "lattisense/cxx_sdk_v2/cxx_fhe_task.h"
+#include "../lattisense/cxx_sdk_v2/cxx_fhe_task.h"
 #include <cmath>
 #include <iostream>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 uint64_t fhe_time = 0;
 bool normal_output = false;
 
@@ -218,9 +218,14 @@ void InitInferenceProcess::_init_dense_layer(const string& key, const json& laye
         uint32_t shape_1d = feature_input.shape[0];
         uint32_t skip_1d = feature_input.special_skip[0];
         uint32_t invalid_fill_1d = feature_input.invalid_fill[0] > 0 ? feature_input.invalid_fill[0] : 1;
-        _prepare_layer(key, move(dense), [&](DensePackedLayer& layer) {
-            layer.prepare_weight_for_1d_multiplexed(shape_1d, skip_1d, invalid_fill_1d);
-        });
+        _prepare_layer(
+            key, move(dense),
+            [&](DensePackedLayer& layer) {
+                layer.prepare_weight_for_1d_multiplexed_lazy(shape_1d, skip_1d, invalid_fill_1d);
+            },
+            [&](DensePackedLayer& layer) {
+                layer.prepare_weight_for_1d_multiplexed(shape_1d, skip_1d, invalid_fill_1d);
+            });
     } else if (feature_input.special_info_dim == 2) {
         Duo input_shape = feature_input.shape;
         Duo invalid_fill = feature_input.invalid_fill;
@@ -233,8 +238,10 @@ void InitInferenceProcess::_init_dense_layer(const string& key, const json& laye
                 layer.prepare_weight_for_2d_multiplexed(input_shape, feature_input.special_skip, invalid_fill);
             });
     } else {
-        _prepare_layer(key, move(dense),
-                       [&](DensePackedLayer& layer) { layer.prepare_weight_0d_skip(feature_input.skip[0]); });
+        _prepare_layer(
+            key, move(dense),
+            [&](DensePackedLayer& layer) { layer.prepare_weight_0d_skip_lazy(feature_input.skip[0]); },
+            [&](DensePackedLayer& layer) { layer.prepare_weight_0d_skip(feature_input.skip[0]); });
     }
 }
 
@@ -272,7 +279,9 @@ void InitInferenceProcess::_init_mult_scalar_layer(const string& key,
     auto mult_scalar = MakeU<MultScalarLayer>(param, feature_input0.shape, move(weight), feature_input0.skip,
                                               feature_input0.pack_channel_per_ciphertext, feature_input0.level,
                                               upsample_factor, block_expansion);
-    _prepare_layer(key, move(mult_scalar), [](MultScalarLayer& layer) { layer.prepare_weight(); });
+    _prepare_layer(
+        key, move(mult_scalar), [](MultScalarLayer& layer) { layer.prepare_weight_lazy(); },
+        [](MultScalarLayer& layer) { layer.prepare_weight(); });
 }
 
 void InitInferenceProcess::_init_drop_level_layer(const string& key, const json& layer) {
@@ -517,10 +526,16 @@ void InitInferenceProcess::_init_fhe_avgpool_layer(const string& key,
             _prepare_layer(key, move(avgpool));
         } else {
             auto avgpool = MakeU<Avgpool2DLayer>(feature_input.shape, stride);
-            _prepare_layer(key, move(avgpool), [&](Avgpool2DLayer& layer) {
-                layer.prepare_weight(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
-                                     feature_input.level, feature_input.skip, feature_input.shape);
-            });
+            _prepare_layer(
+                key, move(avgpool),
+                [&](Avgpool2DLayer& layer) {
+                    layer.prepare_weight_lazy(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
+                                              feature_input.level, feature_input.skip, feature_input.shape);
+                },
+                [&](Avgpool2DLayer& layer) {
+                    layer.prepare_weight(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
+                                         feature_input.level, feature_input.skip, feature_input.shape);
+                });
         }
     }
 }
@@ -539,10 +554,16 @@ void InitInferenceProcess::_init_fhe_avgpool1d_layer(const string& key, const js
             _prepare_layer(key, move(avgpool));
         } else {
             auto avgpool = MakeU<Avgpool1DLayer>(feature_input.shape[0], stride);
-            _prepare_layer(key, move(avgpool), [&](Avgpool1DLayer& layer) {
-                layer.prepare_weight(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
-                                     feature_input.level, feature_input.skip[0], feature_input.shape[0]);
-            });
+            _prepare_layer(
+                key, move(avgpool),
+                [&](Avgpool1DLayer& layer) {
+                    layer.prepare_weight_lazy(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
+                                              feature_input.level, feature_input.skip[0], feature_input.shape[0]);
+                },
+                [&](Avgpool1DLayer& layer) {
+                    layer.prepare_weight(param, feature_input.pack_channel_per_ciphertext, feature_input.channel,
+                                         feature_input.level, feature_input.skip[0], feature_input.shape[0]);
+                });
         }
     }
 }
@@ -1443,7 +1464,397 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
     }
 }
 
-void InferenceProcess::set_feature(const string& feature_id, UPtr<FeatureEncrypted> feature) {
+void InferenceProcess::run_task_lazy(bool is_mpc) {
+    fp->total_fhe_time = 0.0;
+    fp->total_fpga_time = 0.0;
+
+    const json& json_data = fp->json_data;
+    const json& json_features = fp->json_features;
+    const json& json_layers = fp->json_layers;
+    Duo block_shape = fp->block_shape;
+
+    vector<CxxVectorArgument> cxx_args;
+    unique_ptr<FeatureEncrypted> result;
+
+    vector<vector<CkksCiphertext>> ct_data(json_data["input_feature"].size());
+    for (int i = 0; i < (int)json_data["input_feature"].size(); i++) {
+        auto ki = json_data["input_feature"][i];
+        FeatureNode feature_input(json_features[ki.get<string>()]);
+        if (feature_input.dim == 2) {
+            const Feature2DEncrypted& input = dynamic_cast<const Feature2DEncrypted&>(_get_feature(ki));
+            for (int j = 0; j < (int)input.data.size(); j++)
+                ct_data[i].push_back(input.data[j].copy());
+            cxx_args.push_back(CxxVectorArgument{ki, &ct_data[i]});
+        } else if (feature_input.dim == 0) {
+            const Feature0DEncrypted& input = dynamic_cast<const Feature0DEncrypted&>(_get_feature(ki));
+            for (int j = 0; j < (int)input.data.size(); j++)
+                ct_data[i].push_back(input.data[j].copy());
+            cxx_args.push_back(CxxVectorArgument{ki, &ct_data[i]});
+        } else if (feature_input.dim == 1) {
+            const Feature1DEncrypted& input = dynamic_cast<const Feature1DEncrypted&>(_get_feature(ki));
+            for (int j = 0; j < (int)input.data.size(); j++)
+                ct_data[i].push_back(input.data[j].copy());
+            cxx_args.push_back(CxxVectorArgument{ki, &ct_data[i]});
+        }
+    }
+
+    // 2. 按层顺序注册所有权重参数（eager pt_ringt + CustomData）
+    auto layer_data_sources = prepare_layer_data_sources();
+    // 用 map 方便按名查找
+    unordered_map<string, fhe_ops_lib::CustomData*> data_source_map;
+    for (auto& [k, v] : layer_data_sources)
+        data_source_map[k] = &v;
+
+    for (const auto& layer : json_layers.items()) {
+        const string& key = layer.key();
+        const string& layer_type = layer.value()["type"].get<string>();
+        if (layer_type == "avgpool2d") {
+            FeatureNode d_input_node(json_features[layer.value()["feature_input"][0].get<string>()]);
+            if (d_input_node.dim == 2) {
+                bool is_big_size = layer.value()["is_big_size"];
+                bool is_adaptive = layer.value()["is_adaptive_avgpool"];
+                if (is_big_size && fp->get_layer<Avgpool2DLayer>(key).need_repack) {
+                    cxx_args.push_back(
+                        CxxVectorArgument{"repack_mask_" + key, &(fp->get_layer<Avgpool2DLayer>(key).repack_mask_pt)});
+                } else if (!is_big_size && !is_adaptive && data_source_map.count(key)) {
+                    cxx_args.push_back(CxxVectorArgument{key, data_source_map[key]});
+                }
+            }
+        } else if (layer_type == "avgpool1d") {
+            bool is_big_size = layer.value()["is_big_size"];
+            bool is_adaptive = layer.value()["is_adaptive_avgpool"];
+            if (!is_big_size && !is_adaptive && data_source_map.count(key)) {
+                cxx_args.push_back(CxxVectorArgument{key, data_source_map[key]});
+            }
+        } else if (layer_type == "concat2d") {
+            if (!fp->get_layer<ConcatLayer>(key).mask_pt.empty()) {
+                cxx_args.push_back(CxxVectorArgument{"concat_mask_" + key, &(fp->get_layer<ConcatLayer>(key).mask_pt)});
+            }
+        } else if (data_source_map.count(key)) {
+            cxx_args.push_back(CxxVectorArgument{key, data_source_map[key]});
+        }
+    }
+
+    // 3. 准备输出密文
+    string context_id;
+    int level;
+    vector<vector<CkksCiphertext>> z_lists(json_data["output_feature"].size());
+    for (int out_idx = 0; out_idx < (int)json_data["output_feature"].size(); out_idx++) {
+        auto ki = json_data["output_feature"][out_idx];
+        FeatureNode feature_output(json_features[ki.get<string>()]);
+        context_id = feature_output.ckks_parameter_id;
+        level = feature_output.level;
+        int n_out_num = div_ceil(feature_output.channel, feature_output.pack_channel_per_ciphertext);
+        if (feature_output.shape[0] > block_shape[0] || feature_output.shape[1] > block_shape[1]) {
+            Duo out_block_expansion = {feature_output.shape[0] / block_shape[0],
+                                       feature_output.shape[1] / block_shape[1]};
+            n_out_num *= out_block_expansion[0] * out_block_expansion[1];
+        }
+        double encode_scale =
+            ckks_contexts.at(feature_output.ckks_parameter_id).get()->get_parameter().get_default_scale();
+        for (int i = 0; i < n_out_num; i++) {
+            z_lists[out_idx].push_back((*ckks_contexts.at(feature_output.ckks_parameter_id))
+                                           .new_ciphertext(feature_output.level, encode_scale));
+        }
+        cxx_args.push_back(CxxVectorArgument{ki, &z_lists[out_idx]});
+    }
+
+    // 4. 注册执行器并执行
+    unordered_map<string, ExecutorFunc> custom_executors;
+    register_custom_executors(custom_executors);
+
+    switch (compute_device) {
+        case ComputeDevice::CPU: {
+            auto task = make_unique<FheTaskCpu>(fp->project_path);
+            task->bind_custom_executors(custom_executors);
+            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            break;
+        }
+#ifdef INFERENCE_SDK_ENABLE_GPU
+        case ComputeDevice::GPU: {
+            auto task = make_unique<FheTaskGpu>(fp->project_path);
+            task->bind_custom_executors(custom_executors);
+            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            break;
+        }
+#else
+        case ComputeDevice::GPU:
+            throw runtime_error(
+                "GPU support is disabled. Reconfigure with -DINFERENCE_SDK_ENABLE_GPU=ON to enable it.");
+#endif
+        case ComputeDevice::FPGA:
+            throw runtime_error("FPGA mode should use run_task_fpga() instead of run_task_lazy()");
+        default: throw runtime_error("Unknown compute device type");
+    }
+
+    // 5. 保存输出结果
+    for (int out_idx = 0; out_idx < (int)json_data["output_feature"].size(); out_idx++) {
+        auto ki = json_data["output_feature"][out_idx];
+        FeatureNode feature_output(json_features[ki.get<string>()]);
+        if (feature_output.dim == 2) {
+            Feature2DEncrypted f2d(ckks_contexts.at(feature_output.ckks_parameter_id).get(), feature_output.level);
+            f2d.data = move(z_lists[out_idx]);
+            f2d.shape = feature_output.shape;
+            f2d.skip = feature_output.skip;
+            f2d.n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
+            f2d.n_channel = feature_output.channel;
+            result = make_unique<Feature2DEncrypted>(move(f2d));
+        } else if (feature_output.dim == 0) {
+            Feature0DEncrypted f0d(ckks_contexts.at(feature_output.ckks_parameter_id).get(), feature_output.level);
+            f0d.data = move(z_lists[out_idx]);
+            f0d.skip = feature_output.skip[0];
+            f0d.n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
+            f0d.n_channel = feature_output.channel;
+            result = make_unique<Feature0DEncrypted>(move(f0d));
+        } else if (feature_output.dim == 1) {
+            Feature1DEncrypted f1d(ckks_contexts.at(feature_output.ckks_parameter_id).get(), feature_output.level,
+                                   feature_output.skip[0]);
+            f1d.data = move(z_lists[out_idx]);
+            f1d.shape = feature_output.shape[0];
+            f1d.n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
+            f1d.n_channel = feature_output.channel;
+            result = make_unique<Feature1DEncrypted>(move(f1d));
+        }
+        set_feature(ki, move(result));
+    }
+}
+
+// ==================== CustomData 模式辅助实现 ====================
+
+vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_data_sources() {
+    vector<pair<string, fhe_ops_lib::CustomData>> data_sources;
+
+    for (const auto& layer : fp->json_layers.items()) {
+        const string& key = layer.key();
+        const string& layer_type = layer.value()["type"].get<string>();
+
+        if (layer_type == "conv2d") {
+            int groups = layer.value()["groups"];
+            bool is_big_size = layer.value()["is_big_size"];
+            if (groups == 1) {
+                if (is_big_size) {
+                    data_sources.emplace_back(key, fhe_ops_lib::CustomData(static_cast<void*>(
+                                                       &fp->get_layer<InverseMultiplexedConv2DLayer>(key))));
+                } else if (fp->pack_style == "multiplexed") {
+                    data_sources.emplace_back(key, fhe_ops_lib::CustomData(static_cast<void*>(
+                                                       &fp->get_layer<MultiplexedConv2DPackedLayer>(key))));
+                } else {
+                    data_sources.emplace_back(
+                        key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<Conv2DPackedLayer>(key))));
+                }
+            } else {
+                if (is_big_size) {
+                    data_sources.emplace_back(key, fhe_ops_lib::CustomData(static_cast<void*>(
+                                                       &fp->get_layer<InverseMultiplexedConv2DLayerDepthwise>(key))));
+                } else if (fp->pack_style == "multiplexed") {
+                    data_sources.emplace_back(key, fhe_ops_lib::CustomData(static_cast<void*>(
+                                                       &fp->get_layer<MultiplexedConv2DPackedLayerDepthwise>(key))));
+                } else {
+                    data_sources.emplace_back(key, fhe_ops_lib::CustomData(static_cast<void*>(
+                                                       &fp->get_layer<Conv2DPackedDepthwiseLayer>(key))));
+                }
+            }
+        } else if (layer_type == "fc0" || layer_type == "fc1") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<DensePackedLayer>(key))));
+        } else if (layer_type == "poly_relu2d" || layer_type == "polyact") {
+            auto feature_input = layer.value()["feature_input"].get<vector<string>>();
+            FeatureNode d_input_node(fp->json_features[feature_input[0]]);
+            if (d_input_node.dim == 0) {
+                data_sources.emplace_back(key,
+                                          fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<PolyRelu0D>(key))));
+            } else if (d_input_node.dim == 1) {
+                data_sources.emplace_back(key,
+                                          fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<PolyRelu1D>(key))));
+            } else {
+                data_sources.emplace_back(key,
+                                          fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<PolyRelu2D>(key))));
+            }
+        } else if (layer_type == "upsample_nearest") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<UpsampleNearestLayer>(key))));
+        } else if (layer_type == "conv1d") {
+            string style = layer.value().value("style", string("ordinary"));
+            if (style == "multiplexed") {
+                int groups = layer.value().value("groups", 1);
+                int n_out_channel = layer.value().value("channel_output", 1);
+                if (groups == n_out_channel && groups != 1) {
+                    data_sources.emplace_back(key, fhe_ops_lib::CustomData(static_cast<void*>(
+                                                       &fp->get_layer<MultiplexedDWConv1DPackedLayer>(key))));
+                } else {
+                    data_sources.emplace_back(key, fhe_ops_lib::CustomData(static_cast<void*>(
+                                                       &fp->get_layer<MultiplexedConv1DPackedLayer>(key))));
+                }
+            } else {
+                data_sources.emplace_back(
+                    key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<Conv1DPackedLayer>(key))));
+            }
+        } else if (layer_type == "mult_scalar") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<MultScalarLayer>(key))));
+        } else if (layer_type == "avgpool2d") {
+            FeatureNode d_input_node(fp->json_features[layer.value()["feature_input"][0].get<string>()]);
+            if (d_input_node.dim == 2) {
+                bool is_big_size = layer.value()["is_big_size"];
+                bool is_adaptive = layer.value()["is_adaptive_avgpool"];
+                if (!is_big_size && !is_adaptive) {
+                    data_sources.emplace_back(
+                        key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<Avgpool2DLayer>(key))));
+                }
+            }
+        } else if (layer_type == "avgpool1d") {
+            bool is_big_size = layer.value()["is_big_size"];
+            bool is_adaptive = layer.value()["is_adaptive_avgpool"];
+            if (!is_big_size && !is_adaptive) {
+                data_sources.emplace_back(
+                    key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<Avgpool1DLayer>(key))));
+            }
+        }
+        // avgpool, concat 等无 lazy 权重生成，跳过
+    }
+    return data_sources;
+}
+
+void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorFunc>& executors) {
+    auto* fp_ptr = this->fp;
+
+    executors["encode_pt"] = [fp_ptr](ExecutionContext& exec_ctx, const unordered_map<NodeIndex, any>& inputs,
+                                      any& output, const ComputeNode& self) -> void {
+        CkksContext* ckks_ctx_ptr = exec_ctx.get_arithmetic_context<CkksContext>();
+        if (!ckks_ctx_ptr) {
+            ckks_ctx_ptr = exec_ctx.get_arithmetic_context<CkksBtpContext>();
+        }
+        if (!ckks_ctx_ptr) {
+            throw runtime_error("encode_pt: Cannot get CKKS context");
+        }
+        auto& ckks_ctx = *ckks_ctx_ptr;
+
+        if (!self.custom_prop.has_value())
+            throw runtime_error("encode_pt: missing custom_prop");
+
+        const string op_class = self.custom_prop->attributes["op_class"].get<string>();
+        const string type = self.custom_prop->attributes["type"].get<string>();
+        int i = self.custom_prop->attributes.value("i", 0);
+        int j = self.custom_prop->attributes.value("j", 0);
+        int k = self.custom_prop->attributes.value("k", 0);
+
+        NodeIndex input_node_idx = self.input_nodes[0]->index;
+        auto raw_ptr = any_cast<shared_ptr<fhe_ops_lib::CustomData>>(inputs.at(input_node_idx));
+        auto* custom_data = raw_ptr.get();
+        void* layer_ptr = custom_data->get_typed_data<void>();
+
+        CkksPlaintextRingt pt;
+
+        if (op_class == "Conv2DPackedLayer") {
+            auto* layer = static_cast<Conv2DPackedLayer*>(layer_ptr);
+            if (type == "weight_pt")
+                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j, k);
+            else
+                pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
+        } else if (op_class == "Conv2DPackedDepthwiseLayer") {
+            auto* layer = static_cast<Conv2DPackedDepthwiseLayer*>(layer_ptr);
+            if (type == "weight_pt")
+                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, k);
+            else
+                pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
+        } else if (op_class == "InverseMultiplexedConv2DLayer") {
+            auto* layer = static_cast<InverseMultiplexedConv2DLayer*>(layer_ptr);
+            if (type == "weight_pt")
+                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j, k);
+            else if (type == "bias_pt")
+                pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
+            else
+                pt = layer->generate_repack_mask_pt(ckks_ctx);
+        } else if (op_class == "InverseMultiplexedConv2DLayerDepthwise") {
+            auto* layer = static_cast<InverseMultiplexedConv2DLayerDepthwise*>(layer_ptr);
+            if (type == "weight_pt")
+                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, k);
+            else if (type == "bias_pt")
+                pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
+            else
+                pt = layer->generate_repack_mask_pt(ckks_ctx);
+        } else if (op_class == "MultiplexedConv2DPackedLayer") {
+            auto* layer = static_cast<MultiplexedConv2DPackedLayer*>(layer_ptr);
+            if (type == "weight_pt")
+                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j, k);
+            else if (type == "bias_pt")
+                pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
+            else
+                pt = layer->generate_mask_pt_for_indices(ckks_ctx, i, j);
+        } else if (op_class == "MultiplexedConv2DPackedLayerDepthwise") {
+            auto* layer = static_cast<MultiplexedConv2DPackedLayerDepthwise*>(layer_ptr);
+            if (type == "weight_pt")
+                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j);
+            else if (type == "bias_pt")
+                pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
+            else
+                pt = layer->generate_mask_pt_for_indices(ckks_ctx, i, j);
+        } else if (op_class == "Conv1DPackedLayer") {
+            auto* layer = static_cast<Conv1DPackedLayer*>(layer_ptr);
+            if (type == "weight_pt")
+                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j, k);
+            else
+                pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
+        } else if (op_class == "MultiplexedConv1DPackedLayer") {
+            auto* layer = static_cast<MultiplexedConv1DPackedLayer*>(layer_ptr);
+            if (type == "weight_pt")
+                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j, k);
+            else
+                pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
+        } else if (op_class == "MultiplexedDWConv1DPackedLayer") {
+            auto* layer = static_cast<MultiplexedDWConv1DPackedLayer*>(layer_ptr);
+            if (type == "weight_pt")
+                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j);
+            else
+                pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
+        } else if (op_class == "DensePackedLayer") {
+            auto* layer = static_cast<DensePackedLayer*>(layer_ptr);
+            if (layer->is_1d_multiplexed) {
+                if (type == "weight_pt")
+                    pt = layer->generate_weight_pt_1d_mult_for_indices(ckks_ctx, i, j);
+                else
+                    pt = layer->generate_bias_pt_1d_mult_for_index(ckks_ctx, i);
+            } else if (layer->normal_dense) {
+                if (type == "weight_pt")
+                    pt = layer->generate_weight_0d_pt_for_indices(ckks_ctx, i, j);
+                else
+                    pt = layer->generate_bias_0d_pt_for_index(ckks_ctx, i);
+            } else {
+                if (type == "weight_pt")
+                    pt = layer->generate_weight_pt_mult_pack_for_indices(ckks_ctx, i, j);
+                else
+                    pt = layer->generate_bias_pt_mult_pack_for_index(ckks_ctx, i);
+            }
+        } else if (op_class == "PolyRelu0D") {
+            auto* layer = static_cast<PolyRelu0D*>(layer_ptr);
+            pt = layer->generate_weight_pt_for_bsgs(ckks_ctx, i, j);
+        } else if (op_class == "PolyRelu1D") {
+            auto* layer = static_cast<PolyRelu1D*>(layer_ptr);
+            pt = layer->generate_weight_pt_for_bsgs(ckks_ctx, i, j);
+        } else if (op_class == "PolyRelu2D") {
+            auto* layer = static_cast<PolyRelu2D*>(layer_ptr);
+            pt = layer->generate_weight_pt_for_non_absorb_indices(ckks_ctx, i, j);
+        } else if (op_class == "UpsampleNearestLayer") {
+            auto* layer = static_cast<UpsampleNearestLayer*>(layer_ptr);
+            pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
+        } else if (op_class == "MultScalarLayer") {
+            auto* layer = static_cast<MultScalarLayer*>(layer_ptr);
+            pt = layer->generate_weight_pt_for_index(ckks_ctx, i);
+        } else if (op_class == "Avgpool2DLayer") {
+            auto* layer = static_cast<Avgpool2DLayer*>(layer_ptr);
+            pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
+        } else if (op_class == "Avgpool1DLayer") {
+            auto* layer = static_cast<Avgpool1DLayer*>(layer_ptr);
+            pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
+        } else {
+            throw runtime_error("encode_pt: unknown op_class: " + op_class);
+        }
+
+        output = make_shared<CkksPlaintextRingt>(move(pt));
+    };
+}
+
+void InferenceProcess::set_feature(const string& feature_id, unique_ptr<FeatureEncrypted> feature) {
     intermediate_result_[feature_id] = move(feature);
 }
 

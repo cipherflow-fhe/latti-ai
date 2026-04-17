@@ -21,7 +21,7 @@
 #include "util.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 SquareLayer::SquareLayer(const CkksParameter& param_in) : Layer(param_in) {}
 

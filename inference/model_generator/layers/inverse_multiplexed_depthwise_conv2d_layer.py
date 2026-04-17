@@ -25,7 +25,7 @@ from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 
 
-op_class = 'InverseMultiplexedDepthwiseConv2d'
+op_class = 'InverseMultiplexedConv2DLayerDepthwise'
 
 
 class InverseMultiplexedDepthwiseConv2DLayer:

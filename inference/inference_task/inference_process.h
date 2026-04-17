@@ -25,7 +25,7 @@
 #include "util.h"
 #include "fhe_layers/fhe_layers.h"
 
-namespace ls = cxx_sdk_v2;
+namespace ls = lattisense;
 
 enum class ComputeDevice { CPU, GPU, FPGA };
 
@@ -198,7 +198,10 @@ private:
     std::map<std::string, UPtr<Layer>> ckks_layers_;
 };
 
+class InferenceServer;  // forward declaration for friend
+
 class InferenceProcess {
+    friend class InferenceServer;  // allow InferenceServer to access private members
 public:
     InferenceProcess() {}
     InferenceProcess(InitInferenceProcess* fp_in);
@@ -216,7 +219,14 @@ public:
     void run_task(bool is_mpc = false);
     void run_task_sdk(bool is_mpc = false);
     void run_task_plaintext(bool is_mpc = false);
+    void run_task_lazy(bool is_mpc = false);
 
+private:
+    // Prepare CustomData wrappers for all layer objects (keyed by layer_id)
+    std::vector<std::pair<std::string, fhe_ops_lib::CustomData>> prepare_layer_data_sources();
+
+    // Register the encode_pt custom executor
+    void register_custom_executors(std::unordered_map<std::string, ExecutorFunc>& executors);
     void set_feature(const std::string& feature_id, UPtr<FeatureEncrypted> feature);
     template <typename T> T get_ciphertext_output_feature(const std::string& feature_id) {
         return dynamic_cast<const T&>(_get_feature(feature_id)).copy();

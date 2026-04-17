@@ -20,7 +20,7 @@
 
 #include "interface/inference_client.h"
 
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 using namespace fhe_ops_lib;
 

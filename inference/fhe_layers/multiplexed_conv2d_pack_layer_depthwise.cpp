@@ -24,7 +24,7 @@
 #include "multiplexed_conv2d_pack_layer_depthwise.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 MultiplexedConv2DPackedLayerDepthwise::MultiplexedConv2DPackedLayerDepthwise(const CkksParameter& param_in,
                                                                              const Duo& input_shape_in,
@@ -211,7 +211,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksConte
 
     // 1. rotation of kernel direction
     int rotated_size = x.size();
-    std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(rotated_size);
+    std::vector<std::vector<lattisense::CkksCiphertext>> rotated_x(rotated_size);
     parallel_for(rotated_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<CkksCiphertext> rotations =
             populate_rotations_2_sides(ctx_copy, x[ct_idx], kernel_shape_[0], input_rotate_units_[0]);
@@ -351,6 +351,9 @@ Array<double, 3> MultiplexedConv2DPackedLayerDepthwise::run_plaintext(const Arra
     }
 
     Array<double, 3> result({n_out_channel_, output_shape[0], output_shape[1]});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int out_channel_idx = 0; out_channel_idx < n_out_channel_; out_channel_idx++) {
         for (const Duo& output_pos : duo_range(output_shape)) {
             double sum = bias_[out_channel_idx];
