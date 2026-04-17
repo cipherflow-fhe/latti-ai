@@ -850,7 +850,6 @@ def miniprocess(graph: LayerAbstractGraph, p: ComputeNode, res_list: list, polya
     value_list: list[FeatureNode] = list(graph.dag.predecessors(p))
     for value in value_list:
         # c_list = list(graph.dag.predecessors(value))
-        # f_node有分叉/f_node是首节点
         if graph.dag.out_degree(value) > 1 or graph.dag.in_degree(value) == 0:
             mult_scalar_node = add_mult_scalar_between_feature_and_layer(graph, value, p)
             # res_list.append((polyact_id, mult_scalar_node))
