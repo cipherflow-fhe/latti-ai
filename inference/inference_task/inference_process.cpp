@@ -1231,14 +1231,18 @@ void InferenceProcess::run_task(bool is_mpc) {
     // Dynamically create and run task executors based on the compute_device configuration
     switch (compute_device) {
         case ComputeDevice::CPU: {
-            auto task = MakeU<FheTaskCpu>(fp->project_path);
-            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            if (!fhe_task_cpu_) {
+                prepare_task();
+            }
+            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
         case ComputeDevice::GPU: {
-            auto task = MakeU<FheTaskGpu>(fp->project_path);
-            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            if (!fhe_task_gpu_) {
+                prepare_task();
+            }
+            fhe_time = fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #else
@@ -1560,21 +1564,20 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
     }
 
     // 4. 注册执行器并执行
-    unordered_map<string, ExecutorFunc> custom_executors;
-    register_custom_executors(custom_executors);
-
     switch (compute_device) {
         case ComputeDevice::CPU: {
-            auto task = make_unique<FheTaskCpu>(fp->project_path);
-            task->bind_custom_executors(custom_executors);
-            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            if (!fhe_task_cpu_) {
+                prepare_task();
+            }
+            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
         case ComputeDevice::GPU: {
-            auto task = make_unique<FheTaskGpu>(fp->project_path);
-            task->bind_custom_executors(custom_executors);
-            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            if (!fhe_task_gpu_) {
+                prepare_task();
+            }
+            fhe_time = fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #else
@@ -1714,6 +1717,25 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
     }
     return data_sources;
 }
+
+#ifdef INFERENCE_SDK_ENABLE_GPU
+void InferenceProcess::prepare_task() {
+    register_custom_executors(task_custom_executors_);
+    if (compute_device == ComputeDevice::GPU) {
+        fhe_task_gpu_ = make_unique<FheTaskGpu>(fp->project_path);
+        fhe_task_gpu_->bind_custom_executors(task_custom_executors_);
+    } else {
+        fhe_task_cpu_ = make_unique<FheTaskCpu>(fp->project_path);
+        fhe_task_cpu_->bind_custom_executors(task_custom_executors_);
+    }
+}
+#else
+void InferenceProcess::prepare_task() {
+    register_custom_executors(task_custom_executors_);
+    fhe_task_cpu_ = make_unique<FheTaskCpu>(fp->project_path);
+    fhe_task_cpu_->bind_custom_executors(task_custom_executors_);
+}
+#endif
 
 void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorFunc>& executors) {
     auto* fp_ptr = this->fp;
