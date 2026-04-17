@@ -45,22 +45,14 @@ git clone --recursive https://github.com/cipherflow-fhe/latti-ai.git  # This may
 cd latti-ai
 ```
 
-#### Step 2: Build and install HEonGPU (GPU Acceleration Library)
-
-```bash
-cd inference/lattisense/HEonGPU
-cmake -B build \
-  -DCMAKE_CUDA_ARCHITECTURES=<arch> \
-  -DCMAKE_CUDA_COMPILER=<path/to/cuda>/bin/nvcc \
-  -DCMAKE_INSTALL_PREFIX=<path/to/HEonGPU>/install
-cmake --build build --parallel $(nproc) --target install
-```
-
-#### Step 3: Build Project
+#### Step 2: Build Project
 
 ```bash
 cd ../../..  # Return to project root
-cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=<arch>
+cmake -B build \
+      -DINFERENCE_SDK_ENABLE_GPU=ON \
+      -DLATTISENSE_CUDA_ARCH=${CUDA_ARCH} \
+      -DHEONGPU_CCCL_GIT_URL=https://gitee.com/nvidia_mirror/cccl.git
 cmake --build build -j$(nproc)
 ```
 
