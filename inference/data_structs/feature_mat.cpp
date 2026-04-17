@@ -19,7 +19,7 @@
 #include "feature_mat.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 FeatureMatEncrypted::FeatureMatEncrypted(CkksContext* context_in, int ct_level) {
     dim = 2;

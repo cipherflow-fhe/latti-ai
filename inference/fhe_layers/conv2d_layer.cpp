@@ -24,7 +24,7 @@
 #include <sstream>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 #ifdef _OPENMP
 #    include <omp.h>

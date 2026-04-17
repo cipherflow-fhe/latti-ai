@@ -22,7 +22,7 @@
 #include <cmath>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
                                            const Duo& shape_A,

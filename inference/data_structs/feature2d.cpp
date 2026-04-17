@@ -21,7 +21,7 @@
 #include "util.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 Feature2DEncrypted::Feature2DEncrypted(CkksContext* context_in,
                                        int ct_level,

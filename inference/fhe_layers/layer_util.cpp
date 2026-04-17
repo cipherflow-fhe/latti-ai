@@ -21,7 +21,7 @@
 #include <map>
 #include <utility>
 
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 std::vector<CkksCiphertext>
 populate_rotations_1_side(CkksContext& ctx, const CkksCiphertext& x, int n_rotation, int unit) {

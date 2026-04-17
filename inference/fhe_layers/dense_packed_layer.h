@@ -56,13 +56,14 @@ public:
     std::vector<std::vector<double>> bias_rearranged;
 
     bool normal_dense = true;
+    bool is_1d_multiplexed = false;
 
     // Helper functions for prepare_weight_0d_lazy
     ls::CkksPlaintextRingt
     generate_weight_0d_pt_for_indices(ls::CkksContext& ctx, uint32_t packed_out_idx, uint32_t weight_idx) const;
     ls::CkksPlaintextRingt generate_bias_0d_pt_for_index(ls::CkksContext& ctx, uint32_t packed_out_idx) const;
 
-    // Helper functions for prepare_weight_for_mult_pack_lazy
+    // Helper functions for prepare_weight_for_mult_pack_lazy (2D)
     ls::CkksPlaintextRingt generate_weight_pt_mult_pack_for_indices(ls::CkksContext& ctx,
                                                                     int packed_out_feature_idx,
                                                                     int n_block_input_idx) const;

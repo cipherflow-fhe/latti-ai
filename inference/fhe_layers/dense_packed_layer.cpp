@@ -25,7 +25,7 @@
 #include <vector>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 DensePackedLayer::DensePackedLayer(const CkksParameter& param_in,
                                    Array<double, 2>&& weight_in,
@@ -127,6 +127,7 @@ CkksPlaintextRingt DensePackedLayer::generate_bias_0d_pt_for_index(CkksContext& 
 void DensePackedLayer::prepare_weight_for_2d_multiplexed_lazy(const Duo& input_shape_in,
                                                               const Duo& skip_in,
                                                               const Duo& invalid_fill_in) {
+    normal_dense = false;
     special_input_shape[0] = input_shape_in[0];
     special_input_shape[1] = input_shape_in[1];
     special_skip[0] = skip_in[0];
@@ -142,7 +143,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed_lazy(const Duo& input_s
     int valid_skip_1 = special_skip[1] / invalid_fill_in[1];
     int n_channel_per_block = valid_skip_0 * valid_skip_1;
     int n_channel = n_in_feature / (special_input_shape[0] * special_input_shape[1]);
-    n_block_input = div_ceil(n_channel, n_block_per_ct * n_channel_per_block) * n_block_per_ct;
+    n_block_input = div_ceil(n_channel, n_channel_per_block * n_block_per_ct) * n_block_per_ct;
 }
 
 CkksPlaintextRingt DensePackedLayer::generate_weight_pt_mult_pack_for_indices(CkksContext& ctx,
@@ -166,10 +167,10 @@ CkksPlaintextRingt DensePackedLayer::generate_weight_pt_mult_pack_for_indices(Ck
         int y = shape_j / special_skip[1];
         if (cx < valid_skip_0 && cy < valid_skip_1 && x < (int)special_input_shape[0] &&
             y < (int)special_input_shape[1] && block_i < n_out_feature) {
-            int rotated_block =
-                ((n_block_input_idx + i / (input_shape_ct_mult[0] * input_shape_ct_mult[1]) + n_block_per_ct) %
-                     n_block_per_ct +
-                 int(n_block_input_idx / n_block_per_ct) * n_block_per_ct);
+            int rotated_block = ((n_block_input_idx + i / (input_shape_ct_mult[0] * input_shape_ct_mult[1])) %
+                                     std::min(n_block_input, n_block_per_ct) +
+                                 int(n_block_input_idx / std::min(n_block_input, n_block_per_ct)) *
+                                     std::min(n_block_input, n_block_per_ct));
             int in_ch = rotated_block * n_channel_per_block + cx * n_channel_per_block_col + cy;
             int line_i = in_ch * spatial_size + x * special_input_shape[1] + y;
             if (line_i >= n_in_feature || block_i > n_out_feature) {
@@ -223,12 +224,26 @@ vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, co
     int n_packed_out_feature_for_mult_pack =
         weight_pt.empty() ? div_ceil(n_out_feature, n_block_per_ct) : (int)weight_pt.size();
 
-    // Each input ct contributes n_block_pre_ct rotations (one per block slot within the ct).
-    // rotated_cts[x_id][rot] = x[x_id] rotated by rot * block_size slots.
     int block_size = input_shape_ct_mult[0] * input_shape_ct_mult[1];
+
+    // Replicate input data across CT blocks so dense only needs n_block_input iterations
+    int n_rot_factor = (n_block_input > 0 && n_block_input < n_block_per_ct) ? n_block_per_ct / n_block_input : 1;
+    int n_rep_iters = (n_rot_factor > 1) ? static_cast<int>(std::floor(std::log2(n_rot_factor))) : 0;
+
+    vector<CkksCiphertext> x_rep(x_size);
+    parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
+        x_rep[x_id] = x[x_id].copy();
+        for (int r = 0; r < n_rep_iters; r++) {
+            x_rep[x_id] =
+                ctx_copy.add(x_rep[x_id], ctx_copy.rotate(x_rep[x_id], -(int)pow(2, r) * n_block_input * block_size));
+        }
+    });
+
+    // rotated_cts[x_id][rot] = x_rep[x_id] rotated by rot * block_size slots.
     vector<vector<CkksCiphertext>> rotated_cts(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
-        rotated_cts[x_id] = populate_rotations_1_side(ctx_copy, x[x_id], n_block_per_ct - 1, block_size);
+        int n_rotations = std::min(n_block_input, n_block_per_ct);
+        rotated_cts[x_id] = populate_rotations_1_side(ctx_copy, x_rep[x_id], n_rotations - 1, block_size);
     });
 
     vector<CkksCiphertext> result;
@@ -238,10 +253,11 @@ vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, co
         n_packed_out_feature_for_mult_pack, th_nums, ctx, [&](CkksContext& ctx_copy, int packed_out_feature_idx) {
             CkksCiphertext s(0);
             int num_inputs = weight_pt.empty() ? n_block_input : weight_pt[packed_out_feature_idx].size();
+            int modulus = std::min(n_block_input, n_block_per_ct);
             for (int in_feature_idx = 0; in_feature_idx < num_inputs; in_feature_idx++) {
                 // in_feature_idx encodes (group, offset): group = which input ct, offset = rotation within ct.
-                int group = in_feature_idx / n_block_per_ct;
-                int offset = in_feature_idx % n_block_per_ct;
+                int group = in_feature_idx / modulus;
+                int offset = in_feature_idx % modulus;
                 auto& x_ct = rotated_cts[group][offset];
 
                 CkksPlaintextRingt w_pt_rt_owned;
@@ -389,6 +405,9 @@ Array<double, 1> DensePackedLayer::run_plaintext(const Array<double, 1>& x, doub
     Array<double, 1> result({n_out_feature});
     double value = 1.0 / multiplier;
 
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int out_feature_idx = 0; out_feature_idx < n_out_feature; out_feature_idx++) {
         double s = bias[out_feature_idx];
         for (int in_feature_idx = 0; in_feature_idx < n_in_feature; in_feature_idx++) {
@@ -416,28 +435,6 @@ void DensePackedLayer::prepare_weight_for_1d_multiplexed(uint32_t input_shape_in
         }
         bias_pt[out_group] = generate_bias_pt_1d_mult_for_index(ctx_copy, out_group);
     });
-}
-
-void DensePackedLayer::prepare_weight_for_1d_multiplexed_lazy(uint32_t input_shape_in,
-                                                              uint32_t skip_in,
-                                                              uint32_t invalid_fill_in) {
-    input_shape_1d = input_shape_in;
-    skip_1d = skip_in;
-    invalid_fill_1d = invalid_fill_in;
-
-    CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    N_half = ctx.get_parameter().get_n() / 2;
-
-    uint32_t block_stride = skip_1d;
-    uint32_t block_size = input_shape_1d * block_stride;
-
-    int n_blocks = N_half / (int)block_size;
-    int valid_sub = (int)skip_1d / (int)invalid_fill_1d;
-    int n_valid_per_ct_1d = n_blocks * valid_sub;
-    n_block_per_ct_1d = n_blocks;
-
-    int n_actual_channels = n_in_feature / (int)input_shape_1d;
-    n_block_input_1d = div_ceil(n_actual_channels, n_valid_per_ct_1d) * n_block_per_ct_1d;
 }
 
 CkksPlaintextRingt
@@ -487,6 +484,31 @@ CkksPlaintextRingt DensePackedLayer::generate_bias_pt_1d_mult_for_index(CkksCont
         }
     }
     return ctx.encode_ringt(b, param_.get_default_scale());
+}
+
+void DensePackedLayer::prepare_weight_for_1d_multiplexed_lazy(uint32_t input_shape_in,
+                                                              uint32_t skip_in,
+                                                              uint32_t invalid_fill_in) {
+    input_shape_1d = input_shape_in;
+    skip_1d = skip_in;
+    invalid_fill_1d = invalid_fill_in;
+
+    CkksContext ctx = CkksContext::create_empty_context(this->param_);
+    N_half = ctx.get_parameter().get_n() / 2;
+
+    uint32_t block_stride = skip_1d;
+    uint32_t block_size = input_shape_1d * block_stride;
+
+    int n_blocks = N_half / (int)block_size;
+    int valid_sub = (int)skip_1d / (int)invalid_fill_1d;
+    int n_valid_per_ct_1d = n_blocks * valid_sub;
+    n_block_per_ct_1d = n_blocks;
+
+    int n_actual_channels = n_in_feature / (int)input_shape_1d;
+    n_block_input_1d = div_ceil(n_actual_channels, n_valid_per_ct_1d) * n_block_per_ct_1d;
+
+    normal_dense = false;
+    is_1d_multiplexed = true;
 }
 
 Feature0DEncrypted DensePackedLayer::run_1d_multiplexed(CkksContext& ctx, const Feature0DEncrypted& x) {

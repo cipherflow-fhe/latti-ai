@@ -110,9 +110,6 @@ class Avgpool2DLayer:
         # n: number of valid slots in a ciphertext
         x_size = len(x)
 
-        # If ciphertext slots are not full, need to rotate to fill them
-        n_rot = int(np.floor(n / 2 / (self.channel * self.shape[0] * self.shape[1])))
-
         log2_stride_0 = int(np.ceil(np.log2(self.stride[0])))
         log2_stride_1 = int(np.ceil(np.log2(self.stride[1])))
 
@@ -126,9 +123,6 @@ class Avgpool2DLayer:
             for j in range(log2_stride_1 - 1, 0 - 1, -1):
                 ct_tmp = rotate_cols(res, (2**j) * self.skip[1])
                 res = add(res, ct_tmp[0])
-
-            for r in range(0, int(np.floor(np.log2(n_rot))) if n_rot > 1 else 0):
-                res = add(res, rotate_cols(res, (2**r) * self.channel * self.shape[0] * self.shape[1])[0])
             result.append(res)
         return result
 
@@ -303,6 +297,25 @@ class Avgpool2DLayer:
         n_select_pt = min(n_channel, out_channels_per_ct)
         select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)]
         return select_tensor_pt, n_channel_per_ct
+
+    def call_custom_compute_multiplexed_avgpool(self, x: list, avg_data_source, n_channel: int, n: int) -> list:
+        """Lazy path for multiplexed avgpool: generate select_tensor_pt on-demand."""
+        n_channel_per_ct = int(math.ceil(n / 2 / (self.shape[0] * self.shape[1])))
+        out_channels_per_ct = n_channel_per_ct * self.stride[0] * self.stride[1]
+        n_select_pt = min(n_channel, out_channels_per_ct)
+
+        select_tensor_pt = []
+        for i in range(n_select_pt):
+            w_pt = CkksPlaintextRingtNode(f'encode_pt_select_{i}')
+            custom_compute(
+                inputs=[avg_data_source],
+                output=w_pt,
+                type='encode_pt',
+                attributes={'op_class': 'Avgpool2DLayer', 'type': 'select_pt', 'i': i},
+            )
+            select_tensor_pt.append(w_pt)
+
+        return self.call_multiplexed_avgpool(x, select_tensor_pt, n_channel, n_channel_per_ct)
 
     def get_fhe_op_count_multiplexed(
         self, x_size: int, n_channel: int, n_channel_per_ct: int, level: int
