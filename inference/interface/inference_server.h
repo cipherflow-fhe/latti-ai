@@ -25,7 +25,7 @@
 #include "interface/inference_client.h"
 #include "util.h"
 
-namespace ls = cxx_sdk_v2;
+namespace ls = lattisense;
 
 /// Server-side encrypted inference interface.
 ///

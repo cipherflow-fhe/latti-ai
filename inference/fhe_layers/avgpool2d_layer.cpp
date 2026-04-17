@@ -19,7 +19,7 @@
 #include "avgpool2d_layer.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 Avgpool2DLayer::Avgpool2DLayer(const Duo& shape_in, const Duo& stride_in) : n_block_per_ct(0) {
     shape[0] = shape_in[0];
@@ -72,24 +72,18 @@ Feature2DEncrypted Avgpool2DLayer::run_adaptive_avgpool(CkksContext& ctx, const 
     result.data.resize(x_size);
     Duo skip = x.skip;
     Duo shape = x.shape;
-    int n_rot = (ctx.get_parameter().get_n() / 2) / (x.n_channel * x.shape[0] * x.shape[1]);
 
     int log2_stride_0 = static_cast<int>(std::ceil(std::log2(stride[0])));
     int log2_stride_1 = static_cast<int>(std::ceil(std::log2(stride[1])));
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         result.data[idx] = x.data[idx].copy();
         for (int i = log2_stride_0 - 1; i >= 0; --i) {
-            auto ct_tmp = ctx_copy.rotate(result.data[idx], pow(2, i) * shape[0] * skip[0] * skip[1]);
+            auto ct_tmp = ctx_copy.rotate(result.data[idx], (int)pow(2, i) * shape[0] * skip[0] * skip[1]);
             result.data[idx] = ctx_copy.add(result.data[idx], ct_tmp);
         }
         for (int j = log2_stride_1 - 1; j >= 0; --j) {
-            auto ct_tmp = ctx_copy.rotate(result.data[idx], pow(2, j) * skip[1]);
+            auto ct_tmp = ctx_copy.rotate(result.data[idx], (int)pow(2, j) * skip[1]);
             result.data[idx] = ctx_copy.add(result.data[idx], ct_tmp);
-        }
-        int n_rot_iters = (n_rot > 1) ? static_cast<int>(std::floor(std::log2(n_rot))) : 0;
-        for (int r = 0; r < n_rot_iters; r++) {
-            result.data[idx] = ctx_copy.add(
-                result.data[idx], ctx_copy.rotate(result.data[idx], pow(2, r) * x.n_channel * x.shape[0] * x.shape[1]));
         }
     });
     result.n_channel = x.n_channel;
@@ -104,7 +98,7 @@ Feature2DEncrypted Avgpool2DLayer::run_adaptive_avgpool(CkksContext& ctx, const 
     return result;
 }
 
-vector<double> Avgpool2DLayer::select_tensor(int num) {
+vector<double> Avgpool2DLayer::select_tensor(int num) const {
     vector<double> tensor;
     for (int k = 0; k < n_block_per_ct; k++) {
         for (int i = 0; i < shape[0] * skip[0]; i++) {
@@ -120,6 +114,25 @@ vector<double> Avgpool2DLayer::select_tensor(int num) {
         }
     }
     return tensor;
+}
+
+void Avgpool2DLayer::prepare_weight_lazy(const CkksParameter& param_in,
+                                         int n_channel_per_ct,
+                                         int n_channel,
+                                         int level,
+                                         const Duo& skip_in,
+                                         const Duo& shape_in) {
+    // 仅缓存参数，不预编码 select_tensor_pt
+    skip = skip_in;
+    n_block_per_ct = div_ceil(n_channel_per_ct, (skip[0] * skip[1]));
+    shape = shape_in;
+    level_ = level;
+    n_channel_ = n_channel;
+}
+
+CkksPlaintextRingt Avgpool2DLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int i) const {
+    vector<double> si = select_tensor(i);
+    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_));
 }
 
 void Avgpool2DLayer::prepare_weight(const CkksParameter& param_in,
@@ -181,12 +194,12 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         result_ct[idx] = x.data[idx].copy();
         for (int i = log2_stride_0 - 1; i >= 0; --i) {
-            cxx_sdk_v2::CkksCiphertext ct_tmp =
+            lattisense::CkksCiphertext ct_tmp =
                 ctx_copy.rotate(result_ct[idx], pow(2, i) * shape[1] * skip[0] * skip[1]);
             result_ct[idx] = ctx_copy.add(result_ct[idx], ct_tmp);
         }
         for (int j = log2_stride_1 - 1; j >= 0; --j) {
-            cxx_sdk_v2::CkksCiphertext ct_tmp = ctx_copy.rotate(result_ct[idx], pow(2, j) * skip[1]);
+            lattisense::CkksCiphertext ct_tmp = ctx_copy.rotate(result_ct[idx], pow(2, j) * skip[1]);
             result_ct[idx] = ctx_copy.add(result_ct[idx], ct_tmp);
         }
         vector<int32_t> steps;
@@ -207,12 +220,12 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
             int32_t r_num = -r_num0 - r_num1 - r_num2 + l_num0 + l_num1 + l_num2;
             steps.push_back(r_num);
         }
-        std::map<int32_t, cxx_sdk_v2::CkksCiphertext> s_rots = ctx_copy.rotate(result_ct[idx], steps);
+        std::map<int32_t, lattisense::CkksCiphertext> s_rots = ctx_copy.rotate(result_ct[idx], steps);
         for (uint32_t i = 0; i < n_valid; i++) {
             int out_channel_pos = (idx * x.n_channel_per_ct + i) % (x.n_channel_per_ct * stride[0] * stride[1]);
             auto& pt_ringt = select_tensor_pt[out_channel_pos];
             auto pt = ctx_copy.ringt_to_mul(pt_ringt, level_);
-            cxx_sdk_v2::CkksCiphertext c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], pt);
+            lattisense::CkksCiphertext c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], pt);
             result_tmp[idx * x.n_channel_per_ct + i] =
                 move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
         }
@@ -222,7 +235,7 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
     CkksCiphertext sp;
     for (int i = 0; i < x.n_channel; i++) {
         int p = i % (stride[0] * stride[1] * x.n_channel_per_ct);
-        cxx_sdk_v2::CkksCiphertext c_m_s = result_tmp[i].copy();
+        lattisense::CkksCiphertext c_m_s = result_tmp[i].copy();
         if (p == 0) {
             sp = move(c_m_s);
         } else {
@@ -409,6 +422,9 @@ Array<double, 3> Avgpool2DLayer::run_plaintext(const Array<double, 3>& x) {
     uint64_t output_height = input_shape[1] / stride[0];
     uint64_t output_width = input_shape[2] / stride[1];
     Array<double, 3> result({input_shape[0], output_height, output_width});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int idx = 0; idx < input_shape[0]; idx++) {
         vector<vector<double>> output(output_height, vector<double>(output_width, 0.0));
         for (int i = 0; i < output_height; i++) {
@@ -431,6 +447,9 @@ Array<double, 3> Avgpool2DLayer::run_plaintext_multiplexed(const Array<double, 3
     uint64_t output_height = input_shape[1] / stride[0];
     uint64_t output_width = input_shape[2] / stride[1];
     Array<double, 3> result({input_shape[0], output_height, output_width});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int idx = 0; idx < input_shape[0]; idx++) {
         vector<vector<double>> output(output_height, vector<double>(output_width, 0.0));
         for (int i = 0; i < output_height; i++) {

@@ -57,10 +57,18 @@ public:
 
     bool normal_conv = true;
 
-    // Helper functions to generate weights/bias/mask on-demand
+    // Helper functions to generate weights/bias/mask on-demand (post_skip_rotation path)
     ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
     ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
     ls::CkksPlaintextRingt generate_mask_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int i) const;
+
+    // Helper functions to generate weights/bias/mask on-demand (reduct_rot path)
+    ls::CkksPlaintextRingt
+    generate_weight_pt_for_indices_reduct_rot(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
+    ls::CkksPlaintextRingt generate_bias_pt_for_index_reduct_rot(ls::CkksContext& ctx, int bpt_idx) const;
+    ls::CkksPlaintextRingt generate_mask_pt_for_indices_reduct_rot(ls::CkksContext& ctx, int ct_idx, int i) const;
+
+    bool use_reduct_rot = false;
 
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
@@ -89,7 +97,8 @@ private:
     int cached_skip_prod = 0;
     int cached_bias_n_channel_per_ct = 0;
     int cached_total_block_size = 0;
+    // For reduct_rot
+    uint32_t cached_skip_out_prod = 0;
 };
 
-cxx_sdk_v2::CkksCiphertext
-sum_slot(cxx_sdk_v2::CkksContext& ctx, cxx_sdk_v2::CkksCiphertext& x, uint32_t m, uint32_t p);
+ls::CkksCiphertext sum_slot(ls::CkksContext& ctx, ls::CkksCiphertext& x, uint32_t m, uint32_t p);

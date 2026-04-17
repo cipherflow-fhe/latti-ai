@@ -19,7 +19,7 @@
 #include "add_layer.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 void copy_param(const Feature2DEncrypted& x1, Feature2DEncrypted& result) {
     result.dim = x1.dim;
@@ -64,12 +64,31 @@ Feature2DEncrypted AddLayer::run(CkksContext& ctx, const Feature2DEncrypted& x0,
 Array<double, 3> AddLayer::run_plaintext(const Array<double, 3>& x0, const Array<double, 3>& x1) {
     auto shape1 = x0.get_shape();
     Array<double, 3> y(shape1);
-    for (int i = 0; i < shape1[0]; i++) {
-        for (int j = 0; j < shape1[1]; j++) {
-            for (int z = 0; z < shape1[2]; z++) {
+    for (int i = 0; i < (int)shape1[0]; i++) {
+        for (int j = 0; j < (int)shape1[1]; j++) {
+            for (int z = 0; z < (int)shape1[2]; z++) {
                 y.set(i, j, z, x0.get(i, j, z) + x1.get(i, j, z));
             }
         }
+    }
+    return y;
+}
+
+Array<double, 2> AddLayer::run_plaintext_1d(const Array<double, 2>& x0, const Array<double, 2>& x1) {
+    auto shape = x0.get_shape();
+    Array<double, 2> y(shape);
+    for (int i = 0; i < (int)shape[0]; i++) {
+        for (int j = 0; j < (int)shape[1]; j++) {
+            y.set(i, j, x0.get(i, j) + x1.get(i, j));
+        }
+    }
+    return y;
+}
+
+vector<double> AddLayer::run_plaintext_0d(const vector<double>& x0, const vector<double>& x1) {
+    vector<double> y(x0.size());
+    for (size_t i = 0; i < x0.size(); i++) {
+        y[i] = x0[i] + x1[i];
     }
     return y;
 }

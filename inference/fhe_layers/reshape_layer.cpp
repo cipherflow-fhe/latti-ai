@@ -20,7 +20,7 @@
 #include "util.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 ReshapeLayer::ReshapeLayer(const CkksParameter& param_in) : Layer(param_in) {}
 

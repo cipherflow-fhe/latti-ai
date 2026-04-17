@@ -40,7 +40,12 @@ add_library(fhe_layers
 target_include_directories(fhe_layers PUBLIC 
   ${CMAKE_SOURCE_DIR}/data_structs/
 )
-target_link_libraries(fhe_layers PUBLIC lattisense)
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(fhe_layers PUBLIC lattisense OpenMP::OpenMP_CXX)
+else()
+  target_link_libraries(fhe_layers PUBLIC lattisense)
+endif()
 
 target_precompile_headers(fhe_layers PRIVATE
   <nlohmann/json.hpp>

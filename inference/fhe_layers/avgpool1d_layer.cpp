@@ -19,7 +19,7 @@
 #include "avgpool1d_layer.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 Avgpool1DLayer::Avgpool1DLayer(uint32_t shape_in, uint32_t stride_in) : n_block_per_ct(0), skip(0) {
     shape = shape_in;
@@ -63,7 +63,7 @@ Feature1DEncrypted Avgpool1DLayer::run_adaptive_avgpool(CkksContext& ctx, const 
     return result;
 }
 
-vector<double> Avgpool1DLayer::select_tensor(int num) {
+vector<double> Avgpool1DLayer::select_tensor(int num) const {
     vector<double> tensor;
     for (int k = 0; k < n_block_per_ct; k++) {
         for (int i = 0; i < shape * skip; i++) {
@@ -75,6 +75,23 @@ vector<double> Avgpool1DLayer::select_tensor(int num) {
         }
     }
     return tensor;
+}
+
+void Avgpool1DLayer::prepare_weight_lazy(const CkksParameter& param_in,
+                                         int n_channel_per_ct,
+                                         int n_channel,
+                                         int level,
+                                         uint32_t skip_in,
+                                         uint32_t shape_in) {
+    skip = skip_in;
+    n_block_per_ct = div_ceil(n_channel_per_ct, skip);
+    shape = shape_in;
+    level_ = level;
+}
+
+CkksPlaintextRingt Avgpool1DLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int i) const {
+    vector<double> si = select_tensor(i);
+    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_));
 }
 
 void Avgpool1DLayer::prepare_weight(const CkksParameter& param_in,
@@ -112,7 +129,7 @@ Feature1DEncrypted Avgpool1DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         result_ct[idx] = x.data[idx].copy();
         for (int i = log2_stride - 1; i >= 0; --i) {
-            cxx_sdk_v2::CkksCiphertext ct_tmp = ctx_copy.rotate(result_ct[idx], pow(2, i) * skip);
+            lattisense::CkksCiphertext ct_tmp = ctx_copy.rotate(result_ct[idx], pow(2, i) * skip);
             result_ct[idx] = ctx_copy.add(result_ct[idx], ct_tmp);
         }
         vector<int32_t> steps;
@@ -129,12 +146,12 @@ Feature1DEncrypted Avgpool1DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
             int32_t r_num = -r_num0 - r_num1 + l_num0 + l_num1;
             steps.push_back(r_num);
         }
-        std::map<int32_t, cxx_sdk_v2::CkksCiphertext> s_rots = ctx_copy.rotate(result_ct[idx], steps);
+        std::map<int32_t, lattisense::CkksCiphertext> s_rots = ctx_copy.rotate(result_ct[idx], steps);
         for (uint32_t i = 0; i < n_valid; i++) {
             int out_channel_pos = (idx * x.n_channel_per_ct + i) % (x.n_channel_per_ct * stride);
             auto& pt_ringt = select_tensor_pt[out_channel_pos];
             auto pt = ctx_copy.ringt_to_mul(pt_ringt, level_);
-            cxx_sdk_v2::CkksCiphertext c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], pt);
+            lattisense::CkksCiphertext c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], pt);
             result_tmp[idx * x.n_channel_per_ct + i] =
                 move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
         }
@@ -144,7 +161,7 @@ Feature1DEncrypted Avgpool1DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
     CkksCiphertext sp;
     for (int i = 0; i < x.n_channel; i++) {
         int p = i % (stride * x.n_channel_per_ct);
-        cxx_sdk_v2::CkksCiphertext c_m_s = result_tmp[i].copy();
+        lattisense::CkksCiphertext c_m_s = result_tmp[i].copy();
         if (p == 0) {
             sp = move(c_m_s);
         } else {
@@ -168,6 +185,9 @@ Array<double, 2> Avgpool1DLayer::run_plaintext(const Array<double, 2>& x) {
     std::array<uint64_t, 2UL> input_shape = x.get_shape();
     uint64_t output_length = input_shape[1] / stride;
     Array<double, 2> result({input_shape[0], output_length});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int idx = 0; idx < input_shape[0]; idx++) {
         for (int i = 0; i < output_length; i++) {
             double sum = 0.0;
@@ -184,6 +204,9 @@ Array<double, 2> Avgpool1DLayer::run_plaintext_multiplexed(const Array<double, 2
     std::array<uint64_t, 2UL> input_shape = x.get_shape();
     uint64_t output_length = input_shape[1] / stride;
     Array<double, 2> result({input_shape[0], output_length});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int idx = 0; idx < input_shape[0]; idx++) {
         for (int i = 0; i < output_length; i++) {
             double sum = 0.0;

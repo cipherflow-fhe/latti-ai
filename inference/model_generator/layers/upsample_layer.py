@@ -386,7 +386,7 @@ class UpsampleNearestLayer:
                     output=select_pt,
                     type='encode_pt',
                     attributes={
-                        'op_class': 'UpsampleNearest',
+                        'op_class': 'UpsampleNearestLayer',
                         'type': 'select_tensor_pt',
                         'i': out_channel_pos,
                     },

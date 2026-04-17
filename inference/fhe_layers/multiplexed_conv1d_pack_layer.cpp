@@ -23,7 +23,7 @@
 #include <cmath>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 MultiplexedConv1DPackedLayer::MultiplexedConv1DPackedLayer(const CkksParameter& param_in,
                                                            uint32_t input_shape_in,
@@ -242,6 +242,9 @@ Array<double, 2> MultiplexedConv1DPackedLayer::run_plaintext(const Array<double,
         }
     }
 
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int i = 0; i < n_channel_out; i++) {
         for (int j = 0; j < input_shape / stride; j++) {
             double s = bias[i];

@@ -20,9 +20,9 @@
 
 #include <string>
 
-#include <cxx_sdk_v2/cxx_fhe_task.h>
+#include <lattisense/cxx_fhe_task.h>
 
-namespace ls = cxx_sdk_v2;
+namespace ls = lattisense;
 
 std::string fpga_base_path = "/acc_test/integrate/noc_config_16c_3";
 std::string gpu_base_path = "/acc_test/integrate/gpu_tests";
