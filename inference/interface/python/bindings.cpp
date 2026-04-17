@@ -24,18 +24,38 @@
 
 namespace py = pybind11;
 
-// Convert Bytes (vector<uint8_t>) to Python bytes object
+// ── py::bytes ↔ Bytes (vector<uint8_t>) conversion ──────────────────────────
+// pybind11's stl.h type caster does NOT auto-convert Python bytes ↔ vector<uint8_t>.
+// We must handle this explicitly.
+
+// Bytes → py::bytes (zero-copy view, Python manages the bytes object)
 static py::bytes to_pybytes(const Bytes& b) {
     return py::bytes(reinterpret_cast<const char*>(b.data()), b.size());
 }
 
-// Convert map<string, Bytes> to dict[str, bytes]
+// py::bytes → Bytes (requires copy)
+static Bytes from_pybytes(const py::bytes& b) {
+    const char* ptr = PyBytes_AS_STRING(b.ptr());
+    Py_ssize_t len = PyBytes_GET_SIZE(b.ptr());
+    return Bytes(reinterpret_cast<const uint8_t*>(ptr), reinterpret_cast<const uint8_t*>(ptr) + len);
+}
+
+// map<string, Bytes> → dict[str, bytes]
 static py::dict to_pybytes_dict(const std::map<std::string, Bytes>& m) {
     py::dict d;
     for (auto& [k, v] : m) {
         d[py::cast(k)] = to_pybytes(v);
     }
     return d;
+}
+
+// dict[str, bytes] → map<string, Bytes>
+static std::map<std::string, Bytes> from_pybytes_dict(const py::dict& d) {
+    std::map<std::string, Bytes> m;
+    for (auto& [key, val] : d) {
+        m[key.cast<std::string>()] = from_pybytes(val.cast<py::bytes>());
+    }
+    return m;
 }
 
 PYBIND11_MODULE(latti_inference, m) {
@@ -72,8 +92,18 @@ PYBIND11_MODULE(latti_inference, m) {
                 return to_pybytes_dict(result);
             },
             py::arg("input_csvs"))
-        .def("decrypt", &InferenceClient::decrypt, py::arg("encrypted_outputs"),
-             py::call_guard<py::gil_scoped_release>());
+        .def(
+            "decrypt",
+            [](InferenceClient& self, const py::dict& encrypted_outputs) {
+                auto outputs = from_pybytes_dict(encrypted_outputs);
+                std::map<std::string, DecryptedOutput> result;
+                {
+                    py::gil_scoped_release release;
+                    result = self.decrypt(outputs);
+                }
+                return result;
+            },
+            py::arg("encrypted_outputs"));
 
     py::class_<InferenceServer>(m, "InferenceServer")
         .def(py::init([](const std::string& server_dir, bool use_gpu) {
@@ -81,16 +111,23 @@ PYBIND11_MODULE(latti_inference, m) {
                  return InferenceServer(server_dir, use_gpu);
              }),
              py::arg("server_dir"), py::arg("use_gpu") = false)
-        .def("import_eval_context", &InferenceServer::import_eval_context, py::arg("eval_context"),
-             py::call_guard<py::gil_scoped_release>())
+        .def(
+            "import_eval_context",
+            [](InferenceServer& self, const py::bytes& eval_ctx) {
+                auto data = from_pybytes(eval_ctx);
+                py::gil_scoped_release release;
+                self.import_eval_context(data);
+            },
+            py::arg("eval_context"))
         .def("load_model", &InferenceServer::load_model, py::call_guard<py::gil_scoped_release>())
         .def(
             "evaluate",
-            [](InferenceServer& self, const std::map<std::string, Bytes>& encrypted_inputs) {
+            [](InferenceServer& self, const py::dict& encrypted_inputs) {
+                auto inputs = from_pybytes_dict(encrypted_inputs);
                 std::map<std::string, Bytes> result;
                 {
                     py::gil_scoped_release release;
-                    result = self.evaluate(encrypted_inputs);
+                    result = self.evaluate(inputs);
                 }
                 return to_pybytes_dict(result);
             },
