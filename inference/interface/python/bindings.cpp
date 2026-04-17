@@ -46,7 +46,11 @@ PYBIND11_MODULE(latti_inference, m) {
         .def_readonly("num_outputs", &DecryptedOutput::num_outputs);
 
     py::class_<InferenceClient>(m, "InferenceClient")
-        .def(py::init<const std::string&>(), py::arg("client_dir"))
+        .def(py::init([](const std::string& client_dir) {
+                 py::gil_scoped_release release;
+                 return InferenceClient(client_dir);
+             }),
+             py::arg("client_dir"))
         .def("setup", &InferenceClient::setup, py::call_guard<py::gil_scoped_release>())
         .def("export_eval_context",
              [](const InferenceClient& self) {
@@ -72,7 +76,11 @@ PYBIND11_MODULE(latti_inference, m) {
              py::call_guard<py::gil_scoped_release>());
 
     py::class_<InferenceServer>(m, "InferenceServer")
-        .def(py::init<const std::string&, bool>(), py::arg("server_dir"), py::arg("use_gpu") = false)
+        .def(py::init([](const std::string& server_dir, bool use_gpu) {
+                 py::gil_scoped_release release;
+                 return InferenceServer(server_dir, use_gpu);
+             }),
+             py::arg("server_dir"), py::arg("use_gpu") = false)
         .def("import_eval_context", &InferenceServer::import_eval_context, py::arg("eval_context"),
              py::call_guard<py::gil_scoped_release>())
         .def("load_model", &InferenceServer::load_model, py::call_guard<py::gil_scoped_release>())
