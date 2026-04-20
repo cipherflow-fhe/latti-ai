@@ -930,7 +930,8 @@ class LayerAbstractGraph:
                 if not IS_BALANCE:
                     layer.weight_scale = layer.scale_up * layer.scale_down
                     layer.bias_scale = layer.scale_up
-
+                absorb_type.append('polyact')
+                absorb_path.append(layer.poly_path)
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,
@@ -951,7 +952,6 @@ class LayerAbstractGraph:
                     'absorb_type': absorb_type,
                     'absorb_path': absorb_path,
                     'is_big_size': layer.is_big_size,
-                    'poly_path': layer.poly_path,
                 }
             if 'pool' in layer_type:
                 if 'avgpool' in layer_type:
@@ -1006,6 +1006,8 @@ class LayerAbstractGraph:
                 if not IS_BALANCE:
                     layer.weight_scale = layer.scale_up * layer.scale_down
                     layer.bias_scale = layer.scale_up
+                absorb_type.append('polyact')
+                absorb_path.append(layer.poly_path)
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,
@@ -1020,7 +1022,6 @@ class LayerAbstractGraph:
                     'bias_scale': layer.bias_scale,
                     'absorb_type': absorb_type,
                     'absorb_path': absorb_path,
-                    'poly_path': layer.poly_path,
                 }
             if 'batchnorm' in layer_type:
                 layers[layer_id] = {
@@ -1055,6 +1056,8 @@ class LayerAbstractGraph:
                 if not IS_BALANCE:
                     layer.weight_scale = layer.scale_up * layer.scale_down
                     layer.bias_scale = layer.scale_up
+                absorb_type.append('polyact')
+                absorb_path.append(layer.poly_path)
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,
@@ -1070,7 +1073,6 @@ class LayerAbstractGraph:
                     'weight_path': layer_id + '.weight',
                     'weight_scale_list': layer.weight_scale_list,
                     'is_big_size': layer.is_big_size,
-                    'poly_path': layer.poly_path,
                 }
 
             if 'maxpool' == layer_type:
