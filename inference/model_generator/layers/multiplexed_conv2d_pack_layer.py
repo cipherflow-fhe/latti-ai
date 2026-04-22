@@ -368,6 +368,106 @@ class MultiplexedConv2DPackedLayer:
                 res.append(sp)
         return res
 
+    def call_custom_compute_reduct_rot(self, x: list[CkksCiphertextNode], conv_data_source) -> list[CkksCiphertextNode]:
+        """Lazy-mode counterpart of call_reduct_rot.
+
+        Builds the same reduct_rot graph (single-rotation + combined-mask variant)
+        but emits encode_pt custom_compute nodes referencing conv_data_source instead
+        of per-slot CkksPlaintextRingtNode inputs. The C++ executor dispatches to
+        generate_*_reduct_rot / generate_combined_mask_pt_for_reduct_rot based on
+        the layer's use_reduct_rot flag.
+
+        Loop-packing replication is disabled (n_actual_blocks == n_block_per_ct),
+        matching C++ prepare_weight_for_reduct_rot_lazy().
+        """
+        input_ct_size = self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
+        n_actual_blocks = self.n_block_per_ct
+
+        block_rotations: list[CkksCiphertextNode] = list()
+        for x_ct in x:
+            block_rotations += MultiplexedConv2DPackedLayer.populate_rotations_1_side(
+                x_ct, n_actual_blocks - 1, input_ct_size
+            )
+        kernel_rotations = self.gen_rotated_x(block_rotations)
+
+        skip_out_prod = int(self.zero_inserted_skip[0] * self.zero_inserted_skip[1])
+        is_trivial = self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1
+        n_pack_in_channel = int(np.ceil(self.n_in_channel / self.n_channel_per_ct))
+        size_1 = int(n_pack_in_channel * n_actual_blocks)
+        kernel_size = int(self.kernel_shape[0] * self.kernel_shape[1])
+        # n_packed_out = ceil(n_out / output_channels_per_ct), where output_channels_per_ct =
+        #   n_block_per_ct * skip_out_prod (equivalently n_channel_per_ct * stride / upsample).
+        # Don't trust self.n_packed_out_channel — deploy_cmds.py passes a value based on the
+        # input feature's pack_num, which is off by stride_prod for stride>1 layers.
+        n_channel_per_ct_out = int(self.n_block_per_ct * skip_out_prod)
+        n_packed_out = max(1, int(np.ceil(self.n_out_channel / n_channel_per_ct_out)))
+        n_weight_pt = int(n_packed_out * skip_out_prod)
+
+        res: list = list()
+        result_ct: list = list()
+
+        for ct_idx in range(n_weight_pt):
+            sub_pos = ct_idx % skip_out_prod
+            output_ct_group = ct_idx // skip_out_prod
+
+            x_ct_list = list()
+            w_pt_list = list()
+            for j in range(size_1):
+                for k in range(kernel_size):
+                    w_pt = CkksPlaintextRingtNode(f'encode_pt_w_{ct_idx}_{j}_{k}')
+                    custom_compute(
+                        inputs=[conv_data_source],
+                        output=w_pt,
+                        type='encode_pt',
+                        attributes={'op_class': op_class, 'type': 'weight_pt', 'i': ct_idx, 'j': j, 'k': k},
+                    )
+                    x_ct_list.append(kernel_rotations[j][k])
+                    w_pt_list.append(w_pt)
+            s = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+            s = rescale(s)
+
+            if is_trivial:
+                # skip_out_prod == 1, so output_ct_group == ct_idx
+                b_pt = CkksPlaintextRingtNode(f'encode_pt_b_{output_ct_group}')
+                custom_compute(
+                    inputs=[conv_data_source],
+                    output=b_pt,
+                    type='encode_pt',
+                    attributes={'op_class': op_class, 'type': 'bias_pt', 'i': output_ct_group},
+                )
+                res.append(add(s, b_pt))
+            else:
+                s = self.sum_slot(s, self.skip[0], self.skip[1] * self.input_shape[1])
+                s = self.sum_slot(s, self.skip[1], 1)
+                col_offset = int(sub_pos // self.zero_inserted_skip[1]) * self.input_shape[1] * self.skip[1]
+                rot_step = int(-col_offset - int(sub_pos % self.zero_inserted_skip[1]))
+                s_rot = s if rot_step == 0 else rotate_cols(s, [rot_step])[0]
+                m_pt = CkksPlaintextRingtNode(f'encode_pt_m_{ct_idx}')
+                custom_compute(
+                    inputs=[conv_data_source],
+                    output=m_pt,
+                    type='encode_pt',
+                    attributes={'op_class': op_class, 'type': 'mask_pt', 'i': ct_idx},
+                )
+                c_m_s = mult(s_rot, m_pt)
+                result_ct.append(rescale(c_m_s))
+
+        if not is_trivial:
+            for g in range(n_packed_out):
+                sp = result_ct[g * skip_out_prod]
+                for s_idx in range(1, skip_out_prod):
+                    sp = add(sp, result_ct[g * skip_out_prod + s_idx])
+                b_pt = CkksPlaintextRingtNode(f'encode_pt_b_{g}')
+                custom_compute(
+                    inputs=[conv_data_source],
+                    output=b_pt,
+                    type='encode_pt',
+                    attributes={'op_class': op_class, 'type': 'bias_pt', 'i': g},
+                )
+                sp = add(sp, b_pt)
+                res.append(sp)
+        return res
+
     def make_pt_nodes(self, layer_id):
         """Return (weight_pt, bias_pt, mask_pt).
 
@@ -504,24 +604,29 @@ class MultiplexedConv2DPackedLayer:
     def make_pt_nodes_reduct_rot(self, layer_id):
         """Return (weight_pt, bias_pt, mask_pt) for call_reduct_rot().
 
-        Mirrors C++ prepare_weight_for_reduct_rot():
+        Mirrors C++ prepare_weight_for_reduct_rot() (with single-rotation /
+        combined-mask optimization):
           weight_pt[i][j][k]: i in n_packed_out_channel * skip_out_prod,
                                j in n_packed_in_channel * n_actual_blocks,
                                k in kernel_size
           bias_pt[i]: i in n_packed_out_channel
-          mask_pt[i][j]: i in n_weight_pt, j in mask_size (empty if stride=skip=1)
+          mask_pt[i]: single combined mask per ct_idx (shape [1]); empty outer
+                     list if stride=skip=1.
         """
         import math as _math
 
         n_pack_in_channel = _math.ceil(self.n_in_channel / self.n_channel_per_ct)
         kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
         skip_out_prod = int(self.zero_inserted_skip[0] * self.zero_inserted_skip[1])
-        n_weight_pt = self.n_packed_out_channel * skip_out_prod
         size_1 = n_pack_in_channel * self.n_actual_blocks
-        # Bias count: one entry per output CT after accumulation.
-        # n_channel_per_ct_out = n_block_per_ct * skip_out_prod (reduct_rot grouping).
+        # Bias count and n_packed_out: one entry per output CT after accumulation.
+        # n_channel_per_ct_out = n_block_per_ct * skip_out_prod (reduct_rot grouping, equivalent
+        # to n_channel_per_ct * stride_prod / upsample_prod). Don't trust self.n_packed_out_channel —
+        # deploy_cmds.py passes a value based on the input feature's pack_num, which is off by
+        # stride_prod for stride>1 layers.
         n_channel_per_ct_out = self.n_block_per_ct * skip_out_prod
         n_bias = max(1, _math.ceil(self.n_out_channel / n_channel_per_ct_out))
+        n_weight_pt = n_bias * skip_out_prod
 
         weight_pt = [
             [
@@ -534,28 +639,15 @@ class MultiplexedConv2DPackedLayer:
         if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
             mask_pt = []
         else:
-            # Compute per-ct_idx valid mask count: only entries where channel_out < n_out_channel.
-            # channel_out(ct_idx, i) = output_ct_group * n_channel_per_ct_out + i * skip_out_prod + sub_pos
-            skip_out_prod_l = int(self.zero_inserted_skip[0] * self.zero_inserted_skip[1])
-            n_channel_per_ct_out_l = self.n_block_per_ct * skip_out_prod_l
-            mask_pt = []
-            for ct_idx_l in range(n_weight_pt):
-                sub_pos_l = ct_idx_l % skip_out_prod_l
-                output_ct_group_l = ct_idx_l // skip_out_prod_l
-                base = output_ct_group_l * n_channel_per_ct_out_l + sub_pos_l
-                if base >= self.n_out_channel:
-                    valid_i = 0
-                else:
-                    valid_i = min(
-                        self.n_block_per_ct,
-                        int(np.ceil((self.n_out_channel - base) / skip_out_prod_l)),
-                    )
-                mask_pt.append([CkksPlaintextRingtNode(f'convm_{layer_id}_{ct_idx_l}_{j}') for j in range(valid_i)])
+            # One combined mask per ct_idx — n_block_per_ct per-block select_tensor
+            # masks hit disjoint slot positions after the single shared rotation,
+            # so they collapse into one union mask on the C++ side.
+            mask_pt = [[CkksPlaintextRingtNode(f'convm_{layer_id}_{ct_idx}')] for ct_idx in range(n_weight_pt)]
         return weight_pt, bias_pt, mask_pt
 
     def call_reduct_rot(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mask_pt) -> list[CkksCiphertextNode]:
-        """Corresponds to C++ run_core_for_reduct_rot."""
-        # 1. Block direction rotation with loop-packing replication (same as call/call_custom_compute).
+        """Corresponds to C++ run_core_for_reduct_rot (with single-rotation + combined-mask optimization)."""
+        # 1. Block direction rotation with loop-packing replication.
         input_ct_size = self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
         n_actual_blocks = self.n_actual_blocks
         n_rot_factor = self.n_block_per_ct // n_actual_blocks if n_actual_blocks < self.n_block_per_ct else 1
@@ -577,11 +669,11 @@ class MultiplexedConv2DPackedLayer:
         # 2. Kernel direction rotation
         kernel_rotations = self.gen_rotated_x(block_rotations)
 
-        # 3. Multiply-accumulate, rescale, post-process
+        # 3. Multiply-accumulate, rescale, single-rot + combined-mask
         res: list = list()
         result_ct: list = list()
         skip_out_prod = int(self.zero_inserted_skip[0] * self.zero_inserted_skip[1])
-        n_channel_per_ct_out = self.n_block_per_ct * skip_out_prod
+        is_trivial = self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1
 
         for ct_idx in range(len(weight_pt)):
             sub_pos = ct_idx % skip_out_prod
@@ -596,62 +688,35 @@ class MultiplexedConv2DPackedLayer:
             s = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             s = rescale(s)
 
-            if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
-                # No mask needed: bias indexed directly by output_ct_group (= ct_idx when skip_out_prod=1)
+            if is_trivial:
+                # skip_out_prod == 1 here; bias indexed directly by output_ct_group (= ct_idx).
                 res.append(add(s, bias_pt[output_ct_group]))
             else:
-                valid_i = len(mask_pt[ct_idx]) if mask_pt else 0
-                if valid_i == 0:
-                    # No valid output channels for this ct_idx; skip to avoid dangling nodes.
-                    continue
                 s = self.sum_slot(s, self.skip[0], self.skip[1] * self.input_shape[1])
                 s = self.sum_slot(s, self.skip[1], 1)
-                # Only compute rotations for the valid i range (where channel_out < n_out_channel).
-                # mask_pt[ct_idx] already has exactly that many entries.
-                valid_i = len(mask_pt[ct_idx])
-                steps = []
-                for i in range(valid_i):
-                    channel_local = i * skip_out_prod + sub_pos
-                    n_block_residue = (
-                        np.floor(channel_local / (self.zero_inserted_skip[0] * self.zero_inserted_skip[1]))
-                        * self.skip[0]
-                        * self.skip[1]
-                        * self.input_shape[0]
-                        * self.input_shape[1]
-                    )
-                    n_skip = (
-                        np.floor(
-                            (channel_local % (self.zero_inserted_skip[0] * self.zero_inserted_skip[1]))
-                            / self.zero_inserted_skip[1]
-                        )
-                        * self.input_shape[1]
-                        * self.skip[1]
-                    )
-                    rot_step = (
-                        -n_block_residue
-                        - n_skip
-                        - channel_local % self.zero_inserted_skip[1]
-                        + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
-                    )
-                    steps.append(int(rot_step))
-                s_rots = rotate_cols(s, steps)
-                # mask_pt[ct_idx] only contains entries where channel_out < n_out_channel
-                for i in range(valid_i):
-                    c_m_s = mult(s_rots[i], mask_pt[ct_idx][i])
-                    result_ct.append(rescale(c_m_s))
+                # Single rotation: all n_block_per_ct per-block rot_steps collapse to one value
+                # that depends only on sub_pos (block-stride = cached_input_block_size is baked
+                # into the weight encoding, canceling the per-i offset).
+                col_offset = int(sub_pos // self.zero_inserted_skip[1]) * self.input_shape[1] * self.skip[1]
+                rot_step = int(-col_offset - int(sub_pos % self.zero_inserted_skip[1]))
+                s_rot = s if rot_step == 0 else rotate_cols(s, [rot_step])[0]
+                # Single combined mask selects all n_block_per_ct valid slots at once.
+                c_m_s = mult(s_rot, mask_pt[ct_idx][0])
+                result_ct.append(rescale(c_m_s))
 
-        # 4. Accumulate n_channel_per_ct_out results per output CT, then add bias
-        if not (self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1):
-            sp = None
-            for i in range(len(result_ct)):
-                p = i % n_channel_per_ct_out
-                c_m_s = result_ct[i]
-                if p == 0:
-                    sp = c_m_s
-                    bias_idx = i // n_channel_per_ct_out
-                    sp = add(sp, bias_pt[bias_idx])
-                else:
-                    sp = add(sp, c_m_s)
-                if (i + 1) % n_channel_per_ct_out == 0 or i == len(result_ct) - 1:
-                    res.append(sp)
+        # 4. Accumulate skip_out_prod sub_pos-slices per output CT, then add bias.
+        #    n_packed_out = ceil(n_out / (n_block_per_ct * skip_out_prod)) — do not trust
+        #    self.n_packed_out_channel (deploy_cmds.py passes it computed from the input
+        #    feature's pack_num, which is off by stride_prod for stride>1 layers).
+        if not is_trivial:
+            import math as _math
+
+            n_channel_per_ct_out = int(self.n_block_per_ct * skip_out_prod)
+            n_packed_out = max(1, _math.ceil(self.n_out_channel / n_channel_per_ct_out))
+            for g in range(n_packed_out):
+                sp = result_ct[g * skip_out_prod]
+                for s_idx in range(1, skip_out_prod):
+                    sp = add(sp, result_ct[g * skip_out_prod + s_idx])
+                sp = add(sp, bias_pt[g])
+                res.append(sp)
         return res

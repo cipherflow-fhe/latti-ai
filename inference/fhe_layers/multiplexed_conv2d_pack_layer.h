@@ -40,7 +40,8 @@ public:
     void prepare_weight_lazy() override {
         prepare_weight_for_post_skip_rotation_lazy();
     }
-    // virtual void prepare_weight_for_reduct_rot();
+    virtual void prepare_weight_for_reduct_rot();
+    virtual void prepare_weight_for_reduct_rot_lazy();
     virtual void prepare_weight_for_post_skip_rotation();
     virtual void prepare_weight_for_post_skip_rotation_lazy();
 
@@ -67,6 +68,7 @@ public:
     generate_weight_pt_for_indices_reduct_rot(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
     ls::CkksPlaintextRingt generate_bias_pt_for_index_reduct_rot(ls::CkksContext& ctx, int bpt_idx) const;
     ls::CkksPlaintextRingt generate_mask_pt_for_indices_reduct_rot(ls::CkksContext& ctx, int ct_idx, int i) const;
+    ls::CkksPlaintextRingt generate_combined_mask_pt_for_reduct_rot(ls::CkksContext& ctx, int ct_idx) const;
 
     bool use_reduct_rot = false;
 
