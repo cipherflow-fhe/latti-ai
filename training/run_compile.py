@@ -28,9 +28,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / 'model_compiler'))
+sys.path.insert(0, str(Path(__file__).parent))
 
 from model_compiler.pipeline import run_pipeline
 from model_export.onnx_to_json import onnx_to_json
+from nn_tools import export_h5_from_onnx
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 log = logging.getLogger(__name__)
@@ -108,6 +110,8 @@ Examples:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    onnx_path = input_path if is_onnx else None
+
     if is_onnx:
         onnx_style = args.style if args.style else 'ordinary'
         pt_json_path = output_dir / 'pt.json'
@@ -153,6 +157,28 @@ Examples:
             print(
                 f'[Compile] Structure: task/server/nn_layers_ct_0.json, task/{{server,client}}/{{task_config,ckks_parameter}}.json'
             )
+
+        if onnx_path is not None and task_dir.exists():
+            json_path = task_dir / 'server' / 'nn_layers_ct_0.json'
+            h5_path = task_dir / 'server' / 'model_parameters.h5'
+            if json_path.exists():
+                print(f'\n[H5 Export] ONNX: {onnx_path}')
+                print(f'[H5 Export] JSON: {json_path}')
+                print(f'[H5 Export] H5:   {h5_path}')
+                try:
+                    export_h5_from_onnx(
+                        onnx_path=str(onnx_path),
+                        json_path=str(json_path),
+                        h5_path=str(h5_path),
+                    )
+                    print(f'[H5 Export] Done: {h5_path}')
+                except Exception as e:
+                    print(f'\n[H5 Export] Failed: {e}')
+                    import traceback
+
+                    traceback.print_exc()
+            else:
+                print(f'\n[H5 Export] Skipped: {json_path} not found')
 
         return 0
 

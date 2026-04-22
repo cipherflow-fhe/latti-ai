@@ -272,10 +272,7 @@ void InitInferenceProcess::_init_mult_scalar_layer(const string& key,
     CkksParameter& param = *ckks_parameters_.at(feature_input0.ckks_parameter_id);
 
     double scale = layer["weight_scale"];
-    auto weight = gen_random_array<1>({feature_input0.channel}, 1.0);
-    for (int i = 0; i < feature_input0.channel; i++) {
-        weight.set(i, scale);
-    }
+    auto weight = _load_h5_tensor<1>(layer, h5_file, "weight", {feature_input0.channel});
     auto mult_scalar = MakeU<MultScalarLayer>(param, feature_input0.shape, move(weight), feature_input0.skip,
                                               feature_input0.pack_channel_per_ciphertext, feature_input0.level,
                                               upsample_factor, block_expansion);
