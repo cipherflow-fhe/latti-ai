@@ -103,11 +103,11 @@ jobs:
 
       - name: Build pybind11 modules (client + server)
         run: |
-          # Client (standalone, only needs lattisense)
+          # Client (standalone, only needs fhe_ops_lib)
           cd inference/interface/python/client
           mkdir -p build && cd build
           cmake .. \
-            -DLATTISENSE_LIB=$GITHUB_WORKSPACE/build/inference/lattisense/liblattisense.so \
+            -DFHE_OPS_LIB=$GITHUB_WORKSPACE/build/inference/lattisense/fhe_ops_lib/libfhe_ops_lib.so \
             -Dpybind11_DIR=$(python3 -m pybind11 --cmakedir)
           cmake --build . -j$(nproc)
 

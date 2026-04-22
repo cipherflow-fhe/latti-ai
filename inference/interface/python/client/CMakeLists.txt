@@ -5,33 +5,32 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ── Paths ──────────────────────────────────────────────────────────────────
-# Standalone build:  cmake -DLATTISENSE_DIR=/path/to/lattisense ..
-# Integrated build:  built via inference/interface/CMakeLists.txt
 set(LATTISENSE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../lattisense" CACHE PATH "Path to lattisense submodule")
 set(LATTI_INFERENCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
 set(LATTI_INTERFACE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
-# ── Find pre-built lattisense ─────────────────────────────────────────────
-# Standalone build: pass -DLATTISENSE_LIB=/path/to/liblattisense.so
-# Integrated build:  lattisense target already exists, use find_library
-if(NOT LATTISENSE_LIB)
-    find_library(LATTISENSE_LIB
-        NAMES lattisense
+# ── Find pre-built fhe_ops_lib ────────────────────────────────────────────
+# lattisense with LATTISENSE_CLIENT_ONLY=ON produces fhe_ops_lib (not lattisense).
+# Standalone: cmake -DFHE_OPS_LIB=/path/to/libfhe_ops_lib.so ..
+# Integrated: cmake picks it up from LATTISENSE_DIR/build automatically.
+if(NOT FHE_OPS_LIB)
+    find_library(FHE_OPS_LIB
+        NAMES fhe_ops_lib
         PATHS
+            "${LATTISENSE_DIR}/build/fhe_ops_lib"
             "${LATTISENSE_DIR}/build"
             "${LATTISENSE_DIR}/lib"
-            "${CMAKE_BINARY_DIR}/inference/lattisense"
         NO_DEFAULT_PATH
     )
 endif()
 
-if(NOT LATTISENSE_LIB)
+if(NOT FHE_OPS_LIB)
     message(FATAL_ERROR
-        "lattisense library not found. Build lattisense first.\n"
-        "  Standalone: cmake -DLATTISENSE_LIB=/path/to/liblattisense.so .."
+        "fhe_ops_lib not found. Build lattisense with LATTISENSE_CLIENT_ONLY=ON first.\n"
+        "  Standalone: cmake -DFHE_OPS_LIB=/path/to/libfhe_ops_lib.so .."
     )
 endif()
-message(STATUS "Found lattisense: ${LATTISENSE_LIB}")
+message(STATUS "Found fhe_ops_lib: ${FHE_OPS_LIB}")
 
 # ── inference_client_lib ──────────────────────────────────────────────────
 add_library(inference_client_lib STATIC
@@ -53,18 +52,18 @@ target_include_directories(inference_client_lib PUBLIC
     ${LATTISENSE_DIR}/mega_ag_runners     # headers
 )
 
-target_link_libraries(inference_client_lib PUBLIC ${LATTISENSE_LIB})
+target_link_libraries(inference_client_lib PUBLIC ${FHE_OPS_LIB})
 
 set_target_properties(inference_client_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# Windows: copy lattisense.dll to output directory
+# Windows: copy fhe_ops_lib.dll to output directory
 if(WIN32)
-    get_filename_component(LATTISENSE_LIB_DIR "${LATTISENSE_LIB}" DIRECTORY)
+    get_filename_component(FHE_OPS_LIB_DIR "${FHE_OPS_LIB}" DIRECTORY)
     add_custom_command(TARGET inference_client_lib POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${LATTISENSE_LIB_DIR}/lattisense.dll"
+            "${FHE_OPS_LIB_DIR}/libfhe_ops_lib.dll"
             "$<TARGET_FILE_DIR:inference_client_lib>"
-        COMMENT "Copying lattisense.dll to output directory"
+        COMMENT "Copying libfhe_ops_lib.dll to output directory"
     )
 endif()
 
@@ -78,9 +77,9 @@ if(pybind11_FOUND)
     if(WIN32)
         add_custom_command(TARGET latti_client POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${LATTISENSE_LIB_DIR}/lattisense.dll"
+                "${FHE_OPS_LIB_DIR}/libfhe_ops_lib.dll"
                 "$<TARGET_FILE_DIR:latti_client>"
-            COMMENT "Copying lattisense.dll next to latti_client.pyd"
+            COMMENT "Copying libfhe_ops_lib.dll next to latti_client.pyd"
         )
     endif()
 else()
