@@ -110,6 +110,11 @@ void InferenceServer::load_model() {
     fp_->ckks_contexts = std::move(context_map);
     context_ptr_ = fp_->ckks_contexts["param0"].get();
 
+    if (use_gpu_) {
+        fp_->compute_device = ComputeDevice::GPU;
+    }
+    fp_->prepare_task();
+
     std::cout << "[Server] Done." << std::endl;
 }
 
