@@ -248,10 +248,6 @@ def main():
         )
         log.info(f'ONNX saved: {onnx_path}')
 
-        h5_path = os.path.join(export_dir, 'model_parameters.h5')
-        fuse_and_export_h5(model, h5_path=h5_path, upper_bound=args.upper_bound, degree=args.degree, eps=1e-3)
-        log.info(f'Fused H5 saved: {h5_path}')
-
 
 if __name__ == '__main__':
     main()

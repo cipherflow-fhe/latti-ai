@@ -272,10 +272,7 @@ void InitInferenceProcess::_init_mult_scalar_layer(const string& key,
     CkksParameter& param = *ckks_parameters_.at(feature_input0.ckks_parameter_id);
 
     double scale = layer["weight_scale"];
-    auto weight = gen_random_array<1>({feature_input0.channel}, 1.0);
-    for (int i = 0; i < feature_input0.channel; i++) {
-        weight.set(i, scale);
-    }
+    auto weight = _load_h5_tensor<1>(layer, h5_file, "weight", {feature_input0.channel});
     auto mult_scalar = MakeU<MultScalarLayer>(param, feature_input0.shape, move(weight), feature_input0.skip,
                                               feature_input0.pack_channel_per_ciphertext, feature_input0.level,
                                               upsample_factor, block_expansion);
@@ -1231,14 +1228,18 @@ void InferenceProcess::run_task(bool is_mpc) {
     // Dynamically create and run task executors based on the compute_device configuration
     switch (compute_device) {
         case ComputeDevice::CPU: {
-            auto task = MakeU<FheTaskCpu>(fp->project_path);
-            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            if (!fhe_task_cpu_) {
+                prepare_task();
+            }
+            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
         case ComputeDevice::GPU: {
-            auto task = MakeU<FheTaskGpu>(fp->project_path);
-            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            if (!fhe_task_gpu_) {
+                prepare_task();
+            }
+            fhe_time = fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #else
@@ -1560,21 +1561,20 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
     }
 
     // 4. 注册执行器并执行
-    unordered_map<string, ExecutorFunc> custom_executors;
-    register_custom_executors(custom_executors);
-
     switch (compute_device) {
         case ComputeDevice::CPU: {
-            auto task = make_unique<FheTaskCpu>(fp->project_path);
-            task->bind_custom_executors(custom_executors);
-            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            if (!fhe_task_cpu_) {
+                prepare_task();
+            }
+            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
         case ComputeDevice::GPU: {
-            auto task = make_unique<FheTaskGpu>(fp->project_path);
-            task->bind_custom_executors(custom_executors);
-            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            if (!fhe_task_gpu_) {
+                prepare_task();
+            }
+            fhe_time = fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #else
@@ -1715,6 +1715,25 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
     return data_sources;
 }
 
+#ifdef INFERENCE_SDK_ENABLE_GPU
+void InferenceProcess::prepare_task() {
+    register_custom_executors(task_custom_executors_);
+    if (compute_device == ComputeDevice::GPU) {
+        fhe_task_gpu_ = make_unique<FheTaskGpu>(fp->project_path);
+        fhe_task_gpu_->bind_custom_executors(task_custom_executors_);
+    } else {
+        fhe_task_cpu_ = make_unique<FheTaskCpu>(fp->project_path);
+        fhe_task_cpu_->bind_custom_executors(task_custom_executors_);
+    }
+}
+#else
+void InferenceProcess::prepare_task() {
+    register_custom_executors(task_custom_executors_);
+    fhe_task_cpu_ = make_unique<FheTaskCpu>(fp->project_path);
+    fhe_task_cpu_->bind_custom_executors(task_custom_executors_);
+}
+#endif
+
 void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorFunc>& executors) {
     auto* fp_ptr = this->fp;
 
@@ -1799,12 +1818,16 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             auto* layer = static_cast<MultiplexedConv1DPackedLayer*>(layer_ptr);
             if (type == "weight_pt")
                 pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j, k);
+            else if (type == "select_pt")
+                pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
             else
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
         } else if (op_class == "MultiplexedDWConv1DPackedLayer") {
             auto* layer = static_cast<MultiplexedDWConv1DPackedLayer*>(layer_ptr);
             if (type == "weight_pt")
                 pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j);
+            else if (type == "select_pt")
+                pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
             else
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
         } else if (op_class == "DensePackedLayer") {
