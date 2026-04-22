@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Test latti_server module: import_eval_context, load_model, evaluate."""
+"""Test latti_server: full client→server→client roundtrip."""
 
+import ctypes
 import os
 import sys
 
-# Add module path and shared library path
 _HERE = os.path.dirname(os.path.abspath(__file__))
 for candidate in [
     os.path.join(_HERE, 'build'),
@@ -12,9 +12,6 @@ for candidate in [
     if os.path.isdir(candidate):
         sys.path.insert(0, candidate)
         break
-
-# Locate and preload liblattisense.so (needed before import on Linux)
-import ctypes
 
 for lib_dir in [
     os.path.join(_HERE, '..', '..', '..', '..', 'build', 'inference', 'lattisense'),
@@ -34,7 +31,6 @@ import latti_server
 
 
 def find_task_dirs():
-    """Find MNIST client and server task directories."""
     root_candidates = [
         os.path.join(_HERE, '..', '..', '..', '..'),
         os.path.join(_HERE, '..', '..', '..', '..', '..'),
@@ -49,27 +45,23 @@ def find_task_dirs():
 
 
 def test_import():
-    """Module and class visibility."""
-    assert hasattr(latti_server, 'InferenceServer'), 'InferenceServer not found'
+    assert hasattr(latti_server, 'InferenceServer')
     methods = [m for m in dir(latti_server.InferenceServer) if not m.startswith('_')]
     for required in ['import_eval_context', 'load_model', 'evaluate', 'evaluate_plaintext']:
-        assert required in methods, f'InferenceServer missing method: {required}'
+        assert required in methods, f'missing method: {required}'
     print('[PASS] import')
 
 
 def test_full_flow():
-    """Full client→server→client roundtrip using latti_client for key gen + encrypt."""
     client_dir, server_dir = find_task_dirs()
 
-    # Import latti_client for key generation and encryption
     client_build = os.path.join(_HERE, '..', 'client', 'build')
     if not os.path.isdir(client_build):
-        print('[SKIP] latti_client build not found, skipping full flow test')
+        print('[SKIP] latti_client build not found')
         return
     sys.path.insert(0, client_build)
     import latti_client
 
-    # Client: setup + encrypt
     print('\n--- Client: setup + encrypt ---')
     client = latti_client.InferenceClient(client_dir)
     client.setup()
@@ -77,7 +69,6 @@ def test_full_flow():
     encrypted = client.encrypt({'input': os.path.join(client_dir, 'img.csv')})
     print(f'  eval_ctx={len(eval_ctx) / 1024 / 1024:.1f}MB, ciphertext={len(encrypted["input"]) / 1024:.1f}KB')
 
-    # Server: import context + load model + evaluate
     print('\n--- Server: import + load + evaluate ---')
     server = latti_server.InferenceServer(server_dir, use_gpu=False)
     server.import_eval_context(eval_ctx)
@@ -87,10 +78,9 @@ def test_full_flow():
     print('[PASS] load_model')
 
     result = server.evaluate(encrypted)
-    assert 'output' in result, "Server result missing 'output' key"
+    assert 'output' in result
     print(f'[PASS] evaluate (result={len(result["output"]) / 1024:.1f}KB)')
 
-    # Client: decrypt
     print('\n--- Client: decrypt ---')
     decrypted = client.decrypt(result)
     output = decrypted['output'].output
@@ -99,7 +89,7 @@ def test_full_flow():
 
 
 def main():
-    print(f'Testing latti_server module\n')
+    print('Testing latti_server module\n')
     test_import()
     test_full_flow()
     print('\n=== ALL TESTS PASSED ===\n')

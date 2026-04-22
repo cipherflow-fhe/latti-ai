@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Test latti_client module: setup, encrypt, export_eval_context, decrypt, serialization roundtrip."""
+"""Test latti_client: setup, encrypt, export_eval_context, decrypt."""
 
+import csv
 import os
 import sys
 import tempfile
 
-# Add module path: sibling build/ dir (standalone) or ../../build/... (integrated)
 _HERE = os.path.dirname(os.path.abspath(__file__))
 for candidate in [
     os.path.join(_HERE, 'build'),
@@ -17,45 +17,27 @@ for candidate in [
 
 import latti_client
 
-
-def find_task_dir():
-    """Find MNIST client task directory for testing."""
-    candidates = [
-        os.path.join(_HERE, '..', '..', '..', '..', 'examples', 'test_mnist', 'task', 'client'),
-        os.path.join(_HERE, '..', '..', '..', '..', '..', 'examples', 'test_mnist', 'task', 'client'),
-    ]
-    for d in candidates:
-        d = os.path.normpath(d)
-        if os.path.isfile(os.path.join(d, 'task_config.json')):
-            return d
-    raise FileNotFoundError(
-        'Cannot find MNIST task dir with task_config.json. Run from latti-ai root or set working directory accordingly.'
-    )
+TEST_TASK_DIR = os.path.join(_HERE, 'testdata')
 
 
 def test_import():
-    """Module and class visibility."""
-    assert hasattr(latti_client, 'InferenceClient'), 'InferenceClient not found'
-    assert hasattr(latti_client, 'DecryptedOutput'), 'DecryptedOutput not found'
+    assert hasattr(latti_client, 'InferenceClient')
+    assert hasattr(latti_client, 'DecryptedOutput')
     methods = [m for m in dir(latti_client.InferenceClient) if not m.startswith('_')]
     for required in ['setup', 'encrypt', 'decrypt', 'export_eval_context']:
-        assert required in methods, f'InferenceClient missing method: {required}'
+        assert required in methods, f'missing method: {required}'
     print('[PASS] import')
 
 
 def test_setup():
-    """Key generation."""
-    task_dir = find_task_dir()
-    client = latti_client.InferenceClient(task_dir)
+    client = latti_client.InferenceClient(TEST_TASK_DIR)
     client.setup()
     return client
 
 
 def test_export_eval_context(client):
-    """Export and serialization roundtrip."""
     eval_ctx = client.export_eval_context()
-    assert isinstance(eval_ctx, bytes), 'export_eval_context should return bytes'
-    assert len(eval_ctx) > 0, 'eval context is empty'
+    assert isinstance(eval_ctx, bytes) and len(eval_ctx) > 0
 
     with tempfile.NamedTemporaryFile(suffix='.bin', delete=False) as f:
         f.write(eval_ctx)
@@ -63,22 +45,19 @@ def test_export_eval_context(client):
     with open(path, 'rb') as f:
         loaded = f.read()
     os.unlink(path)
-    assert eval_ctx == loaded, 'eval context roundtrip mismatch'
+    assert eval_ctx == loaded, 'roundtrip mismatch'
 
-    print(f'[PASS] export_eval_context ({len(eval_ctx) / 1024 / 1024:.1f} MB, roundtrip OK)')
+    print(f'[PASS] export_eval_context ({len(eval_ctx) / 1024 / 1024:.1f} MB)')
     return eval_ctx
 
 
-def test_encrypt(client, task_dir):
-    """Encrypt input data and serialization roundtrip."""
-    csv_path = os.path.join(task_dir, 'img.csv')
-    assert os.path.isfile(csv_path), f'Test CSV not found: {csv_path}'
+def test_encrypt(client):
+    csv_path = os.path.join(TEST_TASK_DIR, 'img.csv')
+    assert os.path.isfile(csv_path), f'not found: {csv_path}'
 
     encrypted = client.encrypt({'input': csv_path})
-    assert 'input' in encrypted, "Encrypted output missing 'input' key"
     ct = encrypted['input']
-    assert isinstance(ct, bytes), 'encrypt should return bytes'
-    assert len(ct) > 0, 'ciphertext is empty'
+    assert isinstance(ct, bytes) and len(ct) > 0
 
     with tempfile.NamedTemporaryFile(suffix='.bin', delete=False) as f:
         f.write(ct)
@@ -86,28 +65,28 @@ def test_encrypt(client, task_dir):
     with open(path, 'rb') as f:
         loaded = f.read()
     os.unlink(path)
-    assert ct == loaded, 'ciphertext roundtrip mismatch'
+    assert ct == loaded, 'roundtrip mismatch'
 
-    print(f'[PASS] encrypt ({len(ct) / 1024:.1f} KB, roundtrip OK)')
+    print(f'[PASS] encrypt ({len(ct) / 1024:.1f} KB)')
     return encrypted
 
 
 def test_decrypt(client, encrypted):
-    """Decrypt (using re-encrypted data as mock server output)."""
-    # Decrypt expects output names from task_config, not input names.
-    # Feed encrypted 'input' as 'output' to test the binding works.
-    try:
-        result = client.decrypt({'output': encrypted['input']})
-        assert 'output' in result, "decrypt result missing 'output' key"
-        assert len(result['output'].output) > 0, 'decrypted output is empty'
-        print(f'[PASS] decrypt (output[:5]={[round(x, 4) for x in result["output"].output[:5]]})')
-    except MemoryError:
-        # Expected when feeding dim=2 encrypted data as dim=0 output — dimensions mismatch.
-        print('[PASS] decrypt binding OK (MemoryError expected for dimension mismatch)')
+    result = client.decrypt({'output': encrypted['input']})
+    output = result['output']
+    assert output.num_outputs > 0
+
+    with open(os.path.join(TEST_TASK_DIR, 'img.csv')) as f:
+        original = [float(x) for x in next(csv.reader(f))]
+
+    decrypted = output.output[: len(original)]
+    max_error = max(abs(a - b) for a, b in zip(original, decrypted))
+    assert max_error < 0.01, f'error too large: {max_error}'
+    print(f'[PASS] decrypt (num_outputs={output.num_outputs}, max_error={max_error:.6f})')
 
 
 def main():
-    print(f'Testing latti_client module\n')
+    print('Testing latti_client module\n')
     test_import()
 
     print('\n--- Key generation ---')
@@ -118,10 +97,9 @@ def main():
     test_export_eval_context(client)
 
     print('\n--- Encrypt ---')
-    task_dir = find_task_dir()
-    encrypted = test_encrypt(client, task_dir)
+    encrypted = test_encrypt(client)
 
-    print('\n--- Decrypt ---')
+    print('\n--- Decrypt (encrypt-decrypt roundtrip) ---')
     test_decrypt(client, encrypted)
 
     print('\n=== ALL TESTS PASSED ===\n')
