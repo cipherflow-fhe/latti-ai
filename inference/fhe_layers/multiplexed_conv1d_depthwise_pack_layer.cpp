@@ -158,8 +158,8 @@ CkksPlaintextRingt MultiplexedDWConv1DPackedLayer::generate_bias_pt_for_index(Ck
 // generate_select_tensor_pt_for_index  (lazy / on-demand)
 // ---------------------------------------------------------------------------
 
-CkksPlaintext MultiplexedDWConv1DPackedLayer::generate_select_tensor_pt_for_index(CkksContext& ctx,
-                                                                                  int local_ch) const {
+CkksPlaintextRingt MultiplexedDWConv1DPackedLayer::generate_select_tensor_pt_for_index(CkksContext& ctx,
+                                                                                       int local_ch) const {
     int t = local_ch / (int)skip;
     int j = local_ch % (int)skip;
     uint32_t input_block_size = cached_input_block_size;
@@ -168,7 +168,7 @@ CkksPlaintext MultiplexedDWConv1DPackedLayer::generate_select_tensor_pt_for_inde
         int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip + j;
         mask[slot_idx] = 1.0;
     }
-    return ctx.encode(mask, level_ - 1, ctx.get_parameter().get_q(level_ - 1));
+    return ctx.encode_ringt(mask, ctx.get_parameter().get_q(level_ - 1));
 }
 
 // ---------------------------------------------------------------------------
@@ -388,7 +388,8 @@ vector<CkksCiphertext> MultiplexedDWConv1DPackedLayer::run_core(CkksContext& ctx
             CkksCiphertext masked;
             if (block_select_pt.empty()) {
                 auto bs_pt = generate_select_tensor_pt_for_index(ctx_copy, local_ch);
-                masked = ctx_copy.mult_plain(result[ct_idx], bs_pt);
+                auto bs_pt_rt = ctx_copy.ringt_to_mul(bs_pt, level_ - 1);
+                masked = ctx_copy.mult_plain_mul(result[ct_idx], bs_pt_rt);
             } else {
                 auto bs_pt = ctx_copy.ringt_to_mul(block_select_pt[local_ch], level_ - 1);
                 masked = ctx_copy.mult_plain_mul(result[ct_idx], bs_pt);
