@@ -276,14 +276,7 @@ class MultiplexedConv2DPackedLayer:
             s = self.sum_slot(s, self.skip[0], self.skip[1] * self.input_shape[1])
             s = self.sum_slot(s, self.skip[1], 1)
             if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
-                b_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}')
-                custom_compute(
-                    inputs=[conv_data_source],  # Reference same data source
-                    output=b_pt,
-                    type='encode_pt',
-                    attributes={'op_class': op_class, 'type': 'bias_pt', 'i': ct_idx},
-                )
-                res.append(add(s, b_pt))
+                res.append(s)
             else:
                 steps = []
                 valid_n = min(self.n_block_per_ct, self.n_out_channel - ct_idx * self.n_block_per_ct)
@@ -338,25 +331,6 @@ class MultiplexedConv2DPackedLayer:
             c_m_s = result_ct[i]
             if n_block == 0:
                 sp = c_m_s
-                bias_idx = int(
-                    np.floor(
-                        i
-                        / (
-                            self.stride[0]
-                            * self.stride[1]
-                            * self.n_channel_per_ct
-                            / (self.upsample_factor[0] * self.upsample_factor[1])
-                        )
-                    )
-                )
-                b_pt = CkksPlaintextRingtNode(f'encode_pt_{bias_idx}')
-                custom_compute(
-                    inputs=[conv_data_source],  # Reference same data source
-                    output=b_pt,
-                    type='encode_pt',
-                    attributes={'op_class': op_class, 'type': 'bias_pt', 'i': bias_idx},
-                )
-                sp = add(sp, b_pt)
             else:
                 sp = add(sp, c_m_s)
             if (i + 1) % (
@@ -366,6 +340,16 @@ class MultiplexedConv2DPackedLayer:
                 / (self.upsample_factor[0] * self.upsample_factor[1])
             ) == 0 or i == len(result_ct) - 1:
                 res.append(sp)
+        for i in range(len(res)):
+            bias_idx = i
+            b_pt = CkksPlaintextRingtNode(f'encode_pt_{bias_idx}')
+            custom_compute(
+                inputs=[conv_data_source],
+                output=b_pt,
+                type='encode_pt',
+                attributes={'op_class': op_class, 'type': 'bias_pt', 'i': bias_idx},
+            )
+            res[i] = add(res[i], b_pt)
         return res
 
     def make_pt_nodes(self, layer_id):
@@ -430,7 +414,7 @@ class MultiplexedConv2DPackedLayer:
             s = self.sum_slot(s, self.skip[0], self.skip[1] * self.input_shape[1])
             s = self.sum_slot(s, self.skip[1], 1)
             if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
-                res.append(add(s, bias_pt[ct_idx]))
+                res.append(s)
             else:
                 steps = []
                 valid_n = min(self.n_block_per_ct, self.n_out_channel - ct_idx * self.n_block_per_ct)
@@ -478,18 +462,6 @@ class MultiplexedConv2DPackedLayer:
             c_m_s = result_ct[i]
             if n_block == 0:
                 sp = c_m_s
-                bias_idx = int(
-                    np.floor(
-                        i
-                        / (
-                            self.stride[0]
-                            * self.stride[1]
-                            * self.n_channel_per_ct
-                            / (self.upsample_factor[0] * self.upsample_factor[1])
-                        )
-                    )
-                )
-                sp = add(sp, bias_pt[bias_idx])
             else:
                 sp = add(sp, c_m_s)
             if (i + 1) % (
@@ -499,6 +471,8 @@ class MultiplexedConv2DPackedLayer:
                 / (self.upsample_factor[0] * self.upsample_factor[1])
             ) == 0 or i == len(result_ct) - 1:
                 res.append(sp)
+        for i in range(len(res)):
+            res[i] = add(res[i], bias_pt[i])
         return res
 
     def make_pt_nodes_reduct_rot(self, layer_id):
@@ -598,7 +572,7 @@ class MultiplexedConv2DPackedLayer:
 
             if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
                 # No mask needed: bias indexed directly by output_ct_group (= ct_idx when skip_out_prod=1)
-                res.append(add(s, bias_pt[output_ct_group]))
+                res.append(s)
             else:
                 valid_i = len(mask_pt[ct_idx]) if mask_pt else 0
                 if valid_i == 0:
@@ -648,10 +622,10 @@ class MultiplexedConv2DPackedLayer:
                 c_m_s = result_ct[i]
                 if p == 0:
                     sp = c_m_s
-                    bias_idx = i // n_channel_per_ct_out
-                    sp = add(sp, bias_pt[bias_idx])
                 else:
                     sp = add(sp, c_m_s)
                 if (i + 1) % n_channel_per_ct_out == 0 or i == len(result_ct) - 1:
                     res.append(sp)
+        for i in range(len(res)):
+            res[i] = add(res[i], bias_pt[i])
         return res
