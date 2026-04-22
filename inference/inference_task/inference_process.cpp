@@ -1502,9 +1502,8 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         }
     }
 
-    // 2. 按层顺序注册所有权重参数（eager pt_ringt + CustomData）
+    // 2. eager pt_ringt + CustomData
     auto layer_data_sources = prepare_layer_data_sources();
-    // 用 map 方便按名查找
     unordered_map<string, fhe_ops_lib::CustomData*> data_source_map;
     for (auto& [k, v] : layer_data_sources)
         data_source_map[k] = &v;
@@ -1539,7 +1538,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         }
     }
 
-    // 3. 准备输出密文
+    // 3. prepare output
     string context_id;
     int level;
     vector<vector<CkksCiphertext>> z_lists(json_data["output_feature"].size());
@@ -1563,7 +1562,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         cxx_args.push_back(CxxVectorArgument{ki, &z_lists[out_idx]});
     }
 
-    // 4. 注册执行器并执行
+    // 4. run
     switch (compute_device) {
         case ComputeDevice::CPU: {
             if (!fhe_task_cpu_) {
@@ -1590,7 +1589,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         default: throw runtime_error("Unknown compute device type");
     }
 
-    // 5. 保存输出结果
+    // 5. save results
     for (int out_idx = 0; out_idx < (int)json_data["output_feature"].size(); out_idx++) {
         auto ki = json_data["output_feature"][out_idx];
         FeatureNode feature_output(json_features[ki.get<string>()]);
@@ -1622,7 +1621,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
     }
 }
 
-// ==================== CustomData 模式辅助实现 ====================
+// ==================== CustomData mode ====================
 
 vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_data_sources() {
     vector<pair<string, fhe_ops_lib::CustomData>> data_sources;
@@ -1713,7 +1712,6 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
                     key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<Avgpool1DLayer>(key))));
             }
         }
-        // avgpool, concat 等无 lazy 权重生成，跳过
     }
     return data_sources;
 }
