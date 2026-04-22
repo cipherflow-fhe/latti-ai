@@ -1324,5 +1324,4 @@ class TestE2EMultipleLayer(CompilerTestBase):
 
 
 if __name__ == '__main__':
-    # unittest.main()
-    TestCompiler().test_conv_series_with_stride()
+    unittest.main()

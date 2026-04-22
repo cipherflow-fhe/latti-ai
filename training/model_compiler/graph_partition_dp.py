@@ -125,24 +125,35 @@ def get_restoring_score(dag, restore_node, param_dict):
     return s_param.get_score()
 
 
-def reconstruct_graph_from_vec(
-    graph_vec: np.ndarray, template_graph: nx.DiGraph, node_to_idx: dict[FeatureNode, int]
-) -> nx.DiGraph:
-    new_graph = nx.DiGraph()
-    idx_to_node = {idx: node for node, idx in node_to_idx.items()}
-    for node in template_graph.nodes:
-        if isinstance(node, ComputeNode):
-            new_graph.add_node(node, **template_graph.nodes[node])
-        else:
-            node_idx = node_to_idx[node]
-            new_node = copy.deepcopy(node)
-            new_graph.add_node(new_node, **template_graph.nodes[node])
-            new_graph.nodes[new_node]['level'] = graph_vec[node_idx]
+def restore_level_at(new_graph: nx.DiGraph, node: FeatureNode, param_dict):
+    restore_node = transforms.add_btp_layer(
+        new_graph, node, param_dict, config.fhe_param.max_level - new_graph.nodes[node]['level']
+    )
+    score = get_restoring_score(new_graph, restore_node, param_dict)
+    new_graph.nodes[restore_node]['score'] = score
+    succ = list(new_graph.successors(restore_node))[0]
+    new_graph.nodes[succ]['level'] = config.fhe_param.max_level
+    return score
 
-    for u, v in template_graph.edges:
-        u_node = idx_to_node[node_to_idx[u]] if isinstance(u, FeatureNode) else u
-        v_node = idx_to_node[node_to_idx[v]] if isinstance(v, FeatureNode) else v
-        new_graph.add_edge(u_node, v_node)
+
+def reconstruct_graph_from_vec(
+    graph_vec: np.ndarray,
+    template_graph: nx.DiGraph,
+    node_to_idx: dict[FeatureNode, int],
+    param_dict: dict[str, FheParameter],
+) -> nx.DiGraph:
+    new_graph = template_graph.copy()
+    for node in template_graph.nodes:
+        if not isinstance(node, FeatureNode):
+            continue
+
+        node_idx = node_to_idx[node]
+        lv = int(graph_vec[node_idx])
+        if lv < AUX_LV:
+            new_graph.nodes[node]['level'] = lv
+        else:
+            new_graph.nodes[node]['level'] = 0
+            restore_level_at(new_graph, node, param_dict)
 
     return new_graph
 
@@ -249,6 +260,9 @@ class GraphPartitioner:
         new_frontier_solutions = dict()
 
         for terminal_lv in range(config.fhe_param.max_level + 1):
+            if dag.nodes[leading_comp]['level_cost'] + terminal_lv > config.fhe_param.max_level:
+                continue
+
             frontier_lvs = []
             dag.nodes[new_node]['level'] = terminal_lv
             for node_max_lv in pred_frontier:
@@ -324,16 +338,6 @@ class GraphPartitioner:
 
         return new_frontier, new_frontier_solutions
 
-    def restore_level_at(self, new_graph: nx.DiGraph, node: FeatureNode):
-        restore_node = transforms.add_btp_layer(
-            new_graph, node, self.param_dict, config.fhe_param.max_level - new_graph.nodes[node]['level']
-        )
-        score = get_restoring_score(new_graph, restore_node, self.param_dict)
-        new_graph.nodes[restore_node]['score'] = score
-        succ = list(new_graph.successors(restore_node))[0]
-        new_graph.nodes[succ]['level'] = config.fhe_param.max_level
-        return score
-
     def solve(self, H: nx.DiGraph) -> tuple[float, nx.DiGraph]:
         self.pbar.update(1)
         if len(H.nodes) == 0:
@@ -388,7 +392,7 @@ class GraphPartitioner:
         final_solution_frontier = tuple(sorted((NodeLevel(x.node_idx, 0) for x in frontier), key=lambda x: x.node_idx))
         final_score, final_dag_vec = frontier_solutions[final_solution_frontier]
 
-        final_dag = reconstruct_graph_from_vec(final_dag_vec, H, node_to_idx)
+        final_dag = reconstruct_graph_from_vec(final_dag_vec, H, node_to_idx, self.param_dict)
 
         temp_ab = LayerAbstractGraph()
         temp_ab.dag = final_dag
