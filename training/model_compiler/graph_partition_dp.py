@@ -183,11 +183,6 @@ class GraphPartitioner:
         if temperature < 0:
             raise ValueError('Temperature must be non-negative. If set to 0, a greedy algorithm will be used.')
         self.temperature = temperature
-        self.pbar = tqdm(
-            desc=f'Traversing through graph',
-            unit='nodes',
-            total=self.entire_graph.number_of_nodes(),
-        )
 
     def inspect_level_backward(self, subgraph: nx.DiGraph):
         max_level = -1
@@ -282,7 +277,7 @@ class GraphPartitioner:
                     if node_max_lv.node_idx not in nodes_became_internal:
                         new_frontier_key.append(NodeLevel(node_max_lv.node_idx, lv))
                 new_frontier_key.append(NodeLevel(node_to_idx[new_node], terminal_lv))
-
+                new_frontier_key.sort(key=lambda x: x.node_idx)
                 frontier_key.sort(key=lambda x: x.node_idx)
 
                 if tuple(frontier_key) not in frontier_solutions:
@@ -339,14 +334,60 @@ class GraphPartitioner:
         return new_frontier, new_frontier_solutions
 
     def solve(self, H: nx.DiGraph) -> tuple[float, nx.DiGraph]:
-        self.pbar.update(1)
         if len(H.nodes) == 0:
             return 0.0, nx.DiGraph()
 
-        # for node in H.nodes:
-        #     if isinstance(node, FeatureNode):
-        #         node.ckks_parameter_id = 'param0'
-        sorted_nodes = list(nx.topological_sort(H))
+        topo_nodes = list(nx.topological_sort(H))
+        topo_rank = {node: idx for idx, node in enumerate(topo_nodes)}
+
+        source_feature_nodes = sorted(
+            [node for node in H.nodes if isinstance(node, FeatureNode) and len(list(H.predecessors(node))) == 0],
+            key=lambda node: topo_rank[node],
+        )
+        all_feature_nodes = [node for node in topo_nodes if isinstance(node, FeatureNode)]
+
+        sorted_nodes: list[FeatureNode] = []
+        activated_feature_nodes: set[FeatureNode] = set()
+
+        def activate_feature_node(node: FeatureNode):
+            if node in activated_feature_nodes:
+                return
+
+            activated_feature_nodes.add(node)
+            sorted_nodes.append(node)
+
+            ready_successors = sorted(list(H.successors(node)), key=lambda comp: topo_rank[comp])
+            for comp in ready_successors:
+                leading_features = list(H.predecessors(comp))
+                if not all(pred in activated_feature_nodes for pred in leading_features):
+                    continue
+
+                output_features = list(H.successors(comp))
+                activate_feature_node(output_features[0])
+
+        for node in source_feature_nodes:
+            activate_feature_node(node)
+
+        while len(sorted_nodes) < len(all_feature_nodes):
+            progressed = False
+            for node in all_feature_nodes:
+                if node in activated_feature_nodes:
+                    continue
+
+                leading_computes = list(H.predecessors(node))
+                if len(leading_computes) == 0:
+                    activate_feature_node(node)
+                    progressed = True
+                    break
+
+                leading_features = list(H.predecessors(leading_computes[0]))
+                if all(pred in activated_feature_nodes for pred in leading_features):
+                    activate_feature_node(node)
+                    progressed = True
+                    break
+
+            if not progressed:
+                raise RuntimeError('Failed to construct a depth-first feature traversal order for the DAG')
 
         idx = 0
         node_to_idx = {}
@@ -363,12 +404,9 @@ class GraphPartitioner:
         # e.g. {(node1_index, level2, node2_index, level3, node3_index, level1): (cost, graph_vec)},
         # where the nodes are sorted by their id to ensure unique representation of the frontier state.
         frontier_solutions: dict[tuple, float] = {}
-        for start_idx, node in enumerate(sorted_nodes):
-            if isinstance(node, FeatureNode) and len(list(H.predecessors(node))) == 0:
-                frontier.append(NodeLevel(node_to_idx[node], config.fhe_param.max_level))
-                processed_feature_nodes.add(node)
-            else:
-                break
+        for node in source_feature_nodes:
+            frontier.append(NodeLevel(node_to_idx[node], config.fhe_param.max_level))
+            processed_feature_nodes.add(node)
 
         frontier_indices = [x.node_idx for x in frontier]
         for lv_comb in product(range(config.fhe_param.max_level + 1), repeat=len(frontier)):
@@ -381,13 +419,20 @@ class GraphPartitioner:
             node_lv.sort(key=lambda x: x.node_idx)
             frontier_solutions[tuple(node_lv)] = (0.0, init_graph_vec)
 
-        for node in sorted_nodes[start_idx + 1 :]:
-            if isinstance(node, FeatureNode):
-                # print(f"Processing {node.node_id}, frontier num of nodes: {len(frontier)}")
-                frontier, frontier_solutions = self.generate_solutions(
-                    node, frontier, frontier_solutions, processed_feature_nodes, node_to_idx, idx_to_node, H
-                )
-            self.pbar.update(1)
+        pbar = tqdm(
+            desc=f'Traversing through graph',
+            unit='nodes',
+            total=len(sorted_nodes) - len(source_feature_nodes),
+        )
+
+        for idx, node in enumerate(sorted_nodes):
+            if node in source_feature_nodes:
+                continue
+
+            frontier, frontier_solutions = self.generate_solutions(
+                node, frontier, frontier_solutions, processed_feature_nodes, node_to_idx, idx_to_node, H
+            )
+            pbar.update(1)
 
         final_solution_frontier = tuple(sorted((NodeLevel(x.node_idx, 0) for x in frontier), key=lambda x: x.node_idx))
         final_score, final_dag_vec = frontier_solutions[final_solution_frontier]
