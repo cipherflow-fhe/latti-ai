@@ -49,14 +49,14 @@ const int DEFAULT_SCALE_BIT = 34;
 const double DEFAULT_SCALE = pow(2, DEFAULT_SCALE_BIT);
 
 const int RING_MOD_BIT = 44;
-const uint64_t RING_MOD = 1UL << RING_MOD_BIT;
+const uint64_t RING_MOD = 1ULL << RING_MOD_BIT;
 
 const Duo BLOCK_SHAPE = {64, 64};
 
 inline uint64_t gen_random_uint(int n_bit) {
     uint64_t result = 0;
     for (int i = 0; i < n_bit; i++) {
-        result = result * 2 + (random() % 2 == 0 ? 0 : 1);
+        result = result * 2 + (rand() % 2 == 0 ? 0 : 1);
     }
     return result;
 }
