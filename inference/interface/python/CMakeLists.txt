@@ -59,3 +59,5 @@ set_target_properties(latti_inference PROPERTIES
 )
 
 install(TARGETS latti_inference DESTINATION ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_subdirectory(client)

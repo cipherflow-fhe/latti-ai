@@ -101,6 +101,31 @@ jobs:
             ls -dt /opt/heongpu-cache/*/ 2>/dev/null | tail -n +4 | xargs rm -rf 2>/dev/null || true
           fi
 
+      - name: Build pybind11 modules (client + server)
+        run: |
+          # Client (standalone, only needs lattisense)
+          cd inference/interface/python/client
+          mkdir -p build && cd build
+          cmake .. \
+            -DLATTISENSE_LIB=$GITHUB_WORKSPACE/build/inference/lattisense/liblattisense.so \
+            -Dpybind11_DIR=$(python3 -m pybind11 --cmakedir)
+          cmake --build . -j$(nproc)
+
+          # Server (needs full latti-ai build)
+          cd $GITHUB_WORKSPACE/inference/interface/python/server
+          mkdir -p build && cd build
+          cmake .. \
+            -Dpybind11_DIR=$(python3 -m pybind11 --cmakedir) \
+            -DLATTI_AI_BUILD=$GITHUB_WORKSPACE/build
+          cmake --build . -j$(nproc)
+
+      - name: Test pybind11 modules
+        timeout-minutes: 10
+        run: |
+          cd $GITHUB_WORKSPACE
+          python3 inference/interface/python/client/test_client.py
+          python3 inference/interface/python/server/test_server.py
+
       - name: Run compiler tests
         run: |
           cd build/inference/unittests
