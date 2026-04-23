@@ -373,6 +373,7 @@ class ComputeNode:
         self.bias_scale = 1
         self.weight_scale_list = [1, 1, 1, 1, 1]
         self.path = ''
+        self.poly_path = ''
 
     def __repr__(self) -> str:
         return f'ComputeNode: {self.layer_id}'
@@ -929,7 +930,8 @@ class LayerAbstractGraph:
                 if not IS_BALANCE:
                     layer.weight_scale = layer.scale_up * layer.scale_down
                     layer.bias_scale = layer.scale_up
-
+                absorb_type.append('polyact')
+                absorb_path.append(layer.poly_path)
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,
@@ -1004,6 +1006,8 @@ class LayerAbstractGraph:
                 if not IS_BALANCE:
                     layer.weight_scale = layer.scale_up * layer.scale_down
                     layer.bias_scale = layer.scale_up
+                absorb_type.append('polyact')
+                absorb_path.append(layer.poly_path)
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,
@@ -1052,6 +1056,8 @@ class LayerAbstractGraph:
                 if not IS_BALANCE:
                     layer.weight_scale = layer.scale_up * layer.scale_down
                     layer.bias_scale = layer.scale_up
+                absorb_type.append('polyact')
+                absorb_path.append(layer.poly_path)
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,
