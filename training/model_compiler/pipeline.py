@@ -45,6 +45,7 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     transforms.split_upsampling_layers(pt_graph)
     transforms.infer_shapes_skips_and_pack_num(pt_graph)
     transforms.combine_convs_with_upsamples(pt_graph)
+    transforms.process_polyact(pt_graph)
     transforms.set_level_costs(pt_graph)
 
     transforms.absorb_scale(pt_graph)

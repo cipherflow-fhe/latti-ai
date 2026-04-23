@@ -34,6 +34,7 @@ from .export import (
     remove_identity_nodes,
     load_h5_weights,
     fuse_and_export_h5,
+    export_h5_from_onnx,
 )
 
 __all__ = [
@@ -55,6 +56,7 @@ __all__ = [
     'remove_identity_nodes',
     'load_h5_weights',
     'fuse_and_export_h5',
+    'export_h5_from_onnx',
 ]
 
 __version__ = '1.0.0'

@@ -232,6 +232,62 @@ def add_layer(
     return new_compute_node
 
 
+def add_mult_scalar_between_feature_and_layer(
+    graph: LayerAbstractGraph,
+    f_node: FeatureNode,
+    c_node: ComputeNode,
+) -> MultScalarComputeNode:
+    """Insert a mult_scalar compute node on the edge f_node -> c_node.
+
+    Before: f_node -> c_node
+    After:  f_node -> mult_scalar -> mult_scalar_f_node -> c_node
+
+    Args:
+        graph: the computation graph
+        f_node: the upstream feature node
+        c_node: the downstream compute node
+
+    Returns:
+        The newly created MultScalarComputeNode.
+    """
+    timestamp = int(time.time() * 1000000)
+    layer_id = f'{c_node.layer_id}_mult_scalar_ts{timestamp}'
+
+    mult_scalar = MultScalarComputeNode(layer_id, 'mult_scalar', f_node.channel, f_node.channel)
+
+    mult_scalar_f_node = FeatureNode(
+        f_node.node_id + f'_mult_scalar_out_ts{timestamp}',
+        f_node.dim,
+        f_node.channel,
+        f_node.scale,
+        f_node.ckks_parameter_id,
+        f_node.ckks_scale,
+        list(f_node.shape),
+    )
+    mult_scalar_f_node.sp_info = f_node.sp_info.copy()
+
+    skip = list(graph.dag.nodes[f_node]['skip'])
+    # level = graph.dag.nodes[f_node]['level']
+    pack_num = graph.dag.nodes[f_node]['pack_num']
+
+    _insert_layer_between_feature_and_compute(
+        graph.dag,
+        f_node,
+        c_node,
+        mult_scalar,
+        mult_scalar_f_node,
+        new_compute_args={'name': layer_id, 'level_cost': 1},
+        new_feature_args={
+            'name': mult_scalar_f_node.node_id,
+            'skip': skip,
+            # 'level': level,
+            'pack_num': pack_num,
+        },
+    )
+
+    return mult_scalar
+
+
 def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: dict, restore_lv: int):
     refreshed_feature = copy.deepcopy(upstream_feature)
     base_id = upstream_feature.node_id
@@ -788,3 +844,44 @@ def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
         insert_mult_scalar_in_linear_subgraph(graph, subgraph)
 
     return graph
+
+
+def miniprocess(graph: LayerAbstractGraph, p: ComputeNode, res_list: list, polyact_id, approve_len: bool = False):
+    value_list: list[FeatureNode] = list(graph.dag.predecessors(p))
+    for value in value_list:
+        # c_list = list(graph.dag.predecessors(value))
+        if graph.dag.out_degree(value) > 1 or graph.dag.in_degree(value) == 0:
+            mult_scalar_node = add_mult_scalar_between_feature_and_layer(graph, value, p)
+            # res_list.append((polyact_id, mult_scalar_node))
+            mult_scalar_node.poly_path = polyact_id
+            continue
+        else:
+            c_value: ComputeNode = list(graph.dag.predecessors(value))[0]
+
+        if 'conv' in c_value.layer_type or 'fc' in c_value.layer_type:
+            # Direct conv/fc predecessor — record it
+            # res_list.append((polyact_id, c_value))
+            c_value.poly_path = polyact_id
+        elif c_value.layer_type == 'polyact' or (not approve_len and graph.dag.in_degree(c_value) > 1):
+            mult_scalar_node = add_mult_scalar_between_feature_and_layer(graph, value, p)
+            # res_list.append((polyact_id, mult_scalar_node))
+            mult_scalar_node.poly_path = polyact_id
+        else:
+            # Single non-conv/fc predecessor — recurse
+            miniprocess(graph, c_value, res_list, polyact_id)
+
+
+def process_polyact(graph: LayerAbstractGraph) -> list:
+    """
+    Traverse the graph in reverse topological order and call miniprocess for
+    every polyact node.
+
+    Returns:
+        res_list: list of (polyact_id, target_node) pairs collected by miniprocess
+    """
+    res_list = []
+    all_nodes_reversed = list(reversed(list(nx.topological_sort(graph.dag))))
+    for p in all_nodes_reversed:
+        if isinstance(p, ComputeNode) and p.layer_type == 'polyact':
+            miniprocess(graph, p, res_list, p.layer_id, True)
+    return res_list
