@@ -609,7 +609,6 @@ class FheScoreParam:
                 ]
                 if is_depthwise:
                     layer = InverseMultiplexedDepthwiseConv2DLayer(
-                        n_out,
                         n_in,
                         input_shape,
                         padding,

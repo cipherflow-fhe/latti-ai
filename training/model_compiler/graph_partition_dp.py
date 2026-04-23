@@ -330,7 +330,7 @@ class GraphPartitioner:
                 break
 
         for lv_comb in product(range(config.fhe_param.max_level + 1), repeat=len(frontier)):
-            nodes_and_lv = sorted(zip(frontier, lv_comb), key=lambda x: x[0])
+            nodes_and_lv = sorted(zip(frontier, lv_comb), key=lambda x: x[0].node_id)
             frontier_state_key = tuple(NodeLevel(node.node_id, lv) for node, lv in nodes_and_lv)
 
             new_graph = H.subgraph(frontier).copy()
