@@ -1531,6 +1531,23 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
                 cxx_args.push_back(CxxVectorArgument{"concat_mask_" + key, &(fp->get_layer<ConcatLayer>(key).mask_pt)});
             }
         } else if (data_source_map.count(key)) {
+            // MultiplexedConv2DPackedLayer's mask_pt is populated offline in
+            // prepare_weight_lazy and referenced as a static Argument; it must
+            // be pushed BEFORE the conv_data_source to match the Python task
+            // graph's Argument order.
+            if (layer_type == "conv2d" && layer.value()["groups"] == 1 && !layer.value()["is_big_size"] &&
+                fp->pack_style == "multiplexed") {
+                auto& mux_layer = fp->get_layer<MultiplexedConv2DPackedLayer>(key);
+                if (!mux_layer.mask_pt.empty()) {
+                    cxx_args.push_back(CxxVectorArgument{"convm_" + key, &mux_layer.mask_pt});
+                }
+            } else if (layer_type == "conv2d" && layer.value()["groups"] != 1 && !layer.value()["is_big_size"] &&
+                       fp->pack_style == "multiplexed") {
+                auto& mux_dw_layer = fp->get_layer<MultiplexedConv2DPackedLayerDepthwise>(key);
+                if (!mux_dw_layer.mask_pt.empty()) {
+                    cxx_args.push_back(CxxVectorArgument{"convm_" + key, &mux_dw_layer.mask_pt});
+                }
+            }
             cxx_args.push_back(CxxVectorArgument{key, data_source_map[key]});
         }
     }
@@ -1797,7 +1814,11 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             else if (type == "bias_pt")
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
             else
-                pt = layer->generate_mask_pt_for_indices(ckks_ctx, i, j);
+                // mask_pt is now offline (prepare_weight_lazy populates mask_pt
+                // and run_task_lazy binds it as a static Argument); this branch
+                // is retained only as a fallback for task graphs that still
+                // emit mask encode_pt nodes.
+                pt = layer->generate_mask_pt_for_indices(ckks_ctx, i);
         } else if (op_class == "MultiplexedConv2DPackedLayerDepthwise") {
             auto* layer = static_cast<MultiplexedConv2DPackedLayerDepthwise*>(layer_ptr);
             if (type == "weight_pt")
@@ -1805,6 +1826,10 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             else if (type == "bias_pt")
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
             else
+                // mask_pt is now offline (prepare_weight_lazy populates mask_pt
+                // and run_task_lazy binds it as a static Argument); this branch
+                // is retained only as a fallback for task graphs that still
+                // emit mask encode_pt nodes with (ct_idx, channel_in_ct) attrs.
                 pt = layer->generate_mask_pt_for_indices(ckks_ctx, i, j);
         } else if (op_class == "Conv1DPackedLayer") {
             auto* layer = static_cast<Conv1DPackedLayer*>(layer_ptr);
