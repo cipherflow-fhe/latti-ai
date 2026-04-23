@@ -62,8 +62,8 @@ private:
     Duo kernel_shape;
     Duo block_shape;
     Duo stride;
-    Duo stride_next;
-    Duo skip;
+    Duo output_step;
+    Duo output_skip;
     Duo padding_shape;
     Duo orig_stride;
     Array<double, 4> weight;

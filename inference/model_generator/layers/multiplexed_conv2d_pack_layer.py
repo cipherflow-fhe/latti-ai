@@ -46,7 +46,7 @@ class MultiplexedConv2DPackedLayer:
         n_channel_per_ct,
         n_packed_in_channel,
         n_packed_out_channel,
-        upsample_factor: list = [1, 1],
+        external_upsample_factor: list = [1, 1],
     ):
         self.n_out_channel: int = n_out_channel
         self.n_in_channel: int = n_in_channel
@@ -70,10 +70,10 @@ class MultiplexedConv2DPackedLayer:
         self.input_rotate_units = [skip[0] * self.input_shape_ct[1], skip[1] * 1]
         self.input_rotate_ranges = [padding_shape[1], padding_shape[0]]
         self.n_block_per_ct: int = int(np.ceil(n_channel_per_ct / (skip[0] * skip[1])))
-        self.upsample_factor: list = upsample_factor
+        self.external_upsample_factor: list = external_upsample_factor
         self.zero_inserted_skip: list = [1, 1]
-        self.zero_inserted_skip[0] = self.skip[0] * self.stride[0] / self.upsample_factor[0]
-        self.zero_inserted_skip[1] = self.skip[1] * self.stride[1] / self.upsample_factor[1]
+        self.zero_inserted_skip[0] = self.skip[0] * self.stride[0] / self.external_upsample_factor[0]
+        self.zero_inserted_skip[1] = self.skip[1] * self.stride[1] / self.external_upsample_factor[1]
 
     def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call(), grouped by level.
@@ -155,7 +155,7 @@ class MultiplexedConv2DPackedLayer:
                         self.n_channel_per_ct
                         * self.stride[0]
                         * self.stride[1]
-                        / (self.upsample_factor[0] * self.upsample_factor[1])
+                        / (self.external_upsample_factor[0] * self.external_upsample_factor[1])
                     )
                     n_block_residue = (
                         np.floor(n_block / (self.zero_inserted_skip[0] * self.zero_inserted_skip[1]))
@@ -285,7 +285,7 @@ class MultiplexedConv2DPackedLayer:
                         self.n_channel_per_ct
                         * self.stride[0]
                         * self.stride[1]
-                        / (self.upsample_factor[0] * self.upsample_factor[1])
+                        / (self.external_upsample_factor[0] * self.external_upsample_factor[1])
                     )
                     n_block_residue = (
                         np.floor(n_block / (self.zero_inserted_skip[0] * self.zero_inserted_skip[1]))
@@ -326,7 +326,7 @@ class MultiplexedConv2DPackedLayer:
                 self.stride[0]
                 * self.stride[1]
                 * self.n_channel_per_ct
-                / (self.upsample_factor[0] * self.upsample_factor[1])
+                / (self.external_upsample_factor[0] * self.external_upsample_factor[1])
             )
             c_m_s = result_ct[i]
             if n_block == 0:
@@ -337,7 +337,7 @@ class MultiplexedConv2DPackedLayer:
                 self.stride[0]
                 * self.stride[1]
                 * self.n_channel_per_ct
-                / (self.upsample_factor[0] * self.upsample_factor[1])
+                / (self.external_upsample_factor[0] * self.external_upsample_factor[1])
             ) == 0 or i == len(result_ct) - 1:
                 res.append(sp)
         for i in range(len(res)):
@@ -423,7 +423,7 @@ class MultiplexedConv2DPackedLayer:
                         self.n_channel_per_ct
                         * self.stride[0]
                         * self.stride[1]
-                        / (self.upsample_factor[0] * self.upsample_factor[1])
+                        / (self.external_upsample_factor[0] * self.external_upsample_factor[1])
                     )
                     n_block_residue = (
                         np.floor(n_block / (self.zero_inserted_skip[0] * self.zero_inserted_skip[1]))
@@ -457,7 +457,7 @@ class MultiplexedConv2DPackedLayer:
                 self.stride[0]
                 * self.stride[1]
                 * self.n_channel_per_ct
-                / (self.upsample_factor[0] * self.upsample_factor[1])
+                / (self.external_upsample_factor[0] * self.external_upsample_factor[1])
             )
             c_m_s = result_ct[i]
             if n_block == 0:
@@ -468,7 +468,7 @@ class MultiplexedConv2DPackedLayer:
                 self.stride[0]
                 * self.stride[1]
                 * self.n_channel_per_ct
-                / (self.upsample_factor[0] * self.upsample_factor[1])
+                / (self.external_upsample_factor[0] * self.external_upsample_factor[1])
             ) == 0 or i == len(result_ct) - 1:
                 res.append(sp)
         for i in range(len(res)):

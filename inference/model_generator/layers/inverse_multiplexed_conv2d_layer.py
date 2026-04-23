@@ -36,7 +36,16 @@ class InverseMultiplexedConv2DLayer:
     drop_level_num = 0
 
     def __init__(
-        self, n_out_channel, n_in_channel, input_shape, padding, kernel_shape, stride, stride_next, skip, block_shape
+        self,
+        n_out_channel,
+        n_in_channel,
+        input_shape,
+        padding,
+        kernel_shape,
+        stride,
+        stride_next,
+        output_skip,
+        block_shape,
     ):
         self.n_out_channel: int = n_out_channel
         self.n_in_channel: int = n_in_channel
@@ -44,7 +53,7 @@ class InverseMultiplexedConv2DLayer:
         self.kernel_shape: list[int] = kernel_shape
         self.stride: list[int] = stride
         self.stride_next: list[int] = stride_next
-        self.skip: list[int] = skip
+        self.output_skip: list[int] = output_skip
         self.padding: list[int] = padding
         self.block_shape: list[int] = block_shape
 
@@ -54,8 +63,8 @@ class InverseMultiplexedConv2DLayer:
             raise ValueError(f'stride must be powers of 2, got: [{stride[0]}, {stride[1]}]')
         if stride_next[0] & (stride_next[0] - 1) != 0 or stride_next[1] & (stride_next[1] - 1) != 0:
             raise ValueError(f'stride_next must be powers of 2, got: [{stride_next[0]}, {stride_next[1]}]')
-        if skip[0] & (skip[0] - 1) != 0 or skip[1] & (skip[1] - 1) != 0:
-            raise ValueError(f'skip must be powers of 2, got: [{skip[0]}, {skip[1]}]')
+        if output_skip[0] & (output_skip[0] - 1) != 0 or output_skip[1] & (output_skip[1] - 1) != 0:
+            raise ValueError(f'output_skip must be powers of 2, got: [{output_skip[0]}, {output_skip[1]}]')
         if block_shape[0] & (block_shape[0] - 1) != 0 or block_shape[1] & (block_shape[1] - 1) != 0:
             raise ValueError(f'block_shape must be powers of 2, got: [{block_shape[0]}, {block_shape[1]}]')
 
@@ -346,7 +355,7 @@ class InverseMultiplexedConv2DLayer:
             n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 
-            # Shared mask: select row%skip==0 && col%skip==0
+            # Shared mask: select row%out_skip==0 && col%out_skip==0
             repack_mask = CkksPlaintextRingtNode('repack_mask')
             custom_compute(
                 inputs=[conv_data_source],

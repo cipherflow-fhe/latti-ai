@@ -30,8 +30,8 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
                                                              Array<double, 1>&& bias_in,
                                                              const Array<int, 1>& padding_in,
                                                              const Duo& stride_in,
-                                                             const Duo& stride_next_in,
-                                                             const Duo& skip_in,
+                                                             const Duo& output_step_in,
+                                                             const Duo& output_skip_in,
                                                              const Duo& block_shape_in,
                                                              uint32_t level_in,
                                                              double residual_scale)
@@ -55,10 +55,10 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
     }
     stride[0] = stride_in[0];
     stride[1] = stride_in[1];
-    stride_next[0] = stride_next_in[0];
-    stride_next[1] = stride_next_in[1];
-    skip[0] = skip_in[0];
-    skip[1] = skip_in[1];
+    output_step[0] = output_step_in[0];
+    output_step[1] = output_step_in[1];
+    output_skip[0] = output_skip_in[0];
+    output_skip[1] = output_skip_in[1];
 
     // Store original stride and check if repacking is needed
     orig_stride[0] = stride_in[0];
@@ -69,8 +69,8 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
     if (need_repack) {
         stride[0] = input_shape[0] / block_shape[0];
         stride[1] = input_shape[1] / block_shape[1];
-        stride_next[0] = 1;
-        stride_next[1] = 1;
+        output_step[0] = 1;
+        output_step[1] = 1;
     }
 
     if ((input_shape[0] & (input_shape[0] - 1)) != 0 || (input_shape[1] & (input_shape[1] - 1)) != 0) {
@@ -81,13 +81,13 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
         throw std::invalid_argument("stride must be powers of 2, got: [" + std::to_string(stride[0]) + ", " +
                                     std::to_string(stride[1]) + "]");
     }
-    if ((stride_next[0] & (stride_next[0] - 1)) != 0 || (stride_next[1] & (stride_next[1] - 1)) != 0) {
-        throw std::invalid_argument("stride_next must be powers of 2, got: [" + std::to_string(stride_next[0]) + ", " +
-                                    std::to_string(stride_next[1]) + "]");
+    if ((output_step[0] & (output_step[0] - 1)) != 0 || (output_step[1] & (output_step[1] - 1)) != 0) {
+        throw std::invalid_argument("stride_next must be powers of 2, got: [" + std::to_string(output_step[0]) + ", " +
+                                    std::to_string(output_step[1]) + "]");
     }
-    if ((skip[0] & (skip[0] - 1)) != 0 || (skip[1] & (skip[1] - 1)) != 0) {
-        throw std::invalid_argument("skip must be powers of 2, got: [" + std::to_string(skip[0]) + ", " +
-                                    std::to_string(skip[1]) + "]");
+    if ((output_skip[0] & (output_skip[0] - 1)) != 0 || (output_skip[1] & (output_skip[1] - 1)) != 0) {
+        throw std::invalid_argument("output_skip must be powers of 2, got: [" + std::to_string(output_skip[0]) + ", " +
+                                    std::to_string(output_skip[1]) + "]");
     }
     if ((block_shape[0] & (block_shape[0] - 1)) != 0 || (block_shape[1] & (block_shape[1] - 1)) != 0) {
         throw std::invalid_argument("block_shape must be powers of 2, got: [" + std::to_string(block_shape[0]) + ", " +
@@ -112,7 +112,7 @@ void InverseMultiplexedConv2DLayer::prepare_weight() {
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
 
-    int total_kernel_count = kernel_shape[0] * kernel_shape[1] * stride_next[0] * stride_next[1];
+    int total_kernel_count = kernel_shape[0] * kernel_shape[1] * output_step[0] * output_step[1];
     parallel_for(n_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int out_channel_idx) {
         for (int in_channel_idx = 0; in_channel_idx < n_in_channel; ++in_channel_idx) {
             vector<CkksPlaintextRingt> a1(total_kernel_count);
@@ -133,19 +133,19 @@ void InverseMultiplexedConv2DLayer::prepare_weight_lazy() {
     int pad1 = static_cast<int>(padding_shape[1]);
     int stride0 = static_cast<int>(stride[0]);
     int stride1 = static_cast<int>(stride[1]);
-    int stride_next0 = static_cast<int>(stride_next[0]);
-    int stride_next1 = static_cast<int>(stride_next[1]);
+    int output_step_0 = static_cast<int>(output_step[0]);
+    int output_step_1 = static_cast<int>(output_step[1]);
     int kernel_shape0 = static_cast<int>(kernel_shape[0]);
     int kernel_shape1 = static_cast<int>(kernel_shape[1]);
 
     kernel_masks.clear();
-    kernel_masks.resize(kernel_shape[0] * kernel_shape[1] * stride_next[0] * stride_next[1]);
-    for (int i = 0; i < kernel_shape[0] * kernel_shape[1] * stride_next[0] * stride_next[1]; i++) {
+    kernel_masks.resize(kernel_shape[0] * kernel_shape[1] * output_step[0] * output_step[1]);
+    for (int i = 0; i < kernel_shape[0] * kernel_shape[1] * output_step[0] * output_step[1]; i++) {
         kernel_masks[i].resize(N / 2);
     }
     int mask_count = 0;
-    for (int r_i2 = 0; r_i2 < stride_next[0]; r_i2++) {
-        for (int r_j2 = 0; r_j2 < stride_next[1]; r_j2++) {
+    for (int r_i2 = 0; r_i2 < output_step[0]; r_i2++) {
+        for (int r_j2 = 0; r_j2 < output_step[1]; r_j2++) {
             for (int row_seg_idx = 0; row_seg_idx < stride[0]; row_seg_idx++) {
                 for (int col_seg_idx = 0; col_seg_idx < stride[1]; col_seg_idx++) {
                     if (row_seg_idx >= kernel_shape[0] || col_seg_idx >= kernel_shape[1]) {
@@ -156,15 +156,15 @@ void InverseMultiplexedConv2DLayer::prepare_weight_lazy() {
                     for (int u_s = 0; u_s < split_kernel_shape0; u_s++) {
                         for (int v_s = 0; v_s < split_kernel_shape1; v_s++) {
                             int begin_row_idx =
-                                (row_seg_idx - pad0 + stride0 * (u_s + r_i2)) % (stride0 * stride_next0);
-                            begin_row_idx = (begin_row_idx + stride0 * stride_next0) % (stride0 * stride_next0);
+                                (row_seg_idx - pad0 + stride0 * (u_s + r_i2)) % (stride0 * output_step_0);
+                            begin_row_idx = (begin_row_idx + stride0 * output_step_0) % (stride0 * output_step_0);
                             int begin_col_idx =
-                                (col_seg_idx - pad1 + stride1 * (v_s + r_j2)) % (stride1 * stride_next1);
-                            begin_col_idx = (begin_col_idx + stride1 * stride_next1) % (stride1 * stride_next1);
+                                (col_seg_idx - pad1 + stride1 * (v_s + r_j2)) % (stride1 * output_step_1);
+                            begin_col_idx = (begin_col_idx + stride1 * output_step_1) % (stride1 * output_step_1);
                             int row_step = (row_seg_idx - pad0 + stride0 * (u_s + r_i2) - begin_row_idx) /
-                                           (stride0 * stride_next0);
+                                           (stride0 * output_step_0);
                             int col_step = (col_seg_idx - pad1 + stride1 * (v_s + r_j2) - begin_col_idx) /
-                                           (stride1 * stride_next1);
+                                           (stride1 * output_step_1);
                             for (int i_s = 0; i_s < block_shape[0]; i_s++) {
                                 for (int j_s = 0; j_s < block_shape[1]; j_s++) {
                                     if (i_s + row_step >= 0 && i_s + row_step < block_shape[0] && j_s + col_step >= 0 &&
@@ -187,7 +187,7 @@ void InverseMultiplexedConv2DLayer::prepare_weight_lazy() {
 
     // Cache computed values for on-demand generation
     cached_input_block_size = block_shape[0] * block_shape[1];
-    cached_kernel_total_count = kernel_shape[0] * kernel_shape[1] * stride_next[0] * stride_next[1];
+    cached_kernel_total_count = kernel_shape[0] * kernel_shape[1] * output_step[0] * output_step[1];
     cached_total_block_size = block_shape[0] * block_shape[1];
     if (need_repack) {
         uint32_t out_skip0 = block_shape[0] / (input_shape[0] / orig_stride[0]);
@@ -211,8 +211,8 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_weight_pt_for_indices
     int pad1 = static_cast<int>(padding_shape[1]);
     int stride0 = static_cast<int>(stride[0]);
     int stride1 = static_cast<int>(stride[1]);
-    int stride_next0 = static_cast<int>(stride_next[0]);
-    int stride_next1 = static_cast<int>(stride_next[1]);
+    int output_step_0 = static_cast<int>(output_step[0]);
+    int output_step_1 = static_cast<int>(output_step[1]);
     int kernel_shape0 = static_cast<int>(kernel_shape[0]);
     int kernel_shape1 = static_cast<int>(kernel_shape[1]);
 
@@ -220,8 +220,8 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_weight_pt_for_indices
     int saved_r_i2 = 0, saved_r_j2 = 0, saved_row_seg_idx = 0, saved_col_seg_idx = 0, saved_u_s = 0, saved_v_s = 0;
     bool found = false;
 
-    for (int r_i2 = 0; r_i2 < stride_next[0] && !found; r_i2++) {
-        for (int r_j2 = 0; r_j2 < stride_next[1] && !found; r_j2++) {
+    for (int r_i2 = 0; r_i2 < output_step[0] && !found; r_i2++) {
+        for (int r_j2 = 0; r_j2 < output_step[1] && !found; r_j2++) {
             for (int row_seg_idx = 0; row_seg_idx < stride[0] && !found; row_seg_idx++) {
                 for (int col_seg_idx = 0; col_seg_idx < stride[1] && !found; col_seg_idx++) {
                     if (row_seg_idx >= kernel_shape[0] || col_seg_idx >= kernel_shape[1]) {
@@ -292,8 +292,8 @@ std::vector<uint32_t> InverseMultiplexedConv2DLayer::get_used_input_indices() co
     int pad1 = static_cast<int>(padding_shape[1]);
     int s0 = static_cast<int>(stride[0]);
     int s1 = static_cast<int>(stride[1]);
-    int sn0 = static_cast<int>(stride_next[0]);
-    int sn1 = static_cast<int>(stride_next[1]);
+    int sn0 = static_cast<int>(output_step[0]);
+    int sn1 = static_cast<int>(output_step[1]);
 
     for (uint32_t n_in_ch = 0; n_in_ch < n_in_channel; n_in_ch++) {
         uint32_t base = n_in_ch * s0 * s1 * sn0 * sn1;
@@ -330,16 +330,16 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
     int pad1 = static_cast<int>(padding_shape[1]);
     int stride0 = static_cast<int>(stride[0]);
     int stride1 = static_cast<int>(stride[1]);
-    int stride_next0 = static_cast<int>(stride_next[0]);
-    int stride_next1 = static_cast<int>(stride_next[1]);
+    int stride_next0 = static_cast<int>(output_step[0]);
+    int stride_next1 = static_cast<int>(output_step[1]);
     int kernel_shape0 = static_cast<int>(kernel_shape[0]);
     int kernel_shape1 = static_cast<int>(kernel_shape[1]);
     int block_shape1 = static_cast<int>(block_shape[1]);
 
     parallel_for(n_in_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int in_channel_idx) {
-        int base_in_ct_idx = in_channel_idx * stride[0] * stride[1] * stride_next[0] * stride_next[1];
-        for (int r_i2 = 0; r_i2 < stride_next[0]; r_i2++) {
-            for (int r_j2 = 0; r_j2 < stride_next[1]; r_j2++) {
+        int base_in_ct_idx = in_channel_idx * stride[0] * stride[1] * output_step[0] * output_step[1];
+        for (int r_i2 = 0; r_i2 < output_step[0]; r_i2++) {
+            for (int r_j2 = 0; r_j2 < output_step[1]; r_j2++) {
                 for (int row_seg_idx = 0; row_seg_idx < stride[0]; row_seg_idx++) {
                     for (int col_seg_idx = 0; col_seg_idx < stride[1]; col_seg_idx++) {
                         if (row_seg_idx >= kernel_shape[0] || col_seg_idx >= kernel_shape[1]) {
@@ -381,14 +381,14 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
     }
 
     uint32_t n_weight = weight_pt.empty() ? n_out_channel : weight_pt.size();
-    vector<CkksCiphertext> temp_res(n_weight * stride_next[0] * stride_next[1]);
+    vector<CkksCiphertext> temp_res(n_weight * output_step[0] * output_step[1]);
 
     parallel_for(n_weight, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        for (int r_i2 = 0; r_i2 < stride_next[0]; r_i2++) {
-            for (int r_j2 = 0; r_j2 < stride_next[1]; r_j2++) {
+        for (int r_i2 = 0; r_i2 < output_step[0]; r_i2++) {
+            for (int r_j2 = 0; r_j2 < output_step[1]; r_j2++) {
                 CkksCiphertext s(0);
-                int out_ct_idx = ct_idx * stride_next[0] * stride_next[1] + r_i2 * stride_next[1] + r_j2;
-                int base_idx = (r_i2 * stride_next[1] + r_j2) * kernel_shape[0] * kernel_shape[1];
+                int out_ct_idx = ct_idx * output_step[0] * output_step[1] + r_i2 * output_step[1] + r_j2;
+                int base_idx = (r_i2 * output_step[1] + r_j2) * kernel_shape[0] * kernel_shape[1];
                 uint32_t n_j = weight_pt.empty() ? n_in_channel : weight_pt[ct_idx].size();
                 for (int j = 0; j < n_j; j++) {
                     for (int k = 0; k < kernel_shape[0] * kernel_shape[1]; k++) {
@@ -479,7 +479,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
         return res;
     }
 
-    vector<CkksCiphertext> res(div_ceil(n_weight, (uint32_t)n_channel_per_ct_out) * stride_next[0] * stride_next[1]);
+    vector<CkksCiphertext> res(div_ceil(n_weight, (uint32_t)n_channel_per_ct_out) * output_step[0] * output_step[1]);
     if (n_channel_per_ct_out == 1) {
         res = move(temp_res);
     } else {

@@ -32,7 +32,7 @@ public:
                                  uint32_t n_channel_per_ct_in,
                                  uint32_t level_in,
                                  double residual_scale = 1.0,
-                                 const Duo& upsample_factor_in = {1, 1});
+                                 const Duo& external_upsample_factor_in = {1, 1});
 
     void prepare_weight() override {
         prepare_weight_for_post_skip_rotation();
@@ -83,8 +83,9 @@ private:
     uint32_t n_packed_out_channel;
     uint32_t n_block_per_ct;
     int bias_level_down = 0;
+    bool need_repack_;
     double weight_scale;
-    Duo upsample_factor;
+    Duo external_upsample_factor;
     Duo zero_inserted_skip;
 
     // Cached values for on-demand generation

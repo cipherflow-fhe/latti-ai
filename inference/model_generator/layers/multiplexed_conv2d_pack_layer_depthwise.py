@@ -120,7 +120,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
         ops[lv]['rescale'] += self.n_packed_in_channel
         lv -= 1
 
-        if self.stride[0] == 1:
+        if self.stride[0] == 1 and self.stride[1] == 1:
             # stride=1: just add bias per ct
             ops[lv]['add'] += self.n_packed_in_channel
         else:
@@ -217,7 +217,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
 
         n_bias = _math.ceil(self.n_out_channel / (self.stride[0] * self.stride[1] * self.n_channel_per_ct))
         bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_bias)]
-        if self.stride[0] != 1:
+        if self.stride[0] != 1 or self.stride[1] != 1:
             mask_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(self.n_out_channel)]
         else:
             mask_pt = []
@@ -239,7 +239,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
                 w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             s = rescale(partial_sum)
-            if self.stride[0] == 1:
+            if self.stride[0] == 1 and self.stride[1] == 1:
                 res.append(s)
             else:
                 steps = []
@@ -277,22 +277,18 @@ class MultiplexedConv2DPackedLayerDepthwise:
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
                         c_m_s = mult(s_rots[int(i / self.skip[0])], mast_pt[ct_idx * self.n_channel_per_ct + i])
                         result_ct.append(rescale(c_m_s))
-        if self.stride[0] == 1:
-            for i in range(len(res)):
-                res[i] = add(res[i], bias_pt[i])
-            return res
-
-        for i in range(len(result_ct)):
-            p = i % (self.stride[0] * self.stride[1] * self.n_channel_per_ct)
-            c_m_s = result_ct[i]
-            if p == 0:
-                sp = c_m_s
-                btp_idx = int(np.floor(i / (self.stride[0] * self.stride[1] * self.n_channel_per_ct)))
-                sp = add(sp, bias_pt[btp_idx])
-            else:
-                sp = add(sp, c_m_s)
-            if (i + 1) % (self.stride[0] * self.stride[1] * self.n_channel_per_ct) == 0 or i == len(result_ct) - 1:
-                res.append(sp)
+        if self.stride[0] != 1 or self.stride[1] != 1:
+            for i in range(len(result_ct)):
+                p = i % (self.stride[0] * self.stride[1] * self.n_channel_per_ct)
+                c_m_s = result_ct[i]
+                if p == 0:
+                    sp = c_m_s
+                else:
+                    sp = add(sp, c_m_s)
+                if (i + 1) % (self.stride[0] * self.stride[1] * self.n_channel_per_ct) == 0 or i == len(result_ct) - 1:
+                    res.append(sp)
+        for i in range(len(res)):
+            res[i] = add(res[i], bias_pt[i])
         return res
 
     def call_custom_compute(self, x: list[CkksCiphertextNode], conv_data_source) -> list[CkksCiphertextNode]:
@@ -322,7 +318,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
                 w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             s = rescale(partial_sum)
-            if self.stride[0] == 1:
+            if self.stride[0] == 1 and self.stride[1] == 1:
                 res.append(s)
             else:
                 steps = []
@@ -376,34 +372,23 @@ class MultiplexedConv2DPackedLayerDepthwise:
                         )
                         c_m_s = mult(rot_ct, m_pt)
                         result_ct.append(rescale(c_m_s))
-        if self.stride[0] == 1:
-            for i in range(len(res)):
-                b_pt = CkksPlaintextRingtNode(f'encode_pt_{i}')
-                custom_compute(
-                    inputs=[conv_data_source],
-                    output=b_pt,
-                    type='encode_pt',
-                    attributes={'op_class': op_class, 'type': 'bias_pt', 'i': i},
-                )
-                res[i] = add(res[i], b_pt)
-            return res
-
-        for i in range(len(result_ct)):
-            p = i % (self.stride[0] * self.stride[1] * self.n_channel_per_ct)
-            c_m_s = result_ct[i]
-            if p == 0:
-                sp = c_m_s
-                btp_idx = int(np.floor(i / (self.stride[0] * self.stride[1] * self.n_channel_per_ct)))
-                b_pt = CkksPlaintextRingtNode(f'encode_pt_{btp_idx}')
-                custom_compute(
-                    inputs=[conv_data_source],
-                    output=b_pt,
-                    type='encode_pt',
-                    attributes={'op_class': op_class, 'type': 'bias_pt', 'i': btp_idx},
-                )
-                sp = add(sp, b_pt)
-            else:
-                sp = add(sp, c_m_s)
-            if (i + 1) % (self.stride[0] * self.stride[1] * self.n_channel_per_ct) == 0 or i == len(result_ct) - 1:
-                res.append(sp)
+        if self.stride[0] != 1 or self.stride[1] != 1:
+            for i in range(len(result_ct)):
+                p = i % (self.stride[0] * self.stride[1] * self.n_channel_per_ct)
+                c_m_s = result_ct[i]
+                if p == 0:
+                    sp = c_m_s
+                else:
+                    sp = add(sp, c_m_s)
+                if (i + 1) % (self.stride[0] * self.stride[1] * self.n_channel_per_ct) == 0 or i == len(result_ct) - 1:
+                    res.append(sp)
+        for i in range(len(res)):
+            b_pt = CkksPlaintextRingtNode(f'encode_pt_{i}')
+            custom_compute(
+                inputs=[conv_data_source],
+                output=b_pt,
+                type='encode_pt',
+                attributes={'op_class': op_class, 'type': 'bias_pt', 'i': i},
+            )
+            res[i] = add(res[i], b_pt)
         return res
