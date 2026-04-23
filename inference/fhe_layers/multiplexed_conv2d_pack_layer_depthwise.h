@@ -44,8 +44,6 @@ public:
     std::vector<ls::CkksPlaintextRingt> mask_pt;
     bool normal_conv = true;
 
-    virtual Array<double, 3> run_plaintext(const Array<double, 3>& x, double multiplier = 1);
-
     // Helper functions to generate weights/bias/mask on-demand
     ls::CkksPlaintextRingt
     generate_weight_pt_for_indices(ls::CkksContext& ctx, int n_packed_out_channel_idx, int kernel_idx) const;
@@ -65,6 +63,9 @@ private:
     uint32_t n_block_per_ct;
     bool need_repack_;
     double weight_scale;
+    Duo skip_;
+    std::vector<std::vector<double>> kernel_masks_;
+    std::vector<int> input_rotate_units_;
 
     // Cached values for on-demand generation
     Duo cached_input_shape_ct = {0, 0};
