@@ -30,8 +30,6 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
                                                              Array<double, 1>&& bias_in,
                                                              const Array<int, 1>& padding_in,
                                                              const Duo& stride_in,
-                                                             const Duo& output_step_in,
-                                                             const Duo& output_skip_in,
                                                              const Duo& block_shape_in,
                                                              uint32_t level_in,
                                                              double residual_scale)
@@ -55,10 +53,6 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
     }
     stride[0] = stride_in[0];
     stride[1] = stride_in[1];
-    output_step[0] = output_step_in[0];
-    output_step[1] = output_step_in[1];
-    output_skip[0] = output_skip_in[0];
-    output_skip[1] = output_skip_in[1];
 
     // Store original stride and check if repacking is needed
     orig_stride[0] = stride_in[0];
@@ -69,9 +63,9 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
     if (need_repack) {
         stride[0] = input_shape[0] / block_shape[0];
         stride[1] = input_shape[1] / block_shape[1];
-        output_step[0] = 1;
-        output_step[1] = 1;
     }
+    output_step[0] = input_shape[0] / (block_shape[0] * stride[0]);
+    output_step[1] = input_shape[1] / (block_shape[1] * stride[1]);
 
     if ((input_shape[0] & (input_shape[0] - 1)) != 0 || (input_shape[1] & (input_shape[1] - 1)) != 0) {
         throw std::invalid_argument("input_shape must be powers of 2, got: [" + std::to_string(input_shape[0]) + ", " +
@@ -80,14 +74,6 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
     if ((stride[0] & (stride[0] - 1)) != 0 || (stride[1] & (stride[1] - 1)) != 0) {
         throw std::invalid_argument("stride must be powers of 2, got: [" + std::to_string(stride[0]) + ", " +
                                     std::to_string(stride[1]) + "]");
-    }
-    if ((output_step[0] & (output_step[0] - 1)) != 0 || (output_step[1] & (output_step[1] - 1)) != 0) {
-        throw std::invalid_argument("stride_next must be powers of 2, got: [" + std::to_string(output_step[0]) + ", " +
-                                    std::to_string(output_step[1]) + "]");
-    }
-    if ((output_skip[0] & (output_skip[0] - 1)) != 0 || (output_skip[1] & (output_skip[1] - 1)) != 0) {
-        throw std::invalid_argument("output_skip must be powers of 2, got: [" + std::to_string(output_skip[0]) + ", " +
-                                    std::to_string(output_skip[1]) + "]");
     }
     if ((block_shape[0] & (block_shape[0] - 1)) != 0 || (block_shape[1] & (block_shape[1] - 1)) != 0) {
         throw std::invalid_argument("block_shape must be powers of 2, got: [" + std::to_string(block_shape[0]) + ", " +

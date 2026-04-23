@@ -341,8 +341,6 @@ class TestLayerExport(unittest.TestCase):
                                 padding,
                                 kernel_shape,
                                 stride,
-                                next_stride,
-                                skip,
                                 block_shape,
                             )
 
@@ -408,8 +406,6 @@ class TestLayerExport(unittest.TestCase):
                         padding,
                         kernel_shape,
                         stride,
-                        next_stride,
-                        skip,
                         block_shape,
                     )
 
@@ -504,8 +500,6 @@ class TestLayerExport(unittest.TestCase):
                                 padding,
                                 kernel_shape,
                                 stride,
-                                next_stride,
-                                skip,
                                 block_shape,
                             )
 

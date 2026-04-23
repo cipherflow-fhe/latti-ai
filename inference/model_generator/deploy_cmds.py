@@ -168,8 +168,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         padding,
                         kernel_shape,
                         stride,
-                        next_stride,
-                        skip,
                         block_shape,
                     )
                 else:
@@ -180,8 +178,6 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         padding,
                         kernel_shape,
                         stride,
-                        next_stride,
-                        skip,
                         block_shape,
                     )
 

@@ -693,9 +693,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "inv_mux_conv", "", HeteroProcesso
                                 Array<double, 3> input_array =
                                     gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
 
-                                InverseMultiplexedConv2DLayer conv_layer(
-                                    this->context.get_parameter(), input_shape, move(conv0_weight), move(conv0_bias),
-                                    padding, stride, stride_next, skip, block_shape, init_level, 1.0);
+                                InverseMultiplexedConv2DLayer conv_layer(this->context.get_parameter(), input_shape,
+                                                                         move(conv0_weight), move(conv0_bias), padding,
+                                                                         stride, block_shape, init_level, 1.0);
                                 conv_layer.prepare_weight();
 
                                 Feature2DEncrypted input_feature(&this->context, init_level, skip);
@@ -806,7 +806,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "inv_mux_conv_repack", "", HeteroP
 
                         InverseMultiplexedConv2DLayer conv_layer(this->context.get_parameter(), input_shape,
                                                                  move(conv0_weight), move(conv0_bias), padding, stride,
-                                                                 stride_next, skip, block_shape, init_level, 1.0);
+                                                                 block_shape, init_level, 1.0);
                         conv_layer.prepare_weight();
 
                         Feature2DEncrypted input_feature(&this->context, init_level, skip);
@@ -913,7 +913,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "inv_mux_dw_conv", "", HeteroProce
 
                             InverseMultiplexedConv2DLayerDepthwise conv_layer(
                                 this->context.get_parameter(), input_shape, move(conv0_weight), move(conv0_bias),
-                                padding, stride, stride_next, skip, block_shape, init_level, 1.0);
+                                padding, stride, block_shape, init_level, 1.0);
                             conv_layer.prepare_weight();
 
                             // Pack input using interleaved packing
