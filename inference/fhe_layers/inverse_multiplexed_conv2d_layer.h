@@ -63,7 +63,8 @@ private:
     Duo block_shape;
     Duo stride;
     Duo output_step;
-    Duo padding_shape;
+    Duo input_step;
+    DuoInt pad_;
     Duo orig_stride;
     Array<double, 4> weight;
     Array<double, 1> bias;
