@@ -36,13 +36,18 @@ def replace_activation(
     new_module_factory: Callable,
     upper_bound: float,
     hermite_coeffs: tuple,
+    activation_name: str = 'relu',
 ):
     """Replace all *old_cls* activations with *new_module_factory* in-place."""
     for name, child in list(module.named_children()):
-        replace_activation(child, old_cls, new_module_factory, upper_bound, hermite_coeffs)
+        replace_activation(child, old_cls, new_module_factory, upper_bound, hermite_coeffs, activation_name)
 
         if isinstance(child, old_cls):
-            new_module = new_module_factory(hermite_coeffs=hermite_coeffs, upper_bound=upper_bound)
+            new_module = new_module_factory(
+                hermite_coeffs=hermite_coeffs,
+                upper_bound=upper_bound,
+                activation_name=activation_name,
+            )
             setattr(module, name, new_module)
             log.debug('Replaced %s: %s -> %s', name, old_cls.__name__, new_module_factory.__name__)
 
@@ -85,7 +90,8 @@ def replace_activation_with_poly(
         ', '.join(f'{c:.8f}' for c in hermite_coeffs),
     )
 
-    replace_activation(model, old_cls, new_module_factory, upper_bound, hermite_coeffs)
+    activation_name = old_cls.__name__.lower()
+    replace_activation(model, old_cls, new_module_factory, upper_bound, hermite_coeffs, activation_name)
     return model
 
 

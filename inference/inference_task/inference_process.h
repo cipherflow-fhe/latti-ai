@@ -226,7 +226,7 @@ public:
     void run_task_plaintext(bool is_mpc = false);
     void run_task_lazy(bool is_mpc = false);
 
-    // 在 load_model 阶段调用，预先初始化 task 避免首次推理时的重复构造开销
+    // load_model
     void prepare_task();
 
 private:
