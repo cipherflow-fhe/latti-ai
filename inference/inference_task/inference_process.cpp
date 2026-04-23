@@ -396,9 +396,9 @@ void InitInferenceProcess::_init_multiplexed_conv_layer(const string& key,
                 padding.set(0, -1);
                 padding.set(1, -1);
             }
-            auto inv_conv_layer = MakeU<InverseMultiplexedConv2DLayer>(
-                param, feature_input.shape, move(weight), move(bias), padding, stride, next_stride, feature_input.skip,
-                block_shape_in, feature_input.level, residual_scale);
+            auto inv_conv_layer =
+                MakeU<InverseMultiplexedConv2DLayer>(param, feature_input.shape, move(weight), move(bias), padding,
+                                                     stride, block_shape_in, feature_input.level, residual_scale);
             _prepare_layer(key, move(inv_conv_layer));
         } else {
             auto mux_conv_layer = MakeU<MultiplexedConv2DPackedLayer>(
@@ -418,8 +418,8 @@ void InitInferenceProcess::_init_multiplexed_conv_layer(const string& key,
                 padding.set(1, -1);
             }
             auto inv_dw_conv_layer = MakeU<InverseMultiplexedConv2DLayerDepthwise>(
-                param, feature_input.shape, move(weight), move(bias), padding, stride, next_stride, feature_input.skip,
-                block_shape_in, feature_input.level, residual_scale);
+                param, feature_input.shape, move(weight), move(bias), padding, stride, block_shape_in,
+                feature_input.level, residual_scale);
             _prepare_layer(key, move(inv_dw_conv_layer));
         } else {
             auto mux_dw_layer = MakeU<MultiplexedConv2DPackedLayerDepthwise>(
