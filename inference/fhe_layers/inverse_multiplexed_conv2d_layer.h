@@ -28,8 +28,6 @@ public:
                                   Array<double, 1>&& bias_in,
                                   const Array<int, 1>& padding_in,
                                   const Duo& stride_in,
-                                  const Duo& stride_next_in,
-                                  const Duo& skip_in,
                                   const Duo& block_shape_in,
                                   uint32_t level_in,
                                   double residual_scale = 1.0);
@@ -64,8 +62,7 @@ private:
     Duo kernel_shape;
     Duo block_shape;
     Duo stride;
-    Duo stride_next;
-    Duo skip;
+    Duo output_step;
     Duo padding_shape;
     Duo orig_stride;
     Array<double, 4> weight;

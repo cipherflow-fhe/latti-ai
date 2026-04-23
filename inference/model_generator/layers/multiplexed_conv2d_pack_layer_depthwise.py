@@ -120,7 +120,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
         ops[lv]['rescale'] += self.n_packed_in_channel
         lv -= 1
 
-        if self.stride[0] == 1:
+        if self.stride[0] == 1 and self.stride[1] == 1:
             # stride=1: just add bias per ct
             ops[lv]['add'] += self.n_packed_in_channel
         else:
@@ -218,7 +218,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
 
         n_bias = _math.ceil(self.n_out_channel / (self.stride[0] * self.stride[1] * self.n_channel_per_ct))
         bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_bias)]
-        if self.stride[0] != 1:
+        if self.stride[0] != 1 or self.stride[1] != 1:
             mask_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(self.n_out_channel)]
         else:
             mask_pt = []
@@ -240,7 +240,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
                 w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             s = rescale(partial_sum)
-            if self.stride[0] == 1:
+            if self.stride[0] == 1 and self.stride[1] == 1:
                 res.append(s)
             else:
                 steps = []
@@ -342,7 +342,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
                 w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             s = rescale(partial_sum)
-            if self.stride[0] == 1:
+            if self.stride[0] == 1 and self.stride[1] == 1:
                 res.append(s)
             else:
                 steps = []
