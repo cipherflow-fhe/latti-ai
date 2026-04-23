@@ -236,9 +236,24 @@ class MultiplexedConv2DPackedLayer:
                 result = add(result, res[0])
         return result
 
-    def call_custom_compute(self, x: list[CkksCiphertextNode], conv_data_source) -> list[CkksCiphertextNode]:
-        # 0. Create unified data source node (containing all weight/bias/mask data)
-        # This node acts as a "pointer", created only once, all encode_pt nodes reference it
+    def make_mask_pt_nodes(self, layer_id):
+        """Create mask_pt nodes for lazy mode (offline-generated, shared across ct_idx).
+
+        Returns [] when stride=skip=1 (no mask needed).
+        """
+        if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
+            return []
+        n_mask = min(self.n_block_per_ct, self.n_out_channel)
+        return [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_mask)]
+
+    def call_custom_compute(
+        self, x: list[CkksCiphertextNode], conv_data_source, mask_pt_nodes=None
+    ) -> list[CkksCiphertextNode]:
+        # Weight/bias still go through encode_pt (lazy), but mask_pt is offline
+        # (populated by prepare_weight_lazy on the C++ side) and passed in as a
+        # list of static plaintext nodes shared across ct_idx.
+        if mask_pt_nodes is None:
+            mask_pt_nodes = []
 
         # 1. Block direction rotation
         block_rotations: list[CkksCiphertextNode] = list()
@@ -278,7 +293,6 @@ class MultiplexedConv2DPackedLayer:
             if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
                 res.append(s)
             else:
-                steps = []
                 valid_n = min(self.n_block_per_ct, self.n_out_channel - ct_idx * self.n_block_per_ct)
                 for i in range(valid_n):
                     n_block = (ct_idx * self.n_block_per_ct + i) % (
@@ -302,24 +316,15 @@ class MultiplexedConv2DPackedLayer:
                         * self.input_shape[1]
                         * self.skip[1]
                     )
-                    rot_step = (
+                    rot_step = int(
                         -n_block_residue
                         - n_skip
                         - n_block % self.zero_inserted_skip[1]
                         + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
                     )
-                    steps.append(int(rot_step))
-                s_rots = rotate_cols(s, steps)
-                for i in range(valid_n):
-                    m_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}_{i}')
-                    custom_compute(
-                        inputs=[conv_data_source],  # Reference same data source
-                        output=m_pt,
-                        type='encode_pt',
-                        attributes={'op_class': op_class, 'type': 'mask_pt', 'i': ct_idx, 'j': i},
-                    )
-                    c_m_s = mult(s_rots[i], m_pt)
-                    result_ct.append(rescale(c_m_s))
+                    c_m = mult(s, mask_pt_nodes[i])
+                    c_m = rescale(c_m)
+                    result_ct.append(rotate_cols(c_m, [rot_step])[0])
 
         for i in range(len(result_ct)):
             n_block = i % (
@@ -357,7 +362,7 @@ class MultiplexedConv2DPackedLayer:
 
         weight_pt[i][j][k]: i in size_0, j in size_1, k in kernel_size
         bias_pt[i]: i in n_packed_out_channel
-        mask_pt[i][j]: i in size_0, j in valid blocks per ct  (empty list if no mask needed)
+        mask_pt[i]: i in min(n_block_per_ct, n_out_channel)  (empty list if no mask needed)
         """
         import math as _math
 
@@ -378,13 +383,8 @@ class MultiplexedConv2DPackedLayer:
         if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
             mask_pt = []
         else:
-            mask_pt = [
-                [
-                    CkksPlaintextRingtNode(f'convm_{layer_id}_{i}_{j}')
-                    for j in range(min(self.n_block_per_ct, self.n_out_channel - i * self.n_block_per_ct))
-                ]
-                for i in range(size_0)
-            ]
+            n_mask = min(self.n_block_per_ct, self.n_out_channel)
+            mask_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_mask)]
         return weight_pt, bias_pt, mask_pt
 
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mast_pt) -> list[CkksCiphertextNode]:
@@ -416,7 +416,6 @@ class MultiplexedConv2DPackedLayer:
             if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
                 res.append(s)
             else:
-                steps = []
                 valid_n = min(self.n_block_per_ct, self.n_out_channel - ct_idx * self.n_block_per_ct)
                 for i in range(valid_n):
                     n_block = (ct_idx * self.n_block_per_ct + i) % (
@@ -440,17 +439,15 @@ class MultiplexedConv2DPackedLayer:
                         * self.input_shape[1]
                         * self.skip[1]
                     )
-                    rot_step = (
+                    rot_step = int(
                         -n_block_residue
                         - n_skip
                         - n_block % self.zero_inserted_skip[1]
                         + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
                     )
-                    steps.append(int(rot_step))
-                s_rots = rotate_cols(s, steps)
-                for i in range(valid_n):
-                    c_m_s = mult(s_rots[i], mast_pt[ct_idx][i])
-                    result_ct.append(rescale(c_m_s))
+                    c_m = mult(s, mast_pt[i])
+                    c_m = rescale(c_m)
+                    result_ct.append(rotate_cols(c_m, [rot_step])[0])
 
         for i in range(len(result_ct)):
             n_block = i % (

@@ -51,7 +51,9 @@ public:
 
     std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> weight_pt;
     std::vector<ls::CkksPlaintextRingt> bias_pt;
-    std::vector<std::vector<ls::CkksPlaintextRingt>> mask_pt;
+    // post_skip_rotation: block-i masks (one per block position in output CT),
+    // shared across all ct_idx. Size = min(n_block_per_ct, n_out_channel_).
+    std::vector<ls::CkksPlaintextRingt> mask_pt;
 
     std::vector<std::vector<double>> mask_channel;
 
@@ -60,7 +62,7 @@ public:
     // Helper functions to generate weights/bias/mask on-demand (post_skip_rotation path)
     ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
     ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
-    ls::CkksPlaintextRingt generate_mask_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int i) const;
+    ls::CkksPlaintextRingt generate_mask_pt_for_indices(ls::CkksContext& ctx, int i) const;
 
     // Helper functions to generate weights/bias/mask on-demand (reduct_rot path)
     ls::CkksPlaintextRingt

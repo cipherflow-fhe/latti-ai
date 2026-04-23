@@ -275,9 +275,28 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
                     if lazy:
                         conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
-                        layer_output_nodes = conv0_layer.call_custom_compute(
-                            feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source
-                        )
+                        if isinstance(conv0_layer, MultiplexedConv2DPackedLayer):
+                            mask_pt_nodes = conv0_layer.make_mask_pt_nodes(layer_id)
+                            layer_output_nodes = conv0_layer.call_custom_compute(
+                                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                                conv_data_source,
+                                mask_pt_nodes,
+                            )
+                            if mask_pt_nodes:
+                                input_args.append(Argument(f'convm_{layer_id}', mask_pt_nodes))
+                        elif isinstance(conv0_layer, MultiplexedConv2DPackedLayerDepthwise):
+                            mask_pt_nodes = conv0_layer.make_mask_pt_nodes(layer_id)
+                            layer_output_nodes = conv0_layer.call_custom_compute(
+                                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                                conv_data_source,
+                                mask_pt_nodes,
+                            )
+                            if mask_pt_nodes:
+                                input_args.append(Argument(f'convm_{layer_id}', mask_pt_nodes))
+                        else:
+                            layer_output_nodes = conv0_layer.call_custom_compute(
+                                feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source
+                            )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                         input_args.append(Argument(f'{layer_id}', [conv_data_source]))
                     else:
