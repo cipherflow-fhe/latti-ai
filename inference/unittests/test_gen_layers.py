@@ -410,7 +410,7 @@ class TestLayerExport(unittest.TestCase):
                     )
 
                     effective_stride = big_conv.stride
-                    effective_next_stride = big_conv.stride_next
+                    effective_next_stride = big_conv.output_step
 
                     n_block_per_channel = (
                         effective_next_stride[0] * effective_next_stride[1] * effective_stride[0] * effective_stride[1]

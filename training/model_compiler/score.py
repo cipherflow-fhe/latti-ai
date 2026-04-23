@@ -393,13 +393,10 @@ class FheScoreParam:
                 if is_depthwise:
                     layer = InverseMultiplexedDepthwiseConv2DLayer(
                         n_out,
-                        n_in,
                         input_shape,
                         padding,
                         kernel_shape,
                         stride,
-                        next_stride,
-                        skip,
                         block_shape,
                     )
                 else:
@@ -410,8 +407,6 @@ class FheScoreParam:
                         padding,
                         kernel_shape,
                         stride,
-                        next_stride,
-                        skip,
                         block_shape,
                     )
                 return layer.get_fhe_op_count(self.input_mult_level, n)
