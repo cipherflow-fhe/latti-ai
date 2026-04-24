@@ -74,9 +74,12 @@ MultiplexedConv2DPackedLayer::MultiplexedConv2DPackedLayer(const CkksParameter& 
                                                            uint32_t level_in,
                                                            double residual_scale,
                                                            const Duo& external_upsample_factor_in)
-    : Conv2DLayer(param_in, input_shape_in, move(weight_in), move(bias_in), stride_in, skip_in),
+    : Conv2DLayer(param_in, input_shape_in, move(weight_in), move(bias_in), stride_in), skip_(skip_in),
       external_upsample_factor(external_upsample_factor_in),
       zero_inserted_skip(skip_in * stride_in / external_upsample_factor_in) {
+    if ((skip_[0] & (skip_[0] - 1)) != 0 || (skip_[1] & (skip_[1] - 1)) != 0) {
+        throw std::invalid_argument("skip must be powers of 2, got: " + str(skip_));
+    }
     const uint32_t output_channels_per_ct = n_channel_per_ct_in * prod(stride_in) / prod(external_upsample_factor);
 
     n_channel_per_ct = n_channel_per_ct_in;

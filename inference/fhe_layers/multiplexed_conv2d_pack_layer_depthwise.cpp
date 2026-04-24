@@ -35,7 +35,13 @@ MultiplexedConv2DPackedLayerDepthwise::MultiplexedConv2DPackedLayerDepthwise(con
                                                                              uint32_t n_channel_per_ct_in,
                                                                              uint32_t level_in,
                                                                              double residual_scale)
-    : Conv2DLayer(param_in, input_shape_in, move(weight_in), move(bias_in), stride_in, skip_in) {
+    : Conv2DLayer(param_in, input_shape_in, move(weight_in), move(bias_in), stride_in) {
+    skip_ = skip_in;
+    if ((skip_[0] & (skip_[0] - 1)) != 0 || (skip_[1] & (skip_[1] - 1)) != 0) {
+        throw std::invalid_argument("skip must be powers of 2, got: " + str(skip_));
+    }
+    n_groups_ = n_out_channel_;
+    n_in_channel_ = n_out_channel_;
     const uint32_t output_channels_per_ct = n_channel_per_ct_in * prod(stride_);
 
     n_channel_per_ct = n_channel_per_ct_in;
@@ -358,38 +364,5 @@ Feature2DEncrypted MultiplexedConv2DPackedLayerDepthwise::run(CkksContext& ctx, 
     result.n_channel_per_ct = x.n_channel_per_ct * prod(stride_);
     result.level = x.level - bias_level_down;
     result.data = run_core(ctx, x.data);
-    return result;
-}
-
-Array<double, 3> MultiplexedConv2DPackedLayerDepthwise::run_plaintext(const Array<double, 3>& x, double multiplier) {
-    const double value = 1.0 / multiplier;
-    const Duo padding_shape = kernel_shape_ / 2;
-    const Duo padded_shape = input_shape_ + padding_shape * 2;
-    const Duo output_shape = input_shape_ / stride_;
-    Array<double, 3> padded_input({n_out_channel_, padded_shape[0], padded_shape[1]}, 0.0);
-    for (int in_channel_idx = 0; in_channel_idx < n_out_channel_; in_channel_idx++) {
-        for (const Duo& input_pos : duo_range(input_shape_)) {
-            const Duo padded_pos = input_pos + padding_shape;
-            padded_input.set(in_channel_idx, padded_pos[0], padded_pos[1],
-                             x.get(in_channel_idx, input_pos[0], input_pos[1]));
-        }
-    }
-
-    Array<double, 3> result({n_out_channel_, output_shape[0], output_shape[1]});
-#ifdef _OPENMP
-#    pragma omp parallel for schedule(static)
-#endif
-    for (int out_channel_idx = 0; out_channel_idx < n_out_channel_; out_channel_idx++) {
-        for (const Duo& output_pos : duo_range(output_shape)) {
-            double sum = bias_[out_channel_idx];
-            const Duo input_base = output_pos * stride_;
-            for (const Duo& kernel_pos : duo_range(kernel_shape_)) {
-                const Duo input_pos = input_base + kernel_pos;
-                sum += padded_input.get(out_channel_idx, input_pos[0], input_pos[1]) *
-                       (weight_.get(out_channel_idx, 0, kernel_pos[0], kernel_pos[1]) * value);
-            }
-            result.set(out_channel_idx, output_pos[0], output_pos[1], sum);
-        }
-    }
     return result;
 }
