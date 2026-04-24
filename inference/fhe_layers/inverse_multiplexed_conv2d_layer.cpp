@@ -105,31 +105,6 @@ void InverseMultiplexedConv2DLayer::prepare_weight() {
 }
 
 void InverseMultiplexedConv2DLayer::prepare_weight_lazy() {
-    kernel_masks.clear();
-    kernel_masks.resize(prod(kernel_shape) * prod(output_step));
-    for (auto& m : kernel_masks) {
-        m.resize(N / 2);
-    }
-    int mask_count = 0;
-    for (const Duo& r2_pos : duo_range(output_step)) {
-        for (const Duo& seg_pos : duo_range(stride)) {
-            if (seg_pos[0] >= kernel_shape[0] || seg_pos[1] >= kernel_shape[1])
-                continue;
-            Duo split_ks = (kernel_shape + stride - Duo{1, 1} - seg_pos) / stride;
-            for (const Duo& uv_pos : duo_range(split_ks)) {
-                DuoInt val = to_int(seg_pos) - pad_ + to_int(stride) * to_int(uv_pos + r2_pos);
-                DuoInt begin_idx = (val % input_step + to_int(input_step)) % input_step;
-                DuoInt step = (val - begin_idx) / to_int(input_step);
-                for (const Duo& block_pos : duo_range(block_shape)) {
-                    if (block_pos[0] + step[0] >= 0 && block_pos[0] + step[0] < block_shape[0] &&
-                        block_pos[1] + step[1] >= 0 && block_pos[1] + step[1] < block_shape[1]) {
-                        kernel_masks[mask_count][block_pos[0] * block_shape[1] + block_pos[1]] = 1.0;
-                    }
-                }
-                mask_count = mask_count + 1;
-            }
-        }
-    }
     input_rotate_units.clear();
     input_rotate_units.push_back(block_shape[1]);
     input_rotate_units.push_back(1);
@@ -156,7 +131,7 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_weight_pt_for_indices
                                                                                  int in_channel_idx,
                                                                                  int kernel_count) const {
     int current_count = 0;
-    Duo saved_seg_pos = {}, saved_uv_pos = {};
+    Duo saved_seg_pos = {}, saved_uv_pos = {}, saved_r2_pos = {};
     bool found = false;
 
     for (uint32_t r_i2 = 0; r_i2 < output_step[0] && !found; r_i2++) {
@@ -172,6 +147,7 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_weight_pt_for_indices
                             if (current_count == kernel_count) {
                                 saved_seg_pos = seg_pos;
                                 saved_uv_pos = {u_s, v_s};
+                                saved_r2_pos = {r_i2, r_j2};
                                 found = true;
                             } else {
                                 current_count++;
@@ -184,12 +160,23 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_weight_pt_for_indices
     }
 
     Duo kernel_idx = saved_uv_pos * stride + saved_seg_pos;
-    auto& mask = kernel_masks[kernel_count];
-    double w_val = weight.get(out_channel_idx, in_channel_idx, kernel_idx[0], kernel_idx[1]);
 
+    // Compute step on-the-fly instead of reading from pre-computed kernel_masks.
+    DuoInt val = to_int(saved_seg_pos) - pad_ + to_int(stride) * to_int(saved_uv_pos + saved_r2_pos);
+    DuoInt begin_idx = (val % input_step + to_int(input_step)) % input_step;
+    DuoInt step = (val - begin_idx) / to_int(input_step);
+
+    int i_start = std::max(0, -step[0]);
+    int i_end = std::min((int)block_shape[0], (int)block_shape[0] - step[0]);
+    int j_start = std::max(0, -step[1]);
+    int j_end = std::min((int)block_shape[1], (int)block_shape[1] - step[1]);
+
+    double w_val = weight.get(out_channel_idx, in_channel_idx, kernel_idx[0], kernel_idx[1]);
     vector<double> w(N / 2, 0.0);
-    for (int linear_idx = 0; linear_idx < cached_input_block_size; ++linear_idx) {
-        w[linear_idx] = w_val * mask[linear_idx];
+    for (int i_s = i_start; i_s < i_end; ++i_s) {
+        for (int j_s = j_start; j_s < j_end; ++j_s) {
+            w[i_s * (int)block_shape[1] + j_s] = w_val;
+        }
     }
     return ctx.encode_ringt(w, weight_scale);
 }

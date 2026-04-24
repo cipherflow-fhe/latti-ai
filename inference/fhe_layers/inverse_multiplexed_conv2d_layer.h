@@ -68,7 +68,6 @@ private:
     Duo orig_stride;
     Array<double, 4> weight;
     Array<double, 1> bias;
-    std::vector<std::vector<double>> kernel_masks;
     std::vector<int32_t> input_rotate_steps;
     std::vector<int> input_rotate_units;
     std::vector<int> input_rotate_ranges;

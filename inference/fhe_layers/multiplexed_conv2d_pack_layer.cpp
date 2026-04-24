@@ -138,23 +138,6 @@ void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation_lazy() 
 
     kernel_masks_.clear();
 
-    for (const Duo& kernel_pos : duo_range(kernel_shape_)) {
-        vector<double> mask;
-        mask.reserve(prod(input_shape_ct));
-        for (const Duo& input_pos : duo_range(input_shape_ct)) {
-            const int64_t shifted_i = static_cast<int64_t>(kernel_pos[0] * skip_[0] + input_pos[0]) -
-                                      static_cast<int64_t>(padding_shape[0] * skip_[0]);
-            const int64_t shifted_j = static_cast<int64_t>(kernel_pos[1] * skip_[1] + input_pos[1]) -
-                                      static_cast<int64_t>(padding_shape[1] * skip_[1]);
-            if (0 <= shifted_i && shifted_i < input_shape_ct[0] && 0 <= shifted_j && shifted_j < input_shape_ct[1]) {
-                mask.push_back(1.0);
-            } else {
-                mask.push_back(0.0);
-            }
-        }
-        kernel_masks_.push_back(move(mask));
-    }
-
     input_rotate_units_.clear();
     input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
     input_rotate_units_.push_back(skip_[1]);
@@ -185,9 +168,11 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_
     int block_idx = j % n_block_per_ct;
     int kernel_idx = k;
 
-    auto& mask = kernel_masks_[kernel_idx];
+    const Duo padding_shape = kernel_shape_ / 2;
     int base_channel_in = packed_in_channel_idx * n_channel_per_ct;
     int total_skip = skip_[0] * skip_[1];
+    int kernel_shape_i = kernel_idx / kernel_shape_[1];
+    int kernel_shape_j = kernel_idx % kernel_shape_[1];
 
     vector<double> w(N / 2, 0.0);
     for (int linear_idx = 0; linear_idx < n_block_per_ct * cached_input_block_size; ++linear_idx) {
@@ -195,8 +180,14 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_
         int shape_linear = linear_idx % cached_input_block_size;
         int shape_i = shape_linear / cached_input_shape_ct[1];
         int shape_j = shape_linear % cached_input_shape_ct[1];
-        int kernel_shape_i = kernel_idx / kernel_shape_[1];
-        int kernel_shape_j = kernel_idx % kernel_shape_[1];
+
+        // Inline boundary check (replaces pre-computed kernel_masks_)
+        int64_t shifted_i = (int64_t)(kernel_shape_i * skip_[0] + shape_i) - (int64_t)(padding_shape[0] * skip_[0]);
+        int64_t shifted_j = (int64_t)(kernel_shape_j * skip_[1] + shape_j) - (int64_t)(padding_shape[1] * skip_[1]);
+        if (shifted_i < 0 || shifted_i >= cached_input_shape_ct[0] || shifted_j < 0 ||
+            shifted_j >= cached_input_shape_ct[1]) {
+            continue;
+        }
 
         uint32_t channel_in = base_channel_in + (block_idx * total_skip + t * total_skip + (shape_j % skip_[1]) +
                                                  (shape_i % skip_[0]) * skip_[1]) %
@@ -204,10 +195,9 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_
         uint32_t channel_out = output_ct_group * n_block_per_ct * cached_skip_out_prod +
                                ((t + n_block_per_ct) % n_block_per_ct) * cached_skip_out_prod + sub_pos;
 
-        w[linear_idx] = (channel_in >= n_in_channel_ || channel_out >= n_out_channel_) ?
-                            0 :
-                            weight_.get(channel_out, channel_in, kernel_shape_i, kernel_shape_j) *
-                                mask[shape_i * cached_input_shape_ct[1] + shape_j];
+        if (channel_in < n_in_channel_ && channel_out < n_out_channel_) {
+            w[linear_idx] = weight_.get(channel_out, channel_in, kernel_shape_i, kernel_shape_j);
+        }
     }
     return ctx.encode_ringt(w, weight_scale);
 }
@@ -250,28 +240,34 @@ MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, i
     int block_idx = j % n_block_per_ct;
     int kernel_idx = k;
 
-    // Use cached values
-    auto& mask = kernel_masks_[kernel_idx];
+    const Duo padding_shape = kernel_shape_ / 2;
     vector<double> w(N / 2, 0.0);
     int base_channel_in = packed_in_channel_idx * n_channel_per_ct;
+    int kernel_shape_i = kernel_idx / kernel_shape_[1];
+    int kernel_shape_j = kernel_idx % kernel_shape_[1];
 
     for (int linear_idx = 0; linear_idx < n_block_per_ct * cached_input_block_size; ++linear_idx) {
         int t = linear_idx / cached_input_block_size;
         int shape_linear = linear_idx % cached_input_block_size;
         int shape_i = shape_linear / cached_input_shape_ct[1];
         int shape_j = shape_linear % cached_input_shape_ct[1];
-        int kernel_shape_i = kernel_idx / kernel_shape_[1];
-        int kernel_shape_j = kernel_idx % kernel_shape_[1];
+
+        // Inline boundary check (replaces pre-computed kernel_masks_)
+        int64_t shifted_i = (int64_t)(kernel_shape_i * skip_[0] + shape_i) - (int64_t)(padding_shape[0] * skip_[0]);
+        int64_t shifted_j = (int64_t)(kernel_shape_j * skip_[1] + shape_j) - (int64_t)(padding_shape[1] * skip_[1]);
+        if (shifted_i < 0 || shifted_i >= cached_input_shape_ct[0] || shifted_j < 0 ||
+            shifted_j >= cached_input_shape_ct[1]) {
+            continue;
+        }
 
         uint32_t channel_in = base_channel_in + (block_idx * cached_total_skip + t * cached_total_skip +
                                                  (shape_j % skip_[1]) + (shape_i % skip_[0]) * skip_[1]) %
                                                     n_channel_per_ct;
         uint32_t channel_out = ct_idx * n_block_per_ct + (t + n_block_per_ct) % n_block_per_ct;
 
-        w[linear_idx] = (channel_in >= n_in_channel_ || channel_out >= n_out_channel_) ?
-                            0 :
-                            weight_.get(channel_out, channel_in, kernel_shape_i, kernel_shape_j) *
-                                mask[shape_i * cached_input_shape_ct[1] + shape_j];
+        if (channel_in < n_in_channel_ && channel_out < n_out_channel_) {
+            w[linear_idx] = weight_.get(channel_out, channel_in, kernel_shape_i, kernel_shape_j);
+        }
     }
 
     return ctx.encode_ringt(w, weight_scale);
