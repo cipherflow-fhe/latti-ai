@@ -44,14 +44,14 @@ InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter
     } else {
         throw std::invalid_argument("Invalid padding inputs in InverseMultiplexedConv2DLayer");
     }
-    orig_stride = stride_in;
+    ct_stride_ = stride_in;
     Duo output_shape = input_shape_ / stride_in;
     need_repack = (output_shape[0] < block_shape[0]) || (output_shape[1] < block_shape[1]);
     if (need_repack) {
-        stride_ = input_shape_ / block_shape;
+        ct_stride_ = input_shape_ / block_shape;
     }
-    output_step = input_shape_ / (block_shape * stride_);
-    input_step = stride_ * output_step;
+    output_step = input_shape_ / (block_shape * ct_stride_);
+    input_step = ct_stride_ * output_step;
 
     if ((block_shape[0] & (block_shape[0] - 1)) != 0 || (block_shape[1] & (block_shape[1] - 1)) != 0) {
         throw std::invalid_argument("block_shape must be powers of 2, got: [" + std::to_string(block_shape[0]) + ", " +
@@ -100,12 +100,12 @@ void InverseMultiplexedConv2DLayer::prepare_weight_lazy() {
     }
     int mask_count = 0;
     for (const Duo& r2_pos : duo_range(output_step)) {
-        for (const Duo& seg_pos : duo_range(stride_)) {
+        for (const Duo& seg_pos : duo_range(ct_stride_)) {
             if (seg_pos[0] >= kernel_shape_[0] || seg_pos[1] >= kernel_shape_[1])
                 continue;
-            Duo split_ks = (kernel_shape_ + stride_ - Duo{1, 1} - seg_pos) / stride_;
+            Duo split_ks = (kernel_shape_ + ct_stride_ - Duo{1, 1} - seg_pos) / ct_stride_;
             for (const Duo& uv_pos : duo_range(split_ks)) {
-                DuoInt val = to_int(seg_pos) - pad_ + to_int(stride_) * to_int(uv_pos + r2_pos);
+                DuoInt val = to_int(seg_pos) - pad_ + to_int(ct_stride_) * to_int(uv_pos + r2_pos);
                 DuoInt begin_idx = (val % input_step + to_int(input_step)) % input_step;
                 DuoInt step = (val - begin_idx) / to_int(input_step);
                 for (const Duo& block_pos : duo_range(block_shape)) {
@@ -127,7 +127,7 @@ void InverseMultiplexedConv2DLayer::prepare_weight_lazy() {
     cached_kernel_total_count = prod(kernel_shape_) * prod(output_step);
     cached_total_block_size = prod(block_shape);
     if (need_repack) {
-        Duo out_skip = block_shape / (input_shape_ / orig_stride);
+        Duo out_skip = block_shape / (input_shape_ / stride_);
         vector<double> mask_vec(N / 2, 0.0);
         for (uint32_t row = 0; row < block_shape[0]; row += out_skip[0]) {
             for (uint32_t col = 0; col < block_shape[1]; col += out_skip[1]) {
@@ -149,12 +149,12 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_weight_pt_for_indices
 
     for (uint32_t r_i2 = 0; r_i2 < output_step[0] && !found; r_i2++) {
         for (uint32_t r_j2 = 0; r_j2 < output_step[1] && !found; r_j2++) {
-            for (uint32_t seg0 = 0; seg0 < stride_[0] && !found; seg0++) {
-                for (uint32_t seg1 = 0; seg1 < stride_[1] && !found; seg1++) {
+            for (uint32_t seg0 = 0; seg0 < ct_stride_[0] && !found; seg0++) {
+                for (uint32_t seg1 = 0; seg1 < ct_stride_[1] && !found; seg1++) {
                     Duo seg_pos = {seg0, seg1};
                     if (seg_pos[0] >= kernel_shape_[0] || seg_pos[1] >= kernel_shape_[1])
                         continue;
-                    Duo split_ks = (kernel_shape_ + stride_ - Duo{1, 1} - seg_pos) / stride_;
+                    Duo split_ks = (kernel_shape_ + ct_stride_ - Duo{1, 1} - seg_pos) / ct_stride_;
                     for (uint32_t u_s = 0; u_s < split_ks[0] && !found; u_s++) {
                         for (uint32_t v_s = 0; v_s < split_ks[1] && !found; v_s++) {
                             if (current_count == kernel_count) {
@@ -171,7 +171,7 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_weight_pt_for_indices
         }
     }
 
-    Duo kernel_idx = saved_uv_pos * stride_ + saved_seg_pos;
+    Duo kernel_idx = saved_uv_pos * ct_stride_ + saved_seg_pos;
     auto& mask = kernel_masks[kernel_count];
     double w_val = weight_.get(out_channel_idx, in_channel_idx, kernel_idx[0], kernel_idx[1]);
 
@@ -192,7 +192,7 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_bias_pt_for_index(Ckk
 }
 
 CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_repack_mask_pt(CkksContext& ctx) const {
-    Duo out_skip = block_shape / (input_shape_ / orig_stride);
+    Duo out_skip = block_shape / (input_shape_ / stride_);
     vector<double> mask_vec(N / 2, 0.0);
     for (uint32_t row = 0; row < block_shape[0]; row += out_skip[0]) {
         for (uint32_t col = 0; col < block_shape[1]; col += out_skip[1]) {
@@ -205,14 +205,14 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayer::generate_repack_mask_pt(CkksCo
 std::vector<uint32_t> InverseMultiplexedConv2DLayer::get_used_input_indices() const {
     std::set<uint32_t> used;
     for (uint32_t n_in_ch = 0; n_in_ch < n_in_channel_; n_in_ch++) {
-        uint32_t base = n_in_ch * prod(stride_) * prod(output_step);
+        uint32_t base = n_in_ch * prod(ct_stride_) * prod(output_step);
         for (const Duo& r2_pos : duo_range(output_step)) {
-            for (const Duo& seg_pos : duo_range(stride_)) {
+            for (const Duo& seg_pos : duo_range(ct_stride_)) {
                 if (seg_pos[0] >= kernel_shape_[0] || seg_pos[1] >= kernel_shape_[1])
                     continue;
-                Duo split_ks = (kernel_shape_ + stride_ - Duo{1, 1} - seg_pos) / stride_;
+                Duo split_ks = (kernel_shape_ + ct_stride_ - Duo{1, 1} - seg_pos) / ct_stride_;
                 for (const Duo& uv_pos : duo_range(split_ks)) {
-                    DuoInt val = to_int(seg_pos) - pad_ + to_int(stride_) * to_int(uv_pos + r2_pos);
+                    DuoInt val = to_int(seg_pos) - pad_ + to_int(ct_stride_) * to_int(uv_pos + r2_pos);
                     DuoInt begin_idx = (val % input_step + to_int(input_step)) % input_step;
                     used.insert(base + begin_idx[0] * input_step[1] + begin_idx[1]);
                 }
@@ -226,14 +226,14 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
     std::vector<std::vector<lattisense::CkksCiphertext>> rotated_x(n_in_channel_);
 
     parallel_for(n_in_channel_, th_nums, ctx, [&](CkksContext& ctx_copy, int in_channel_idx) {
-        uint32_t base_in_ct_idx = in_channel_idx * prod(stride_) * prod(output_step);
+        uint32_t base_in_ct_idx = in_channel_idx * prod(ct_stride_) * prod(output_step);
         for (const Duo& r2_pos : duo_range(output_step)) {
-            for (const Duo& seg_pos : duo_range(stride_)) {
+            for (const Duo& seg_pos : duo_range(ct_stride_)) {
                 if (seg_pos[0] >= kernel_shape_[0] || seg_pos[1] >= kernel_shape_[1])
                     continue;
-                Duo split_ks = (kernel_shape_ + stride_ - Duo{1, 1} - seg_pos) / stride_;
+                Duo split_ks = (kernel_shape_ + ct_stride_ - Duo{1, 1} - seg_pos) / ct_stride_;
                 for (const Duo& uv_pos : duo_range(split_ks)) {
-                    DuoInt val = to_int(seg_pos) - pad_ + to_int(stride_) * to_int(uv_pos + r2_pos);
+                    DuoInt val = to_int(seg_pos) - pad_ + to_int(ct_stride_) * to_int(uv_pos + r2_pos);
                     DuoInt begin_idx = (val % input_step + to_int(input_step)) % input_step;
                     DuoInt step = (val - begin_idx) / to_int(input_step);
                     uint32_t in_ct_idx = base_in_ct_idx + begin_idx[0] * input_step[1] + begin_idx[1];
@@ -245,8 +245,8 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
     });
 
     int n_channel_per_ct_out;
-    if (2 * prod(input_shape_ / stride_) < N) {
-        n_channel_per_ct_out = N / (2 * prod(input_shape_ / stride_));
+    if (2 * prod(input_shape_ / ct_stride_) < N) {
+        n_channel_per_ct_out = N / (2 * prod(input_shape_ / ct_stride_));
     } else {
         n_channel_per_ct_out = 1;
     }
@@ -298,7 +298,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
     });
 
     if (need_repack) {
-        Duo out_skip = block_shape / (input_shape_ / orig_stride);
+        Duo out_skip = block_shape / (input_shape_ / stride_);
         uint32_t n_channel_per_block = prod(out_skip);
         uint32_t n_block_per_ct_out = (N / 2) / prod(block_shape);
         uint32_t n_channel_per_ct_repack = n_channel_per_block * n_block_per_ct_out;
@@ -355,7 +355,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
             if (channel_idx_in_ct == 0) {
                 res[pack_out_ct_idx] = move(temp_res[out_ct_idx]);
             } else {
-                long step = -1 * channel_idx_in_ct * prod(input_shape_ / stride_);
+                long step = -1 * channel_idx_in_ct * prod(input_shape_ / ct_stride_);
                 auto s_rot = ctx.rotate(temp_res[out_ct_idx], step);
                 res[pack_out_ct_idx] = ctx.add(res[pack_out_ct_idx], move(s_rot));
             }
@@ -366,7 +366,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
 
 Feature2DEncrypted InverseMultiplexedConv2DLayer::run(CkksContext& ctx, const Feature2DEncrypted& x) {
     Feature2DEncrypted result(&ctx, x.level);
-    result.shape = x.shape / orig_stride;
+    result.shape = x.shape / stride_;
     result.n_channel = n_out_channel_;
     if (need_repack) {
         result.skip = block_shape / result.shape;
