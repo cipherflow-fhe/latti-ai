@@ -8,6 +8,9 @@ vs_build/
 .idea/
 .cache/
 
+# Node
+node_modules/
+
 # Python
 __pycache__/
 *.pyc
@@ -58,6 +61,7 @@ CLAUDE.md
 .codex
 AGENTS.md
 .superpowers
+.playwright-mcp
 
 # Task plan files
 *plan.md

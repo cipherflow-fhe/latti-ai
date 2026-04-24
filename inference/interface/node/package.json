@@ -1,0 +1,16 @@
+{
+  "name": "latti-client-node",
+  "version": "0.1.0",
+  "description": "Node.js N-API addon for FHE inference client",
+  "main": "build/Release/latti_client.node",
+  "private": true,
+  "scripts": {
+    "build": "cmake-js compile",
+    "rebuild": "cmake-js rebuild",
+    "test": "node test_client.js"
+  },
+  "dependencies": {
+    "cmake-js": "^8.0.0",
+    "node-addon-api": "^8.0.0"
+  }
+}
