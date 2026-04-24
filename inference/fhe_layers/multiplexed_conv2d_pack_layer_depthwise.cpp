@@ -42,6 +42,7 @@ MultiplexedConv2DPackedLayerDepthwise::MultiplexedConv2DPackedLayerDepthwise(con
     n_packed_in_channel = div_ceil(n_out_channel_, n_channel_per_ct);
     n_packed_out_channel = div_ceil(n_out_channel_, output_channels_per_ct);
     n_block_per_ct = div_ceil(n_channel_per_ct, prod(skip_));
+    need_repack_ = (stride_ != Duo{1, 1});
     level_ = level_in;
     weight_scale = param_.get_q(level_) * residual_scale;
 }
@@ -155,8 +156,9 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayerDepthwise::generate_weight_pt_for
                                                                                          int n_packed_out_channel_idx,
                                                                                          int kernel_idx) const {
     auto& mask = kernel_masks_[kernel_idx];
-    vector<double> w(n_block_per_ct * cached_input_block_size, 0.0);
     const Duo kernel_pos = div_mod(static_cast<uint32_t>(kernel_idx), kernel_shape_[1]);
+
+    vector<double> w(n_block_per_ct * cached_input_block_size, 0.0);
 
     for (uint32_t linear_idx = 0; linear_idx < n_block_per_ct * cached_input_block_size; ++linear_idx) {
         const Duo block_pos = div_mod(linear_idx, cached_input_block_size);
@@ -264,7 +266,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksConte
 
     vector<CkksCiphertext> res;
     uint32_t n_weight = weight_pt.empty() ? n_packed_in_channel : weight_pt.size();
-    if (stride_[0] == 1) {
+    if (!need_repack_) {
         res.resize(n_weight);
     }
     parallel_for(n_weight, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
@@ -288,7 +290,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksConte
             }
         }
         s = ctx_copy.rescale(s, ctx_copy.get_parameter().get_default_scale());
-        if (stride_[0] == 1) {
+        if (!need_repack_) {
             res[ct_idx] = move(s);
         } else {
             vector<int32_t> steps;
@@ -321,36 +323,27 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksConte
             }
         }
     });
-    if (stride_[0] == 1) {
-        for (int i = 0; i < res.size(); i++) {
-            if (bias_pt.empty()) {
-                auto b_pt = generate_bias_pt_for_index(ctx, i);
-                res[i] = ctx.add_plain_ringt(res[i], b_pt);
+    if (need_repack_) {
+        CkksCiphertext sp;
+        for (int i = 0; i < (int)result_ct.size(); i++) {
+            int p = i % output_channels_per_ct;
+            auto c_m_s = move(result_ct[i]);
+            if (p == 0) {
+                sp = move(c_m_s);
             } else {
-                res[i] = ctx.add_plain_ringt(res[i], bias_pt[i]);
+                sp = ctx.add(sp, c_m_s);
+            }
+            if ((i + 1) % output_channels_per_ct == 0 || i == (int)result_ct.size() - 1) {
+                res.push_back(move(sp));
             }
         }
-        return res;
     }
-
-    CkksCiphertext sp;
-    for (int i = 0; i < result_ct.size(); i++) {
-        int p = i % output_channels_per_ct;
-        auto c_m_s = move(result_ct[i]);
-        if (p == 0) {
-            sp = move(c_m_s);
-            int bias_idx = i / output_channels_per_ct;
-            if (bias_pt.empty()) {
-                auto b_pt = generate_bias_pt_for_index(ctx, bias_idx);
-                sp = ctx.add_plain_ringt(sp, b_pt);
-            } else {
-                sp = ctx.add_plain_ringt(sp, bias_pt[bias_idx]);
-            }
+    for (int i = 0; i < (int)res.size(); i++) {
+        if (bias_pt.empty()) {
+            auto b_pt = generate_bias_pt_for_index(ctx, i);
+            res[i] = ctx.add_plain_ringt(res[i], b_pt);
         } else {
-            sp = ctx.add(sp, c_m_s);
-        }
-        if ((i + 1) % output_channels_per_ct == 0 || i == result_ct.size() - 1) {
-            res.push_back(move(sp));
+            res[i] = ctx.add_plain_ringt(res[i], bias_pt[i]);
         }
     }
     return res;
@@ -358,7 +351,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksConte
 
 Feature2DEncrypted MultiplexedConv2DPackedLayerDepthwise::run(CkksContext& ctx, const Feature2DEncrypted& x) {
     Feature2DEncrypted result(&ctx, x.level);
-    int bias_level_down = (stride_[0] == 1) ? 1 : 2;
+    int bias_level_down = need_repack_ ? 2 : 1;
     result.shape = x.shape / stride_;
     result.skip = x.skip * stride_;
     result.n_channel = n_out_channel_;
