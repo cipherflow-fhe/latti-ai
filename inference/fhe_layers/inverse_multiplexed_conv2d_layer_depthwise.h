@@ -18,9 +18,10 @@
 
 #pragma once
 #include "layer.h"
+#include "conv2d_layer.h"
 #include "../data_structs/feature.h"
 
-class InverseMultiplexedConv2DLayerDepthwise : public Layer {
+class InverseMultiplexedConv2DLayerDepthwise : public Conv2DLayer {
 public:
     InverseMultiplexedConv2DLayerDepthwise(const ls::CkksParameter& param_in,
                                            const Duo& input_shape_in,
@@ -35,8 +36,6 @@ public:
     void prepare_weight_lazy() override;
 
     virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
-
-    virtual Array<double, 3> run_plaintext(const Array<double, 3>& x, double multiplier = 1.0);
 
     std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt;
     std::vector<ls::CkksPlaintextRingt> bias_pt;
@@ -54,18 +53,11 @@ private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
 
     int N;
-    uint32_t n_out_channel;
-    uint32_t n_in_channel;
-    Duo input_shape;
-    Duo kernel_shape;
     Duo block_shape;
-    Duo stride;
     Duo output_step;
     Duo input_step;
     DuoInt pad_;
-    Duo orig_stride;
-    Array<double, 4> weight;
-    Array<double, 1> bias;
+    Duo ct_stride_;
     std::vector<std::vector<double>> kernel_masks;
     std::vector<int32_t> input_rotate_steps;
     std::vector<int> input_rotate_units;
