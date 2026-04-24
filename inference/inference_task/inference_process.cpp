@@ -272,10 +272,7 @@ void InitInferenceProcess::_init_mult_scalar_layer(const string& key,
     CkksParameter& param = *ckks_parameters_.at(feature_input0.ckks_parameter_id);
 
     double scale = layer["weight_scale"];
-    auto weight = gen_random_array<1>({feature_input0.channel}, 1.0);
-    for (int i = 0; i < feature_input0.channel; i++) {
-        weight.set(i, scale);
-    }
+    auto weight = _load_h5_tensor<1>(layer, h5_file, "weight", {feature_input0.channel});
     auto mult_scalar = MakeU<MultScalarLayer>(param, feature_input0.shape, move(weight), feature_input0.skip,
                                               feature_input0.pack_channel_per_ciphertext, feature_input0.level,
                                               upsample_factor, block_expansion);
@@ -399,9 +396,9 @@ void InitInferenceProcess::_init_multiplexed_conv_layer(const string& key,
                 padding.set(0, -1);
                 padding.set(1, -1);
             }
-            auto inv_conv_layer = MakeU<InverseMultiplexedConv2DLayer>(
-                param, feature_input.shape, move(weight), move(bias), padding, stride, next_stride, feature_input.skip,
-                block_shape_in, feature_input.level, residual_scale);
+            auto inv_conv_layer =
+                MakeU<InverseMultiplexedConv2DLayer>(param, feature_input.shape, move(weight), move(bias), padding,
+                                                     stride, block_shape_in, feature_input.level, residual_scale);
             _prepare_layer(key, move(inv_conv_layer));
         } else {
             auto mux_conv_layer = MakeU<MultiplexedConv2DPackedLayer>(
@@ -421,8 +418,8 @@ void InitInferenceProcess::_init_multiplexed_conv_layer(const string& key,
                 padding.set(1, -1);
             }
             auto inv_dw_conv_layer = MakeU<InverseMultiplexedConv2DLayerDepthwise>(
-                param, feature_input.shape, move(weight), move(bias), padding, stride, next_stride, feature_input.skip,
-                block_shape_in, feature_input.level, residual_scale);
+                param, feature_input.shape, move(weight), move(bias), padding, stride, block_shape_in,
+                feature_input.level, residual_scale);
             _prepare_layer(key, move(inv_dw_conv_layer));
         } else {
             auto mux_dw_layer = MakeU<MultiplexedConv2DPackedLayerDepthwise>(
@@ -1231,14 +1228,18 @@ void InferenceProcess::run_task(bool is_mpc) {
     // Dynamically create and run task executors based on the compute_device configuration
     switch (compute_device) {
         case ComputeDevice::CPU: {
-            auto task = MakeU<FheTaskCpu>(fp->project_path);
-            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            if (!fhe_task_cpu_) {
+                prepare_task();
+            }
+            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
         case ComputeDevice::GPU: {
-            auto task = MakeU<FheTaskGpu>(fp->project_path);
-            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            if (!fhe_task_gpu_) {
+                prepare_task();
+            }
+            fhe_time = fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #else
@@ -1498,9 +1499,8 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         }
     }
 
-    // 2. 按层顺序注册所有权重参数（eager pt_ringt + CustomData）
+    // 2. eager pt_ringt + CustomData
     auto layer_data_sources = prepare_layer_data_sources();
-    // 用 map 方便按名查找
     unordered_map<string, fhe_ops_lib::CustomData*> data_source_map;
     for (auto& [k, v] : layer_data_sources)
         data_source_map[k] = &v;
@@ -1531,11 +1531,28 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
                 cxx_args.push_back(CxxVectorArgument{"concat_mask_" + key, &(fp->get_layer<ConcatLayer>(key).mask_pt)});
             }
         } else if (data_source_map.count(key)) {
+            // MultiplexedConv2DPackedLayer's mask_pt is populated offline in
+            // prepare_weight_lazy and referenced as a static Argument; it must
+            // be pushed BEFORE the conv_data_source to match the Python task
+            // graph's Argument order.
+            if (layer_type == "conv2d" && layer.value()["groups"] == 1 && !layer.value()["is_big_size"] &&
+                fp->pack_style == "multiplexed") {
+                auto& mux_layer = fp->get_layer<MultiplexedConv2DPackedLayer>(key);
+                if (!mux_layer.mask_pt.empty()) {
+                    cxx_args.push_back(CxxVectorArgument{"convm_" + key, &mux_layer.mask_pt});
+                }
+            } else if (layer_type == "conv2d" && layer.value()["groups"] != 1 && !layer.value()["is_big_size"] &&
+                       fp->pack_style == "multiplexed") {
+                auto& mux_dw_layer = fp->get_layer<MultiplexedConv2DPackedLayerDepthwise>(key);
+                if (!mux_dw_layer.mask_pt.empty()) {
+                    cxx_args.push_back(CxxVectorArgument{"convm_" + key, &mux_dw_layer.mask_pt});
+                }
+            }
             cxx_args.push_back(CxxVectorArgument{key, data_source_map[key]});
         }
     }
 
-    // 3. 准备输出密文
+    // 3. prepare output
     string context_id;
     int level;
     vector<vector<CkksCiphertext>> z_lists(json_data["output_feature"].size());
@@ -1559,22 +1576,21 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         cxx_args.push_back(CxxVectorArgument{ki, &z_lists[out_idx]});
     }
 
-    // 4. 注册执行器并执行
-    unordered_map<string, ExecutorFunc> custom_executors;
-    register_custom_executors(custom_executors);
-
+    // 4. run
     switch (compute_device) {
         case ComputeDevice::CPU: {
-            auto task = make_unique<FheTaskCpu>(fp->project_path);
-            task->bind_custom_executors(custom_executors);
-            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            if (!fhe_task_cpu_) {
+                prepare_task();
+            }
+            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
         case ComputeDevice::GPU: {
-            auto task = make_unique<FheTaskGpu>(fp->project_path);
-            task->bind_custom_executors(custom_executors);
-            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args);
+            if (!fhe_task_gpu_) {
+                prepare_task();
+            }
+            fhe_time = fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
             break;
         }
 #else
@@ -1587,7 +1603,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         default: throw runtime_error("Unknown compute device type");
     }
 
-    // 5. 保存输出结果
+    // 5. save results
     for (int out_idx = 0; out_idx < (int)json_data["output_feature"].size(); out_idx++) {
         auto ki = json_data["output_feature"][out_idx];
         FeatureNode feature_output(json_features[ki.get<string>()]);
@@ -1619,7 +1635,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
     }
 }
 
-// ==================== CustomData 模式辅助实现 ====================
+// ==================== CustomData mode ====================
 
 vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_data_sources() {
     vector<pair<string, fhe_ops_lib::CustomData>> data_sources;
@@ -1710,10 +1726,28 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
                     key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<Avgpool1DLayer>(key))));
             }
         }
-        // avgpool, concat 等无 lazy 权重生成，跳过
     }
     return data_sources;
 }
+
+#ifdef INFERENCE_SDK_ENABLE_GPU
+void InferenceProcess::prepare_task() {
+    register_custom_executors(task_custom_executors_);
+    if (compute_device == ComputeDevice::GPU) {
+        fhe_task_gpu_ = make_unique<FheTaskGpu>(fp->project_path);
+        fhe_task_gpu_->bind_custom_executors(task_custom_executors_);
+    } else {
+        fhe_task_cpu_ = make_unique<FheTaskCpu>(fp->project_path);
+        fhe_task_cpu_->bind_custom_executors(task_custom_executors_);
+    }
+}
+#else
+void InferenceProcess::prepare_task() {
+    register_custom_executors(task_custom_executors_);
+    fhe_task_cpu_ = make_unique<FheTaskCpu>(fp->project_path);
+    fhe_task_cpu_->bind_custom_executors(task_custom_executors_);
+}
+#endif
 
 void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorFunc>& executors) {
     auto* fp_ptr = this->fp;
@@ -1780,7 +1814,11 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             else if (type == "bias_pt")
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
             else
-                pt = layer->generate_mask_pt_for_indices(ckks_ctx, i, j);
+                // mask_pt is now offline (prepare_weight_lazy populates mask_pt
+                // and run_task_lazy binds it as a static Argument); this branch
+                // is retained only as a fallback for task graphs that still
+                // emit mask encode_pt nodes.
+                pt = layer->generate_mask_pt_for_indices(ckks_ctx, i);
         } else if (op_class == "MultiplexedConv2DPackedLayerDepthwise") {
             auto* layer = static_cast<MultiplexedConv2DPackedLayerDepthwise*>(layer_ptr);
             if (type == "weight_pt")
@@ -1788,6 +1826,10 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             else if (type == "bias_pt")
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
             else
+                // mask_pt is now offline (prepare_weight_lazy populates mask_pt
+                // and run_task_lazy binds it as a static Argument); this branch
+                // is retained only as a fallback for task graphs that still
+                // emit mask encode_pt nodes with (ct_idx, channel_in_ct) attrs.
                 pt = layer->generate_mask_pt_for_indices(ckks_ctx, i, j);
         } else if (op_class == "Conv1DPackedLayer") {
             auto* layer = static_cast<Conv1DPackedLayer*>(layer_ptr);
@@ -1799,12 +1841,16 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             auto* layer = static_cast<MultiplexedConv1DPackedLayer*>(layer_ptr);
             if (type == "weight_pt")
                 pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j, k);
+            else if (type == "select_pt")
+                pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
             else
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
         } else if (op_class == "MultiplexedDWConv1DPackedLayer") {
             auto* layer = static_cast<MultiplexedDWConv1DPackedLayer*>(layer_ptr);
             if (type == "weight_pt")
                 pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j);
+            else if (type == "select_pt")
+                pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
             else
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
         } else if (op_class == "DensePackedLayer") {

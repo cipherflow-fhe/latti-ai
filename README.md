@@ -48,7 +48,7 @@ cd latti-ai
 #### Step 2: Build and install HEonGPU (GPU Acceleration Library)
 
 ```bash
-cd inference/lattisense/HEonGPU
+cd inference/lattisense/backends/HEonGPU
 cmake -B build \
   -DCMAKE_CUDA_ARCHITECTURES=<arch> \
   -DCMAKE_CUDA_COMPILER=<path/to/cuda>/bin/nvcc \
@@ -59,8 +59,10 @@ cmake --build build --parallel $(nproc) --target install
 #### Step 3: Build Project
 
 ```bash
-cd ../../..  # Return to project root
-cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=<arch>
+cd ../../../..  # Return to project root
+cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON\
+      -DLATTISENSE_CUDA_ARCH=<arch>\
+      -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 

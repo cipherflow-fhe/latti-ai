@@ -25,6 +25,11 @@
 #include "util.h"
 #include "fhe_layers/fhe_layers.h"
 
+namespace lattisense {
+class FheTaskGpu;
+class FheTaskCpu;
+}  // namespace lattisense
+
 namespace ls = lattisense;
 
 enum class ComputeDevice { CPU, GPU, FPGA };
@@ -221,6 +226,9 @@ public:
     void run_task_plaintext(bool is_mpc = false);
     void run_task_lazy(bool is_mpc = false);
 
+    // load_model
+    void prepare_task();
+
 private:
     // Prepare CustomData wrappers for all layer objects (keyed by layer_id)
     std::vector<std::pair<std::string, fhe_ops_lib::CustomData>> prepare_layer_data_sources();
@@ -235,4 +243,10 @@ private:
 private:
     std::map<std::string, UPtr<FeatureEncrypted>> intermediate_result_;
     const FeatureEncrypted& _get_feature(const std::string& feature_id);
+
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    std::unique_ptr<lattisense::FheTaskGpu> fhe_task_gpu_;
+#endif
+    std::unique_ptr<lattisense::FheTaskCpu> fhe_task_cpu_;
+    std::unordered_map<std::string, ExecutorFunc> task_custom_executors_;
 };
