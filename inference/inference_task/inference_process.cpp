@@ -301,7 +301,12 @@ void InitInferenceProcess::_init_concat_layer(const string& key, const json& lay
 
     auto feature_inputs = layer["feature_input"].get<vector<string>>();
     vector<uint32_t> input_n_channels;
+    vector<uint32_t> input_packs;
+    vector<uint32_t> input_skip_scalars;   // dim=0: slot stride ; dim=1: block stride
+    vector<uint32_t> input_lengths;        // dim=1 only: feat.shape[0]
+    vector<uint32_t> input_invalid_fills;  // dim=1/2 only; defaults to 1 for dim=0/1
     bool has_uneven = false;
+    int input_dim = -1;
     string ckks_param_id;
     Duo shape = {0, 0};
     Duo skip = {1, 1};
@@ -311,9 +316,15 @@ void InitInferenceProcess::_init_concat_layer(const string& key, const json& lay
     for (const auto& fid : feature_inputs) {
         FeatureNode feat(json_features[fid]);
         input_n_channels.push_back(feat.channel);
+        input_packs.push_back(feat.pack_channel_per_ciphertext);
+        input_skip_scalars.push_back(feat.skip[0]);
+        input_lengths.push_back(feat.shape[0]);
+        input_invalid_fills.push_back(feat.invalid_fill[0] > 0 ? feat.invalid_fill[0] : 1);
         if (feat.channel % feat.pack_channel_per_ciphertext != 0) {
             has_uneven = true;
         }
+        if (input_dim < 0)
+            input_dim = feat.dim;
         ckks_param_id = feat.ckks_parameter_id;
         shape = feat.shape;
         skip = feat.skip;
@@ -321,7 +332,20 @@ void InitInferenceProcess::_init_concat_layer(const string& key, const json& lay
         pack = feat.pack_channel_per_ciphertext;
     }
 
-    if (has_uneven) {
+    if (input_dim == 0) {
+        // dim=0: one slot per global channel, per-input pack/skip.
+        _prepare_layer(key, move(concat), [&](ConcatLayer& layer) {
+            layer.prepare_mask_data_0d(*ckks_parameters_.at(ckks_param_id), input_n_channels, input_packs,
+                                       input_skip_scalars, level);
+        });
+    } else if (input_dim == 1) {
+        // dim=1: L contiguous-strided slots per global channel, per-input pack/skip/L.
+        _prepare_layer(key, move(concat), [&](ConcatLayer& layer) {
+            layer.prepare_mask_data_1d(*ckks_parameters_.at(ckks_param_id), input_n_channels, input_packs,
+                                       input_lengths, input_skip_scalars, input_invalid_fills, level);
+        });
+    } else if (has_uneven) {
+        // dim=2 uneven path (existing).
         _prepare_layer(key, move(concat), [&](ConcatLayer& layer) {
             layer.prepare_mask_data(*ckks_parameters_.at(ckks_param_id), input_n_channels, pack, shape, skip, level);
         });
@@ -1337,11 +1361,30 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 result = fp->get_layer<MultScalarLayer>(key).run_plaintext(input0);
             }
             if (layer_type == "concat2d") {
-                vector<Array<double, 3>> inputs;
-                for (const auto& input_name : feature_input) {
-                    inputs.emplace_back(p_feature2d_x[input_name].copy());
+                // "concat2d" is used for all dim in {0,1,2}; dispatch by input dim.
+                FeatureNode feature_input0(json_features[feature_input[0]]);
+                if (feature_input0.dim == 0) {
+                    vector<vector<double>> inputs0d;
+                    inputs0d.reserve(feature_input.size());
+                    for (const auto& input_name : feature_input) {
+                        inputs0d.push_back(p_feature0d_x[input_name]);
+                    }
+                    result0d = fp->get_layer<ConcatLayer>(key).concatenate_channels_multiple_inputs_0d(inputs0d);
+                } else if (feature_input0.dim == 1) {
+                    vector<Array<double, 2>> inputs1d;
+                    inputs1d.reserve(feature_input.size());
+                    for (const auto& input_name : feature_input) {
+                        inputs1d.emplace_back(p_feature1d_x[input_name].copy());
+                    }
+                    result1d = fp->get_layer<ConcatLayer>(key).concatenate_channels_multiple_inputs_1d(inputs1d);
+                } else {
+                    vector<Array<double, 3>> inputs;
+                    inputs.reserve(feature_input.size());
+                    for (const auto& input_name : feature_input) {
+                        inputs.emplace_back(p_feature2d_x[input_name].copy());
+                    }
+                    result = fp->get_layer<ConcatLayer>(key).concatenate_channels_multiple_inputs(inputs);
                 }
-                result = fp->get_layer<ConcatLayer>(key).concatenate_channels_multiple_inputs(inputs);
             }
             if (layer_type == "upsample") {
                 auto& input0 = p_feature2d_x[feature_input[0]];
