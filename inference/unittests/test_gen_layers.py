@@ -341,8 +341,6 @@ class TestLayerExport(unittest.TestCase):
                                 padding,
                                 kernel_shape,
                                 stride,
-                                next_stride,
-                                skip,
                                 block_shape,
                             )
 
@@ -408,13 +406,11 @@ class TestLayerExport(unittest.TestCase):
                         padding,
                         kernel_shape,
                         stride,
-                        next_stride,
-                        skip,
                         block_shape,
                     )
 
                     effective_stride = big_conv.stride
-                    effective_next_stride = big_conv.stride_next
+                    effective_next_stride = big_conv.output_step
 
                     n_block_per_channel = (
                         effective_next_stride[0] * effective_next_stride[1] * effective_stride[0] * effective_stride[1]
@@ -504,8 +500,6 @@ class TestLayerExport(unittest.TestCase):
                                 padding,
                                 kernel_shape,
                                 stride,
-                                next_stride,
-                                skip,
                                 block_shape,
                             )
 

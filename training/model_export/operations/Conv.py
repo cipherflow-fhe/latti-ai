@@ -57,7 +57,8 @@ class ConvComputeNode(ComputeNode):
             feature_output[0].shape[0] = feature_input[0].shape[0] // stride[0]
         feature_output[0].level = feature_input[0].level - 1
         self.weight_path = self.weight_path
-        self.bias_path = self.weight_path.replace('.weight', '.bias')
+        if self.bias_path is None:
+            self.bias_path = self.weight_path.replace('.weight', '.bias')
         self.style = style
         self.is_big_size = False
 

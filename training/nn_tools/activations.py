@@ -195,13 +195,13 @@ class _RangeNormPoly2dExport(torch.autograd.Function):
     """ONNX export helper: emit RangeNormPoly2d as a single custom op."""
 
     @staticmethod
-    def forward(ctx, x, running_max, upper_bound, eps, hermite_coeffs):
+    def forward(ctx, x, running_max, upper_bound, eps, hermite_coeffs, activation_name):
         scale_factor = running_max / upper_bound + eps
         poly_out = _eval_hermite(x / scale_factor, hermite_coeffs)
         return scale_factor * poly_out
 
     @staticmethod
-    def symbolic(g, x, running_max, upper_bound, eps, hermite_coeffs):
+    def symbolic(g, x, running_max, upper_bound, eps, hermite_coeffs, activation_name):
         return g.op(
             'nn_tools::RangeNormPoly2d',
             x,
@@ -209,6 +209,7 @@ class _RangeNormPoly2dExport(torch.autograd.Function):
             upper_bound_f=upper_bound,
             degree_i=len(hermite_coeffs) - 1,
             eps_f=eps,
+            activation_s=activation_name,
         ).setType(x.type())
 
 
@@ -219,16 +220,21 @@ class RangeNormPoly2d(nn.Module):
     activation, and rescales back.
 
     Args:
-        hermite_coeffs: Tuple of Hermite expansion coefficients.
-        num_features:   Number of channels (0 for lazy initialization).
-        upper_bound:    Normalization upper bound.
+        hermite_coeffs:  Tuple of Hermite expansion coefficients.
+        num_features:    Number of channels (0 for lazy initialization).
+        upper_bound:     Normalization upper bound.
+        activation_name: Name of the original activation (e.g. ``'relu'``,
+                         ``'silu'``). Stored as an ONNX node attribute so
+                         that the export pipeline can reconstruct the correct
+                         Hermite coefficients without a PyTorch model.
     """
 
-    def __init__(self, hermite_coeffs, num_features=0, upper_bound=3.0, **kwargs):
+    def __init__(self, hermite_coeffs, num_features=0, upper_bound=3.0, activation_name='relu', **kwargs):
         super().__init__()
         self.hermite_coeffs = tuple(hermite_coeffs)
         self.num_features = num_features
         self.upper_bound = upper_bound
+        self.activation_name = activation_name
 
         self.rangenorm = RangeNorm2d(num_features, upper_bound=upper_bound, eps=1e-3, momentum=0.1)
         self.poly = PolyAct(hermite_coeffs)
@@ -241,6 +247,7 @@ class RangeNormPoly2d(nn.Module):
                 self.upper_bound,
                 self.rangenorm.eps,
                 self.hermite_coeffs,
+                self.activation_name,
             )
         x = self.rangenorm(x)
         x = self.rangenorm.scale_factor * self.poly(x)
@@ -248,7 +255,8 @@ class RangeNormPoly2d(nn.Module):
 
     def extra_repr(self):
         return (
-            f'num_features={self.num_features}, upper_bound={self.upper_bound}, degree={len(self.hermite_coeffs) - 1}'
+            f'num_features={self.num_features}, upper_bound={self.upper_bound}, '
+            f'degree={len(self.hermite_coeffs) - 1}, activation={self.activation_name}'
         )
 
 
