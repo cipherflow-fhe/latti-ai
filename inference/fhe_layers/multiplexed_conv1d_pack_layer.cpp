@@ -23,7 +23,7 @@
 #include <cmath>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 MultiplexedConv1DPackedLayer::MultiplexedConv1DPackedLayer(const CkksParameter& param_in,
                                                            uint32_t input_shape_in,
@@ -137,14 +137,14 @@ CkksPlaintextRingt MultiplexedConv1DPackedLayer::generate_bias_pt_for_index(Ckks
     }
 }
 
-CkksPlaintext MultiplexedConv1DPackedLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int t) const {
+CkksPlaintextRingt MultiplexedConv1DPackedLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int t) const {
     uint32_t input_block_size = cached_input_block_size;
     vector<double> mask(param_.get_n() / 2, 0.0);
     for (int out_idx = 0; out_idx < (int)(input_shape / stride); out_idx++) {
         int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip;
         mask[slot_idx] = 1.0;
     }
-    return ctx.encode(mask, level_ - 1, ctx.get_parameter().get_q(level_ - 1));
+    return ctx.encode_ringt(mask, ctx.get_parameter().get_q(level_ - 1));
 }
 
 void MultiplexedConv1DPackedLayer::prepare_weight() {
@@ -242,6 +242,9 @@ Array<double, 2> MultiplexedConv1DPackedLayer::run_plaintext(const Array<double,
         }
     }
 
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int i = 0; i < n_channel_out; i++) {
         for (int j = 0; j < input_shape / stride; j++) {
             double s = bias[i];
@@ -380,7 +383,8 @@ vector<CkksCiphertext> MultiplexedConv1DPackedLayer::run_core(CkksContext& ctx, 
             CkksCiphertext masked;
             if (block_select_pt.empty()) {
                 auto bs_pt = generate_select_tensor_pt_for_index(ctx_copy, t);
-                masked = ctx_copy.mult_plain(result[wg], bs_pt);
+                auto bs_pt_rt = ctx.ringt_to_mul(bs_pt, level_ - 1);
+                masked = ctx_copy.mult_plain_mul(result[wg], bs_pt_rt);
             } else {
                 auto bs_pt = ctx_copy.ringt_to_mul(block_select_pt[t], level_ - 1);
                 masked = ctx_copy.mult_plain_mul(result[wg], bs_pt);

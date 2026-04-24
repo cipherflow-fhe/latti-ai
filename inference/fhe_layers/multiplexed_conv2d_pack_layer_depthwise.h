@@ -63,6 +63,7 @@ private:
     uint32_t n_packed_in_channel;
     uint32_t n_packed_out_channel;
     uint32_t n_block_per_ct;
+    bool need_repack_;
     double weight_scale;
 
     // Cached values for on-demand generation

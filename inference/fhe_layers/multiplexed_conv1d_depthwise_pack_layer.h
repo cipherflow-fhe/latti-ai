@@ -51,7 +51,7 @@ public:
     // On-demand helpers (for lazy mode)
     ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int kernel_idx) const;
     ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int idx) const;
-    ls::CkksPlaintext generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int local_ch) const;
+    ls::CkksPlaintextRingt generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int local_ch) const;
 
     Feature1DEncrypted run(ls::CkksContext& ctx, Feature1DEncrypted& x);
     virtual std::vector<double> select_tensor(int num) const;

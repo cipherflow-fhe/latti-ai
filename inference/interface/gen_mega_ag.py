@@ -29,6 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from inference.lattisense.frontend.custom_task import *  # noqa: E402
+
+# from inference.model_generator.deploy_cmds import gen_custom_task  # noqa: E402
 from inference.model_generator.deploy_cmds import gen_custom_task  # noqa: E402
 
 
@@ -76,7 +78,7 @@ def main():
 
     for erg_name, erg_config in server_config['server_task'].items():
         if erg_config['enable_fpga']:
-            gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style)
+            gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style, lazy=True)
 
     print(f'Done: mega_ag generated for {task_dir}.')
 

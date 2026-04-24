@@ -35,6 +35,14 @@ using Array1DUint = std::vector<uint64_t>;
 using Bytes = std::vector<uint8_t>;
 
 using Duo = std::array<uint32_t, 2>;
+using DuoInt = std::array<int32_t, 2>;
+
+inline DuoInt to_int(const Duo& a) {
+    return {static_cast<int32_t>(a[0]), static_cast<int32_t>(a[1])};
+}
+inline Duo to_uint(const DuoInt& a) {
+    return {static_cast<uint32_t>(a[0]), static_cast<uint32_t>(a[1])};
+}
 
 inline std::string str(const Duo& x) {
     return "(" + std::to_string(x[0]) + ',' + std::to_string(x[1]) + ')';
@@ -73,6 +81,40 @@ inline Duo div_mod(uint32_t p, uint32_t q) {
     return {p / q, p % q};
 }
 inline bool operator==(const Duo& a, const Duo& b) {
+    return (a[0] == b[0]) && (a[1] == b[1]);
+}
+
+inline DuoInt operator+(const DuoInt& a, const DuoInt& b) {
+    return {a[0] + b[0], a[1] + b[1]};
+}
+inline DuoInt operator-(const DuoInt& a, const DuoInt& b) {
+    return {a[0] - b[0], a[1] - b[1]};
+}
+inline DuoInt operator*(const DuoInt& a, const DuoInt& b) {
+    return {a[0] * b[0], a[1] * b[1]};
+}
+inline DuoInt operator*(const DuoInt& a, int32_t s) {
+    return {a[0] * s, a[1] * s};
+}
+inline DuoInt operator*(int32_t s, const DuoInt& a) {
+    return {s * a[0], s * a[1]};
+}
+inline DuoInt operator/(const DuoInt& a, const DuoInt& b) {
+    return {a[0] / b[0], a[1] / b[1]};
+}
+inline DuoInt operator/(const DuoInt& a, int32_t s) {
+    return {a[0] / s, a[1] / s};
+}
+inline DuoInt operator%(const DuoInt& a, const Duo& b) {
+    return {a[0] % static_cast<int32_t>(b[0]), a[1] % static_cast<int32_t>(b[1])};
+}
+inline DuoInt operator%(const DuoInt& a, uint32_t s) {
+    return {a[0] % static_cast<int32_t>(s), a[1] % static_cast<int32_t>(s)};
+}
+inline int32_t prod(const DuoInt& a) {
+    return a[0] * a[1];
+}
+inline bool operator==(const DuoInt& a, const DuoInt& b) {
     return (a[0] == b[0]) && (a[1] == b[1]);
 }
 

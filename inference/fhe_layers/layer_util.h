@@ -22,7 +22,7 @@
 
 #include <vector>
 
-namespace ls = cxx_sdk_v2;
+namespace ls = lattisense;
 
 std::vector<ls::CkksCiphertext>
 populate_rotations_1_side(ls::CkksContext& ctx, const ls::CkksCiphertext& x, int n_rotation, int unit);

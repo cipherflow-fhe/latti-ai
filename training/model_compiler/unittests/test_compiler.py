@@ -411,7 +411,7 @@ class CompilerTestBase(unittest.TestCase):
             f'sys.path.insert(0,"{project_root}");'
             f'sys.path.insert(0,"{project_root / "inference"}");'
             f'from inference.model_generator.deploy_cmds import gen_custom_task;'
-            f'gen_custom_task("{server_dir}",param_name="{param_name}",use_gpu=True,style="{pack_style}")'
+            f'gen_custom_task("{server_dir}",param_name="{param_name}",use_gpu=True,style="{pack_style}",lazy=True)'
         )
         result = subprocess.run([sys.executable, '-c', gen_script], capture_output=True, text=True)
         if result.returncode != 0:

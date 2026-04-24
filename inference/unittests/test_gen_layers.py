@@ -191,6 +191,7 @@ class TestLayerExport(unittest.TestCase):
                 input_args=input_args,
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / f'CKKS_square_{s}_{s}' / f'level_{n_in_level}' / 'server',
+                fpga_acc=False,
             )
 
     def test_conv2d_packed(self):
@@ -340,8 +341,6 @@ class TestLayerExport(unittest.TestCase):
                                 padding,
                                 kernel_shape,
                                 stride,
-                                next_stride,
-                                skip,
                                 block_shape,
                             )
 
@@ -366,6 +365,7 @@ class TestLayerExport(unittest.TestCase):
                                 / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                                 / f'level_{init_level}'
                                 / 'server',
+                                fpga_acc=False,
                             )
 
     def test_inverse_mux_conv_repack(self):
@@ -406,13 +406,11 @@ class TestLayerExport(unittest.TestCase):
                         padding,
                         kernel_shape,
                         stride,
-                        next_stride,
-                        skip,
                         block_shape,
                     )
 
                     effective_stride = big_conv.stride
-                    effective_next_stride = big_conv.stride_next
+                    effective_next_stride = big_conv.output_step
 
                     n_block_per_channel = (
                         effective_next_stride[0] * effective_next_stride[1] * effective_stride[0] * effective_stride[1]
@@ -443,6 +441,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                         / f'level_{init_level}'
                         / 'server',
+                        fpga_acc=False,
                     )
 
     def test_inverse_mux_dw_conv(self):
@@ -501,8 +500,6 @@ class TestLayerExport(unittest.TestCase):
                                 padding,
                                 kernel_shape,
                                 stride,
-                                next_stride,
-                                skip,
                                 block_shape,
                             )
 
@@ -524,6 +521,7 @@ class TestLayerExport(unittest.TestCase):
                                 / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                                 / f'level_{init_level}'
                                 / 'server',
+                                fpga_acc=False,
                             )
 
     def test_poly_bsgs(self):
@@ -559,6 +557,7 @@ class TestLayerExport(unittest.TestCase):
                 output_instruction_path=base_path
                 / f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order}'
                 / f'level_{level}',
+                fpga_acc=False,
             )
 
     def test_fc_pack_skip_feature0d(self):
@@ -613,6 +612,7 @@ class TestLayerExport(unittest.TestCase):
                 / f'CKKS_fc_prepare_weight1_1D_pack_skip_{s}_{s}'
                 / f'level_{level}'
                 / 'server',
+                fpga_acc=False,
             )
 
     def test_fc_fc_feature0d(self):
@@ -696,6 +696,7 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_fc_fc_{input_channel}_{output_channel}_{output_channel1}'
             / f'level_{init_level}'
             / 'server',
+            fpga_acc=False,
         )
 
     def test_fc_multiplexed_feature2d(self):
@@ -723,8 +724,8 @@ class TestLayerExport(unittest.TestCase):
             n_channel_per_block = valid_skip_0 * valid_skip_1
             n_channel = n_in_channel // (shape[0] * shape[1])
             n_channel_per_ct = int((N / 2) / (shape[0] * shape[1]) / (invalid_fill[0] * invalid_fill[1]))
-            n_input_ct = max(1, int(np.ceil(n_in_channel / n_channel_per_ct)))
-            n_block_input = n_input_ct * n_num_per_ct
+            n_input_ct = max(1, int(np.ceil(n_channel / n_channel_per_block / n_num_per_ct)) * 1)
+            n_block_input = int(np.ceil(n_channel / n_channel_per_block))
 
             input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_input_ct)]
             weight_pt = [
@@ -759,6 +760,7 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
+                fpga_acc=False,
             )
 
     def test_poly_relu_bsgs_feature2d(self):
@@ -811,6 +813,7 @@ class TestLayerExport(unittest.TestCase):
             output_instruction_path=base_path
             / f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order0}_{order1}'
             / f'level_{level}',
+            fpga_acc=False,
         )
 
     def test_poly_bsgs_feature0d(self):
@@ -851,6 +854,7 @@ class TestLayerExport(unittest.TestCase):
                     output_instruction_path=base_path
                     / f'CKKS_poly_relu_bsgs_feature0d_{n_in_channel}_channel_order_{order}_skip_{skip_val}'
                     / f'level_{level}',
+                    fpga_acc=False,
                 )
 
     def test_poly_bsgs_feature1d_skip(self):
@@ -898,6 +902,7 @@ class TestLayerExport(unittest.TestCase):
                         output_args=[Argument('output_ct', output_ct)],
                         output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_skip_{n_in_channel}_channel'
                         f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
+                        fpga_acc=False,
                     )
 
     def test_poly_bsgs_feature1d_mux(self):
@@ -943,6 +948,7 @@ class TestLayerExport(unittest.TestCase):
                         output_args=[Argument('output_ct', output_ct)],
                         output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_mux_{n_in_channel}_channel'
                         f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
+                        fpga_acc=False,
                     )
 
     def test_conv1d_layer(self):
@@ -994,6 +1000,7 @@ class TestLayerExport(unittest.TestCase):
                             / f'conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}'
                             / f'level_{init_level}'
                             / 'server',
+                            fpga_acc=False,
                         )
 
     def test_mux_conv1d_layer(self):
@@ -1059,6 +1066,7 @@ class TestLayerExport(unittest.TestCase):
                             / f'multiplexed_conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}'
                             / f'level_{init_level}'
                             / 'server',
+                            fpga_acc=False,
                         )
 
     def test_add_layer(self):
@@ -1086,6 +1094,7 @@ class TestLayerExport(unittest.TestCase):
                     / f'CKKS_add_layer/ch_{n_channel}_shape_{s}_{s}'
                     / f'level_{level}'
                     / 'server',
+                    fpga_acc=False,
                 )
 
     def test_avgpool2d_layer(self):
@@ -1122,6 +1131,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}_{s}'
                         / f'level_{level}'
                         / 'server',
+                        fpga_acc=False,
                     )
 
     def test_adaptive_avgpool2d_layer(self):
@@ -1153,6 +1163,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}_{s}'
                         / f'level_{level}'
                         / 'server',
+                        fpga_acc=False,
                     )
 
     def test_interleaved_avgpool2d_layer(self):
@@ -1199,6 +1210,7 @@ class TestLayerExport(unittest.TestCase):
                             / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                             / f'level_{level}'
                             / 'server',
+                            fpga_acc=False,
                         )
 
     def test_avgpool1d_layer(self):
@@ -1236,6 +1248,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}'
                         / f'level_{level}'
                         / 'server',
+                        fpga_acc=False,
                     )
 
     def test_adaptive_avgpool1d_layer(self):
@@ -1267,6 +1280,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}'
                         / f'level_{level}'
                         / 'server',
+                        fpga_acc=False,
                     )
 
     def test_mult_scalar_layer(self):
@@ -1293,6 +1307,7 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_mult_scalar/ch_{n_channel}_shape_{s}_{s}'
             / f'level_{level}'
             / 'server',
+            fpga_acc=False,
         )
 
     def test_mux_dw_conv1d_layer(self):
@@ -1356,6 +1371,7 @@ class TestLayerExport(unittest.TestCase):
                                 / f'mux_dw_conv1d_ch_{n_channel}_input_{input_shape}_kernel_{kernel_shape}_skip_{skip}_stride_{stride}'
                                 / f'level_{init_level}'
                                 / 'server',
+                                fpga_acc=False,
                             )
 
     def test_fc_1d_multiplexed(self):
@@ -1440,4 +1456,5 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
+                fpga_acc=False,
             )

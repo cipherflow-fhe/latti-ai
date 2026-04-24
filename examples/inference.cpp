@@ -31,7 +31,7 @@
 #include "interface/inference_server.h"
 
 using namespace std;
-namespace ls = cxx_sdk_v2;
+namespace ls = lattisense;
 
 int main(int argc, char* argv[]) {
     string task_dir;
