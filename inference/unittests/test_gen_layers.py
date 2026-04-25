@@ -31,6 +31,7 @@ from inference.model_generator.deploy_cmds import *  # noqa: E402
 from inference.model_generator.layers.add_pack import AddLayer  # noqa: E402
 from inference.model_generator.layers.avgpool2d_layer import Avgpool2DLayer  # noqa: E402
 from inference.model_generator.layers.mult_scaler import MultScalarLayer  # noqa: E402
+from inference.model_generator.layers.softmax_layer import SoftmaxLayer  # noqa: E402
 from training.model_export.onnx_to_json import *  # noqa: E402
 
 
@@ -722,6 +723,75 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_fc_fc_{input_channel}_{output_channel}_{output_channel1}'
             / f'level_{init_level}'
             / 'server',
+        )
+
+    def test_softmax_feature0d(self):
+        # Softmax v1 requires input level >= 13, so use PN15 (N=32768, max_level=17).
+        set_param('PN15QP880')
+        n_classes = 32
+        input_level = 13
+
+        input_ct = [CkksCiphertextNode('input_ct0', input_level)]
+
+        exp_poly_input_level = input_level - 2
+        exp_c5_level = exp_poly_input_level
+        exp_c4_level = exp_poly_input_level - 1
+        exp_c3_level = exp_poly_input_level - 2
+        exp_c2_level = exp_poly_input_level - 3
+        exp_c1_level = exp_poly_input_level - 4
+        exp_c0_level = exp_poly_input_level - 5
+
+        recip_poly_input_level = input_level - 9
+        recip_c3_level = recip_poly_input_level
+        recip_c2_level = recip_poly_input_level - 1
+        recip_c1_level = recip_poly_input_level - 2
+        recip_c0_level = recip_poly_input_level - 3
+
+        pt_quarter = CkksPlaintextRingtNode('softmax_pt_quarter')
+        pt_inv_classes = CkksPlaintextRingtNode('softmax_pt_inv_classes')
+        exp_c5 = CkksPlaintextMulNode('softmax_exp_c5', level=exp_c5_level)
+        exp_c4 = CkksPlaintextNode('softmax_exp_c4', level=exp_c4_level)
+        exp_c3 = CkksPlaintextNode('softmax_exp_c3', level=exp_c3_level)
+        exp_c2 = CkksPlaintextNode('softmax_exp_c2', level=exp_c2_level)
+        exp_c1 = CkksPlaintextNode('softmax_exp_c1', level=exp_c1_level)
+        exp_c0 = CkksPlaintextNode('softmax_exp_c0', level=exp_c0_level)
+        recip_c3 = CkksPlaintextMulNode('softmax_recip_c3', level=recip_c3_level)
+        recip_c2 = CkksPlaintextNode('softmax_recip_c2', level=recip_c2_level)
+        recip_c1 = CkksPlaintextNode('softmax_recip_c1', level=recip_c1_level)
+        recip_c0 = CkksPlaintextNode('softmax_recip_c0', level=recip_c0_level)
+
+        softmax = SoftmaxLayer(n_classes=n_classes)
+        output_ct = [
+            softmax.call(
+                input_ct[0],
+                pt_quarter,
+                pt_inv_classes,
+                exp_coeffs=[exp_c0, exp_c1, exp_c2, exp_c3, exp_c4, exp_c5],
+                recip_coeffs=[recip_c0, recip_c1, recip_c2, recip_c3],
+                output_prefix='softmax',
+            )
+        ]
+
+        input_args = [
+            Argument('input_node', input_ct),
+            Argument('softmax_pt_quarter', [pt_quarter]),
+            Argument('softmax_pt_inv_classes', [pt_inv_classes]),
+            Argument('softmax_exp_c5', [exp_c5]),
+            Argument('softmax_exp_c4', [exp_c4]),
+            Argument('softmax_exp_c3', [exp_c3]),
+            Argument('softmax_exp_c2', [exp_c2]),
+            Argument('softmax_exp_c1', [exp_c1]),
+            Argument('softmax_exp_c0', [exp_c0]),
+            Argument('softmax_recip_c3', [recip_c3]),
+            Argument('softmax_recip_c2', [recip_c2]),
+            Argument('softmax_recip_c1', [recip_c1]),
+            Argument('softmax_recip_c0', [recip_c0]),
+        ]
+
+        process_custom_task(
+            input_args=input_args,
+            output_args=[Argument('output_ct', output_ct)],
+            output_instruction_path=base_path / f'CKKS_softmax/ch_{n_classes}' / f'level_{input_level}' / 'server',
         )
 
     def test_fc_multiplexed_feature2d(self):

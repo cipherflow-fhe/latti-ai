@@ -7,6 +7,7 @@ add_library(fhe_layers
   concat_layer.cpp
   conv2d_packed_layer.cpp 
   activation_layer.cpp 
+  softmax_layer.cpp
   dense_packed_layer.cpp 
   reshape_layer.cpp
   add_layer.cpp

@@ -39,6 +39,7 @@
 #include "fhe_layers/conv2d_depthwise.h"
 #include "fhe_layers/dense_packed_layer.h"
 #include "fhe_layers/reshape_layer.h"
+#include "fhe_layers/softmax_layer.h"
 #include "fhe_layers/block_col_major_ccmm.h"
 #include "fhe_layers/block_col_major_cpmm.h"
 #include "fhe_layers/block_col_major_transpose.h"
@@ -63,10 +64,28 @@ using namespace std;
 using namespace cxx_sdk_v2;
 namespace fs = std::filesystem;
 
-fs::path base_path = "../hetero";
+static fs::path resolve_hetero_base_path() {
+    const std::vector<fs::path> candidates = {
+        "../hetero",
+        "build/inference/hetero",
+        "inference/hetero",
+    };
+    for (const auto& candidate : candidates) {
+        if (fs::exists(candidate)) {
+            return candidate;
+        }
+    }
+    throw std::runtime_error("Cannot find hetero task directory. Tried: ../hetero, build/inference/hetero, inference/hetero");
+}
+
+fs::path base_path = resolve_hetero_base_path();
 
 static vector<string> read_arg_names(const fs::path& project_path) {
-    ifstream f(project_path / "task_signature.json");
+    const fs::path sig_path = project_path / "task_signature.json";
+    ifstream f(sig_path);
+    if (!f.is_open()) {
+        throw std::runtime_error("Failed to open task signature file: " + sig_path.string());
+    }
     auto sig = nlohmann::json::parse(f);
     vector<string> names;
     for (const auto& entry : sig["online"]) {
@@ -1295,6 +1314,115 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc_feature0d", "", HeteroProce
     ArrayComparison result = compare(output_plain_1, output_mg);
     REQUIRE(result.max_error < 5.0e-2 * result.max_abs);
     REQUIRE(result.rmse < 1.0e-2 * result.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "softmax_feature0d", "", HeteroProcessors) {
+    const int N = 32768;
+    const int n_slot = N / 2;
+    const int init_level = 13;
+    const uint32_t n_classes = 32;
+
+    CkksParameter param = CkksParameter::create_parameter(N);
+    CkksContext context = CkksContext::create_random_context(param);
+    context.gen_rotation_keys();
+
+    Array<double, 1> input_1d = gen_random_array<1>({n_classes}, 1.0);
+    Feature0DEncrypted input_feature(&context, init_level);
+    // Softmax rotation-tree denominator assumes logits are tiled across all slots.
+    // If only the head slots are populated, boundary rotations mix in zeros and
+    // produce unstable reciprocal inputs.
+    std::vector<double> input_tiled(n_slot);
+    for (int i = 0; i < n_slot; ++i) {
+        input_tiled[i] = input_1d.get(i % static_cast<int>(n_classes));
+    }
+    auto input_pt = context.encode(input_tiled, init_level, param.get_default_scale());
+    input_feature.data.push_back(context.encrypt_asymmetric(input_pt));
+    input_feature.n_channel = n_classes;
+    input_feature.n_channel_per_ct = n_slot;
+    input_feature.skip = 1;
+
+    SoftmaxLayer softmax_layer(param, n_classes, init_level);
+
+    Feature0DEncrypted output_feature(&context, 0);
+    output_feature.n_channel = n_classes;
+    output_feature.n_channel_per_ct = n_slot;
+    output_feature.skip = 1;
+    output_feature.data.push_back(context.new_ciphertext(0, param.get_default_scale()));
+
+    fs::path project_path =
+        base_path / "CKKS_softmax" / ("ch_" + to_string(n_classes)) / ("level_" + to_string(init_level)) / "server";
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "input_node")
+            cxx_args.push_back({name, &input_feature.data});
+        else if (name == "softmax_pt_quarter")
+            cxx_args.push_back({name, &softmax_layer.pt_quarter});
+        else if (name == "softmax_pt_inv_classes")
+            cxx_args.push_back({name, &softmax_layer.pt_inv_classes});
+        else if (name == "softmax_exp_c5")
+            cxx_args.push_back({name, &softmax_layer.exp_c5});
+        else if (name == "softmax_exp_c4")
+            cxx_args.push_back({name, &softmax_layer.exp_c4});
+        else if (name == "softmax_exp_c3")
+            cxx_args.push_back({name, &softmax_layer.exp_c3});
+        else if (name == "softmax_exp_c2")
+            cxx_args.push_back({name, &softmax_layer.exp_c2});
+        else if (name == "softmax_exp_c1")
+            cxx_args.push_back({name, &softmax_layer.exp_c1});
+        else if (name == "softmax_exp_c0")
+            cxx_args.push_back({name, &softmax_layer.exp_c0});
+        else if (name == "softmax_recip_c3")
+            cxx_args.push_back({name, &softmax_layer.recip_c3});
+        else if (name == "softmax_recip_c2")
+            cxx_args.push_back({name, &softmax_layer.recip_c2});
+        else if (name == "softmax_recip_c1")
+            cxx_args.push_back({name, &softmax_layer.recip_c1});
+        else if (name == "softmax_recip_c0")
+            cxx_args.push_back({name, &softmax_layer.recip_c0});
+        else if (name == "output_ct")
+            cxx_args.push_back({name, &output_feature.data});
+    }
+
+    if constexpr (is_same_v<TestType, ProcessorCpu>) {
+        FheTaskCpu fhe_task(project_path.string());
+        fhe_task.run(&context, cxx_args);
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    } else if constexpr (is_same_v<TestType, ProcessorGpu>) {
+        FheTaskGpu fhe_task(project_path.string());
+        fhe_task.run(&context, cxx_args);
+#endif
+    }
+
+    Array<double, 1> output_mg = output_feature.unpack();
+    Array<double, 1> plain_output = softmax_layer.run_plaintext(input_1d);
+
+    print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+    print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
+
+    ArrayComparison compare_result = compare(plain_output, output_mg);
+    REQUIRE(compare_result.max_error < 2.5e-1);
+    REQUIRE(compare_result.rmse < 8.0e-2);
+
+    auto argmax = [](const Array<double, 1>& x) {
+        int idx = 0;
+        double best = x.get(0);
+        for (int i = 1; i < x.get_size(); i++) {
+            if (x.get(i) > best) {
+                best = x.get(i);
+                idx = i;
+            }
+        }
+        return idx;
+    };
+    REQUIRE(argmax(plain_output) == argmax(output_mg));
+
+    double prob_sum = 0.0;
+    for (int i = 0; i < output_mg.get_size(); i++) {
+        prob_sum += output_mg.get(i);
+    }
+    REQUIRE(prob_sum == Approx(1.0).margin(2.0e-1));
 }
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature2d", "", HeteroProcessors) {
