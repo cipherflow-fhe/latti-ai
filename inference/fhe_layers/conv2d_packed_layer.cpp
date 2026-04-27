@@ -43,10 +43,13 @@ Conv2DPackedLayer::Conv2DPackedLayer(const CkksParameter& param,
                                      uint32_t n_channel_per_ct,
                                      uint32_t level,
                                      double residual_scale)
-    : Conv2DLayer(param, input_shape, move(weight), move(bias), stride, skip), n_channel_per_ct_(n_channel_per_ct),
-      n_packed_ct_in_(div_ceil(n_in_channel_, n_channel_per_ct)),
+    : Conv2DLayer(param, input_shape, move(weight), move(bias), stride), skip_(skip),
+      n_channel_per_ct_(n_channel_per_ct), n_packed_ct_in_(div_ceil(n_in_channel_, n_channel_per_ct)),
       n_packed_ct_out_(div_ceil(n_out_channel_, n_channel_per_ct)),
       weight_scale_(param_.get_q(level) * residual_scale) {
+    if ((skip_[0] & (skip_[0] - 1)) != 0 || (skip_[1] & (skip_[1] - 1)) != 0) {
+        throw std::invalid_argument("skip must be powers of 2, got: " + str(skip_));
+    }
     level_ = level;
 }
 
