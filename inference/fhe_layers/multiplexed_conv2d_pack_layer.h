@@ -87,8 +87,11 @@ private:
     int bias_level_down = 0;
     bool need_repack_;
     double weight_scale;
+    Duo skip_;
     Duo external_upsample_factor;
     Duo zero_inserted_skip;
+    std::vector<std::vector<double>> kernel_masks_;
+    std::vector<int> input_rotate_units_;
 
     // Cached values for on-demand generation
     Duo cached_input_shape_ct = {0, 0};

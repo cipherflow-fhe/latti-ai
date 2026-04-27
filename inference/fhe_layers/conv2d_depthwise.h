@@ -39,8 +39,6 @@ public:
 
     virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
 
-    virtual Array<double, 3> run_plaintext(const Array<double, 3>& x, double multiplier = 1.0);
-
     std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt_;
 
     std::vector<ls::CkksPlaintextRingt> bias_pt_;
@@ -72,11 +70,11 @@ private:
 
     double modified_scale_;
 
+    Duo skip_;
+
     // Cached values for on-demand generation (lazy mode)
     int N = 0;
     uint32_t cached_input_block_size = 0;
-    // cppcheck-suppress duplInheritedMember
     std::vector<std::vector<double>> kernel_masks_;
-    // cppcheck-suppress duplInheritedMember
     std::vector<int> input_rotate_units_;
 };

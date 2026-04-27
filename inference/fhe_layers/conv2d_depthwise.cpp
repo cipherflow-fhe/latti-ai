@@ -43,9 +43,14 @@ Conv2DPackedDepthwiseLayer::Conv2DPackedDepthwiseLayer(const CkksParameter& para
                                                        uint32_t n_channel_per_ct,
                                                        uint32_t level,
                                                        double residual_scale)
-    : Conv2DLayer(param, input_shape, move(weight), move(bias), stride, skip), n_channel_per_ct_(n_channel_per_ct),
-      n_packed_in_ct_(div_ceil(n_in_channel_, n_channel_per_ct)),
+    : Conv2DLayer(param, input_shape, move(weight), move(bias), stride), skip_(skip),
+      n_channel_per_ct_(n_channel_per_ct), n_packed_in_ct_(div_ceil(n_in_channel_, n_channel_per_ct)),
       n_packed_out_ct_(div_ceil(n_out_channel_, n_channel_per_ct)) {
+    if ((skip_[0] & (skip_[0] - 1)) != 0 || (skip_[1] & (skip_[1] - 1)) != 0) {
+        throw std::invalid_argument("skip must be powers of 2, got: " + str(skip_));
+    }
+    n_groups_ = n_out_channel_;
+    n_in_channel_ = n_out_channel_;
     level_ = level;
     modified_scale_ = param_.get_q(level_) * residual_scale;
 }
@@ -159,45 +164,6 @@ Feature2DEncrypted Conv2DPackedDepthwiseLayer::run(CkksContext& ctx, const Featu
     result.skip[0] = x.skip[0] * stride_[0];
     result.skip[1] = x.skip[1] * stride_[1];
     result.level = x.level - 1;
-    return result;
-}
-
-// ============================================================================
-// Plaintext Depthwise Convolution (for Testing/Verification)
-// ============================================================================
-
-Array<double, 3> Conv2DPackedDepthwiseLayer::run_plaintext(const Array<double, 3>& x, double multiplier) {
-    const double weight_scale = 1.0 / multiplier;
-
-    const std::array<uint32_t, 2> padding{kernel_shape_[0] / 2, kernel_shape_[1] / 2};
-
-    Array<double, 3> padded_input({n_out_channel_, input_shape_[0] + padding[0] * 2, input_shape_[1] + padding[1] * 2},
-                                  0.0);
-
-    for (uint32_t ch = 0; ch < n_out_channel_; ++ch) {
-        for (uint32_t i = 0; i < input_shape_[0]; ++i) {
-            for (uint32_t j = 0; j < input_shape_[1]; ++j) {
-                padded_input.set(ch, i + padding[0], j + padding[1], x.get(ch, i, j));
-            }
-        }
-    }
-
-    const std::array<uint32_t, 2> output_shape{input_shape_[0] / stride_[0], input_shape_[1] / stride_[1]};
-
-    Array<double, 3> result({n_out_channel_, output_shape[0], output_shape[1]});
-
-#ifdef _OPENMP
-#    pragma omp parallel for collapse(3) schedule(static)
-#endif
-    for (uint32_t out_ch = 0; out_ch < n_out_channel_; ++out_ch) {
-        for (uint32_t out_i = 0; out_i < output_shape[0]; ++out_i) {
-            for (uint32_t out_j = 0; out_j < output_shape[1]; ++out_j) {
-                const double value = compute_depthwise_element(out_ch, out_i, out_j, padded_input, weight_scale);
-                result.set(out_ch, out_i, out_j, value);
-            }
-        }
-    }
-
     return result;
 }
 
