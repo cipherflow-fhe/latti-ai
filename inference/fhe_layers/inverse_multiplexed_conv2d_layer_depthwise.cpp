@@ -97,34 +97,6 @@ void InverseMultiplexedConv2DLayerDepthwise::prepare_weight() {
 }
 
 void InverseMultiplexedConv2DLayerDepthwise::prepare_weight_lazy() {
-    kernel_masks.clear();
-    kernel_masks.resize(prod(kernel_shape_) * prod(output_step));
-    for (auto& m : kernel_masks) {
-        m.resize(N / 2);
-    }
-    int mask_count = 0;
-    for (const Duo& r2_pos : duo_range(output_step)) {
-        for (const Duo& seg_pos : duo_range(ct_stride_)) {
-            if (seg_pos[0] >= kernel_shape_[0] || seg_pos[1] >= kernel_shape_[1]) {
-                continue;
-            }
-            Duo split_kernel_shape = (kernel_shape_ + ct_stride_ - Duo{1, 1} - seg_pos) / ct_stride_;
-            for (const Duo& uv_pos : duo_range(split_kernel_shape)) {
-                DuoInt val = to_int(seg_pos) - pad_ + to_int(ct_stride_) * to_int(uv_pos + r2_pos);
-                DuoInt begin_idx = (val % input_step + to_int(input_step)) % input_step;
-                DuoInt step = (val - begin_idx) / to_int(input_step);
-                for (const Duo& block_pos : duo_range(block_shape)) {
-                    if (block_pos[0] + step[0] >= 0 && block_pos[0] + step[0] < block_shape[0] &&
-                        block_pos[1] + step[1] >= 0 && block_pos[1] + step[1] < block_shape[1]) {
-                        int linear_idx = block_pos[0] * block_shape[1] + block_pos[1];
-                        kernel_masks[mask_count][linear_idx] = 1.0;
-                    }
-                }
-                mask_count = mask_count + 1;
-            }
-        }
-    }
-
     // Cache computed values for on-demand generation
     cached_input_block_size = prod(block_shape);
     cached_kernel_total_count = prod(kernel_shape_) * prod(output_step);
@@ -146,7 +118,7 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_fo
                                                                                           int out_channel_idx,
                                                                                           int kernel_count) const {
     int current_count = 0;
-    Duo saved_seg_pos = {}, saved_uv_pos = {};
+    Duo saved_seg_pos = {}, saved_uv_pos = {}, saved_r2_pos = {};
     bool found = false;
 
     for (uint32_t r_i2 = 0; r_i2 < output_step[0] && !found; r_i2++) {
@@ -162,6 +134,7 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_fo
                             if (current_count == kernel_count) {
                                 saved_seg_pos = seg_pos;
                                 saved_uv_pos = {u_s, v_s};
+                                saved_r2_pos = {r_i2, r_j2};
                                 found = true;
                             } else {
                                 current_count++;
@@ -174,12 +147,23 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_fo
     }
 
     Duo kernel_idx = saved_uv_pos * ct_stride_ + saved_seg_pos;
-    auto& mask = kernel_masks[kernel_count];
-    double w_val = weight_.get(out_channel_idx, 0, kernel_idx[0], kernel_idx[1]);
 
+    // Compute step on-the-fly instead of reading from pre-computed kernel_masks.
+    DuoInt val = to_int(saved_seg_pos) - pad_ + to_int(ct_stride_) * to_int(saved_uv_pos + saved_r2_pos);
+    DuoInt begin_idx = (val % input_step + to_int(input_step)) % input_step;
+    DuoInt step = (val - begin_idx) / to_int(input_step);
+
+    int i_start = std::max(0, -step[0]);
+    int i_end = std::min((int)block_shape[0], (int)block_shape[0] - step[0]);
+    int j_start = std::max(0, -step[1]);
+    int j_end = std::min((int)block_shape[1], (int)block_shape[1] - step[1]);
+
+    double w_val = weight_.get(out_channel_idx, 0, kernel_idx[0], kernel_idx[1]);
     vector<double> w(N / 2, 0.0);
-    for (int linear_idx = 0; linear_idx < cached_input_block_size; ++linear_idx) {
-        w[linear_idx] = w_val * mask[linear_idx];
+    for (int i_s = i_start; i_s < i_end; ++i_s) {
+        for (int j_s = j_start; j_s < j_end; ++j_s) {
+            w[i_s * (int)block_shape[1] + j_s] = w_val;
+        }
     }
     return ctx.encode_ringt(w, weight_scale);
 }
