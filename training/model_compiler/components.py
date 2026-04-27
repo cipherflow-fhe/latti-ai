@@ -930,8 +930,9 @@ class LayerAbstractGraph:
                 if not IS_BALANCE:
                     layer.weight_scale = layer.scale_up * layer.scale_down
                     layer.bias_scale = layer.scale_up
-                absorb_type.append('polyact')
-                absorb_path.append(layer.poly_path)
+                if layer.poly_path and layer.poly_path not in absorb_path:
+                    absorb_type.append('polyact')
+                    absorb_path.append(layer.poly_path)
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,
@@ -1006,8 +1007,9 @@ class LayerAbstractGraph:
                 if not IS_BALANCE:
                     layer.weight_scale = layer.scale_up * layer.scale_down
                     layer.bias_scale = layer.scale_up
-                absorb_type.append('polyact')
-                absorb_path.append(layer.poly_path)
+                if layer.poly_path and layer.poly_path not in absorb_path:
+                    absorb_type.append('polyact')
+                    absorb_path.append(layer.poly_path)
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,
@@ -1056,8 +1058,9 @@ class LayerAbstractGraph:
                 if not IS_BALANCE:
                     layer.weight_scale = layer.scale_up * layer.scale_down
                     layer.bias_scale = layer.scale_up
-                absorb_type.append('polyact')
-                absorb_path.append(layer.poly_path)
+                if layer.poly_path and layer.poly_path not in absorb_path:
+                    absorb_type.append('polyact')
+                    absorb_path.append(layer.poly_path)
                 layers[layer_id] = {
                     'type': layer_type,
                     'channel_input': channel_input,

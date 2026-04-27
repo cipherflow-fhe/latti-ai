@@ -32,7 +32,7 @@ project_root = script_dir.parent.parent.parent
 sys.path.append(str(script_dir.parent))
 sys.path.append(str(script_dir.parent.parent))
 
-from nn_tools.export import export_to_onnx, fuse_and_export_h5
+from nn_tools.export import export_to_onnx, export_h5_from_onnx
 from model_export.onnx_to_json import onnx_to_json
 from pipeline import run_pipeline
 from components import (
@@ -390,7 +390,13 @@ class CompilerTestBase(unittest.TestCase):
 
         # Step 4: Export model weights to h5
         h5_path = server_dir / 'model_parameters.h5'
-        fuse_and_export_h5(model, str(h5_path), verbose=False)
+        json_path = server_dir / 'nn_layers_ct_0.json'
+        export_h5_from_onnx(
+            onnx_path=str(temp_onnx),
+            json_path=str(json_path),
+            h5_path=str(h5_path),
+            verbose=False,
+        )
 
         # Step 6: Read pack_style and param_name from configs
         with open(client_dir / 'task_config.json', 'r') as f:

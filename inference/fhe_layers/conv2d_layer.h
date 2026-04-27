@@ -32,8 +32,7 @@ public:
                 const Duo& input_shape,
                 Array<double, 4>&& weight,
                 Array<double, 1>&& bias,
-                const Duo& stride,
-                const Duo& skip);
+                const Duo& stride);
 
     Array<double, 3> run_plaintext(const Array<double, 3>& x, double multiplier = 1.0);
 
@@ -46,17 +45,13 @@ protected:
 
     uint32_t n_in_channel_;
 
+    uint32_t n_groups_ = 1;
+
     Duo input_shape_;
 
     Duo kernel_shape_;
 
     Duo stride_;
-
-    Duo skip_;
-
-    std::vector<std::vector<double>> kernel_masks_;
-
-    std::vector<int> input_rotate_units_;
 
     double compute_output_element(uint32_t out_ch,
                                   const Duo& output_pos,

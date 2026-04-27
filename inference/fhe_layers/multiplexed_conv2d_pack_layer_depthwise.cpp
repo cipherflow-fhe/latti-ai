@@ -35,7 +35,13 @@ MultiplexedConv2DPackedLayerDepthwise::MultiplexedConv2DPackedLayerDepthwise(con
                                                                              uint32_t n_channel_per_ct_in,
                                                                              uint32_t level_in,
                                                                              double residual_scale)
-    : Conv2DLayer(param_in, input_shape_in, move(weight_in), move(bias_in), stride_in, skip_in) {
+    : Conv2DLayer(param_in, input_shape_in, move(weight_in), move(bias_in), stride_in) {
+    skip_ = skip_in;
+    if ((skip_[0] & (skip_[0] - 1)) != 0 || (skip_[1] & (skip_[1] - 1)) != 0) {
+        throw std::invalid_argument("skip must be powers of 2, got: " + str(skip_));
+    }
+    n_groups_ = n_out_channel_;
+    n_in_channel_ = n_out_channel_;
     const uint32_t output_channels_per_ct = n_channel_per_ct_in * prod(stride_);
 
     n_channel_per_ct = n_channel_per_ct_in;
@@ -74,26 +80,8 @@ void MultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
 }
 
 void MultiplexedConv2DPackedLayerDepthwise::prepare_weight_lazy() {
-    const Duo padding_shape = kernel_shape_ / 2;
     const Duo input_shape_ct = input_shape_ * skip_;
     kernel_masks_.clear();
-
-    for (const Duo& kernel_pos : duo_range(kernel_shape_)) {
-        vector<double> mask;
-        mask.reserve(prod(input_shape_ct));
-        for (const Duo& input_pos : duo_range(input_shape_ct)) {
-            const int64_t shifted_i = static_cast<int64_t>(kernel_pos[0] * skip_[0] + input_pos[0]) -
-                                      static_cast<int64_t>(padding_shape[0] * skip_[0]);
-            const int64_t shifted_j = static_cast<int64_t>(kernel_pos[1] * skip_[1] + input_pos[1]) -
-                                      static_cast<int64_t>(padding_shape[1] * skip_[1]);
-            if (0 <= shifted_i && shifted_i < input_shape_ct[0] && 0 <= shifted_j && shifted_j < input_shape_ct[1]) {
-                mask.push_back(1.0);
-            } else {
-                mask.push_back(0.0);
-            }
-        }
-        kernel_masks_.push_back(move(mask));
-    }
 
     input_rotate_units_.clear();
     input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
@@ -155,7 +143,7 @@ vector<double> MultiplexedConv2DPackedLayerDepthwise::select_tensor(int num) con
 CkksPlaintextRingt MultiplexedConv2DPackedLayerDepthwise::generate_weight_pt_for_indices(CkksContext& ctx,
                                                                                          int n_packed_out_channel_idx,
                                                                                          int kernel_idx) const {
-    auto& mask = kernel_masks_[kernel_idx];
+    const Duo padding_shape = kernel_shape_ / 2;
     const Duo kernel_pos = div_mod(static_cast<uint32_t>(kernel_idx), kernel_shape_[1]);
 
     vector<double> w(n_block_per_ct * cached_input_block_size, 0.0);
@@ -164,15 +152,22 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayerDepthwise::generate_weight_pt_for
         const Duo block_pos = div_mod(linear_idx, cached_input_block_size);
         const Duo input_pos = div_mod(block_pos[1], cached_input_shape_ct[1]);
 
+        // Inline boundary check (replaces pre-computed kernel_masks_)
+        int64_t shifted_i = (int64_t)(kernel_pos[0] * skip_[0] + input_pos[0]) - (int64_t)(padding_shape[0] * skip_[0]);
+        int64_t shifted_j = (int64_t)(kernel_pos[1] * skip_[1] + input_pos[1]) - (int64_t)(padding_shape[1] * skip_[1]);
+        if (shifted_i < 0 || shifted_i >= cached_input_shape_ct[0] || shifted_j < 0 ||
+            shifted_j >= cached_input_shape_ct[1]) {
+            continue;
+        }
+
         const uint32_t channel_in = 0;
         const uint32_t channel_out = static_cast<uint32_t>(n_packed_out_channel_idx) * n_channel_per_ct +
                                      block_pos[0] * cached_skip_prod +
                                      (skip_[0] * (input_pos[0] % skip_[0]) + input_pos[1] % skip_[0]);
 
-        w[linear_idx] = (channel_in >= n_in_channel_ || channel_out >= n_out_channel_) ?
-                            0 :
-                            weight_.get(channel_out, channel_in, kernel_pos[0], kernel_pos[1]) *
-                                mask[input_pos[0] * cached_input_shape_ct[1] + input_pos[1]];
+        if (channel_in < n_in_channel_ && channel_out < n_out_channel_) {
+            w[linear_idx] = weight_.get(channel_out, channel_in, kernel_pos[0], kernel_pos[1]);
+        }
     }
     return ctx.encode_ringt(w, weight_scale);
 }
@@ -358,38 +353,5 @@ Feature2DEncrypted MultiplexedConv2DPackedLayerDepthwise::run(CkksContext& ctx, 
     result.n_channel_per_ct = x.n_channel_per_ct * prod(stride_);
     result.level = x.level - bias_level_down;
     result.data = run_core(ctx, x.data);
-    return result;
-}
-
-Array<double, 3> MultiplexedConv2DPackedLayerDepthwise::run_plaintext(const Array<double, 3>& x, double multiplier) {
-    const double value = 1.0 / multiplier;
-    const Duo padding_shape = kernel_shape_ / 2;
-    const Duo padded_shape = input_shape_ + padding_shape * 2;
-    const Duo output_shape = input_shape_ / stride_;
-    Array<double, 3> padded_input({n_out_channel_, padded_shape[0], padded_shape[1]}, 0.0);
-    for (int in_channel_idx = 0; in_channel_idx < n_out_channel_; in_channel_idx++) {
-        for (const Duo& input_pos : duo_range(input_shape_)) {
-            const Duo padded_pos = input_pos + padding_shape;
-            padded_input.set(in_channel_idx, padded_pos[0], padded_pos[1],
-                             x.get(in_channel_idx, input_pos[0], input_pos[1]));
-        }
-    }
-
-    Array<double, 3> result({n_out_channel_, output_shape[0], output_shape[1]});
-#ifdef _OPENMP
-#    pragma omp parallel for schedule(static)
-#endif
-    for (int out_channel_idx = 0; out_channel_idx < n_out_channel_; out_channel_idx++) {
-        for (const Duo& output_pos : duo_range(output_shape)) {
-            double sum = bias_[out_channel_idx];
-            const Duo input_base = output_pos * stride_;
-            for (const Duo& kernel_pos : duo_range(kernel_shape_)) {
-                const Duo input_pos = input_base + kernel_pos;
-                sum += padded_input.get(out_channel_idx, input_pos[0], input_pos[1]) *
-                       (weight_.get(out_channel_idx, 0, kernel_pos[0], kernel_pos[1]) * value);
-            }
-            result.set(out_channel_idx, output_pos[0], output_pos[1], sum);
-        }
-    }
     return result;
 }

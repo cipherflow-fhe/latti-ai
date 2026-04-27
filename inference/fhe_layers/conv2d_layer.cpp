@@ -38,9 +38,8 @@ Conv2DLayer::Conv2DLayer(const CkksParameter& param,
                          const Duo& input_shape,
                          Array<double, 4>&& weight,
                          Array<double, 1>&& bias,
-                         const Duo& stride,
-                         const Duo& skip)
-    : Layer(param), input_shape_(input_shape), stride_(stride), skip_(skip), weight_(move(weight)), bias_(move(bias)) {
+                         const Duo& stride)
+    : Layer(param), input_shape_(input_shape), stride_(stride), weight_(move(weight)), bias_(move(bias)) {
     const auto weight_shape = weight_.get_shape();
     n_out_channel_ = weight_shape[0];
     n_in_channel_ = weight_shape[1];
@@ -51,9 +50,6 @@ Conv2DLayer::Conv2DLayer(const CkksParameter& param,
     }
     if ((stride_[0] & (stride_[0] - 1)) != 0 || (stride_[1] & (stride_[1] - 1)) != 0) {
         throw std::invalid_argument("stride must be powers of 2, got: " + str(stride_));
-    }
-    if ((skip_[0] & (skip_[0] - 1)) != 0 || (skip_[1] & (skip_[1] - 1)) != 0) {
-        throw std::invalid_argument("skip must be powers of 2, got: " + str(skip_));
     }
 }
 
@@ -67,12 +63,17 @@ double Conv2DLayer::compute_output_element(uint32_t out_ch,
                                            double weight_scale) const {
     double sum = bias_.get(out_ch);
     const Duo input_base = output_pos * stride_;
+    const uint32_t n_out_per_group = n_out_channel_ / n_groups_;
+    const uint32_t n_in_per_group = n_in_channel_ / n_groups_;
+    const uint32_t group_idx = out_ch / n_out_per_group;
+    const uint32_t in_ch_start = group_idx * n_in_per_group;
 
-    for (uint32_t in_ch = 0; in_ch < n_in_channel_; ++in_ch) {
+    for (uint32_t in_ch = in_ch_start; in_ch < in_ch_start + n_in_per_group; ++in_ch) {
         for (const Duo& kernel_pos : duo_range(kernel_shape_)) {
             const Duo input_pos = input_base + kernel_pos;
             const double input_val = padded_input.get(in_ch, input_pos[0], input_pos[1]);
-            const double weight_val = weight_.get(out_ch, in_ch, kernel_pos[0], kernel_pos[1]) * weight_scale;
+            const double weight_val =
+                weight_.get(out_ch, in_ch - in_ch_start, kernel_pos[0], kernel_pos[1]) * weight_scale;
 
             sum += input_val * weight_val;
         }
