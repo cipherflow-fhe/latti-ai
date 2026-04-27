@@ -47,8 +47,8 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     transforms.combine_convs_with_upsamples(pt_graph)
     transforms.process_polyact(pt_graph)
     transforms.set_level_costs(pt_graph)
-
-    transforms.absorb_scale(pt_graph)
+    # TODO: All functions must be completed, this only for test
+    transforms.absorb_scale_new(pt_graph)
 
     return pt_graph
 

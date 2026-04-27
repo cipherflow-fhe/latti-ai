@@ -846,6 +846,50 @@ def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
     return graph
 
 
+def absorb_scale_new(graph: LayerAbstractGraph):
+    layers_to_absorb = ['avgpool1d', 'avgpool2d', 'mult_coeff']
+    new_dict = dict()
+    for node in list(graph.dag.nodes):
+        if isinstance(node, ComputeNode):
+            if node.layer_type in layers_to_absorb:
+                pre_f_node = list(graph.dag.predecessors(node))[0]
+                pre_c_node = list(graph.dag.predecessors(pre_f_node))[0]
+                _propagate_scale(graph.dag, pre_f_node, pre_c_node, Direction.UP, 0.5, new_dict)
+
+    # _propagate_scale(graph.dag)
+    _remove_identity_mult_scalars(graph)
+
+
+def _remove_identity_mult_scalars(graph: LayerAbstractGraph):
+    """Remove mult_scalar nodes whose scale == 1.0 (identity, no-op).
+
+    For each such node the topology is:
+        feat_in → mult_scalar → feat_out → next_compute
+    After removal:
+        feat_in → next_compute  (with the original edge attributes from feat_out→next_compute)
+    """
+    for node in list(graph.dag.nodes):
+        if not isinstance(node, ComputeNode):
+            continue
+        if node.layer_type != 'mult_scalar':
+            continue
+        if node.scale != 1.0:
+            continue
+        if node not in graph.dag.nodes:
+            continue
+
+        feat_in = list(graph.dag.predecessors(node))[0]
+        feat_out = list(graph.dag.successors(node))[0]
+        next_nodes = list(graph.dag.successors(feat_out))
+
+        for next_node in next_nodes:
+            edge_attrs = dict(graph.dag.edges[feat_out, next_node])
+            graph.dag.add_edge(feat_in, next_node, **edge_attrs)
+
+        graph.dag.remove_node(node)
+        graph.dag.remove_node(feat_out)
+
+
 def miniprocess(graph: LayerAbstractGraph, p: ComputeNode, res_list: list, polyact_id, approve_len: bool = False):
     value_list: list[FeatureNode] = list(graph.dag.predecessors(p))
     for value in value_list:
@@ -869,6 +913,154 @@ def miniprocess(graph: LayerAbstractGraph, p: ComputeNode, res_list: list, polya
         else:
             # Single non-conv/fc predecessor — recurse
             miniprocess(graph, c_value, res_list, polyact_id)
+
+
+def _absorb_at_loop(dag: nx.DiGraph, cur_node, next_node, scale: float, absorbed: dict):
+    """Called when next_node is already on the call stack (loop detected).
+    Inserts a mult_scalar between cur_node and next_node to absorb the scale in place.
+    """
+    if isinstance(next_node, ComputeNode):
+        feature_node, compute_node = cur_node, next_node
+    else:
+        feature_node, compute_node = next_node, cur_node
+    graph_wrapper = LayerAbstractGraph()
+    graph_wrapper.dag = dag
+    mult_scalar = add_mult_scalar_between_feature_and_layer(graph_wrapper, feature_node, compute_node)
+    absorbed[mult_scalar] = absorbed.get(mult_scalar, 1.0) * scale
+    mult_scalar.scale *= scale
+
+
+def _call_or_absorb(dag, cur_node, next_node, direction, scale, absorbed, stack):
+    """Check next_node against the call stack before recursing.
+    If next_node is already on the stack, a loop would form — absorb instead.
+    """
+    if id(next_node) in stack:
+        _absorb_at_loop(dag, cur_node, next_node, scale, absorbed)
+    else:
+        _propagate_scale(dag, cur_node, next_node, direction, scale, absorbed, stack)
+
+
+def _propagate_scale(
+    dag: nx.DiGraph,
+    old_node,
+    node,
+    direction: Direction,
+    scale: float,
+    absorbed: dict,
+    stack: set = None,
+):
+    """Recursively propagate a scale factor through the DAG.
+
+    Args:
+        dag: the computation graph
+        old_node: the node we came from (used to exclude it when fanning out)
+        node: the current node being visited
+        direction: Direction.DOWN means we arrived from above, Direction.UP from below
+        scale: the scale factor to propagate
+        absorbed: mapping of ComputeNode -> scale, records where scale was absorbed
+        stack: set of id(node) currently on the call stack, used to detect loops
+    """
+    if stack is None:
+        stack = set()
+    stack.add(id(node))
+    # try/finally ensures stack.discard is always executed regardless of how the
+    # function returns (early return or exception), keeping push/pop strictly paired.
+    try:
+        if isinstance(node, FeatureNode):
+            if direction == Direction.DOWN:
+                # Arrived from above — fan out downward to all successors
+                for node_in in list(dag.successors(node)):
+                    _call_or_absorb(dag, node, node_in, Direction.DOWN, scale, absorbed, stack)
+            else:
+                # Arrived from below — propagate upward (in-degree must be 1) and
+                # fan out to all sibling successors with 1/scale to compensate
+                preds = list(dag.predecessors(node))
+                if not preds:
+                    # Graph input node — insert mult_scalar between node and old_node as absorption point
+                    if isinstance(old_node, ComputeNode):
+                        graph_wrapper = LayerAbstractGraph()
+                        graph_wrapper.dag = dag
+                        mult_scalar = add_mult_scalar_between_feature_and_layer(graph_wrapper, node, old_node)
+                        absorbed[mult_scalar] = absorbed.get(mult_scalar, 1.0) * scale
+                        mult_scalar.scale *= scale
+                    return
+                succs = list(dag.successors(node))
+                _call_or_absorb(dag, node, preds[0], Direction.UP, scale, absorbed, stack)
+                for node_in in succs:
+                    if node_in is old_node:
+                        continue
+                    _call_or_absorb(dag, node, node_in, Direction.DOWN, 1.0 / scale, absorbed, stack)
+        else:
+            # ComputeNode
+            if node.layer_type in config.absorbable_layers:
+                # This node can absorb the scale — record and stop
+                absorbed[node] = absorbed.get(node, 1.0) * scale
+                node.scale = node.scale * scale
+                return
+            if direction == Direction.DOWN:
+                # Arrived from above — propagate downward (single successor) and
+                # propagate to sibling predecessors with 1/scale
+                preds = list(dag.predecessors(node))
+                succs = list(dag.successors(node))
+                _call_or_absorb(dag, node, succs[0], Direction.DOWN, scale, absorbed, stack)
+                for node_in in preds:
+                    if node_in is old_node:
+                        continue
+                    _call_or_absorb(dag, node, node_in, Direction.UP, 1.0 / scale, absorbed, stack)
+            else:
+                # Arrived from below — fan upward to all predecessors.
+                #
+                # Each input arm is identified by the input_index edge attribute,
+                # which is preserved across insertions by _insert_layer_between_feature_and_compute.
+                # We explore each arm exactly once:
+                #   - Before each arm we look up the *current* predecessor that carries
+                #     that arm's input_index (it may have changed to an M_out node if a
+                #     previous arm's exploration inserted a mult_scalar via _absorb_at_loop).
+                #   - Once an arm is marked done, it is never re-entered even if a new
+                #     node was inserted into it during that arm's own exploration (barrier
+                #     or non-loop insertion case).
+                preds = list(dag.predecessors(node))
+                if len(preds) > 1:
+                    arm_indices = sorted({dag.edges[p, node].get('input_index') for p in preds})
+                    explored_arms = set()
+                    for idx in arm_indices:
+                        if idx in explored_arms:
+                            continue
+                        explored_arms.add(idx)
+                        current_pred = next(
+                            (p for p in dag.predecessors(node) if dag.edges[p, node].get('input_index') == idx),
+                            None,
+                        )
+                        if current_pred is None:
+                            continue
+                        _call_or_absorb(dag, node, current_pred, Direction.UP, scale, absorbed, stack)
+                else:
+                    for node_in in preds:
+                        _call_or_absorb(dag, node, node_in, Direction.UP, scale, absorbed, stack)
+    finally:
+        stack.discard(id(node))
+
+
+def propagate_scale_from_node(
+    dag: nx.DiGraph,
+    start_node,
+    scale: float,
+    direction: Direction = Direction.DOWN,
+) -> dict:
+    """Propagate a scale factor starting from *start_node*.
+
+    Args:
+        dag: the computation graph
+        start_node: the node to start propagation from
+        scale: the scale factor to propagate
+        direction: initial direction of propagation
+
+    Returns:
+        absorbed: dict mapping ComputeNode -> accumulated scale absorbed there
+    """
+    absorbed: dict = {}
+    _propagate_scale(dag, None, start_node, direction, scale, absorbed)
+    return absorbed
 
 
 def process_polyact(graph: LayerAbstractGraph) -> list:

@@ -486,10 +486,364 @@ add_time = {
     8192: {0: 0.000081, 1: 0.000094, 2: 0.000176, 3: 0.000208, 4: 0.000224, 5: 0.000241},
 }
 
+gpu_mult_plain_time = {
+    65536: {
+        1: 0.0000051,
+        2: 0.0000055,
+        3: 0.0000062,
+        4: 0.0000065,
+        5: 0.0000072,
+        6: 0.0000076,
+        7: 0.0000082,
+        8: 0.0000088,
+        9: 0.0000093,
+        10: 0.0000100,
+        11: 0.0000106,
+        12: 0.0000111,
+        13: 0.0000113,
+        14: 0.0000121,
+        15: 0.0000127,
+        16: 0.0000133,
+        17: 0.0000138,
+        18: 0.0000152,
+        19: 0.0000154,
+        20: 0.0000162,
+        21: 0.0000171,
+        22: 0.0000195,
+        23: 0.0000223,
+        24: 0.0000263,
+        25: 0.0000317,
+        26: 0.0000365,
+        27: 0.0000424,
+        28: 0.0000474,
+        29: 0.0000495,
+        30: 0.0000527,
+        31: 0.0000551,
+        32: 0.0000248,
+        33: 0.0000326,
+    },
+    32768: {
+        1: 0.0000039,
+        2: 0.0000039,
+        3: 0.0000043,
+        4: 0.0000048,
+        5: 0.0000047,
+        6: 0.0000050,
+        7: 0.0000051,
+        8: 0.0000052,
+        9: 0.0000053,
+        10: 0.0000059,
+        11: 0.0000061,
+        12: 0.0000066,
+        13: 0.0000065,
+        14: 0.0000069,
+        15: 0.0000071,
+        16: 0.0000075,
+        17: 0.0000077,
+    },
+    16384: {
+        1: 0.0000031,
+        2: 0.0000031,
+        3: 0.0000035,
+        4: 0.0000034,
+        5: 0.0000041,
+        6: 0.0000041,
+        7: 0.0000041,
+        8: 0.0000042,
+        9: 0.0000043,
+    },
+    8192: {1: 0.0000031, 2: 0.0000031, 3: 0.0000033, 4: 0.0000035, 5: 0.0000037},
+}
+
+gpu_mult_time = {
+    65536: {
+        1: 0.0000072,
+        2: 0.0000082,
+        3: 0.0000108,
+        4: 0.0000131,
+        5: 0.0000143,
+        6: 0.0000162,
+        7: 0.0000179,
+        8: 0.0000193,
+        9: 0.0000213,
+        10: 0.0000229,
+        11: 0.0000247,
+        12: 0.0000268,
+        13: 0.0000277,
+        14: 0.0000293,
+        15: 0.0000314,
+        16: 0.0000332,
+        17: 0.0000375,
+        18: 0.0000416,
+        19: 0.0000493,
+        20: 0.0000579,
+        21: 0.0000659,
+        22: 0.0000576,
+        23: 0.0000647,
+        24: 0.0000706,
+        25: 0.0000810,
+        26: 0.0000893,
+        27: 0.0000954,
+        28: 0.0001006,
+        29: 0.0001075,
+        30: 0.0001137,
+        31: 0.0001200,
+        32: 0.0000946,
+        33: 0.0001123,
+    },
+    32768: {
+        1: 0.0000038,
+        2: 0.0000042,
+        3: 0.0000046,
+        4: 0.0000050,
+        5: 0.0000054,
+        6: 0.0000056,
+        7: 0.0000060,
+        8: 0.0000064,
+        9: 0.0000067,
+        10: 0.0000072,
+        11: 0.0000073,
+        12: 0.0000078,
+        13: 0.0000080,
+        14: 0.0000083,
+        15: 0.0000086,
+        16: 0.0000092,
+        17: 0.0000093,
+    },
+    16384: {
+        1: 0.0000053,
+        2: 0.0000046,
+        3: 0.0000041,
+        4: 0.0000042,
+        5: 0.0000045,
+        6: 0.0000045,
+        7: 0.0000043,
+        8: 0.0000050,
+        9: 0.0000052,
+    },
+    8192: {1: 0.0000037, 2: 0.0000036, 3: 0.0000040, 4: 0.0000043, 5: 0.0000045},
+}
+
+gpu_rotate_time = {
+    65536: {
+        0: 0.0000871,
+        1: 0.0000942,
+        2: 0.0001345,
+        3: 0.0001812,
+        4: 0.0002347,
+        5: 0.0003034,
+        6: 0.0003763,
+        7: 0.0004642,
+        8: 0.0005788,
+        9: 0.0007135,
+        10: 0.0008473,
+        11: 0.0009814,
+        12: 0.0011337,
+        13: 0.0013370,
+        14: 0.0015183,
+        15: 0.0017012,
+        16: 0.0018898,
+        17: 0.0020903,
+        18: 0.0022992,
+        19: 0.0025176,
+        20: 0.0027439,
+        21: 0.0029897,
+        22: 0.0032389,
+        23: 0.0035041,
+        24: 0.0037668,
+        25: 0.0040496,
+        26: 0.0043613,
+        27: 0.0046668,
+        28: 0.0049830,
+        29: 0.0052905,
+        30: 0.0056395,
+        31: 0.0059822,
+        32: 0.0063218,
+        33: 0.0064503,
+    },
+    32768: {
+        0: 0.0000494,
+        1: 0.0000504,
+        2: 0.0000643,
+        3: 0.0000789,
+        4: 0.0001004,
+        5: 0.0001280,
+        6: 0.0001648,
+        7: 0.0002043,
+        8: 0.0002469,
+        9: 0.0002921,
+        10: 0.0003423,
+        11: 0.0004020,
+        12: 0.0004818,
+        13: 0.0005722,
+        14: 0.0006608,
+        15: 0.0007510,
+        16: 0.0008395,
+        17: 0.0008461,
+    },
+    16384: {
+        0: 0.0000453,
+        1: 0.0000477,
+        2: 0.0000500,
+        3: 0.0000527,
+        4: 0.0000601,
+        5: 0.0000734,
+        6: 0.0000844,
+        7: 0.0000941,
+        8: 0.0001089,
+        9: 0.0001104,
+    },
+    8192: {0: 0.0000355, 1: 0.0000385, 2: 0.0000395, 3: 0.0000442, 4: 0.0000475, 5: 0.0000511},
+}
+
+gpu_rescale_time = {
+    8192: {1: 0.0000213, 2: 0.0000213, 3: 0.0000209, 4: 0.0000230, 5: 0.0000261},
+    16384: {
+        1: 0.0000258,
+        2: 0.0000245,
+        3: 0.0000232,
+        4: 0.0000226,
+        5: 0.0000230,
+        6: 0.0000250,
+        7: 0.0000265,
+        8: 0.0000277,
+        9: 0.0000280,
+    },
+    32768: {
+        1: 0.0000210,
+        2: 0.0000233,
+        3: 0.0000256,
+        4: 0.0000277,
+        5: 0.0000302,
+        6: 0.0000328,
+        7: 0.0000363,
+        8: 0.0000388,
+        9: 0.0000409,
+        10: 0.0000426,
+        11: 0.0000448,
+        12: 0.0000474,
+        13: 0.0000505,
+        14: 0.0000533,
+        15: 0.0000559,
+        16: 0.0000583,
+        17: 0.0000596,
+    },
+    65536: {
+        1: 0.0000304,
+        2: 0.0000352,
+        3: 0.0000409,
+        4: 0.0000474,
+        5: 0.0000527,
+        6: 0.0000579,
+        7: 0.0000652,
+        8: 0.0000702,
+        9: 0.0000750,
+        10: 0.0000821,
+        11: 0.0000872,
+        12: 0.0000928,
+        13: 0.0000996,
+        14: 0.0001046,
+        15: 0.0001103,
+        16: 0.0001169,
+        17: 0.0001236,
+        18: 0.0001304,
+        19: 0.0001356,
+        20: 0.0001415,
+        21: 0.0001486,
+        22: 0.0001541,
+        23: 0.0001587,
+        24: 0.0001662,
+        25: 0.0001770,
+        26: 0.0001877,
+        27: 0.0002026,
+        28: 0.0002229,
+        29: 0.0002483,
+        30: 0.0002618,
+        31: 0.0002829,
+        32: 0.0002632,
+        33: 0.0002815,
+    },
+}
+
+gpu_add_time = {
+    65536: {
+        0: 0.0000059,
+        1: 0.0000066,
+        2: 0.0000079,
+        3: 0.0000101,
+        4: 0.0000123,
+        5: 0.0000137,
+        6: 0.0000157,
+        7: 0.0000172,
+        8: 0.0000186,
+        9: 0.0000204,
+        10: 0.0000222,
+        11: 0.0000245,
+        12: 0.0000267,
+        13: 0.0000281,
+        14: 0.0000288,
+        15: 0.0000309,
+        16: 0.0000331,
+        17: 0.0000360,
+        18: 0.0000388,
+        19: 0.0000412,
+        20: 0.0000438,
+        21: 0.0000488,
+        22: 0.0000528,
+        23: 0.0000585,
+        24: 0.0000623,
+        25: 0.0000664,
+        26: 0.0000698,
+        27: 0.0000736,
+        28: 0.0000769,
+        29: 0.0000807,
+        30: 0.0000841,
+        31: 0.0000883,
+        32: 0.0000775,
+        33: 0.0000811,
+    },
+    32768: {
+        0: 0.0000031,
+        1: 0.0000035,
+        2: 0.0000040,
+        3: 0.0000041,
+        4: 0.0000043,
+        5: 0.0000045,
+        6: 0.0000048,
+        7: 0.0000051,
+        8: 0.0000058,
+        9: 0.0000057,
+        10: 0.0000059,
+        11: 0.0000060,
+        12: 0.0000064,
+        13: 0.0000064,
+        14: 0.0000068,
+        15: 0.0000071,
+        16: 0.0000074,
+        17: 0.0000078,
+    },
+    16384: {
+        0: 0.0000051,
+        1: 0.0000054,
+        2: 0.0000047,
+        3: 0.0000036,
+        4: 0.0000040,
+        5: 0.0000040,
+        6: 0.0000038,
+        7: 0.0000041,
+        8: 0.0000044,
+        9: 0.0000049,
+    },
+    8192: {0: 0.0000032, 1: 0.0000036, 2: 0.0000040, 3: 0.0000033, 4: 0.0000038, 5: 0.0000041},
+}
+
 btp_time = {'8192': 7, '16384': 12, '65536': 24}
+gpu_btp_time = {'65536': 0.65}
 
 mpc_refresh_rate = 1 / 15
 ct_trans_rate = 1 / 10
+
+acc_rate = 0.7
 
 
 class FheScoreParam:
@@ -498,7 +852,6 @@ class FheScoreParam:
         succs: list[FeatureNode] = list(dag.successors(compute_node))
 
         self.dag = dag
-        self.acc_rate = 1
         self.compute_node = compute_node
         self.input_mult_level = dag.nodes[preds[0]]['level']
         self.output_mult_level = dag.nodes[succs[0]]['level']
@@ -539,7 +892,7 @@ class FheScoreParam:
         self.rotate_score = rotate_time[self.input_degree][level]
         self.add_score = add_time[self.input_degree][level]
 
-    def get_score(self) -> float:
+    def get_score(self, use_gpu: bool = True) -> float:
         """Compute layer latency score by instantiating the exact inference layer class,
         calling get_fhe_op_count() to get primitive op counts, then multiplying by per-op
         timing constants.
@@ -550,6 +903,23 @@ class FheScoreParam:
         n = self.input_degree  # poly_modulus_degree = 2*N_slots
         layer_type = self.compute_node.layer_type
         style = config.style
+        lv = self.input_mult_level
+
+        if use_gpu:
+            _rotate_time = gpu_rotate_time
+            _mult_plain_time = gpu_mult_plain_time
+            _mult_time = gpu_mult_time
+            _add_time = gpu_add_time
+            _rescale_time = gpu_rescale_time
+        else:
+            _rotate_time = rotate_time
+            _mult_plain_time = mult_plain_time
+            _mult_time = mult_time
+            _add_time = add_time
+            _rescale_time = rescale_time
+
+        def _lookup(table, level):
+            return table[n].get(level, 0)
 
         op_counts = self._build_layer_and_get_op_count(preds, n, layer_type, style)
         # op_counts may be a flat dict {str: int} (single level) or a level-grouped
@@ -557,11 +927,11 @@ class FheScoreParam:
         if op_counts and isinstance(next(iter(op_counts)), int):
             score = 0.0
             for lv, ops in op_counts.items():
-                r_score = rotate_time[self.input_degree][lv]
-                mp_score = mult_plain_time[self.input_degree][lv] if lv > 0 else 0
-                m_score = mult_time[self.input_degree][lv] if lv > 0 else 0
-                a_score = add_time[self.input_degree][lv]
-                rs_score = rescale_time[self.input_degree][lv] if lv > 0 else 0
+                r_score = _lookup(_rotate_time, lv)
+                mp_score = _lookup(_mult_plain_time, lv) if lv > 0 else 0
+                m_score = _lookup(_mult_time, lv) if lv > 0 else 0
+                a_score = _lookup(_add_time, lv)
+                rs_score = _lookup(_rescale_time, lv) if lv > 0 else 0
                 score += (
                     ops['rotate'] * r_score
                     + ops['mult_plain'] * mp_score
@@ -570,14 +940,19 @@ class FheScoreParam:
                     + ops['rescale'] * rs_score
                 )
         else:
+            r_score = _lookup(_rotate_time, lv)
+            mp_score = _lookup(_mult_plain_time, lv) if lv > 0 else 0
+            m_score = _lookup(_mult_time, lv) if lv > 0 else 0
+            a_score = _lookup(_add_time, lv)
+            rs_score = _lookup(_rescale_time, lv) if lv > 0 else 0
             score = (
-                op_counts['rotate'] * self.rotate_score
-                + op_counts['mult_plain'] * self.mult_plain_score
-                + op_counts['mult'] * self.mult_score
-                + op_counts['add'] * self.add_score
-                + op_counts['rescale'] * self.rescale_score
+                op_counts['rotate'] * r_score
+                + op_counts['mult_plain'] * mp_score
+                + op_counts['mult'] * m_score
+                + op_counts['add'] * a_score
+                + op_counts['rescale'] * rs_score
             )
-        return score * self.acc_rate
+        return score * acc_rate
 
     def _build_layer_and_get_op_count(self, preds, n, layer_type, style):
         """Instantiate the matching inference layer and return its get_fhe_op_count() dict.
@@ -981,6 +1356,10 @@ class BtpScoreParam:
         pack_num = graph.dag.nodes[pred]['pack_num']
         self.ct_num = math.ceil(compute_node.channel_input / pack_num)
 
-    def get_score(self):
-        score = self.ct_num * btp_time[str(self.n)] / get_multithread_rate_for_btp(self.ct_num)
+    def get_score(self, use_gpu=True):
+        if use_gpu:
+            _btp_time = gpu_btp_time[str(self.n)]
+        else:
+            _btp_time = btp_time[str(self.n)]
+        score = (self.ct_num * _btp_time) * acc_rate
         return score

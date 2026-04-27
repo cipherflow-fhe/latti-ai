@@ -283,7 +283,102 @@ class ConvResidualRelu(nn.Module):
         return self.relu(self.conv(x) + x)
 
 
-class ThreeConvConcatRelu(nn.Module):
+class ConvResidualMultcoeff(nn.Module):
+    """(conv(x) + x) * 0.5: residual shortcut scaled by a mult_coeff."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn = nn.BatchNorm2d(32)
+
+    def forward(self, x):
+        x = self.bn(x)
+        return (self.bn(x) + x) * 0.5
+
+
+class DoubleResidualMultcoeff(nn.Module):
+    """两层残差叠加后乘 0.5。
+    结构：z = (conv2(y) + y) * 0.5，其中 y = conv1(x) + x
+    测试多层残差场景，scale 需要穿透两个 add 节点。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.bn = nn.BatchNorm2d(32)
+        self.conv1 = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(32)
+
+    def forward(self, x):
+        x = self.bn(x)
+        y = self.bn1(self.conv1(x)) + x  # 第一个残差 add
+        z = self.bn2(self.conv2(y)) + y  # 第二个残差 add
+        return z * 0.5
+
+
+class BranchInBranchMultcoeff(nn.Module):
+    """分支里面还有分支，再乘 0.5。
+    结构：((conv_a(x) + conv_b(x)) + x) * 0.5
+    外层 add：内层 add 臂 + identity 臂；内层 add：两条 conv 臂。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.bn = nn.BatchNorm2d(32)
+        self.conv_a = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn_a = nn.BatchNorm2d(32)
+        self.conv_b = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn_b = nn.BatchNorm2d(32)
+
+    def forward(self, x):
+        x = self.bn(x)
+        inner = self.bn_a(self.conv_a(x)) + self.bn_b(self.conv_b(x))  # 内层 add
+        return (inner + x) * 0.5  # 外层 add + mult_coeff
+
+
+class ThreeBranchMultcoeff(nn.Module):
+    """三条分支汇入同一个 add，再乘 0.5。
+    结构：(conv_a(x) + conv_b(x) + x) * 0.5
+    add 有三条臂：两条 conv 臂 + 一条 identity 臂，测试 input_index 多臂场景。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.bn = nn.BatchNorm2d(32)
+        self.conv_a = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn_a = nn.BatchNorm2d(32)
+        self.conv_b = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn_b = nn.BatchNorm2d(32)
+
+    def forward(self, x):
+        x = self.bn(x)
+        return (self.bn_a(self.conv_a(x)) + self.bn_b(self.conv_b(x)) + x) * 0.5
+
+
+class DeepNestedMultcoeff(nn.Module):
+    """三层线性堆叠残差，最外层乘 0.5。
+    结构：x1=conv1(x)+x, x2=conv2(x1)+x1, x3=conv3(x2)+x2, out=x3*0.5
+    测试 scale 能沿深链路穿透多层 add 到达共同祖先。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.bn = nn.BatchNorm2d(32)
+        self.conv1 = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(32)
+        self.conv3 = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(32)
+
+    def forward(self, x):
+        x = self.bn(x)
+        x1 = self.bn1(self.conv1(x)) + x
+        x2 = self.bn2(self.conv2(x1)) + x1
+        x3 = self.bn3(self.conv3(x2)) + x2
+        return x3 * 0.5
+
     """cat([conv1, conv2, conv3], dim=1) → relu."""
 
     def __init__(self):

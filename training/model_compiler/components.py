@@ -374,6 +374,7 @@ class ComputeNode:
         self.weight_scale_list = [1, 1, 1, 1, 1]
         self.path = ''
         self.poly_path = ''
+        self.scale = 1
 
     def __repr__(self) -> str:
         return f'ComputeNode: {self.layer_id}'

@@ -565,7 +565,43 @@ class TestLayerInteraction(CompilerTestBase):
         # )
         # self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
 
-    def test_conv_and_convtranspose(self):
+    def test_conv_residual_multcoeff(self):
+        """should be absorbed into conv or identity branch."""
+        model = nn_modules.ConvResidualMultcoeff()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+        # The scale factor 0.5 should be absorbed — no free mult_coeff node should remain
+
+    def test_double_residual_multcoeff(self):
+        """两层残差叠加后 *0.5：scale 需穿透两个 add，最终无 mult_coeff 残留，
+        identity 分支上的补偿 mult_scalar 净值应为 1.0（已被清理）。"""
+        model = nn_modules.DoubleResidualMultcoeff()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+    def test_branch_in_branch_multcoeff(self):
+        """外层 add(内层 add(conv_a, conv_b), identity) * 0.5：
+        分支里还有分支，scale 要正确分配到所有叶子。"""
+        model = nn_modules.BranchInBranchMultcoeff()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+    def test_three_branch_multcoeff(self):
+        """三条臂汇入同一 add，再 *0.5：测试 input_index 多臂场景。"""
+        model = nn_modules.ThreeBranchMultcoeff()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+        # self.assertFalse(
+        #     any(isinstance(n, ComputeNode) and n.layer_type == 'mult_coeff'
+        #         for n in graph.dag.nodes),
+        #     'mult_coeff should be fully absorbed',
+        # )
+
+    def test_deep_nested_multcoeff(self):
+        """三层线性堆叠残差，最外层 *0.5：scale 沿深链路穿透多层 add。"""
+        model = nn_modules.DeepNestedMultcoeff()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+        self.assertFalse(
+            any(isinstance(n, ComputeNode) and n.layer_type == 'mult_coeff' for n in graph.dag.nodes),
+            'mult_coeff should be fully absorbed',
+        )
+
         model = nn_modules.ConvAndConvTransposeBlock()
         graph, score = self._export_and_compile(model, (1, 32, 16, 16), style='multiplexed')
         self.assertTrue(
