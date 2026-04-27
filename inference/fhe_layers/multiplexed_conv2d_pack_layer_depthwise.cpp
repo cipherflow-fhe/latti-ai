@@ -80,26 +80,8 @@ void MultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
 }
 
 void MultiplexedConv2DPackedLayerDepthwise::prepare_weight_lazy() {
-    const Duo padding_shape = kernel_shape_ / 2;
     const Duo input_shape_ct = input_shape_ * skip_;
     kernel_masks_.clear();
-
-    for (const Duo& kernel_pos : duo_range(kernel_shape_)) {
-        vector<double> mask;
-        mask.reserve(prod(input_shape_ct));
-        for (const Duo& input_pos : duo_range(input_shape_ct)) {
-            const int64_t shifted_i = static_cast<int64_t>(kernel_pos[0] * skip_[0] + input_pos[0]) -
-                                      static_cast<int64_t>(padding_shape[0] * skip_[0]);
-            const int64_t shifted_j = static_cast<int64_t>(kernel_pos[1] * skip_[1] + input_pos[1]) -
-                                      static_cast<int64_t>(padding_shape[1] * skip_[1]);
-            if (0 <= shifted_i && shifted_i < input_shape_ct[0] && 0 <= shifted_j && shifted_j < input_shape_ct[1]) {
-                mask.push_back(1.0);
-            } else {
-                mask.push_back(0.0);
-            }
-        }
-        kernel_masks_.push_back(move(mask));
-    }
 
     input_rotate_units_.clear();
     input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
@@ -161,7 +143,7 @@ vector<double> MultiplexedConv2DPackedLayerDepthwise::select_tensor(int num) con
 CkksPlaintextRingt MultiplexedConv2DPackedLayerDepthwise::generate_weight_pt_for_indices(CkksContext& ctx,
                                                                                          int n_packed_out_channel_idx,
                                                                                          int kernel_idx) const {
-    auto& mask = kernel_masks_[kernel_idx];
+    const Duo padding_shape = kernel_shape_ / 2;
     const Duo kernel_pos = div_mod(static_cast<uint32_t>(kernel_idx), kernel_shape_[1]);
 
     vector<double> w(n_block_per_ct * cached_input_block_size, 0.0);
@@ -170,15 +152,22 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayerDepthwise::generate_weight_pt_for
         const Duo block_pos = div_mod(linear_idx, cached_input_block_size);
         const Duo input_pos = div_mod(block_pos[1], cached_input_shape_ct[1]);
 
+        // Inline boundary check (replaces pre-computed kernel_masks_)
+        int64_t shifted_i = (int64_t)(kernel_pos[0] * skip_[0] + input_pos[0]) - (int64_t)(padding_shape[0] * skip_[0]);
+        int64_t shifted_j = (int64_t)(kernel_pos[1] * skip_[1] + input_pos[1]) - (int64_t)(padding_shape[1] * skip_[1]);
+        if (shifted_i < 0 || shifted_i >= cached_input_shape_ct[0] || shifted_j < 0 ||
+            shifted_j >= cached_input_shape_ct[1]) {
+            continue;
+        }
+
         const uint32_t channel_in = 0;
         const uint32_t channel_out = static_cast<uint32_t>(n_packed_out_channel_idx) * n_channel_per_ct +
                                      block_pos[0] * cached_skip_prod +
                                      (skip_[0] * (input_pos[0] % skip_[0]) + input_pos[1] % skip_[0]);
 
-        w[linear_idx] = (channel_in >= n_in_channel_ || channel_out >= n_out_channel_) ?
-                            0 :
-                            weight_.get(channel_out, channel_in, kernel_pos[0], kernel_pos[1]) *
-                                mask[input_pos[0] * cached_input_shape_ct[1] + input_pos[1]];
+        if (channel_in < n_in_channel_ && channel_out < n_out_channel_) {
+            w[linear_idx] = weight_.get(channel_out, channel_in, kernel_pos[0], kernel_pos[1]);
+        }
     }
     return ctx.encode_ringt(w, weight_scale);
 }

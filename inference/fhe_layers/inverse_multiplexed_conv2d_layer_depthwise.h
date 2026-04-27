@@ -58,7 +58,6 @@ private:
     Duo input_step;
     DuoInt pad_;
     Duo ct_stride_;
-    std::vector<std::vector<double>> kernel_masks;
     std::vector<int32_t> input_rotate_steps;
     std::vector<int> input_rotate_units;
     std::vector<int> input_rotate_ranges;
