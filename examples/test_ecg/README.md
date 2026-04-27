@@ -63,7 +63,7 @@ If you need to execute the complete pipeline from scratch: **data preprocessing 
 #### 3.1 Plaintext Baseline Model Training
 
 ```
-python examples/my_ecg001/train.py \
+python examples/test_ecg/train.py \
   --model-name two_conv \
   --epochs 20 \
   --batch-size 32 \
@@ -71,27 +71,27 @@ python examples/my_ecg001/train.py \
   --num-workers 4 \
   --torch-num-threads 4 \
   --num-classes 2 \
-  --processed-dir ./examples/my_ecg001/processed_over_1to1 \
-  --output-dir ./examples/my_ecg001/runs/exp_over009/model \
+  --processed-dir ./examples/test_ecg/processed_over_1to1 \
+  --output-dir ./examples/test_ecg/runs/exp_over009/model \
   --input-shape 1 16 16
 ```
 
 #### 3.2 FHE Operator Replacement and Model Fine-tuning
 
 ```
-python examples/my_ecg001/train.py \
+python examples/test_ecg/train.py \
   --poly_model_convert \
   --model-name two_conv \
-  --pretrained ./examples/my_ecg001/runs/exp_over009/model/train_baseline.pth \
+  --pretrained ./examples/test_ecg/runs/exp_over009/model/train_baseline.pth \
   --epochs 3 \
   --batch-size 16 \
   --lr 0.0005 \
   --num-workers 4 \
   --torch-num-threads 4 \
   --num-classes 2 \
-  --processed-dir ./examples/my_ecg001/processed_over_1to1 \
-  --output-dir ./examples/my_ecg001/runs/exp_over009/model \
-  --export-dir ./examples/my_ecg001/runs/exp_over009/task/server \
+  --processed-dir ./examples/test_ecg/processed_over_1to1 \
+  --output-dir ./examples/test_ecg/runs/exp_over009/model \
+  --export-dir ./examples/test_ecg/runs/exp_over009/task/server \
   --input-shape 1 16 16 \
   --degree 4 \
   --upper-bound 3.0 \
@@ -102,30 +102,30 @@ python examples/my_ecg001/train.py \
 
 ```
 python training/run_compile.py \
-  --input ./examples/my_ecg001/runs/exp_over009/model/trained_poly.onnx \
-  --output ./examples/my_ecg001/runs/exp_over009 \
+  --input ./examples/test_ecg/runs/exp_over009/model/trained_poly.onnx \
+  --output ./examples/test_ecg/runs/exp_over009 \
   --style multiplexed
 ```
 
 #### 3.4 Generate Low-level FHE Execution Instructions
 
 ```
-python inference/interface/gen_mega_ag.py --task-dir ./examples/my_ecg001/runs/exp_over009/task
+python inference/interface/gen_mega_ag.py --task-dir ./examples/test_ecg/runs/exp_over009/task
 ```
 
 #### 3.5 Generate Batch Test Samples
 
 ```
-python examples/my_ecg001/prepare_ten_samples.py
+python examples/test_ecg/prepare_ten_samples.py
 ```
 
 **Parameter Configuration Description**
 
 |   Parameter Name   | Type |                        Default Value                         |                         Description                          |
 | :----------------: | :--: | :----------------------------------------------------------: | :----------------------------------------------------------: |
-| `--processed-dir`  | str  |          `./examples/my_ecg001/processed_over_1to1`          |          Directory path of the preprocessed dataset          |
-| `--baseline-ckpt`  | str  | `./examples/my_ecg001/runs/exp_over009/model/train_baseline.pth` |      File path of the plaintext baseline model weights       |
-|    `--task-dir`    | str  |         `./examples/my_ecg001/runs/exp_over009/task`         |             Root directory path of the FHE task              |
+| `--processed-dir`  | str  |          `./examples/test_ecg/processed_over_1to1`           |          Directory path of the preprocessed dataset          |
+| `--baseline-ckpt`  | str  | `./examples/test_ecg/runs/exp_over009/model/train_baseline.pth` |      File path of the plaintext baseline model weights       |
+|    `--task-dir`    | str  |         `./examples/test_ecg/runs/exp_over009/task`          |             Root directory path of the FHE task              |
 |   `--model-name`   | str  |                          `two_conv`                          | Model name (options: `tiny_cnn`/`tiny_cnn8`/`two_conv`/`mlp_head`) |
 | `--dataset-split`  | str  |                            `test`                            |  Dataset split for sample selection (options: `val`/`test`)  |
 |  `--normal-count`  | int  |                             `5`                              |             Number of normal samples to extract              |
@@ -135,7 +135,7 @@ python examples/my_ecg001/prepare_ten_samples.py
 #### 3.6 Execute Batch Encrypted Inference and Result Summary
 
 ```
-python examples/my_ecg001/run_batch_fhe.py
+python examples/test_ecg/run_batch_fhe.py
 ```
 
 **Parameter Configuration Description**

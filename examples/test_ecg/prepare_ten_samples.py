@@ -5,12 +5,21 @@ from pathlib import Path
 
 import numpy as np
 import torch
+"""
+Balanced Batch Sample Preparation Module.
+
+This module selects a balanced batch of ECG samples (default: 5 normal + 5 abnormal)
+from the validation or test set, exports them as individual CSV files for batch FHE inference,
+and generates baseline plaintext predictions for all samples. It produces a sample list
+(sample_list.json), plaintext prediction results (plaintext_predictions.json), and individual
+sample tensors for subsequent encrypted inference verification and consistency analysis.
+"""
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from my_ecg001.model import build_model
+from test_ecg.model import build_model
 
 CLASS_NAMES = ['normal', 'abnormal']
 

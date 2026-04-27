@@ -5,12 +5,19 @@ from pathlib import Path
 
 import numpy as np
 import torch
+"""
+Plaintext Sample Selection and Baseline Prediction Module.
 
+This module selects a single ECG sample from the validation set, exports it as a CSV file
+for FHE inference testing, and generates baseline plaintext predictions using the trained model.
+It produces metadata (sample_meta.json), baseline prediction results (baseline_plaintext.json),
+and the sample tensor for subsequent encrypted inference verification and comparison.
+"""
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from my_ecg001.model import build_model
+from test_ecg.model import build_model
 
 CLASS_NAMES = ['normal', 'abnormal']
 

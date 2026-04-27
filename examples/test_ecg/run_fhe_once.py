@@ -4,6 +4,15 @@ import argparse
 import subprocess
 from pathlib import Path
 
+"""
+Single Sample FHE Inference Execution Module.
+
+This module runs Fully Homomorphic Encryption (FHE) inference on a single ECG sample,
+executing the compiled FHE binary with verification mode enabled. It captures the complete
+output including encrypted/plaintext logits and verification details, saves the execution
+log to a file, and generates a summary JSON with command details and return code for
+debugging and validation purposes.
+"""
 
 def main():
     parser = argparse.ArgumentParser()

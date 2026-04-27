@@ -7,7 +7,14 @@ import wfdb
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
+"""
+ECG Data Preparation and Preprocessing Module.
 
+This module processes MIT-BIH Arrhythmia Database records to extract heartbeats,
+convert them to 2D representations, and split the dataset into training, validation,
+and test sets. It supports three variants: original data, undersampled (1:1 balanced),
+and oversampled (1:1 balanced) training sets for handling class imbalance.
+"""
 DATA_DIR = r'D:\Learn\python\PythonProject\MachineLearn\Latti-Ai\text2\mit-bih-arrhythmia-database-1.0.0'
 OUTPUT_ROOT = r'D:\Learn\python\PythonProject\MachineLearn\Latti-Ai\text2\my_ecg0'
 

@@ -1,6 +1,12 @@
 import numpy as np
 
+"""
+ECG Signal Data Augmentation Module.
 
+This module provides data augmentation techniques for ECG (Electrocardiogram) signals,
+including Gaussian noise injection, amplitude scaling, baseline shifting, and signal clipping.
+These augmentations help improve model robustness and generalization during training.
+"""
 class ECGAugment:
     def __init__(
         self,

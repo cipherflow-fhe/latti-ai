@@ -10,7 +10,18 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# ==========添加项目根目录到sys.path==========
+"""
+ECG Model Training and Export Module.
+
+This module implements the complete training pipeline for ECG classification models,
+including baseline training and FHE-compatible polynomial model conversion. It supports
+training with class-weighted cross-entropy loss, automatic best model checkpointing,
+and export to ONNX and H5 formats for FHE deployment. The polynomial activation replacement
+enables privacy-preserving inference using Fully Homomorphic Encryption while maintaining
+classification accuracy.
+"""
+
+#  Add project root directory to sys.path
 FILE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = FILE_ROOT.parent
 

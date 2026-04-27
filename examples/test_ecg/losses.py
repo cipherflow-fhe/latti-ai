@@ -2,7 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+"""
+Loss Functions Module for ECG Classification.
 
+This module implements custom loss functions including Focal Loss for handling class imbalance,
+and provides a factory function to build different loss types (CrossEntropy, Weighted CrossEntropy,
+Focal Loss) based on configuration parameters.
+"""
 class FocalLoss(nn.Module):
     def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
         super().__init__()

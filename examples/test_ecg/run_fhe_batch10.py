@@ -8,14 +8,25 @@ from pathlib import Path
 import numpy as np
 from sklearn.metrics import accuracy_score, confusion_matrix, precision_recall_fscore_support, classification_report
 
+"""
+FHE Batch Inference and Evaluation Module.
+
+This module executes Fully Homomorphic Encryption (FHE) inference on a batch of ECG samples,
+parses encrypted and plaintext verification results from the FHE binary output, and performs
+comprehensive evaluation comparing FHE predictions with baseline plaintext predictions. It calculates
+classification metrics (accuracy, confusion matrix, precision, recall, F1-score) for both modes
+and measures prediction consistency between encrypted and plaintext inference, providing detailed
+analysis for validating FHE-based privacy-preserving ECG classification.
+"""
+
 CLASS_NAMES = ['normal', 'abnormal']
 
 
 def parse_vector_from_verification_table(text: str, field_name: str):
     """
-    从 Verification 表格中解析向量。
-    field_name: 'Encrypted' 或 'Plaintext'
-    返回: list[float]
+      Parse vector from Verification table.
+      field_name: 'Encrypted' or 'Plaintext'
+      Returns: list[float]
     """
     lines = text.splitlines()
     values = {}

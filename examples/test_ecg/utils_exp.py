@@ -7,6 +7,15 @@ from pathlib import Path
 import numpy as np
 import torch
 
+"""
+Experimental Utility Functions Module.
+
+This module provides common utility functions for ECG classification experiments,
+including random seed management, directory/file operations (JSON, CSV), early stopping
+mechanism, model checkpoint save/load, and class weight computation for handling
+imbalanced datasets. These utilities support reproducible training and efficient
+experiment management across the ECG-FHE pipeline.
+"""
 
 def set_seed(seed=42):
     random.seed(seed)
