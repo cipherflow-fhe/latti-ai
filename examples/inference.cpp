@@ -103,7 +103,7 @@ int main(int argc, char* argv[]) {
 
     // --- Server side: load model and run encrypted inference ---
     cout << "[Step 3/5] Server loading model and importing context..." << endl;
-    InferenceServer server(task_dir + "/server", use_gpu);
+    InferenceServer server(task_dir + "/server", use_gpu, 1);
     server.import_eval_context(eval_ctx);
     server.load_model();
 
