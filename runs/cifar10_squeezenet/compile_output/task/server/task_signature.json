@@ -1,0 +1,1914 @@
+{
+    "algorithm": "CKKS",
+    "key": {
+        "rlk": 24,
+        "glk": {
+            "5": 24,
+            "25": 24,
+            "625": 24,
+            "52429": 9,
+            "128481": 24,
+            "89129": 9,
+            "28609": 24,
+            "97937": 24,
+            "61313": 24,
+            "69153": 24,
+            "125": 24,
+            "3125": 24,
+            "15625": 24,
+            "78125": 24,
+            "60833": 24,
+            "7937": 24,
+            "102017": 24,
+            "81409": 24,
+            "77185": 24,
+            "89345": 24,
+            "117889": 24,
+            "31745": 24,
+            "113153": 24,
+            "63489": 24,
+            "95233": 24,
+            "126977": 24,
+            "59393": 24,
+            "122881": 24,
+            "118785": 24,
+            "114689": 24,
+            "106497": 24,
+            "98305": 24,
+            "81921": 24,
+            "65537": 24,
+            "49153": 24,
+            "32769": 24,
+            "16385": 24,
+            "8193": 24,
+            "71681": 24,
+            "4097": 24,
+            "35841": 24,
+            "67585": 24,
+            "99329": 24,
+            "49665": 24,
+            "45441": 24,
+            "57601": 24,
+            "86145": 24,
+            "13921": 24,
+            "106561": 24,
+            "131071": 24
+        },
+        "ckks_btp_swk": {
+            "swk_dts": [
+                0,
+                4
+            ],
+            "swk_std": [
+                24,
+                4
+            ]
+        }
+    },
+    "online": [
+        {
+            "id": "input",
+            "type": "ct",
+            "size": [
+                1
+            ],
+            "level": 1,
+            "phase": "in"
+        },
+        {
+            "id": "_Unsqueeze_1_output_0",
+            "type": "ct",
+            "size": [
+                1
+            ],
+            "level": 1,
+            "phase": "in"
+        },
+        {
+            "id": "_Unsqueeze_output_0",
+            "type": "ct",
+            "size": [
+                1
+            ],
+            "level": 1,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_0_Conv",
+            "type": "pt_ringt",
+            "size": [
+                3,
+                32,
+                9
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_0_Conv",
+            "type": "pt_ringt",
+            "size": [
+                3
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "concat_mask__Concat",
+            "type": "pt_ringt",
+            "size": [
+                2
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_1_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                3
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_1_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                3
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_1_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                3
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_1_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                3
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_1_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                3
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "select_tensor_pt__features_features_2_AveragePool",
+            "type": "pt_ringt",
+            "size": [
+                96
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_3_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                128,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_3_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_squeeze_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_squeeze_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_squeeze_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_squeeze_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_squeeze_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_3_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                128,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_3_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_3_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                128,
+                9
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_3_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_expand1x1_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_expand1x1_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_expand1x1_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_expand1x1_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_expand1x1_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_expand3x3_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_expand3x3_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_expand3x3_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_expand3x3_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_3_expand3x3_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "concat_mask__features_features_3_Concat",
+            "type": "pt_ringt",
+            "size": [
+                128
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_4_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                128,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_4_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_squeeze_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_squeeze_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_squeeze_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_squeeze_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_squeeze_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_4_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                128,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_4_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_4_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                128,
+                9
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_4_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_expand1x1_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_expand1x1_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_expand1x1_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_expand1x1_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_expand1x1_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_expand3x3_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_expand3x3_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_expand3x3_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_expand3x3_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_4_expand3x3_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "concat_mask__features_features_4_Concat",
+            "type": "pt_ringt",
+            "size": [
+                128
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "select_tensor_pt__features_features_5_AveragePool",
+            "type": "pt_ringt",
+            "size": [
+                128
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_6_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                512,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_6_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_squeeze_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_squeeze_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_squeeze_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_squeeze_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_squeeze_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_6_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                512,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_6_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_6_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                512,
+                9
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_6_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_expand1x1_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_expand1x1_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_expand1x1_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_expand1x1_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_expand1x1_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_expand3x3_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_expand3x3_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_expand3x3_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_expand3x3_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_6_expand3x3_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "concat_mask__features_features_6_Concat",
+            "type": "pt_ringt",
+            "size": [
+                256
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_7_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                512,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_7_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_squeeze_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_squeeze_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_squeeze_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_squeeze_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_squeeze_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_7_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                512,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_7_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_7_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                512,
+                9
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_7_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_expand1x1_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_expand1x1_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_expand1x1_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_expand1x1_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_expand1x1_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_expand3x3_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_expand3x3_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_expand3x3_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_expand3x3_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_7_expand3x3_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "concat_mask__features_features_7_Concat",
+            "type": "pt_ringt",
+            "size": [
+                256
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "select_tensor_pt__features_features_8_AveragePool",
+            "type": "pt_ringt",
+            "size": [
+                256
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_9_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                2048,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_9_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_squeeze_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_squeeze_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_squeeze_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_squeeze_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_squeeze_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_9_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                2048,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_9_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_9_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                2048,
+                9
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_9_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_expand1x1_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_expand1x1_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_expand1x1_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_expand1x1_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_expand1x1_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_expand3x3_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_expand3x3_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_expand3x3_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_expand3x3_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_9_expand3x3_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "concat_mask__features_features_9_Concat",
+            "type": "pt_ringt",
+            "size": [
+                384
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_10_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                2048,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_10_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_squeeze_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_squeeze_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_squeeze_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_squeeze_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_squeeze_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_10_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                2048,
+                9
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_10_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_10_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                2048,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_10_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_expand1x1_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_expand1x1_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_expand1x1_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_expand1x1_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_expand1x1_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_expand3x3_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_expand3x3_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_expand3x3_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_expand3x3_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_10_expand3x3_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "concat_mask__features_features_10_Concat",
+            "type": "pt_ringt",
+            "size": [
+                384
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_11_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                2048,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_11_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_squeeze_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_squeeze_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_squeeze_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_squeeze_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_squeeze_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_11_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                2048,
+                9
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_11_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_11_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                2048,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_11_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_expand3x3_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_expand3x3_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_expand3x3_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_expand3x3_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_expand3x3_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_expand1x1_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_expand1x1_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_expand1x1_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_expand1x1_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_11_expand1x1_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "concat_mask__features_features_11_Concat",
+            "type": "pt_ringt",
+            "size": [
+                512
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_12_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                2048,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_12_squeeze_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_squeeze_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_squeeze_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_squeeze_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_squeeze_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_squeeze_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_12_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                2048,
+                9
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_12_expand3x3_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__features_features_12_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                2048,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__features_features_12_expand1x1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_expand3x3_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_expand3x3_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_expand3x3_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_expand3x3_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_expand3x3_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_expand1x1_activation_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_expand1x1_activation_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_expand1x1_activation_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_expand1x1_activation_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__features_features_12_expand1x1_activation_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "concat_mask__features_features_12_Concat",
+            "type": "pt_ringt",
+            "size": [
+                512
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convw__classifier_classifier_1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1,
+                2048,
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "convb__classifier_classifier_1_Conv",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__classifier_classifier_2_Simple_Polyrelu_0",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__classifier_classifier_2_Simple_Polyrelu_1",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__classifier_classifier_2_Simple_Polyrelu_2",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__classifier_classifier_2_Simple_Polyrelu_3",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "poly_reluw__classifier_classifier_2_Simple_Polyrelu_4",
+            "type": "pt_ringt",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "in"
+        },
+        {
+            "id": "output",
+            "type": "ct",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "out"
+        },
+        {
+            "id": "_Concat_output_0",
+            "type": "ct",
+            "size": [
+                1
+            ],
+            "level": 0,
+            "phase": "out"
+        }
+    ],
+    "offline": []
+}

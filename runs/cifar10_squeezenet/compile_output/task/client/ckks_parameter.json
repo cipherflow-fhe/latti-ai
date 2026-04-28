@@ -1,0 +1,13 @@
+{
+    "param0": {
+        "poly_modulus_degree": 65536,
+        "n_mult_level": 9,
+        "log_default_scale": 40,
+        "block_shape": [
+            32,
+            32
+        ],
+        "param_name": "N16QP1546H192H32",
+        "pack_num": 4.0
+    }
+}

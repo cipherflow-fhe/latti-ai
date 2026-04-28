@@ -1,0 +1,4477 @@
+{
+  "score": 476.68232717744445,
+  "ckks_parameter": {
+    "param0": {
+      "poly_modulus_degree": 65536,
+      "n_mult_level": 9,
+      "log_default_scale": 40,
+      "param_name": "N16QP1546H192H32",
+      "q": [
+        1152921504614055937,
+        1099512938497,
+        1099510054913,
+        1099507695617,
+        1099515691009,
+        1099506515969,
+        1099516870657,
+        1099504549889,
+        1099503894529,
+        1099503370241,
+        549754109953,
+        549753978881,
+        549753716737,
+        1152921504598720513,
+        1152921504615628801,
+        1152921504597016577,
+        1152921504616808449,
+        1152921504595968001,
+        1152921504618381313,
+        1152921504620347393,
+        1152921504592822273,
+        72057594038321153,
+        72057594036879361,
+        72057594035306497,
+        72057594040680449
+      ],
+      "p": [
+        2305843009211596801,
+        2305843009210023937,
+        2305843009208713217,
+        2305843009202159617,
+        2305843009201242113
+      ],
+      "pack_num": 4
+    }
+  },
+  "feature": {
+    "input": {
+      "dim": 2,
+      "channel": 3,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 1,
+      "depth": -1,
+      "pack_num": 32,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_Unsqueeze_1_output_0": {
+      "dim": 0,
+      "channel": 1,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 1,
+      "depth": -1,
+      "pack_num": 128,
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "_Unsqueeze_output_0": {
+      "dim": 0,
+      "channel": 1,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 1,
+      "depth": -1,
+      "pack_num": 128,
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "_features_features_0_Conv_output_0": {
+      "dim": 2,
+      "channel": 96,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 32,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_Concat_output_0": {
+      "dim": 0,
+      "channel": 2,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 128,
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "_features_features_0_Conv_output_0_refreshed": {
+      "dim": 2,
+      "channel": 96,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 32,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_1_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 96,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 6,
+      "depth": -1,
+      "pack_num": 32,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_2_AveragePool_output_0": {
+      "dim": 2,
+      "channel": 96,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 5,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_3_squeeze_Conv_output_0": {
+      "dim": 2,
+      "channel": 16,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 3,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 16,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0_refreshed": {
+      "dim": 2,
+      "channel": 16,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0_refreshed140346446725568_drop_level_output": {
+      "dim": 2,
+      "channel": 16,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 8,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0_refreshed140346446730112_drop_level_output": {
+      "dim": 2,
+      "channel": 16,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 8,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_3_expand1x1_Conv_output_0": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 6,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_3_expand3x3_Conv_output_0": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 6,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_3_expand1x1_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 3,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_3_expand3x3_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 3,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_3_Concat_output_0": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 2,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_4_squeeze_Conv_output_0": {
+      "dim": 2,
+      "channel": 16,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_4_squeeze_Conv_output_0_refreshed": {
+      "dim": 2,
+      "channel": 16,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_4_squeeze_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 16,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 6,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_4_expand1x1_Conv_output_0": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 4,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_4_expand3x3_Conv_output_0": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 4,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_4_expand1x1_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 1,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_4_expand3x3_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 1,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_4_Concat_output_0": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_4_Concat_output_0_refreshed": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_4_Concat_output_0_refreshed140346446726848_drop_level_output": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 8,
+      "depth": -1,
+      "pack_num": 128,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_5_AveragePool_output_0": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 7,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_6_squeeze_Conv_output_0": {
+      "dim": 2,
+      "channel": 32,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 5,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_6_squeeze_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 32,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 2,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_6_expand1x1_Conv_output_0": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_6_expand3x3_Conv_output_0": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_6_expand1x1_Conv_output_0_refreshed": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_6_expand3x3_Conv_output_0_refreshed": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_6_expand1x1_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 6,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_6_expand3x3_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 6,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_6_Concat_output_0": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 5,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_7_squeeze_Conv_output_0": {
+      "dim": 2,
+      "channel": 32,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 3,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_7_squeeze_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 32,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_7_squeeze_activation_Simple_Polyrelu_output_0_refreshed": {
+      "dim": 2,
+      "channel": 32,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_7_expand1x1_Conv_output_0": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 7,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_7_expand3x3_Conv_output_0": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 7,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_7_expand1x1_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 4,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_7_expand3x3_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 128,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 4,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_7_Concat_output_0": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 3,
+      "depth": -1,
+      "pack_num": 512,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_8_AveragePool_output_0": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 2,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_9_squeeze_Conv_output_0": {
+      "dim": 2,
+      "channel": 48,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_9_squeeze_Conv_output_0_refreshed": {
+      "dim": 2,
+      "channel": 48,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_9_squeeze_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 48,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 6,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_9_expand1x1_Conv_output_0": {
+      "dim": 2,
+      "channel": 192,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 4,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_9_expand3x3_Conv_output_0": {
+      "dim": 2,
+      "channel": 192,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 4,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_9_expand1x1_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 192,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 1,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_9_expand3x3_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 192,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 1,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_9_Concat_output_0": {
+      "dim": 2,
+      "channel": 384,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_9_Concat_output_0_refreshed": {
+      "dim": 2,
+      "channel": 384,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_9_Concat_output_0_refreshed140346446727808_drop_level_output": {
+      "dim": 2,
+      "channel": 384,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 5,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_10_squeeze_Conv_output_0": {
+      "dim": 2,
+      "channel": 48,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 3,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 48,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0_refreshed": {
+      "dim": 2,
+      "channel": 48,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0_refreshed140346590018944_drop_level_output": {
+      "dim": 2,
+      "channel": 48,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 2,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0_refreshed140346446729856_drop_level_output": {
+      "dim": 2,
+      "channel": 48,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 8,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_10_expand3x3_Conv_output_0": {
+      "dim": 2,
+      "channel": 192,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_10_expand1x1_Conv_output_0": {
+      "dim": 2,
+      "channel": 192,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 6,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_10_expand3x3_Conv_output_0_refreshed": {
+      "dim": 2,
+      "channel": 192,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_10_expand1x1_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 192,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 3,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_10_expand3x3_Conv_output_0_refreshed140346446726336_drop_level_output": {
+      "dim": 2,
+      "channel": 192,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 6,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_10_expand3x3_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 192,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 3,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_10_Concat_output_0": {
+      "dim": 2,
+      "channel": 384,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 2,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_11_squeeze_Conv_output_0": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_11_squeeze_Conv_output_0_refreshed": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_11_squeeze_Conv_output_0_refreshed140346492870400_drop_level_output": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 8,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_11_squeeze_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 5,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_11_expand3x3_Conv_output_0": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 3,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_11_expand1x1_Conv_output_0": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 3,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_11_expand3x3_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_11_expand1x1_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_11_expand3x3_activation_Simple_Polyrelu_output_0_refreshed": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_11_expand1x1_activation_Simple_Polyrelu_output_0_refreshed": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_11_expand3x3_activation_Simple_Polyrelu_output_0_refreshed140346450386496_drop_level_output": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 8,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_11_expand1x1_activation_Simple_Polyrelu_output_0_refreshed140345548912576_drop_level_output": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 8,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_11_Concat_output_0": {
+      "dim": 2,
+      "channel": 512,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 7,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_12_squeeze_Conv_output_0": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 5,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_12_squeeze_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 64,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 2,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_12_expand3x3_Conv_output_0": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_12_expand1x1_Conv_output_0": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_12_expand3x3_Conv_output_0_refreshed": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_12_expand1x1_Conv_output_0_refreshed": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 9,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_12_expand3x3_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 6,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_12_expand1x1_activation_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 256,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 6,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_features_features_12_Concat_output_0": {
+      "dim": 2,
+      "channel": 512,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 5,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_classifier_classifier_1_Conv_output_0": {
+      "dim": 2,
+      "channel": 10,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 3,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_classifier_classifier_2_Simple_Polyrelu_output_0": {
+      "dim": 2,
+      "channel": 10,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "_classifier_classifier_3_AveragePool_output_0": {
+      "dim": 2,
+      "channel": 10,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "shape": [
+        1,
+        1
+      ],
+      "skip": [
+        1,
+        1
+      ],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 2048,
+      "invalid_fill": [
+        1,
+        1
+      ]
+    },
+    "output": {
+      "dim": 0,
+      "channel": 90,
+      "scale": 1.0,
+      "ckks_scale": 1,
+      "skip": [],
+      "ckks_parameter_id": "param0",
+      "level": 0,
+      "depth": -1,
+      "pack_num": 32
+    }
+  },
+  "layer": {
+    "_features_features_0_Conv": {
+      "type": "conv2d",
+      "channel_input": 3,
+      "channel_output": 96,
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "input"
+      ],
+      "feature_output": [
+        "_features_features_0_Conv_output_0"
+      ],
+      "weight_path": "features.0.weight",
+      "bias_path": "features.0.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 1,
+      "style": "multiplexed"
+    },
+    "_Concat": {
+      "type": "concat2d",
+      "channel_input": 1,
+      "channel_output": 2,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_Unsqueeze_output_0",
+        "_Unsqueeze_1_output_0"
+      ],
+      "feature_output": [
+        "_Concat_output_0"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_0_Conv_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 96,
+      "channel_output": 96,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_0_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_0_Conv_output_0_refreshed"
+      ],
+      "level_cost": -9
+    },
+    "_features_features_1_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 96,
+      "channel_output": 96,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_0_Conv_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_1_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.1.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_2_AveragePool": {
+      "type": "avgpool2d",
+      "channel_input": 96,
+      "channel_output": 96,
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "stride": [
+        2,
+        2
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_1_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_2_AveragePool_output_0"
+      ],
+      "is_big_size": false,
+      "is_adaptive_avgpool": false,
+      "padding": [
+        0,
+        0
+      ],
+      "level_cost": 1
+    },
+    "_features_features_3_squeeze_Conv": {
+      "type": "conv2d",
+      "channel_input": 96,
+      "channel_output": 16,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_2_AveragePool_output_0"
+      ],
+      "feature_output": [
+        "_features_features_3_squeeze_Conv_output_0"
+      ],
+      "weight_path": "features.3.squeeze.weight",
+      "bias_path": "features.3.squeeze.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_3_squeeze_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 16,
+      "channel_output": 16,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_3_squeeze_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.3.squeeze_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 16,
+      "channel_output": 16,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0_refreshed"
+      ],
+      "level_cost": -8
+    },
+    "_features_features_3_expand1x1_Conv_drop_level_idx0_ts1777099169674192": {
+      "type": "drop_level",
+      "channel_input": 16,
+      "channel_output": 16,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0_refreshed140346446725568_drop_level_output"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_3_expand3x3_Conv_drop_level_idx0_ts1777099169674241": {
+      "type": "drop_level",
+      "channel_input": 16,
+      "channel_output": 16,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0_refreshed140346446730112_drop_level_output"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_3_expand1x1_Conv": {
+      "type": "conv2d",
+      "channel_input": 16,
+      "channel_output": 64,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0_refreshed140346446725568_drop_level_output"
+      ],
+      "feature_output": [
+        "_features_features_3_expand1x1_Conv_output_0"
+      ],
+      "weight_path": "features.3.expand1x1.weight",
+      "bias_path": "features.3.expand1x1.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_3_expand3x3_Conv": {
+      "type": "conv2d",
+      "channel_input": 16,
+      "channel_output": 64,
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_3_squeeze_activation_Simple_Polyrelu_output_0_refreshed140346446730112_drop_level_output"
+      ],
+      "feature_output": [
+        "_features_features_3_expand3x3_Conv_output_0"
+      ],
+      "weight_path": "features.3.expand3x3.weight",
+      "bias_path": "features.3.expand3x3.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_3_expand1x1_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 64,
+      "channel_output": 64,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_3_expand1x1_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_3_expand1x1_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.3.expand1x1_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_3_expand3x3_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 64,
+      "channel_output": 64,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_3_expand3x3_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_3_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.3.expand3x3_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_3_Concat": {
+      "type": "concat2d",
+      "channel_input": 64,
+      "channel_output": 128,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_3_expand1x1_activation_Simple_Polyrelu_output_0",
+        "_features_features_3_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_3_Concat_output_0"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_4_squeeze_Conv": {
+      "type": "conv2d",
+      "channel_input": 128,
+      "channel_output": 16,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_3_Concat_output_0"
+      ],
+      "feature_output": [
+        "_features_features_4_squeeze_Conv_output_0"
+      ],
+      "weight_path": "features.4.squeeze.weight",
+      "bias_path": "features.4.squeeze.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_4_squeeze_Conv_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 16,
+      "channel_output": 16,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_4_squeeze_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_4_squeeze_Conv_output_0_refreshed"
+      ],
+      "level_cost": -9
+    },
+    "_features_features_4_squeeze_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 16,
+      "channel_output": 16,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_4_squeeze_Conv_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_4_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.4.squeeze_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_4_expand1x1_Conv": {
+      "type": "conv2d",
+      "channel_input": 16,
+      "channel_output": 64,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_4_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_4_expand1x1_Conv_output_0"
+      ],
+      "weight_path": "features.4.expand1x1.weight",
+      "bias_path": "features.4.expand1x1.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_4_expand3x3_Conv": {
+      "type": "conv2d",
+      "channel_input": 16,
+      "channel_output": 64,
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_4_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_4_expand3x3_Conv_output_0"
+      ],
+      "weight_path": "features.4.expand3x3.weight",
+      "bias_path": "features.4.expand3x3.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_4_expand1x1_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 64,
+      "channel_output": 64,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_4_expand1x1_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_4_expand1x1_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.4.expand1x1_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_4_expand3x3_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 64,
+      "channel_output": 64,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_4_expand3x3_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_4_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.4.expand3x3_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_4_Concat": {
+      "type": "concat2d",
+      "channel_input": 64,
+      "channel_output": 128,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_4_expand1x1_activation_Simple_Polyrelu_output_0",
+        "_features_features_4_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_4_Concat_output_0"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_4_Concat_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 128,
+      "channel_output": 128,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_4_Concat_output_0"
+      ],
+      "feature_output": [
+        "_features_features_4_Concat_output_0_refreshed"
+      ],
+      "level_cost": -8
+    },
+    "_features_features_5_AveragePool_drop_level_idx0_ts1777099169674069": {
+      "type": "drop_level",
+      "channel_input": 128,
+      "channel_output": 128,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_4_Concat_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_4_Concat_output_0_refreshed140346446726848_drop_level_output"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_5_AveragePool": {
+      "type": "avgpool2d",
+      "channel_input": 128,
+      "channel_output": 128,
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "stride": [
+        2,
+        2
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_4_Concat_output_0_refreshed140346446726848_drop_level_output"
+      ],
+      "feature_output": [
+        "_features_features_5_AveragePool_output_0"
+      ],
+      "is_big_size": false,
+      "is_adaptive_avgpool": false,
+      "padding": [
+        0,
+        0
+      ],
+      "level_cost": 1
+    },
+    "_features_features_6_squeeze_Conv": {
+      "type": "conv2d",
+      "channel_input": 128,
+      "channel_output": 32,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_5_AveragePool_output_0"
+      ],
+      "feature_output": [
+        "_features_features_6_squeeze_Conv_output_0"
+      ],
+      "weight_path": "features.6.squeeze.weight",
+      "bias_path": "features.6.squeeze.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_6_squeeze_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 32,
+      "channel_output": 32,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_6_squeeze_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_6_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.6.squeeze_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_6_expand1x1_Conv": {
+      "type": "conv2d",
+      "channel_input": 32,
+      "channel_output": 128,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_6_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_6_expand1x1_Conv_output_0"
+      ],
+      "weight_path": "features.6.expand1x1.weight",
+      "bias_path": "features.6.expand1x1.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_6_expand3x3_Conv": {
+      "type": "conv2d",
+      "channel_input": 32,
+      "channel_output": 128,
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_6_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_6_expand3x3_Conv_output_0"
+      ],
+      "weight_path": "features.6.expand3x3.weight",
+      "bias_path": "features.6.expand3x3.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_6_expand1x1_Conv_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 128,
+      "channel_output": 128,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_6_expand1x1_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_6_expand1x1_Conv_output_0_refreshed"
+      ],
+      "level_cost": -9
+    },
+    "_features_features_6_expand3x3_Conv_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 128,
+      "channel_output": 128,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_6_expand3x3_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_6_expand3x3_Conv_output_0_refreshed"
+      ],
+      "level_cost": -9
+    },
+    "_features_features_6_expand1x1_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 128,
+      "channel_output": 128,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_6_expand1x1_Conv_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_6_expand1x1_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.6.expand1x1_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_6_expand3x3_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 128,
+      "channel_output": 128,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_6_expand3x3_Conv_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_6_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.6.expand3x3_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_6_Concat": {
+      "type": "concat2d",
+      "channel_input": 128,
+      "channel_output": 256,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_6_expand1x1_activation_Simple_Polyrelu_output_0",
+        "_features_features_6_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_6_Concat_output_0"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_7_squeeze_Conv": {
+      "type": "conv2d",
+      "channel_input": 256,
+      "channel_output": 32,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_6_Concat_output_0"
+      ],
+      "feature_output": [
+        "_features_features_7_squeeze_Conv_output_0"
+      ],
+      "weight_path": "features.7.squeeze.weight",
+      "bias_path": "features.7.squeeze.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_7_squeeze_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 32,
+      "channel_output": 32,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_7_squeeze_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_7_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.7.squeeze_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_7_squeeze_activation_Simple_Polyrelu_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 32,
+      "channel_output": 32,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_7_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_7_squeeze_activation_Simple_Polyrelu_output_0_refreshed"
+      ],
+      "level_cost": -9
+    },
+    "_features_features_7_expand1x1_Conv": {
+      "type": "conv2d",
+      "channel_input": 32,
+      "channel_output": 128,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_7_squeeze_activation_Simple_Polyrelu_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_7_expand1x1_Conv_output_0"
+      ],
+      "weight_path": "features.7.expand1x1.weight",
+      "bias_path": "features.7.expand1x1.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_7_expand3x3_Conv": {
+      "type": "conv2d",
+      "channel_input": 32,
+      "channel_output": 128,
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_7_squeeze_activation_Simple_Polyrelu_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_7_expand3x3_Conv_output_0"
+      ],
+      "weight_path": "features.7.expand3x3.weight",
+      "bias_path": "features.7.expand3x3.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_7_expand1x1_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 128,
+      "channel_output": 128,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_7_expand1x1_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_7_expand1x1_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.7.expand1x1_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_7_expand3x3_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 128,
+      "channel_output": 128,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_7_expand3x3_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_7_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.7.expand3x3_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_7_Concat": {
+      "type": "concat2d",
+      "channel_input": 128,
+      "channel_output": 256,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_7_expand1x1_activation_Simple_Polyrelu_output_0",
+        "_features_features_7_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_7_Concat_output_0"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_8_AveragePool": {
+      "type": "avgpool2d",
+      "channel_input": 256,
+      "channel_output": 256,
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "stride": [
+        2,
+        2
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_7_Concat_output_0"
+      ],
+      "feature_output": [
+        "_features_features_8_AveragePool_output_0"
+      ],
+      "is_big_size": false,
+      "is_adaptive_avgpool": false,
+      "padding": [
+        0,
+        0
+      ],
+      "level_cost": 1
+    },
+    "_features_features_9_squeeze_Conv": {
+      "type": "conv2d",
+      "channel_input": 256,
+      "channel_output": 48,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_8_AveragePool_output_0"
+      ],
+      "feature_output": [
+        "_features_features_9_squeeze_Conv_output_0"
+      ],
+      "weight_path": "features.9.squeeze.weight",
+      "bias_path": "features.9.squeeze.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_9_squeeze_Conv_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 48,
+      "channel_output": 48,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_9_squeeze_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_9_squeeze_Conv_output_0_refreshed"
+      ],
+      "level_cost": -9
+    },
+    "_features_features_9_squeeze_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 48,
+      "channel_output": 48,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_9_squeeze_Conv_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_9_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.9.squeeze_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_9_expand1x1_Conv": {
+      "type": "conv2d",
+      "channel_input": 48,
+      "channel_output": 192,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_9_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_9_expand1x1_Conv_output_0"
+      ],
+      "weight_path": "features.9.expand1x1.weight",
+      "bias_path": "features.9.expand1x1.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_9_expand3x3_Conv": {
+      "type": "conv2d",
+      "channel_input": 48,
+      "channel_output": 192,
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_9_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_9_expand3x3_Conv_output_0"
+      ],
+      "weight_path": "features.9.expand3x3.weight",
+      "bias_path": "features.9.expand3x3.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_9_expand1x1_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 192,
+      "channel_output": 192,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_9_expand1x1_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_9_expand1x1_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.9.expand1x1_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_9_expand3x3_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 192,
+      "channel_output": 192,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_9_expand3x3_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_9_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.9.expand3x3_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_9_Concat": {
+      "type": "concat2d",
+      "channel_input": 192,
+      "channel_output": 384,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_9_expand1x1_activation_Simple_Polyrelu_output_0",
+        "_features_features_9_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_9_Concat_output_0"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_9_Concat_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 384,
+      "channel_output": 384,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_9_Concat_output_0"
+      ],
+      "feature_output": [
+        "_features_features_9_Concat_output_0_refreshed"
+      ],
+      "level_cost": -5
+    },
+    "_features_features_10_squeeze_Conv_drop_level_idx0_ts1777099169673897": {
+      "type": "drop_level",
+      "channel_input": 384,
+      "channel_output": 384,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_9_Concat_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_9_Concat_output_0_refreshed140346446727808_drop_level_output"
+      ],
+      "level_cost": 4
+    },
+    "_features_features_10_squeeze_Conv": {
+      "type": "conv2d",
+      "channel_input": 384,
+      "channel_output": 48,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_9_Concat_output_0_refreshed140346446727808_drop_level_output"
+      ],
+      "feature_output": [
+        "_features_features_10_squeeze_Conv_output_0"
+      ],
+      "weight_path": "features.10.squeeze.weight",
+      "bias_path": "features.10.squeeze.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_10_squeeze_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 48,
+      "channel_output": 48,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_10_squeeze_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.10.squeeze_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 48,
+      "channel_output": 48,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0_refreshed"
+      ],
+      "level_cost": -8
+    },
+    "_features_features_10_expand3x3_Conv_drop_level_idx0_ts1777099168839422": {
+      "type": "drop_level",
+      "channel_input": 48,
+      "channel_output": 48,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0_refreshed140346590018944_drop_level_output"
+      ],
+      "level_cost": 6
+    },
+    "_features_features_10_expand1x1_Conv_drop_level_idx0_ts1777099169673842": {
+      "type": "drop_level",
+      "channel_input": 48,
+      "channel_output": 48,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0_refreshed140346446729856_drop_level_output"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_10_expand3x3_Conv": {
+      "type": "conv2d",
+      "channel_input": 48,
+      "channel_output": 192,
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0_refreshed140346590018944_drop_level_output"
+      ],
+      "feature_output": [
+        "_features_features_10_expand3x3_Conv_output_0"
+      ],
+      "weight_path": "features.10.expand3x3.weight",
+      "bias_path": "features.10.expand3x3.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_10_expand1x1_Conv": {
+      "type": "conv2d",
+      "channel_input": 48,
+      "channel_output": 192,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_10_squeeze_activation_Simple_Polyrelu_output_0_refreshed140346446729856_drop_level_output"
+      ],
+      "feature_output": [
+        "_features_features_10_expand1x1_Conv_output_0"
+      ],
+      "weight_path": "features.10.expand1x1.weight",
+      "bias_path": "features.10.expand1x1.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_10_expand3x3_Conv_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 192,
+      "channel_output": 192,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_10_expand3x3_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_10_expand3x3_Conv_output_0_refreshed"
+      ],
+      "level_cost": -6
+    },
+    "_features_features_10_expand1x1_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 192,
+      "channel_output": 192,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_10_expand1x1_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_10_expand1x1_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.10.expand1x1_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_10_expand3x3_activation_Simple_Polyrelu_drop_level_idx0_ts1777099169673776": {
+      "type": "drop_level",
+      "channel_input": 192,
+      "channel_output": 192,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_10_expand3x3_Conv_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_10_expand3x3_Conv_output_0_refreshed140346446726336_drop_level_output"
+      ],
+      "level_cost": 3
+    },
+    "_features_features_10_expand3x3_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 192,
+      "channel_output": 192,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_10_expand3x3_Conv_output_0_refreshed140346446726336_drop_level_output"
+      ],
+      "feature_output": [
+        "_features_features_10_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.10.expand3x3_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_10_Concat": {
+      "type": "concat2d",
+      "channel_input": 192,
+      "channel_output": 384,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_10_expand1x1_activation_Simple_Polyrelu_output_0",
+        "_features_features_10_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_10_Concat_output_0"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_11_squeeze_Conv": {
+      "type": "conv2d",
+      "channel_input": 384,
+      "channel_output": 64,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_10_Concat_output_0"
+      ],
+      "feature_output": [
+        "_features_features_11_squeeze_Conv_output_0"
+      ],
+      "weight_path": "features.11.squeeze.weight",
+      "bias_path": "features.11.squeeze.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_11_squeeze_Conv_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 64,
+      "channel_output": 64,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_11_squeeze_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_11_squeeze_Conv_output_0_refreshed"
+      ],
+      "level_cost": -8
+    },
+    "_features_features_11_squeeze_activation_Simple_Polyrelu_drop_level_idx0_ts1777099169673707": {
+      "type": "drop_level",
+      "channel_input": 64,
+      "channel_output": 64,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_11_squeeze_Conv_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_11_squeeze_Conv_output_0_refreshed140346492870400_drop_level_output"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_11_squeeze_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 64,
+      "channel_output": 64,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_11_squeeze_Conv_output_0_refreshed140346492870400_drop_level_output"
+      ],
+      "feature_output": [
+        "_features_features_11_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.11.squeeze_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_11_expand3x3_Conv": {
+      "type": "conv2d",
+      "channel_input": 64,
+      "channel_output": 256,
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_11_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_11_expand3x3_Conv_output_0"
+      ],
+      "weight_path": "features.11.expand3x3.weight",
+      "bias_path": "features.11.expand3x3.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_11_expand1x1_Conv": {
+      "type": "conv2d",
+      "channel_input": 64,
+      "channel_output": 256,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_11_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_11_expand1x1_Conv_output_0"
+      ],
+      "weight_path": "features.11.expand1x1.weight",
+      "bias_path": "features.11.expand1x1.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_11_expand3x3_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 256,
+      "channel_output": 256,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_11_expand3x3_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_11_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.11.expand3x3_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_11_expand1x1_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 256,
+      "channel_output": 256,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_11_expand1x1_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_11_expand1x1_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.11.expand1x1_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_11_expand3x3_activation_Simple_Polyrelu_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 256,
+      "channel_output": 256,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_11_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_11_expand3x3_activation_Simple_Polyrelu_output_0_refreshed"
+      ],
+      "level_cost": -8
+    },
+    "_features_features_11_expand1x1_activation_Simple_Polyrelu_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 256,
+      "channel_output": 256,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_11_expand1x1_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_11_expand1x1_activation_Simple_Polyrelu_output_0_refreshed"
+      ],
+      "level_cost": -8
+    },
+    "_features_features_11_Concat_drop_level_idx0_ts1777099169673438": {
+      "type": "drop_level",
+      "channel_input": 256,
+      "channel_output": 256,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_11_expand3x3_activation_Simple_Polyrelu_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_11_expand3x3_activation_Simple_Polyrelu_output_0_refreshed140346450386496_drop_level_output"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_11_Concat_drop_level_idx1_ts1777099169673602": {
+      "type": "drop_level",
+      "channel_input": 256,
+      "channel_output": 256,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_11_expand1x1_activation_Simple_Polyrelu_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_11_expand1x1_activation_Simple_Polyrelu_output_0_refreshed140345548912576_drop_level_output"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_11_Concat": {
+      "type": "concat2d",
+      "channel_input": 256,
+      "channel_output": 512,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_11_expand1x1_activation_Simple_Polyrelu_output_0_refreshed140345548912576_drop_level_output",
+        "_features_features_11_expand3x3_activation_Simple_Polyrelu_output_0_refreshed140346450386496_drop_level_output"
+      ],
+      "feature_output": [
+        "_features_features_11_Concat_output_0"
+      ],
+      "level_cost": 1
+    },
+    "_features_features_12_squeeze_Conv": {
+      "type": "conv2d",
+      "channel_input": 512,
+      "channel_output": 64,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_11_Concat_output_0"
+      ],
+      "feature_output": [
+        "_features_features_12_squeeze_Conv_output_0"
+      ],
+      "weight_path": "features.12.squeeze.weight",
+      "bias_path": "features.12.squeeze.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_12_squeeze_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 64,
+      "channel_output": 64,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_12_squeeze_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_12_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.12.squeeze_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_12_expand3x3_Conv": {
+      "type": "conv2d",
+      "channel_input": 64,
+      "channel_output": 256,
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_12_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_12_expand3x3_Conv_output_0"
+      ],
+      "weight_path": "features.12.expand3x3.weight",
+      "bias_path": "features.12.expand3x3.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_12_expand1x1_Conv": {
+      "type": "conv2d",
+      "channel_input": 64,
+      "channel_output": 256,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_12_squeeze_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_12_expand1x1_Conv_output_0"
+      ],
+      "weight_path": "features.12.expand1x1.weight",
+      "bias_path": "features.12.expand1x1.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_features_features_12_expand3x3_Conv_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 256,
+      "channel_output": 256,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_12_expand3x3_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_12_expand3x3_Conv_output_0_refreshed"
+      ],
+      "level_cost": -9
+    },
+    "_features_features_12_expand1x1_Conv_output_0_bootstrap": {
+      "type": "bootstrapping",
+      "channel_input": 256,
+      "channel_output": 256,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_12_expand1x1_Conv_output_0"
+      ],
+      "feature_output": [
+        "_features_features_12_expand1x1_Conv_output_0_refreshed"
+      ],
+      "level_cost": -9
+    },
+    "_features_features_12_expand3x3_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 256,
+      "channel_output": 256,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_12_expand3x3_Conv_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_12_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.12.expand3x3_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_12_expand1x1_activation_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 256,
+      "channel_output": 256,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_12_expand1x1_Conv_output_0_refreshed"
+      ],
+      "feature_output": [
+        "_features_features_12_expand1x1_activation_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "features.features.12.expand1x1_activation.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 1,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_features_features_12_Concat": {
+      "type": "concat2d",
+      "channel_input": 256,
+      "channel_output": 512,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_12_expand1x1_activation_Simple_Polyrelu_output_0",
+        "_features_features_12_expand3x3_activation_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_features_features_12_Concat_output_0"
+      ],
+      "level_cost": 1
+    },
+    "_classifier_classifier_1_Conv": {
+      "type": "conv2d",
+      "channel_input": 512,
+      "channel_output": 10,
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "groups": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_features_features_12_Concat_output_0"
+      ],
+      "feature_output": [
+        "_classifier_classifier_1_Conv_output_0"
+      ],
+      "weight_path": "classifier.1.weight",
+      "bias_path": "classifier.1.bias",
+      "is_normal": "1",
+      "upsample_factor_in": [
+        1,
+        1
+      ],
+      "weight_scale": 1,
+      "bias_scale": 1,
+      "absorb_type": [],
+      "absorb_path": [],
+      "is_big_size": false,
+      "level_cost": 2,
+      "style": "multiplexed"
+    },
+    "_classifier_classifier_2_Simple_Polyrelu": {
+      "type": "simple_polyrelu",
+      "channel_input": 10,
+      "channel_output": 10,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_classifier_classifier_1_Conv_output_0"
+      ],
+      "feature_output": [
+        "_classifier_classifier_2_Simple_Polyrelu_output_0"
+      ],
+      "weight_path": "classifier.classifier.2.weight",
+      "zero_skip": [
+        1,
+        1
+      ],
+      "is_big_size": false,
+      "is_absorb_polyrelu": false,
+      "level_cost": 3,
+      "order": 4,
+      "weight_scale": 0,
+      "weight_scale_list": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "_classifier_classifier_3_AveragePool": {
+      "type": "avgpool2d",
+      "channel_input": 10,
+      "channel_output": 10,
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_classifier_classifier_2_Simple_Polyrelu_output_0"
+      ],
+      "feature_output": [
+        "_classifier_classifier_3_AveragePool_output_0"
+      ],
+      "is_big_size": false,
+      "is_adaptive_avgpool": true,
+      "padding": [
+        0,
+        0
+      ],
+      "level_cost": 0
+    },
+    "_Reshape": {
+      "type": "reshape",
+      "channel_input": 10,
+      "channel_output": 90,
+      "ckks_parameter_id_input": "param0",
+      "ckks_parameter_id_output": "param0",
+      "feature_input": [
+        "_classifier_classifier_3_AveragePool_output_0"
+      ],
+      "feature_output": [
+        "output"
+      ],
+      "shape": [
+        90
+      ],
+      "level_cost": 0
+    }
+  },
+  "mpc_parameter": {
+    "param0": {
+      "scale_ord": 18,
+      "rangep": 128,
+      "ring_mod": 17592186044416
+    }
+  },
+  "input_feature": [
+    "input",
+    "_Unsqueeze_1_output_0",
+    "_Unsqueeze_output_0"
+  ],
+  "output_feature": [
+    "output",
+    "_Concat_output_0"
+  ]
+}
