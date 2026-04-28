@@ -32,6 +32,10 @@ public:
     Feature2DEncrypted run_multiple_inputs(ls::CkksContext& ctx, const std::vector<Feature2DEncrypted>& inputs);
     Array<double, 3> concatenate_channels(const Array<double, 3>& x1, const Array<double, 3>& x2);
     Array<double, 3> concatenate_channels_multiple_inputs(const std::vector<Array<double, 3>>& inputs);
+    // Plaintext concat for dim=1 features: Array<double, 2> shape (C, L); requires all inputs to share L.
+    Array<double, 2> concatenate_channels_multiple_inputs_1d(const std::vector<Array<double, 2>>& inputs);
+    // Plaintext concat for dim=0 features: flat (length = n_channel) vectors; just flat-appends.
+    std::vector<double> concatenate_channels_multiple_inputs_0d(const std::vector<std::vector<double>>& inputs);
 
     void prepare_mask_data(const ls::CkksParameter& param,
                            const std::vector<uint32_t>& input_n_channels,
@@ -39,6 +43,30 @@ public:
                            Duo shape,
                            Duo skip,
                            int level);
+
+    // dim=0 variant that accepts per-input pack_num and slot stride. Needed when
+    // concat inputs have different pack_num (e.g. backbone pack=2 and MLP pack=128).
+    // For each global channel, marks exactly ONE slot at position
+    //   (local_ch % pack_i) * skip_i
+    // in the source CT, mirroring the Python call_multiple_inputs_mixed_pack logic.
+    void prepare_mask_data_0d(const ls::CkksParameter& param,
+                              const std::vector<uint32_t>& input_n_channels,
+                              const std::vector<uint32_t>& input_packs,
+                              const std::vector<uint32_t>& input_skip_scalars,
+                              int level);
+
+    // dim=1 variant: each channel occupies L_i contiguous-strided slots in its CT.
+    // For each global channel, marks L_i slots at positions
+    //   slot(l) = block_idx * (L_i * skip_i) + l * skip_i + sub_pos   for l in [0, L_i)
+    // following the Feature1DEncrypted::pack_multiplexed layout (invalid_fill is
+    // assumed to be 1 by default; can be extended if needed).
+    void prepare_mask_data_1d(const ls::CkksParameter& param,
+                              const std::vector<uint32_t>& input_n_channels,
+                              const std::vector<uint32_t>& input_packs,
+                              const std::vector<uint32_t>& input_lengths,
+                              const std::vector<uint32_t>& input_skips,
+                              const std::vector<uint32_t>& input_invalid_fills,
+                              int level);
 
     std::vector<ls::CkksPlaintextRingt> mask_pt;
 

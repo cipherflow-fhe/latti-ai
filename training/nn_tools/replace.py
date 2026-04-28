@@ -227,6 +227,71 @@ def replace_general_avgpool_with_depthwise_conv(
     return model
 
 
+def _fuse_linear_bn1d_params(lin: nn.Linear, bn: nn.BatchNorm1d) -> None:
+    """In-place: absorb BN1d running stats into Linear weight/bias.
+
+    y = W x + b,  z = (y - rm) / sqrt(rv + eps) * gamma + beta
+      => W' = scale[:, None] * W,  b' = scale * (b - rm) + beta
+         where scale = gamma / sqrt(rv + eps)
+    """
+    import torch
+
+    with torch.no_grad():
+        eps = bn.eps
+        rm = bn.running_mean
+        rv = bn.running_var
+        gamma = bn.weight if bn.affine else torch.ones_like(rm)
+        beta = bn.bias if bn.affine else torch.zeros_like(rm)
+        scale = gamma / torch.sqrt(rv + eps)
+
+        if lin.bias is None:
+            lin.bias = nn.Parameter(torch.zeros(lin.out_features, dtype=lin.weight.dtype, device=lin.weight.device))
+
+        lin.weight.data.copy_(scale.unsqueeze(1) * lin.weight.data)
+        lin.bias.data.copy_(scale * (lin.bias.data - rm) + beta)
+
+
+def fuse_linear_bn1d_inplace(model: nn.Module) -> int:
+    """Fold every ``(Linear, BatchNorm1d)`` pair into the Linear, replace BN1d with ``Identity``.
+
+    Must be called **after training** (model in eval mode) and **before ONNX
+    export**. The C++ FHE runtime treats ``batchnorm2d`` nodes as identity, so
+    any ``BatchNorm1d`` that PyTorch applies after a Linear has to be absorbed
+    into the Linear weights before export — otherwise the exported model
+    computes ``Wx + b`` where PyTorch computed ``(Wx + b - rm) / sqrt(rv + eps) * gamma + beta``.
+
+    Only pairs where BN1d directly follows Linear in ``named_children`` order
+    (i.e. ``x = act(bn(fc(x)))``) are fused.
+
+    Returns:
+        Number of pairs fused.
+    """
+    targets = []
+    for parent_name, parent in model.named_modules():
+        children = list(parent.named_children())
+        for i in range(len(children) - 1):
+            a_name, a_mod = children[i]
+            b_name, b_mod = children[i + 1]
+            if (
+                isinstance(a_mod, nn.Linear)
+                and isinstance(b_mod, nn.BatchNorm1d)
+                and b_mod.num_features == a_mod.out_features
+            ):
+                targets.append((parent, parent_name, a_name, a_mod, b_name, b_mod))
+
+    for parent, parent_name, a_name, lin, b_name, bn in targets:
+        _fuse_linear_bn1d_params(lin, bn)
+        setattr(parent, b_name, nn.Identity())
+        log.info(
+            'Fuse Linear+BN1d: %s%s + %s%s',
+            (parent_name + '.') if parent_name else '',
+            a_name,
+            (parent_name + '.') if parent_name else '',
+            b_name,
+        )
+    return len(targets)
+
+
 def prepare_for_fhe(
     model: nn.Module,
     poly_module=RangeNormPoly2d,
