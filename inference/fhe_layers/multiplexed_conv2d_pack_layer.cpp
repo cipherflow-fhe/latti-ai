@@ -116,7 +116,12 @@ void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation() {
         }
     });
 
-    // mask_pt is already populated by prepare_weight_for_post_skip_rotation_lazy().
+    if (!(stride_[0] == 1 && stride_[1] == 1 && skip_[0] == 1 && skip_[1] == 1)) {
+        uint32_t n_mask = min(n_block_per_ct, n_out_channel_);
+        mask_pt.resize(n_mask);
+        parallel_for(n_mask, th_nums, ctx,
+                     [&](CkksContext& ctx_copy, int i) { mask_pt[i] = generate_mask_pt_for_indices(ctx_copy, i); });
+    }
 
     parallel_for(n_packed_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int n_packed_out_channel_idx) {
         bias_pt[n_packed_out_channel_idx] = generate_bias_pt_for_index(ctx_copy, n_packed_out_channel_idx);
@@ -147,16 +152,7 @@ void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation_lazy() 
 
     bias_level_down = (stride_ == Duo{1, 1} && skip_ == Duo{1, 1}) ? 1 : 2;
 
-    // mask_pt is small (<= n_block_per_ct entries) and shared across ct_idx,
-    // so generate it offline even in lazy mode.
     mask_pt.clear();
-    if (!(stride_[0] == 1 && stride_[1] == 1 && skip_[0] == 1 && skip_[1] == 1)) {
-        uint32_t n_mask = min(n_block_per_ct, n_out_channel_);
-        mask_pt.resize(n_mask);
-        CkksContext ctx = CkksContext::create_empty_context(this->param_);
-        parallel_for(n_mask, th_nums, ctx,
-                     [&](CkksContext& ctx_copy, int i) { mask_pt[i] = generate_mask_pt_for_indices(ctx_copy, i); });
-    }
 }
 
 CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_reduct_rot(CkksContext& ctx,
@@ -485,7 +481,12 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
                 const int32_t rot_step = -row_offset - col_offset - channel_in_ct % zero_inserted_skip[1] +
                                          i * prod(skip_) * input_feature_size;
 
-                auto m_pt = ctx_copy.ringt_to_mul(mask_pt[i], level_ - 1);
+                CkksPlaintextRingt gen_m_pt;
+                if (lazy_encoding) {
+                    gen_m_pt = generate_mask_pt_for_indices(ctx_copy, i);
+                }
+                const CkksPlaintextRingt& m_pt_rt = lazy_encoding ? gen_m_pt : mask_pt[i];
+                auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level_ - 1);
                 auto c_m = ctx_copy.mult_plain_mul(s, m_pt);
                 c_m = ctx_copy.rescale(c_m, ctx_copy.get_parameter().get_default_scale());
                 result_ct[ct_idx * n_block_per_ct + i] = ctx_copy.rotate(c_m, rot_step);

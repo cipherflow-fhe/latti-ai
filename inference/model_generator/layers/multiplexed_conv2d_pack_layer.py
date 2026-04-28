@@ -236,25 +236,7 @@ class MultiplexedConv2DPackedLayer:
                 result = add(result, res[0])
         return result
 
-    def make_mask_pt_nodes(self, layer_id):
-        """Create mask_pt nodes for lazy mode (offline-generated, shared across ct_idx).
-
-        Returns [] when stride=skip=1 (no mask needed).
-        """
-        if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
-            return []
-        n_mask = min(self.n_block_per_ct, self.n_out_channel)
-        return [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_mask)]
-
-    def call_custom_compute(
-        self, x: list[CkksCiphertextNode], conv_data_source, mask_pt_nodes=None
-    ) -> list[CkksCiphertextNode]:
-        # Weight/bias still go through encode_pt (lazy), but mask_pt is offline
-        # (populated by prepare_weight_lazy on the C++ side) and passed in as a
-        # list of static plaintext nodes shared across ct_idx.
-        if mask_pt_nodes is None:
-            mask_pt_nodes = []
-
+    def call_custom_compute(self, x: list[CkksCiphertextNode], conv_data_source) -> list[CkksCiphertextNode]:
         # 1. Block direction rotation
         block_rotations: list[CkksCiphertextNode] = list()
         for x_ct in x:
@@ -322,7 +304,14 @@ class MultiplexedConv2DPackedLayer:
                         - n_block % self.zero_inserted_skip[1]
                         + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
                     )
-                    c_m = mult(s, mask_pt_nodes[i])
+                    m_pt = CkksPlaintextRingtNode(f'encode_pt_mask_{ct_idx}_{i}')
+                    custom_compute(
+                        inputs=[conv_data_source],
+                        output=m_pt,
+                        type='encode_pt',
+                        attributes={'op_class': op_class, 'type': 'mask_pt', 'i': i},
+                    )
+                    c_m = mult(s, m_pt)
                     c_m = rescale(c_m)
                     result_ct.append(rotate_cols(c_m, [rot_step])[0])
 
