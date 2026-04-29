@@ -18,7 +18,7 @@
 from pathlib import Path
 
 import components
-from components import LayerAbstractGraph, config, PN13QP218, PN14QP438, PN15QP880, PN16QP1761, N16QP1546H192H32
+from components import LayerAbstractGraph, config, PN13QP218s, PN13QP218, PN14QP438, PN15QP880, PN16QP1761, N16QP1546H192H32
 import processor
 from processor import *
 from graph_partition_dp import *
@@ -91,7 +91,7 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
     """
     print('Step 2: Trying no-BTP mode...')
 
-    no_btp_params = [PN13QP218, PN14QP438, PN15QP880, PN16QP1761]
+    no_btp_params = [PN13QP218s, PN13QP218, PN14QP438, PN15QP880, PN16QP1761]
 
     for params in no_btp_params:
         config.fhe_param = params
