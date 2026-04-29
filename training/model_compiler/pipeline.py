@@ -185,11 +185,16 @@ def run_btp_compilation(
 
 def post_process(graph: LayerAbstractGraph):
     slot_num = config.fhe_param.poly_modulus_degree / 2
-    for node in graph.dag.nodes:
+    for node in list(graph.dag.nodes):
         if isinstance(node, ComputeNode):
             node.up_scale_str = list()
             node.down_scale_str = list()
             transforms.populate_pack_num(graph.dag, node, slot_num)
+            if node.layer_type == 'reshape':
+                f_node = list(graph.dag.successors(node))[0]
+                if graph.dag.out_degree(f_node) == 0:
+                    graph.dag.remove_node(f_node)
+                    graph.dag.remove_node(node)
 
     transforms.set_graph_scale(graph)
     process_levels(graph)
