@@ -76,7 +76,18 @@ void MultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
         bias_pt[n_packed_out_channel_idx] = generate_bias_pt_for_index(ctx_copy, n_packed_out_channel_idx);
     });
 
-    // mask_pt was already populated by prepare_weight_lazy() above (shared across ct_idx).
+    if (stride_[0] != 1) {
+        mask_pt.resize(n_out_channel_);
+        parallel_for(n_packed_in_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
+            for (int i = 0; i < static_cast<int>(n_channel_per_ct); ++i) {
+                const int channel_global = ct_idx * static_cast<int>(n_channel_per_ct) + i;
+                if (channel_global >= static_cast<int>(n_out_channel_)) {
+                    break;
+                }
+                mask_pt[channel_global] = generate_mask_pt_for_indices(ctx_copy, ct_idx, i);
+            }
+        });
+    }
 }
 
 void MultiplexedConv2DPackedLayerDepthwise::prepare_weight_lazy() {
@@ -99,24 +110,7 @@ void MultiplexedConv2DPackedLayerDepthwise::prepare_weight_lazy() {
     cached_bias_n_channel_per_ct = n_channel_per_ct * prod(stride_);
     cached_total_block_size = n_block_per_ct * prod(bias_shape * cached_bias_skip);
 
-    // weight_rearranged and bias_rearranged are still generated on-demand in run_core.
-    // mask_pt is generated offline even in lazy mode so run_task_lazy can bind it as a
-    // static Argument. Each (ct_idx, i) gets a unique source-position mask (target mask
-    // rotated by -step_k) because step_k depends on the full channel_global.
     mask_pt.clear();
-    if (stride_[0] != 1) {
-        mask_pt.resize(n_out_channel_);
-        CkksContext ctx = CkksContext::create_empty_context(this->param_);
-        parallel_for(n_packed_in_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-            for (int i = 0; i < static_cast<int>(n_channel_per_ct); ++i) {
-                const int channel_global = ct_idx * static_cast<int>(n_channel_per_ct) + i;
-                if (channel_global >= static_cast<int>(n_out_channel_)) {
-                    break;
-                }
-                mask_pt[channel_global] = generate_mask_pt_for_indices(ctx_copy, ct_idx, i);
-            }
-        });
-    }
 }
 
 vector<double> MultiplexedConv2DPackedLayerDepthwise::select_tensor(int num) const {
@@ -307,11 +301,17 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksConte
                                          (rotated_col - base_col);
                 steps.push_back(-rot_step);
             }
+            const bool lazy_mask = mask_pt.empty();
             for (int i = 0; i < n_channel_per_ct; i++) {
                 if ((ct_idx * n_channel_per_ct + i) >= n_out_channel_) {
                     continue;
                 }
-                auto m_pt = ctx_copy.ringt_to_mul(mask_pt[ct_idx * n_channel_per_ct + i], level_ - 1);
+                CkksPlaintextRingt gen_m_pt;
+                if (lazy_mask) {
+                    gen_m_pt = generate_mask_pt_for_indices(ctx_copy, ct_idx, i);
+                }
+                const CkksPlaintextRingt& m_pt_rt = lazy_mask ? gen_m_pt : mask_pt[ct_idx * n_channel_per_ct + i];
+                auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level_ - 1);
                 auto c_m = ctx_copy.mult_plain_mul(s, m_pt);
                 c_m = ctx_copy.rescale(c_m, ctx_copy.get_parameter().get_default_scale());
                 result_ct[ct_idx * n_channel_per_ct + i] = ctx_copy.rotate(c_m, steps[i / skip_[0]]);

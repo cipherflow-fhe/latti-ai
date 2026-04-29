@@ -303,3 +303,69 @@ class ConcatLayer:
             result.append(rescale(packed))
 
         return result
+
+    def call_multiple_inputs_mixed_pack(
+        self,
+        inputs: list[list[CkksCiphertextNode]],
+        input_n_channels: list[int],
+        input_packs: list[int],
+        input_skips: list[int],
+        out_pack: int,
+        out_skip: int,
+        mask_pts: list[CkksPlaintextRingtNode],
+    ) -> list[CkksCiphertextNode]:
+        """Concatenate dim=0 features whose input packs are NOT identical.
+
+        Each input i has its own ``pack_i`` and ``skip_i`` (slot stride). The
+        output CT uses ``out_pack`` and ``out_skip``. For every global channel
+        we mask the source CT at its native slot, then rotate to the destination
+        slot under the output packing, and accumulate into the target output CT.
+
+        Args:
+            inputs:           List of CT node lists, one list per input.
+            input_n_channels: Number of logical channels per input.
+            input_packs:      ``pack_num`` per input (channels packed per CT).
+            input_skips:      Slot stride per input (slots between adjacent channels in a CT).
+            out_pack:         ``pack_num`` of the concat output.
+            out_skip:         Slot stride of the concat output.
+            mask_pts:         Pre-created mask plaintext nodes, one per global channel.
+
+        Returns:
+            Output CT node list with length ``ceil(sum(input_n_channels) / out_pack)``.
+        """
+        # Cumulative channel counts for fast (global_ch -> input_idx, local_ch) lookup.
+        cumulative = [0]
+        for n in input_n_channels:
+            cumulative.append(cumulative[-1] + n)
+        total_channels = cumulative[-1]
+
+        n_out_ct = math.ceil(total_channels / out_pack)
+        result: list = [None] * n_out_ct
+
+        for global_ch in range(total_channels):
+            # Locate source input + local channel
+            input_idx = 0
+            for i in range(len(input_n_channels)):
+                if global_ch < cumulative[i + 1]:
+                    input_idx = i
+                    break
+            local_ch = global_ch - cumulative[input_idx]
+
+            pack_i = input_packs[input_idx]
+            skip_i = input_skips[input_idx]
+            src_ct_idx = local_ch // pack_i
+            src_slot = (local_ch % pack_i) * skip_i
+
+            dst_ct_idx = global_ch // out_pack
+            dst_slot = (global_ch % out_pack) * out_skip
+
+            masked = mult(inputs[input_idx][src_ct_idx], mask_pts[global_ch])
+            rot_step = -(dst_slot - src_slot)
+            rotated = masked if rot_step == 0 else rotate_cols(masked, [rot_step])[0]
+
+            if result[dst_ct_idx] is None:
+                result[dst_ct_idx] = rotated
+            else:
+                result[dst_ct_idx] = add(result[dst_ct_idx], rotated)
+
+        return [rescale(ct) for ct in result]
