@@ -26,12 +26,17 @@ set(LATTISENSE_BUILD_TESTS OFF CACHE BOOL "Build lattisense unit tests" FORCE)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(CMAKE_C_COMPILER "/usr/bin/gcc-12")
-set(CMAKE_CXX_COMPILER "/usr/bin/g++-12")
+# set(CMAKE_C_COMPILER "/usr/bin/gcc-12")
+# set(CMAKE_CXX_COMPILER "/usr/bin/g++-12")
 
 project(latti-ai)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -maes")
+# -maes is x86-only; skip on ARM macOS
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+  # AES-NI is always available on ARM64
+else()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -maes")
+endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_C_STANDARD_REQUIRED ON)
