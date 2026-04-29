@@ -96,11 +96,33 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     # correctly by the lazy-loading in the main loop (which also computes the right CT count
     # for big_size layers).
     if len(config_info['input_feature']) > 1:
+        # First-use lookup: {input_fid: first consumer layer config}
+        first_use = {}
+        for lyr in config_info['layer'].values():
+            for fid in lyr.get('feature_input', []):
+                if fid in config_info['input_feature'] and fid not in first_use:
+                    first_use[fid] = lyr
+
         for input_fid in config_info['input_feature']:
             feat = config_info['feature'][input_fid]
             pack = int(feat['pack_num'])
             level = int(feat['level'])
-            n_packed = math.ceil(int(feat['channel']) / pack)
+            n_in_channel_fid = int(feat['channel'])
+            n_packed = math.ceil(n_in_channel_fid / pack)
+            # Mirror the big_size expansion logic from the per-layer loop below:
+            # big_size conv2d / avgpool / mult_scalar consume inputs as
+            #   n_in_channel * block_expansion[0] * block_expansion[1]
+            # ciphertexts, not the default ceil(channel / pack_num).
+            consumer = first_use.get(input_fid)
+            if (
+                consumer is not None
+                and consumer.get('is_big_size', False)
+                and (consumer['type'] == 'conv2d' or 'avgpool' in consumer['type'] or consumer['type'] == 'mult_scalar')
+            ):
+                input_shape = feat['shape']
+                be0 = math.ceil(input_shape[0] / block_shape[0])
+                be1 = math.ceil(input_shape[1] / block_shape[1])
+                n_packed = n_in_channel_fid * be0 * be1
             x = [CkksCiphertextNode(input_fid + f'input{k}', level=level) for k in range(n_packed)]
             feature_id_to_nodes_map[input_fid] = x
             input_args.append(Argument(input_fid, x))
@@ -275,28 +297,9 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
                     if lazy:
                         conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
-                        if isinstance(conv0_layer, MultiplexedConv2DPackedLayer):
-                            mask_pt_nodes = conv0_layer.make_mask_pt_nodes(layer_id)
-                            layer_output_nodes = conv0_layer.call_custom_compute(
-                                feature_id_to_nodes_map[layer_input_feature_ids[0]],
-                                conv_data_source,
-                                mask_pt_nodes,
-                            )
-                            if mask_pt_nodes:
-                                input_args.append(Argument(f'convm_{layer_id}', mask_pt_nodes))
-                        elif isinstance(conv0_layer, MultiplexedConv2DPackedLayerDepthwise):
-                            mask_pt_nodes = conv0_layer.make_mask_pt_nodes(layer_id)
-                            layer_output_nodes = conv0_layer.call_custom_compute(
-                                feature_id_to_nodes_map[layer_input_feature_ids[0]],
-                                conv_data_source,
-                                mask_pt_nodes,
-                            )
-                            if mask_pt_nodes:
-                                input_args.append(Argument(f'convm_{layer_id}', mask_pt_nodes))
-                        else:
-                            layer_output_nodes = conv0_layer.call_custom_compute(
-                                feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source
-                            )
+                        layer_output_nodes = conv0_layer.call_custom_compute(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source
+                        )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                         input_args.append(Argument(f'{layer_id}', [conv_data_source]))
                     else:
@@ -542,26 +545,73 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         elif 'concat2d' in layer_config['type']:
             # Check if any input has n_channel not divisible by n_channel_per_ct
             input_n_channels = []
+            input_packs = []
             has_uneven = False
             for input_fid in layer_input_feature_ids:
                 feat = config_info['feature'][input_fid]
                 n_ch = int(feat['channel'])
                 input_n_channels.append(n_ch)
+                input_packs.append(int(feat['pack_num']))
                 if n_ch % pack != 0:
                     has_uneven = True
 
-            if has_uneven:
+            mixed_pack = len(set(input_packs)) > 1
+
+            if mixed_pack:
+                # Mixed-pack path: inputs come with different pack_num; neither the
+                # fast merge nor the uneven-same-pack path works. Use the general
+                # mask + rotate + add repack routine, driven by each input's own
+                # pack/skip and the output feature's pack/skip.
+                out_feat = config_info['feature'][layer_output_feature_ids[0]]
+                out_pack = int(out_feat['pack_num'])
+                out_skip_raw = out_feat.get('skip', 1)
+                out_skip = int(out_skip_raw[0] if isinstance(out_skip_raw, list) else out_skip_raw)
+                input_skips = []
+                for input_fid in layer_input_feature_ids:
+                    sk = config_info['feature'][input_fid].get('skip', 1)
+                    input_skips.append(int(sk[0] if isinstance(sk, list) else sk))
+
+                concat_layer = ConcatLayer()
+                input_node_lists = [feature_id_to_nodes_map[fid] for fid in layer_input_feature_ids]
+                total_channels = sum(input_n_channels)
+                mask_pts = [CkksPlaintextRingtNode(f'concat_mask_{layer_id}_{i}') for i in range(total_channels)]
+                layer_output_nodes = concat_layer.call_multiple_inputs_mixed_pack(
+                    input_node_lists,
+                    input_n_channels,
+                    input_packs,
+                    input_skips,
+                    out_pack,
+                    out_skip,
+                    mask_pts,
+                )
+                feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                input_args.append(Argument(f'concat_mask_{layer_id}', mask_pts))
+            elif has_uneven:
                 # Uneven path: per-channel mask+rotate+add
                 concat_layer = ConcatLayer()
                 input_node_lists = [feature_id_to_nodes_map[fid] for fid in layer_input_feature_ids]
-                input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
+                first_feat = config_info['feature'][layer_input_feature_ids[0]]
+                # For dim=0 features there is no H/W; synthesise a virtual 1D
+                # layout so the 2D uneven algorithm still produces correct slot
+                # offsets. With shape=[1, skip_scalar] and skip=[1, 1]:
+                #   block_size = skip_scalar
+                #   src_slot_base = local_ch * skip_scalar
+                # which matches the physical packing of a dim=0 feature.
+                if first_feat.get('dim', 2) == 0:
+                    feat_skip = first_feat.get('skip', 1)
+                    skip_scalar = int(feat_skip[0] if isinstance(feat_skip, list) else feat_skip)
+                    input_shape = [1, skip_scalar]
+                    use_skip = [1, 1]
+                else:
+                    input_shape = first_feat['shape']
+                    use_skip = skip
                 total_channels = sum(input_n_channels)
 
                 # Create mask plaintext nodes for each global channel
                 mask_pts = [CkksPlaintextRingtNode(f'concat_mask_{layer_id}_{i}') for i in range(total_channels)]
 
                 layer_output_nodes = concat_layer.call_multiple_inputs_uneven(
-                    input_node_lists, input_n_channels, pack, input_shape, skip, mask_pts
+                    input_node_lists, input_n_channels, pack, input_shape, use_skip, mask_pts
                 )
                 feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                 input_args.append(Argument(f'concat_mask_{layer_id}', mask_pts))
