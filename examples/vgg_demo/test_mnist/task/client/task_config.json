@@ -1,0 +1,57 @@
+{
+    "task_type": "fhe",
+    "task_num": 1,
+    "server_start_id": 0,
+    "server_end_id": 0,
+    "block_shape": [
+        16,
+        16
+    ],
+    "is_absorb_polyrelu": false,
+    "pack_style": "ordinary",
+    "task_input_id": [
+        "input"
+    ],
+    "task_output_id": [
+        "output"
+    ],
+    "task_input_param": {
+        "input": {
+            "dim": 2,
+            "channel": 1,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 7,
+            "depth": -1,
+            "pack_num": 32
+        }
+    },
+    "task_output_param": {
+        "output": {
+            "dim": 0,
+            "channel": 10,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "skip": 256,
+            "ckks_parameter_id": "param0",
+            "level": 0,
+            "depth": -1,
+            "pack_num": 32
+        }
+    },
+    "server_task": {
+        "nn_layers_ct_0": {
+            "enable_fpga": true
+        }
+    },
+    "use_btp": false
+}

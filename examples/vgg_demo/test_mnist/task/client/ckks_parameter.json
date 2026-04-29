@@ -1,0 +1,13 @@
+{
+    "param0": {
+        "poly_modulus_degree": 16384,
+        "n_mult_level": 9,
+        "log_default_scale": 34,
+        "block_shape": [
+            16,
+            16
+        ],
+        "param_name": "PN14QP438",
+        "pack_num": 4.0
+    }
+}

@@ -95,20 +95,25 @@ def compute_coefficients(func, max_n=5, tol=1e-8, limit=20, **func_kwargs):
 
     for n in range(max_n + 1):
 
-        def integrand(x):
-            # Handle scalar and array inputs
-            x_arr = np.array(x, dtype=float) if np.isscalar(x) else x
-            # Pass extra arguments when calling the function
+        def integrand_scalar(x):
+            """quad 要求返回 Python float；这里显式标量化避免 1-d ndarray。"""
+            x_scalar = float(x)
+            # 保证传给 activation 的是 1-d，兼容依赖向量输入的 numpy_func
+            x_arr = np.array([x_scalar], dtype=float)
             if func_kwargs:
                 fx = func(x_arr, **func_kwargs)
             else:
                 fx = func(x_arr)
-            return fx * hermite_prob(n, x_arr) * np.exp(-(x_arr**2) / 2)
+
+            fx_scalar = float(np.asarray(fx, dtype=float).reshape(-1)[0])
+            h_scalar = float(np.asarray(hermite_prob(n, x_arr), dtype=float).reshape(-1)[0])
+            gauss = float(np.exp(-(x_scalar**2) / 2))
+            return fx_scalar * h_scalar * gauss
 
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', category=RuntimeWarning)
             I_n, _ = quad(
-                lambda x: np.array(integrand(x)),  # ensure output is array
+                integrand_scalar,
                 -limit,
                 limit,
                 epsabs=tol,
