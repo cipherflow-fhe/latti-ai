@@ -38,12 +38,14 @@ from inference.model_generator.layers.multiplexed_conv2d_pack_layer import *
 from inference.model_generator.layers.multiplexed_conv2d_pack_layer_depthwise import *
 from inference.model_generator.layers.poly_relu2d import *
 from inference.model_generator.layers.upsample_layer import *
+from inference.model_generator.layers.Softmax_layer_base import SoftmaxLayerBase
 from training.model_compiler.components import (
     N16QP1546H192H32,
     PN13QP218,
     PN14QP438,
     PN15QP880,
     PN16QP1761,
+    ToyBTP,      # ← 新增
 )
 
 
@@ -59,6 +61,7 @@ _FHE_PARAMS = {
     'PN15QP880': PN15QP880,
     'PN16QP1761': PN16QP1761,
     'N16QP1546H192H32': N16QP1546H192H32,
+    'toy_btp': ToyBTP,     # ← 新增(用于尝试mnist使用自举的上下文)
 }
 
 
@@ -68,6 +71,8 @@ def set_param(param_name):
     fhe = _FHE_PARAMS[param_name]
     if param_name == 'N16QP1546H192H32':
         param = CkksBtpParam.create_default_param()
+    elif param_name == 'toy_btp':
+        param = CkksBtpParam.create_toy_param()    # 新增
     else:
         param = Param.create_ckks_custom_param(n=fhe.poly_modulus_degree, p=fhe.p, q=fhe.q)
     set_fhe_param(param)
@@ -534,6 +539,30 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     input_args.append(Argument(f'select_tensor_pt_{layer_id}', select_tensor_pt))
 
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+
+        elif layer_config['type'] == 'softmax':
+            softmax_layer = SoftmaxLayerBase(
+                n_channel=n_in_channel,
+                n_channel_per_ct=pack,
+                skip=skip,
+                exp_order=layer_config['exp_order'],
+                inv_order=layer_config['inv_order'],
+                input_min=layer_config['input_min'],
+                input_max=layer_config['input_max'],
+                n_goldschmidt_iter=layer_config.get('n_goldschmidt_iter', 2),
+            )
+            softmax_mask_pt  = CkksPlaintextRingtNode(f'softmax_mask_pt_{layer_id}_0')
+            softmax_mask_pt2 = CkksPlaintextRingtNode(f'softmax_mask_pt_{layer_id}_1')
+            layer_output_nodes = softmax_layer.call(
+                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                softmax_mask_pt,
+                softmax_mask_pt2,
+            )
+            input_args.append(Argument(f'softmax_mask_pt_{layer_id}_0', softmax_mask_pt))
+            input_args.append(Argument(f'softmax_mask_pt_{layer_id}_1', softmax_mask_pt2))
+            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+
+
 
         elif layer_config['type'] == 'fc0':
             n_packed_in_channel = math.ceil(n_in_channel / (n // 2))

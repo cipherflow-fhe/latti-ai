@@ -43,3 +43,24 @@ if(INFERENCE_SDK_ENABLE_GPU)
 endif()
 
 add_test(NAME test_e2e COMMAND test_e2e)
+
+# ── Softmax layer unit test ───────────────────────────────────────────────────
+# 与 test_fhe_layers_hetero 保持一致：链接 fhe_layers（含 SoftmaxLayer 实现）
+# 和 lattisense（CKKS 上下文、密钥操作等）
+add_executable(test_softmax_layer test_softmax_layer.cpp ut_util.cpp )
+target_include_directories(test_softmax_layer PRIVATE
+    ${CMAKE_SOURCE_DIR}/inference/fhe_layers
+)
+target_link_libraries(test_softmax_layer PUBLIC fhe_layers lattisense)
+add_test(NAME test_softmax_layer COMMAND test_softmax_layer)
+
+# ── Softmax layer base (无自举) 单元测试 ─────────────────────────────────────
+add_executable(test_softmax_layer_base test_softmax_layer_base.cpp ut_util.cpp)
+target_include_directories(test_softmax_layer_base PRIVATE
+    ${CMAKE_SOURCE_DIR}/inference/fhe_layers
+)
+target_link_libraries(test_softmax_layer_base PUBLIC fhe_layers lattisense)
+add_test(NAME test_softmax_layer_base COMMAND test_softmax_layer_base)
+
+add_executable(test_n65536_smoke test_n65536_smoke.cpp)
+target_link_libraries(test_n65536_smoke PUBLIC lattisense)

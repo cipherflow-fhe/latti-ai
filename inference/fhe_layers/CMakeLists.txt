@@ -1,4 +1,6 @@
 add_library(fhe_layers 
+  softmax_layer_base.cpp
+  softmax_layer.cpp 
   conv2d_layer.cpp 
   upsample_layer.cpp
   upsample_nearest_layer.cpp

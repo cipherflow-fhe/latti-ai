@@ -51,6 +51,13 @@ public:
 
     virtual ls::CkksPlaintextRingt generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int ct_idx) const = 0;
 
+    /////////////////////////////////////////////////////
+    // 新增，用于层级计算
+    // 返回多项式求值的理论乘法深度（可用于 level 预算）
+    int get_depth() const { 
+        return compute_bsgs_level_cost(order); 
+    }
+
 protected:
     int N;
     int cached_channel;
