@@ -85,6 +85,35 @@ protected:
     double default_scale;
 };
 
+// ───────────────────────────────────────────────────────────────────
+// N=65536 普通 CKKS（无自举），仅生成 softmax 需要的旋转密钥
+// ───────────────────────────────────────────────────────────────────
+class CkksN65536Fixture : public CpuFixture {
+public:
+    CkksN65536Fixture()
+        : N{1 << 16},                         // 65536
+          n_slot{N / 2},
+          param{ls::CkksParameter::create_parameter(N)},
+          context{ls::CkksContext::create_random_context(param)},
+          min_level{1},
+          max_level{param.get_max_level()},
+          default_scale{param.get_default_scale()} {
+        // 关键：只为 softmax 的 sum_slots / broadcast_slots 生成旋转密钥
+        // 若 n_channel_per_ct=8，再加 ±4；以此类推 step=1,2,4,...,n_ch/2
+        std::vector<int32_t> rots = {+1, -1, +2, -2, +4, -4, +8, -8};
+        context.gen_rotation_keys_for_rotations(rots, /*include_swap_rows=*/false);
+    }
+
+protected:
+    int N;
+    int n_slot;
+    ls::CkksParameter param;
+    ls::CkksContext context;
+    int min_level;
+    int max_level;
+    double default_scale;
+};
+
 class GpuFixture {
 public:
     GpuFixture() {}
@@ -136,6 +165,27 @@ public:
         n_slot = n / 2;
     }
 
+protected:
+    int n;
+    int n_slot;
+    ls::CkksBtpParameter param;
+    ls::CkksBtpContext context;
+    double default_scale;
+};
+
+class LattigoCkksBtpToyFixture {
+public:
+    LattigoCkksBtpToyFixture()
+        : param{ls::CkksBtpParameter::create_toy_parameter()},
+          context{ls::CkksBtpContext::create_random_context(param)}
+          // default_scale{param.get_default_scale()} 
+        {
+        context.gen_rotation_keys();
+        // n = param.get_n();
+        n = context.get_parameter().get_n();
+        n_slot = n / 2;
+        default_scale = context.get_parameter().get_default_scale();
+    }
 protected:
     int n;
     int n_slot;

@@ -18,7 +18,7 @@
 
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
-
+#include "fixture.hpp"
 #include <tuple>
 #include <math.h>
 #include <vector>
@@ -55,6 +55,7 @@
 #include "fhe_layers/mult_scaler.h"
 #include "fhe_layers/upsample_layer.h"
 #include "fhe_layers/upsample_nearest_layer.h"
+#include "fhe_layers/softmax_layer_base.h"
 #include "ut_util.h"
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include <lattisense/lib/nlohmann/json.hpp>
@@ -86,6 +87,12 @@ struct TaskMetrics {
 std::string extract_task_config(const fs::path& project_path, const fs::path& base_path) {
     auto rel = fs::relative(project_path, base_path);
     return rel.parent_path().string();  // removes the trailing "server" component
+}
+
+static Array<double, 1> make_array_test(const std::vector<double>& vec) {
+        Array<double, 1> arr({static_cast<uint64_t>(vec.size())});
+        for (size_t i = 0; i < vec.size(); ++i) arr[static_cast<uint64_t>(i)] = vec[i];
+        return arr;  // 触发移动构造
 }
 
 class MetricsCollector {
@@ -2617,3 +2624,122 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "upsample_nearest_layer", "", Hete
         run_upsample_nearest_test(4, 8);
     }
 }
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// ── Softmax：用 CkksN65536Fixture，不走 HeteroFixture ──────────────────────
+TEST_CASE_METHOD(CkksN65536Fixture, "softmax_feature0d", "[softmax]") {
+    // 对应 test_gen_layers.py 里两个 test_case 的参数，这里可以不用写阶数，在gen_layers里已经指定了
+    struct TestParam {
+        uint32_t n_channel;
+        uint32_t n_channel_per_ct;
+        double   input_min;
+        double   input_max;
+        int      level;
+    };
+    vector<TestParam> cases = {
+        {4,  4,  -1.0, 1.0, 20},        // {4,  4,  -2.0, 0.0, 7, 4, 20},
+        // {16,  4,  -1.0, 1.0, 20},      //   {16, 4,  -1.0, 3.0, 7, 4, 20},
+    };
+
+    for (auto& tc : cases) {
+        SECTION("ch=" + to_string(tc.n_channel) + "_per_ct=" + to_string(tc.n_channel_per_ct)) {
+
+            // ── 构造明文输入 ────────────────────────────────────────────────
+            std::mt19937 rng(42);
+            std::uniform_real_distribution<double> dist(tc.input_min, tc.input_max);
+            vector<double> input(tc.n_channel);
+            for (auto& v : input) v = dist(rng);
+
+            // ── 加密输入，对齐 test_softmax_layer_base.cpp 的 encrypt_input ─ 
+            uint32_t n_ct = (tc.n_channel + tc.n_channel_per_ct - 1) / tc.n_channel_per_ct;
+            Feature0DEncrypted enc_input(&context, tc.level);
+            enc_input.n_channel        = tc.n_channel;
+            enc_input.n_channel_per_ct = tc.n_channel_per_ct;
+            enc_input.skip             = 1;
+            enc_input.pack_type        = 0;
+            enc_input.level            = tc.level;
+            for (uint32_t ci = 0; ci < n_ct; ++ci) {
+                vector<double> slot_vec(n_slot, 0.0);
+                for (uint32_t i = 0; i < tc.n_channel_per_ct; ++i) {
+                    uint32_t idx = ci * tc.n_channel_per_ct + i;
+                    if (idx < tc.n_channel) slot_vec[i] = input[idx];
+                }
+                auto pt = context.encode(slot_vec, tc.level, default_scale);
+                enc_input.data.push_back(context.encrypt_asymmetric(pt));
+            }
+
+            // ── 构造输出密文占位 ────────────────────────────────────────────
+            Feature0DEncrypted enc_output(&context, 1);
+            for (uint32_t i = 0; i < n_ct; ++i)
+                enc_output.data.push_back(context.new_ciphertext(1, default_scale));
+
+            // ── 构造 slot0 掩码：[1, 0, ..., 0] ────────────────────────────
+            vector<double> mask_vec(n_slot, 0.0);
+            mask_vec[0] = 1.0;
+            // 两个独立掩码节点
+            vector<CkksPlaintextRingt> softmax_mask_pt_0_vec;
+            softmax_mask_pt_0_vec.push_back(context.encode_ringt(mask_vec, default_scale));
+            vector<CkksPlaintextRingt> softmax_mask_pt_1_vec;
+            softmax_mask_pt_1_vec.push_back(context.encode_ringt(mask_vec, default_scale));
+
+            // ── 加载指令并构造 cxx_args ──────────────────────────────────────
+            fs::path project_path = base_path
+                / "CKKS_softmax"
+                / ("ch_" + to_string(tc.n_channel) + "_per_ct_" + to_string(tc.n_channel_per_ct))
+                / ("level_" + to_string(tc.level))
+                / "server";
+
+            auto arg_names = read_arg_names(project_path);
+            vector<CxxVectorArgument> cxx_args;
+            for (const auto& name : arg_names) {
+                if (name.rfind("input_ct", 0) == 0)
+                    cxx_args.push_back({name, &enc_input.data});
+                else if (name == "softmax_mask_pt_0")
+                    cxx_args.push_back({name, &softmax_mask_pt_0_vec});
+                else if (name == "softmax_mask_pt_1")
+                    cxx_args.push_back({name, &softmax_mask_pt_1_vec});
+                else if (name.rfind("output_ct", 0) == 0)
+                    cxx_args.push_back({name, &enc_output.data});
+            }
+
+            FheTaskCpu fhe_task(project_path.string());
+            fhe_task.run(&context, cxx_args);
+        
+            // ── 解密并对比明文 softmax ──────────────────────────────────────
+            enc_output.n_channel        = tc.n_channel;      
+            enc_output.n_channel_per_ct = tc.n_channel_per_ct;     
+            enc_output.skip             = 1;   
+            enc_output.pack_type        = 0;    
+            Array<double, 1> arr = enc_output.unpack();
+            vector<double> decrypted(tc.n_channel);
+            for (uint32_t i = 0; i < tc.n_channel; ++i)
+                decrypted[i] = arr[static_cast<uint64_t>(i)];
+
+            // 明文 softmax
+            vector<double> expected(tc.n_channel);
+            double sum_exp = 0.0;
+            for (double v : input) sum_exp += std::exp(v);
+            for (uint32_t i = 0; i < tc.n_channel; ++i)
+                expected[i] = std::exp(input[i]) / sum_exp;
+
+            // 误差检查
+            double max_err = 0.0, sum_sq = 0.0;
+            for (uint32_t i = 0; i < tc.n_channel; ++i) {
+                double e = std::fabs(decrypted[i] - expected[i]);
+                max_err = std::max(max_err, e);
+                sum_sq += e * e;
+            }
+
+            auto cmp = compare(make_array_test(expected), make_array_test(decrypted));
+            printf("[STATS softmax] max_err=%.2e  rmse=%.2e  max_abs=%.2e\n", cmp.max_error, cmp.rmse, cmp.max_abs);
+            constexpr double kRelTol = 5.0e-2;   // 5% relative error
+            REQUIRE(cmp.max_error < kRelTol * cmp.max_abs);
+            double sum = std::accumulate(decrypted.begin(), decrypted.end(), 0.0);
+            REQUIRE(std::fabs(sum - 1.0) < 1e-3);
+            constexpr double kTol = 1e-4;
+            REQUIRE(max_err < kTol);
+        }
+    }
+} 
+

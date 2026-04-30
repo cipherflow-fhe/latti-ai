@@ -32,7 +32,7 @@ from inference.model_generator.layers.add_pack import AddLayer  # noqa: E402
 from inference.model_generator.layers.avgpool2d_layer import Avgpool2DLayer  # noqa: E402
 from inference.model_generator.layers.mult_scaler import MultScalarLayer  # noqa: E402
 from training.model_export.onnx_to_json import *  # noqa: E402
-
+from inference.model_generator.layers.Softmax_layer_base import SoftmaxLayerBase
 
 def export_to_onnx(model, inputs, output_names, onnx_path, dynamic_axes=None, opset_version=18):
     """
@@ -1170,6 +1170,56 @@ class TestLayerExport(unittest.TestCase):
             / f'level_{level}'
             / 'server',
         )
+
+    def test_softmax_layer(self):
+        # 直接用 N=65536 的预置参数
+        set_param('PN16QP1761')
+        level = 20  
+        # 参数组合
+        test_cases = [
+            dict(n_channel=4,  n_channel_per_ct=4,  input_min=-1.0, input_max=1.0, exp_order=7, inv_order=4),
+            dict(n_channel=16,  n_channel_per_ct=4,  input_min=-1.0, input_max=1.0, exp_order=7, inv_order=4),
+        ]
+
+        for tc in test_cases:
+            n_channel        = tc['n_channel']
+            n_channel_per_ct = tc['n_channel_per_ct']
+            n_ct = math.ceil(n_channel / n_channel_per_ct)
+            skip = 1
+
+            print(f'sub-test: n_channel={n_channel}, n_channel_per_ct={n_channel_per_ct}')
+
+            # 构造输入密文节点
+            input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+            # 构造 slot0 掩码节点（两个独立节点）
+            softmax_mask_pt  = CkksPlaintextRingtNode('softmax_mask_pt_0')
+            softmax_mask_pt2 = CkksPlaintextRingtNode('softmax_mask_pt_1')
+            # 构造层并建图
+            softmax_layer = SoftmaxLayerBase(
+                n_channel=n_channel,
+                n_channel_per_ct=n_channel_per_ct,
+                skip=skip,
+                exp_order=tc['exp_order'],
+                inv_order=tc['inv_order'],
+                input_min=tc['input_min'],
+                input_max=tc['input_max'],
+            )
+            output_ct = softmax_layer.call(input_ct, softmax_mask_pt, softmax_mask_pt2)
+
+            input_args = [
+                Argument('input_ct', input_ct),
+                Argument('softmax_mask_pt_0', softmax_mask_pt),
+                Argument('softmax_mask_pt_1', softmax_mask_pt2),
+            ]
+            process_custom_task(
+                input_args=input_args,
+                output_args=[Argument('output_ct', output_ct)],
+                output_instruction_path=base_path
+                / f'CKKS_softmax'
+                / f'ch_{n_channel}_per_ct_{n_channel_per_ct}'
+                / f'level_{level}'
+                / 'server',
+            )
 
 
 if __name__ == '__main__':
