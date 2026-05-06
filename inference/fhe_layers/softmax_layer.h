@@ -19,22 +19,16 @@
 #pragma once
 
 #include <cstdint>
-#include <functional>
 #include <vector>
 #include "layer.h"
 #include "../data_structs/feature0d.h"
 
 class SoftmaxLayer : public Layer {
 public:
-    using KernelFn =
-        std::function<std::vector<ls::CkksCiphertext>(ls::CkksContext&, const std::vector<ls::CkksCiphertext>&)>;
-
     explicit SoftmaxLayer(const ls::CkksParameter& param_in,
                           uint32_t n_classes = 0,
-                          uint32_t input_level = 0,
-                          KernelFn kernel = nullptr);
+                          uint32_t input_level = 0);
 
-    void set_kernel(KernelFn kernel);
     void prepare_offline_args(uint32_t n_classes, uint32_t input_level);
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x) const;
     Feature0DEncrypted run(ls::CkksContext& ctx, const Feature0DEncrypted& x) const;
@@ -54,7 +48,6 @@ public:
     std::vector<ls::CkksPlaintext> recip_c0;
 
 private:
-    KernelFn kernel_;
     uint32_t n_classes_ = 0;
     uint32_t input_level_ = 0;
 };

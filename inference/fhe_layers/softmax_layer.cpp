@@ -21,16 +21,11 @@
 #include <array>
 #include <cmath>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 using namespace std;
 using namespace cxx_sdk_v2;
-
-#if defined(LATTI_AI_USE_LATTISENSE_CKKS_SOFTMAX_CPU_KERNEL)
-namespace cxx_sdk_v2 {
-std::vector<CkksCiphertext> ckks_softmax_cpu(CkksContext& ctx, const std::vector<CkksCiphertext>& x);
-}
-#endif
 
 namespace {
 constexpr int kMinSoftmaxInputLevel = 13;
@@ -49,18 +44,109 @@ constexpr std::array<double, 4> kRecipCoeffs = {
     0.0007824595670968044,
     -0.000010035965681343485,
 };
+
+const CkksPlaintextRingt& require_one(const vector<CkksPlaintextRingt>& values, const char* name) {
+    if (values.size() != 1) {
+        throw runtime_error(string("SoftmaxLayer requires exactly one offline arg for ") + name);
+    }
+    return values[0];
+}
+
+const CkksPlaintextMul& require_one(const vector<CkksPlaintextMul>& values, const char* name) {
+    if (values.size() != 1) {
+        throw runtime_error(string("SoftmaxLayer requires exactly one offline arg for ") + name);
+    }
+    return values[0];
+}
+
+const CkksPlaintext& require_one(const vector<CkksPlaintext>& values, const char* name) {
+    if (values.size() != 1) {
+        throw runtime_error(string("SoftmaxLayer requires exactly one offline arg for ") + name);
+    }
+    return values[0];
+}
+
+CkksCiphertext rescale_default(CkksContext& ctx, const CkksCiphertext& x) {
+    return ctx.rescale(x, ctx.get_parameter().get_default_scale());
+}
+
+CkksCiphertext mult_ringt_rescale(CkksContext& ctx, const CkksCiphertext& x, const CkksPlaintextRingt& pt) {
+    auto pt_mul = ctx.ringt_to_mul(pt, x.get_level());
+    return rescale_default(ctx, ctx.mult_plain_mul(x, pt_mul));
+}
+
+CkksCiphertext mult_relin_rescale(CkksContext& ctx, const CkksCiphertext& x, const CkksCiphertext& y) {
+    return rescale_default(ctx, ctx.relinearize(ctx.mult(x, y)));
+}
+
+CkksCiphertext drop_levels(CkksContext& ctx, const CkksCiphertext& x, int levels) {
+    CkksCiphertext result = x.copy();
+    for (int i = 0; i < levels; ++i) {
+        result = ctx.drop_level(result);
+    }
+    return result;
+}
+
+CkksCiphertext repeated_block_sum(CkksContext& ctx, CkksCiphertext x, uint32_t n_classes) {
+    CkksCiphertext total = move(x);
+    for (uint32_t step = 1; step < n_classes; step <<= 1U) {
+        auto rotated = ctx.advanced_rotate(total, static_cast<int32_t>(step));
+        total = ctx.add(total, rotated);
+    }
+    return total;
+}
+
+CkksCiphertext eval_exp_poly_v1(CkksContext& ctx,
+                                const CkksCiphertext& x,
+                                const CkksPlaintextMul& c5,
+                                const CkksPlaintext& c4,
+                                const CkksPlaintext& c3,
+                                const CkksPlaintext& c2,
+                                const CkksPlaintext& c1,
+                                const CkksPlaintext& c0) {
+    auto x_lm1 = drop_levels(ctx, x, 1);
+    auto x_lm2 = drop_levels(ctx, x, 2);
+    auto x_lm3 = drop_levels(ctx, x, 3);
+    auto x_lm4 = drop_levels(ctx, x, 4);
+
+    auto acc = rescale_default(ctx, ctx.mult_plain_mul(x, c5));
+    acc = ctx.add_plain(acc, c4);
+    acc = mult_relin_rescale(ctx, acc, x_lm1);
+    acc = ctx.add_plain(acc, c3);
+    acc = mult_relin_rescale(ctx, acc, x_lm2);
+    acc = ctx.add_plain(acc, c2);
+    acc = mult_relin_rescale(ctx, acc, x_lm3);
+    acc = ctx.add_plain(acc, c1);
+    acc = mult_relin_rescale(ctx, acc, x_lm4);
+    acc = ctx.add_plain(acc, c0);
+
+    auto exp_half = mult_relin_rescale(ctx, acc, acc);
+    return mult_relin_rescale(ctx, exp_half, exp_half);
+}
+
+CkksCiphertext eval_recip_poly_v1(CkksContext& ctx,
+                                  const CkksCiphertext& x,
+                                  const CkksPlaintextMul& c3,
+                                  const CkksPlaintext& c2,
+                                  const CkksPlaintext& c1,
+                                  const CkksPlaintext& c0) {
+    auto x_lm1 = drop_levels(ctx, x, 1);
+    auto x_lm2 = drop_levels(ctx, x, 2);
+
+    auto acc = rescale_default(ctx, ctx.mult_plain_mul(x, c3));
+    acc = ctx.add_plain(acc, c2);
+    acc = mult_relin_rescale(ctx, acc, x_lm1);
+    acc = ctx.add_plain(acc, c1);
+    acc = mult_relin_rescale(ctx, acc, x_lm2);
+    return ctx.add_plain(acc, c0);
+}
 }  // namespace
 
-SoftmaxLayer::SoftmaxLayer(const CkksParameter& param_in, uint32_t n_classes, uint32_t input_level, KernelFn kernel)
-    : Layer(param_in), kernel_(move(kernel)) {
+SoftmaxLayer::SoftmaxLayer(const CkksParameter& param_in, uint32_t n_classes, uint32_t input_level) : Layer(param_in) {
     if (n_classes == 0 && input_level == 0) {
         return;
     }
     prepare_offline_args(n_classes, input_level);
-}
-
-void SoftmaxLayer::set_kernel(KernelFn kernel) {
-    kernel_ = move(kernel);
 }
 
 void SoftmaxLayer::prepare_offline_args(uint32_t n_classes, uint32_t input_level) {
@@ -143,7 +229,8 @@ void SoftmaxLayer::prepare_offline_args(uint32_t n_classes, uint32_t input_level
     pt_quarter.emplace_back(
         ctx.encode_ringt(tile_scalar(0.25), param_.get_q(static_cast<int>(input_level))));
     pt_inv_classes.emplace_back(
-        ctx.encode_ringt(tile_scalar(1.0 / static_cast<double>(n_classes)), param_.get_q(static_cast<int>(input_level) - 1)));
+        ctx.encode_ringt(tile_scalar(1.0 / static_cast<double>(n_classes)),
+                         param_.get_q(static_cast<int>(input_level) - 1)));
 
     exp_c5.emplace_back(ctx.encode_mul(tile_scalar(kExpCoeffs[5]), exp_c5_level, q(exp_c5_level)));
     exp_c4.emplace_back(ctx.encode(tile_scalar(kExpCoeffs[4]), exp_c4_level, scale_exp_1));
@@ -162,15 +249,45 @@ void SoftmaxLayer::prepare_offline_args(uint32_t n_classes, uint32_t input_level
 }
 
 vector<CkksCiphertext> SoftmaxLayer::run_core(CkksContext& ctx, const vector<CkksCiphertext>& x) const {
-#if defined(LATTI_AI_USE_LATTISENSE_CKKS_SOFTMAX_CPU_KERNEL)
-    return ckks_softmax_cpu(ctx, x);
-#else
-    if (!kernel_) {
-        throw runtime_error(
-            "SoftmaxLayer kernel is not set. Please bind the lattisense softmax kernel before calling run().");
+    if (x.size() != 1) {
+        throw runtime_error("SoftmaxLayer::run_core currently supports exactly one input ciphertext.");
     }
-    return kernel_(ctx, x);
-#endif
+    if (n_classes_ == 0 || input_level_ == 0) {
+        throw runtime_error("SoftmaxLayer::run_core requires prepared offline args.");
+    }
+    if (static_cast<uint32_t>(x[0].get_level()) != input_level_) {
+        throw runtime_error("SoftmaxLayer::run_core input level does not match prepared offline args.");
+    }
+
+    const auto& pt_quarter_arg = require_one(pt_quarter, "pt_quarter");
+    const auto& pt_inv_classes_arg = require_one(pt_inv_classes, "pt_inv_classes");
+    const auto& exp_c5_arg = require_one(exp_c5, "exp_c5");
+    const auto& exp_c4_arg = require_one(exp_c4, "exp_c4");
+    const auto& exp_c3_arg = require_one(exp_c3, "exp_c3");
+    const auto& exp_c2_arg = require_one(exp_c2, "exp_c2");
+    const auto& exp_c1_arg = require_one(exp_c1, "exp_c1");
+    const auto& exp_c0_arg = require_one(exp_c0, "exp_c0");
+    const auto& recip_c3_arg = require_one(recip_c3, "recip_c3");
+    const auto& recip_c2_arg = require_one(recip_c2, "recip_c2");
+    const auto& recip_c1_arg = require_one(recip_c1, "recip_c1");
+    const auto& recip_c0_arg = require_one(recip_c0, "recip_c0");
+
+    auto logits_quarter = mult_ringt_rescale(ctx, x[0], pt_quarter_arg);
+    auto quarter_sum = repeated_block_sum(ctx, logits_quarter.copy(), n_classes_);
+    auto mean_quarter = mult_ringt_rescale(ctx, quarter_sum, pt_inv_classes_arg);
+    auto logits_quarter_lm1 = drop_levels(ctx, logits_quarter, 1);
+    auto centered_quarter = ctx.sub(logits_quarter_lm1, mean_quarter);
+
+    auto exp_logits = eval_exp_poly_v1(
+        ctx, centered_quarter, exp_c5_arg, exp_c4_arg, exp_c3_arg, exp_c2_arg, exp_c1_arg, exp_c0_arg);
+    auto denom = repeated_block_sum(ctx, exp_logits.copy(), n_classes_);
+    auto inv_denom = eval_recip_poly_v1(ctx, denom, recip_c3_arg, recip_c2_arg, recip_c1_arg, recip_c0_arg);
+    auto exp_logits_lm3 = drop_levels(ctx, exp_logits, 3);
+    auto softmax = mult_relin_rescale(ctx, exp_logits_lm3, inv_denom);
+
+    vector<CkksCiphertext> result;
+    result.push_back(move(softmax));
+    return result;
 }
 
 Feature0DEncrypted SoftmaxLayer::run(CkksContext& ctx, const Feature0DEncrypted& x) const {
