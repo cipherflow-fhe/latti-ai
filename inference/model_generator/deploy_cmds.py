@@ -37,6 +37,7 @@ from inference.model_generator.layers.multiplexed_conv1d_pack_layer import *
 from inference.model_generator.layers.multiplexed_conv2d_pack_layer import *
 from inference.model_generator.layers.multiplexed_conv2d_pack_layer_depthwise import *
 from inference.model_generator.layers.poly_relu2d import *
+from inference.model_generator.layers.softmax_layer import *
 from inference.model_generator.layers.upsample_layer import *
 from training.model_compiler.components import (
     N16QP1546H192H32,
@@ -329,6 +330,94 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             act_layer = SquareLayer(level)
             layer_output_nodes = act_layer.call(feature_id_to_nodes_map[layer_input_feature_ids[0]])
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+
+        elif layer_config['type'] == 'softmax':
+            feat = config_info['feature'][layer_input_feature_ids[0]]
+            if feat['dim'] != 0:
+                raise ValueError(
+                    f"softmax currently supports only Feature0D input, got dim={feat['dim']} for layer '{layer_id}'"
+                )
+
+            input_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
+            if len(input_nodes) != 1:
+                raise ValueError(
+                    f"softmax currently supports single ciphertext input, got {len(input_nodes)} for layer '{layer_id}'"
+                )
+
+            n_classes = int(layer_config['channel_input'])
+            if n_classes != int(layer_config['channel_output']):
+                raise ValueError(
+                    f"softmax channel mismatch in layer '{layer_id}': "
+                    f"in={layer_config['channel_input']} out={layer_config['channel_output']}"
+                )
+
+            input_level = input_nodes[0].level
+            if input_level < 13:
+                raise ValueError(
+                    f"softmax requires input level >= 13, got {input_level} for layer '{layer_id}'. "
+                    f"Please increase CKKS level budget or insert bootstrap before softmax."
+                )
+
+            exp_poly_input_level = input_level - 2
+            exp_c5_level = exp_poly_input_level
+            exp_c4_level = exp_poly_input_level - 1
+            exp_c3_level = exp_poly_input_level - 2
+            exp_c2_level = exp_poly_input_level - 3
+            exp_c1_level = exp_poly_input_level - 4
+            exp_c0_level = exp_poly_input_level - 5
+
+            recip_poly_input_level = input_level - 9
+            recip_c3_level = recip_poly_input_level
+            recip_c2_level = recip_poly_input_level - 1
+            recip_c1_level = recip_poly_input_level - 2
+            recip_c0_level = recip_poly_input_level - 3
+
+            min_coeff_level = min(exp_c0_level, recip_c0_level)
+            if min_coeff_level < 0:
+                raise ValueError(
+                    f"softmax coefficient level underflow in layer '{layer_id}': min level {min_coeff_level}. "
+                    f"Current input level={input_level} is insufficient for this approximation circuit."
+                )
+
+            softmax_layer = SoftmaxLayer(n_classes=n_classes)
+            pt_quarter = CkksPlaintextRingtNode(f'softmax_pt_quarter_{layer_id}')
+            pt_inv_classes = CkksPlaintextRingtNode(f'softmax_pt_inv_classes_{layer_id}')
+
+            exp_c5 = CkksPlaintextMulNode(f'softmax_exp_c5_{layer_id}', level=exp_c5_level)
+            exp_c4 = CkksPlaintextNode(f'softmax_exp_c4_{layer_id}', level=exp_c4_level)
+            exp_c3 = CkksPlaintextNode(f'softmax_exp_c3_{layer_id}', level=exp_c3_level)
+            exp_c2 = CkksPlaintextNode(f'softmax_exp_c2_{layer_id}', level=exp_c2_level)
+            exp_c1 = CkksPlaintextNode(f'softmax_exp_c1_{layer_id}', level=exp_c1_level)
+            exp_c0 = CkksPlaintextNode(f'softmax_exp_c0_{layer_id}', level=exp_c0_level)
+
+            recip_c3 = CkksPlaintextMulNode(f'softmax_recip_c3_{layer_id}', level=recip_c3_level)
+            recip_c2 = CkksPlaintextNode(f'softmax_recip_c2_{layer_id}', level=recip_c2_level)
+            recip_c1 = CkksPlaintextNode(f'softmax_recip_c1_{layer_id}', level=recip_c1_level)
+            recip_c0 = CkksPlaintextNode(f'softmax_recip_c0_{layer_id}', level=recip_c0_level)
+
+            softmax_node = softmax_layer.call(
+                input_nodes[0],
+                pt_quarter,
+                pt_inv_classes,
+                exp_coeffs=[exp_c0, exp_c1, exp_c2, exp_c3, exp_c4, exp_c5],
+                recip_coeffs=[recip_c0, recip_c1, recip_c2, recip_c3],
+                output_prefix=f'softmax_{layer_id}',
+            )
+            layer_output_nodes = [softmax_node]
+            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+
+            input_args.append(Argument(f'softmax_pt_quarter_{layer_id}', [pt_quarter]))
+            input_args.append(Argument(f'softmax_pt_inv_classes_{layer_id}', [pt_inv_classes]))
+            input_args.append(Argument(f'softmax_exp_c5_{layer_id}', [exp_c5]))
+            input_args.append(Argument(f'softmax_exp_c4_{layer_id}', [exp_c4]))
+            input_args.append(Argument(f'softmax_exp_c3_{layer_id}', [exp_c3]))
+            input_args.append(Argument(f'softmax_exp_c2_{layer_id}', [exp_c2]))
+            input_args.append(Argument(f'softmax_exp_c1_{layer_id}', [exp_c1]))
+            input_args.append(Argument(f'softmax_exp_c0_{layer_id}', [exp_c0]))
+            input_args.append(Argument(f'softmax_recip_c3_{layer_id}', [recip_c3]))
+            input_args.append(Argument(f'softmax_recip_c2_{layer_id}', [recip_c2]))
+            input_args.append(Argument(f'softmax_recip_c1_{layer_id}', [recip_c1]))
+            input_args.append(Argument(f'softmax_recip_c0_{layer_id}', [recip_c0]))
 
         elif layer_config['type'] in ('poly_relu2d', 'simple_polyrelu'):
             feat = config_info['feature'][layer_input_feature_ids[0]]
