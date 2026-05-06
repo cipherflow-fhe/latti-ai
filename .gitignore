@@ -1,17 +1,13 @@
-# Build
+# Build artifacts
 build/
 vs_build/
+Testing/
 
-# IDE
-.vs/
-.vscode/
-.idea/
-.cache/
-
-# Node
+# Dependencies
 node_modules/
+deps/
 
-# Python
+# Python artifacts
 __pycache__/
 *.pyc
 *.egg-info/
@@ -19,35 +15,53 @@ venv/
 **/test_venv/
 **/.pyarmor/
 
-# Model files
+# IDE and local tooling
+.vs/
+.vscode/
+.idea/
+.cache/
+.codex
+AGENTS.md
+CLAUDE.md
+.superpowers
+.playwright-mcp
+.claude
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Model artifacts
 *.pth
 *.p
 *.onnx
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Project-specific
+# Generated runtime data
 viz/
 debug/
 temp/
 data/
 runs/
-deps/
+
+# Generated export files
 export/**/*.log
 export/**/*.txt
 export/**/*.json
 export/**/*.csv
 export/**/*.yaml
-training/retraining/export/
-training/general_enc_inference_sdk/
-training/model_compiler/unittests/task/*
-training/model_compiler/unittests/temp*
+
+# Generated task files
 config_user.json
 gen_task/*.json
 **/mega_ag.json
 **/task_signature.json
+*plan.md
+
+# Training-generated files
+training/retraining/export/
+training/general_enc_inference_sdk/
+training/model_compiler/unittests/task/*
+training/model_compiler/unittests/temp*
 
 # Dataset directories
 mnist/
@@ -55,16 +69,3 @@ cifar10/
 lfw/
 resnet/
 resnet_new/
-
-# CLAUDE.md
-CLAUDE.md
-.codex
-AGENTS.md
-.superpowers
-.playwright-mcp
-
-# Task plan files
-*plan.md
-
-# CTest
-Testing/
