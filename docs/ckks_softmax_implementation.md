@@ -37,8 +37,7 @@ class SoftmaxLayer : public Layer {
 public:
     explicit SoftmaxLayer(const ls::CkksParameter& param_in,
                           uint32_t n_classes = 0,
-                          uint32_t input_level = 0,
-                          KernelFn kernel = nullptr);
+                          uint32_t input_level = 0);
 
     void prepare_offline_args(uint32_t n_classes, uint32_t input_level);
     Feature0DEncrypted run(ls::CkksContext& ctx, const Feature0DEncrypted& x) const;
