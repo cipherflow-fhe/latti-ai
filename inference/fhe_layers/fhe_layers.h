@@ -45,3 +45,4 @@
 #include "fhe_layers/reshape_layer.h"
 #include "fhe_layers/upsample_layer.h"
 #include "fhe_layers/upsample_nearest_layer.h"
+#include "fhe_layers/softmax_layer.h"

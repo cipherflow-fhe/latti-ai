@@ -28,6 +28,7 @@
 #include <sstream>
 #include <filesystem>
 #include <iomanip>
+#include <functional>
 
 #include "data_structs/feature.h"
 #include "fhe_layers/conv2d_packed_layer.h"
@@ -53,6 +54,7 @@
 #include "fhe_layers/avgpool2d_layer.h"
 #include "fhe_layers/concat_layer.h"
 #include "fhe_layers/mult_scaler.h"
+#include "fhe_layers/softmax_layer.h"
 #include "fhe_layers/upsample_layer.h"
 #include "fhe_layers/upsample_nearest_layer.h"
 #include "ut_util.h"
@@ -63,7 +65,7 @@ using namespace std;
 using namespace cxx_sdk_v2;
 namespace fs = std::filesystem;
 
-fs::path base_path = "../hetero";
+fs::path base_path = "./hetero";
 
 static vector<string> read_arg_names(const fs::path& project_path) {
     ifstream f(project_path / "task_signature.json");
@@ -134,7 +136,7 @@ struct SharedHeteroResources {
         static SharedHeteroResources instance;
         return instance;
     }
-    const int N = 16384;
+    const int N = 32768;
     const int n_slot = N / 2;
     CkksParameter param;
     CkksContext context;
@@ -146,6 +148,15 @@ private:
     }
     SharedHeteroResources(const SharedHeteroResources&) = delete;
     SharedHeteroResources& operator=(const SharedHeteroResources&) = delete;
+};
+
+struct SoftmaxTestConfig {
+    std::string name;
+    double input_range_scale;
+    int init_level;
+    std::array<double, 2> exp_range;
+    std::array<double, 2> inv_range;
+    double temperature = 1.0;
 };
 
 template <typename T> class HeteroFixture {
@@ -193,6 +204,390 @@ public:
         return result;
     }
 
+    static double eval_poly_plain(double x, const vector<double>& coeffs) {
+        double result = 0.0;
+        double x_pow = 1.0;
+        for (size_t i = 0; i < coeffs.size(); i++) {
+            result += coeffs[i] * x_pow;
+            x_pow *= x;
+        }
+        return result;
+    }
+
+    static vector<double> compute_mapped_poly_coeffs(std::function<double(double)> func, int degree) {
+        int n = degree + 1;
+        vector<double> cheb_coeffs(n, 0.0);
+        for (int j = 0; j < n; j++) {
+            double cj = 0.0;
+            for (int k = 0; k < n; k++) {
+                double theta = M_PI * (2 * k + 1) / (2 * n);
+                double T_j = cos(j * theta);
+                cj += func(cos(theta)) * T_j;
+            }
+            cheb_coeffs[j] = 2.0 / n * cj;
+        }
+        cheb_coeffs[0] /= 2.0;
+
+        vector<double> poly_coeffs(n, 0.0);
+        for (int j = n - 1; j >= 0; j--) {
+            vector<double> Tj(n, 0.0);
+            if (j == 0) { Tj[0] = 1.0; }
+            else if (j == 1) { Tj[1] = 1.0; }
+            else {
+                vector<double> Tprev2(n, 0.0); Tprev2[0] = 1.0;
+                vector<double> Tprev1(n, 0.0); Tprev1[1] = 1.0;
+                for (int i = 2; i <= j; i++) {
+                    Tj.assign(n, 0.0);
+                    for (int p = 1; p < n; p++) Tj[p] += 2.0 * Tprev1[p - 1];
+                    for (int p = 0; p < n - 2; p++) Tj[p] -= Tprev2[p];
+                    Tprev2 = Tprev1; Tprev1 = Tj;
+                }
+            }
+            for (int p = 0; p < n; p++) poly_coeffs[p] += cheb_coeffs[j] * Tj[p];
+        }
+        return poly_coeffs;
+    }
+
+    void print_softmax_comparison(const std::string& title, const Array<double, 1>& input_array,
+                                   const Array<double, 1>& expected, const Array<double, 1>& result,
+                                   int n_channel, double temperature,
+                                   const std::array<double, 2>& exp_range, int exp_degree,
+                                   const std::array<double, 2>& inv_range, int inv_degree) {
+        Array<double, 1> true_softmax({(uint64_t)n_channel});
+        double sum_exp = 0.0;
+        for (int i = 0; i < n_channel; i++) sum_exp += std::exp(input_array[i]);
+        for (int i = 0; i < n_channel; i++) true_softmax.set(i, std::exp(input_array[i]) / sum_exp);
+
+        double exp_alpha = 2.0 / (exp_range[1] - exp_range[0]);
+        double exp_beta = -(exp_range[0] + exp_range[1]) / (exp_range[1] - exp_range[0]);
+        auto exp_func_mapped = [exp_range](double x_prime) -> double {
+            return std::exp((exp_range[1] - exp_range[0]) / 2 * x_prime + (exp_range[0] + exp_range[1]) / 2);
+        };
+        auto exp_coeffs = compute_mapped_poly_coeffs(exp_func_mapped, exp_degree);
+
+        double inv_alpha = 2.0 / (inv_range[1] - inv_range[0]);
+        double inv_beta = -(inv_range[0] + inv_range[1]) / (inv_range[1] - inv_range[0]);
+        auto inv_func_mapped = [inv_range](double x_prime) -> double {
+            double x = (inv_range[1] - inv_range[0]) / 2 * x_prime + (inv_range[0] + inv_range[1]) / 2;
+            return 1.0 / x;
+        };
+        auto inv_coeffs = compute_mapped_poly_coeffs(inv_func_mapped, inv_degree);
+
+        Array<double, 1> poly_softmax({(uint64_t)n_channel});
+        vector<double> exp_values(n_channel);
+        double poly_sum = 0.0;
+        for (int i = 0; i < n_channel; i++) {
+            double x_scaled = input_array[i] / temperature;
+            double x_prime = exp_alpha * x_scaled + exp_beta;
+            exp_values[i] = eval_poly_plain(x_prime, exp_coeffs);
+            poly_sum += exp_values[i];
+        }
+        double inv_sum_prime = inv_alpha * poly_sum + inv_beta;
+        double inv_sum = eval_poly_plain(inv_sum_prime, inv_coeffs);
+        for (int i = 0; i < n_channel; i++) {
+            poly_softmax.set(i, exp_values[i] * inv_sum);
+        }
+
+        int true_argmax = 0, poly_argmax = 0, actual_argmax = 0;
+        double true_max = true_softmax[0], poly_max = poly_softmax[0], actual_max = result[0];
+        for (int i = 1; i < n_channel; i++) {
+            if (true_softmax[i] > true_max) { true_max = true_softmax[i]; true_argmax = i; }
+            if (poly_softmax[i] > poly_max) { poly_max = poly_softmax[i]; poly_argmax = i; }
+            if (result[i] > actual_max) { actual_max = result[i]; actual_argmax = i; }
+        }
+
+        double max_error = 0.0;
+        int max_error_idx = -1;
+        double sum_sq_error = 0.0, sum_sq_expected = 0.0;
+        for (int i = 0; i < n_channel; i++) {
+            double error = std::abs(expected[i] - result[i]);
+            sum_sq_error += error * error;
+            sum_sq_expected += expected[i] * expected[i];
+            if (error > max_error) { max_error = error; max_error_idx = i; }
+        }
+        double rmse = std::sqrt(sum_sq_error / n_channel);
+        double rms = std::sqrt(sum_sq_expected / n_channel);
+
+        std::cout << "\n========== " << title << " ==========\n";
+        if (temperature != 1.0)
+            std::cout << "  Temperature T=" << temperature << " (Poly/FHE compute softmax(x/T), True computes softmax(x))\n";
+
+        std::cout << std::setw(5) << "Cls"
+                  << std::setw(10) << "Input"
+                  << std::setw(15) << "True"
+                  << std::setw(15) << "Target"
+                  << std::setw(15) << "Poly"
+                  << std::setw(15) << "FHE"
+                  << std::setw(12) << "Poly_Err%"
+                  << std::setw(12) << "FHE_Err%"
+                  << std::setw(10) << "True%"
+                  << std::setw(10) << "Poly%" << "\n";
+        std::cout << "-------------------------------------------------------------------------------------------------------------------\n";
+        for (int i = 0; i < n_channel; i++) {
+            double poly_rel_err = (expected[i] != 0) ? std::abs(poly_softmax[i] - expected[i]) / expected[i] * 100 : 0;
+            double fhe_rel_err = (expected[i] != 0) ? std::abs(result[i] - expected[i]) / expected[i] * 100 : 0;
+            std::string marker = (i == true_argmax && i == poly_argmax && i == actual_argmax) ? " <<<" :
+                                 (i == true_argmax && i == poly_argmax) ? " <TP" :
+                                 (i == true_argmax && i == actual_argmax) ? " <TF" :
+                                 (i == poly_argmax && i == actual_argmax) ? " <PF" :
+                                 (i == true_argmax) ? " <T" :
+                                 (i == poly_argmax) ? " <P" :
+                                 (i == actual_argmax) ? " <F" : "";
+            std::cout << std::setw(5) << i
+                      << std::setw(10) << std::fixed << std::setprecision(4) << input_array[i]
+                      << std::setw(15) << std::setprecision(6) << true_softmax[i]
+                      << std::setw(15) << expected[i]
+                      << std::setw(15) << poly_softmax[i]
+                      << std::setw(15) << result[i]
+                      << std::setw(11) << std::setprecision(2) << poly_rel_err << "%"
+                      << std::setw(11) << fhe_rel_err << "%"
+                      << std::setw(9) << std::setprecision(2) << true_softmax[i] * 100 << "%"
+                      << std::setw(9) << poly_softmax[i] * 100 << "%" << marker << "\n";
+        }
+        std::cout << "-------------------------------------------------------------------------------------------------------------------\n";
+        std::cout << "  True class=" << true_argmax << " (prob=" << std::fixed << std::setprecision(6) << true_max << " = " << std::setprecision(2) << true_max * 100 << "%)"
+                  << ", Poly class=" << poly_argmax << " (prob=" << std::setprecision(6) << poly_max << " = " << std::setprecision(2) << poly_max * 100 << "%)"
+                  << ", FHE class=" << actual_argmax << " (prob=" << std::setprecision(6) << actual_max << " = " << std::setprecision(2) << actual_max * 100 << "%)"
+                  << ", Match=" << (true_argmax == poly_argmax && true_argmax == actual_argmax ? "ALL" : true_argmax == actual_argmax ? "FHE" : true_argmax == poly_argmax ? "POLY" : "NONE") << "\n";
+        std::cout << "  FHE vs Target: rmse/rms=" << std::setprecision(2) << (rmse / rms * 100) << "%"
+                  << ", max_error=" << std::setprecision(6) << max_error << " at [" << max_error_idx << "]\n";
+        std::cout << "==============================================================\n\n";
+    }
+
+    void run_softmax_test(SoftmaxTestConfig config, int n_channel) {
+        Array<double, 1> input_array = gen_random_array<1>({(uint64_t)n_channel}, config.input_range_scale);
+
+        int exp_degree = 7;
+        int inv_degree = 7;
+
+        SoftmaxLayer softmax(config.exp_range, exp_degree, config.inv_range, inv_degree, n_channel, n_channel, config.temperature);
+
+        Feature0DEncrypted input_feature(&context, config.init_level);
+        input_feature.n_channel = n_channel;
+        input_feature.n_channel_per_ct = n_channel;
+        input_feature.pack(input_array, false, param.get_default_scale());
+
+        auto start_time = std::chrono::high_resolution_clock::now();
+        Feature0DEncrypted output_feature = softmax.run(context, input_feature);
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
+        TaskMetrics metrics;
+        metrics.test_name = "softmax_layer_" + config.name;
+        metrics.task_config = "n_channel_" + std::to_string(n_channel);
+        metrics.n = N;
+        metrics.processor_type = "CPU";
+        metrics.execution_time_ms = duration.count();
+        MetricsCollector::add_metrics(metrics);
+
+        Array<double, 1> result = output_feature.unpack();
+        Array<double, 1> expected = softmax.run_plaintext(input_array);
+
+        std::cout << "Input range: [-" << config.input_range_scale << ", " << config.input_range_scale << "]\n";
+        print_softmax_comparison("Softmax Layer Test: " + config.name, input_array, expected, result, n_channel, config.temperature,
+                                 config.exp_range, exp_degree, config.inv_range, inv_degree);
+
+        auto compare_result = compare(expected, result);
+        REQUIRE(compare_result.max_error < 0.30 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 0.30 * compare_result.rms);
+    }
+
+    void run_softmax_graph_gen_test(SoftmaxTestConfig config, int n_channel) {
+        int init_level = config.init_level;
+        int exp_degree = 7;
+        int inv_degree = 7;
+        std::array<double, 2> exp_range = config.exp_range;
+        std::array<double, 2> inv_range = config.inv_range;
+
+        Array<double, 1> input_array = gen_random_array<1>({(uint64_t)n_channel}, config.input_range_scale);
+
+        int n_slots = std::min(n_channel, n_channel);
+        int total_slots = this->param.get_n() / 2;
+        double default_scale = this->param.get_default_scale();
+
+        auto compute_mapped_poly_coeffs = [](std::function<double(double)> func, int degree) -> vector<double> {
+            int n = degree + 1;
+            vector<double> cheb_coeffs(n, 0.0);
+            for (int j = 0; j < n; j++) {
+                double cj = 0.0;
+                for (int k = 0; k < n; k++) {
+                    double theta = M_PI * (2 * k + 1) / (2 * n);
+                    double T_j = cos(j * theta);
+                    cj += func(cos(theta)) * T_j;
+                }
+                cheb_coeffs[j] = 2.0 / n * cj;
+            }
+            cheb_coeffs[0] /= 2.0;
+
+            vector<double> poly_coeffs(n, 0.0);
+            for (int j = n - 1; j >= 0; j--) {
+                vector<double> Tj(n, 0.0);
+                if (j == 0) {
+                    Tj[0] = 1.0;
+                } else if (j == 1) {
+                    Tj[1] = 1.0;
+                } else {
+                    vector<double> Tprev2(n, 0.0);
+                    Tprev2[0] = 1.0;
+                    vector<double> Tprev1(n, 0.0);
+                    Tprev1[1] = 1.0;
+                    for (int i = 2; i <= j; i++) {
+                        Tj.assign(n, 0.0);
+                        for (int p = 1; p < n; p++)
+                            Tj[p] += 2.0 * Tprev1[p - 1];
+                        for (int p = 0; p < n - 2; p++)
+                            Tj[p] -= Tprev2[p];
+                        Tprev2 = Tprev1;
+                        Tprev1 = Tj;
+                    }
+                }
+                for (int p = 0; p < n; p++)
+                    poly_coeffs[p] += cheb_coeffs[j] * Tj[p];
+            }
+
+            return poly_coeffs;
+        };
+
+        double exp_alpha = 2.0 / (exp_range[1] - exp_range[0]);
+        double exp_beta = -(exp_range[0] + exp_range[1]) / (exp_range[1] - exp_range[0]);
+        auto exp_func_mapped = [exp_range](double x_prime) -> double {
+            return std::exp((exp_range[1] - exp_range[0]) / 2 * x_prime + (exp_range[0] + exp_range[1]) / 2);
+        };
+        auto exp_coeffs = compute_mapped_poly_coeffs(exp_func_mapped, exp_degree);
+
+        double inv_alpha = 2.0 / (inv_range[1] - inv_range[0]);
+        double inv_beta = -(inv_range[0] + inv_range[1]) / (inv_range[1] - inv_range[0]);
+        auto inv_func_mapped = [inv_range](double x_prime) -> double {
+            double x = (inv_range[1] - inv_range[0]) / 2 * x_prime + (inv_range[0] + inv_range[1]) / 2;
+            return 1.0 / x;
+        };
+        auto inv_coeffs = compute_mapped_poly_coeffs(inv_func_mapped, inv_degree);
+
+        vector<vector<CkksPlaintextRingt>> pt_ringt_args;
+        pt_ringt_args.reserve(1 + 2 + exp_degree + 1 + 1 + 2 + inv_degree + 1);
+
+        map<string, int> pt_ringt_idx_map;
+
+        if (config.temperature != 1.0) {
+            vector<double> slot_values(total_slots, 1.0 / config.temperature);
+            vector<CkksPlaintextRingt> pt_vec;
+            pt_vec.push_back(this->context.encode_ringt(slot_values, default_scale));
+            pt_ringt_idx_map["sm_0_temp"] = (int)pt_ringt_args.size();
+            pt_ringt_args.push_back(std::move(pt_vec));
+        }
+
+        {
+            vector<double> slot_values(total_slots, exp_alpha);
+            vector<CkksPlaintextRingt> pt_vec;
+            pt_vec.push_back(this->context.encode_ringt(slot_values, default_scale));
+            pt_ringt_idx_map["sm_0_exp_alpha"] = (int)pt_ringt_args.size();
+            pt_ringt_args.push_back(std::move(pt_vec));
+        }
+
+        {
+            vector<double> slot_values(total_slots, exp_beta);
+            vector<CkksPlaintextRingt> pt_vec;
+            pt_vec.push_back(this->context.encode_ringt(slot_values, default_scale));
+            pt_ringt_idx_map["sm_0_exp_beta"] = (int)pt_ringt_args.size();
+            pt_ringt_args.push_back(std::move(pt_vec));
+        }
+
+        for (int i = 0; i <= exp_degree; i++) {
+            vector<double> slot_values(total_slots, exp_coeffs[i]);
+            string name = "sm_0_exp_c" + to_string(i);
+            vector<CkksPlaintextRingt> pt_vec;
+            pt_vec.push_back(this->context.encode_ringt(slot_values, default_scale));
+            pt_ringt_idx_map[name] = (int)pt_ringt_args.size();
+            pt_ringt_args.push_back(std::move(pt_vec));
+        }
+
+        {
+            vector<double> mask_values(total_slots, 0.0);
+            for (int i = 0; i < n_slots; i++) mask_values[i] = 1.0;
+            vector<CkksPlaintextRingt> pt_vec;
+            pt_vec.push_back(this->context.encode_ringt(mask_values, default_scale));
+            pt_ringt_idx_map["sm_0_sum_mask"] = (int)pt_ringt_args.size();
+            pt_ringt_args.push_back(std::move(pt_vec));
+        }
+
+        {
+            vector<double> slot_values(total_slots, inv_alpha);
+            vector<CkksPlaintextRingt> pt_vec;
+            pt_vec.push_back(this->context.encode_ringt(slot_values, default_scale));
+            pt_ringt_idx_map["sm_0_inv_alpha"] = (int)pt_ringt_args.size();
+            pt_ringt_args.push_back(std::move(pt_vec));
+        }
+
+        {
+            vector<double> slot_values(total_slots, inv_beta);
+            vector<CkksPlaintextRingt> pt_vec;
+            pt_vec.push_back(this->context.encode_ringt(slot_values, default_scale));
+            pt_ringt_idx_map["sm_0_inv_beta"] = (int)pt_ringt_args.size();
+            pt_ringt_args.push_back(std::move(pt_vec));
+        }
+
+        for (int i = 0; i <= inv_degree; i++) {
+            vector<double> slot_values(total_slots, inv_coeffs[i]);
+            string name = "sm_0_inv_c" + to_string(i);
+            vector<CkksPlaintextRingt> pt_vec;
+            pt_vec.push_back(this->context.encode_ringt(slot_values, default_scale));
+            pt_ringt_idx_map[name] = (int)pt_ringt_args.size();
+            pt_ringt_args.push_back(std::move(pt_vec));
+        }
+
+        SoftmaxLayer softmax(exp_range, exp_degree, inv_range, inv_degree, n_channel, n_channel, config.temperature);
+
+        Feature0DEncrypted input_feature(&this->context, init_level);
+        input_feature.pack(input_array, false, this->param.get_default_scale());
+
+        int output_level = init_level - (exp_degree > 1 ? (int)ceil(log2(exp_degree)) : 0)
+                                    - (inv_degree > 1 ? (int)ceil(log2(inv_degree)) : 0) - 4
+                                    - (config.temperature != 1.0 ? 1 : 0);
+        Feature0DEncrypted output_feature(&this->context, output_level);
+        output_feature.skip = input_feature.skip;
+        output_feature.n_channel = input_feature.n_channel;
+        output_feature.n_channel_per_ct = input_feature.n_channel_per_ct;
+        output_feature.data.push_back(
+            this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+
+        fs::path softmax_base_path = "./build/inference/hetero";
+        fs::path project_path = softmax_base_path / ("CKKS_softmax_" + config.name + "_" + to_string(n_channel)) /
+                                ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_feature.data});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output_feature.data});
+            else {
+                auto it = pt_ringt_idx_map.find(name);
+                if (it != pt_ringt_idx_map.end()) {
+                    cxx_args.push_back({name, &pt_ringt_args[it->second]});
+                } else {
+                    cerr << "WARNING: unmatched arg name: " << name << endl;
+                }
+            }
+        }
+        this->run(project_path, cxx_args);
+
+        output_feature.n_channel = n_channel;
+        output_feature.n_channel_per_ct = input_feature.n_channel_per_ct;
+        output_feature.skip = input_feature.skip;
+
+        Array<double, 1> result = output_feature.unpack();
+        Array<double, 1> expected = softmax.run_plaintext(input_array);
+
+        this->print_softmax_comparison("Softmax Graph Gen Test: " + config.name, input_array, expected, result, n_channel, config.temperature,
+                                       exp_range, exp_degree, inv_range, inv_degree);
+
+        auto compare_result = compare(expected, result);
+        REQUIRE(compare_result.max_error < 0.30 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 0.30 * compare_result.rms);
+    }
+
 protected:
     int N;
     int n_slot;
@@ -222,7 +617,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "sq", "", HeteroProcessors) {
             Feature2DEncrypted input_feature(&this->context, init_level);
             input_feature.pack_multiple_channel(input_array, false, this->param.get_default_scale());
 
-            Feature2DEncrypted output_feature(&this->context, init_level);
+            Feature2DEncrypted output_feature(&this->context, init_level - 1);
 
             for (int i = 0; i < 1; i++) {
                 output_feature.data.push_back(
@@ -2617,3 +3012,269 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "upsample_nearest_layer", "", Hete
         run_upsample_nearest_test(4, 8);
     }
 }
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "softmax_layer", "", HeteroProcessors) {
+    int n_channel = 16;
+
+    std::vector<SoftmaxTestConfig> test_configs = {
+        {
+            "range_0.5",
+            0.5,
+            12,
+            {-1.0, 1.0},
+            {5.0, 30.0},
+            1.0
+        },
+        {
+            "range_1.0",
+            1.0,
+            12,
+            {-2.0, 2.0},
+            {5.0, 50.0},
+            1.0
+        },
+        {
+            "range_1.5_T1.5",
+            1.5,
+            12,
+            {-1.0, 1.0},
+            {5.0, 30.0},
+            1.5
+        },
+        {
+            "range_2.0_T1",
+            2.0,
+            12,
+            {-2.0, 2.0},
+            {2.0, 120.0},
+            1.0
+        },
+        {
+            "range_2.0_T2",
+            2.0,
+            12,
+            {-1.0, 1.0},
+            {5.0, 30.0},
+            2.0
+        },
+        {
+            "range_8.0_T1",
+            8.0,
+            12,
+            {-8.0, 8.0},
+            {0.001, 50000.0},
+            1.0
+        },
+        {
+            "range_8.0_T8",
+            8.0,
+            12,
+            {-1.0, 1.0},
+            {5.0, 30.0},
+            8.0
+        },
+    };
+
+    for (auto& config : test_configs) {
+        SECTION("input_scale=" + config.name) {
+            this->run_softmax_test(config, n_channel);
+        }
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "softmax_add_plain_ringt_test", "", HeteroProcessors) {
+    int total_slots = this->param.get_n() / 2;
+    double default_scale = this->param.get_default_scale();
+    int max_level = this->param.get_max_level();
+
+    cout << "max_level=" << max_level << endl;
+
+    auto decrypt_decode = [&](const CkksCiphertext& ct) -> vector<double> {
+        CkksPlaintext pt = this->context.decrypt(ct);
+        return this->context.decode(pt);
+    };
+
+    // Test: evaluate exp polynomial directly (not through computation graph)
+    // p(x) = c0 + c1*x + c2*x^2 + ... + c7*x^7
+    // Using the same structure as _eval_poly
+    
+    int degree = 7;
+    int init_level = min(max_level, 12);
+    
+    // Compute coefficients using Chebyshev interpolation
+    auto compute_coeffs = [](double (*func)(double), int deg, double a, double b) -> vector<double> {
+        int n = deg + 1;
+        vector<double> cheb_coeffs(n, 0.0);
+        for (int j = 0; j < n; j++) {
+            double cj = 0.0;
+            for (int k = 0; k < n; k++) {
+                double theta = M_PI * (2 * k + 1) / (2 * n);
+                double x_mapped = (b - a) / 2 * cos(theta) + (b + a) / 2;
+                double T_j = cos(j * theta);
+                cj += func(x_mapped) * T_j;
+            }
+            cheb_coeffs[j] = 2.0 / n * cj;
+        }
+        cheb_coeffs[0] /= 2.0;
+        // Simplified: just return Chebyshev coefficients for now
+        // We'll evaluate using Chebyshev basis directly
+        return cheb_coeffs;
+    };
+    
+    // For simplicity, let's just test c1*x + c0 using the same operations as _eval_poly
+    double x_val = 0.5;
+    double c0_val = 1.0;
+    double c1_val = 1.0;
+    
+    vector<double> x_values(total_slots, x_val);
+    vector<double> c0_values(total_slots, c0_val);
+    vector<double> c1_values(total_slots, c1_val);
+    
+    CkksPlaintext x_pt = this->context.encode(x_values, init_level, default_scale);
+    CkksCiphertext x_ct = this->context.encrypt_asymmetric(x_pt);
+    
+    // c1 * x (mult with pt_ringt)
+    CkksPlaintextRingt c1_ringt = this->context.encode_ringt(c1_values, default_scale);
+    int level = x_ct.get_level();
+    CkksPlaintextMul c1_mul = this->context.ringt_to_mul(c1_ringt, level);
+    CkksCiphertext c1_x = this->context.mult_plain_mul(x_ct, c1_mul);
+    c1_x = this->context.rescale(c1_x, default_scale);
+    
+    // c1*x + c0 (add_plain_ringt)
+    CkksPlaintextRingt c0_ringt = this->context.encode_ringt(c0_values, default_scale);
+    CkksCiphertext result = this->context.add_plain_ringt(c1_x, c0_ringt);
+    
+    auto dec = decrypt_decode(result);
+    double expected = c1_val * x_val + c0_val;
+    cout << "c1*x + c0 (add_plain_ringt): expected=" << expected << ", actual=" << dec[0] << ", error=" << abs(expected - dec[0]) << endl;
+    
+    // Now test a full polynomial: c0 + c1*x + c2*x^2 + c3*x^3
+    // Using the same recursive structure as _eval_poly
+    // For degree 3: mid=2, high = eval_range(2,3), low = eval_range(0,1)
+    // eval_range(2,3): mid=1, high=c3, low=c2
+    //   result = x * c3 + c2
+    // eval_range(0,1): mid=1, high=c1, low=c0
+    //   result = x * c1 + c0
+    // result = high * x^2 + low
+    
+    double c2_val = 0.5;
+    double c3_val = 0.1;
+    vector<double> c2_values(total_slots, c2_val);
+    vector<double> c3_values(total_slots, c3_val);
+    
+    // Compute x^2
+    CkksCiphertext3 x_sq_3 = this->context.mult(x_ct, x_ct);
+    CkksCiphertext x_sq = this->context.relinearize(x_sq_3);
+    x_sq = this->context.rescale(x_sq, default_scale);
+    
+    // eval_range(2,3): x * c3 + c2
+    CkksPlaintextRingt c3_ringt = this->context.encode_ringt(c3_values, default_scale);
+    // Drop x to match c3's level? No, x is at init_level, c3 is pt_ringt at level 0
+    // mult(x, c3) -> ct * pt_ringt
+    CkksPlaintextMul c3_mul = this->context.ringt_to_mul(c3_ringt, x_ct.get_level());
+    CkksCiphertext high = this->context.mult_plain_mul(x_ct, c3_mul);
+    high = this->context.rescale(high, default_scale);
+    // high + c2
+    CkksPlaintextRingt c2_ringt = this->context.encode_ringt(c2_values, default_scale);
+    high = this->context.add_plain_ringt(high, c2_ringt);
+    
+    // eval_range(0,1): x * c1 + c0
+    CkksPlaintextMul c1_mul2 = this->context.ringt_to_mul(c1_ringt, x_ct.get_level());
+    CkksCiphertext low = this->context.mult_plain_mul(x_ct, c1_mul2);
+    low = this->context.rescale(low, default_scale);
+    low = this->context.add_plain_ringt(low, c0_ringt);
+    
+    // high * x^2 + low
+    // Need to align levels
+    cout << "high level=" << high.get_level() << ", x_sq level=" << x_sq.get_level() << ", low level=" << low.get_level() << endl;
+    
+    // Drop levels to match
+    while (high.get_level() > x_sq.get_level()) high = this->context.drop_level(high, 1);
+    while (x_sq.get_level() > high.get_level()) x_sq = this->context.drop_level(x_sq, 1);
+    
+    CkksCiphertext3 result3 = this->context.mult(high, x_sq);
+    CkksCiphertext result2 = this->context.relinearize(result3);
+    result2 = this->context.rescale(result2, default_scale);
+    
+    while (result2.get_level() > low.get_level()) result2 = this->context.drop_level(result2, 1);
+    while (low.get_level() > result2.get_level()) low = this->context.drop_level(low, 1);
+    
+    result2 = this->context.add(result2, low);
+    
+    dec = decrypt_decode(result2);
+    expected = c0_val + c1_val * x_val + c2_val * x_val * x_val + c3_val * x_val * x_val * x_val;
+    cout << "c0+c1*x+c2*x^2+c3*x^3: expected=" << expected << ", actual=" << dec[0] << ", error=" << abs(expected - dec[0]) << endl;
+    
+    REQUIRE(abs(expected - dec[0]) < 0.01);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "softmax_layer_graph_gen", "", HeteroProcessors) {
+    int n_channel = 16;
+
+    std::vector<SoftmaxTestConfig> test_configs = {
+        {
+            "range_0.5",
+            0.5,
+            12,
+            {-1.0, 1.0},
+            {5.0, 30.0},
+            1.0
+        },
+        {
+            "range_1.0",
+            1.0,
+            12,
+            {-2.0, 2.0},
+            {5.0, 50.0},
+            1.0
+        },
+        {
+            "range_1.5_T1.5",
+            1.5,
+            12,
+            {-1.0, 1.0},
+            {5.0, 30.0},
+            1.5
+        },
+        {
+            "range_2.0_T1",
+            2.0,
+            12,
+            {-2.0, 2.0},
+            {2.0, 120.0},
+            1.0
+        },
+        {
+            "range_2.0_T2",
+            2.0,
+            12,
+            {-1.0, 1.0},
+            {5.0, 30.0},
+            2.0
+        },
+        {
+            "range_8.0_T1",
+            8.0,
+            12,
+            {-8.0, 8.0},
+            {0.001, 50000.0},
+            1.0
+        },
+        {
+            "range_8.0_T8",
+            8.0,
+            12,
+            {-1.0, 1.0},
+            {5.0, 30.0},
+            8.0
+        },
+    };
+
+    for (auto& config : test_configs) {
+        SECTION("input_scale=" + config.name) {
+            this->run_softmax_graph_gen_test(config, n_channel);
+        }
+    }
+}
+
+
