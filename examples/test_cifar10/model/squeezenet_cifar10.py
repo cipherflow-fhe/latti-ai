@@ -52,4 +52,4 @@ class SqueezeNetCIFAR10(nn.Module):
     def forward(self, x):
         x = self.features(x)
         x = self.classifier(x)
-        return x.view(x.size(0), -1)
+        return x
