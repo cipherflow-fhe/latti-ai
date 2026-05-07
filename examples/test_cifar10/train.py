@@ -41,6 +41,7 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from model import resnet20
+from model.squeezenet_cifar10 import SqueezeNetCIFAR10
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 log = logging.getLogger(__name__)
@@ -121,6 +122,8 @@ def main():
     parser.add_argument('--gpu', type=int, default=0, help='-1 for CPU')
     parser.add_argument('--lr-milestones', type=int, nargs='+', default=[100, 150])
     parser.add_argument('--lr-gamma', type=float, default=0.1)
+    parser.add_argument('--arch', type=str, default='resnet20', choices=['resnet20', 'squeezenet'],
+                    help='Model architecture to use')
 
     # Poly-ReLU options
     parser.add_argument('--poly_model_convert', action='store_true', help='replace ReLU with RangeNormPoly2d')
@@ -149,7 +152,13 @@ def main():
     train_loader, test_loader = get_cifar10_loaders(args.data_dir, args.batch_size, args.num_workers, args.input_shape)
 
     # Build model
-    model = resnet20()
+    if args.arch == 'resnet20':
+        model = resnet20()
+    elif args.arch == 'squeezenet':
+        model = SqueezeNetCIFAR10()
+    else:
+        raise ValueError(f'Unknown architecture: {args.arch}')
+
     if args.pretrained:
         log.info(f'Loading pretrained: {args.pretrained}')
         ckpt = torch.load(args.pretrained, map_location='cpu')
