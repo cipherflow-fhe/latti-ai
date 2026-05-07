@@ -26,13 +26,13 @@ class SqueezeNetCIFAR10(nn.Module):
         self.features = nn.Sequential(
             nn.Conv2d(3, 96, kernel_size=3, stride=1, padding=1),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2, ceil_mode=True),
+            nn.MaxPool2d(kernel_size=2, stride=2, ceil_mode=True),
             Fire(96, 16, 64, 64),
             Fire(128, 16, 64, 64),
-            nn.MaxPool2d(kernel_size=3, stride=2, ceil_mode=True),
+            nn.MaxPool2d(kernel_size=2, stride=2, ceil_mode=True),
             Fire(128, 32, 128, 128),
             Fire(256, 32, 128, 128),
-            nn.MaxPool2d(kernel_size=3, stride=2, ceil_mode=True),
+            nn.MaxPool2d(kernel_size=2, stride=2, ceil_mode=True),
             Fire(256, 48, 192, 192),
             Fire(384, 48, 192, 192),
             Fire(384, 64, 256, 256),
@@ -42,13 +42,12 @@ class SqueezeNetCIFAR10(nn.Module):
         self.classifier = nn.Sequential(
             nn.Dropout(p=0.5),
             final_conv,
-            nn.ReLU(inplace=True),
-            nn.AvgPool2d(kernel_size=3)
+            nn.AdaptiveAvgPool2d(1)
         )
         # 初始化权重
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
 
     def forward(self, x):
         x = self.features(x)
