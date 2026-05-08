@@ -19,7 +19,7 @@
 #include "upsample_nearest_layer.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 UpsampleNearestLayer::UpsampleNearestLayer(const CkksParameter& param_in,
                                            const Duo& shape_in,
@@ -128,13 +128,13 @@ Feature2DEncrypted UpsampleNearestLayer::run(CkksContext& ctx, const Feature2DEn
             int32_t r_num = -r_num0 - r_num1 - r_num2 + l_num0 + l_num1 + l_num2;
             steps[i] = r_num;
         }
-        std::map<int32_t, cxx_sdk_v2::CkksCiphertext> s_rots = ctx_copy.rotate(x_data_cpy[idx], steps);
+        std::map<int32_t, lattisense::CkksCiphertext> s_rots = ctx_copy.rotate(x_data_cpy[idx], steps);
 
         for (int i = 0; i < x.n_channel_per_ct; i++) {
             int out_channel_pos =
                 (idx * x.n_channel_per_ct + i) % (x.n_channel_per_ct / (upsample_factor[0] * upsample_factor[1]));
 
-            cxx_sdk_v2::CkksCiphertext c_m_s;
+            lattisense::CkksCiphertext c_m_s;
             // Lazy mode: generate plaintext on-demand if select_tensor_pt is empty
             if (select_tensor_pt.empty()) {
                 auto pt_ringt = generate_select_tensor_pt_for_index(ctx_copy, out_channel_pos);
@@ -157,7 +157,7 @@ Feature2DEncrypted UpsampleNearestLayer::run(CkksContext& ctx, const Feature2DEn
     CkksCiphertext sp;
     for (int i = 0; i < x.n_channel; i++) {
         int p = i % (x.n_channel_per_ct / (upsample_factor[0] * upsample_factor[1]));
-        cxx_sdk_v2::CkksCiphertext c_m_s = result_tmp[i].copy();
+        lattisense::CkksCiphertext c_m_s = result_tmp[i].copy();
         if (p == 0) {
             sp = move(c_m_s);
         } else {
@@ -181,12 +181,12 @@ Feature2DEncrypted UpsampleNearestLayer::run(CkksContext& ctx, const Feature2DEn
 
     parallel_for(res_size, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int i = 0; i < log2_upsample_0; i++) {
-            cxx_sdk_v2::CkksCiphertext ct_tmp =
+            lattisense::CkksCiphertext ct_tmp =
                 ctx_copy.rotate(result_ct[idx], pow(2, i) * shape[1] * skip[1] * skip[0] / upsample_factor[0] * -1);
             result_ct[idx] = ctx_copy.add(result_ct[idx], move(ct_tmp));
         }
         for (int j = 0; j < log2_upsample_1; j++) {
-            cxx_sdk_v2::CkksCiphertext ct_tmp =
+            lattisense::CkksCiphertext ct_tmp =
                 ctx_copy.rotate(result_ct[idx], pow(2, j) * skip[1] / upsample_factor[1] * -1);
             result_ct[idx] = ctx_copy.add(result_ct[idx], move(ct_tmp));
         }

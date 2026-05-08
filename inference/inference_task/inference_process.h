@@ -23,7 +23,7 @@
 #include "util.h"
 #include "fhe_layers/fhe_layers.h"
 
-namespace ls = cxx_sdk_v2;
+namespace ls = lattisense;
 
 enum class ComputeDevice { CPU, GPU, FPGA };
 

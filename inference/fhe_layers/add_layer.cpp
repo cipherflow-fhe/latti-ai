@@ -19,7 +19,7 @@
 #include "add_layer.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 void copy_param(const Feature2DEncrypted& x1, Feature2DEncrypted& result) {
     result.dim = x1.dim;

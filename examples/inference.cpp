@@ -30,8 +30,12 @@
 #include "interface/inference_client.h"
 #include "interface/inference_server.h"
 
+// Forward-declare; not transitively exposed by the interface headers.
+namespace fhe_ops_lib {
+void print_double_message(const double* msg, const char* name, int count);
+}
+
 using namespace std;
-namespace ls = cxx_sdk_v2;
 
 int main(int argc, char* argv[]) {
     string task_dir;
@@ -120,12 +124,12 @@ int main(int argc, char* argv[]) {
     // --- Display results ---
     cout << "========== Results ==========" << endl;
     for (auto& [name, result] : results) {
-        ls::print_double_message(result.output.data(), ("Encrypted output [" + name + "]").c_str(), 1);
+        fhe_ops_lib::print_double_message(result.output.data(), ("Encrypted output [" + name + "]").c_str(), 1);
     }
 
     auto plaintext_outputs = server.evaluate_plaintext(input_csvs);
     for (auto& [name, plaintext_output] : plaintext_outputs) {
-        ls::print_double_message(plaintext_output.data(), ("Plaintext output [" + name + "]").c_str(), 1);
+        fhe_ops_lib::print_double_message(plaintext_output.data(), ("Plaintext output [" + name + "]").c_str(), 1);
     }
 
     if (verify) {

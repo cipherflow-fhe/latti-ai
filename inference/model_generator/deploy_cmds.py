@@ -62,20 +62,33 @@ _FHE_PARAMS = {
 }
 
 
-def set_param(param_name):
+def set_param(param_name, slots=None):
+    """Set the global FHE parameter.
+
+    When `slots` is below dense full-packing (n // 2), pick the sparse
+    `CkksBtpParam` factory so `g_param.slots` reflects the requested
+    sparse value and `rotations_for_bootstrapping()` emits the sparse
+    Trace/SubSum rotations on top of the dense CtS/StC ones. Falls back
+    to the default factory when `slots` is None or equals n // 2.
+    """
     if param_name not in _FHE_PARAMS:
         raise ValueError(f'Unsupported FHE parameter name: {param_name!r}')
     fhe = _FHE_PARAMS[param_name]
     if param_name == 'N16QP1546H192H32':
-        param = CkksBtpParam.create_default_param()
+        n_half = fhe.poly_modulus_degree // 2
+        if slots is not None and 0 < slots < n_half:
+            log_slots = int(math.log2(slots))
+            param = CkksBtpParam.create_sparse_param(log_slots)
+        else:
+            param = CkksBtpParam.create_default_param()
     else:
-        param = Param.create_ckks_custom_param(n=fhe.poly_modulus_degree, p=fhe.p, q=fhe.q)
+        param = CkksParam.create_custom_param(n=fhe.poly_modulus_degree, p=fhe.p, q=fhe.q)
     set_fhe_param(param)
 
 
-def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordinary'):
+def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordinary', slots=None):
     n = _FHE_PARAMS[param_name].poly_modulus_degree
-    set_param(param_name)
+    set_param(param_name, slots=slots)
     task_config_info = read_config(os.path.join(task_path, 'task_config.json'))
     try:
         block_shape = task_config_info['block_shape']
@@ -426,7 +439,13 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             for node in feature_id_to_nodes_map[layer_input_feature_ids[0]]:
                 if node.level > 0:
                     node = drop_level(node, node.level)
-                layer_output_nodes.append(bootstrap(node))
+                bt_out = bootstrap(node)
+                # Pin used_slots on each bootstrap output so process_custom_task's
+                # _infer_log_slots picks up the sparse target. `bootstrap()` would
+                # otherwise inherit a saturated `n // 2` from upstream rotations.
+                if slots is not None and 0 < slots < n // 2:
+                    bt_out.used_slots = slots
+                layer_output_nodes.append(bt_out)
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif layer_config['type'] in ('add', 'add2d'):
@@ -607,7 +626,9 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
     output_args = [Argument(output_id, feature_id_to_nodes_map[output_id]) for output_id in task_output_feature_ids]
 
-    process_custom_task(input_args=input_args, output_args=output_args, output_instruction_path=task_path)
+    process_custom_task(
+        input_args=input_args, output_args=output_args, output_instruction_path=task_path, fpga_acc=not use_gpu
+    )
 
 
 if __name__ == '__main__':

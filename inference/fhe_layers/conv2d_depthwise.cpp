@@ -31,7 +31,7 @@
 #include "util.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 Conv2DPackedDepthwiseLayer::Conv2DPackedDepthwiseLayer(const CkksParameter& param,
                                                        const Duo& input_shape,

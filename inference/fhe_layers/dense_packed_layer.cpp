@@ -24,7 +24,7 @@
 #include <vector>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 DensePackedLayer::DensePackedLayer(const CkksParameter& param_in,
                                    const Array<double, 2>& weight_in,

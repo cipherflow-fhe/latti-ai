@@ -21,7 +21,7 @@
 
 #include "interface/inference_server.h"
 
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 InferenceServer::InferenceServer(const std::string& server_dir, bool use_gpu)
     : server_dir_(server_dir), use_gpu_(use_gpu) {}
