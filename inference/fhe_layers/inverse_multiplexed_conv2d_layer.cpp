@@ -22,7 +22,7 @@
 #include "inverse_multiplexed_conv2d_layer.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 InverseMultiplexedConv2DLayer::InverseMultiplexedConv2DLayer(const CkksParameter& param_in,
                                                              const Duo& input_shape_in,
@@ -433,7 +433,7 @@ std::vector<uint32_t> InverseMultiplexedConv2DLayer::get_used_input_indices() co
 }
 
 vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
-    std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(n_in_channel);
+    std::vector<std::vector<lattisense::CkksCiphertext>> rotated_x(n_in_channel);
     int pad0 = static_cast<int>(padding_shape[0]);
     int pad1 = static_cast<int>(padding_shape[1]);
     int stride0 = static_cast<int>(stride[0]);
@@ -503,7 +503,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
                         if (weight_pt.empty()) {
                             auto w_pt_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, j, k + base_idx);
                             auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
-                            cxx_sdk_v2::CkksCiphertext one_mult_res =
+                            lattisense::CkksCiphertext one_mult_res =
                                 ctx_copy.mult_plain_mul(rotated_x[j][k + base_idx], w_pt);
                             if (j == 0 && k == 0) {
                                 s = move(one_mult_res);
@@ -511,9 +511,9 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
                                 s = ctx_copy.add(s, one_mult_res);
                             }
                         } else {
-                            cxx_sdk_v2::CkksPlaintextRingt& w_pt_rt = weight_pt[ct_idx][j][k + base_idx];
-                            cxx_sdk_v2::CkksPlaintextMul w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
-                            cxx_sdk_v2::CkksCiphertext one_mult_res =
+                            lattisense::CkksPlaintextRingt& w_pt_rt = weight_pt[ct_idx][j][k + base_idx];
+                            lattisense::CkksPlaintextMul w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
+                            lattisense::CkksCiphertext one_mult_res =
                                 ctx_copy.mult_plain_mul(rotated_x[j][k + base_idx], w_pt);
                             if (j == 0 && k == 0) {
                                 s = move(one_mult_res);

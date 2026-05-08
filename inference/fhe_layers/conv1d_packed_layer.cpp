@@ -21,7 +21,7 @@
 #include "util.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 Conv1DPackedLayer::Conv1DPackedLayer(const CkksParameter& param_in,
                                      const uint32_t input_shape_in,
@@ -252,14 +252,14 @@ vector<CkksCiphertext> Conv1DPackedLayer::run_core(CkksContext& ctx, std::vector
     }
 
     int rotated_size = input_rotated_x.size();
-    std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(rotated_size);
+    std::vector<std::vector<lattisense::CkksCiphertext>> rotated_x(rotated_size);
     parallel_for(rotated_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<CkksCiphertext> rotations =
             Conv2DLayer::populate_rotations_2_sides(ctx_copy, input_rotated_x[ct_idx], kernel_shape, skip);
         move(rotations.begin(), rotations.end(), back_inserter(rotated_x[ct_idx]));
     });
 
-    std::vector<cxx_sdk_v2::CkksCiphertext> result(n_packed_out_channel);
+    std::vector<lattisense::CkksCiphertext> result(n_packed_out_channel);
     parallel_for(n_packed_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         mult_add(&ctx_copy, rotated_x, ct_idx, ct_idx + 1, result);
     });

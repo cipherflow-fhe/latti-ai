@@ -23,7 +23,7 @@
 #include <functional>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 // ======================== PolyReluBase ========================
 

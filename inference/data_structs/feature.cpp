@@ -21,7 +21,7 @@
 #include <sstream>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 int32_t bitlength = RING_MOD_BIT;
 

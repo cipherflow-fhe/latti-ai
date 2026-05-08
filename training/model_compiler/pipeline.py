@@ -22,6 +22,7 @@ from components import LayerAbstractGraph, config, PN13QP218, PN14QP438, PN15QP8
 import processor
 from processor import *
 from graph_partition_dp import *
+from slot_inference import _infer_slots
 
 
 def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
@@ -242,7 +243,9 @@ def dump_graph(
     if server_task_config.exists():
         shutil.copy(str(server_task_config), str(client_task_config))
 
-    ckks_param = {'param0': {**config.fhe_param.to_dict(), 'pack_num': 4.0}}
+    n = int(config.fhe_param.poly_modulus_degree)
+    inferred_slots = _infer_slots(server_dir, n)
+    ckks_param = {'param0': {**config.fhe_param.to_dict(), 'pack_num': 4.0, 'slots': inferred_slots}}
 
     with open(server_dir / 'ckks_parameter.json', 'w') as f:
         json.dump(ckks_param, f, indent=4)

@@ -22,7 +22,7 @@
 #include <cmath>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 ParMultiplexedConv1DPackedLayer::ParMultiplexedConv1DPackedLayer(const CkksParameter& param_in,
                                                                  uint32_t input_shape_in,

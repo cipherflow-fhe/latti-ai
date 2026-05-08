@@ -27,7 +27,14 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+_LATTI_AI_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_LATTI_AI_ROOT))
+# Lattisense's `frontend/` is laid out as a top-level package inside its
+# own repo; when we vendor it under inference/lattisense/, internal
+# imports like `from frontend.bootstrap_params import ...` need
+# inference/lattisense on sys.path too. Without this, gen_mega_ag.py
+# fails with ModuleNotFoundError unless the user sets PYTHONPATH.
+sys.path.insert(0, str(_LATTI_AI_ROOT / 'inference' / 'lattisense'))
 from inference.lattisense.frontend.custom_task import *  # noqa: E402
 from inference.model_generator.deploy_cmds import gen_custom_task  # noqa: E402
 
@@ -39,6 +46,11 @@ def main():
         type=str,
         required=True,
         help='Path to the task directory',
+    )
+    parser.add_argument(
+        '--force-dense',
+        action='store_true',
+        help='Force slots = N/2 (dense baseline) instead of the auto-inferred sparse value.',
     )
     args = parser.parse_args()
 
@@ -69,6 +81,30 @@ def main():
         task_config = json.load(f)
     style = task_config.get('pack_style', 'ordinary')
 
+    # Re-derive slots from the compiled graph each invocation; keeps this
+    # script idempotent across alternating --force-dense / sparse runs.
+    # Both client and server ckks_parameter.json are rewritten so the
+    # InferenceClient encoder skip stays in lockstep with the runtime.
+    client_n = int(first_param['poly_modulus_degree'])
+    if args.force_dense:
+        slots = None
+        canonical_slots = client_n // 2
+    else:
+        sys.path.insert(0, str(_LATTI_AI_ROOT / 'training' / 'model_compiler'))
+        from slot_inference import _infer_slots  # noqa: E402
+
+        canonical_slots = _infer_slots(Path(task_dir) / 'server', client_n)
+        slots = canonical_slots if canonical_slots < client_n // 2 else None
+    first_param['slots'] = canonical_slots
+    with open(ckks_param_path, 'w', encoding='utf-8') as f:
+        json.dump(ckks_config, f, indent=4)
+    server_ckks_param_path = os.path.join(task_dir, 'server', 'ckks_parameter.json')
+    with open(server_ckks_param_path, 'r', encoding='utf-8') as f:
+        srv_cfg = json.load(f)
+    next(iter(srv_cfg.values()))['slots'] = canonical_slots
+    with open(server_ckks_param_path, 'w', encoding='utf-8') as f:
+        json.dump(srv_cfg, f, indent=4)
+
     # Read server config to find ergs with GPU acceleration enabled.
     server_config_path = os.path.join(task_dir, 'server', 'task_config.json')
     with open(server_config_path, 'r', encoding='utf-8') as f:
@@ -76,7 +112,7 @@ def main():
 
     for erg_name, erg_config in server_config['server_task'].items():
         if erg_config['enable_fpga']:
-            gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style)
+            gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style, slots=slots)
 
     print(f'Done: mega_ag generated for {task_dir}.')
 

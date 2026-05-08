@@ -20,7 +20,7 @@
 
 #include "interface/inference_client.h"
 
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 using namespace fhe_ops_lib;
 
@@ -82,7 +82,7 @@ void InferenceClient::read_configuration() {
     std::string ckks_param_id = first_param["ckks_parameter_id"];
     auto& ckks_entry = ckks_config[ckks_param_id];
     poly_modulus_degree_ = ckks_entry["poly_modulus_degree"].get<int>();
-    n_slots_ = poly_modulus_degree_ / 2;
+    n_slots_ = ckks_entry.value("slots", poly_modulus_degree_ / 2);
     if (ckks_entry.contains("q") && ckks_entry.contains("p")) {
         q_ = ckks_entry["q"].get<std::vector<uint64_t>>();
         p_ = ckks_entry["p"].get<std::vector<uint64_t>>();
@@ -97,7 +97,23 @@ void InferenceClient::create_crypto_context() {
     if (needs_btp_) {
         btp_param_ = std::make_unique<CkksBtpParameter>(CkksBtpParameter::create_parameter());
         btp_context_ = std::make_unique<CkksBtpContext>(CkksBtpContext::create_random_context(*btp_param_));
+        // Default power-of-2 keys cover dense bootstrap; the explicit Galois
+        // elements from the task signature add the sparse BSGS rotations
+        // (e.g., 252 at log_slots=8) that lattigo otherwise rejects.
         btp_context_->gen_rotation_keys();
+        auto sig_path = client_dir_.parent_path() / "server" / "task_signature.json";
+        if (std::filesystem::exists(sig_path)) {
+            auto sig = read_json(sig_path.string());
+            if (sig.contains("key") && sig["key"].contains("glk")) {
+                std::vector<uint64_t> gal_els;
+                for (auto& [k, _] : sig["key"]["glk"].items()) {
+                    gal_els.push_back(std::stoull(k));
+                }
+                if (!gal_els.empty()) {
+                    btp_context_->gen_rotation_keys_for_galois_elements(gal_els);
+                }
+            }
+        }
         context_ptr_ = btp_context_.get();
     } else {
         if (!q_.empty() && !p_.empty()) {

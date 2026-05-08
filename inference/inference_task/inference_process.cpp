@@ -21,7 +21,7 @@
 #include <iostream>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 uint64_t fhe_time = 0;
 bool normal_output = false;
 

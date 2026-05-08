@@ -59,8 +59,13 @@
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include <lattisense/lib/nlohmann/json.hpp>
 
+// Forward-declare; not transitively exposed by the interface headers.
+namespace fhe_ops_lib {
+void print_double_message(const double* msg, const char* name, int count);
+}
+
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 namespace fs = std::filesystem;
 
 fs::path base_path = "../hetero";

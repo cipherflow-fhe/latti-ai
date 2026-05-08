@@ -19,7 +19,7 @@
 #include "mult_scaler.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 MultScalarLayer::MultScalarLayer(const CkksParameter& param_in,
                                  const Duo& input_shape_in,

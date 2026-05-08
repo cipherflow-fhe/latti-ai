@@ -353,6 +353,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
     import numpy as np
     import h5py
     from .activations import RangeNormPoly2d as _RangeNormPoly2d
+    from .activations import RangeNormPoly1d as _RangeNormPoly1d
     from .activations import Simple_Polyrelu as _Simple_Polyrelu
 
     sd = model.state_dict()
@@ -361,7 +362,15 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
         return sd[key].detach().cpu().numpy()
 
     # Collect leaf modules in traversal order
-    target_types = (nn.Conv2d, nn.Conv1d, nn.BatchNorm2d, _RangeNormPoly2d, _Simple_Polyrelu, nn.Linear)
+    target_types = (
+        nn.Conv2d,
+        nn.Conv1d,
+        nn.BatchNorm2d,
+        _RangeNormPoly2d,
+        _RangeNormPoly1d,
+        _Simple_Polyrelu,
+        nn.Linear,
+    )
     modules_list = [(name, mod) for name, mod in model.named_modules() if isinstance(mod, target_types)]
 
     fused = {}
@@ -398,7 +407,9 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
                     log.info('Conv (no BN): %s', name)
                 i += 1
 
-        elif isinstance(mod, _RangeNormPoly2d):
+        elif isinstance(mod, (_RangeNormPoly2d, _RangeNormPoly1d)):
+            # 1d and 2d share the same buffer name and absorption math;
+            # `.flatten()` handles either tensor shape uniformly.
             running_max = get_np(f'{name}.rangenorm.running_max').flatten()
             coeffs = _compute_poly_coeffs(running_max, upper_bound, eps, mod.hermite_coeffs)
             fused[f'{name}.weight'] = coeffs.flatten()

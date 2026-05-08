@@ -22,7 +22,7 @@
 #include "multiplexed_conv2d_pack_layer.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 CkksCiphertext sum_slot(CkksContext& ctx, CkksCiphertext& x, uint32_t m, uint32_t p) {
     CkksCiphertext result = x.copy();
@@ -523,7 +523,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayer::run_core(CkksContext& ct
     }
 
     int rotated_size = input_rotated_x_skip.size();
-    std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(rotated_size);
+    std::vector<std::vector<lattisense::CkksCiphertext>> rotated_x(rotated_size);
     parallel_for(rotated_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<CkksCiphertext> rotations = populate_rotations_2_sides(ctx_copy, input_rotated_x_skip[ct_idx],
                                                                       kernel_shape_[0], input_rotate_units_[0]);
@@ -612,7 +612,7 @@ ParMultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ct
     }
 
     int rotated_size = input_rotated_x.size();
-    std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(rotated_size);
+    std::vector<std::vector<lattisense::CkksCiphertext>> rotated_x(rotated_size);
     parallel_for(rotated_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<CkksCiphertext> rotations =
             populate_rotations_2_sides(ctx_copy, input_rotated_x[ct_idx], kernel_shape_[0], input_rotate_units_[0]);
@@ -766,7 +766,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayer::run_core_for_reduct_rot(
 
     // 2. Kernel direction rotations (same as post_skip)
     int rotated_size = input_rotated_x.size();
-    std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(rotated_size);
+    std::vector<std::vector<lattisense::CkksCiphertext>> rotated_x(rotated_size);
     parallel_for(rotated_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<CkksCiphertext> rotations =
             populate_rotations_2_sides(ctx_copy, input_rotated_x[ct_idx], kernel_shape_[0], input_rotate_units_[0]);
