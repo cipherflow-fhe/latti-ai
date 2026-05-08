@@ -1195,7 +1195,7 @@ class TestLayerExport(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 
-    def test_softmax_layer(self):
+  def test_softmax_layer(self):
         N = 65536
         set_param('PN16QP1761')
         level = 3
@@ -1216,25 +1216,7 @@ if __name__ == '__main__':
             output_args=[Argument('output_ct', output_ct)],
             output_instruction_path=base_path / f'CKKS_softmax' / f'level_{level}' / 'server',
         )
+    # =================================================
 
-    def test_softmax_layer(self):
-        N = 65536
-        set_param('PN16QP1761')
-        level = 3
-        num_channels = 4
-        skip = 1
-
-        n_channel_per_ct = N // 2 // skip
-        n_ct = (num_channels + n_channel_per_ct - 1) // n_channel_per_ct
-
-        input_ct = [CkksCiphertextNode(f'input_{i}', level) for i in range(n_ct)]
-
-        softmax = SoftmaxLayer(num_channels, skip, N)
-        output_ct = softmax.call(input_ct, None, None, N)
-
-        input_args = [Argument('input_node', input_ct)]
-        process_custom_task(
-            input_args=input_args,
-            output_args=[Argument('output_ct', output_ct)],
-            output_instruction_path=base_path / f'CKKS_softmax' / f'level_{level}' / 'server',
-        )
+if __name__ == '__main__':
+    unittest.main()
