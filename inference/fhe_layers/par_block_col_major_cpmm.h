@@ -47,6 +47,19 @@ public:
     void precompute_diagonals();
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A);
 
+    // Accessors for pre-computed plaintexts (valid after precompute_diagonals())
+    const ls::CkksPlaintextRingt& get_diag_pt(uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const {
+        return diag_pt_[mb][g][bp][k];
+    }
+    const ls::CkksPlaintextRingt& get_mask_h0_pt() const {
+        return mask_h0_pt_;
+    }
+
+    // Lazy generation: encode on demand without precompute_diagonals()
+    ls::CkksPlaintextRingt
+    generate_diag_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const;
+    ls::CkksPlaintextRingt generate_mask_h0_pt(ls::CkksContext& ctx) const;
+
 private:
     enum class Mode { SQUARE, EXPAND, REDUCE };
 

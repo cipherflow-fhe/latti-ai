@@ -82,4 +82,5 @@ public:
     Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;
     Feature1DEncrypted copy() const;
+    Feature1DEncrypted drop_level(int n_level_to_drop) const;
 };

@@ -90,6 +90,12 @@ void BlockColMajorTranspose::precompute_diagonals() {
     }
 }
 
+CkksPlaintextRingt BlockColMajorTranspose::generate_transpose_diag_pt(CkksContext& ctx, uint32_t k_idx) const {
+    int k = (int)k_idx - (int)(d_ - 1);  // k_idx 0..2d-2 -> k -(d-1)..d-1
+    auto diag_vec = build_transpose_diagonal(k);
+    return ctx.encode_ringt(diag_vec, param_.get_q(level_));
+}
+
 // transpose_on_ct: (2d-1) rotations + (2d-1) pt_muls + (2d-2) adds + 1 rescale
 // Input level L -> Output level L-1
 // Same rotate->multiply->accumulate->rescale pattern as BlockCCMM::sigma_on_ct

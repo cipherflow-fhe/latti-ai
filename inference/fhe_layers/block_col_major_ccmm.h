@@ -33,6 +33,14 @@ public:
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A, const FeatureMatEncrypted& B);
 
+    // Generate precomputed diagonal plaintexts on demand (used by encode_pt executor).
+    // Equivalent to the corresponding precompute_diagonals() entries but returns by value.
+    ls::CkksPlaintextRingt generate_sigma_pt(ls::CkksContext& ctx, uint32_t k) const;
+    ls::CkksPlaintextRingt generate_tau_pt(ls::CkksContext& ctx, uint32_t offset_idx) const;
+    ls::CkksPlaintextRingt generate_psi_k0_pt(ls::CkksContext& ctx) const;
+    ls::CkksPlaintextRingt generate_psi_wk_pt(ls::CkksContext& ctx, uint32_t i) const;
+    ls::CkksPlaintextRingt generate_psi_wkd_pt(ls::CkksContext& ctx, uint32_t i) const;
+
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx,
                                              const std::vector<ls::CkksCiphertext>& A_cts,
