@@ -31,6 +31,9 @@ public:
     void precompute_diagonals();
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A);
 
+    // Lazy generation: encode on demand without precompute_diagonals()
+    ls::CkksPlaintextRingt generate_diag_pt(ls::CkksContext& ctx, uint32_t bj, uint32_t bp, uint32_t k) const;
+
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& A_cts);
     ls::CkksCiphertext block_mult_cpmm(ls::CkksContext& ctx, const ls::CkksCiphertext& a, int bj, int bp) const;
