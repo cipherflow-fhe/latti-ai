@@ -77,6 +77,12 @@ public:
     /// Generate crypto context with keys.
     void setup();
 
+    /// Release all in-memory key material immediately.
+    /// After this call, encrypt()/decrypt() will fail until setup() or load_full_context()
+    /// is called again. Use this to free GBs of key memory without waiting for the GC to
+    /// finalize the wrapper object.
+    void release();
+
     /// Export a public-only evaluation context (serialized bytes).
     /// The server uses this to perform encrypted computation without the secret key.
     Bytes export_eval_context() const;

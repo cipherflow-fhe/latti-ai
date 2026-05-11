@@ -22,8 +22,14 @@
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-static Napi::Buffer<uint8_t> bytes_to_buffer(Napi::Env env, const Bytes& b) {
-    return Napi::Buffer<uint8_t>::Copy(env, b.data(), b.size());
+// Takes ownership of b (b is moved-from after this call). The resulting Buffer points
+// to the heap-allocated Bytes directly; V8's finalizer deletes it on GC. Zero-copy for
+// the underlying buffer — only the small vector control block is heap-allocated extra.
+static Napi::Buffer<uint8_t> bytes_to_buffer(Napi::Env env, Bytes&& b) {
+    auto* owned = new Bytes(std::move(b));
+    return Napi::Buffer<uint8_t>::New(
+        env, owned->data(), owned->size(),
+        [](Napi::Env, uint8_t* /*data*/, Bytes* hint) { delete hint; }, owned);
 }
 
 static Bytes buffer_to_bytes(Napi::Value val) {
@@ -60,6 +66,33 @@ private:
     InferenceClient* client_;
 };
 
+class ReleaseWorker : public Napi::AsyncWorker {
+public:
+    ReleaseWorker(Napi::Env env, InferenceClient* client)
+        : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)), client_(client) {}
+
+    Napi::Promise Promise() {
+        return deferred_.Promise();
+    }
+
+    void Execute() override {
+        try {
+            client_->release();
+        } catch (const std::exception& e) { SetError(e.what()); }
+    }
+
+    void OnOK() override {
+        deferred_.Resolve(Env().Undefined());
+    }
+    void OnError(const Napi::Error& err) override {
+        deferred_.Reject(err.Value());
+    }
+
+private:
+    Napi::Promise::Deferred deferred_;
+    InferenceClient* client_;
+};
+
 class ExportEvalContextWorker : public Napi::AsyncWorker {
 public:
     ExportEvalContextWorker(Napi::Env env, InferenceClient* client)
@@ -76,7 +109,7 @@ public:
     }
 
     void OnOK() override {
-        deferred_.Resolve(bytes_to_buffer(Env(), result_));
+        deferred_.Resolve(bytes_to_buffer(Env(), std::move(result_)));
     }
     void OnError(const Napi::Error& err) override {
         deferred_.Reject(err.Value());
@@ -108,7 +141,7 @@ public:
         auto env = Env();
         auto obj = Napi::Object::New(env);
         for (auto& [k, v] : result_) {
-            obj.Set(k, bytes_to_buffer(env, v));
+            obj.Set(k, bytes_to_buffer(env, std::move(v)));
         }
         deferred_.Resolve(obj);
     }
@@ -182,7 +215,7 @@ public:
     }
 
     void OnOK() override {
-        deferred_.Resolve(bytes_to_buffer(Env(), result_));
+        deferred_.Resolve(bytes_to_buffer(Env(), std::move(result_)));
     }
     void OnError(const Napi::Error& err) override {
         deferred_.Reject(err.Value());
@@ -232,6 +265,7 @@ public:
             DefineClass(env, "InferenceClient",
                         {
                             InstanceMethod<&InferenceClientWrapper::Setup>("setup"),
+                            InstanceMethod<&InferenceClientWrapper::Release>("release"),
                             InstanceMethod<&InferenceClientWrapper::ExportEvalContext>("exportEvalContext"),
                             InstanceMethod<&InferenceClientWrapper::ExportFullContext>("exportFullContext"),
                             InstanceMethod<&InferenceClientWrapper::LoadFullContext>("loadFullContext"),
@@ -258,6 +292,12 @@ public:
 
     Napi::Value Setup(const Napi::CallbackInfo& info) {
         auto* worker = new SetupWorker(info.Env(), client_.get());
+        worker->Queue();
+        return worker->Promise();
+    }
+
+    Napi::Value Release(const Napi::CallbackInfo& info) {
+        auto* worker = new ReleaseWorker(info.Env(), client_.get());
         worker->Queue();
         return worker->Promise();
     }

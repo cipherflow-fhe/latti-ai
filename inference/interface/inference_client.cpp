@@ -130,6 +130,16 @@ void InferenceClient::setup() {
     create_crypto_context();
 }
 
+void InferenceClient::release() {
+    std::cout << "[Client] Releasing in-memory key material..." << std::endl;
+    ckks_context_.reset();
+    btp_context_.reset();
+    ckks_param_.reset();
+    btp_param_.reset();
+    context_ptr_ = nullptr;
+    std::cout << "[Client] Done." << std::endl;
+}
+
 void InferenceClient::load_full_context(const Bytes& full_bytes) {
     std::cout << "[Client] Loading full context (with secret key)..." << std::endl;
     if (needs_btp_) {

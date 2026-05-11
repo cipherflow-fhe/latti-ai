@@ -101,6 +101,28 @@ async function testLoadFullContextRoundtrip(taskDir, fullCtx) {
     console.log(`[PASS] loadFullContext roundtrip (maxError=${maxError.toFixed(6)})`);
 }
 
+async function testReleaseThenReloadRoundtrip(taskDir, fullCtx) {
+    console.log('\n[TEST] release + reload roundtrip');
+    const { InferenceClient } = require('./build/Release/latti_client.node');
+    const c = new InferenceClient(taskDir);
+    await c.setup();
+    await c.release();                  // frees freshly-generated keys
+    await c.loadFullContext(fullCtx);   // restore from saved bytes
+
+    const csvPath = path.join(taskDir, 'img.csv');
+    const encrypted = await c.encrypt({input: csvPath});
+    const result = await c.decrypt({output: encrypted.input});
+
+    const csv = fs.readFileSync(csvPath, 'utf8');
+    const original = csv.trim().split(',').map(Number);
+    const decrypted = Array.from(result.output.output).slice(0, original.length);
+    const maxError = Math.max(...original.map((v, i) => Math.abs(v - decrypted[i])));
+    if (maxError >= 0.01) {
+        throw new Error(`max error too large: ${maxError}`);
+    }
+    console.log(`[PASS] release + reload roundtrip (maxError=${maxError.toFixed(6)})`);
+}
+
 async function main() {
     console.log('Testing latti_client N-API addon\n');
     const client = await testImport();
@@ -111,6 +133,7 @@ async function main() {
     if (encrypted) {
         await testDecrypt(client, encrypted);
         await testLoadFullContextRoundtrip(TEST_TASK_DIR, fullCtx);
+        await testReleaseThenReloadRoundtrip(TEST_TASK_DIR, fullCtx);
     }
     console.log('\n=== ALL TESTS PASSED ===\n');
 }

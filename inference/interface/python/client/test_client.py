@@ -24,7 +24,7 @@ def test_import():
     assert hasattr(latti_client, 'InferenceClient')
     assert hasattr(latti_client, 'DecryptedOutput')
     methods = [m for m in dir(latti_client.InferenceClient) if not m.startswith('_')]
-    for required in ['setup', 'encrypt', 'decrypt', 'export_eval_context',
+    for required in ['setup', 'release', 'encrypt', 'decrypt', 'export_eval_context',
                      'export_full_context', 'load_full_context']:
         assert required in methods, f'missing method: {required}'
     print('[PASS] import')
@@ -119,6 +119,25 @@ def test_load_full_context_roundtrip(full_ctx):
     print(f'[PASS] load_full_context roundtrip (max_error={max_error:.6f})')
 
 
+def test_release_then_reload_roundtrip(full_ctx):
+    """After release(), the client should be reusable via load_full_context()."""
+    c = latti_client.InferenceClient(TEST_TASK_DIR)
+    c.setup()
+    c.release()  # frees the freshly-generated context
+    c.load_full_context(full_ctx)  # restore from saved bytes
+
+    csv_path = os.path.join(TEST_TASK_DIR, 'img.csv')
+    encrypted = c.encrypt({'input': csv_path})
+    result = c.decrypt({'output': encrypted['input']})
+
+    with open(csv_path) as f:
+        original = [float(x) for x in next(csv.reader(f))]
+    decrypted = result['output'].output[: len(original)]
+    max_error = max(abs(a - b) for a, b in zip(original, decrypted))
+    assert max_error < 0.01, f'error too large: {max_error}'
+    print(f'[PASS] release + reload roundtrip (max_error={max_error:.6f})')
+
+
 def main():
     print('Testing latti_client module\n')
     test_import()
@@ -141,6 +160,9 @@ def main():
 
     print('\n--- Load full context in fresh client + roundtrip ---')
     test_load_full_context_roundtrip(full_ctx)
+
+    print('\n--- Release + reload roundtrip ---')
+    test_release_then_reload_roundtrip(full_ctx)
 
     print('\n=== ALL TESTS PASSED ===\n')
 
