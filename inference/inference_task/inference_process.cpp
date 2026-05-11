@@ -759,36 +759,74 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     result = MakeU<Feature2DEncrypted>(fp->get_layer<SquareLayer>(key).call(context, input2D));
+                } else if (feature_node.dim == 1) {
+                    const Feature1DEncrypted& input1D = dynamic_cast<const Feature1DEncrypted&>(feature_node);
+                    Feature1DEncrypted out = input1D.copy();
+                    out.data = fp->get_layer<SquareLayer>(key).call(context, input1D.data);
+                    out.level = input1D.level - 1;
+                    result = MakeU<Feature1DEncrypted>(move(out));
                 } else if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
                     result = MakeU<Feature0DEncrypted>(fp->get_layer<SquareLayer>(key).call(context, input0D));
                 } else {
-                    throw runtime_error("input is not available, expect Feature2DEncrypted ");
+                    throw runtime_error("input is not available, expect Feature2DEncrypted or Feature1DEncrypted or "
+                                        "Feature0DEncrypted");
                 }
                 fhe_timer.stop();
             } else if (layer_type == "add2d") {
                 fhe_timer.start();
                 double target_ckks_scale = json_features[feature_output[0]]["ckks_scale"];
-                const Feature2DEncrypted& input0 =
-                    dynamic_cast<const Feature2DEncrypted&>(_get_feature(feature_input[0]));
-                const Feature2DEncrypted& input1 =
-                    dynamic_cast<const Feature2DEncrypted&>(_get_feature(feature_input[1]));
-                if (input0.dim == 2 && input1.dim == 2) {
+                const FeatureEncrypted& feat0 = _get_feature(feature_input[0]);
+                const FeatureEncrypted& feat1 = _get_feature(feature_input[1]);
+                if (feat0.dim == 2 && feat1.dim == 2) {
+                    const Feature2DEncrypted& input0 = dynamic_cast<const Feature2DEncrypted&>(feat0);
+                    const Feature2DEncrypted& input1 = dynamic_cast<const Feature2DEncrypted&>(feat1);
                     result = MakeU<Feature2DEncrypted>(fp->get_layer<AddLayer>(key).run(context, input0, input1));
+                } else if (feat0.dim == 1 && feat1.dim == 1) {
+                    const Feature1DEncrypted& input0 = dynamic_cast<const Feature1DEncrypted&>(feat0);
+                    const Feature1DEncrypted& input1 = dynamic_cast<const Feature1DEncrypted&>(feat1);
+                    Feature1DEncrypted out = input0.copy();
+                    int n_ct = input0.data.size();
+                    out.data.resize(n_ct);
+                    parallel_for(n_ct, th_nums, context, [&](ls::CkksContext& ctx_copy, int ct_idx) {
+                        out.data[ct_idx] = ctx_copy.add(input0.data[ct_idx], input1.data[ct_idx]);
+                    });
+                    result = MakeU<Feature1DEncrypted>(move(out));
+                } else if (feat0.dim == 0 && feat1.dim == 0) {
+                    const Feature0DEncrypted& input0 = dynamic_cast<const Feature0DEncrypted&>(feat0);
+                    const Feature0DEncrypted& input1 = dynamic_cast<const Feature0DEncrypted&>(feat1);
+                    Feature0DEncrypted out = input0.copy();
+                    int n_ct = input0.data.size();
+                    out.data.resize(n_ct);
+                    parallel_for(n_ct, th_nums, context, [&](ls::CkksContext& ctx_copy, int ct_idx) {
+                        out.data[ct_idx] = ctx_copy.add(input0.data[ct_idx], input1.data[ct_idx]);
+                    });
+                    result = MakeU<Feature0DEncrypted>(move(out));
                 } else {
-                    throw runtime_error("input is not available, expect Feature2DEncrypted");
+                    throw runtime_error("add2d: input dims mismatch or unsupported dim");
                 }
                 fhe_timer.stop();
             } else if (layer_type == "mult_scalar") {
                 fhe_timer.start();
-                const Feature2DEncrypted& input0 =
-                    dynamic_cast<const Feature2DEncrypted&>(_get_feature(feature_input[0]));
-
-                if (input0.dim == 2) {
+                const FeatureEncrypted& feat0 = _get_feature(feature_input[0]);
+                if (feat0.dim == 2) {
+                    const Feature2DEncrypted& input0 = dynamic_cast<const Feature2DEncrypted&>(feat0);
                     auto res = fp->get_layer<MultScalarLayer>(key).run(context, input0);
                     result = MakeU<Feature2DEncrypted>(move(res));
+                } else if (feat0.dim == 1) {
+                    const Feature1DEncrypted& input0 = dynamic_cast<const Feature1DEncrypted&>(feat0);
+                    Feature1DEncrypted out = input0.copy();
+                    out.data = fp->get_layer<MultScalarLayer>(key).run_core(context, input0.data);
+                    out.level = input0.level - 1;
+                    result = MakeU<Feature1DEncrypted>(move(out));
+                } else if (feat0.dim == 0) {
+                    const Feature0DEncrypted& input0 = dynamic_cast<const Feature0DEncrypted&>(feat0);
+                    Feature0DEncrypted out = input0.copy();
+                    out.data = fp->get_layer<MultScalarLayer>(key).run_core(context, input0.data);
+                    out.level = input0.level - 1;
+                    result = MakeU<Feature0DEncrypted>(move(out));
                 } else {
-                    throw runtime_error("input is not available, expect Feature2DEncrypted");
+                    throw runtime_error("mult_scalar: unsupported input dim");
                 }
                 fhe_timer.stop();
             } else if (layer_type == "drop_level") {
@@ -799,11 +837,14 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     result = MakeU<Feature2DEncrypted>(input2D.drop_level(n_level_to_drop));
+                } else if (feature_node.dim == 1) {
+                    const Feature1DEncrypted& input1D = dynamic_cast<const Feature1DEncrypted&>(feature_node);
+                    result = MakeU<Feature1DEncrypted>(input1D.drop_level(n_level_to_drop));
                 } else if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
                     result = MakeU<Feature0DEncrypted>(input0D.drop_level(n_level_to_drop));
                 } else {
-                    throw runtime_error("input is not available, expect Feature2DEncrypted or Feature0DEncrypted");
+                    throw runtime_error("drop_level: unsupported input dim");
                 }
             } else if (layer_type == "fc0" || layer_type == "fc1") {
                 fhe_timer.start();
@@ -1399,6 +1440,9 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 if (feature_input0.dim == 2) {
                     auto& input0 = p_feature2d_x[feature_input[0]];
                     result = fp->get_layer<SquareLayer>(key).run_plaintext(input0);
+                } else if (feature_input0.dim == 1) {
+                    auto& input0 = p_feature1d_x[feature_input[0]];
+                    result1d = fp->get_layer<SquareLayer>(key).run_plaintext(input0);
                 } else if (feature_input0.dim == 0) {
                     auto& input0 = p_feature0d_x[feature_input[0]];
                     result0d = fp->get_layer<SquareLayer>(key)
@@ -1409,9 +1453,19 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
             if (layer_type == "add2d") {
                 FeatureNode feature_input0(json_features[feature_input[0]]);
                 FeatureNode feature_input1(json_features[feature_input[1]]);
-                auto& input0 = p_feature2d_x[feature_input[0]];
-                auto& input1 = p_feature2d_x[feature_input[1]];
-                result = fp->get_layer<AddLayer>(key).run_plaintext(input0, input1);
+                if (feature_input0.dim == 2) {
+                    auto& input0 = p_feature2d_x[feature_input[0]];
+                    auto& input1 = p_feature2d_x[feature_input[1]];
+                    result = fp->get_layer<AddLayer>(key).run_plaintext(input0, input1);
+                } else if (feature_input0.dim == 1) {
+                    auto& input0 = p_feature1d_x[feature_input[0]];
+                    auto& input1 = p_feature1d_x[feature_input[1]];
+                    result1d = fp->get_layer<AddLayer>(key).run_plaintext_1d(input0, input1);
+                } else if (feature_input0.dim == 0) {
+                    auto& input0 = p_feature0d_x[feature_input[0]];
+                    auto& input1 = p_feature0d_x[feature_input[1]];
+                    result0d = fp->get_layer<AddLayer>(key).run_plaintext_0d(input0, input1);
+                }
             }
             if (layer_type == "poly_relu2d" || layer_type == "polyact") {
                 FeatureNode feature_input0(json_features[feature_input[0]]);

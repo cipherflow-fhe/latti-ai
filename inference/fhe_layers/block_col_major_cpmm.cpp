@@ -160,6 +160,11 @@ std::vector<CkksCiphertext> BlockColMajorCPMM::run_core(CkksContext& ctx, const 
     return C_cts;
 }
 
+CkksPlaintextRingt BlockColMajorCPMM::generate_diag_pt(CkksContext& ctx, uint32_t bj, uint32_t bp, uint32_t k) const {
+    auto diag_vec = build_block_diagonal(bj, bp, k);
+    return ctx.encode_ringt(diag_vec, param_.get_q(level_));
+}
+
 FeatureMatEncrypted BlockColMajorCPMM::run(CkksContext& ctx, const FeatureMatEncrypted& A) {
     FeatureMatEncrypted result(&ctx, A.level);
     result.data = run_core(ctx, A.data);
