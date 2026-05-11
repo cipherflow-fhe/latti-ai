@@ -187,6 +187,15 @@ void ParBlockColMajorCPMM::precompute_diagonals() {
     mask_h0_pt_ = ctx.encode_ringt(mask_vec, mask_scale);
 }
 
+CkksPlaintextRingt
+ParBlockColMajorCPMM::generate_diag_pt(CkksContext& ctx, uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const {
+    return ctx.encode_ringt(build_block_diagonal(mb, g, bp, k), param_.get_q(level_));
+}
+
+CkksPlaintextRingt ParBlockColMajorCPMM::generate_mask_h0_pt(CkksContext& ctx) const {
+    return ctx.encode_ringt(build_head0_mask(), param_.get_q(level_ - 1));
+}
+
 // block_mult_cpmm: d rotations + d pt_muls + (d-1) adds + 1 rescale
 // Computes a ciphertext's all interleaved heads' contributions to output block column bp in parallel.
 // Input level L -> Output level L-1
