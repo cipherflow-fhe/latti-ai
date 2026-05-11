@@ -29,6 +29,10 @@ public:
                               uint32_t level);
     void precompute_diagonals();
 
+    // Lazy generation: encode transpose diagonal on demand
+    // k_idx: 0..2d-2, maps to k = k_idx - (d-1) in range [-(d-1), d-1]
+    ls::CkksPlaintextRingt generate_transpose_diag_pt(ls::CkksContext& ctx, uint32_t k_idx) const;
+
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& input);
 
 private:

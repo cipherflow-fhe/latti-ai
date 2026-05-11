@@ -35,6 +35,174 @@
 #define CATCH_CONFIG_MAIN
 #include "e2e_test_util.h"
 
+#include <any>
+#include <unordered_map>
+
+#include "data_structs/feature_mat.h"
+#include "fhe_layers/block_col_major_transpose.h"
+#include "fhe_layers/block_col_major_cpmm.h"
+#include "fhe_layers/block_col_major_ccmm.h"
+#include "fhe_layers/par_block_col_major_cpmm.h"
+#include "fhe_layers/par_block_col_major_transpose.h"
+#include "fhe_layers/par_block_col_major_ccmm.h"
+
+#include <cxx_sdk_v2/cxx_fhe_task.h>
+#include <cxx_sdk_v2/cxx_argument.h>
+
+using namespace lattisense;
+using namespace fhe_ops_lib;
+
+// ── BlockColMajor E2E test utilities ─────────────────────────────────────────
+
+static Array<double, 2> pt_matmul(const Array<double, 2>& A, const Array<double, 2>& B) {
+    uint32_t m = A.get_shape()[0], n = A.get_shape()[1], p = B.get_shape()[1];
+    Array<double, 2> C({m, p});
+    for (uint32_t i = 0; i < m; i++)
+        for (uint32_t j = 0; j < p; j++) {
+            double s = 0;
+            for (uint32_t k = 0; k < n; k++)
+                s += A.get(i, k) * B.get(k, j);
+            C.set(i, j, s);
+        }
+    return C;
+}
+
+static Array<double, 2> pt_transpose(const Array<double, 2>& A) {
+    uint32_t m = A.get_shape()[0], n = A.get_shape()[1];
+    Array<double, 2> T({n, m});
+    for (uint32_t i = 0; i < m; i++)
+        for (uint32_t j = 0; j < n; j++)
+            T.set(j, i, A.get(i, j));
+    return T;
+}
+
+// Per-head transpose: A is M × (K * n_heads), returns K × (M * n_heads)
+// Head h: A[:, h*K:(h+1)*K]^T → result[:, h*M:(h+1)*M]
+static Array<double, 2> pt_per_head_transpose(const Array<double, 2>& A, uint32_t per_head_cols, uint32_t n_heads) {
+    uint32_t M = A.get_shape()[0];
+    uint32_t K = per_head_cols;
+    Array<double, 2> T({K, M * n_heads});
+    for (uint32_t h = 0; h < n_heads; h++)
+        for (uint32_t i = 0; i < M; i++)
+            for (uint32_t j = 0; j < K; j++)
+                T.set(j, h * M + i, A.get(i, h * K + j));
+    return T;
+}
+
+// Per-head matmul: A is M × (N * n_heads), B is N × (P * n_heads), returns M × (P * n_heads)
+// Head h: A[:, h*N:(h+1)*N] * B[:, h*P:(h+1)*P]
+static Array<double, 2> pt_per_head_matmul(const Array<double, 2>& A,
+                                           const Array<double, 2>& B,
+                                           uint32_t N_inner,
+                                           uint32_t P_out,
+                                           uint32_t n_heads) {
+    uint32_t M = A.get_shape()[0];
+    Array<double, 2> C({M, P_out * n_heads});
+    for (uint32_t h = 0; h < n_heads; h++)
+        for (uint32_t i = 0; i < M; i++)
+            for (uint32_t j = 0; j < P_out; j++) {
+                double s = 0;
+                for (uint32_t k = 0; k < N_inner; k++)
+                    s += A.get(i, h * N_inner + k) * B.get(k, h * P_out + j);
+                C.set(i, h * P_out + j, s);
+            }
+    return C;
+}
+
+static double max_rel_error(const Array<double, 2>& expected, const Array<double, 2>& actual) {
+    double max_abs = 0, max_err = 0;
+    for (uint32_t i = 0; i < expected.get_shape()[0]; i++)
+        for (uint32_t j = 0; j < expected.get_shape()[1]; j++) {
+            max_abs = std::max(max_abs, std::abs(expected.get(i, j)));
+            max_err = std::max(max_err, std::abs(expected.get(i, j) - actual.get(i, j)));
+        }
+    return max_abs > 0 ? max_err / max_abs : max_err;
+}
+
+// Unified encode_pt executor for all BlockColMajor / ParBlockColMajor layers
+static ExecutorFunc make_block_col_major_encode_pt_executor() {
+    return [](ExecutionContext& exec_ctx, const std::unordered_map<NodeIndex, std::any>& inputs, std::any& output,
+              const ComputeNode& self) -> void {
+        CkksContext* ctx_ptr = exec_ctx.get_arithmetic_context<CkksContext>();
+        if (!ctx_ptr)
+            ctx_ptr = exec_ctx.get_arithmetic_context<CkksBtpContext>();
+        if (!ctx_ptr)
+            throw std::runtime_error("encode_pt: cannot get CkksContext");
+        if (!self.custom_prop.has_value())
+            throw std::runtime_error("encode_pt: missing custom_prop");
+
+        const auto& attrs = self.custom_prop->attributes;
+        const std::string op_class = attrs.at("op_class").get<std::string>();
+        const std::string type = attrs.at("type").get<std::string>();
+
+        NodeIndex in_idx = self.input_nodes[0]->index;
+        auto cd_ptr = std::any_cast<std::shared_ptr<CustomData>>(inputs.at(in_idx));
+        void* layer_ptr = cd_ptr->get_typed_data<void>();
+
+        CkksPlaintextRingt pt = [&]() -> CkksPlaintextRingt {
+            if (op_class == "BlockColMajorTranspose") {
+                auto* layer = static_cast<BlockColMajorTranspose*>(layer_ptr);
+                if (type == "transpose_diag_pt")
+                    return layer->generate_transpose_diag_pt(*ctx_ptr, attrs.value("k_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for BlockColMajorTranspose: " + type);
+            }
+            if (op_class == "BlockColMajorCPMM") {
+                auto* layer = static_cast<BlockColMajorCPMM*>(layer_ptr);
+                if (type == "diag_pt")
+                    return layer->generate_diag_pt(*ctx_ptr, attrs.value("bj", 0), attrs.value("bp", 0),
+                                                   attrs.value("k", 0));
+                throw std::runtime_error("encode_pt: unknown type for BlockColMajorCPMM: " + type);
+            }
+            if (op_class == "BlockColMajorCCMM") {
+                auto* layer = static_cast<BlockColMajorCCMM*>(layer_ptr);
+                if (type == "sigma_pt")
+                    return layer->generate_sigma_pt(*ctx_ptr, attrs.value("k", 0));
+                if (type == "tau_pt")
+                    return layer->generate_tau_pt(*ctx_ptr, attrs.value("offset_idx", 0));
+                if (type == "psi_k0_pt")
+                    return layer->generate_psi_k0_pt(*ctx_ptr);
+                if (type == "psi_wk_pt")
+                    return layer->generate_psi_wk_pt(*ctx_ptr, attrs.value("i", 1));
+                if (type == "psi_wkd_pt")
+                    return layer->generate_psi_wkd_pt(*ctx_ptr, attrs.value("i", 1));
+                throw std::runtime_error("encode_pt: unknown type for BlockColMajorCCMM: " + type);
+            }
+            if (op_class == "ParBlockColMajorCPMM") {
+                auto* layer = static_cast<ParBlockColMajorCPMM*>(layer_ptr);
+                if (type == "diag_pt")
+                    return layer->generate_diag_pt(*ctx_ptr, attrs.value("mb", 0), attrs.value("g", 0),
+                                                   attrs.value("bp", 0), attrs.value("k", 0));
+                if (type == "mask_h0_pt")
+                    return layer->generate_mask_h0_pt(*ctx_ptr);
+                throw std::runtime_error("encode_pt: unknown type for ParBlockColMajorCPMM: " + type);
+            }
+            if (op_class == "ParBlockColMajorTranspose") {
+                auto* layer = static_cast<ParBlockColMajorTranspose*>(layer_ptr);
+                if (type == "transpose_diag_pt")
+                    return layer->generate_transpose_diag_pt(*ctx_ptr, attrs.value("k_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParBlockColMajorTranspose: " + type);
+            }
+            if (op_class == "ParBlockColMajorCCMM") {
+                auto* layer = static_cast<ParBlockColMajorCCMM*>(layer_ptr);
+                if (type == "sigma_pt")
+                    return layer->generate_sigma_pt(*ctx_ptr, attrs.value("k", 0));
+                if (type == "tau_pt")
+                    return layer->generate_tau_pt(*ctx_ptr, attrs.value("offset_idx", 0));
+                if (type == "psi_k0_pt")
+                    return layer->generate_psi_k0_pt(*ctx_ptr);
+                if (type == "psi_wk_pt")
+                    return layer->generate_psi_wk_pt(*ctx_ptr, attrs.value("i", 1));
+                if (type == "psi_wkd_pt")
+                    return layer->generate_psi_wkd_pt(*ctx_ptr, attrs.value("i", 1));
+                throw std::runtime_error("encode_pt: unknown type for ParBlockColMajorCCMM: " + type);
+            }
+            throw std::runtime_error("encode_pt: unknown op_class: " + op_class);
+        }();
+
+        output = std::make_shared<CkksPlaintextRingt>(std::move(pt));
+    };
+}
+
 static const fs::path single_layer_base_path = e2e_base_path / "single_layer";
 
 // Read test names from ut_names.json written by the Python test suite.
@@ -302,6 +470,417 @@ TEST_CASE("cpu/adaptive_avgpool1d", "[e2e][cpu]") {
     }
 }
 
+// ── BlockColMajor / ParBlockColMajor (custom task) ──
+
+// Helper: run a BlockColMajor-family E2E test using FheTask with custom encode_pt executor.
+// These layers are not produced by the model compiler; they use process_custom_task
+// to generate mega_ag.json / task_signature.json, and require a custom encode_pt executor
+// to lazily generate plaintext diagonals during task execution.
+template <typename SetupFn>
+static void run_block_col_major_test(const fs::path& test_dir, bool use_gpu, SetupFn setup_fn) {
+    using clock = std::chrono::high_resolution_clock;
+    std::string test_name = test_dir.filename().string();
+    std::string device_tag = use_gpu ? "GPU" : "CPU";
+    fs::path server_dir = test_dir / "task" / "server";
+
+    REQUIRE(fs::exists(server_dir / "mega_ag.json"));
+    REQUIRE(fs::exists(server_dir / "task_signature.json"));
+
+    // Setup: create context, layer, input data, reference output, and cxx_args
+    const int N = 16384;
+    CkksParameter param = CkksParameter::create_parameter(N);
+    CkksContext ctx = CkksContext::create_random_context(param);
+    ctx.gen_rotation_keys();
+
+    // setup_fn populates cxx_args and returns the reference output + tolerance
+    std::vector<CxxVectorArgument> cxx_args;
+    Array<double, 2> ref_output({1, 1});
+    Duo out_shape = {0, 0};
+    uint32_t out_d = 0;
+    uint32_t out_n_heads = 0;
+    bool is_par = false;
+    std::vector<CkksCiphertext>* out_cts_ptr = nullptr;
+    std::any layer_holder;  // keeps layer alive until after task.run()
+
+    setup_fn(param, ctx, server_dir.string(), cxx_args, ref_output, out_shape, out_d, out_n_heads, is_par, out_cts_ptr,
+             layer_holder);
+
+    // Register executor and run task
+    std::unordered_map<std::string, ExecutorFunc> executors;
+    executors["encode_pt"] = make_block_col_major_encode_pt_executor();
+
+    auto t0 = clock::now();
+    uint64_t elapsed_us = 0;
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    if (use_gpu) {
+        FheTaskGpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        elapsed_us = task.run(&ctx, cxx_args);
+    } else
+#endif
+    {
+        FheTaskCpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        elapsed_us = task.run(&ctx, cxx_args);
+    }
+    auto t1 = clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+    std::cout << "\n[" << test_name << "] (" << device_tag << ") elapsed=" << std::fixed << std::setprecision(2) << ms
+              << " ms\n";
+
+    // Decrypt output — out_cts_ptr was set by setup_fn and filled in-place by FheTask
+    REQUIRE(out_cts_ptr != nullptr);
+
+    FeatureMatEncrypted out_enc(&ctx, 0);
+    out_enc.data.clear();
+    for (auto& ct : *out_cts_ptr)
+        out_enc.data.push_back(std::move(ct));
+    out_enc.shape = out_shape;
+    out_enc.matmul_block_size = out_d;
+
+    Array<double, 2> actual({1, 1});
+    if (is_par) {
+        actual = out_enc.par_block_col_major_unpack(out_shape[0], out_shape[1], out_d, out_n_heads);
+    } else {
+        actual = out_enc.block_col_major_unpack(out_shape[0], out_shape[1], out_d);
+    }
+
+    double rel_err = max_rel_error(ref_output, actual);
+    std::cout << "  max_rel_error = " << std::scientific << rel_err << "\n";
+
+    INFO("Test: " << test_name << " (" << device_tag << "), rel_err: " << rel_err);
+    REQUIRE(rel_err < 0.05);
+}
+
+TEST_CASE("cpu/block_col_major_transpose", "[e2e][cpu][block_col_major]") {
+    auto test_dir = single_layer_base_path / "block_col_major_transpose";
+    if (!fs::exists(test_dir / "task" / "server" / "mega_ag.json"))
+        return;
+
+    run_block_col_major_test(test_dir, false,
+                             [](CkksParameter& param, CkksContext& ctx, const std::string& task_dir,
+                                std::vector<CxxVectorArgument>& cxx_args, Array<double, 2>& ref_output, Duo& out_shape,
+                                uint32_t& out_d, uint32_t& out_n_heads, bool& is_par,
+                                std::vector<CkksCiphertext>*& out_cts_ptr, std::any& layer_holder) {
+                                 const uint32_t M = 8, K = 8, d = 4;
+                                 const int level = 5;
+
+                                 auto A = gen_random_array<2>({M, K}, 1.0);
+                                 ref_output = pt_transpose(A);
+                                 out_shape = {K, M};
+                                 out_d = d;
+                                 is_par = false;
+
+                                 auto layer_ptr = std::make_shared<BlockColMajorTranspose>(param, Duo{M, K}, d, level);
+                                 layer_holder = layer_ptr;
+
+                                 FeatureMatEncrypted A_enc(&ctx, level);
+                                 A_enc.block_col_major_pack(A, d, false, param.get_default_scale());
+
+                                 static std::vector<CkksCiphertext> in_cts, out_cts;
+                                 static std::vector<CustomData> layer_data;
+                                 in_cts.clear();
+                                 out_cts.clear();
+                                 layer_data.clear();
+
+                                 for (auto& ct : A_enc.data)
+                                     in_cts.push_back(ct.copy());
+                                 layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+                                 uint32_t n_out = in_cts.size();
+                                 for (uint32_t i = 0; i < n_out; i++)
+                                     out_cts.push_back(ctx.new_ciphertext(level - 1, param.get_default_scale()));
+
+                                 out_cts_ptr = &out_cts;
+                                 cxx_args = {
+                                     CxxVectorArgument{"input", &in_cts},
+                                     CxxVectorArgument{"_transpose_layer", &layer_data},
+                                     CxxVectorArgument{"output", &out_cts},
+                                 };
+                             });
+}
+
+TEST_CASE("cpu/block_col_major_cpmm", "[e2e][cpu][block_col_major]") {
+    auto test_dir = single_layer_base_path / "block_col_major_cpmm";
+    if (!fs::exists(test_dir / "task" / "server" / "mega_ag.json"))
+        return;
+
+    run_block_col_major_test(
+        test_dir, false,
+        [](CkksParameter& param, CkksContext& ctx, const std::string& task_dir,
+           std::vector<CxxVectorArgument>& cxx_args, Array<double, 2>& ref_output, Duo& out_shape, uint32_t& out_d,
+           uint32_t& out_n_heads, bool& is_par, std::vector<CkksCiphertext>*& out_cts_ptr, std::any& layer_holder) {
+            const uint32_t M = 8, K = 8, P = 8, d = 4;
+            const int level = 5;
+
+            auto A = gen_random_array<2>({M, K}, 1.0);
+            auto B = gen_random_array<2>({K, P}, 0.1);
+            ref_output = pt_matmul(A, B);
+            out_shape = {M, P};
+            out_d = d;
+            is_par = false;
+
+            auto layer_ptr = std::make_shared<BlockColMajorCPMM>(param, Duo{M, K}, Duo{K, P}, B, d, level);
+            layer_holder = layer_ptr;
+
+            FeatureMatEncrypted A_enc(&ctx, level);
+            A_enc.block_col_major_pack(A, d, false, param.get_default_scale());
+
+            static std::vector<CkksCiphertext> A_cts, out_cts;
+            static std::vector<CustomData> layer_data;
+            A_cts.clear();
+            out_cts.clear();
+            layer_data.clear();
+
+            for (auto& ct : A_enc.data)
+                A_cts.push_back(ct.copy());
+            layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+            uint32_t n_out = div_ceil(M, d) * div_ceil(P, d);
+            for (uint32_t i = 0; i < n_out; i++)
+                out_cts.push_back(ctx.new_ciphertext(level - 1, param.get_default_scale()));
+
+            out_cts_ptr = &out_cts;
+            cxx_args = {
+                CxxVectorArgument{"A_input", &A_cts},
+                CxxVectorArgument{"_cpmm_layer", &layer_data},
+                CxxVectorArgument{"output", &out_cts},
+            };
+        });
+}
+
+TEST_CASE("cpu/block_col_major_ccmm", "[e2e][cpu][block_col_major]") {
+    auto test_dir = single_layer_base_path / "block_col_major_ccmm";
+    if (!fs::exists(test_dir / "task" / "server" / "mega_ag.json"))
+        return;
+
+    run_block_col_major_test(
+        test_dir, false,
+        [](CkksParameter& param, CkksContext& ctx, const std::string& task_dir,
+           std::vector<CxxVectorArgument>& cxx_args, Array<double, 2>& ref_output, Duo& out_shape, uint32_t& out_d,
+           uint32_t& out_n_heads, bool& is_par, std::vector<CkksCiphertext>*& out_cts_ptr, std::any& layer_holder) {
+            const uint32_t M = 8, K = 8, P = 8, d = 4;
+            const int level = 7;
+
+            auto A = gen_random_array<2>({M, K}, 1.0);
+            auto B = gen_random_array<2>({K, P}, 0.1);
+            ref_output = pt_matmul(A, B);
+            out_shape = {M, P};
+            out_d = d;
+            is_par = false;
+
+            auto layer_ptr = std::make_shared<BlockColMajorCCMM>(param, Duo{M, K}, Duo{K, P}, d, d, level, level);
+            layer_ptr->precompute_diagonals();
+            layer_holder = layer_ptr;
+
+            FeatureMatEncrypted A_enc(&ctx, level);
+            A_enc.block_col_major_pack(A, d, false, param.get_default_scale());
+            FeatureMatEncrypted B_enc(&ctx, level);
+            B_enc.block_col_major_pack(B, d, false, param.get_default_scale());
+
+            static std::vector<CkksCiphertext> A_cts, B_cts, out_cts;
+            static std::vector<CustomData> layer_data;
+            A_cts.clear();
+            B_cts.clear();
+            out_cts.clear();
+            layer_data.clear();
+
+            for (auto& ct : A_enc.data)
+                A_cts.push_back(ct.copy());
+            for (auto& ct : B_enc.data)
+                B_cts.push_back(ct.copy());
+            layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+            uint32_t n_out = div_ceil(M, d) * div_ceil(P, d);
+            for (uint32_t i = 0; i < n_out; i++)
+                out_cts.push_back(ctx.new_ciphertext(level - 3, param.get_default_scale()));
+
+            out_cts_ptr = &out_cts;
+            cxx_args = {
+                CxxVectorArgument{"A_input", &A_cts},
+                CxxVectorArgument{"B_input", &B_cts},
+                CxxVectorArgument{"_ccmm_layer", &layer_data},
+                CxxVectorArgument{"output", &out_cts},
+            };
+        });
+}
+
+TEST_CASE("cpu/par_block_col_major_cpmm", "[e2e][cpu][block_col_major]") {
+    auto test_dir = single_layer_base_path / "par_block_col_major_cpmm";
+    if (!fs::exists(test_dir / "task" / "server" / "mega_ag.json"))
+        return;
+
+    run_block_col_major_test(
+        test_dir, false,
+        [](CkksParameter& param, CkksContext& ctx, const std::string& task_dir,
+           std::vector<CxxVectorArgument>& cxx_args, Array<double, 2>& ref_output, Duo& out_shape, uint32_t& out_d,
+           uint32_t& out_n_heads, bool& is_par, std::vector<CkksCiphertext>*& out_cts_ptr, std::any& layer_holder) {
+            const uint32_t m = 8, n_per_head = 4, n_heads = 2, d = 4;
+            const uint32_t n_total = n_heads * n_per_head;
+            const int level = 5;
+
+            auto W = gen_random_array<2>({n_total, n_total}, 0.1);
+            auto A = gen_random_array<2>({m, n_total}, 1.0);
+            ref_output = pt_matmul(A, W);
+            out_shape = {m, n_per_head};
+            out_d = d;
+            out_n_heads = n_heads;
+            is_par = true;
+
+            auto layer_ptr = std::make_shared<ParBlockColMajorCPMM>(param, Duo{m, n_per_head}, W, d, n_heads, level);
+            layer_ptr->precompute_diagonals();
+            layer_holder = layer_ptr;
+
+            FeatureMatEncrypted A_enc(&ctx, level);
+            A_enc.par_block_col_major_pack(A, d, n_heads, false, param.get_default_scale());
+
+            static std::vector<CkksCiphertext> in_cts, out_cts;
+            static std::vector<CustomData> layer_data;
+            in_cts.clear();
+            out_cts.clear();
+            layer_data.clear();
+
+            for (auto& ct : A_enc.data)
+                in_cts.push_back(ct.copy());
+            layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+            uint32_t num_block_rows_A = div_ceil(m, d);
+            uint32_t n_h_padded = 1;
+            while (n_h_padded < n_heads)
+                n_h_padded <<= 1;
+            uint32_t n_slot = param.get_n() / 2;
+            uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+            uint32_t n_out = num_block_rows_A * G;
+
+            for (uint32_t i = 0; i < n_out; i++)
+                out_cts.push_back(ctx.new_ciphertext(level - 2, param.get_default_scale()));
+
+            out_cts_ptr = &out_cts;
+            cxx_args = {
+                CxxVectorArgument{"input", &in_cts},
+                CxxVectorArgument{"_cpmm_layer", &layer_data},
+                CxxVectorArgument{"output", &out_cts},
+            };
+        });
+}
+
+TEST_CASE("cpu/par_block_col_major_transpose", "[e2e][cpu][block_col_major]") {
+    auto test_dir = single_layer_base_path / "par_block_col_major_transpose";
+    if (!fs::exists(test_dir / "task" / "server" / "mega_ag.json"))
+        return;
+
+    run_block_col_major_test(
+        test_dir, false,
+        [](CkksParameter& param, CkksContext& ctx, const std::string& task_dir,
+           std::vector<CxxVectorArgument>& cxx_args, Array<double, 2>& ref_output, Duo& out_shape, uint32_t& out_d,
+           uint32_t& out_n_heads, bool& is_par, std::vector<CkksCiphertext>*& out_cts_ptr, std::any& layer_holder) {
+            const uint32_t M = 8, K = 8, d = 4, n_heads = 2;
+            const int level = 5;
+
+            auto A = gen_random_array<2>({M, n_heads * K}, 1.0);
+            // Reference: per-head transpose
+            ref_output = pt_per_head_transpose(A, K, n_heads);
+            out_shape = {K, M};
+            out_d = d;
+            out_n_heads = n_heads;
+            is_par = true;
+
+            auto layer_ptr = std::make_shared<ParBlockColMajorTranspose>(param, Duo{M, K}, d, n_heads, level);
+            layer_holder = layer_ptr;
+
+            FeatureMatEncrypted A_enc(&ctx, level);
+            A_enc.par_block_col_major_pack(A, d, n_heads, false, param.get_default_scale());
+
+            static std::vector<CkksCiphertext> in_cts, out_cts;
+            static std::vector<CustomData> layer_data;
+            in_cts.clear();
+            out_cts.clear();
+            layer_data.clear();
+
+            for (auto& ct : A_enc.data)
+                in_cts.push_back(ct.copy());
+            layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+            uint32_t n_out = in_cts.size();
+            for (uint32_t i = 0; i < n_out; i++)
+                out_cts.push_back(ctx.new_ciphertext(level - 1, param.get_default_scale()));
+
+            out_cts_ptr = &out_cts;
+            cxx_args = {
+                CxxVectorArgument{"input", &in_cts},
+                CxxVectorArgument{"_transpose_layer", &layer_data},
+                CxxVectorArgument{"output", &out_cts},
+            };
+        });
+}
+
+TEST_CASE("cpu/par_block_col_major_ccmm", "[e2e][cpu][block_col_major]") {
+    auto test_dir = single_layer_base_path / "par_block_col_major_ccmm";
+    if (!fs::exists(test_dir / "task" / "server" / "mega_ag.json"))
+        return;
+
+    run_block_col_major_test(
+        test_dir, false,
+        [](CkksParameter& param, CkksContext& ctx, const std::string& task_dir,
+           std::vector<CxxVectorArgument>& cxx_args, Array<double, 2>& ref_output, Duo& out_shape, uint32_t& out_d,
+           uint32_t& out_n_heads, bool& is_par, std::vector<CkksCiphertext>*& out_cts_ptr, std::any& layer_holder) {
+            const uint32_t M = 8, N_dim = 8, P = 8, d = 4, n_heads = 2;
+            const int level = 7;
+
+            auto A = gen_random_array<2>({M, n_heads * N_dim}, 1.0);
+            auto B = gen_random_array<2>({N_dim, n_heads * P}, 0.1);
+            // Reference: per-head matmul
+            ref_output = pt_per_head_matmul(A, B, N_dim, P, n_heads);
+            out_shape = {M, P};
+            out_d = d;
+            out_n_heads = n_heads;
+            is_par = true;
+
+            auto layer_ptr =
+                std::make_shared<ParBlockColMajorCCMM>(param, Duo{M, N_dim}, Duo{N_dim, P}, d, n_heads, level);
+            layer_ptr->precompute_diagonals();
+            layer_holder = layer_ptr;
+
+            FeatureMatEncrypted A_enc(&ctx, level);
+            A_enc.par_block_col_major_pack(A, d, n_heads, false, param.get_default_scale());
+            FeatureMatEncrypted B_enc(&ctx, level);
+            B_enc.par_block_col_major_pack(B, d, n_heads, false, param.get_default_scale());
+
+            static std::vector<CkksCiphertext> A_cts, B_cts, out_cts;
+            static std::vector<CustomData> layer_data;
+            A_cts.clear();
+            B_cts.clear();
+            out_cts.clear();
+            layer_data.clear();
+
+            for (auto& ct : A_enc.data)
+                A_cts.push_back(ct.copy());
+            for (auto& ct : B_enc.data)
+                B_cts.push_back(ct.copy());
+            layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+            uint32_t n_out = div_ceil(M, d) * div_ceil(P, d);
+            uint32_t n_h_padded = 1;
+            while (n_h_padded < n_heads)
+                n_h_padded <<= 1;
+            uint32_t n_slot = param.get_n() / 2;
+            uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+            n_out *= G;
+
+            for (uint32_t i = 0; i < n_out; i++)
+                out_cts.push_back(ctx.new_ciphertext(level - 3, param.get_default_scale()));
+
+            out_cts_ptr = &out_cts;
+            cxx_args = {
+                CxxVectorArgument{"A_input", &A_cts},
+                CxxVectorArgument{"B_input", &B_cts},
+                CxxVectorArgument{"_ccmm_layer", &layer_data},
+                CxxVectorArgument{"output", &out_cts},
+            };
+        });
+}
+
 // == GPU individual tests =====================================================
 
 #ifdef INFERENCE_SDK_ENABLE_GPU
@@ -492,6 +1071,334 @@ TEST_CASE("gpu/adaptive_avgpool1d", "[e2e][gpu]") {
             }
         }
     }
+}
+
+// ── GPU BlockColMajor / ParBlockColMajor ──
+
+TEST_CASE("gpu/block_col_major_transpose", "[e2e][gpu][block_col_major]") {
+    auto test_dir = single_layer_base_path / "block_col_major_transpose";
+    if (!fs::exists(test_dir / "task" / "server" / "mega_ag.json"))
+        return;
+
+    run_block_col_major_test(test_dir, true,
+                             [](CkksParameter& param, CkksContext& ctx, const std::string& task_dir,
+                                std::vector<CxxVectorArgument>& cxx_args, Array<double, 2>& ref_output, Duo& out_shape,
+                                uint32_t& out_d, uint32_t& out_n_heads, bool& is_par,
+                                std::vector<CkksCiphertext>*& out_cts_ptr, std::any& layer_holder) {
+                                 const uint32_t M = 8, K = 8, d = 4;
+                                 const int level = 5;
+
+                                 auto A = gen_random_array<2>({M, K}, 1.0);
+                                 ref_output = pt_transpose(A);
+                                 out_shape = {K, M};
+                                 out_d = d;
+                                 is_par = false;
+
+                                 auto layer_ptr = std::make_shared<BlockColMajorTranspose>(param, Duo{M, K}, d, level);
+                                 layer_holder = layer_ptr;
+
+                                 FeatureMatEncrypted A_enc(&ctx, level);
+                                 A_enc.block_col_major_pack(A, d, false, param.get_default_scale());
+
+                                 static std::vector<CkksCiphertext> in_cts, out_cts;
+                                 static std::vector<CustomData> layer_data;
+                                 in_cts.clear();
+                                 out_cts.clear();
+                                 layer_data.clear();
+
+                                 for (auto& ct : A_enc.data)
+                                     in_cts.push_back(ct.copy());
+                                 layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+                                 uint32_t n_out = in_cts.size();
+                                 for (uint32_t i = 0; i < n_out; i++)
+                                     out_cts.push_back(ctx.new_ciphertext(level - 1, param.get_default_scale()));
+
+                                 out_cts_ptr = &out_cts;
+                                 cxx_args = {
+                                     CxxVectorArgument{"input", &in_cts},
+                                     CxxVectorArgument{"_transpose_layer", &layer_data},
+                                     CxxVectorArgument{"output", &out_cts},
+                                 };
+                             });
+}
+
+TEST_CASE("gpu/block_col_major_cpmm", "[e2e][gpu][block_col_major]") {
+    auto test_dir = single_layer_base_path / "block_col_major_cpmm";
+    if (!fs::exists(test_dir / "task" / "server" / "mega_ag.json"))
+        return;
+
+    run_block_col_major_test(
+        test_dir, true,
+        [](CkksParameter& param, CkksContext& ctx, const std::string& task_dir,
+           std::vector<CxxVectorArgument>& cxx_args, Array<double, 2>& ref_output, Duo& out_shape, uint32_t& out_d,
+           uint32_t& out_n_heads, bool& is_par, std::vector<CkksCiphertext>*& out_cts_ptr, std::any& layer_holder) {
+            const uint32_t M = 8, K = 8, P = 8, d = 4;
+            const int level = 5;
+
+            auto A = gen_random_array<2>({M, K}, 1.0);
+            auto B = gen_random_array<2>({K, P}, 0.1);
+            ref_output = pt_matmul(A, B);
+            out_shape = {M, P};
+            out_d = d;
+            is_par = false;
+
+            auto layer_ptr = std::make_shared<BlockColMajorCPMM>(param, Duo{M, K}, Duo{K, P}, B, d, level);
+            layer_holder = layer_ptr;
+
+            FeatureMatEncrypted A_enc(&ctx, level);
+            A_enc.block_col_major_pack(A, d, false, param.get_default_scale());
+
+            static std::vector<CkksCiphertext> A_cts, out_cts;
+            static std::vector<CustomData> layer_data;
+            A_cts.clear();
+            out_cts.clear();
+            layer_data.clear();
+
+            for (auto& ct : A_enc.data)
+                A_cts.push_back(ct.copy());
+            layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+            uint32_t n_out = div_ceil(M, d) * div_ceil(P, d);
+            for (uint32_t i = 0; i < n_out; i++)
+                out_cts.push_back(ctx.new_ciphertext(level - 1, param.get_default_scale()));
+
+            out_cts_ptr = &out_cts;
+            cxx_args = {
+                CxxVectorArgument{"A_input", &A_cts},
+                CxxVectorArgument{"_cpmm_layer", &layer_data},
+                CxxVectorArgument{"output", &out_cts},
+            };
+        });
+}
+
+TEST_CASE("gpu/block_col_major_ccmm", "[e2e][gpu][block_col_major]") {
+    auto test_dir = single_layer_base_path / "block_col_major_ccmm";
+    if (!fs::exists(test_dir / "task" / "server" / "mega_ag.json"))
+        return;
+
+    run_block_col_major_test(
+        test_dir, true,
+        [](CkksParameter& param, CkksContext& ctx, const std::string& task_dir,
+           std::vector<CxxVectorArgument>& cxx_args, Array<double, 2>& ref_output, Duo& out_shape, uint32_t& out_d,
+           uint32_t& out_n_heads, bool& is_par, std::vector<CkksCiphertext>*& out_cts_ptr, std::any& layer_holder) {
+            const uint32_t M = 8, K = 8, P = 8, d = 4;
+            const int level = 7;
+
+            auto A = gen_random_array<2>({M, K}, 1.0);
+            auto B = gen_random_array<2>({K, P}, 0.1);
+            ref_output = pt_matmul(A, B);
+            out_shape = {M, P};
+            out_d = d;
+            is_par = false;
+
+            auto layer_ptr = std::make_shared<BlockColMajorCCMM>(param, Duo{M, K}, Duo{K, P}, d, d, level, level);
+            layer_ptr->precompute_diagonals();
+            layer_holder = layer_ptr;
+
+            FeatureMatEncrypted A_enc(&ctx, level);
+            A_enc.block_col_major_pack(A, d, false, param.get_default_scale());
+            FeatureMatEncrypted B_enc(&ctx, level);
+            B_enc.block_col_major_pack(B, d, false, param.get_default_scale());
+
+            static std::vector<CkksCiphertext> A_cts, B_cts, out_cts;
+            static std::vector<CustomData> layer_data;
+            A_cts.clear();
+            B_cts.clear();
+            out_cts.clear();
+            layer_data.clear();
+
+            for (auto& ct : A_enc.data)
+                A_cts.push_back(ct.copy());
+            for (auto& ct : B_enc.data)
+                B_cts.push_back(ct.copy());
+            layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+            uint32_t n_out = div_ceil(M, d) * div_ceil(P, d);
+            for (uint32_t i = 0; i < n_out; i++)
+                out_cts.push_back(ctx.new_ciphertext(level - 3, param.get_default_scale()));
+
+            out_cts_ptr = &out_cts;
+            cxx_args = {
+                CxxVectorArgument{"A_input", &A_cts},
+                CxxVectorArgument{"B_input", &B_cts},
+                CxxVectorArgument{"_ccmm_layer", &layer_data},
+                CxxVectorArgument{"output", &out_cts},
+            };
+        });
+}
+
+TEST_CASE("gpu/par_block_col_major_cpmm", "[e2e][gpu][block_col_major]") {
+    auto test_dir = single_layer_base_path / "par_block_col_major_cpmm";
+    if (!fs::exists(test_dir / "task" / "server" / "mega_ag.json"))
+        return;
+
+    run_block_col_major_test(
+        test_dir, true,
+        [](CkksParameter& param, CkksContext& ctx, const std::string& task_dir,
+           std::vector<CxxVectorArgument>& cxx_args, Array<double, 2>& ref_output, Duo& out_shape, uint32_t& out_d,
+           uint32_t& out_n_heads, bool& is_par, std::vector<CkksCiphertext>*& out_cts_ptr, std::any& layer_holder) {
+            const uint32_t m = 8, n_per_head = 4, n_heads = 2, d = 4;
+            const uint32_t n_total = n_heads * n_per_head;
+            const int level = 5;
+
+            auto W = gen_random_array<2>({n_total, n_total}, 0.1);
+            auto A = gen_random_array<2>({m, n_total}, 1.0);
+            ref_output = pt_matmul(A, W);
+            out_shape = {m, n_per_head};
+            out_d = d;
+            out_n_heads = n_heads;
+            is_par = true;
+
+            auto layer_ptr = std::make_shared<ParBlockColMajorCPMM>(param, Duo{m, n_per_head}, W, d, n_heads, level);
+            layer_ptr->precompute_diagonals();
+            layer_holder = layer_ptr;
+
+            FeatureMatEncrypted A_enc(&ctx, level);
+            A_enc.par_block_col_major_pack(A, d, n_heads, false, param.get_default_scale());
+
+            static std::vector<CkksCiphertext> in_cts, out_cts;
+            static std::vector<CustomData> layer_data;
+            in_cts.clear();
+            out_cts.clear();
+            layer_data.clear();
+
+            for (auto& ct : A_enc.data)
+                in_cts.push_back(ct.copy());
+            layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+            uint32_t num_block_rows_A = div_ceil(m, d);
+            uint32_t n_h_padded = 1;
+            while (n_h_padded < n_heads)
+                n_h_padded <<= 1;
+            uint32_t n_slot = param.get_n() / 2;
+            uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+            uint32_t n_out = num_block_rows_A * G;
+
+            for (uint32_t i = 0; i < n_out; i++)
+                out_cts.push_back(ctx.new_ciphertext(level - 2, param.get_default_scale()));
+
+            out_cts_ptr = &out_cts;
+            cxx_args = {
+                CxxVectorArgument{"input", &in_cts},
+                CxxVectorArgument{"_cpmm_layer", &layer_data},
+                CxxVectorArgument{"output", &out_cts},
+            };
+        });
+}
+
+TEST_CASE("gpu/par_block_col_major_transpose", "[e2e][gpu][block_col_major]") {
+    auto test_dir = single_layer_base_path / "par_block_col_major_transpose";
+    if (!fs::exists(test_dir / "task" / "server" / "mega_ag.json"))
+        return;
+
+    run_block_col_major_test(
+        test_dir, true,
+        [](CkksParameter& param, CkksContext& ctx, const std::string& task_dir,
+           std::vector<CxxVectorArgument>& cxx_args, Array<double, 2>& ref_output, Duo& out_shape, uint32_t& out_d,
+           uint32_t& out_n_heads, bool& is_par, std::vector<CkksCiphertext>*& out_cts_ptr, std::any& layer_holder) {
+            const uint32_t M = 8, K = 8, d = 4, n_heads = 2;
+            const int level = 5;
+
+            auto A = gen_random_array<2>({M, n_heads * K}, 1.0);
+            ref_output = pt_per_head_transpose(A, K, n_heads);
+            out_shape = {K, M};
+            out_d = d;
+            out_n_heads = n_heads;
+            is_par = true;
+
+            auto layer_ptr = std::make_shared<ParBlockColMajorTranspose>(param, Duo{M, K}, d, n_heads, level);
+            layer_holder = layer_ptr;
+
+            FeatureMatEncrypted A_enc(&ctx, level);
+            A_enc.par_block_col_major_pack(A, d, n_heads, false, param.get_default_scale());
+
+            static std::vector<CkksCiphertext> in_cts, out_cts;
+            static std::vector<CustomData> layer_data;
+            in_cts.clear();
+            out_cts.clear();
+            layer_data.clear();
+
+            for (auto& ct : A_enc.data)
+                in_cts.push_back(ct.copy());
+            layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+            uint32_t n_out = in_cts.size();
+            for (uint32_t i = 0; i < n_out; i++)
+                out_cts.push_back(ctx.new_ciphertext(level - 1, param.get_default_scale()));
+
+            out_cts_ptr = &out_cts;
+            cxx_args = {
+                CxxVectorArgument{"input", &in_cts},
+                CxxVectorArgument{"_transpose_layer", &layer_data},
+                CxxVectorArgument{"output", &out_cts},
+            };
+        });
+}
+
+TEST_CASE("gpu/par_block_col_major_ccmm", "[e2e][gpu][block_col_major]") {
+    auto test_dir = single_layer_base_path / "par_block_col_major_ccmm";
+    if (!fs::exists(test_dir / "task" / "server" / "mega_ag.json"))
+        return;
+
+    run_block_col_major_test(
+        test_dir, true,
+        [](CkksParameter& param, CkksContext& ctx, const std::string& task_dir,
+           std::vector<CxxVectorArgument>& cxx_args, Array<double, 2>& ref_output, Duo& out_shape, uint32_t& out_d,
+           uint32_t& out_n_heads, bool& is_par, std::vector<CkksCiphertext>*& out_cts_ptr, std::any& layer_holder) {
+            const uint32_t M = 8, N_dim = 8, P = 8, d = 4, n_heads = 2;
+            const int level = 7;
+
+            auto A = gen_random_array<2>({M, n_heads * N_dim}, 1.0);
+            auto B = gen_random_array<2>({N_dim, n_heads * P}, 0.1);
+            ref_output = pt_per_head_matmul(A, B, N_dim, P, n_heads);
+            out_shape = {M, P};
+            out_d = d;
+            out_n_heads = n_heads;
+            is_par = true;
+
+            auto layer_ptr =
+                std::make_shared<ParBlockColMajorCCMM>(param, Duo{M, N_dim}, Duo{N_dim, P}, d, n_heads, level);
+            layer_ptr->precompute_diagonals();
+            layer_holder = layer_ptr;
+
+            FeatureMatEncrypted A_enc(&ctx, level);
+            A_enc.par_block_col_major_pack(A, d, n_heads, false, param.get_default_scale());
+            FeatureMatEncrypted B_enc(&ctx, level);
+            B_enc.par_block_col_major_pack(B, d, n_heads, false, param.get_default_scale());
+
+            static std::vector<CkksCiphertext> A_cts, B_cts, out_cts;
+            static std::vector<CustomData> layer_data;
+            A_cts.clear();
+            B_cts.clear();
+            out_cts.clear();
+            layer_data.clear();
+
+            for (auto& ct : A_enc.data)
+                A_cts.push_back(ct.copy());
+            for (auto& ct : B_enc.data)
+                B_cts.push_back(ct.copy());
+            layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+            uint32_t n_out = div_ceil(M, d) * div_ceil(P, d);
+            uint32_t n_h_padded = 1;
+            while (n_h_padded < n_heads)
+                n_h_padded <<= 1;
+            uint32_t n_slot = param.get_n() / 2;
+            uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+            n_out *= G;
+
+            for (uint32_t i = 0; i < n_out; i++)
+                out_cts.push_back(ctx.new_ciphertext(level - 3, param.get_default_scale()));
+
+            out_cts_ptr = &out_cts;
+            cxx_args = {
+                CxxVectorArgument{"A_input", &A_cts},
+                CxxVectorArgument{"B_input", &B_cts},
+                CxxVectorArgument{"_ccmm_layer", &layer_data},
+                CxxVectorArgument{"output", &out_cts},
+            };
+        });
 }
 
 #endif
