@@ -166,6 +166,63 @@ private:
     std::map<std::string, DecryptedOutput> result_;
 };
 
+class ExportFullContextWorker : public Napi::AsyncWorker {
+public:
+    ExportFullContextWorker(Napi::Env env, InferenceClient* client)
+        : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)), client_(client) {}
+
+    Napi::Promise Promise() {
+        return deferred_.Promise();
+    }
+
+    void Execute() override {
+        try {
+            result_ = client_->export_full_context();
+        } catch (const std::exception& e) { SetError(e.what()); }
+    }
+
+    void OnOK() override {
+        deferred_.Resolve(bytes_to_buffer(Env(), result_));
+    }
+    void OnError(const Napi::Error& err) override {
+        deferred_.Reject(err.Value());
+    }
+
+private:
+    Napi::Promise::Deferred deferred_;
+    InferenceClient* client_;
+    Bytes result_;
+};
+
+class LoadFullContextWorker : public Napi::AsyncWorker {
+public:
+    LoadFullContextWorker(Napi::Env env, InferenceClient* client, Bytes full_bytes)
+        : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)), client_(client),
+          full_bytes_(std::move(full_bytes)) {}
+
+    Napi::Promise Promise() {
+        return deferred_.Promise();
+    }
+
+    void Execute() override {
+        try {
+            client_->load_full_context(full_bytes_);
+        } catch (const std::exception& e) { SetError(e.what()); }
+    }
+
+    void OnOK() override {
+        deferred_.Resolve(Env().Undefined());
+    }
+    void OnError(const Napi::Error& err) override {
+        deferred_.Reject(err.Value());
+    }
+
+private:
+    Napi::Promise::Deferred deferred_;
+    InferenceClient* client_;
+    Bytes full_bytes_;
+};
+
 // ── InferenceClient wrapper class ────────────────────────────────────────────
 
 class InferenceClientWrapper : public Napi::ObjectWrap<InferenceClientWrapper> {
@@ -176,6 +233,8 @@ public:
                         {
                             InstanceMethod<&InferenceClientWrapper::Setup>("setup"),
                             InstanceMethod<&InferenceClientWrapper::ExportEvalContext>("exportEvalContext"),
+                            InstanceMethod<&InferenceClientWrapper::ExportFullContext>("exportFullContext"),
+                            InstanceMethod<&InferenceClientWrapper::LoadFullContext>("loadFullContext"),
                             InstanceMethod<&InferenceClientWrapper::Encrypt>("encrypt"),
                             InstanceMethod<&InferenceClientWrapper::Decrypt>("decrypt"),
                         });
@@ -246,6 +305,23 @@ public:
         auto* worker = new DecryptWorker(env, client_.get(), std::move(encrypted));
         worker->Queue();
         return worker->Promise();
+    }
+
+    Napi::Value ExportFullContext(const Napi::CallbackInfo& info) {
+        auto* w = new ExportFullContextWorker(info.Env(), client_.get());
+        w->Queue();
+        return w->Promise();
+    }
+
+    Napi::Value LoadFullContext(const Napi::CallbackInfo& info) {
+        Napi::Env env = info.Env();
+        if (info.Length() < 1 || !info[0].IsBuffer()) {
+            Napi::TypeError::New(env, "Expected Buffer argument: full_bytes").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+        auto* w = new LoadFullContextWorker(env, client_.get(), buffer_to_bytes(info[0]));
+        w->Queue();
+        return w->Promise();
     }
 
 private:

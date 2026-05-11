@@ -67,12 +67,28 @@ PYBIND11_MODULE(latti_client, m) {
              }),
              py::arg("client_dir"))
         .def("setup", &InferenceClient::setup, py::call_guard<py::gil_scoped_release>())
+        .def("load_full_context",
+             [](InferenceClient& self, const py::bytes& full_bytes) {
+                 Bytes vec = from_pybytes(full_bytes);
+                 py::gil_scoped_release release;
+                 self.load_full_context(vec);
+             },
+             py::arg("full_bytes"))
         .def("export_eval_context",
              [](const InferenceClient& self) {
                  Bytes data;
                  {
                      py::gil_scoped_release release;
                      data = self.export_eval_context();
+                 }
+                 return to_pybytes(data);
+             })
+        .def("export_full_context",
+             [](const InferenceClient& self) {
+                 Bytes data;
+                 {
+                     py::gil_scoped_release release;
+                     data = self.export_full_context();
                  }
                  return to_pybytes(data);
              })
