@@ -1,0 +1,306 @@
+{
+    "input_feature": [
+        "input"
+    ],
+    "output_feature": [
+        "output"
+    ],
+    "feature": {
+        "input": {
+            "dim": 2,
+            "channel": 1,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "pack_num": 128,
+            "ckks_parameter_id": "param0",
+            "level": 5
+        },
+        "output": {
+            "dim": 0,
+            "channel": 10,
+            "scale": 1,
+            "virtual_shape": [
+                8,
+                8
+            ],
+            "virtual_skip": [
+                1,
+                1
+            ],
+            "skip": 1,
+            "pack_num": 512,
+            "ckks_parameter_id": "param0",
+            "level": -2
+        },
+        "_relu1_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "pack_num": 128,
+            "ckks_parameter_id": "param0",
+            "level": 2
+        },
+        "_relu2_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                4,
+                4
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "pack_num": 128,
+            "ckks_parameter_id": "param0",
+            "level": -1
+        },
+        "_conv1_Conv_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "pack_num": 128,
+            "ckks_parameter_id": "param0",
+            "level": 4
+        },
+        "_bn1_BatchNormalization_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "pack_num": 128,
+            "ckks_parameter_id": "param0",
+            "level": 4
+        },
+        "_conv2_Conv_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                4,
+                4
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "pack_num": 128,
+            "ckks_parameter_id": "param0",
+            "level": 1
+        },
+        "_bn2_BatchNormalization_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                4,
+                4
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "pack_num": 128,
+            "ckks_parameter_id": "param0",
+            "level": 1
+        },
+        "_flatten_Flatten_output_0": {
+            "dim": 0,
+            "channel": 512,
+            "scale": 1,
+            "virtual_shape": [
+                8,
+                8
+            ],
+            "virtual_skip": [
+                1,
+                1
+            ],
+            "skip": 1,
+            "pack_num": 512,
+            "ckks_parameter_id": "param0",
+            "level": -1
+        }
+    },
+    "layer": {
+        "_conv1_Conv": {
+            "type": "conv2d",
+            "style": "ordinary",
+            "channel_input": 1,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "input"
+            ],
+            "feature_output": [
+                "_conv1_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                2,
+                2
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                5,
+                5
+            ],
+            "weight_path": "conv1.weight",
+            "bias_path": "conv1.bias"
+        },
+        "_bn1_BatchNormalization": {
+            "type": "batchnorm2d",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_conv1_Conv_output_0"
+            ],
+            "feature_output": [
+                "_bn1_BatchNormalization_output_0"
+            ],
+            "weight_path": "bn1.weight",
+            "bias_path": "bn1.bias",
+            "running_mean_path": "bn1.running_mean",
+            "running_var_path": "bn1.running_var"
+        },
+        "_relu1_RangeNormPoly2d": {
+            "type": "simple_polyrelu",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_bn1_BatchNormalization_output_0"
+            ],
+            "feature_output": [
+                "_relu1_RangeNormPoly2d_output_0"
+            ],
+            "order": 2,
+            "weight_path": "relu1.weight"
+        },
+        "_conv2_Conv": {
+            "type": "conv2d",
+            "style": "ordinary",
+            "channel_input": 16,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_relu1_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_conv2_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                2,
+                2
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "conv2.weight",
+            "bias_path": "conv2.bias"
+        },
+        "_bn2_BatchNormalization": {
+            "type": "batchnorm2d",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_conv2_Conv_output_0"
+            ],
+            "feature_output": [
+                "_bn2_BatchNormalization_output_0"
+            ],
+            "weight_path": "bn2.weight",
+            "bias_path": "bn2.bias",
+            "running_mean_path": "bn2.running_mean",
+            "running_var_path": "bn2.running_var"
+        },
+        "_relu2_RangeNormPoly2d": {
+            "type": "simple_polyrelu",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_bn2_BatchNormalization_output_0"
+            ],
+            "feature_output": [
+                "_relu2_RangeNormPoly2d_output_0"
+            ],
+            "order": 2,
+            "weight_path": "relu2.weight"
+        },
+        "_flatten_Flatten": {
+            "type": "reshape",
+            "channel_input": 32,
+            "channel_output": 512,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_flatten_Flatten_output_0"
+            ],
+            "shape": [
+                -1,
+                512
+            ]
+        },
+        "_fc_Gemm": {
+            "type": "fc0",
+            "channel_input": 512,
+            "channel_output": 10,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_flatten_Flatten_output_0"
+            ],
+            "feature_output": [
+                "output"
+            ],
+            "weight_path": "fc.weight",
+            "bias_path": "fc.bias"
+        }
+    }
+}

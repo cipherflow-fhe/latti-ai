@@ -110,6 +110,29 @@ PN13QP218 = FheParameter(
     n_slots=1 << 12,
 )
 
+# PN13QP218s: LogN=13, logQP=220, ~127-bit classic security (small primes for more levels)
+# Q: 1×26-bit + 7×24-bit, P: 1×26-bit, LogSlots=12
+# Uses 24-bit primes to pack 7 multiplicative levels — designed for quantized (FP8) models.
+# logQP=220 provides approximately 127-bit security (2 bits over the 128-bit budget of 218).
+PN13QP218s = FheParameter(
+    name='PN13QP218s',
+    poly_modulus_degree=8192,
+    max_level=7,
+    log_default_scale=24,
+    q=[
+        0x2044001,  # 26-bit Q0
+        0x804001,  # 24-bit
+        0x820001,  # 24-bit
+        0x840001,  # 24-bit
+        0x844001,  # 24-bit
+        0x850001,  # 24-bit
+        0x868001,  # 24-bit
+        0x898001,  # 24-bit
+    ],
+    p=[0x207C001],  # 26-bit (>= 24-bit Q for key switching)
+    n_slots=1 << 12,
+)
+
 # PN14QP438: LogN=14, logQP=438, 128-bit classic security
 # Q: 1×45-bit + 9×34-bit, P: 2×43-bit, LogSlots=13
 PN14QP438 = FheParameter(

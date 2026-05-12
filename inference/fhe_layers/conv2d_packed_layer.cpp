@@ -24,7 +24,7 @@
 #include <deque>
 #include <future>
 #include <thread>
-#include <immintrin.h>
+// #include <immintrin.h>  // x86-only, not available on ARM
 
 using namespace std;
 using namespace cxx_sdk_v2;

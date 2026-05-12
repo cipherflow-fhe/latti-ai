@@ -41,6 +41,7 @@ from inference.model_generator.layers.upsample_layer import *
 from training.model_compiler.components import (
     N16QP1546H192H32,
     PN13QP218,
+    PN13QP218s,
     PN14QP438,
     PN15QP880,
     PN16QP1761,
@@ -54,6 +55,7 @@ def read_config(config_path):
 
 
 _FHE_PARAMS = {
+    'PN13QP218s': PN13QP218s,
     'PN13QP218': PN13QP218,
     'PN14QP438': PN14QP438,
     'PN15QP880': PN15QP880,

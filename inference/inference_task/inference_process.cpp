@@ -79,7 +79,13 @@ void InitInferenceProcess::init_parameters(bool is_bootstrapping) {
         for (auto& param : json_params.items()) {
             string key = param.key();
             int n = param.value()["poly_modulus_degree"];
-            ckks_parameters[key] = make_unique<CkksParameter>(CkksParameter::create_parameter(n));
+            if (param.value().contains("q") && param.value().contains("p")) {
+                auto q = param.value()["q"].get<vector<uint64_t>>();
+                auto p = param.value()["p"].get<vector<uint64_t>>();
+                ckks_parameters[key] = make_unique<CkksParameter>(CkksParameter::create_custom_parameter(n, q, p));
+            } else {
+                ckks_parameters[key] = make_unique<CkksParameter>(CkksParameter::create_parameter(n));
+            }
         }
     }
 }
