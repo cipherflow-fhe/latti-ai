@@ -2014,11 +2014,11 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_attention", "[block_co
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_full_attention", "[block_col_major_e2e]", HeteroProcessors) {
     auto& res = SharedHeteroResources::get();
-    const uint32_t seq_len = 53, n_heads = 3, head_dim = 16, d = head_dim;
+    const uint32_t seq_len = 197, n_heads = 3, head_dim = 64, d = head_dim;
     const uint32_t total_dim = n_heads * head_dim;
     const int init_level = 9;
 
-    fs::path server_dir = base_path / "CKKS_par_full_attention_seq53_heads3_dim16" / "level_9" / "server";
+    fs::path server_dir = base_path / "CKKS_par_full_attention_seq197_heads3_dim64" / "level_9" / "server";
     if (!fs::exists(server_dir / "mega_ag.json"))
         return;
 
@@ -2097,7 +2097,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_full_attention", "[blo
     attnv_data.emplace_back(static_cast<void*>(ccmm_attnv.get()));
 
     // Output: seq_len × head_dim per head, level = 0
-    uint32_t n_out = div_ceil(seq_len, d) * div_ceil(head_dim, d);
+    uint32_t num_block_rows_out = div_ceil(seq_len, d);
+    uint32_t n_h_padded = 1;
+    while (n_h_padded < n_heads)
+        n_h_padded <<= 1;
+    uint32_t n_slot = res.param.get_n() / 2;
+    uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+    uint32_t n_out = num_block_rows_out * G;
     for (uint32_t i = 0; i < n_out; i++)
         out_cts.push_back(res.context.new_ciphertext(0, res.param.get_default_scale()));
 

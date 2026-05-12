@@ -1874,12 +1874,12 @@ class TestLayerExport(unittest.TestCase):
     def test_par_full_attention(self):
         """Full FHE attention: X→Q,K,V (3 CPMMs) → Transpose(K) → Q*K^T (CCMM) → attn*V (CCMM).
 
-        seq_len=53, n_heads=3, head_dim=16, init_level=9.
+        seq_len=197, n_heads=3, head_dim=64, init_level=9.
         Level budget: CPMM(2) + Transpose(1) + CCMM(3) + CCMM(3) = 9.
         """
         set_param('PN14QP438')
         N_SLOT = 16384 // 2
-        seq_len, n_heads, head_dim = 53, 3, 16
+        seq_len, n_heads, head_dim = 197, 3, 64
         total_dim = n_heads * head_dim
         init_level = 9
 
