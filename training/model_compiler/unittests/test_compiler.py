@@ -872,21 +872,21 @@ class TestE2E(CompilerTestBase):
     # ── No-BTP tests (poly_n=8192) ──
 
     def test_e2e_poly_n_8192(self):
-        """1 Conv + 1 Act = 4 levels → poly_n=8192, no BTP."""
+        """1 Conv + 1 Act = 4 levels → poly_n=8192 (PN13QP218s), no BTP."""
         model = nn_modules.PolyDegreeN8192()
         graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'poly_n_8192')
         self.assertEqual(config.fhe_param.poly_modulus_degree, 8192)
-        self.assertEqual(config.fhe_param.max_level, 5)
+        self.assertEqual(config.fhe_param.max_level, 7)
         self.assertFalse(self._has_bootstrapping(graph))
 
     # ── No-BTP tests (poly_n=16384, 6-9 levels) ──
 
     def test_e2e_conv_act(self):
-        """3 Conv + 1 Act = 6 levels → poly_n=16384, no BTP."""
+        """3 Conv + 1 Act = 6 levels → poly_n=8192 (PN13QP218s), no BTP."""
         model = nn_modules.PolyDegreeN16384()
         graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'conv_act')
-        self.assertEqual(config.fhe_param.poly_modulus_degree, 16384)
-        self.assertEqual(config.fhe_param.max_level, 9)
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 8192)
+        self.assertEqual(config.fhe_param.max_level, 7)
         self.assertFalse(self._has_bootstrapping(graph))
         self.assertTrue(check_dropped_levels_per_subgraph(graph))
 
