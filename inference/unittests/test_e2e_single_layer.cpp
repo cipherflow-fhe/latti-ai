@@ -223,11 +223,21 @@ static const auto single_layer_test_names = load_test_names(single_layer_base_pa
 
 // == Run all (batch) ==========================================================
 
+// Custom tasks (BlockColMajor / ParBlockColMajor) only generate server/ files and
+// are driven by their own dedicated TEST_CASEs below; skip them in the batch loop
+// which uses run_e2e_test (requires client/task_config.json).
+static bool is_standard_e2e_task(const fs::path& test_dir) {
+    return fs::exists(test_dir / "task" / "client" / "task_config.json");
+}
+
 TEST_CASE("cpu/all", "[batch][cpu][e2e]") {
     REQUIRE_FALSE(single_layer_test_names.empty());
     for (const auto& name : single_layer_test_names) {
+        auto test_dir = single_layer_base_path / name;
+        if (!is_standard_e2e_task(test_dir))
+            continue;
         SECTION(name) {
-            run_e2e_test(single_layer_base_path / name, false);
+            run_e2e_test(test_dir, false);
         }
     }
 }
@@ -236,8 +246,11 @@ TEST_CASE("cpu/all", "[batch][cpu][e2e]") {
 TEST_CASE("gpu/all", "[batch][gpu][e2e]") {
     REQUIRE_FALSE(single_layer_test_names.empty());
     for (const auto& name : single_layer_test_names) {
+        auto test_dir = single_layer_base_path / name;
+        if (!is_standard_e2e_task(test_dir))
+            continue;
         SECTION(name) {
-            run_e2e_test(single_layer_base_path / name, true);
+            run_e2e_test(test_dir, true);
         }
     }
 }
