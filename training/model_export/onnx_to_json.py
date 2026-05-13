@@ -36,12 +36,14 @@ from .operations.Sigmoid import SigmoidComputeNode
 from .operations.PolyRelu import PolyReluComputeNode
 from .operations.ConvTranspose import ConvTransposeComputeNode
 from .operations.PolyAct import PolyActComputeNode
+from .operations.MatMul import MatMulComputeNode
+from .operations.Transpose import TransposeComputeNode
 from .onnx_model_manipulations import simplify_onnx_model
 
 log = logging.getLogger(__name__)
 
 
-def gen_data_nodes(value_infos) -> dict[str, FeatureNode]:
+def gen_data_nodes(value_infos, feature_mat: bool = False) -> dict[str, FeatureNode]:
     """Build FeatureNode dict from ONNX value_info entries."""
     data_nodes: dict[str, FeatureNode] = dict()
     for key, feature in value_infos.items():
@@ -51,7 +53,14 @@ def gen_data_nodes(value_infos) -> dict[str, FeatureNode]:
             tensor_shape.append(s.dim_value)
         if len(tensor_shape) == 0:
             continue
-        if len(tensor_shape) == 1:
+        if feature_mat:
+            if len(tensor_shape) == 3:
+                shape = tensor_shape[1:]
+            else:
+                shape = list(tensor_shape)
+            dim = 2
+            channel = 1
+        elif len(tensor_shape) == 1:
             shape = tensor_shape
             dim = 0
             channel = tensor_shape[0]
@@ -67,6 +76,8 @@ def gen_data_nodes(value_infos) -> dict[str, FeatureNode]:
         skip = [1] * max(dim, 1)
         ckks_parameter_id = 'param0'
         node = FeatureNode(key, dim, channel, scale, skip, ckks_parameter_id, shape)
+        if feature_mat:
+            node.data_type = 'feature_mat'
         data_nodes[key] = node
     return data_nodes
 
@@ -86,7 +97,7 @@ def get_constant(const_node: onnx.NodeProto):
     return const_value
 
 
-def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
+def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_mat: bool = False):
     """Convert an ONNX model file to the JSON format for encrypted inference.
 
     Args:
@@ -105,7 +116,7 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
     value_infos.update(input_value_infos)
     value_infos.update(output_value_infos)
     value_infos.update({i.name: i for i in graph.value_info})
-    features_nodes = gen_data_nodes(value_infos)
+    features_nodes = gen_data_nodes(value_infos, feature_mat=feature_mat)
     compute_nodes: dict[str, ComputeNode] = {}
 
     constant_nodes = dict()
@@ -159,6 +170,10 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
                 compute_node = DenseComputeNode.from_onnx_node(n, features_nodes)
             case 'ConvTranspose':
                 compute_node = ConvTransposeComputeNode.from_onnx_node(n, features_nodes)
+            case 'MatMul':
+                compute_node = MatMulComputeNode.from_onnx_node(n, features_nodes)
+            case 'Transpose':
+                compute_node = TransposeComputeNode.from_onnx_node(n, features_nodes)
             case 'RangeNormPoly2d':
                 compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
             case 'RangeNormPoly1d':
