@@ -531,16 +531,16 @@ class TestSingleLayer(CompilerTestBase):
             )
         )
 
-    def test_vit_1(self):
-        model = nn_modules.VitTest1()
+    def test_qkv(self):
+        model = nn_modules.QKVTest()
         self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
 
-    def test_vit_2(self):
-        model = nn_modules.VitTest2()
+    def test_transpose(self):
+        model = nn_modules.TransposeTest()
         self._export_and_compile(model, (1, 32, 64), style='multiplexed', feature_mat=True)
 
-    def test_vit_3(self):
-        model = nn_modules.VitTest3()
+    def test_ccmm(self):
+        model = nn_modules.CCMMTest()
         self._export_and_compile(model, [(32, 64), (64, 64)], style='multiplexed', feature_mat=True)
 
 
