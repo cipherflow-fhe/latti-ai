@@ -38,6 +38,7 @@ public:
     ls::CkksPlaintextRingt generate_psi_wkd_pt(ls::CkksContext& ctx, uint32_t i) const;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A, const FeatureMatEncrypted& B);
+    Array<double, 2> run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const;
 
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx,

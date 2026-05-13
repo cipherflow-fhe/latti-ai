@@ -26,6 +26,7 @@ public:
     void precompute_diagonals();
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& input);
+    Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
 
     // Lazy generation: encode transpose diagonal on demand
     // k_idx: 0..2d-2, maps to k = k_idx - (d-1) in range [-(d-1), d-1]

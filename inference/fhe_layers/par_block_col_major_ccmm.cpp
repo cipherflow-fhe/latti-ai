@@ -423,3 +423,16 @@ ParBlockColMajorCCMM::run(CkksContext& ctx, const FeatureMatEncrypted& A, const 
     result.matmul_block_size = d_;
     return result;
 }
+
+Array<double, 2> ParBlockColMajorCCMM::run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const {
+    Array<double, 2> C({m_, p_ * n_heads_});
+    for (uint32_t h = 0; h < n_heads_; h++)
+        for (uint32_t i = 0; i < m_; i++)
+            for (uint32_t j = 0; j < p_; j++) {
+                double s = 0;
+                for (uint32_t k = 0; k < n_; k++)
+                    s += A.get(i, h * n_ + k) * B.get(k, h * p_ + j);
+                C.set(i, h * p_ + j, s);
+            }
+    return C;
+}

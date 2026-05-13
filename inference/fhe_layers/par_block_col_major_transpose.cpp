@@ -189,3 +189,12 @@ FeatureMatEncrypted ParBlockColMajorTranspose::run(CkksContext& ctx, const Featu
     result.matmul_block_size = d_;
     return result;
 }
+
+Array<double, 2> ParBlockColMajorTranspose::run_plaintext(const Array<double, 2>& A) const {
+    Array<double, 2> T({n_, m_ * n_heads_});
+    for (uint32_t h = 0; h < n_heads_; h++)
+        for (uint32_t i = 0; i < m_; i++)
+            for (uint32_t j = 0; j < n_; j++)
+                T.set(j, h * m_ + i, A.get(i, h * n_ + j));
+    return T;
+}

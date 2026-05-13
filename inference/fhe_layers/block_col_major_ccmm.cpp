@@ -365,3 +365,15 @@ CkksPlaintextRingt BlockColMajorCCMM::generate_psi_wkd_pt(CkksContext& ctx, uint
     auto [w_k, w_kd] = build_psi_diagonals(i);
     return ctx.encode_ringt(w_kd, psi_scale);
 }
+
+Array<double, 2> BlockColMajorCCMM::run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const {
+    Array<double, 2> C({m_, p_});
+    for (uint32_t i = 0; i < m_; i++)
+        for (uint32_t j = 0; j < p_; j++) {
+            double s = 0;
+            for (uint32_t k = 0; k < n_; k++)
+                s += A.get(i, k) * B.get(k, j);
+            C.set(i, j, s);
+        }
+    return C;
+}

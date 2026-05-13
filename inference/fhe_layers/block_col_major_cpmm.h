@@ -30,6 +30,7 @@ public:
                       uint32_t level_A);
     void precompute_diagonals();
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A);
+    Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
 
     // Lazy generation: encode on demand without precompute_diagonals()
     ls::CkksPlaintextRingt generate_diag_pt(ls::CkksContext& ctx, uint32_t bj, uint32_t bp, uint32_t k) const;

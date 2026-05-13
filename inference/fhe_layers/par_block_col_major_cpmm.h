@@ -46,6 +46,7 @@ public:
                          uint32_t level_A);
     void precompute_diagonals();
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A);
+    Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
 
     // Accessors for pre-computed plaintexts (valid after precompute_diagonals())
     const ls::CkksPlaintextRingt& get_diag_pt(uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const {

@@ -150,3 +150,11 @@ FeatureMatEncrypted BlockColMajorTranspose::run(CkksContext& ctx, const FeatureM
     result.matmul_block_size = d_;
     return result;
 }
+
+Array<double, 2> BlockColMajorTranspose::run_plaintext(const Array<double, 2>& A) const {
+    Array<double, 2> T({n_, m_});
+    for (uint32_t i = 0; i < m_; i++)
+        for (uint32_t j = 0; j < n_; j++)
+            T.set(j, i, A.get(i, j));
+    return T;
+}

@@ -1513,57 +1513,6 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature1d_mux", "", Het
 // They use FheTask with a custom encode_pt executor to lazily generate plaintext
 // diagonals during task execution.
 
-static Array<double, 2> e2e_pt_matmul(const Array<double, 2>& A, const Array<double, 2>& B) {
-    uint32_t m = A.get_shape()[0], n = A.get_shape()[1], p = B.get_shape()[1];
-    Array<double, 2> C({m, p});
-    for (uint32_t i = 0; i < m; i++)
-        for (uint32_t j = 0; j < p; j++) {
-            double s = 0;
-            for (uint32_t k = 0; k < n; k++)
-                s += A.get(i, k) * B.get(k, j);
-            C.set(i, j, s);
-        }
-    return C;
-}
-
-static Array<double, 2> e2e_pt_transpose(const Array<double, 2>& A) {
-    uint32_t m = A.get_shape()[0], n = A.get_shape()[1];
-    Array<double, 2> T({n, m});
-    for (uint32_t i = 0; i < m; i++)
-        for (uint32_t j = 0; j < n; j++)
-            T.set(j, i, A.get(i, j));
-    return T;
-}
-
-static Array<double, 2> e2e_pt_per_head_transpose(const Array<double, 2>& A, uint32_t per_head_cols, uint32_t n_heads) {
-    uint32_t M = A.get_shape()[0];
-    uint32_t K = per_head_cols;
-    Array<double, 2> T({K, M * n_heads});
-    for (uint32_t h = 0; h < n_heads; h++)
-        for (uint32_t i = 0; i < M; i++)
-            for (uint32_t j = 0; j < K; j++)
-                T.set(j, h * M + i, A.get(i, h * K + j));
-    return T;
-}
-
-static Array<double, 2> e2e_pt_per_head_matmul(const Array<double, 2>& A,
-                                               const Array<double, 2>& B,
-                                               uint32_t N_inner,
-                                               uint32_t P_out,
-                                               uint32_t n_heads) {
-    uint32_t M = A.get_shape()[0];
-    Array<double, 2> C({M, P_out * n_heads});
-    for (uint32_t h = 0; h < n_heads; h++)
-        for (uint32_t i = 0; i < M; i++)
-            for (uint32_t j = 0; j < P_out; j++) {
-                double s = 0;
-                for (uint32_t k = 0; k < N_inner; k++)
-                    s += A.get(i, h * N_inner + k) * B.get(k, h * P_out + j);
-                C.set(i, h * P_out + j, s);
-            }
-    return C;
-}
-
 static double e2e_max_rel_error(const Array<double, 2>& expected, const Array<double, 2>& actual) {
     double max_abs = 0, max_err = 0;
     for (uint32_t i = 0; i < expected.get_shape()[0]; i++)
@@ -1723,9 +1672,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
                 return;
 
             auto A = gen_random_array<2>({m, n}, 1.0);
-            auto ref_output = e2e_pt_transpose(A);
 
             auto layer_ptr = std::make_shared<BlockColMajorTranspose>(res.param, Duo{m, n}, d, level);
+            auto ref_output = layer_ptr->run_plaintext(A);
 
             FeatureMatEncrypted A_enc(&res.context, level);
             A_enc.block_col_major_pack(A, d, false, res.param.get_default_scale());
@@ -1770,9 +1719,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_block_cpmm_sweep", "[block
 
                 auto A = gen_random_array<2>({m, n}, 1.0);
                 auto B = gen_random_array<2>({n, p}, 0.1);
-                auto ref_output = e2e_pt_matmul(A, B);
 
                 auto layer_ptr = std::make_shared<BlockColMajorCPMM>(res.param, Duo{m, n}, Duo{n, p}, B, d, level);
+                auto ref_output = layer_ptr->run_plaintext(A);
 
                 FeatureMatEncrypted A_enc(&res.context, level);
                 A_enc.block_col_major_pack(A, d, false, res.param.get_default_scale());
@@ -1819,11 +1768,11 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_block_ccmm_sweep", "[block
 
                 auto A = gen_random_array<2>({m, n}, 1.0);
                 auto B = gen_random_array<2>({n, p}, 0.1);
-                auto ref_output = e2e_pt_matmul(A, B);
 
                 auto layer_ptr =
                     std::make_shared<BlockColMajorCCMM>(res.param, Duo{m, n}, Duo{n, p}, d, d, level, level);
                 layer_ptr->precompute_diagonals();
+                auto ref_output = layer_ptr->run_plaintext(A, B);
 
                 FeatureMatEncrypted A_enc(&res.context, level);
                 A_enc.block_col_major_pack(A, d, false, res.param.get_default_scale());
@@ -1885,11 +1834,11 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_cpmm_square", "[block_
 
         auto W = gen_random_array<2>({total_dim, total_dim}, 0.1);
         auto A = gen_random_array<2>({cfg.m, total_dim}, 0.5);
-        auto ref_output = e2e_pt_matmul(A, W);
 
         auto layer_ptr =
             std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{cfg.m, cfg.head_dim}, W, d, cfg.n_heads, cfg.level);
         layer_ptr->precompute_diagonals();
+        auto ref_output = layer_ptr->run_plaintext(A);
 
         FeatureMatEncrypted A_enc(&res.context, cfg.level);
         A_enc.par_block_col_major_pack(A, d, cfg.n_heads, false, res.param.get_default_scale());
@@ -2028,10 +1977,21 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_full_attention", "[blo
     auto W_K = gen_random_array<2>({total_dim, total_dim}, 0.1);
     auto W_V = gen_random_array<2>({total_dim, total_dim}, 0.1);
 
+    // Create 7 layer objects (3 CPMM + 1 Transpose + 2 CCMM)
+    auto cpmm_q =
+        std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{seq_len, head_dim}, W_Q, d, n_heads, init_level);
+    cpmm_q->precompute_diagonals();
+    auto cpmm_k =
+        std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{seq_len, head_dim}, W_K, d, n_heads, init_level);
+    cpmm_k->precompute_diagonals();
+    auto cpmm_v =
+        std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{seq_len, head_dim}, W_V, d, n_heads, init_level);
+    cpmm_v->precompute_diagonals();
+
     // Reference: Q=X*W_Q, K=X*W_K, V=X*W_V, then per-head Q*K^T*V
-    auto Q_mat = e2e_pt_matmul(X_mat, W_Q);
-    auto K_mat = e2e_pt_matmul(X_mat, W_K);
-    auto V_mat = e2e_pt_matmul(X_mat, W_V);
+    auto Q_mat = cpmm_q->run_plaintext(X_mat);
+    auto K_mat = cpmm_k->run_plaintext(X_mat);
+    auto V_mat = cpmm_v->run_plaintext(X_mat);
 
     Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
     for (uint32_t h = 0; h < n_heads; h++)
@@ -2046,17 +2006,6 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_full_attention", "[blo
                 }
                 expected.set(i, h * head_dim + j, sum);
             }
-
-    // Create 7 layer objects (3 CPMM + 1 Transpose + 2 CCMM)
-    auto cpmm_q =
-        std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{seq_len, head_dim}, W_Q, d, n_heads, init_level);
-    cpmm_q->precompute_diagonals();
-    auto cpmm_k =
-        std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{seq_len, head_dim}, W_K, d, n_heads, init_level);
-    cpmm_k->precompute_diagonals();
-    auto cpmm_v =
-        std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{seq_len, head_dim}, W_V, d, n_heads, init_level);
-    cpmm_v->precompute_diagonals();
 
     auto kt_transpose = std::make_shared<ParBlockColMajorTranspose>(res.param, Duo{seq_len, head_dim}, d, n_heads,
                                                                     init_level - 2);  // K at level 7
@@ -3181,9 +3130,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const int level = 5;
 
     auto A = gen_random_array<2>({M, K}, 1.0);
-    auto ref_output = e2e_pt_transpose(A);
 
     auto layer_ptr = std::make_shared<BlockColMajorTranspose>(res.param, Duo{M, K}, d, level);
+    auto ref_output = layer_ptr->run_plaintext(A);
 
     FeatureMatEncrypted A_enc(&res.context, level);
     A_enc.block_col_major_pack(A, d, false, res.param.get_default_scale());
@@ -3223,9 +3172,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     auto A = gen_random_array<2>({M, K}, 1.0);
     auto B = gen_random_array<2>({K, P}, 0.1);
-    auto ref_output = e2e_pt_matmul(A, B);
 
     auto layer_ptr = std::make_shared<BlockColMajorCPMM>(res.param, Duo{M, K}, Duo{K, P}, B, d, level);
+    auto ref_output = layer_ptr->run_plaintext(A);
 
     FeatureMatEncrypted A_enc(&res.context, level);
     A_enc.block_col_major_pack(A, d, false, res.param.get_default_scale());
@@ -3266,10 +3215,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     auto A = gen_random_array<2>({M, K}, 1.0);
     auto B = gen_random_array<2>({K, P}, 0.1);
-    auto ref_output = e2e_pt_matmul(A, B);
 
     auto layer_ptr = std::make_shared<BlockColMajorCCMM>(res.param, Duo{M, K}, Duo{K, P}, d, d, level, level);
     layer_ptr->precompute_diagonals();
+    auto ref_output = layer_ptr->run_plaintext(A, B);
 
     FeatureMatEncrypted A_enc(&res.context, level);
     A_enc.block_col_major_pack(A, d, false, res.param.get_default_scale());
@@ -3317,10 +3266,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     auto W = gen_random_array<2>({n_total, n_total}, 0.1);
     auto A = gen_random_array<2>({m, n_total}, 1.0);
-    auto ref_output = e2e_pt_matmul(A, W);
 
     auto layer_ptr = std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{m, n_per_head}, W, d, n_heads, level);
     layer_ptr->precompute_diagonals();
+    auto ref_output = layer_ptr->run_plaintext(A);
 
     FeatureMatEncrypted A_enc(&res.context, level);
     A_enc.par_block_col_major_pack(A, d, n_heads, false, res.param.get_default_scale());
@@ -3367,9 +3316,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const int level = 5;
 
     auto A = gen_random_array<2>({M, n_heads * K}, 1.0);
-    auto ref_output = e2e_pt_per_head_transpose(A, K, n_heads);
 
     auto layer_ptr = std::make_shared<ParBlockColMajorTranspose>(res.param, Duo{M, K}, d, n_heads, level);
+    auto ref_output = layer_ptr->run_plaintext(A);
 
     FeatureMatEncrypted A_enc(&res.context, level);
     A_enc.par_block_col_major_pack(A, d, n_heads, false, res.param.get_default_scale());
@@ -3409,10 +3358,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     auto A = gen_random_array<2>({M, n_heads * N_dim}, 1.0);
     auto B = gen_random_array<2>({N_dim, n_heads * P}, 0.1);
-    auto ref_output = e2e_pt_per_head_matmul(A, B, N_dim, P, n_heads);
 
     auto layer_ptr = std::make_shared<ParBlockColMajorCCMM>(res.param, Duo{M, N_dim}, Duo{N_dim, P}, d, n_heads, level);
     layer_ptr->precompute_diagonals();
+    auto ref_output = layer_ptr->run_plaintext(A, B);
 
     FeatureMatEncrypted A_enc(&res.context, level);
     A_enc.par_block_col_major_pack(A, d, n_heads, false, res.param.get_default_scale());
