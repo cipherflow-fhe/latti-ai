@@ -823,7 +823,7 @@ class SingleAdaptiveAvgpool1d(nn.Module):
         return self.pool(x)
 
 
-class VitTest1(nn.Module):
+class QKVTest(nn.Module):
     def __init__(self):
         super().__init__()
         self.qkv = nn.Linear(192, 1, False)
@@ -832,16 +832,15 @@ class VitTest1(nn.Module):
         return self.qkv(x)
 
 
-class VitTest2(nn.Module):
+class TransposeTest(nn.Module):
     def __init__(self):
         super().__init__()
-        # self.qkv = nn.Linear(192, 1, False)
 
     def forward(self, x):
         return x.transpose(-2, -1)
 
 
-class VitTest3(nn.Module):
+class CCMMTest(nn.Module):
     def __init__(self):
         super().__init__()
         # self.qkv = nn.Linear(192, 1, False)
