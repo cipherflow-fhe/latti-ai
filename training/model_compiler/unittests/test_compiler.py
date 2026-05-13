@@ -307,6 +307,7 @@ class CompilerTestBase(unittest.TestCase):
         style='ordinary',
         graph_type='btp',
         replace=True,
+        feature_mat=False,
         **export_kwargs,
     ):
         if replace:
@@ -322,7 +323,7 @@ class CompilerTestBase(unittest.TestCase):
             save_h5=False,
             **export_kwargs,
         )
-        onnx_to_json(self.temp_onnx_path, self.temp_json_path, style)
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, style, feature_mat=feature_mat)
         graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
@@ -529,6 +530,18 @@ class TestSingleLayer(CompilerTestBase):
                 for node in graph.dag.nodes
             )
         )
+
+    def test_vit_1(self):
+        model = nn_modules.VitTest1()
+        self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
+
+    def test_vit_2(self):
+        model = nn_modules.VitTest2()
+        self._export_and_compile(model, (1, 32, 64), style='multiplexed', feature_mat=True)
+
+    def test_vit_3(self):
+        model = nn_modules.VitTest3()
+        self._export_and_compile(model, [(32, 64), (64, 64)], style='multiplexed', feature_mat=True)
 
 
 class TestLayerInteraction(CompilerTestBase):
