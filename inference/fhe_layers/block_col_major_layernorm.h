@@ -1,0 +1,142 @@
+/*
+ * Copyright (c) 2025-2026 CipherFlow (Shenzhen) Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#pragma once
+#include "layer.h"
+#include "../data_structs/feature_mat.h"
+
+// ============================================================
+// BlockColMajorLNStats — Phase 1: compute scaled variance (a) and mean
+// Levels consumed: 3 (L -> L-3)
+// Input:  FeatureMatEncrypted x at level L, scale D
+// Output: a_cts (per block-row, level L-3, scale D exact)
+//         mean_cts (per block-row, level L-1, scale D exact)
+// ============================================================
+class BlockColMajorLNStats : public Layer {
+public:
+    BlockColMajorLNStats(const ls::CkksParameter& param,
+                         Duo shape,
+                         uint32_t block_size,
+                         uint32_t init_level,
+                         double eps,
+                         double inv_var_scale);
+    void precompute_plaintexts();
+
+    std::pair<std::vector<ls::CkksCiphertext>, std::vector<ls::CkksCiphertext>> run(ls::CkksContext& ctx,
+                                                                                    const FeatureMatEncrypted& x);
+
+private:
+    uint32_t m_, n_, d_, n_slot_, chunk_size_, num_chunks_;
+    uint32_t num_block_rows_, num_block_cols_;
+    double eps_, inv_var_scale_;
+
+    // Row-sum helper: sum all d column elements per row within a single block ct
+    ls::CkksCiphertext intra_block_row_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
+
+    ls::CkksPlaintextRingt inv_n_norm_pt_;     // 1/N,   scale q_L/D*q_{L-1} (normalizing)
+    ls::CkksPlaintextRingt inv_n_sq_norm_pt_;  // 1/N²,  scale q_L/D*q_{L-1} (normalizing)
+    ls::CkksPlaintextRingt inv_n_mean_pt_;     // 1/N,   scale q_L
+    ls::CkksPlaintextRingt inv_var_scale_pt_;  // inv_var_scale, scale q_{L-2}
+    ls::CkksPlaintextRingt eps_add_pt_;        // eps*inv_var_scale, scale D
+};
+
+// ============================================================
+// BlockColMajorLNMinimaxInit — Phase 2: y0 = c0 + c1*a + c2*a² (non-Horner)
+// Levels consumed: 2 (input_level -> input_level-2)
+// Input:  a_cts (per block-row, level input_level, scale D)
+// Output: y_cts (per block-row, level input_level-2, scale D exact)
+// ============================================================
+class BlockColMajorLNMinimaxInit : public Layer {
+public:
+    BlockColMajorLNMinimaxInit(const ls::CkksParameter& param,
+                               uint32_t block_size,
+                               uint32_t input_level,
+                               double c0,
+                               double c1,
+                               double c2);
+    void precompute_plaintexts();
+
+    std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& a_cts);
+
+private:
+    uint32_t d_, n_slot_, chunk_size_;
+    double c0_, c1_, c2_;
+
+    ls::CkksPlaintextRingt c2_norm_pt_;  // c2, scale q_{L-3}/D*q_{L-4} (normalizing)
+    ls::CkksPlaintextRingt c1_pt_;       // c1, scale q_{input_level}
+    ls::CkksPlaintextRingt c0_add_pt_;   // c0, scale D
+};
+
+// ============================================================
+// BlockColMajorLNGoldschmidt — Phase 3: one Goldschmidt iteration
+//   y_new = 0.5 * y * (3 - a * y²)
+// Levels consumed: 4 (L_y -> L_y-4)
+// Input:  y_cts (level L_y, scale D), a_cts (level >= L_y, scale D)
+// Output: y_new_cts (level L_y-4, scale D exact)
+// ============================================================
+class BlockColMajorLNGoldschmidt : public Layer {
+public:
+    BlockColMajorLNGoldschmidt(const ls::CkksParameter& param, uint32_t block_size, uint32_t input_level);
+    void precompute_plaintexts();
+
+    std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx,
+                                        const std::vector<ls::CkksCiphertext>& y_cts,
+                                        const std::vector<ls::CkksCiphertext>& a_cts);
+
+private:
+    uint32_t d_, n_slot_, chunk_size_;
+
+    ls::CkksPlaintextRingt three_add_pt_;  // 3.0, scale S2
+    ls::CkksPlaintextRingt half_norm_pt_;  // 0.5, normalizing scale
+};
+
+// ============================================================
+// BlockColMajorLNAffine — Phase 4: output = (x - mean) * y * gamma*inv_std_scale + beta
+// Levels consumed: 2 (L_out -> L_out-2)
+// Input:  x (original FeatureMatEncrypted at level L),
+//         mean_cts (level L-1, scale D),
+//         y_cts (level L_out, scale D)
+// Output: FeatureMatEncrypted (same shape/format, level L_out-2)
+// ============================================================
+class BlockColMajorLNAffine : public Layer {
+public:
+    BlockColMajorLNAffine(const ls::CkksParameter& param,
+                          Duo shape,
+                          uint32_t block_size,
+                          uint32_t init_level,
+                          uint32_t y_level,
+                          double inv_std_scale,
+                          const std::vector<double>& gamma,
+                          const std::vector<double>& beta);
+    void precompute_plaintexts();
+
+    FeatureMatEncrypted run(ls::CkksContext& ctx,
+                            const FeatureMatEncrypted& x,
+                            const std::vector<ls::CkksCiphertext>& mean_cts,
+                            const std::vector<ls::CkksCiphertext>& y_cts);
+
+private:
+    uint32_t m_, n_, d_, n_slot_, chunk_size_, num_chunks_;
+    uint32_t num_block_rows_, num_block_cols_;
+    uint32_t init_level_, y_level_;
+    double inv_std_scale_;
+    std::vector<double> gamma_vals_, beta_vals_;
+
+    std::vector<ls::CkksPlaintextRingt> gamma_pt_;     // per block-col, scale q_{L_out}
+    std::vector<ls::CkksPlaintextRingt> beta_add_pt_;  // per block-col, scale D²/q_{L_out-1}
+};
