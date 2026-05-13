@@ -58,6 +58,8 @@
 #include "fhe_layers/mult_scaler.h"
 #include "fhe_layers/upsample_layer.h"
 #include "fhe_layers/upsample_nearest_layer.h"
+#include "fhe_layers/block_col_major_layernorm.h"
+#include "fhe_layers/par_block_col_major_layernorm.h"
 #include "ut_util.h"
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include <lattisense/lib/nlohmann/json.hpp>
@@ -2844,5 +2846,204 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "upsample_nearest_layer", "", Hete
 
     SECTION("n_channel=4, shape=8x8") {
         run_upsample_nearest_test(4, 8);
+    }
+}
+
+// ============================================================
+// Block Col Major LayerNorm (组合 4 个独立类测试完整 forward)
+// ============================================================
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", HeteroProcessors) {
+    // LayerNorm needs higher levels; use local context with N=32768
+    const int N = 32768;
+    CkksParameter param = CkksParameter::create_parameter(N);
+    CkksContext context = CkksContext::create_random_context(param);
+    context.gen_rotation_keys();
+    double default_scale = param.get_default_scale();
+
+    auto run_ln_test = [&](uint32_t d, uint32_t m, uint32_t n, uint32_t num_iters, int init_level) {
+        double eps = 1e-5;
+        double var_std_bound = 4.0;
+        double inv_var_scale = 1.0 / (var_std_bound * var_std_bound);
+        double inv_std_scale = 1.0 / var_std_bound;
+        double c0 = 6.19067182, c1 = -16.15885111, c2 = 11.52830778;
+
+        // Generate random data
+        Array<double, 2> X_mat = gen_random_array<2>({m, n}, 1.0);
+        vector<double> gamma(n), beta(n);
+        for (uint32_t j = 0; j < n; j++) {
+            gamma[j] = 0.5 + 0.5 * ((double)rand() / RAND_MAX);
+            beta[j] = 0.1 * ((double)rand() / RAND_MAX - 0.5);
+        }
+
+        // Encrypt
+        FeatureMatEncrypted X_enc(&context, init_level);
+        X_enc.shape = {m, n};
+        X_enc.matmul_block_size = d;
+        X_enc.block_col_major_pack(X_mat, d, false, default_scale);
+
+        // Phase 1: Stats
+        BlockColMajorLNStats stats(param, {m, n}, d, init_level, eps, inv_var_scale);
+        stats.precompute_plaintexts();
+        auto [a_cts, mean_cts] = stats.run(context, X_enc);
+
+        // Phase 2: Minimax Init
+        BlockColMajorLNMinimaxInit minimax(param, d, init_level - 3, c0, c1, c2);
+        minimax.precompute_plaintexts();
+        auto y_cts = minimax.run(context, a_cts);
+
+        // Phase 3: Goldschmidt
+        for (uint32_t k = 0; k < num_iters; k++) {
+            uint32_t y_level = init_level - 5 - 4 * k;
+            BlockColMajorLNGoldschmidt gold(param, d, y_level);
+            gold.precompute_plaintexts();
+            y_cts = gold.run(context, y_cts, a_cts);
+        }
+
+        // Phase 4: Affine
+        uint32_t y_final_level = init_level - 5 - 4 * num_iters;
+        BlockColMajorLNAffine affine(param, {m, n}, d, init_level, y_final_level, inv_std_scale, gamma, beta);
+        affine.precompute_plaintexts();
+        FeatureMatEncrypted result_enc = affine.run(context, X_enc, mean_cts, y_cts);
+
+        // Unpack
+        auto result = result_enc.block_col_major_unpack(m, n, d);
+
+        // Compute expected (same algorithm: E[x^2]-E[x]^2, minimax, goldschmidt)
+        Array<double, 2> expected({(uint64_t)m, (uint64_t)n});
+        for (uint32_t i = 0; i < m; i++) {
+            double sum_x = 0.0, sum_x2 = 0.0;
+            for (uint32_t j = 0; j < n; j++) {
+                double v = X_mat.get(i, j);
+                sum_x += v;
+                sum_x2 += v * v;
+            }
+            double mean = sum_x / n;
+            double var = sum_x2 / n - mean * mean;
+            double a = (var + eps) * inv_var_scale;
+
+            double y = c0 + c1 * a + c2 * a * a;
+            for (uint32_t k = 0; k < num_iters; k++) {
+                y = 0.5 * y * (3.0 - a * y * y);
+            }
+
+            for (uint32_t j = 0; j < n; j++) {
+                double x_norm = (X_mat.get(i, j) - mean) * inv_std_scale * y;
+                expected.set(i, j, x_norm * gamma[j] + beta[j]);
+            }
+        }
+
+        print_double_message(result.to_array_1d().data(), "output_mg", 10);
+        print_double_message(expected.to_array_1d().data(), "output_expected", 10);
+
+        auto compare_result = compare(expected, result);
+        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    };
+
+    SECTION("d=64, m=197, n=192, iters=1") {
+        run_ln_test(64, 197, 192, 1, 11);
+    }
+}
+
+// ============================================================
+// Par Block Col Major LayerNorm (组合 4 个独立类测试完整 forward)
+// ============================================================
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "", HeteroProcessors) {
+    // LayerNorm needs higher levels; use local context with N=32768
+    const int N = 32768;
+    CkksParameter param = CkksParameter::create_parameter(N);
+    CkksContext context = CkksContext::create_random_context(param);
+    context.gen_rotation_keys();
+    double default_scale = param.get_default_scale();
+
+    auto run_par_ln_test = [&](uint32_t d, uint32_t seq_len, uint32_t n_heads, uint32_t head_dim, uint32_t num_iters,
+                               int init_level) {
+        double eps = 1e-5;
+        double var_std_bound = 4.0;
+        double inv_var_scale = 1.0 / (var_std_bound * var_std_bound);
+        double inv_std_scale = 1.0 / var_std_bound;
+        double c0 = 6.19067182, c1 = -16.15885111, c2 = 11.52830778;
+        uint32_t total_dim = n_heads * head_dim;
+
+        // Generate random data
+        Array<double, 2> X_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
+        vector<double> gamma(total_dim), beta(total_dim);
+        for (uint32_t j = 0; j < total_dim; j++) {
+            gamma[j] = 0.5 + 0.5 * ((double)rand() / RAND_MAX);
+            beta[j] = 0.1 * ((double)rand() / RAND_MAX - 0.5);
+        }
+
+        // Encrypt using par_block_col_major_pack
+        FeatureMatEncrypted X_enc(&context, init_level);
+        X_enc.shape = {seq_len, head_dim};
+        X_enc.matmul_block_size = d;
+        X_enc.par_block_col_major_pack(X_mat, d, n_heads, false, default_scale);
+
+        // Phase 1: Stats (full-dimension normalization: N = total_dim)
+        ParBlockColMajorLNStats stats(param, {seq_len, head_dim}, d, n_heads, init_level, eps, inv_var_scale);
+        stats.precompute_plaintexts();
+        auto [a_cts, mean_cts] = stats.run(context, X_enc);
+
+        // Phase 2: Minimax Init (a is now at init_level-4 due to par Stats extra mask level)
+        ParBlockColMajorLNMinimaxInit minimax(param, d, init_level - 4, c0, c1, c2);
+        minimax.precompute_plaintexts();
+        auto y_cts = minimax.run(context, a_cts);
+
+        // Phase 3: Goldschmidt
+        for (uint32_t k = 0; k < num_iters; k++) {
+            uint32_t y_level = init_level - 6 - 4 * k;
+            ParBlockColMajorLNGoldschmidt gold(param, d, y_level);
+            gold.precompute_plaintexts();
+            y_cts = gold.run(context, y_cts, a_cts);
+        }
+
+        // Phase 4: Affine
+        uint32_t y_final_level = init_level - 6 - 4 * num_iters;
+        ParBlockColMajorLNAffine affine(param, {seq_len, head_dim}, d, n_heads, init_level, y_final_level,
+                                        inv_std_scale, gamma, beta);
+        affine.precompute_plaintexts();
+        FeatureMatEncrypted result_enc = affine.run(context, X_enc, mean_cts, y_cts);
+
+        // Unpack
+        auto result = result_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
+
+        // Compute expected (full-dimension normalization across all heads)
+        Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
+        for (uint32_t i = 0; i < seq_len; i++) {
+            double sum_x = 0.0, sum_x2 = 0.0;
+            for (uint32_t j = 0; j < total_dim; j++) {
+                double v = X_mat.get(i, j);
+                sum_x += v;
+                sum_x2 += v * v;
+            }
+            double mean = sum_x / total_dim;
+            double var = sum_x2 / total_dim - mean * mean;
+            double a = (var + eps) * inv_var_scale;
+
+            double y = c0 + c1 * a + c2 * a * a;
+            for (uint32_t k = 0; k < num_iters; k++) {
+                y = 0.5 * y * (3.0 - a * y * y);
+            }
+
+            for (uint32_t j = 0; j < total_dim; j++) {
+                double x_norm = (X_mat.get(i, j) - mean) * inv_std_scale * y;
+                expected.set(i, j, x_norm * gamma[j] + beta[j]);
+            }
+        }
+
+        print_double_message(result.to_array_1d().data(), "output_mg", 10);
+        print_double_message(expected.to_array_1d().data(), "output_expected", 10);
+
+        auto compare_result = compare(expected, result);
+        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    };
+
+    SECTION("d=64, seq=197, heads=3, head_dim=64, iters=1") {
+        run_par_ln_test(64, 197, 3, 64, 1, 12);
     }
 }
