@@ -47,8 +47,10 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     transforms.combine_convs_with_upsamples(pt_graph)
     transforms.process_polyact(pt_graph)
     transforms.set_level_costs(pt_graph)
-    # TODO: All functions must be completed, this only for test
-    transforms.absorb_scale_new(pt_graph)
+
+    from absorb_scale_dp import absorb_scale_dp
+
+    absorb_scale_dp(pt_graph)
 
     return pt_graph
 
@@ -191,7 +193,7 @@ def post_process(graph: LayerAbstractGraph):
             node.down_scale_str = list()
             transforms.populate_pack_num(graph.dag, node, slot_num)
 
-    transforms.set_graph_scale(graph)
+    # transforms.set_graph_scale(graph)
     process_levels(graph)
 
     return graph

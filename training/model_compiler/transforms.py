@@ -62,9 +62,9 @@ def _insert_layer_between_feature_and_compute(
     dag.add_node(new_compute, **new_compute_args)
     dag.add_node(new_feature, **new_feature_args)
 
-    old_edge_attrs = dag.edges[old_feature, old_compute]
+    old_edge_attrs = dict(dag.edges[old_feature, old_compute])
     dag.remove_edge(old_feature, old_compute)
-    dag.add_edge(old_feature, new_compute)
+    dag.add_edge(old_feature, new_compute, **old_edge_attrs)
     dag.add_edge(new_compute, new_feature)
     dag.add_edge(new_feature, old_compute, **old_edge_attrs)
 
@@ -361,6 +361,8 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
         },
         new_compute_args={'name': mult_scalar_node.layer_id, 'level_cost': 1},
     )
+
+    return mult_scalar_node
 
 
 def find_layer_in_linear_graph(
@@ -846,17 +848,743 @@ def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
     return graph
 
 
-def absorb_scale_new(graph: LayerAbstractGraph):
-    layers_to_absorb = ['avgpool1d', 'avgpool2d', 'mult_coeff']
-    new_dict = dict()
-    for node in list(graph.dag.nodes):
-        if isinstance(node, ComputeNode):
-            if node.layer_type in layers_to_absorb:
-                pre_f_node = list(graph.dag.predecessors(node))[0]
-                pre_c_node = list(graph.dag.predecessors(pre_f_node))[0]
-                _propagate_scale(graph.dag, pre_f_node, pre_c_node, Direction.UP, 0.5, new_dict)
+def _backward_level_dict(dag: nx.DiGraph) -> tuple[dict, dict]:
+    """Compute backward FHE levels for all FeatureNodes in *dag*.
 
-    # _propagate_scale(graph.dag)
+    Uses the same logic as inspect_level_backward: graph-output FeatureNodes
+    start at level 0; going toward inputs, each ComputeNode adds its
+    level_cost.
+
+    Returns:
+        level     : FeatureNode → int  (backward level of each FeatureNode)
+        arm_level : (FeatureNode, ComputeNode) → int
+                    level contribution of each output edge, i.e.
+                    level[feat_out_of_compute] + level_cost[compute].
+                    Used by fork decisions in _propagate_scale to avoid
+                    recomputing per-arm contributions during recursion.
+
+    Prerequisite: dag.nodes[compute]['level_cost'] must already be set
+    (i.e. set_level_costs has been called before absorb_scale_new).
+    """
+    level: dict = {}
+    arm_level: dict = {}
+    for node in reversed(list(nx.topological_sort(dag))):
+        if isinstance(node, ComputeNode):
+            continue
+        succs = list(dag.successors(node))
+        if not succs:
+            level[node] = 0
+        else:
+            best = 0
+            for c in succs:
+                contrib = level[next(dag.successors(c))] + dag.nodes[c]['level_cost']
+                arm_level[(node, c)] = contrib
+                if contrib > best:
+                    best = contrib
+            level[node] = best
+    return level, arm_level
+
+
+# ---------------------------------------------------------------------------
+# Absorber layer types (used by graph_static_analysis and helpers)
+# ---------------------------------------------------------------------------
+_ABSORBER_TYPES = frozenset({'conv2d', 'fc0', 'fc1', 'mult_scalar', 'polyact'})
+# polyact excluded: p(x/s) ≠ p(x)/s, so polyact cannot absorb in DOWN direction
+_DOWN_ABSORBER_TYPES = frozenset({'conv2d', 'fc0', 'fc1', 'mult_scalar'})
+
+
+def graph_static_analysis(dag: nx.DiGraph) -> tuple[dict, dict, dict, dict]:
+    """Pass 1: static analysis of the DAG for scale absorption decisions.
+
+    Returns
+    -------
+    feat_info : dict  keyed by FeatureNode
+        'absorber_up'           : bool — every UP path from F reaches an absorber
+        'bottleneck_succs'      : frozenset[ComputeNode] — output arms that set F's level
+        'level_free_up'         : bool — at least one non-bottleneck output arm exists
+        'nearest_convergence_up': FeatureNode | None — nearest shared upstream for join siblings
+        'node_insert_cost'      : int — cost of terminating scale at this FeatureNode
+
+    min_cover_above : dict  keyed by ComputeNode
+        Minimum cost (in FREE/NONFREE units) to handle a scale that propagates
+        ABOVE ComputeNode C.  Replaces the old per-FeatureNode min_ms_up.
+
+        Key properties:
+        - Absorber C: 0 (scale absorbed for free).
+        - Single-input C: min of insert-at-f_above vs go-further-above.
+        - JOIN C: sum over groups (convergent arm-groups pay once per shared ancestor).
+
+    plan_above : dict  keyed by ComputeNode
+        Ordered list of structural actions to execute when scale arrives ABOVE C.
+        Each action is a tuple; see :func:`absorb_scale_new_dp` docstring for
+        the supported action kinds.
+
+    node_insert_cost : dict  keyed by FeatureNode
+        Cost of terminating scale at this FeatureNode (Σ arm costs over all
+        non-DOWN-absorber output arms, with non-bottleneck arms billed FREE and
+        bottleneck arms billed NONFREE).
+    """
+    _FREE_COST = 1
+    _NONFREE_COST = 10_000
+
+    _, arm_level = _backward_level_dict(dag)
+    topo = list(nx.topological_sort(dag))
+    topo_rank = {n: i for i, n in enumerate(topo)}
+
+    # ------------------------------------------------------------------ #
+    # Phase 1: bottleneck_succs + level_free_up (no ordering constraint)
+    # ------------------------------------------------------------------ #
+    bottleneck_succs: dict[object, frozenset] = {}
+    level_free_up: dict[object, bool] = {}
+    for node in dag.nodes:
+        if isinstance(node, ComputeNode):
+            continue
+        succs = list(dag.successors(node))
+        if not succs:
+            bottleneck_succs[node] = frozenset()
+            level_free_up[node] = False
+            continue
+        arm_levels = {c: arm_level.get((node, c), 0) for c in succs}
+        max_lv = max(arm_levels.values())
+        bottleneck_succs[node] = frozenset(c for c, lv in arm_levels.items() if lv == max_lv)
+        level_free_up[node] = len(bottleneck_succs[node]) < len(succs)
+
+    # ------------------------------------------------------------------ #
+    # Phase 2: absorber_up (topological, graph-inputs first)
+    # ------------------------------------------------------------------ #
+    absorber_up: dict[object, bool] = {}
+    for node in topo:
+        if isinstance(node, ComputeNode):
+            continue
+        preds = list(dag.predecessors(node))
+        if not preds:
+            absorber_up[node] = False
+            continue
+        all_covered = True
+        for c in preds:
+            if c.layer_type in _ABSORBER_TYPES:
+                continue
+            for f_above in dag.predecessors(c):
+                if not absorber_up.get(f_above, False):
+                    all_covered = False
+                    break
+            if not all_covered:
+                break
+        absorber_up[node] = all_covered
+
+    # ------------------------------------------------------------------ #
+    # Phase 3: node_insert_cost[F]
+    # Cost of "stopping scale at F" = inserting ms on every non-DOWN-absorber
+    # output arm.  Arm cost is FREE if arm is non-bottleneck, NONFREE otherwise.
+    # ------------------------------------------------------------------ #
+    node_insert_cost: dict[object, int] = {}
+    for node in dag.nodes:
+        if isinstance(node, ComputeNode):
+            continue
+        succs = list(dag.successors(node))
+        if not succs:
+            node_insert_cost[node] = 0
+            continue
+        cost = 0
+        for s in succs:
+            if s.layer_type in _DOWN_ABSORBER_TYPES:
+                continue
+            cost += _NONFREE_COST if s in bottleneck_succs[node] else _FREE_COST
+        node_insert_cost[node] = cost
+
+    # ------------------------------------------------------------------ #
+    # Phase 4: nearest_convergence_up (topological)
+    # ------------------------------------------------------------------ #
+    id_to_feat: dict[int, object] = {id(n): n for n in dag.nodes if isinstance(n, FeatureNode)}
+
+    def _upstream_feat_ids(start_feat) -> set:
+        visited: set = set()
+        stack = [start_feat]
+        while stack:
+            f = stack.pop()
+            fid = id(f)
+            if fid in visited:
+                continue
+            visited.add(fid)
+            for c in dag.predecessors(f):
+                if c.layer_type in _ABSORBER_TYPES:
+                    continue
+                for f_above in dag.predecessors(c):
+                    stack.append(f_above)
+        return visited
+
+    nearest_convergence_up: dict[object, object | None] = {n: None for n in dag.nodes if isinstance(n, FeatureNode)}
+    for node in topo:
+        if not isinstance(node, ComputeNode):
+            continue
+        preds = list(dag.predecessors(node))
+        if len(preds) < 2:
+            continue
+        reach = [(f, _upstream_feat_ids(f)) for f in preds]
+        for i in range(len(reach)):
+            f_i, set_i = reach[i]
+            for j in range(i + 1, len(reach)):
+                f_j, set_j = reach[j]
+                shared = set_i & set_j
+                if not shared:
+                    continue
+                nearest_fid = max(
+                    (fid for fid in shared if fid in id_to_feat),
+                    key=lambda fid: topo_rank.get(id_to_feat[fid], -1),
+                    default=None,
+                )
+                if nearest_fid is None:
+                    continue
+                nearest_f = id_to_feat[nearest_fid]
+                for arm_f in (f_i, f_j):
+                    existing = nearest_convergence_up[arm_f]
+                    if existing is None or topo_rank[nearest_f] > topo_rank[existing]:
+                        nearest_convergence_up[arm_f] = nearest_f
+
+    # ------------------------------------------------------------------ #
+    # Phase 5: min_cover_above[C] per ComputeNode (topological, inputs first)
+    #
+    # Replaces the old per-FeatureNode min_ms_up.  Fixes two structural bugs:
+    #   1. cost_insert was edge-level (missed compensation arms).
+    #   2. shared-ancestor paths were double-counted in multi-input JOIN nodes.
+    #
+    # Key formulas:
+    #   comp(F, excluded_cs) = sum of arm costs for non-excluded, non-DOWN-absorber succs of F
+    #   insert_all_cost(F)   = node_insert_cost[F]  (stops scale at F on all arms)
+    #   go_above_cost(F, ci_set) = comp(F, ci_set) + min_cover_above[pred_C_of_F]
+    #   min_cover(F, ci_set) = min(insert_all_cost, go_above_cost)  [theoretical: only these two are optimal]
+    #
+    # For single-input C (pred = f_above):
+    #   min_cover_above[C] = min_cover(f_above, {C})
+    #
+    # For JOIN C (preds = {f1, f2, ...}):
+    #   Group preds by nearest_convergence_up:
+    #     - Absorber preds: cost 0
+    #     - Individual preds (ncu=None): min_cover_singleton(fi, C)
+    #     - Convergence group {fi, fj, ...} with shared G:
+    #         pay comp(fi, {C}) + comp(fj, {C}) + ... + min_cover(G, ci_set)
+    # ------------------------------------------------------------------ #
+    def _comp(f_node, excluded_cs) -> int:
+        """Compensation cost: ms on non-excluded, non-DOWN-absorber succs of f_node."""
+        cost = 0
+        for s in dag.successors(f_node):
+            if s in excluded_cs:
+                continue
+            if s.layer_type in _DOWN_ABSORBER_TYPES:
+                continue
+            cost += _NONFREE_COST if s in bottleneck_succs[f_node] else _FREE_COST
+        return cost
+
+    def _insert_plan_at(f_node, ci_set):
+        """Actions when terminating scale at f_node (option-A: F unchanged,
+        scale applied only on ci_set arms)."""
+        actions = []
+        for c in dag.successors(f_node):
+            if c not in ci_set:
+                continue
+            if c.layer_type in _DOWN_ABSORBER_TYPES:
+                actions.append(('absorb_up', c))
+            else:
+                actions.append(('insert_ms_up', f_node, c))
+        return actions
+
+    def _compensate_plan_at(f_node, ci_set):
+        """Actions when passing UP through f_node: 1/s compensation on every
+        non-ci_set successor (absorbers eat it for free, else propagate down)."""
+        actions = []
+        for c in dag.successors(f_node):
+            if c in ci_set:
+                continue
+            if c.layer_type in _DOWN_ABSORBER_TYPES:
+                actions.append(('absorb_down', c))
+            else:
+                actions.append(('compensate_down', f_node, c))
+        return actions
+
+    def _min_cover_at(f_node, ci_set):
+        """min(insert_all, go_above) at f_node, where ci_set are the excluded arms.
+        Returns (cost, plan)."""
+        insert_cost = node_insert_cost[f_node]
+        pred_cs = list(dag.predecessors(f_node))
+        if not pred_cs:
+            # graph input: cannot go further above — must terminate here
+            return insert_cost, _insert_plan_at(f_node, ci_set)
+
+        pred_c = pred_cs[0]  # FeatureNode has exactly one predecessor ComputeNode
+        go_cost = _comp(f_node, ci_set) + min_cover_above.get(pred_c, _NONFREE_COST)
+
+        if insert_cost <= go_cost:
+            return insert_cost, _insert_plan_at(f_node, ci_set)
+        plan = _compensate_plan_at(f_node, ci_set)
+        plan.extend(plan_above.get(pred_c, []))
+        return go_cost, plan
+
+    def _find_ci_toward_fi(G, f_i):
+        """Find the direct successor ComputeNode of G on the path toward f_i."""
+        # Walk up from f_i until we find a FeatureNode whose pred ComputeNode has G as a pred.
+        current_f = f_i
+        while current_f is not G:
+            pred_cs = list(dag.predecessors(current_f))
+            if not pred_cs:
+                return None
+            pred_c = pred_cs[0]
+            pred_fs = list(dag.predecessors(pred_c))
+            if G in pred_fs:
+                return pred_c  # direct succ of G toward f_i
+            if len(pred_fs) != 1:
+                return None  # multi-input node, cannot trace single path
+            current_f = pred_fs[0]
+        return None  # f_i is G itself (shouldn't happen)
+
+    min_cover_above: dict[object, int] = {}
+    plan_above: dict[object, list] = {}
+
+    for C in topo:
+        if not isinstance(C, ComputeNode):
+            continue
+
+        if C.layer_type in _ABSORBER_TYPES:
+            min_cover_above[C] = 0
+            plan_above[C] = [('absorb_up', C)]
+            continue
+
+        preds_f = list(dag.predecessors(C))
+
+        if len(preds_f) == 1:
+            # Single-input: straightforward
+            f_above = preds_f[0]
+            cost_C, plan_C = _min_cover_at(f_above, {C})
+            min_cover_above[C] = cost_C
+            plan_above[C] = plan_C
+        else:
+            # JOIN (add/cat/etc.): group preds by nearest_convergence_up
+            total = 0
+            plan_C: list = []
+            grouped: dict[int, dict] = {}  # id(G) -> {G, f_list, comp_sum, ci_set, comp_plan}
+
+            for f_i in preds_f:
+                pred_cs_fi = list(dag.predecessors(f_i))
+                if not pred_cs_fi:
+                    # f_i is graph input — must insert ms at f_i boundary
+                    total += node_insert_cost[f_i]
+                    plan_C.extend(_insert_plan_at(f_i, {C}))
+                    continue
+                c_i = pred_cs_fi[0]
+                if c_i.layer_type in _ABSORBER_TYPES:
+                    # absorber handles this arm for free
+                    plan_C.append(('absorb_up', c_i))
+                    continue
+
+                ncu = nearest_convergence_up.get(f_i)
+                if ncu is None:
+                    # Individual singleton: no convergence with siblings
+                    cost_i, plan_i = _min_cover_at(f_i, {C})
+                    total += cost_i
+                    plan_C.extend(plan_i)
+                else:
+                    gid = id(ncu)
+                    if gid not in grouped:
+                        grouped[gid] = {'G': ncu, 'f_list': [], 'comp_sum': 0, 'ci_set': set(), 'comp_plan': []}
+                    grouped[gid]['f_list'].append(f_i)
+                    if f_i is ncu:
+                        # f_i IS the convergence point — scale arrives at f_i via C
+                        # directly (identity arm of the join). Do not add comp_sum;
+                        # C goes straight into ci_set.
+                        grouped[gid]['ci_set'].add(C)
+                    else:
+                        # Each f_i contributes its own compensation cost (non-C succs)
+                        grouped[gid]['comp_sum'] += _comp(f_i, {C})
+                        grouped[gid]['comp_plan'].extend(_compensate_plan_at(f_i, {C}))
+
+            # Resolve ci_set for each convergence group
+            for gid, grp in grouped.items():
+                G = grp['G']
+                for f_i in grp['f_list']:
+                    if f_i is G:
+                        continue  # already added C to ci_set above
+                    ci = _find_ci_toward_fi(G, f_i)
+                    if ci is not None:
+                        grp['ci_set'].add(ci)
+
+            # Each group pays: sum(comp per fi) + min_cover_at(G, ci_set)
+            for grp in grouped.values():
+                G = grp['G']
+                ci_set = grp['ci_set']
+                cost_g, plan_g = _min_cover_at(G, ci_set)
+                total += grp['comp_sum'] + cost_g
+                plan_C.extend(grp['comp_plan'])
+                plan_C.extend(plan_g)
+
+            min_cover_above[C] = total
+            plan_above[C] = plan_C
+
+    # ------------------------------------------------------------------ #
+    # Assemble feat_info
+    # ------------------------------------------------------------------ #
+    feat_info: dict = {}
+    for node in dag.nodes:
+        if not isinstance(node, FeatureNode):
+            continue
+        feat_info[node] = {
+            'absorber_up': absorber_up[node],
+            'bottleneck_succs': bottleneck_succs[node],
+            'level_free_up': level_free_up[node],
+            'nearest_convergence_up': nearest_convergence_up[node],
+            'node_insert_cost': node_insert_cost[node],
+        }
+    return feat_info, min_cover_above, plan_above, node_insert_cost
+
+
+def _sum_level(dag: nx.DiGraph) -> int:
+    """Sum of backward FHE levels across all FeatureNodes (lower is better)."""
+    level, _ = _backward_level_dict(dag)
+    return sum(level.values())
+
+
+def absorb_scale_new(graph: LayerAbstractGraph):
+    """Propagate scale factors from avgpool/mult_coeff nodes into absorbable layers.
+
+    Trigger conditions (aligned with absorb_scale / set_feature_scales):
+      - mult_coeff   : always; scale = node.coeff
+      - avgpool1d/2d : only when is_adaptive_avgpool or is_big_size (fixed-size
+                       regular pooling keeps its scale handled elsewhere);
+                       scale = 1 / prod(kernel_shape)
+
+    For each trigger node both an UP probe and a DOWN probe are run on deep
+    copies of the current dag.  The probe whose resulting dag has the smaller
+    total level sum (_sum_level) is adopted.  Ties go to UP.
+    """
+    layers_to_absorb = ['avgpool1d', 'avgpool2d', 'mult_coeff']
+
+    # Use a while loop (not for-loop over list) so that after graph.dag is
+    # replaced by a probe copy, subsequent iterations always operate on the
+    # current graph's node objects.
+    processed_layer_ids: set[str] = set()
+    while True:
+        node = next(
+            (
+                n
+                for n in graph.dag.nodes
+                if isinstance(n, ComputeNode)
+                and n.layer_type in layers_to_absorb
+                and n.layer_id not in processed_layer_ids
+            ),
+            None,
+        )
+        if node is None:
+            break
+        processed_layer_ids.add(node.layer_id)
+
+        if node.layer_type in ('avgpool1d', 'avgpool2d'):
+            if not (node.is_adaptive_avgpool or node.is_big_size):
+                continue
+            scale = 1.0 / math.prod(node.kernel_shape)
+        else:
+            scale = node.coeff
+
+        pre_f_node = list(graph.dag.predecessors(node))[0]
+        out_f_node = next(graph.dag.successors(node))
+        preds_of_pre_f = list(graph.dag.predecessors(pre_f_node))
+
+        if not preds_of_pre_f:
+            # pre_f_node is a graph input — no upstream to explore, go DOWN directly
+            _propagate_scale(graph.dag, node, out_f_node, Direction.DOWN, scale)
+            continue
+
+        pre_c_node = preds_of_pre_f[0]
+
+        # --- UP probe ---
+        dag_up = copy.deepcopy(graph.dag)
+        pre_f_up = next(n for n in dag_up.nodes if isinstance(n, FeatureNode) and n.node_id == pre_f_node.node_id)
+        pre_c_up = next(n for n in dag_up.nodes if isinstance(n, ComputeNode) and n.layer_id == pre_c_node.layer_id)
+        _, arm_level_up = _backward_level_dict(dag_up)
+        _propagate_scale(dag_up, pre_f_up, pre_c_up, Direction.UP, scale, arm_level=arm_level_up)
+
+        # --- DOWN probe ---
+        dag_down = copy.deepcopy(graph.dag)
+        out_f_down = next(n for n in dag_down.nodes if isinstance(n, FeatureNode) and n.node_id == out_f_node.node_id)
+        node_down = next(n for n in dag_down.nodes if isinstance(n, ComputeNode) and n.layer_id == node.layer_id)
+        _propagate_scale(dag_down, node_down, out_f_down, Direction.DOWN, scale)
+
+        # Adopt the probe with lower total level cost; ties go to UP.
+        graph.dag = dag_up if _sum_level(dag_up) <= _sum_level(dag_down) else dag_down
+
+    for node in graph.dag.nodes:
+        if isinstance(node, ComputeNode):
+            if node.layer_type == 'mult_scalar':
+                print('layer=', node.layer_id, 'scale_up=', node.scale_up, node.scale_down)
+    _remove_identity_mult_scalars(graph)
+
+
+def _propagate_scale_pass2(
+    dag: nx.DiGraph,
+    start_feat: 'FeatureNode',
+    scale: float,
+    feat_info: dict,
+    min_cover_above: dict,
+    arm_level: dict,
+    source_node: 'ComputeNode | None' = None,
+):
+    """Pass 2: propagate *scale* upward from *start_feat* using Pass-1 info.
+
+    Decision at each FeatureNode F (arriving from downstream ComputeNode C_from):
+
+      absorber_up[F] is True
+        → continue upward; absorb into the first conv/fc/ms/polyact found.
+
+      absorber_up[F] is False
+        → compare arm cost of inserting ms here vs min_cover_above of pred:
+            arm_cost = FREE(1) if C_from ∉ bottleneck_succs[F] else NONFREE
+            above_cost = min_cover_above[pred_C_of_F]
+          if arm_cost <= above_cost → insert ms on (F → C_from), stop this arm.
+          else → continue upward.
+
+    Convergence (nearest_convergence_up):
+      When two sibling arms of a join (add/cat) share upstream FeatureNodes,
+      both carry nearest_convergence_up = G (the nearest shared node).
+      Processing is deferred until ALL convergent arms have arrived at G;
+      only then is G processed once, avoiding duplicate ms insertion.
+
+    Compensation:
+      When passing through a multi-input ComputeNode (add/cat) upward,
+      all other input arms receive a 1/scale DOWN compensation via
+      _propagate_scale (identical to existing behaviour).
+    """
+    _FREE_COST = 1
+    _NONFREE_COST = 10_000
+
+    graph_wrapper = LayerAbstractGraph()
+    graph_wrapper.dag = dag
+
+    def _insert_ms_up(f_node, c_node, s):
+        """Insert ms on (f_node → c_node); ms absorbs scale in UP direction."""
+        ms = add_mult_scalar_between_feature_and_layer(graph_wrapper, f_node, c_node)
+        ms.scale_down *= s
+        _, new_arm = _backward_level_dict(dag)
+        arm_level.clear()
+        arm_level.update(new_arm)
+
+    def _absorb_into_up(compute_node, s):
+        compute_node.scale_down *= s
+
+    convergence_pending: dict = {}
+    convergence_expected: dict = {}
+    convergence_c_froms: dict = {}
+    visited_convergence: set = set()
+
+    # work_stack items: (feat_node, c_from, scale)
+    work_stack: list = [(start_feat, None, scale)]
+
+    while work_stack:
+        feat_node, c_from, sc = work_stack.pop()
+
+        # ------------------------------------------------------------------ #
+        # Convergence deferral
+        # ------------------------------------------------------------------ #
+        ncu = feat_info.get(feat_node, {}).get('nearest_convergence_up')
+        if ncu is not None and id(ncu) not in visited_convergence:
+            pending = convergence_pending.setdefault(id(ncu), [])
+            pending.append((feat_node, c_from, sc))
+
+            if id(ncu) not in convergence_expected:
+                join_node = next(
+                    (s for s in dag.successors(feat_node) if isinstance(s, ComputeNode) and dag.in_degree(s) > 1),
+                    None,
+                )
+                if join_node is not None:
+                    count = sum(
+                        1
+                        for p in dag.predecessors(join_node)
+                        if isinstance(p, FeatureNode) and feat_info.get(p, {}).get('nearest_convergence_up') is ncu
+                    )
+                    convergence_expected[id(ncu)] = max(count, 1)
+                else:
+                    convergence_expected[id(ncu)] = 1
+
+            if len(pending) < convergence_expected[id(ncu)]:
+                continue  # wait for remaining sibling arms
+
+            # All sibling arms arrived — compute convergent c_froms
+            visited_convergence.add(id(ncu))
+            c_froms_set: set = set()
+            for arm_feat, _arm_c_from, _arm_sc in pending:
+                if arm_feat is ncu:
+                    # arm_feat IS the convergence point — scale arrived via the
+                    # original c_from (the join itself), not via any pred path.
+                    if _arm_c_from is not None:
+                        c_froms_set.add(_arm_c_from)
+                    continue
+                for c in dag.predecessors(arm_feat):
+                    if ncu in dag.predecessors(c):
+                        c_froms_set.add(c)
+                        break
+            convergence_c_froms[id(ncu)] = c_froms_set
+            work_stack.append((ncu, None, sc))
+            continue
+
+        # ------------------------------------------------------------------ #
+        # Dead-end: graph input
+        # ------------------------------------------------------------------ #
+        preds_of_feat = list(dag.predecessors(feat_node))
+        if not preds_of_feat:
+            if c_from is not None:
+                _insert_ms_up(feat_node, c_from, sc)
+            continue
+
+        # ------------------------------------------------------------------ #
+        # Decision: insert ms here or continue upward
+        # New formula: arm_cost(F, c_from) <= min_cover_above[pred_C_of_F]
+        # ------------------------------------------------------------------ #
+        absorber_up_f = feat_info.get(feat_node, {}).get('absorber_up', False)
+        bsuccs = feat_info.get(feat_node, {}).get('bottleneck_succs', frozenset())
+
+        arm_cost = _FREE_COST if (c_from is not None and c_from not in bsuccs) else _NONFREE_COST
+
+        # Determine the predecessor ComputeNode(s) of feat_node (those feeding it from above)
+        pred_c_of_feat = preds_of_feat[0]  # FeatureNode has exactly one predecessor ComputeNode
+        above_cost = min_cover_above.get(pred_c_of_feat, _NONFREE_COST)
+
+        insert_here = not absorber_up_f and c_from is not None and arm_cost <= above_cost
+
+        if insert_here:
+            _insert_ms_up(feat_node, c_from, sc)
+            continue
+
+        # Continue upward: compensate all non-excluded output arms
+        if c_from is not None:
+            excluded = {c_from}
+        else:
+            excluded = set(convergence_c_froms.get(id(feat_node), set()))
+        # At start_feat the scale originated from source_node; don't compensate
+        # through it (the caller turns the source into identity afterwards).
+        if feat_node is start_feat and source_node is not None:
+            excluded.add(source_node)
+        for c_other in list(dag.successors(feat_node)):
+            if c_other in excluded:
+                continue
+            _propagate_scale(
+                dag,
+                feat_node,
+                c_other,
+                Direction.DOWN,
+                1.0 / sc,
+                arm_level=arm_level,
+            )
+
+        # Continue upward through each predecessor ComputeNode
+        for c_up in preds_of_feat:
+            if c_up.layer_type in _ABSORBER_TYPES:
+                _absorb_into_up(c_up, sc)
+                continue
+            for f_above in dag.predecessors(c_up):
+                work_stack.append((f_above, c_up, sc))
+
+
+def absorb_scale_new_dp(graph: LayerAbstractGraph):
+    """Two-pass scale absorption using Pass-1 static analysis + Pass-2 DP.
+
+    Pass 1 (graph_static_analysis): read-only topological scan.
+    Pass 2 (_propagate_scale_pass2): for each scale source, uses Pass-1 info
+      to pick the globally cheapest insertion point (min_ms_up), then directly
+      modifies the dag (inserts mult_scalar or absorbs into existing layers).
+
+    Trigger conditions identical to absorb_scale_new:
+      - mult_coeff   : always
+      - avgpool1d/2d : only when is_adaptive_avgpool or is_big_size
+    """
+    layers_to_absorb = ['avgpool1d', 'avgpool2d', 'mult_coeff']
+
+    processed_layer_ids: set[str] = set()
+    while True:
+        feat_info, min_cover_above, plan_above, node_insert_cost = graph_static_analysis(graph.dag)
+        _, arm_level = _backward_level_dict(graph.dag)
+
+        node = next(
+            (
+                n
+                for n in graph.dag.nodes
+                if isinstance(n, ComputeNode)
+                and n.layer_type in layers_to_absorb
+                and n.layer_id not in processed_layer_ids
+            ),
+            None,
+        )
+        if node is None:
+            break
+        processed_layer_ids.add(node.layer_id)
+
+        if node.layer_type in ('avgpool1d', 'avgpool2d'):
+            if not (node.is_adaptive_avgpool or node.is_big_size):
+                continue
+            scale = 1.0 / math.prod(node.kernel_shape)
+        else:
+            scale = node.coeff
+
+        pre_f_node = list(graph.dag.predecessors(node))[0]
+        out_f_node = next(graph.dag.successors(node))
+        preds_of_pre_f = list(graph.dag.predecessors(pre_f_node))
+
+        if not preds_of_pre_f:
+            # Graph-input: no upstream, propagate DOWN
+            _propagate_scale(graph.dag, node, out_f_node, Direction.DOWN, scale, arm_level=arm_level)
+            continue
+
+        # Build the source plan (Pass-1 driven): at pre_f_node we go UP unconditionally,
+        # excluding the source from compensation. Then append plan_above of the pred
+        # ComputeNode of pre_f_node. mc additionally clears its coeff after execution.
+        src_plan = []
+        for c in graph.dag.successors(pre_f_node):
+            if c is node:
+                continue
+            if c.layer_type in _DOWN_ABSORBER_TYPES:
+                src_plan.append(('absorb_down', c))
+            else:
+                src_plan.append(('compensate_down', pre_f_node, c))
+        src_plan.extend(plan_above.get(preds_of_pre_f[0], []))
+        if node.layer_type == 'mult_coeff':
+            src_plan.append(('clear_source_mc', node))
+
+        _NONFREE = 10_000
+
+        def _fmt_cost(v):
+            return 'NONFREE' if v >= _NONFREE else str(v)
+
+        print(f'\n=== Pass-1 metrics for source {node.layer_id} (scale={scale}) ===')
+        print('  node_insert_cost (per FeatureNode, topological):')
+        for n in nx.topological_sort(graph.dag):
+            if isinstance(n, FeatureNode):
+                ident = getattr(n, 'node_id', repr(n))
+                print(f'    {ident:55s}  {_fmt_cost(node_insert_cost[n])}')
+        print('  min_cover_above (per ComputeNode, topological):')
+        for n in nx.topological_sort(graph.dag):
+            if isinstance(n, ComputeNode):
+                ident = getattr(n, 'layer_id', repr(n))
+                v = min_cover_above.get(n, None)
+                print(f'    {ident:55s}  {("-" if v is None else _fmt_cost(v))}')
+
+        print(f'\n=== Pass-1 plan for source {node.layer_id} (scale={scale}) ===')
+        for i, action in enumerate(src_plan, 1):
+            kind = action[0]
+            tail = ', '.join(getattr(a, 'layer_id', getattr(a, 'node_id', repr(a))) for a in action[1:])
+            print(f'  {i:2d}. {kind:18s}  {tail}')
+        print()
+
+        # For mult_coeff the source layer is destructively absorbed: its scale
+        # is lifted upstream and the source becomes an identity mc afterwards.
+        # Tell Pass 2 to skip DOWN compensation through the source so it does
+        # not insert a redundant ms behind it (avgpool keeps its averaging and
+        # still needs the DOWN compensation, so it doesn't pass source_node).
+        if node.layer_type == 'mult_coeff':
+            _propagate_scale_pass2(
+                graph.dag, pre_f_node, scale, feat_info, min_cover_above, arm_level, source_node=node
+            )
+            node.coeff = 1.0
+        else:
+            _propagate_scale_pass2(graph.dag, pre_f_node, scale, feat_info, min_cover_above, arm_level)
+
+    for node in graph.dag.nodes:
+        if isinstance(node, ComputeNode) and node.layer_type == 'mult_scalar':
+            print('layer=', node.layer_id, 'scale_up=', node.scale_up, node.scale_down)
     _remove_identity_mult_scalars(graph)
 
 
@@ -873,7 +1601,7 @@ def _remove_identity_mult_scalars(graph: LayerAbstractGraph):
             continue
         if node.layer_type != 'mult_scalar':
             continue
-        if node.scale != 1.0:
+        if node.scale_down * node.scale_up != 1.0 or node.poly_path:
             continue
         if node not in graph.dag.nodes:
             continue
@@ -915,8 +1643,8 @@ def miniprocess(graph: LayerAbstractGraph, p: ComputeNode, res_list: list, polya
             miniprocess(graph, c_value, res_list, polyact_id)
 
 
-def _absorb_at_loop(dag: nx.DiGraph, cur_node, next_node, scale: float, absorbed: dict):
-    """Called when next_node is already on the call stack (loop detected).
+def _absorb_at_loop(dag: nx.DiGraph, cur_node, next_node, scale: float, direction: Direction, arm_level: dict = None):
+    """Called when next_node is already on the active set (loop detected).
     Inserts a mult_scalar between cur_node and next_node to absorb the scale in place.
     """
     if isinstance(next_node, ComputeNode):
@@ -926,18 +1654,116 @@ def _absorb_at_loop(dag: nx.DiGraph, cur_node, next_node, scale: float, absorbed
     graph_wrapper = LayerAbstractGraph()
     graph_wrapper.dag = dag
     mult_scalar = add_mult_scalar_between_feature_and_layer(graph_wrapper, feature_node, compute_node)
-    absorbed[mult_scalar] = absorbed.get(mult_scalar, 1.0) * scale
-    mult_scalar.scale *= scale
-
-
-def _call_or_absorb(dag, cur_node, next_node, direction, scale, absorbed, stack):
-    """Check next_node against the call stack before recursing.
-    If next_node is already on the stack, a loop would form — absorb instead.
-    """
-    if id(next_node) in stack:
-        _absorb_at_loop(dag, cur_node, next_node, scale, absorbed)
+    if direction == Direction.UP:
+        mult_scalar.scale_down *= scale
     else:
-        _propagate_scale(dag, cur_node, next_node, direction, scale, absorbed, stack)
+        mult_scalar.scale_up *= scale
+    if arm_level is not None:
+        _, new_arm = _backward_level_dict(dag)
+        arm_level.clear()
+        arm_level.update(new_arm)
+
+
+def _can_absorb_up(dag: nx.DiGraph, node, visited: set = None) -> bool:
+    """Read-only probe: from *node* upward, can every path find an absorber?
+
+    An absorber is a ComputeNode whose layer_type is one of conv2d / fc0 / fc1 /
+    mult_scalar / polyact.  Graph-input FeatureNodes (no predecessors) are
+    dead-ends and cause the function to return False.
+
+    Cycles are handled conservatively: a revisited node is assumed absorbable
+    (True) so that the loop-detection path in _propagate_scale handles it.
+    """
+    visited = set()
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if id(cur) in visited:
+            continue  # cycle — assume absorbable
+        visited.add(id(cur))
+        if isinstance(cur, ComputeNode):
+            if cur.layer_type in {'conv2d', 'fc0', 'fc1', 'mult_scalar', 'polyact'}:
+                continue  # absorber found on this path
+            preds = list(dag.predecessors(cur))
+            stack.extend(preds)
+        else:  # FeatureNode
+            preds = list(dag.predecessors(cur))
+            if not preds:
+                return False  # graph input dead-end — no absorber on this path
+            stack.extend(preds)
+    return True
+
+
+def _can_absorb_down(dag: nx.DiGraph, node, visited: set = None) -> bool:
+    """Read-only probe: from *node* downward, can every path find an absorber?
+
+    An absorber is a ComputeNode whose layer_type is one of conv2d / fc0 / fc1 /
+    mult_scalar / polyact.  Graph-output FeatureNodes (no successors) are
+    dead-ends and cause the function to return False.
+
+    Cycles are handled conservatively: a revisited node is assumed absorbable
+    (True) so that the loop-detection path in _propagate_scale handles it.
+    """
+    visited = set()
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if id(cur) in visited:
+            continue  # cycle — assume absorbable
+        visited.add(id(cur))
+        if isinstance(cur, ComputeNode):
+            if cur.layer_type in {'conv2d', 'fc0', 'fc1', 'mult_scalar'}:
+                continue  # absorber found on this path
+            succs = list(dag.successors(cur))
+            stack.extend(succs)
+        else:  # FeatureNode
+            succs = list(dag.successors(cur))
+            if not succs:
+                return False  # graph output dead-end — no absorber on this path
+            stack.extend(succs)
+    return True
+
+
+def _propagate_scale_at_multi_input_no_absorber(dag, old_node, node, scale, arm_level):
+    """Handle scale propagation when arriving DOWN at a multi-input ComputeNode
+    (e.g. add) whose downstream path has no absorber.
+
+    Strategy:
+      1. Trial-insert ms on old_node → node (the arm we came from).
+      2. Measure change in sum(level):
+         - sum+1: ms is "free" (old_node arm was not the bottleneck) — keep it.
+         - sum+more: ms raises add's level and propagates downstream — undo
+    """
+    graph_wrapper = LayerAbstractGraph()
+    graph_wrapper.dag = dag
+    flag = False
+    sum_before = _sum_level(dag)
+
+    # Trial: insert ms on old_node → node
+    ms_trial = add_mult_scalar_between_feature_and_layer(graph_wrapper, old_node, node)
+    ms_trial_out = next(dag.successors(ms_trial))
+
+    sum_after = _sum_level(dag)
+
+    if sum_after - sum_before <= 1:
+        # old_node arm was not the bottleneck — ms here is free, keep it
+        ms_trial.scale_up *= scale
+        flag = True
+    else:
+        # ms raises add's level — undo trial and insert ms after add's output instead
+        original_edge_data = dict(dag.edges[ms_trial_out, node])
+        dag.remove_node(ms_trial_out)
+        dag.remove_node(ms_trial)
+        dag.add_edge(old_node, node, **original_edge_data)
+
+        # ms_final = add_mult_scalar_behind_node(graph_wrapper, node)
+        # ms_final.scale_up *= scale
+
+    if arm_level is not None:
+        _, new_arm = _backward_level_dict(dag)
+        arm_level.clear()
+        arm_level.update(new_arm)
+    return flag
 
 
 def _propagate_scale(
@@ -946,10 +1772,9 @@ def _propagate_scale(
     node,
     direction: Direction,
     scale: float,
-    absorbed: dict,
-    stack: set = None,
+    arm_level: dict = None,
 ):
-    """Recursively propagate a scale factor through the DAG.
+    """Iteratively propagate a scale factor through the DAG.
 
     Args:
         dag: the computation graph
@@ -957,88 +1782,247 @@ def _propagate_scale(
         node: the current node being visited
         direction: Direction.DOWN means we arrived from above, Direction.UP from below
         scale: the scale factor to propagate
-        absorbed: mapping of ComputeNode -> scale, records where scale was absorbed
-        stack: set of id(node) currently on the call stack, used to detect loops
+        arm_level: (FeatureNode, ComputeNode) → int level contribution table;
+                   updated in-place whenever the graph is modified.
+
+    Loop detection uses an explicit active set instead of the call stack.
+    Each work item is (old_node, node, direction, scale).  A sentinel tuple
+    (None, node, None, None) is pushed immediately after a node is activated
+    so that active.discard(id(node)) fires when all work spawned by that node
+    has been processed (LIFO order mirrors the original recursion).
     """
-    if stack is None:
-        stack = set()
-    stack.add(id(node))
-    # try/finally ensures stack.discard is always executed regardless of how the
-    # function returns (early return or exception), keeping push/pop strictly paired.
-    try:
+    _SENTINEL = None  # direction=None      → pop event: active.discard(node)
+    _DEFERRED_UP = object()  # direction=_DEFERRED_UP   → deferred pred lookup (ComputeNode UP)
+    _DEFERRED_DOWN = object()  # direction=_DEFERRED_DOWN → deferred succ lookup (FeatureNode DOWN)
+
+    active: set = set()
+    # work_stack entry types:
+    #   (old_node,    node,    direction,      scale)  — normal work item
+    #   (None,        node,    None,           None)   — sentinel: deactivate node
+    #   (c_node,      arm_idx, _DEFERRED_UP,   scale)  — deferred: re-query pred via input_index
+    #   (f_node,      arm_idx, _DEFERRED_DOWN, scale)  — deferred: re-query succ via output_index
+    work_stack: list = [(old_node, node, direction, scale)]
+
+    while work_stack:
+        item = work_stack.pop()
+        old_node, node, direction, scale = item
+
+        # --- sentinel: deactivate node ---
+        if direction is None:
+            active.discard(id(node))
+            continue
+
+        # --- deferred pred lookup (ComputeNode UP, multi-arm) ---
+        # old_node = compute_node, node = arm_idx (int), scale = scale value
+        if direction is _DEFERRED_UP:
+            compute_node = old_node
+            arm_idx = node
+            current_pred = next(
+                (p for p in dag.predecessors(compute_node) if dag.edges[p, compute_node].get('input_index') == arm_idx),
+                None,
+            )
+            if current_pred is not None:
+                work_stack.append((compute_node, current_pred, Direction.UP, scale))
+            continue
+
+        # --- deferred succ lookup (FeatureNode DOWN, multi-arm) ---
+        # old_node = feat_node, node = arm_idx (int), scale = scale value
+        if direction is _DEFERRED_DOWN:
+            feat_node = old_node
+            arm_idx = node
+            current_succ = next(
+                (s for s in dag.successors(feat_node) if dag.edges[feat_node, s].get('output_index') == arm_idx),
+                None,
+            )
+            if current_succ is not None:
+                work_stack.append((feat_node, current_succ, Direction.DOWN, scale))
+            continue
+
+        # --- loop detection (replaces _call_or_absorb guard) ---
+        if id(node) in active:
+            _absorb_at_loop(dag, old_node, node, scale, direction, arm_level)
+            continue
+
+        active.add(id(node))
+        # Sentinel is pushed below, at the point where all child work items
+        # for this node have been determined.  For most paths the sentinel is
+        # pushed immediately (so it pops after all children).  For the
+        # FeatureNode-UP path it is pushed *before* the sibling compensation
+        # items so that active.discard fires only after compensation is done.
+
+        # ------------------------------------------------------------------ #
+        # FeatureNode
+        # ------------------------------------------------------------------ #
         if isinstance(node, FeatureNode):
             if direction == Direction.DOWN:
-                # Arrived from above — fan out downward to all successors
-                for node_in in list(dag.successors(node)):
-                    _call_or_absorb(dag, node, node_in, Direction.DOWN, scale, absorbed, stack)
-            else:
-                # Arrived from below — propagate upward (in-degree must be 1) and
-                # fan out to all sibling successors with 1/scale to compensate
+                succs = list(dag.successors(node))
+                if not succs:
+                    # Graph output dead-end
+                    if isinstance(old_node, ComputeNode):
+                        graph_wrapper = LayerAbstractGraph()
+                        graph_wrapper.dag = dag
+                        ms_node = add_mult_scalar_behind_node(graph_wrapper, old_node)
+                        ms_node.scale_up *= scale
+                    work_stack.append((_SENTINEL, node, None, None))
+                    continue
+
+                if len(succs) > 1:
+                    # Multi-arm fan-out identified by output_index.
+                    # Push in reverse order so lowest index is processed first.
+                    arm_indices = sorted({dag.edges[node, s]['output_index'] for s in succs}, reverse=True)
+                    seen_arms: set = set()
+                    work_stack.append((_SENTINEL, node, None, None))
+                    for idx in arm_indices:
+                        if idx in seen_arms:
+                            continue
+                        seen_arms.add(idx)
+                        # Deferred: re-query succ at pop time so arm N+1 sees
+                        # graph mutations made by arm N (e.g. ms inserted on edge).
+                        work_stack.append((node, idx, _DEFERRED_DOWN, scale))
+                else:
+                    work_stack.append((_SENTINEL, node, None, None))
+                    work_stack.append((node, succs[0], Direction.DOWN, scale))
+
+            else:  # Direction.UP — f_node，向上方向
                 preds = list(dag.predecessors(node))
                 if not preds:
-                    # Graph input node — insert mult_scalar between node and old_node as absorption point
+                    # Graph input dead-end
                     if isinstance(old_node, ComputeNode):
                         graph_wrapper = LayerAbstractGraph()
                         graph_wrapper.dag = dag
                         mult_scalar = add_mult_scalar_between_feature_and_layer(graph_wrapper, node, old_node)
-                        absorbed[mult_scalar] = absorbed.get(mult_scalar, 1.0) * scale
-                        mult_scalar.scale *= scale
-                    return
+                        mult_scalar.scale_down *= scale
+                        if arm_level is not None:
+                            _, new_arm = _backward_level_dict(dag)
+                            arm_level.clear()
+                            arm_level.update(new_arm)
+                    work_stack.append((_SENTINEL, node, None, None))
+                    continue
+
+                # Fork detection: if this FeatureNode fans out to multiple
+                # successors (out_degree > 1), decide whether to insert a
+                # mult_scalar on the current edge (node → old_node) or
+                # continue propagating upward.
+                #
+                # Decision rule (arm-level lookup):
+                #   current   = arm_level[(node, old_node)]
+                #   other_max = max arm_level[(node, c)] for all other arms
+                #
+                # If current < other_max: old_node arm is not the bottleneck
+                # → insert ms here (free), stop.
+                # Otherwise: continue upward; real absorber is better.
+                if (
+                    dag.out_degree(node) > 1
+                    and isinstance(old_node, ComputeNode)
+                    and arm_level is not None
+                    and not _can_absorb_up(dag, node)
+                ):
+                    current = arm_level.get((node, old_node), 0)
+                    other_max = max(
+                        (arm_level.get((node, c), 0) for c in dag.successors(node) if c is not old_node),
+                        default=0,
+                    )
+                    if current < other_max:
+                        graph_wrapper = LayerAbstractGraph()
+                        graph_wrapper.dag = dag
+                        mult_scalar = add_mult_scalar_between_feature_and_layer(graph_wrapper, node, old_node)
+                        mult_scalar.scale_up *= scale
+                        _, new_arm = _backward_level_dict(dag)
+                        arm_level.clear()
+                        arm_level.update(new_arm)
+                        work_stack.append((_SENTINEL, node, None, None))
+                        continue
+
                 succs = list(dag.successors(node))
-                _call_or_absorb(dag, node, preds[0], Direction.UP, scale, absorbed, stack)
+                # For FeatureNode UP: sentinel must be pushed BEFORE the
+                # sibling compensation items so that active.discard(node)
+                # fires only after ALL compensation work is done (LIFO order:
+                # sentinel pops last, UP item pops first).
+                work_stack.append((_SENTINEL, node, None, None))
+                # Push sibling compensation items (processed after UP subtree)
                 for node_in in succs:
                     if node_in is old_node:
                         continue
-                    _call_or_absorb(dag, node, node_in, Direction.DOWN, 1.0 / scale, absorbed, stack)
+                    work_stack.append((node, node_in, Direction.DOWN, 1.0 / scale))
+                # Push main upward item last (processed next, i.e. first)
+                work_stack.append((node, preds[0], Direction.UP, scale))
+
+        # ------------------------------------------------------------------ #
+        # ComputeNode
+        # ------------------------------------------------------------------ #
         else:
-            # ComputeNode
-            if node.layer_type in config.absorbable_layers:
-                # This node can absorb the scale — record and stop
-                absorbed[node] = absorbed.get(node, 1.0) * scale
-                node.scale = node.scale * scale
-                return
+            # conv2d/fc/mult_scalar: absorbable in any direction
+            if node.layer_type in {'conv2d', 'fc0', 'fc1', 'mult_scalar'}:
+                if direction == Direction.UP:
+                    node.scale_down = node.scale_down * scale
+                else:
+                    node.scale_up = node.scale_up * scale
+                work_stack.append((_SENTINEL, node, None, None))
+                continue
+
+            # polyact: direction-dependent
+            #   UP   → absorb into polynomial coefficients
+            #   DOWN → f(s·x) ≠ s·f(x), treat as barrier
+            if node.layer_type == 'polyact':
+                if direction == Direction.UP:
+                    node.scale_down = node.scale_down * scale
+                else:
+                    if isinstance(old_node, FeatureNode):
+                        graph_wrapper = LayerAbstractGraph()
+                        graph_wrapper.dag = dag
+                        mult_scalar = add_mult_scalar_between_feature_and_layer(graph_wrapper, old_node, node)
+                        mult_scalar.scale_up *= scale
+                        if arm_level is not None:
+                            _, new_arm = _backward_level_dict(dag)
+                            arm_level.clear()
+                            arm_level.update(new_arm)
+                work_stack.append((_SENTINEL, node, None, None))
+                continue
+
             if direction == Direction.DOWN:
                 # Arrived from above — propagate downward (single successor) and
-                # propagate to sibling predecessors with 1/scale
+                # send 1/scale compensation to all sibling predecessors
                 preds = list(dag.predecessors(node))
                 succs = list(dag.successors(node))
-                _call_or_absorb(dag, node, succs[0], Direction.DOWN, scale, absorbed, stack)
+                if len(preds) > 1 and not _can_absorb_down(dag, node):
+                    Flag = _propagate_scale_at_multi_input_no_absorber(dag, old_node, node, scale, arm_level)
+                    print('flag=', Flag)
+                    if Flag:
+                        work_stack.append((_SENTINEL, node, None, None))
+                        continue
+                work_stack.append((_SENTINEL, node, None, None))
+                # Push sibling compensation items first (processed later)
                 for node_in in preds:
                     if node_in is old_node:
                         continue
-                    _call_or_absorb(dag, node, node_in, Direction.UP, 1.0 / scale, absorbed, stack)
-            else:
+                    work_stack.append((node, node_in, Direction.UP, 1.0 / scale))
+                # Push main downward item last (processed next)
+                work_stack.append((node, succs[0], Direction.DOWN, scale))
+
+            else:  # Direction.UP — compute，向上传
                 # Arrived from below — fan upward to all predecessors.
-                #
-                # Each input arm is identified by the input_index edge attribute,
-                # which is preserved across insertions by _insert_layer_between_feature_and_compute.
-                # We explore each arm exactly once:
-                #   - Before each arm we look up the *current* predecessor that carries
-                #     that arm's input_index (it may have changed to an M_out node if a
-                #     previous arm's exploration inserted a mult_scalar via _absorb_at_loop).
-                #   - Once an arm is marked done, it is never re-entered even if a new
-                #     node was inserted into it during that arm's own exploration (barrier
-                #     or non-loop insertion case).
+                # Arms must be explored strictly in order (like recursion): arm N+1
+                # starts only after arm N's full subtree is done, so that arm N+1's
+                # re-query of the current predecessor reflects graph mutations from arm N.
+                # Use _DEFERRED items: each item re-queries its predecessor at pop time.
                 preds = list(dag.predecessors(node))
+                work_stack.append((_SENTINEL, node, None, None))
                 if len(preds) > 1:
-                    arm_indices = sorted({dag.edges[p, node].get('input_index') for p in preds})
-                    explored_arms = set()
+                    arm_indices = sorted(
+                        {dag.edges[p, node].get('input_index') for p in preds},
+                        reverse=True,  # reverse so lowest index pops first (LIFO)
+                    )
+                    seen_arms: set = set()
                     for idx in arm_indices:
-                        if idx in explored_arms:
+                        if idx in seen_arms:
                             continue
-                        explored_arms.add(idx)
-                        current_pred = next(
-                            (p for p in dag.predecessors(node) if dag.edges[p, node].get('input_index') == idx),
-                            None,
-                        )
-                        if current_pred is None:
-                            continue
-                        _call_or_absorb(dag, node, current_pred, Direction.UP, scale, absorbed, stack)
+                        seen_arms.add(idx)
+                        # Push a deferred item: predecessor re-queried at pop time,
+                        # after all earlier arms have finished modifying the graph.
+                        work_stack.append((node, idx, _DEFERRED_UP, scale))
                 else:
                     for node_in in preds:
-                        _call_or_absorb(dag, node, node_in, Direction.UP, scale, absorbed, stack)
-    finally:
-        stack.discard(id(node))
+                        work_stack.append((node, node_in, Direction.UP, scale))
 
 
 def propagate_scale_from_node(
@@ -1046,21 +2030,9 @@ def propagate_scale_from_node(
     start_node,
     scale: float,
     direction: Direction = Direction.DOWN,
-) -> dict:
-    """Propagate a scale factor starting from *start_node*.
-
-    Args:
-        dag: the computation graph
-        start_node: the node to start propagation from
-        scale: the scale factor to propagate
-        direction: initial direction of propagation
-
-    Returns:
-        absorbed: dict mapping ComputeNode -> accumulated scale absorbed there
-    """
-    absorbed: dict = {}
-    _propagate_scale(dag, None, start_node, direction, scale, absorbed)
-    return absorbed
+):
+    """Propagate a scale factor starting from *start_node*."""
+    _propagate_scale(dag, None, start_node, direction, scale)
 
 
 def process_polyact(graph: LayerAbstractGraph) -> list:

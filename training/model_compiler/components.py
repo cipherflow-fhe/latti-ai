@@ -809,6 +809,13 @@ class LayerAbstractGraph:
                 graph_info.dag.add_edge(f_node, compute_node, input_index=idx if len(feature_input) > 1 else None)
             graph_info.dag.add_edges_from([(compute_node, node) for node in feature_output])
 
+        for node in graph_info.dag.nodes:
+            if isinstance(node, FeatureNode):
+                succs = list(graph_info.dag.successors(node))
+                if len(succs) > 1:
+                    for idx, succ in enumerate(succs):
+                        graph_info.dag.edges[node, succ]['output_index'] = idx
+
         if is_fpga:
             pack_dict = dict()
             level_init_list = dict()

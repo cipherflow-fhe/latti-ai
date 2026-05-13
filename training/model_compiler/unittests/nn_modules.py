@@ -293,7 +293,7 @@ class ConvResidualMultcoeff(nn.Module):
 
     def forward(self, x):
         x = self.bn(x)
-        return (self.bn(x) + x) * 0.5
+        return (self.conv(x) + x) * 0.5
 
 
 class DoubleResidualMultcoeff(nn.Module):
@@ -312,8 +312,8 @@ class DoubleResidualMultcoeff(nn.Module):
 
     def forward(self, x):
         x = self.bn(x)
-        y = self.bn1(self.conv1(x)) + x  # 第一个残差 add
-        z = self.bn2(self.conv2(y)) + y  # 第二个残差 add
+        y = (self.conv1(x)) + self.conv2(x)  # 第一个残差 add
+        z = (self.conv2(y)) + y  # 第二个残差 add
         return z * 0.5
 
 
@@ -353,7 +353,7 @@ class ThreeBranchMultcoeff(nn.Module):
 
     def forward(self, x):
         x = self.bn(x)
-        return (self.bn_a(self.conv_a(x)) + self.bn_b(self.conv_b(x)) + x) * 0.5
+        return (self.bn_a(self.conv_a(x)) + self.bn_b(self.bn(x)) + x) * 0.5
 
 
 class DeepNestedMultcoeff(nn.Module):
@@ -373,12 +373,56 @@ class DeepNestedMultcoeff(nn.Module):
         self.bn3 = nn.BatchNorm2d(32)
 
     def forward(self, x):
-        x = self.bn(x)
+        x = self.conv1(x)
         x1 = self.bn1(self.conv1(x)) + x
         x2 = self.bn2(self.conv2(x1)) + x1
         x3 = self.bn3(self.conv3(x2)) + x2
         return x3 * 0.5
 
+
+class MultCoeffThenResidual(nn.Module):
+    """input → mc (×0.5) → mc_out → add(mc_out, conv(mc_out))
+    add 后面是 graph output，无下游吸收点。
+    测试 DOWN 方向到多输入 add、且 add 后无吸收点时的 ms 插入策略。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn = nn.BatchNorm2d(32)
+
+    def forward(self, x):
+        mc_out = x * 0.5
+        out1 = mc_out + self.bn(mc_out)
+        out2 = self.conv(out1)
+        return out2
+
+
+class NewModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        n_cat = 64
+        self.conv = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)  # 内 cat 的 conv 臂
+        self.conv1 = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.conv1_1 = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn = nn.BatchNorm2d(32)
+        self.bn0 = nn.BatchNorm2d(32)
+        # 内 cat 后 channel = 32 + 32 = 64，下游层按 64 设
+        self.conv2 = nn.Conv2d(n_cat, 32, kernel_size=3, padding=1, bias=False)  # 外 cat 的 conv 臂
+        self.bn1 = nn.BatchNorm2d(n_cat)  # 外 cat 的 bn 臂
+        self.bn2 = nn.BatchNorm2d(n_cat)
+
+    def forward(self, x):
+        # mc_out = x * 0.5
+        x = self.bn(x)
+        out1 = torch.cat([self.bn(x), self.conv1(x)], dim=1)  # 32 + 32 = 64
+        # 外层 cat：conv2(64→32) + bn1(64) + identity(64) = 32 + 64 + 64 = 160
+        out2 = torch.cat([self.conv2(out1), self.bn1(out1), self.bn2(out1)], dim=1)
+        out = out2 * 0.5
+        return out
+
+
+class ThreeConvConcatRelu(nn.Module):
     """cat([conv1, conv2, conv3], dim=1) → relu."""
 
     def __init__(self):
