@@ -173,3 +173,15 @@ FeatureMatEncrypted BlockColMajorCPMM::run(CkksContext& ctx, const FeatureMatEnc
     result.matmul_block_size = d_;
     return result;
 }
+
+Array<double, 2> BlockColMajorCPMM::run_plaintext(const Array<double, 2>& A) const {
+    Array<double, 2> C({m_, p_});
+    for (uint32_t i = 0; i < m_; i++)
+        for (uint32_t j = 0; j < p_; j++) {
+            double s = 0;
+            for (uint32_t k = 0; k < n_; k++)
+                s += A.get(i, k) * B_mat_.get(k, j);
+            C.set(i, j, s);
+        }
+    return C;
+}

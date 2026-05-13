@@ -32,6 +32,7 @@ public:
     void precompute_diagonals();
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A, const FeatureMatEncrypted& B);
+    Array<double, 2> run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const;
 
     // Generate precomputed diagonal plaintexts on demand (used by encode_pt executor).
     // Equivalent to the corresponding precompute_diagonals() entries but returns by value.

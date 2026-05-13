@@ -34,6 +34,7 @@ public:
     ls::CkksPlaintextRingt generate_transpose_diag_pt(ls::CkksContext& ctx, uint32_t k_idx) const;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& input);
+    Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
 
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& cts);
