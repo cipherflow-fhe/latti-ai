@@ -637,9 +637,9 @@ def set_level_costs(graph: LayerAbstractGraph):
             has_uneven = any(p.channel % graph.dag.nodes[p]['pack_num'] != 0 for p in preds)
             graph.dag.nodes[compute_node]['level_cost'] = 1 if has_uneven else 0
         elif compute_node.layer_type == 'qkvcpmm':
-            graph.dag.nodes[compute_node]['level_cost'] = 1
+            graph.dag.nodes[compute_node]['level_cost'] = 2
         elif compute_node.layer_type == 'transpose':
-            graph.dag.nodes[compute_node]['level_cost'] = 0
+            graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type == 'ccmm':
             graph.dag.nodes[compute_node]['level_cost'] = 1
         else:

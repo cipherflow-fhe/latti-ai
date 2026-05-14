@@ -285,6 +285,8 @@ class GlobalConfig:
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
             cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'polyact']
             cls._instance.single_thread = config_dict.get('SINGLE_THREAD', False)
+            cls._instance.n_heads = config_dict.get('N_HEADS', 1)
+            cls._instance.matmul_block_size = config_dict.get('MATMUL_BLOCK_SIZE', 8)
 
         return cls._instance
 

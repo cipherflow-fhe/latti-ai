@@ -154,6 +154,8 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
         'block_shape': config.block_shape,
         'is_absorb_polyrelu': False,
         'pack_style': config.style,
+        'n_heads': config.n_heads,
+        'matmul_block_size': config.matmul_block_size,
         'task_input_id': [str(n.node_id) for n in input_roots],
         'task_output_id': [str(n.node_id) for n in output_roots],
         'task_input_param': {str(n.node_id): param_dict[n.node_id] for n in input_roots},
