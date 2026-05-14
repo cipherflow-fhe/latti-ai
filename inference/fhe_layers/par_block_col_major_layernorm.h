@@ -25,6 +25,10 @@
 // Full-dimension normalization: N = n_heads * cols_per_head
 // Levels consumed: 4 (L -> L-4)
 //   Extra level vs block format: cross-head mask pt*ct to fix rotate wrap
+//
+// Numerically stable: computes mean = sum_x/N first, then mean²,
+// to avoid squaring large sum_x values. inv_var_scale is absorbed
+// into the final normalizing pt*ct to keep depth at 4 levels.
 // ============================================================
 class ParBlockColMajorLNStats : public Layer {
 public:
@@ -58,10 +62,8 @@ private:
 
     ls::CkksPlaintextRingt h0_mask_pt_;     // 1 at h=0, 0 at h!=0 (for sum_x mask)
     ls::CkksPlaintextRingt h0_mask_sq_pt_;  // same mask, different encode scale (for sum_x_sq mask)
-    ls::CkksPlaintextRingt inv_n_norm_pt_;
-    ls::CkksPlaintextRingt inv_n_sq_norm_pt_;
-    ls::CkksPlaintextRingt inv_n_mean_pt_;
-    ls::CkksPlaintextRingt inv_var_scale_pt_;
+    ls::CkksPlaintextRingt inv_n_pt_;       // 1/N, scale q_{L-1} (for mean and E_x_sq)
+    ls::CkksPlaintextRingt ivs_norm_pt_;    // inv_var_scale, normalizing (D²/q_{L-2} -> D)
     ls::CkksPlaintextRingt eps_add_pt_;
 };
 
@@ -92,7 +94,8 @@ private:
 
 // ============================================================
 // ParBlockColMajorLNGoldschmidt — Phase 3: one Goldschmidt iteration
-// Levels consumed: 4
+//   y_new = 0.5 * (3*y - (a*y)*(y²))
+// Levels consumed: 3 (L_y -> L_y-3)
 // ============================================================
 class ParBlockColMajorLNGoldschmidt : public Layer {
 public:
@@ -106,8 +109,8 @@ public:
 private:
     uint32_t d_, n_slot_, chunk_size_;
 
-    ls::CkksPlaintextRingt three_add_pt_;
-    ls::CkksPlaintextRingt half_norm_pt_;
+    ls::CkksPlaintextRingt three_pt_;      // 3.0, for pt*ct with y
+    ls::CkksPlaintextRingt half_norm_pt_;  // 0.5, normalizing scale
 };
 
 // ============================================================

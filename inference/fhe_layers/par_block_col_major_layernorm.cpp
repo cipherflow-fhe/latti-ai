@@ -78,7 +78,6 @@ void ParBlockColMajorLNStats::precompute_plaintexts() {
     // Encode at q_L so that pt*ct preserves scale: D * q_L / q_L = D
     vector<double> h0_mask(n_slot_, 0.0);
     for (uint32_t i = 0; i < (uint32_t)n_slot_; i++) {
-        // h_local = i % S_ (within each chunk)
         uint32_t pos_in_chunk = i % chunk_size_;
         uint32_t h_local = pos_in_chunk % S_;
         if (h_local == 0)
@@ -87,31 +86,34 @@ void ParBlockColMajorLNStats::precompute_plaintexts() {
     h0_mask_pt_ = ctx.encode_ringt(h0_mask, q_L);
 
     // Same mask but for sum_x_sq at level L-1 (scale D^2/q_L after squaring)
-    // Encode at q_{L-1} so that pt*ct preserves the input scale:
-    //   (D^2/q_L) * q_{L-1} / q_{L-1} = D^2/q_L
+    // Encode at q_{L-1} so that pt*ct preserves the input scale
     h0_mask_sq_pt_ = ctx.encode_ringt(h0_mask, q_L1);
 
-    // Normalizing pt*ct for E_x_sq: input at level L-2, scale D^2/q_L
-    // Need output D: encode scale = q_L/D * q_{L-2}
-    //   proof: (D^2/q_L) * (q_L/D * q_{L-2}) / q_{L-2} = D
-    double norm_scale = q_L / D * q_L2;
+    // 1/N for both mean and E_x_sq paths:
+    //   mean path: sum_x at L-1, scale D -> D-preserving pt*ct at q_{L-1}
+    //   E_x_sq path: sum_x_sq at L-2, scale D²/q_L -> scale-preserving pt*ct at q_L
+    //   We use q_{L-1} for this pt, applied at:
+    //     - level L-1 for mean: D * q_{L-1} / q_{L-1} = D  ✓
+    //     - level L-2 for E_x_sq: (D²/q_L) * q_{L-1}/... hmm, different levels
+    //   Actually, we need separate encode scales for different levels.
+    //   For E_x_sq: input at L-2, scale D²/q_L, encode at q_L
+    //     proof: (D²/q_L) * q_L / q_{L-2} = D²/q_{L-2}
+    //   For mean: input at L-1, scale D, encode at q_{L-1}
+    //     proof: D * q_{L-1} / q_{L-1} = D
+    //   These are at different levels so we need the same plaintext re-encoded.
+    //   Use inv_n_pt_ encoded at q_{L-1} for mean, and ringt_to_mul at proper level for E_x_sq.
+    //   Actually the value of ringt doesn't change when we call ringt_to_mul at different levels,
+    //   but the modulus chain does. We encode at the LARGEST needed q and let ringt_to_mul handle it.
+    //   We encode at q_L (largest), usable at both level L-1 for mean and level L-2 for E_x_sq.
     vector<double> inv_n_vec(n_slot_, 1.0 / N);
-    inv_n_norm_pt_ = ctx.encode_ringt(inv_n_vec, norm_scale);
+    inv_n_pt_ = ctx.encode_ringt(inv_n_vec, q_L);
 
-    // Normalizing pt*ct for mean_sq: input at level L-2, scale D^2/q_{L-1}
-    // Need output D: encode scale = q_{L-1}/D * q_{L-2}
-    double norm_sq_scale = q_L1 / D * q_L2;
-    vector<double> inv_n_sq_vec(n_slot_, 1.0 / (N * N));
-    inv_n_sq_norm_pt_ = ctx.encode_ringt(inv_n_sq_vec, norm_sq_scale);
-
-    // mean = sum_x * pt(1/N): sum_x at level L-1, scale D
-    // Encode at q_{L-1} to preserve D
-    inv_n_mean_pt_ = ctx.encode_ringt(inv_n_vec, q_L1);
-
-    // inv_var_scale: var at level L-3, scale D
-    // Encode at q_{L-3}
+    // inv_var_scale normalizing pt*ct: var at scale D²/q_{L-2} -> D
+    //   encode scale = q_{L-2}/D * q_{L-3}
+    //   proof: (D²/q_{L-2}) * (q_{L-2}/D * q_{L-3}) / q_{L-3} = D
+    double ivs_norm_scale = q_L2 / D * q_L3;
     vector<double> ivs_vec(n_slot_, inv_var_scale_);
-    inv_var_scale_pt_ = ctx.encode_ringt(ivs_vec, q_L3);
+    ivs_norm_pt_ = ctx.encode_ringt(ivs_vec, ivs_norm_scale);
 
     // eps add: a at level L-4, scale D
     vector<double> eps_vec(n_slot_, eps_ * inv_var_scale_);
@@ -228,52 +230,46 @@ pair<vector<CkksCiphertext>, vector<CkksCiphertext>> ParBlockColMajorLNStats::ru
     });
     // sum_x_sq_row at level L-2, scale D^2/q_L
 
-    // Step 6: sum_x_sq2 = sum_x * sum_x
-    // sum_x at level L-1, scale D. ct*ct -> level L-2, scale D^2/q_{L-1}
-    vector<CkksCiphertext> sum_x_sq2(num_block_rows_);
+    // Step 6: mean = sum_x * pt(1/N) -> L-2, exact D
+    //   Numerically stable: compute mean first, then square.
+    vector<CkksCiphertext> mean_cts(num_block_rows_);
     parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto prod = ctx_copy.mult(sum_x[bi], sum_x[bi]);
-        auto relin = ctx_copy.relinearize(prod);
-        sum_x_sq2[bi] = ctx_copy.rescale(relin, D / param_.get_q(level_ - 1) * D);
+        auto pt_inv_n = ctx_copy.ringt_to_mul(inv_n_pt_, level_ - 1);
+        auto p = ctx_copy.mult_plain_mul(sum_x[bi], pt_inv_n);
+        mean_cts[bi] = ctx_copy.rescale(p, D);
     });
-    // sum_x_sq2 at level L-2, scale D^2/q_{L-1}
+    // mean at L-2, exact D
 
-    // Step 7: Normalizing pt*ct
-    // E_x_sq: sum_x_sq_row(L-2, D^2/q_L) * pt -> L-3, D exact
-    // mean_sq: sum_x_sq2(L-2, D^2/q_{L-1}) * pt -> L-3, D exact
+    // Step 7: mean_sq = mean * mean -> L-3, scale D²/q_{L-2}
+    //   Also: E_x_sq = sum_x_sq_row * pt(1/N) -> L-3, scale D²/q_{L-2}
+    //   Both at L-3, same scale D²/q_{L-2}, can subtract directly.
     vector<CkksCiphertext> E_x_sq(num_block_rows_);
     vector<CkksCiphertext> mean_sq(num_block_rows_);
     parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto pt_inv_n = ctx_copy.ringt_to_mul(inv_n_norm_pt_, level_ - 2);
-        auto p1 = ctx_copy.mult_plain_mul(sum_x_sq_row[bi], pt_inv_n);
-        E_x_sq[bi] = ctx_copy.rescale(p1, D);
+        // mean² = mean * mean -> L-3, scale D²/q_{L-2}
+        auto prod = ctx_copy.mult(mean_cts[bi], mean_cts[bi]);
+        auto relin = ctx_copy.relinearize(prod);
+        mean_sq[bi] = ctx_copy.rescale(relin, D / param_.get_q(level_ - 2) * D);
 
-        auto pt_inv_n_sq = ctx_copy.ringt_to_mul(inv_n_sq_norm_pt_, level_ - 2);
-        auto p2 = ctx_copy.mult_plain_mul(sum_x_sq2[bi], pt_inv_n_sq);
-        mean_sq[bi] = ctx_copy.rescale(p2, D);
+        // E[x²] = sum_x_sq_row * pt(1/N, scale=q_L) -> L-3, scale D²/q_{L-2}
+        //   proof: (D²/q_L) * q_L / q_{L-2} = D²/q_{L-2}
+        auto pt_inv_n = ctx_copy.ringt_to_mul(inv_n_pt_, level_ - 2);
+        auto p = ctx_copy.mult_plain_mul(sum_x_sq_row[bi], pt_inv_n);
+        E_x_sq[bi] = ctx_copy.rescale(p, D / param_.get_q(level_ - 2) * D);
     });
 
-    // Step 8: var = E_x_sq - mean_sq (both at L-3, exact D)
+    // Step 8: var = E_x_sq - mean_sq (both at L-3, scale D²/q_{L-2})
     vector<CkksCiphertext> var_cts(num_block_rows_);
     for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
         var_cts[bi] = ctx.sub(E_x_sq[bi], mean_sq[bi]);
     }
 
-    // Step 9: mean = sum_x * pt(1/N)
-    // sum_x at L-1, scale D -> L-2, exact D
-    vector<CkksCiphertext> mean_cts(num_block_rows_);
-    parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto pt_inv_n_mean = ctx_copy.ringt_to_mul(inv_n_mean_pt_, level_ - 1);
-        auto p = ctx_copy.mult_plain_mul(sum_x[bi], pt_inv_n_mean);
-        mean_cts[bi] = ctx_copy.rescale(p, D);
-    });
-    // mean at L-2, exact D
-
-    // Step 10: a = var * inv_var_scale + eps
-    // var at L-3, scale D -> L-4, exact D
+    // Step 9: a = var * inv_var_scale (normalizing D²/q_{L-2} -> D) + eps*inv_var_scale
+    //   encode scale = q_{L-2}/D * q_{L-3}
+    //   proof: (D²/q_{L-2}) * (q_{L-2}/D * q_{L-3}) / q_{L-3} = D
     vector<CkksCiphertext> a_cts(num_block_rows_);
     parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto pt_ivs = ctx_copy.ringt_to_mul(inv_var_scale_pt_, level_ - 3);
+        auto pt_ivs = ctx_copy.ringt_to_mul(ivs_norm_pt_, level_ - 3);
         auto p = ctx_copy.mult_plain_mul(var_cts[bi], pt_ivs);
         a_cts[bi] = ctx_copy.rescale(p, D);
         a_cts[bi] = ctx_copy.add_plain_ringt(a_cts[bi], eps_add_pt_);
@@ -363,13 +359,16 @@ void ParBlockColMajorLNGoldschmidt::precompute_plaintexts() {
     double q_Ly = param_.get_q(level_);
     double q_Ly1 = param_.get_q(level_ - 1);
     double q_Ly2 = param_.get_q(level_ - 2);
-    double q_Ly3 = param_.get_q(level_ - 3);
 
-    double S2 = D / q_Ly * D / q_Ly1 * D;
+    // "3" for pt*ct with y: 3*y should match scale of (y*a)*(y²)
+    //   encode scale = D³/(q_{L_y}·q_{L_y-1}) = D/q_{L_y} * D/q_{L_y-1} * D
+    double three_scale = D / q_Ly * D / q_Ly1 * D;
     vector<double> three_vec(n_slot_, 3.0);
-    three_add_pt_ = ctx.encode_ringt(three_vec, S2);
+    three_pt_ = ctx.encode_ringt(three_vec, three_scale);
 
-    double half_scale = q_Ly / D * q_Ly1 / D * q_Ly2 / D * q_Ly3;
+    // 0.5 normalizing: convert S_prod = D⁴/(q_{L_y}²·q_{L_y-1}) back to D
+    //   encode scale = q_{L_y}/D * q_{L_y}/D * q_{L_y-1}/D * q_{L_y-2}
+    double half_scale = q_Ly / D * q_Ly / D * q_Ly1 / D * q_Ly2;
     vector<double> half_vec(n_slot_, 0.5);
     half_norm_pt_ = ctx.encode_ringt(half_vec, half_scale);
 }
@@ -382,28 +381,37 @@ vector<CkksCiphertext> ParBlockColMajorLNGoldschmidt::run(CkksContext& ctx,
     vector<CkksCiphertext> y_new(n);
 
     parallel_for(n, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto y_sq_raw = ctx_copy.mult(y_cts[bi], y_cts[bi]);
-        auto y_sq = ctx_copy.rescale(ctx_copy.relinearize(y_sq_raw), D / param_.get_q(level_) * D);
-
+        // Drop a to level_ to match y
         auto a_drop = a_cts[bi].copy();
-        while (a_drop.get_level() > (int)(level_ - 1)) {
+        while (a_drop.get_level() > (int)level_) {
             a_drop = ctx_copy.drop_level(a_drop);
         }
-        auto ay_sq_raw = ctx_copy.mult(a_drop, y_sq);
-        auto ay_sq = ctx_copy.rescale(ctx_copy.relinearize(ay_sq_raw), D / param_.get_q(level_ - 1) * D);
 
-        auto neg_ay_sq = ctx_copy.negate(ay_sq);
-        auto three_minus = ctx_copy.add_plain_ringt(neg_ay_sq, three_add_pt_);
+        // Step 1 (parallel): y*a and y*y -> level_-1, scale S1 = D²/q_{L_y}
+        auto ya_raw = ctx_copy.mult(y_cts[bi], a_drop);
+        auto ya = ctx_copy.rescale(ctx_copy.relinearize(ya_raw), D / param_.get_q(level_) * D);
 
-        auto y_drop = y_cts[bi].copy();
-        while (y_drop.get_level() > (int)(level_ - 2)) {
-            y_drop = ctx_copy.drop_level(y_drop);
-        }
-        auto prod_raw = ctx_copy.mult(y_drop, three_minus);
-        auto prod = ctx_copy.rescale(ctx_copy.relinearize(prod_raw), D / param_.get_q(level_ - 2) * D);
+        auto yy_raw = ctx_copy.mult(y_cts[bi], y_cts[bi]);
+        auto yy = ctx_copy.rescale(ctx_copy.relinearize(yy_raw), D / param_.get_q(level_) * D);
 
-        auto half_mul = ctx_copy.ringt_to_mul(half_norm_pt_, level_ - 3);
-        auto half_raw = ctx_copy.mult_plain_mul(prod, half_mul);
+        // Step 2: (y*a)*(y*y) -> level_-2, scale S_prod = D⁴/(q_{L_y}²·q_{L_y-1})
+        auto ya_yy_raw = ctx_copy.mult(ya, yy);
+        auto ya_yy = ctx_copy.rescale(ctx_copy.relinearize(ya_yy_raw),
+                                      D / param_.get_q(level_) * D / param_.get_q(level_ - 1) * D);
+
+        // Step 3: 3*y (pt*ct) -> level_-1, scale S_prod
+        auto three_mul = ctx_copy.ringt_to_mul(three_pt_, level_);
+        auto three_y_raw = ctx_copy.mult_plain_mul(y_cts[bi], three_mul);
+        auto three_y = ctx_copy.rescale(three_y_raw, D / param_.get_q(level_) * D / param_.get_q(level_ - 1) * D);
+        // Drop 3*y from level_-1 to level_-2 to match (y*a)*(y*y)
+        auto three_y_drop = ctx_copy.drop_level(three_y);
+
+        // Step 4: 3*y - (y*a)*(y*y) -> level_-2, scale S_prod
+        auto diff = ctx_copy.sub(three_y_drop, ya_yy);
+
+        // Step 5: 0.5 * diff (normalizing pt*ct -> exact D at level_-3)
+        auto half_mul = ctx_copy.ringt_to_mul(half_norm_pt_, level_ - 2);
+        auto half_raw = ctx_copy.mult_plain_mul(diff, half_mul);
         y_new[bi] = ctx_copy.rescale(half_raw, D);
     });
 

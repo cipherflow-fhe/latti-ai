@@ -26,6 +26,10 @@
 // Input:  FeatureMatEncrypted x at level L, scale D
 // Output: a_cts (per block-row, level L-3, scale D exact)
 //         mean_cts (per block-row, level L-1, scale D exact)
+//
+// Numerically stable: computes mean = sum_x/N first, then mean²,
+// to avoid squaring large sum_x values. inv_var_scale is absorbed
+// into the final normalizing pt*ct to keep depth at 3 levels.
 // ============================================================
 class BlockColMajorLNStats : public Layer {
 public:
@@ -48,11 +52,9 @@ private:
     // Row-sum helper: sum all d column elements per row within a single block ct
     ls::CkksCiphertext intra_block_row_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
-    ls::CkksPlaintextRingt inv_n_norm_pt_;     // 1/N,   scale q_L/D*q_{L-1} (normalizing)
-    ls::CkksPlaintextRingt inv_n_sq_norm_pt_;  // 1/N²,  scale q_L/D*q_{L-1} (normalizing)
-    ls::CkksPlaintextRingt inv_n_mean_pt_;     // 1/N,   scale q_L
-    ls::CkksPlaintextRingt inv_var_scale_pt_;  // inv_var_scale, scale q_{L-2}
-    ls::CkksPlaintextRingt eps_add_pt_;        // eps*inv_var_scale, scale D
+    ls::CkksPlaintextRingt inv_n_pt_;     // 1/N,   scale q_L (for E_x_sq and mean)
+    ls::CkksPlaintextRingt ivs_norm_pt_;  // inv_var_scale, scale q_{L-1}/D*q_{L-2} (normalizing D²/q_{L-1} -> D)
+    ls::CkksPlaintextRingt eps_add_pt_;   // eps*inv_var_scale, scale D
 };
 
 // ============================================================
@@ -84,10 +86,12 @@ private:
 
 // ============================================================
 // BlockColMajorLNGoldschmidt — Phase 3: one Goldschmidt iteration
-//   y_new = 0.5 * y * (3 - a * y²)
-// Levels consumed: 4 (L_y -> L_y-4)
+//   y_new = 0.5 * (3*y - (a*y)*(y²))
+// Levels consumed: 3 (L_y -> L_y-3)
+//   Depth-optimized: y*a and y² computed in parallel (depth 1),
+//   then (y*a)*(y²) at depth 2, and 0.5 normalizing at depth 3.
 // Input:  y_cts (level L_y, scale D), a_cts (level >= L_y, scale D)
-// Output: y_new_cts (level L_y-4, scale D exact)
+// Output: y_new_cts (level L_y-3, scale D exact)
 // ============================================================
 class BlockColMajorLNGoldschmidt : public Layer {
 public:
@@ -101,7 +105,7 @@ public:
 private:
     uint32_t d_, n_slot_, chunk_size_;
 
-    ls::CkksPlaintextRingt three_add_pt_;  // 3.0, scale S2
+    ls::CkksPlaintextRingt three_pt_;      // 3.0, for pt*ct with y
     ls::CkksPlaintextRingt half_norm_pt_;  // 0.5, normalizing scale
 };
 
