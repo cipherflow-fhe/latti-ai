@@ -893,7 +893,7 @@ class FheScoreParam:
         elif layer_type in ('add', 'add2d'):
             layer = AddLayer()
             return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
-        elif layer_type == 'qkvcpmm':
+        elif layer_type == 'parcpmm':
             m = preds[0].shape[0]
             n_total = preds[0].shape[1]
             n_per_head = n_total // config.n_heads
@@ -911,7 +911,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type == 'transpose':
+        elif layer_type == 'partranspose':
             m = preds[0].shape[0]
             n_per_head = preds[0].shape[1] // config.n_heads
             n_slot = n // 2
@@ -925,7 +925,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type == 'ccmm':
+        elif layer_type == 'parccmm':
             m = preds[0].shape[0]
             n_per_head = preds[0].shape[1] // config.n_heads
             p_per_head = preds[1].shape[1] // config.n_heads
