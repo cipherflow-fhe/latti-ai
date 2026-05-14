@@ -30,7 +30,15 @@ public:
                          uint32_t level);
     void precompute_diagonals();
 
+    // Lazy generation: encode diagonal plaintexts on demand
+    ls::CkksPlaintextRingt generate_sigma_pt(ls::CkksContext& ctx, uint32_t k) const;
+    ls::CkksPlaintextRingt generate_tau_pt(ls::CkksContext& ctx, uint32_t offset_idx) const;
+    ls::CkksPlaintextRingt generate_psi_k0_pt(ls::CkksContext& ctx) const;
+    ls::CkksPlaintextRingt generate_psi_wk_pt(ls::CkksContext& ctx, uint32_t i) const;
+    ls::CkksPlaintextRingt generate_psi_wkd_pt(ls::CkksContext& ctx, uint32_t i) const;
+
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A, const FeatureMatEncrypted& B);
+    Array<double, 2> run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const;
 
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx,

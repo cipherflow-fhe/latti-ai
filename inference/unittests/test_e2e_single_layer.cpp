@@ -35,6 +35,12 @@
 #define CATCH_CONFIG_MAIN
 #include "e2e_test_util.h"
 
+#include <cxx_sdk_v2/cxx_fhe_task.h>
+#include <cxx_sdk_v2/cxx_argument.h>
+
+using namespace lattisense;
+using namespace fhe_ops_lib;
+
 static const fs::path single_layer_base_path = e2e_base_path / "single_layer";
 
 // Read test names from ut_names.json written by the Python test suite.
@@ -58,8 +64,9 @@ static const auto single_layer_test_names = load_test_names(single_layer_base_pa
 TEST_CASE("cpu/all", "[batch][cpu][e2e]") {
     REQUIRE_FALSE(single_layer_test_names.empty());
     for (const auto& name : single_layer_test_names) {
+        auto test_dir = single_layer_base_path / name;
         SECTION(name) {
-            run_e2e_test(single_layer_base_path / name, false);
+            run_e2e_test(test_dir, false);
         }
     }
 }
@@ -68,8 +75,9 @@ TEST_CASE("cpu/all", "[batch][cpu][e2e]") {
 TEST_CASE("gpu/all", "[batch][gpu][e2e]") {
     REQUIRE_FALSE(single_layer_test_names.empty());
     for (const auto& name : single_layer_test_names) {
+        auto test_dir = single_layer_base_path / name;
         SECTION(name) {
-            run_e2e_test(single_layer_base_path / name, true);
+            run_e2e_test(test_dir, true);
         }
     }
 }
