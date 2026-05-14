@@ -2863,8 +2863,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
     auto run_ln_test = [&](uint32_t d, uint32_t m, uint32_t n, uint32_t num_iters, int init_level) {
         double eps = 1e-5;
         double var_std_bound = 4.0;
-        double inv_var_scale = 1.0 / (var_std_bound * var_std_bound);
-        double inv_std_scale = 1.0 / var_std_bound;
+        double inv_var = 1.0 / (var_std_bound * var_std_bound);
+        double inv_std = 1.0 / var_std_bound;
         double c0 = 6.19067182, c1 = -16.15885111, c2 = 11.52830778;
 
         // Generate random data
@@ -2882,28 +2882,28 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
         X_enc.block_col_major_pack(X_mat, d, false, default_scale);
 
         // Phase 1: Stats
-        BlockColMajorLNStats stats(param, {m, n}, d, init_level, eps, inv_var_scale);
-        stats.precompute_plaintexts();
-        auto [a_cts, mean_cts] = stats.run(context, X_enc);
+        BlockColMajorLNStats stats(param, {m, n}, d, init_level, eps, inv_var);
+        stats.prepare_weight();
+        auto [a_cts, x_centered] = stats.run(context, X_enc);
 
         // Phase 2: Minimax Init
         BlockColMajorLNMinimaxInit minimax(param, d, init_level - 3, c0, c1, c2);
-        minimax.precompute_plaintexts();
+        minimax.prepare_weight();
         auto y_cts = minimax.run(context, a_cts);
 
         // Phase 3: Goldschmidt (3 levels per iteration, was 4)
         for (uint32_t k = 0; k < num_iters; k++) {
             uint32_t y_level = init_level - 5 - 3 * k;
             BlockColMajorLNGoldschmidt gold(param, d, y_level);
-            gold.precompute_plaintexts();
+            gold.prepare_weight();
             y_cts = gold.run(context, y_cts, a_cts);
         }
 
         // Phase 4: Affine
         uint32_t y_final_level = init_level - 5 - 3 * num_iters;
-        BlockColMajorLNAffine affine(param, {m, n}, d, init_level, y_final_level, inv_std_scale, gamma, beta);
-        affine.precompute_plaintexts();
-        FeatureMatEncrypted result_enc = affine.run(context, X_enc, mean_cts, y_cts);
+        BlockColMajorLNAffine affine(param, {m, n}, d, y_final_level, inv_std, gamma, beta);
+        affine.prepare_weight();
+        FeatureMatEncrypted result_enc = affine.run(context, x_centered, y_cts);
 
         // Unpack
         auto result = result_enc.block_col_major_unpack(m, n, d);
@@ -2919,7 +2919,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
             }
             double mean = sum_x / n;
             double var = sum_x2 / n - mean * mean;
-            double a = (var + eps) * inv_var_scale;
+            double a = (var + eps) * inv_var;
 
             double y = c0 + c1 * a + c2 * a * a;
             for (uint32_t k = 0; k < num_iters; k++) {
@@ -2927,7 +2927,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
             }
 
             for (uint32_t j = 0; j < n; j++) {
-                double x_norm = (X_mat.get(i, j) - mean) * inv_std_scale * y;
+                double x_norm = (X_mat.get(i, j) - mean) * inv_std * y;
                 expected.set(i, j, x_norm * gamma[j] + beta[j]);
             }
         }
@@ -2962,8 +2962,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "
                                int init_level) {
         double eps = 1e-5;
         double var_std_bound = 4.0;
-        double inv_var_scale = 1.0 / (var_std_bound * var_std_bound);
-        double inv_std_scale = 1.0 / var_std_bound;
+        double inv_var = 1.0 / (var_std_bound * var_std_bound);
+        double inv_std = 1.0 / var_std_bound;
         double c0 = 6.19067182, c1 = -16.15885111, c2 = 11.52830778;
         uint32_t total_dim = n_heads * head_dim;
 
@@ -2982,29 +2982,28 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "
         X_enc.par_block_col_major_pack(X_mat, d, n_heads, false, default_scale);
 
         // Phase 1: Stats (full-dimension normalization: N = total_dim)
-        ParBlockColMajorLNStats stats(param, {seq_len, head_dim}, d, n_heads, init_level, eps, inv_var_scale);
-        stats.precompute_plaintexts();
-        auto [a_cts, mean_cts] = stats.run(context, X_enc);
+        ParBlockColMajorLNStats stats(param, {seq_len, total_dim}, d, n_heads, init_level, eps, inv_var);
+        stats.prepare_weight();
+        auto [a_cts, x_centered] = stats.run(context, X_enc);
 
         // Phase 2: Minimax Init (a is now at init_level-4 due to par Stats extra mask level)
         ParBlockColMajorLNMinimaxInit minimax(param, d, init_level - 4, c0, c1, c2);
-        minimax.precompute_plaintexts();
+        minimax.prepare_weight();
         auto y_cts = minimax.run(context, a_cts);
 
         // Phase 3: Goldschmidt (3 levels per iteration, was 4)
         for (uint32_t k = 0; k < num_iters; k++) {
             uint32_t y_level = init_level - 6 - 3 * k;
             ParBlockColMajorLNGoldschmidt gold(param, d, y_level);
-            gold.precompute_plaintexts();
+            gold.prepare_weight();
             y_cts = gold.run(context, y_cts, a_cts);
         }
 
         // Phase 4: Affine
         uint32_t y_final_level = init_level - 6 - 3 * num_iters;
-        ParBlockColMajorLNAffine affine(param, {seq_len, head_dim}, d, n_heads, init_level, y_final_level,
-                                        inv_std_scale, gamma, beta);
-        affine.precompute_plaintexts();
-        FeatureMatEncrypted result_enc = affine.run(context, X_enc, mean_cts, y_cts);
+        ParBlockColMajorLNAffine affine(param, {seq_len, total_dim}, d, n_heads, y_final_level, inv_std, gamma, beta);
+        affine.prepare_weight();
+        FeatureMatEncrypted result_enc = affine.run(context, x_centered, y_cts);
 
         // Unpack
         auto result = result_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
@@ -3020,7 +3019,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "
             }
             double mean = sum_x / total_dim;
             double var = sum_x2 / total_dim - mean * mean;
-            double a = (var + eps) * inv_var_scale;
+            double a = (var + eps) * inv_var;
 
             double y = c0 + c1 * a + c2 * a * a;
             for (uint32_t k = 0; k < num_iters; k++) {
@@ -3028,7 +3027,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "
             }
 
             for (uint32_t j = 0; j < total_dim; j++) {
-                double x_norm = (X_mat.get(i, j) - mean) * inv_std_scale * y;
+                double x_norm = (X_mat.get(i, j) - mean) * inv_std * y;
                 expected.set(i, j, x_norm * gamma[j] + beta[j]);
             }
         }

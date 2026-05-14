@@ -21,27 +21,21 @@
 #include "../data_structs/feature_mat.h"
 
 // ============================================================
-// ParBlockColMajorLNStats — Phase 1: compute scaled variance (a) and mean
-// Full-dimension normalization: N = n_heads * cols_per_head
+// ParBlockColMajorLNStats — Phase 1: compute scaled variance (a) and x_centered
 // Levels consumed: 4 (L -> L-4)
-//   Extra level vs block format: cross-head mask pt*ct to fix rotate wrap
-//
-// Numerically stable: computes mean = sum_x/N first, then mean²,
-// to avoid squaring large sum_x values. inv_var_scale is absorbed
-// into the final normalizing pt*ct to keep depth at 4 levels.
 // ============================================================
 class ParBlockColMajorLNStats : public Layer {
 public:
     ParBlockColMajorLNStats(const ls::CkksParameter& param,
-                            Duo shape,  // per-head: {M, cols_per_head}
+                            Duo shape,  // full matrix: {M, n_heads * cols_per_head}
                             uint32_t block_size,
                             uint32_t n_heads,
                             uint32_t init_level,
                             double eps,
-                            double inv_var_scale);
-    void precompute_plaintexts();
+                            double inv_var);
+    void prepare_weight();
 
-    // Returns: {a_cts, mean_cts}, each has num_block_rows elements
+    // Returns {a_cts[num_block_rows], x_centered[total_cts]}
     std::pair<std::vector<ls::CkksCiphertext>, std::vector<ls::CkksCiphertext>> run(ls::CkksContext& ctx,
                                                                                     const FeatureMatEncrypted& x);
 
@@ -50,20 +44,15 @@ private:
     uint32_t n_heads_, n_h_padded_, S_, n_cts_per_block_idx_;
     uint32_t chunk_size_, num_chunks_;
     uint32_t num_block_rows_, num_block_cols_;
-    uint32_t total_dim_;  // N = n_heads * cols_per_head
-    double eps_, inv_var_scale_;
+    uint32_t total_dim_;
+    double eps_, inv_var_;
 
     // Column sum only (no cross-head sum)
     ls::CkksCiphertext intra_block_col_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
-    // Cross-head sum + mask + replicate (costs 1 level via mask pt*ct)
-    ls::CkksCiphertext cross_head_sum_masked(ls::CkksContext& ctx,
-                                             const ls::CkksCiphertext& col_summed,
-                                             const ls::CkksPlaintextRingt& mask_pt) const;
 
-    ls::CkksPlaintextRingt h0_mask_pt_;     // 1 at h=0, 0 at h!=0 (for sum_x mask)
-    ls::CkksPlaintextRingt h0_mask_sq_pt_;  // same mask, different encode scale (for sum_x_sq mask)
-    ls::CkksPlaintextRingt inv_n_pt_;       // 1/N, scale q_{L-1} (for mean and E_x_sq)
-    ls::CkksPlaintextRingt ivs_norm_pt_;    // inv_var_scale, normalizing (D²/q_{L-2} -> D)
+    ls::CkksPlaintextRingt h0_mask_pt_;
+    ls::CkksPlaintextRingt inv_n_pt_;  // 1/N, scale q_{L-1} (for mean and E_x_sq)
+    ls::CkksPlaintextRingt iv_pt_;     // inv_var, normalizing (D²/q_{L-2} -> D)
     ls::CkksPlaintextRingt eps_add_pt_;
 };
 
@@ -79,7 +68,7 @@ public:
                                   double c0,
                                   double c1,
                                   double c2);
-    void precompute_plaintexts();
+    void prepare_weight();
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& a_cts);
 
@@ -100,7 +89,7 @@ private:
 class ParBlockColMajorLNGoldschmidt : public Layer {
 public:
     ParBlockColMajorLNGoldschmidt(const ls::CkksParameter& param, uint32_t block_size, uint32_t input_level);
-    void precompute_plaintexts();
+    void prepare_weight();
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx,
                                         const std::vector<ls::CkksCiphertext>& y_cts,
@@ -114,26 +103,23 @@ private:
 };
 
 // ============================================================
-// ParBlockColMajorLNAffine — Phase 4: output = (x - mean) * y * gamma + beta
-// Full-dimension normalization
+// ParBlockColMajorLNAffine — Phase 4: output = x_centered * y * gamma*inv_std + beta
 // Levels consumed: 2
 // ============================================================
 class ParBlockColMajorLNAffine : public Layer {
 public:
     ParBlockColMajorLNAffine(const ls::CkksParameter& param,
-                             Duo shape,  // per-head: {M, cols_per_head}
+                             Duo shape,  // full matrix: {M, n_heads * cols_per_head}
                              uint32_t block_size,
                              uint32_t n_heads,
-                             uint32_t init_level,
                              uint32_t y_level,
-                             double inv_std_scale,
-                             const std::vector<double>& gamma,  // length = n_heads * cols_per_head
+                             double inv_std,
+                             const std::vector<double>& gamma,
                              const std::vector<double>& beta);
-    void precompute_plaintexts();
+    void prepare_weight();
 
     FeatureMatEncrypted run(ls::CkksContext& ctx,
-                            const FeatureMatEncrypted& x,
-                            const std::vector<ls::CkksCiphertext>& mean_cts,
+                            const std::vector<ls::CkksCiphertext>& x_centered,
                             const std::vector<ls::CkksCiphertext>& y_cts);
 
 private:
@@ -141,13 +127,10 @@ private:
     uint32_t n_heads_, n_h_padded_, S_, n_cts_per_block_idx_;
     uint32_t chunk_size_, num_chunks_;
     uint32_t num_block_rows_, num_block_cols_;
-    uint32_t init_level_, y_level_;
-    double inv_std_scale_;
+    uint32_t y_level_;
+    double inv_std_;
     std::vector<double> gamma_vals_, beta_vals_;
 
-    // gamma_pt and beta_pt: per (bj, g) for par format
-    // indexed as bj * n_cts_per_block_idx_ + g
     std::vector<ls::CkksPlaintextRingt> gamma_pt_;
-    // beta_pt: per (bi, bj, g) to handle row masking
     std::vector<ls::CkksPlaintextRingt> beta_add_pt_;
 };
