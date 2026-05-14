@@ -641,7 +641,7 @@ def set_level_costs(graph: LayerAbstractGraph):
         elif compute_node.layer_type == 'partranspose':
             graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type == 'parccmm':
-            graph.dag.nodes[compute_node]['level_cost'] = 1
+            graph.dag.nodes[compute_node]['level_cost'] = 3
         else:
             graph.dag.nodes[compute_node]['level_cost'] = 0
 
