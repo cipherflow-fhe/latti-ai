@@ -888,7 +888,18 @@ class FheScoreParam:
         elif layer_type in ('add', 'add2d'):
             layer = AddLayer()
             return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
-
+        elif layer_type == 'qkvcpmm':
+            # TODO: qkvcpmm cost
+            layer = AddLayer()
+            return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
+        elif layer_type == 'transpose':
+            # TODO: transpose cost
+            layer = AddLayer()
+            return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
+        elif layer_type == 'ccmm':
+            # TODO: ccmm cost
+            layer = AddLayer()
+            return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
         # ── upsample_nearest ────────────────────────────────────────────────
         elif layer_type in ('upsample_nearest', 'resize'):
             input_shape = self.input_shape

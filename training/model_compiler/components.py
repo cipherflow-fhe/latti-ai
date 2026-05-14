@@ -325,6 +325,7 @@ class FeatureNode:
         self.invalid_fill = [1, 1]
         self.sp_info = {'skip': [1, 1], 'invalid_fill': [1, 1], 'shape': [1, 1]}
         self.has_sp_info = False
+        self.data_type: str = ''
 
     def __repr__(self) -> str:
         return f'{self.node_id}'
@@ -344,6 +345,8 @@ class FeatureNode:
         info['ckks_parameter_id'] = self.ckks_parameter_id
         info['level'] = int(self.level)
         info['ckks_scale'] = self.ckks_scale
+        if self.data_type:
+            info['data_type'] = self.data_type
         return info
 
 
@@ -658,7 +661,7 @@ class LayerAbstractGraph:
         feature_dict = dict()
         for key, feature_json in graph_json['feature'].items():
             dim = feature_json['dim']
-            channel = feature_json['channel']
+            channel = feature_json.get('channel', 1)
             scale = 1.0
             ckks_parameter_id = feature_json['ckks_parameter_id']
             if dim in (1, 2):
@@ -674,13 +677,14 @@ class LayerAbstractGraph:
                 node.sp_info = sp_info
             else:
                 raise ValueError(f'Unsupported feature dim: {dim}')
+            node.data_type = feature_json.get('data_type', '')
             graph_info.dag.add_node(node, name=key, skip=skip)
             feature_dict[key] = node
 
         for key, layer_json in graph_json['layer'].items():
             layer_type = layer_json['type']
-            channel_input = layer_json['channel_input']
-            channel_output = layer_json['channel_output']
+            channel_input = layer_json.get('channel_input', 1)
+            channel_output = layer_json.get('channel_output', 1)
 
             feature_input = [feature_dict[fid] for fid in layer_json['feature_input']]
             feature_output = [feature_dict[fid] for fid in layer_json['feature_output']]
@@ -748,6 +752,15 @@ class LayerAbstractGraph:
                     channel_output,
                     upsample_factor=upsample_factor,
                 )
+
+            elif layer_type == 'qkvcpmm':
+                compute_node = ComputeNode(key, layer_type, 1, 1)
+
+            elif layer_type == 'transpose':
+                compute_node = ComputeNode(key, layer_type, 1, 1)
+
+            elif layer_type == 'ccmm':
+                compute_node = ComputeNode(key, layer_type, 1, 1)
 
             elif 'fc' in layer_type:
                 weight_path = layer_json['weight_path']
@@ -991,6 +1004,24 @@ class LayerAbstractGraph:
                 if 'mpc_refresh' in layer_type:
                     layers[layer_id]['is_end'] = False
                     mpc_refresh_ids.append(layer_id)
+            if layer_type == 'qkvcpmm':
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
+                }
+            if layer_type == 'transpose':
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
+                }
+            if layer_type == 'ccmm':
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
+                }
             if 'fc' in layer_type:
                 absorb_type = list()
                 absorb_path = list()
@@ -1184,21 +1215,36 @@ class LayerAbstractGraph:
                     # pred_compute = next(self.dag.predecessors(feature), None)
                     if feature.has_sp_info:
                         feature_dict['special_info'] = feature.sp_info
+                    if feature.data_type:
+                        feature_dict['data_type'] = feature.data_type
                     features[key] = feature_dict
                 elif dim in (1, 2):
-                    features[key] = {
-                        'dim': dim,
-                        'channel': channel,
-                        'scale': scale,
-                        'ckks_scale': ckks_scale,
-                        'shape': shape,
-                        'skip': skip,
-                        'ckks_parameter_id': ckks_parameter_id,
-                        'level': level,
-                        'depth': depth,
-                        'pack_num': pack_num,
-                        'invalid_fill': feature.invalid_fill,
-                    }
+                    if feature.data_type == 'feature_mat':
+                        feature_dict = {
+                            'dim': dim,
+                            'scale': scale,
+                            'ckks_scale': ckks_scale,
+                            'shape': shape,
+                            'ckks_parameter_id': ckks_parameter_id,
+                            'level': level,
+                            'pack_num': pack_num,
+                            'data_type': feature.data_type,
+                        }
+                    else:
+                        feature_dict = {
+                            'dim': dim,
+                            'channel': channel,
+                            'scale': scale,
+                            'ckks_scale': ckks_scale,
+                            'shape': shape,
+                            'skip': skip,
+                            'ckks_parameter_id': ckks_parameter_id,
+                            'level': level,
+                            'depth': depth,
+                            'pack_num': pack_num,
+                            'invalid_fill': feature.invalid_fill,
+                        }
+                    features[key] = feature_dict
                 else:
                     raise ValueError('Unsupported dim value.')
 

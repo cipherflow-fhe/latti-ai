@@ -821,3 +821,29 @@ class SingleAdaptiveAvgpool1d(nn.Module):
 
     def forward(self, x):
         return self.pool(x)
+
+
+class QKVTest(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.qkv = nn.Linear(192, 1, False)
+
+    def forward(self, x):
+        return self.qkv(x)
+
+
+class TransposeTest(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return x.transpose(-2, -1)
+
+
+class CCMMTest(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # self.qkv = nn.Linear(192, 1, False)
+
+    def forward(self, x0, x1):
+        return x0 @ x1

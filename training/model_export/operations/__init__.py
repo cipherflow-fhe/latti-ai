@@ -58,6 +58,7 @@ class FeatureNode(object):
         self.isvisit = False
         self.level = 0
         self.computer_nodes: list[ComputeNode] = []
+        self.data_type: str = ''
 
     def __repr__(self) -> str:
         return f'{self.node_id}'
@@ -66,11 +67,14 @@ class FeatureNode(object):
         info = dict()
 
         info['dim'] = self.dim
-        info['channel'] = self.channel
+        if self.data_type != 'feature_mat':
+            info['channel'] = self.channel
         info['scale'] = self.scale
-        if self.dim == 2:
+        if self.dim == 2 and self.data_type != 'feature_mat':
             info['shape'] = self.shape
             info['skip'] = self.skip
+        elif self.dim == 2 and self.data_type == 'feature_mat':
+            info['shape'] = self.shape
         if self.dim == 1:
             info['shape'] = self.shape
             info['skip'] = self.skip
@@ -79,6 +83,8 @@ class FeatureNode(object):
 
         info['ckks_parameter_id'] = self.ckks_parameter_id
         info['level'] = int(self.level)
+        if self.data_type:
+            info['data_type'] = self.data_type
         return info
 
 
@@ -210,6 +216,8 @@ def get_op_id(op: str):
         output = 'MatMul'
     elif op == 'RNN' or op == 'rnn':
         output = 'RNN'
+    elif op == 'Transpose':
+        output = 'Transpose'
     else:
         raise TypeError(f'Current operator {op} is not supported')
     return output
@@ -268,6 +276,8 @@ def get_type_id(op: str):
         output = 'matmul'
     elif op == 'MyRNN' or op == 'rnn':
         output = 'rnn'
+    elif op == 'Transpose':
+        output = 'transpose'
     else:
         raise TypeError(f'Current operator {op} is not supported')
     return output
