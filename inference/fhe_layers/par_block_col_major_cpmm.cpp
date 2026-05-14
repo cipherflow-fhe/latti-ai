@@ -187,6 +187,15 @@ void ParBlockColMajorCPMM::precompute_diagonals() {
     mask_h0_pt_ = ctx.encode_ringt(mask_vec, mask_scale);
 }
 
+CkksPlaintextRingt
+ParBlockColMajorCPMM::generate_diag_pt(CkksContext& ctx, uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const {
+    return ctx.encode_ringt(build_block_diagonal(mb, g, bp, k), param_.get_q(level_));
+}
+
+CkksPlaintextRingt ParBlockColMajorCPMM::generate_mask_h0_pt(CkksContext& ctx) const {
+    return ctx.encode_ringt(build_head0_mask(), param_.get_q(level_ - 1));
+}
+
 // block_mult_cpmm: d rotations + d pt_muls + (d-1) adds + 1 rescale
 // Computes a ciphertext's all interleaved heads' contributions to output block column bp in parallel.
 // Input level L -> Output level L-1
@@ -315,4 +324,43 @@ FeatureMatEncrypted ParBlockColMajorCPMM::run(CkksContext& ctx, const FeatureMat
         result.data = run_core(ctx, A.data, all_mbs);
     }
     return result;
+}
+
+Array<double, 2> ParBlockColMajorCPMM::run_plaintext(const Array<double, 2>& A) const {
+    uint32_t n_total = n_total_per_mb_;
+    if (mode_ == Mode::SQUARE) {
+        Array<double, 2> C({m_, n_total});
+        for (uint32_t i = 0; i < m_; i++)
+            for (uint32_t j = 0; j < n_total; j++) {
+                double s = 0;
+                for (uint32_t k = 0; k < n_total; k++)
+                    s += A.get(i, k) * W_padded_[0].get(k, j);
+                C.set(i, j, s);
+            }
+        return C;
+    } else if (mode_ == Mode::EXPAND) {
+        uint32_t out_cols = K_ * n_total;
+        Array<double, 2> C({m_, out_cols});
+        for (uint32_t mb = 0; mb < K_; mb++)
+            for (uint32_t i = 0; i < m_; i++)
+                for (uint32_t j = 0; j < n_total; j++) {
+                    double s = 0;
+                    for (uint32_t k = 0; k < n_total; k++)
+                        s += A.get(i, k) * W_padded_[mb].get(k, j);
+                    C.set(i, mb * n_total + j, s);
+                }
+        return C;
+    } else {
+        // REDUCE
+        Array<double, 2> C({m_, n_total});
+        for (uint32_t i = 0; i < m_; i++)
+            for (uint32_t j = 0; j < n_total; j++) {
+                double s = 0;
+                for (uint32_t mb = 0; mb < K_; mb++)
+                    for (uint32_t k = 0; k < n_total; k++)
+                        s += A.get(i, mb * n_total + k) * W_padded_[mb].get(k, j);
+                C.set(i, j, s);
+            }
+        return C;
+    }
 }

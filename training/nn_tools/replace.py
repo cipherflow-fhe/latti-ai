@@ -222,7 +222,8 @@ def replace_general_avgpool_with_depthwise_conv(
     if has_lazy:
         model.eval()
         with torch.no_grad():
-            model(torch.randn(*input_size))
+            device = next(model.parameters()).device
+            model(torch.randn(*input_size, device=device))
 
     return model
 

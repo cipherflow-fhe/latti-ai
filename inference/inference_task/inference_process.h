@@ -162,6 +162,12 @@ private:
     void _init_upsample_layer(const std::string& key, const json& layer, const Duo& block_shape = {128, 256});
     void _init_upsample_nearest_layer(const std::string& key, const json& layer);
     void _init_conv1d_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_cpmm_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_ccmm_layer(const std::string& key, const json& layer);
+    void _init_transpose_layer(const std::string& key, const json& layer);
+    void _init_parcpmm_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_parccmm_layer(const std::string& key, const json& layer);
+    void _init_partranspose_layer(const std::string& key, const json& layer);
     template <typename T> void _prepare_layer(const std::string& key, UPtr<T> layer) {
         if (is_lazy) {
             layer->prepare_weight_lazy();
@@ -220,6 +226,7 @@ public:
     std::map<std::string, Array<double, 2>> p_feature1d_x;
     std::vector<std::string> available_keys;
     std::map<std::string, Array1D> p_feature0d_x;
+    std::map<std::string, Array<double, 2>> p_feature_mat_x;
 
     void run_task(bool is_mpc = false);
     void run_task_sdk(bool is_mpc = false);

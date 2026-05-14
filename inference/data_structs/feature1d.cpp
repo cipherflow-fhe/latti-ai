@@ -252,3 +252,20 @@ Feature1DEncrypted Feature1DEncrypted::copy() const {
     }
     return result;
 }
+
+Feature1DEncrypted Feature1DEncrypted::drop_level(int n_level_to_drop) const {
+    int new_level = level - n_level_to_drop;
+    Feature1DEncrypted result(context, new_level, skip, invalid_fill);
+    result.n_channel = n_channel;
+    result.n_channel_per_ct = n_channel_per_ct;
+    result.shape = shape;
+    result.data.resize(data.size());
+    parallel_for(data.size(), th_nums, *context, [&](CkksContext& ctx_copy, int ct_idx) {
+        auto ct_tmp = data[ct_idx].copy();
+        for (int j = 0; j < n_level_to_drop; j++) {
+            ct_tmp = ctx_copy.drop_level(ct_tmp);
+        }
+        result.data[ct_idx] = move(ct_tmp);
+    });
+    return result;
+}
