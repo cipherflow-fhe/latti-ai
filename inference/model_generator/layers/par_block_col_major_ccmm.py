@@ -285,3 +285,72 @@ class ParBlockColMajorCCMM:
             psi_wkd_pt.append(node_kd)
 
         return self.call(A_cts, B_cts, sigma_pt, tau_pt, psi_k0_pt, psi_wk_pt, psi_wkd_pt)
+
+    # ------------------------------------------------------------------ #
+    #  FHE operation count                                                #
+    # ------------------------------------------------------------------ #
+
+    def get_fhe_op_count(self, level: int) -> dict:
+        """Count FHE primitive operations grouped by level.
+
+        Per (bi, bp, bj, g) call to _block_mult (level L -> L-3):
+
+          Level L — sigma + tau:
+            rotate:     (d-1) + (2d-2) = 3*(d-1)   [k=0/offset=0 skipped]
+            mult_plain: d + (2d-1) = 3*d - 1
+            add:        (d-1) + (2d-2) = 3*(d-1)
+            rescale:    2
+
+          Level L-1 — phi + psi + psi_k0:
+            rotate:     (d-1) [phi] + 2*(d-1) [psi] = 3*(d-1)
+            mult_plain: 2*(d-1) [psi] + 1 [psi_k0] = 2*d - 1
+            add:        (d-1) [within psi]
+            rescale:    (d-1) [psi] + 1 [psi_k0] = d
+
+          Level L-2 — ct-ct mult + accumulate within block:
+            mult:       d    [one per i=0..d-1]
+            add:        (d-1) [accumulate prod_i into result]
+            rescale:    d
+
+          Over all (bi, bp, bj, g):
+            n_block_mult = num_block_rows_A * num_block_cols_B * num_block_cols_A * G
+            n_output     = num_block_rows_A * num_block_cols_B * G
+
+          Level L-3 — accumulate over bj into output:
+            add: n_output * max(0, num_block_cols_A - 1)
+        """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+        d = self.d
+        G = self.G
+        R = self.num_block_rows_A
+        C = self.num_block_cols_B
+        K = self.num_block_cols_A
+
+        n_block_mult = R * C * K * G
+        n_output = R * C * G
+
+        # Level L: sigma + tau
+        ops[lv]['rotate'] += n_block_mult * 3 * (d - 1)
+        ops[lv]['mult_plain'] += n_block_mult * (3 * d - 1)
+        ops[lv]['add'] += n_block_mult * 3 * (d - 1)
+        ops[lv]['rescale'] += n_block_mult * 2
+        lv -= 1
+
+        # Level L-1: phi + psi + psi_k0
+        ops[lv]['rotate'] += n_block_mult * 3 * (d - 1)
+        ops[lv]['mult_plain'] += n_block_mult * (2 * d - 1)
+        ops[lv]['add'] += n_block_mult * (d - 1)
+        ops[lv]['rescale'] += n_block_mult * d
+        lv -= 1
+
+        # Level L-2: ct-ct mult + within-block accumulate
+        ops[lv]['mult'] += n_block_mult * d
+        ops[lv]['add'] += n_block_mult * (d - 1)
+        ops[lv]['rescale'] += n_block_mult * d
+        lv -= 1
+
+        # Level L-3: accumulate over bj
+        ops[lv]['add'] += n_output * max(0, K - 1)
+
+        return dict(ops)

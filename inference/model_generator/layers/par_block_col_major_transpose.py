@@ -203,3 +203,34 @@ class ParBlockColMajorTranspose:
             transpose_diag_pt.append(node)
 
         return self.call(input_cts, transpose_diag_pt)
+
+    # ------------------------------------------------------------------ #
+    #  FHE operation count                                                #
+    # ------------------------------------------------------------------ #
+
+    def get_fhe_op_count(self, level: int) -> dict:
+        """Count FHE primitive operations grouped by level.
+
+        Per (bi, bj, g) CT, _transpose_on_ct iterates over 2d-1 diagonals.
+        k=0 gives rot_amount=0 and is skipped; (2d-2) actual rotations.
+
+          Level L — transpose_on_ct:
+            rotate:     (2*d - 2)
+            mult_plain: (2*d - 1)
+            add:        (2*d - 2)   [within ct_pt_mult_accumulate]
+            rescale:    1
+
+          Total CTs = num_blocks * G.
+        """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+        d = self.d
+        G = self.G
+        total_cts = self.num_blocks * G
+
+        ops[lv]['rotate'] += total_cts * (2 * d - 2)
+        ops[lv]['mult_plain'] += total_cts * (2 * d - 1)
+        ops[lv]['add'] += total_cts * (2 * d - 2)
+        ops[lv]['rescale'] += total_cts
+
+        return dict(ops)
