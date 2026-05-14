@@ -2891,16 +2891,16 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
         minimax.precompute_plaintexts();
         auto y_cts = minimax.run(context, a_cts);
 
-        // Phase 3: Goldschmidt
+        // Phase 3: Goldschmidt (3 levels per iteration, was 4)
         for (uint32_t k = 0; k < num_iters; k++) {
-            uint32_t y_level = init_level - 5 - 4 * k;
+            uint32_t y_level = init_level - 5 - 3 * k;
             BlockColMajorLNGoldschmidt gold(param, d, y_level);
             gold.precompute_plaintexts();
             y_cts = gold.run(context, y_cts, a_cts);
         }
 
         // Phase 4: Affine
-        uint32_t y_final_level = init_level - 5 - 4 * num_iters;
+        uint32_t y_final_level = init_level - 5 - 3 * num_iters;
         BlockColMajorLNAffine affine(param, {m, n}, d, init_level, y_final_level, inv_std_scale, gamma, beta);
         affine.precompute_plaintexts();
         FeatureMatEncrypted result_enc = affine.run(context, X_enc, mean_cts, y_cts);
@@ -2943,7 +2943,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
     };
 
     SECTION("d=64, m=197, n=192, iters=1") {
-        run_ln_test(64, 197, 192, 1, 11);
+        run_ln_test(64, 197, 192, 1, 10);
     }
 }
 
@@ -2991,16 +2991,16 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "
         minimax.precompute_plaintexts();
         auto y_cts = minimax.run(context, a_cts);
 
-        // Phase 3: Goldschmidt
+        // Phase 3: Goldschmidt (3 levels per iteration, was 4)
         for (uint32_t k = 0; k < num_iters; k++) {
-            uint32_t y_level = init_level - 6 - 4 * k;
+            uint32_t y_level = init_level - 6 - 3 * k;
             ParBlockColMajorLNGoldschmidt gold(param, d, y_level);
             gold.precompute_plaintexts();
             y_cts = gold.run(context, y_cts, a_cts);
         }
 
         // Phase 4: Affine
-        uint32_t y_final_level = init_level - 6 - 4 * num_iters;
+        uint32_t y_final_level = init_level - 6 - 3 * num_iters;
         ParBlockColMajorLNAffine affine(param, {seq_len, head_dim}, d, n_heads, init_level, y_final_level,
                                         inv_std_scale, gamma, beta);
         affine.precompute_plaintexts();
@@ -3044,6 +3044,6 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "
     };
 
     SECTION("d=64, seq=197, heads=3, head_dim=64, iters=1") {
-        run_par_ln_test(64, 197, 3, 64, 1, 12);
+        run_par_ln_test(64, 197, 3, 64, 1, 11);
     }
 }
