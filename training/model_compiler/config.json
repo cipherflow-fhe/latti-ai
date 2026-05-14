@@ -6,5 +6,5 @@
   "SET_LEVEL_MAX": true,
   "SINGLE_THREAD": false,
   "N_HEADS": 1,
-  "MATMUL_BLOCK_SIZE": 8
+  "MATMUL_BLOCK_SIZE": 1
 }
