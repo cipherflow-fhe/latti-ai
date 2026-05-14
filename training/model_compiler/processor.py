@@ -154,6 +154,8 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
         'block_shape': config.block_shape,
         'is_absorb_polyrelu': False,
         'pack_style': config.style,
+        'n_heads': config.n_heads,
+        'matmul_block_size': config.matmul_block_size,
         'task_input_id': [str(n.node_id) for n in input_roots],
         'task_output_id': [str(n.node_id) for n in output_roots],
         'task_input_param': {str(n.node_id): param_dict[n.node_id] for n in input_roots},
@@ -253,12 +255,12 @@ def update_shape_for_btp(graph: LayerAbstractGraph):
         elif compute_node.layer_type == 'resize':
             for i in range(2):
                 succs[0].shape[i] = preds[0].shape[i] * compute_node.upsample_factor_in[i]
-        elif compute_node.layer_type == 'qkvcpmm':
+        elif compute_node.layer_type == 'parcpmm':
             succs[0].shape[0] = preds[0].shape[0]
-        elif compute_node.layer_type == 'transpose':
+        elif compute_node.layer_type == 'partranspose':
             succs[0].shape[0] = preds[0].shape[1] if len(preds[0].shape) > 1 else preds[0].shape[0]
             succs[0].shape[1] = preds[0].shape[0]
-        elif compute_node.layer_type == 'ccmm':
+        elif compute_node.layer_type == 'parccmm':
             succs[0].shape[0] = preds[0].shape[0]
         else:
             for i in range(2):

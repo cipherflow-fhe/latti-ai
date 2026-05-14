@@ -46,7 +46,7 @@ class TransposeComputeNode(ComputeNode):
     @staticmethod
     def from_onnx_node(x: NodeProto, features_nodes) -> 'TransposeComputeNode':
         layer_id = format_id(x.name)
-        layer_type = 'transpose'
+        layer_type = 'partranspose'
         feature_input = [features_nodes[format_id(x.input[0])]]
         feature_output = [features_nodes[format_id(x.output[0])]]
         attrs = ComputeNode.get_attr_value_dict(x)

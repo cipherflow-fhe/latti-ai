@@ -285,6 +285,8 @@ class GlobalConfig:
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
             cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'polyact']
             cls._instance.single_thread = config_dict.get('SINGLE_THREAD', False)
+            cls._instance.n_heads = config_dict.get('N_HEADS', 1)
+            cls._instance.matmul_block_size = config_dict.get('MATMUL_BLOCK_SIZE', 8)
 
         return cls._instance
 
@@ -753,13 +755,13 @@ class LayerAbstractGraph:
                     upsample_factor=upsample_factor,
                 )
 
-            elif layer_type == 'qkvcpmm':
+            elif layer_type == 'parcpmm':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
 
-            elif layer_type == 'transpose':
+            elif layer_type == 'partranspose':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
 
-            elif layer_type == 'ccmm':
+            elif layer_type == 'parccmm':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
 
             elif 'fc' in layer_type:
@@ -1004,19 +1006,19 @@ class LayerAbstractGraph:
                 if 'mpc_refresh' in layer_type:
                     layers[layer_id]['is_end'] = False
                     mpc_refresh_ids.append(layer_id)
-            if layer_type == 'qkvcpmm':
+            if layer_type == 'parcpmm':
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                 }
-            if layer_type == 'transpose':
+            if layer_type == 'partranspose':
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                 }
-            if layer_type == 'ccmm':
+            if layer_type == 'parccmm':
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
