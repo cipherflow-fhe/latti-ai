@@ -277,7 +277,7 @@ def get_type_id(op: str):
     elif op == 'MyRNN' or op == 'rnn':
         output = 'rnn'
     elif op == 'Transpose':
-        output = 'transpose'
+        output = 'partranspose'
     else:
         raise TypeError(f'Current operator {op} is not supported')
     return output

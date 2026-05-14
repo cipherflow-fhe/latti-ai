@@ -514,12 +514,12 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                     )
 
             else:
-                if compute_node.layer_type == 'qkvcpmm':
+                if compute_node.layer_type == 'parcpmm':
                     succ.shape[0] = preds[0].shape[0]
-                elif compute_node.layer_type == 'transpose':
+                elif compute_node.layer_type == 'partranspose':
                     succ.shape[0] = preds[0].shape[1] if len(preds[0].shape) > 1 else preds[0].shape[0]
                     succ.shape[1] = preds[0].shape[0]
-                elif compute_node.layer_type == 'ccmm':
+                elif compute_node.layer_type == 'parccmm':
                     succ.shape[0] = preds[0].shape[0]
                 else:
                     for i in range(preds[0].dim):
@@ -636,12 +636,12 @@ def set_level_costs(graph: LayerAbstractGraph):
         elif compute_node.layer_type == 'concat2d':
             has_uneven = any(p.channel % graph.dag.nodes[p]['pack_num'] != 0 for p in preds)
             graph.dag.nodes[compute_node]['level_cost'] = 1 if has_uneven else 0
-        elif compute_node.layer_type == 'qkvcpmm':
+        elif compute_node.layer_type == 'parcpmm':
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type == 'partranspose':
             graph.dag.nodes[compute_node]['level_cost'] = 1
-        elif compute_node.layer_type == 'transpose':
-            graph.dag.nodes[compute_node]['level_cost'] = 0
-        elif compute_node.layer_type == 'ccmm':
-            graph.dag.nodes[compute_node]['level_cost'] = 1
+        elif compute_node.layer_type == 'parccmm':
+            graph.dag.nodes[compute_node]['level_cost'] = 3
         else:
             graph.dag.nodes[compute_node]['level_cost'] = 0
 

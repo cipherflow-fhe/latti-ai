@@ -51,10 +51,10 @@ class MatMulComputeNode(ComputeNode):
         layer_id = format_id(x.name)
         input1_id = format_id(x.input[1])
         if input1_id in features_nodes:
-            layer_type = 'ccmm'
+            layer_type = 'parccmm'
             feature_input = [features_nodes[format_id(x.input[0])], features_nodes[input1_id]]
         else:
-            layer_type = 'qkvcpmm'
+            layer_type = 'parcpmm'
             feature_input = [features_nodes[format_id(x.input[0])]]
         feature_output = [features_nodes[format_id(x.output[0])]]
         attrs = ComputeNode.get_attr_value_dict(x)
