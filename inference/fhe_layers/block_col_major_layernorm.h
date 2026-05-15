@@ -22,10 +22,6 @@
 
 // ============================================================
 // BlockColMajorLNStats — Phase 1: compute scaled variance (a) and x_centered
-// Levels consumed: 3 (L -> L-3)
-// Input:  FeatureMatEncrypted x at level L, scale D
-// Output: a_cts (per block-row, level L-3, scale D exact)
-//         x_centered (per block, level L-1, scale D exact)
 // ============================================================
 class BlockColMajorLNStats : public Layer {
 public:
@@ -37,7 +33,6 @@ public:
                          double inv_var);
     void prepare_weight();
 
-    // Returns {a_cts[num_block_rows], x_centered[total_blocks]}
     std::pair<std::vector<ls::CkksCiphertext>, std::vector<ls::CkksCiphertext>> run(ls::CkksContext& ctx,
                                                                                     const FeatureMatEncrypted& x);
 
@@ -49,9 +44,9 @@ private:
     // Row-sum helper: sum all d column elements per row within a single block ct
     ls::CkksCiphertext intra_block_row_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
-    ls::CkksPlaintextRingt inv_n_pt_;    // 1/N,   scale q_L (for E_x_sq and mean)
-    ls::CkksPlaintextRingt iv_pt_;       // inv_var, scale q_{L-1}/D*q_{L-2} (normalizing D²/q_{L-1} -> D)
-    ls::CkksPlaintextRingt eps_add_pt_;  // eps*inv_var, scale D
+    ls::CkksPlaintextRingt inv_n_pt_;    // 1/N,
+    ls::CkksPlaintextRingt iv_pt_;       // inv_var,
+    ls::CkksPlaintextRingt eps_add_pt_;  // eps*inv_var
 };
 
 // ============================================================
@@ -76,19 +71,13 @@ private:
     uint32_t d_, n_slot_, chunk_size_;
     double c0_, c1_, c2_;
 
-    ls::CkksPlaintextRingt c2_norm_pt_;  // c2, scale q_{L-3}/D*q_{L-4} (normalizing)
-    ls::CkksPlaintextRingt c1_pt_;       // c1, scale q_{input_level}
-    ls::CkksPlaintextRingt c0_add_pt_;   // c0, scale D
+    ls::CkksPlaintextRingt c2_norm_pt_;  // c2
+    ls::CkksPlaintextRingt c1_pt_;       // c1
+    ls::CkksPlaintextRingt c0_add_pt_;   // c0
 };
 
 // ============================================================
 // BlockColMajorLNGoldschmidt — Phase 3: one Goldschmidt iteration
-//   y_new = 0.5 * (3*y - (a*y)*(y²))
-// Levels consumed: 3 (L_y -> L_y-3)
-//   Depth-optimized: y*a and y² computed in parallel (depth 1),
-//   then (y*a)*(y²) at depth 2, and 0.5 normalizing at depth 3.
-// Input:  y_cts (level L_y, scale D), a_cts (level >= L_y, scale D)
-// Output: y_new_cts (level L_y-3, scale D exact)
 // ============================================================
 class BlockColMajorLNGoldschmidt : public Layer {
 public:
@@ -117,8 +106,8 @@ public:
                           uint32_t block_size,
                           uint32_t y_level,
                           double inv_std,
-                          const std::vector<double>& gamma,
-                          const std::vector<double>& beta);
+                          Array<double, 1>&& gamma,
+                          Array<double, 1>&& beta);
     void prepare_weight();
 
     FeatureMatEncrypted run(ls::CkksContext& ctx,
@@ -130,7 +119,7 @@ private:
     uint32_t num_block_rows_, num_block_cols_;
     uint32_t y_level_;
     double inv_std_;
-    std::vector<double> gamma_vals_, beta_vals_;
+    Array<double, 1> gamma_vals_, beta_vals_;
 
     std::vector<ls::CkksPlaintextRingt> gamma_pt_;
     std::vector<ls::CkksPlaintextRingt> beta_add_pt_;

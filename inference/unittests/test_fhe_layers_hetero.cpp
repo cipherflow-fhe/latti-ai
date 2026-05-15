@@ -2849,9 +2849,6 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "upsample_nearest_layer", "", Hete
     }
 }
 
-// ============================================================
-// Block Col Major LayerNorm (组合 4 个独立类测试完整 forward)
-// ============================================================
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", HeteroProcessors) {
     // LayerNorm needs higher levels; use local context with N=32768
     const int N = 32768;
@@ -2869,11 +2866,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
 
         // Generate random data
         Array<double, 2> X_mat = gen_random_array<2>({m, n}, 1.0);
-        vector<double> gamma(n), beta(n);
-        for (uint32_t j = 0; j < n; j++) {
-            gamma[j] = 0.5 + 0.5 * ((double)rand() / RAND_MAX);
-            beta[j] = 0.1 * ((double)rand() / RAND_MAX - 0.5);
-        }
+        Array<double, 1> gamma = gen_random_array<1>({n}, 0.5);
+        Array<double, 1> beta = gen_random_array<1>({n}, 0.1);
 
         // Encrypt
         FeatureMatEncrypted X_enc(&context, init_level);
@@ -2886,12 +2880,12 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
         stats.prepare_weight();
         auto [a_cts, x_centered] = stats.run(context, X_enc);
 
-        // Phase 2: Minimax Init
+        // Phase 2: Minimax Init, 2 levels consumpsion
         BlockColMajorLNMinimaxInit minimax(param, d, init_level - 3, c0, c1, c2);
         minimax.prepare_weight();
         auto y_cts = minimax.run(context, a_cts);
 
-        // Phase 3: Goldschmidt (3 levels per iteration, was 4)
+        // Phase 3: Goldschmidt (3 levels per iteration)
         for (uint32_t k = 0; k < num_iters; k++) {
             uint32_t y_level = init_level - 5 - 3 * k;
             BlockColMajorLNGoldschmidt gold(param, d, y_level);
@@ -2901,14 +2895,14 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
 
         // Phase 4: Affine
         uint32_t y_final_level = init_level - 5 - 3 * num_iters;
-        BlockColMajorLNAffine affine(param, {m, n}, d, y_final_level, inv_std, gamma, beta);
+        BlockColMajorLNAffine affine(param, {m, n}, d, y_final_level, inv_std, gamma.copy(), beta.copy());
         affine.prepare_weight();
         FeatureMatEncrypted result_enc = affine.run(context, x_centered, y_cts);
 
         // Unpack
         auto result = result_enc.block_col_major_unpack(m, n, d);
 
-        // Compute expected (same algorithm: E[x^2]-E[x]^2, minimax, goldschmidt)
+        // Compute expected (same algorithm: biased var E[x^2]-E[x]^2, minimax, goldschmidt)
         Array<double, 2> expected({(uint64_t)m, (uint64_t)n});
         for (uint32_t i = 0; i < m; i++) {
             double sum_x = 0.0, sum_x2 = 0.0;
@@ -2928,7 +2922,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
 
             for (uint32_t j = 0; j < n; j++) {
                 double x_norm = (X_mat.get(i, j) - mean) * inv_std * y;
-                expected.set(i, j, x_norm * gamma[j] + beta[j]);
+                expected.set(i, j, x_norm * gamma.get(j) + beta.get(j));
             }
         }
 
@@ -2947,9 +2941,6 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
     }
 }
 
-// ============================================================
-// Par Block Col Major LayerNorm (组合 4 个独立类测试完整 forward)
-// ============================================================
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "", HeteroProcessors) {
     // LayerNorm needs higher levels; use local context with N=32768
     const int N = 32768;
@@ -2969,11 +2960,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "
 
         // Generate random data
         Array<double, 2> X_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
-        vector<double> gamma(total_dim), beta(total_dim);
-        for (uint32_t j = 0; j < total_dim; j++) {
-            gamma[j] = 0.5 + 0.5 * ((double)rand() / RAND_MAX);
-            beta[j] = 0.1 * ((double)rand() / RAND_MAX - 0.5);
-        }
+        Array<double, 1> gamma = gen_random_array<1>({total_dim}, 0.5);
+        Array<double, 1> beta = gen_random_array<1>({total_dim}, 0.1);
 
         // Encrypt using par_block_col_major_pack
         FeatureMatEncrypted X_enc(&context, init_level);
@@ -3001,7 +2989,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "
 
         // Phase 4: Affine
         uint32_t y_final_level = init_level - 6 - 3 * num_iters;
-        ParBlockColMajorLNAffine affine(param, {seq_len, total_dim}, d, n_heads, y_final_level, inv_std, gamma, beta);
+        ParBlockColMajorLNAffine affine(param, {seq_len, total_dim}, d, n_heads, y_final_level, inv_std, gamma.copy(),
+                                        beta.copy());
         affine.prepare_weight();
         FeatureMatEncrypted result_enc = affine.run(context, x_centered, y_cts);
 
@@ -3028,7 +3017,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "
 
             for (uint32_t j = 0; j < total_dim; j++) {
                 double x_norm = (X_mat.get(i, j) - mean) * inv_std * y;
-                expected.set(i, j, x_norm * gamma[j] + beta[j]);
+                expected.set(i, j, x_norm * gamma.get(j) + beta.get(j));
             }
         }
 
