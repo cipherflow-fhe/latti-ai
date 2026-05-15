@@ -254,6 +254,11 @@ pair<vector<CkksCiphertext>, vector<CkksCiphertext>> ParBlockColMajorLNStats::ru
         a_cts[bi] = ctx_copy.add_plain_ringt(a_cts[bi], eps_add_pt_);
     });
 
+    // Drop x_centered from level L-2 to match a_cts at level L-4
+    parallel_for(total_cts, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
+        x_centered[ct_idx] = ctx_copy.drop_level(x_centered[ct_idx], 2);
+    });
+
     return {move(a_cts), move(x_centered)};
 }
 
