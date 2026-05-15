@@ -51,8 +51,8 @@ private:
     ls::CkksCiphertext intra_block_col_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
     ls::CkksPlaintextRingt h0_mask_pt_;
-    ls::CkksPlaintextRingt inv_n_pt_;  // 1/N, scale q_{L-1} (for mean and E_x_sq)
-    ls::CkksPlaintextRingt iv_pt_;     // inv_var, normalizing (D²/q_{L-2} -> D)
+    ls::CkksPlaintextRingt inv_n_pt_;  // 1/N,
+    ls::CkksPlaintextRingt iv_pt_;     // inv_var
     ls::CkksPlaintextRingt eps_add_pt_;
 };
 
@@ -114,8 +114,8 @@ public:
                              uint32_t n_heads,
                              uint32_t y_level,
                              double inv_std,
-                             const std::vector<double>& gamma,
-                             const std::vector<double>& beta);
+                             Array<double, 1>&& gamma,
+                             Array<double, 1>&& beta);
     void prepare_weight();
 
     FeatureMatEncrypted run(ls::CkksContext& ctx,
@@ -129,7 +129,7 @@ private:
     uint32_t num_block_rows_, num_block_cols_;
     uint32_t y_level_;
     double inv_std_;
-    std::vector<double> gamma_vals_, beta_vals_;
+    Array<double, 1> gamma_vals_, beta_vals_;
 
     std::vector<ls::CkksPlaintextRingt> gamma_pt_;
     std::vector<ls::CkksPlaintextRingt> beta_add_pt_;

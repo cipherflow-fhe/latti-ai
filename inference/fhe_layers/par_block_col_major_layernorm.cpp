@@ -402,9 +402,9 @@ ParBlockColMajorLNAffine::ParBlockColMajorLNAffine(const CkksParameter& param,
                                                    uint32_t n_heads,
                                                    uint32_t y_level,
                                                    double inv_std,
-                                                   const vector<double>& gamma,
-                                                   const vector<double>& beta)
-    : Layer(param), y_level_(y_level), inv_std_(inv_std), gamma_vals_(gamma), beta_vals_(beta) {
+                                                   Array<double, 1>&& gamma,
+                                                   Array<double, 1>&& beta)
+    : Layer(param), y_level_(y_level), inv_std_(inv_std), gamma_vals_(move(gamma)), beta_vals_(move(beta)) {
     level_ = y_level;
     m_ = shape[0];
     d_ = block_size;
@@ -432,7 +432,7 @@ void ParBlockColMajorLNAffine::prepare_weight() {
     double D = param_.get_default_scale();
     double q_L = param_.get_q(y_level_);
     double q_L1 = param_.get_q(y_level_ - 1);
-    double beta_scale = D / q_L1 * D;
+    double beta_scale = D;
 
     uint32_t n_gamma_vecs = num_block_cols_ * n_cts_per_block_idx_;
     gamma_pt_.resize(n_gamma_vecs);
@@ -449,23 +449,23 @@ void ParBlockColMajorLNAffine::prepare_weight() {
                         for (uint32_t ci = 0; ci < num_chunks_; ci++) {
                             uint32_t slot = ci * chunk_size_ + base_slot;
                             if (h < n_heads_ && actual_col < cols_per_head_) {
-                                gamma_vec[slot] = inv_std_ * gamma_vals_[h * cols_per_head_ + actual_col];
+                                gamma_vec[slot] = inv_std_ * gamma_vals_.get(h * cols_per_head_ + actual_col);
                             }
                         }
                     }
                 }
             }
             uint32_t idx = bj * n_cts_per_block_idx_ + g;
-            gamma_pt_[idx] = ctx.encode_ringt(gamma_vec, q_L);
+            gamma_pt_[idx] = ctx.encode_ringt(gamma_vec, q_L / D * q_L1);
         }
     }
 
-    // beta: per (bi, bj, g) to handle row masking
+    // beta: per (bj, bi, g) to handle row and column masking
     uint32_t total_beta = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
     beta_add_pt_.resize(total_beta);
 
-    for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
-        for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
+    for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
+        for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
             for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
                 vector<double> beta_vec(n_slot_, 0.0);
                 for (uint32_t h_local = 0; h_local < S_; h_local++) {
@@ -478,7 +478,7 @@ void ParBlockColMajorLNAffine::prepare_weight() {
                             for (uint32_t ci = 0; ci < num_chunks_; ci++) {
                                 uint32_t slot = ci * chunk_size_ + base_slot;
                                 if (actual_row < m_ && h < n_heads_ && actual_col < cols_per_head_) {
-                                    beta_vec[slot] = beta_vals_[h * cols_per_head_ + actual_col];
+                                    beta_vec[slot] = beta_vals_.get(h * cols_per_head_ + actual_col);
                                 }
                             }
                         }
@@ -510,17 +510,16 @@ FeatureMatEncrypted ParBlockColMajorLNAffine::run(CkksContext& ctx,
 
         uint32_t gamma_idx = bj * n_cts_per_block_idx_ + g;
         auto gamma_mul = ctx_copy.ringt_to_mul(gamma_pt_[gamma_idx], y_level_);
-        auto yw = ctx_copy.rescale(ctx_copy.mult_plain_mul(y_cts[bi], gamma_mul), D);
+        auto yw = ctx_copy.rescale(ctx_copy.mult_plain_mul(y_cts[bi], gamma_mul), param_.get_q(y_level_ - 1));
 
         auto xc = x_centered[ct_idx].copy();
         if (xc.get_level() > (int)(y_level_ - 1)) {
             xc = ctx_copy.drop_level(xc, xc.get_level() - (int)(y_level_ - 1));
         }
 
-        auto out = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(xc, yw)), D / param_.get_q(y_level_ - 1) * D);
+        auto out = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(xc, yw)), D);
 
-        uint32_t beta_idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
-        result.data[ct_idx] = ctx_copy.add_plain_ringt(out, beta_add_pt_[beta_idx]);
+        result.data[ct_idx] = ctx_copy.add_plain_ringt(out, beta_add_pt_[ct_idx]);
     });
 
     result.level = y_level_ - 2;
