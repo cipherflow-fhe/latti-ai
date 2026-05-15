@@ -110,13 +110,14 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             n_in_channel_fid = int(feat['channel'])
             n_packed = math.ceil(n_in_channel_fid / pack)
             # Mirror the big_size expansion logic from the per-layer loop below:
-            # big_size conv2d / avgpool / mult_scalar consume inputs as
+            # big_size conv2d / avgpool / mult_scalar (2D only) consume inputs as
             #   n_in_channel * block_expansion[0] * block_expansion[1]
             # ciphertexts, not the default ceil(channel / pack_num).
             consumer = first_use.get(input_fid)
             if (
                 consumer is not None
                 and consumer.get('is_big_size', False)
+                and feat.get('dim', 2) == 2
                 and (consumer['type'] == 'conv2d' or 'avgpool' in consumer['type'] or consumer['type'] == 'mult_scalar')
             ):
                 input_shape = feat['shape']
@@ -142,12 +143,16 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         n_packed_in_channel = math.ceil(n_in_channel / pack)
         n_packed_out_channel = math.ceil(n_out_channel / pack)
 
-        # For big_conv/big_avgpool/big_mult_scalar, input CT count differs from the default n_packed_in_channel
+        # For big_conv/big_avgpool/big_mult_scalar (2D only), input CT count differs from the default n_packed_in_channel
         if (
-            layer_config['type'] == 'conv2d'
-            or 'avgpool' in layer_config['type']
-            or layer_config['type'] == 'mult_scalar'
-        ) and layer_config.get('is_big_size', False):
+            (
+                layer_config['type'] == 'conv2d'
+                or 'avgpool' in layer_config['type']
+                or layer_config['type'] == 'mult_scalar'
+            )
+            and layer_config.get('is_big_size', False)
+            and config_info['feature'][layer_input_feature_ids[0]].get('dim', 2) == 2
+        ):
             input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
             block_expansion = (
                 math.ceil(input_shape[0] / block_shape[0]),

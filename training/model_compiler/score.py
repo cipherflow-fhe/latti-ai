@@ -51,6 +51,9 @@ from inference.model_generator.layers.multiplexed_dw_conv1d_pack_layer import Mu
 from inference.model_generator.layers.poly_relu0d import PolyRelu0D
 from inference.model_generator.layers.poly_relu1d import PolyRelu1D
 from inference.model_generator.layers.poly_relu2d import PolyRelu2D
+from inference.model_generator.layers.par_block_col_major_ccmm import ParBlockColMajorCCMM
+from inference.model_generator.layers.par_block_col_major_cpmm import ParBlockColMajorCPMM
+from inference.model_generator.layers.par_block_col_major_transpose import ParBlockColMajorTranspose
 from inference.model_generator.layers.upsample_layer import UpsampleNearestLayer
 
 
@@ -552,6 +555,8 @@ class FheScoreParam:
         style = config.style
 
         op_counts = self._build_layer_and_get_op_count(preds, n, layer_type, style)
+        if op_counts is None:
+            return 0.0
         # op_counts may be a flat dict {str: int} (single level) or a level-grouped
         # dict {int: {str: int}} when ops span multiple levels (e.g. MultiplexedConv1D).
         if op_counts and isinstance(next(iter(op_counts)), int):
@@ -888,7 +893,54 @@ class FheScoreParam:
         elif layer_type in ('add', 'add2d'):
             layer = AddLayer()
             return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
-
+        elif layer_type == 'parcpmm':
+            m = preds[0].shape[0]
+            n_total = preds[0].shape[1]
+            n_per_head = n_total // config.n_heads
+            W_rows = n_total
+            W_cols = self.output_shape[1]
+            n_slot = n // 2
+            try:
+                layer = ParBlockColMajorCPMM(
+                    shape_A=(m, n_per_head),
+                    W_shape=(W_rows, W_cols),
+                    block_size=config.matmul_block_size,
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError):
+                return None
+        elif layer_type == 'partranspose':
+            m = preds[0].shape[0]
+            n_per_head = preds[0].shape[1] // config.n_heads
+            n_slot = n // 2
+            try:
+                layer = ParBlockColMajorTranspose(
+                    shape=(m, n_per_head),
+                    block_size=config.matmul_block_size,
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError):
+                return None
+        elif layer_type == 'parccmm':
+            m = preds[0].shape[0]
+            n_per_head = preds[0].shape[1] // config.n_heads
+            p_per_head = preds[1].shape[1] // config.n_heads
+            n_slot = n // 2
+            try:
+                layer = ParBlockColMajorCCMM(
+                    shape_A=(m, n_per_head),
+                    shape_B=(n_per_head, p_per_head),
+                    block_size=config.matmul_block_size,
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError):
+                return None
         # ── upsample_nearest ────────────────────────────────────────────────
         elif layer_type in ('upsample_nearest', 'resize'):
             input_shape = self.input_shape
