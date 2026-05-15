@@ -174,6 +174,10 @@ pair<vector<CkksCiphertext>, vector<CkksCiphertext>> BlockColMajorLNStats::run(C
         a_cts[bi] = ctx_copy.add_plain_ringt(a_cts[bi], eps_add_pt_);
     });
 
+    // Drop x_centered from level L-1 to match a_cts at level L-3
+    parallel_for(total_blocks, th_nums, ctx,
+                 [&](CkksContext& ctx_copy, int idx) { x_centered[idx] = ctx_copy.drop_level(x_centered[idx], 2); });
+
     return {move(a_cts), move(x_centered)};
 }
 
