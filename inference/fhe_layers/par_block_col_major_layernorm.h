@@ -21,7 +21,7 @@
 #include "../data_structs/feature_mat.h"
 
 // ============================================================
-// ParBlockColMajorLNStats — Phase 1: compute scaled variance (a) and x_centered
+// ParBlockColMajorLNStats — Phase 1: compute scaled variance (a)
 // Levels consumed: 4 (L -> L-4)
 // ============================================================
 class ParBlockColMajorLNStats : public Layer {
@@ -35,9 +35,8 @@ public:
                             double inv_var);
     void prepare_weight();
 
-    // Returns {a_cts[num_block_rows], x_centered[total_cts]}
-    std::pair<std::vector<ls::CkksCiphertext>, std::vector<ls::CkksCiphertext>> run(ls::CkksContext& ctx,
-                                                                                    const FeatureMatEncrypted& x);
+    // Returns a_cts[num_block_rows]
+    std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
 
 private:
     uint32_t m_, cols_per_head_, d_, n_slot_;
@@ -47,13 +46,40 @@ private:
     uint32_t total_dim_;
     double eps_, inv_var_;
 
-    // Column sum only (no cross-head sum)
     ls::CkksCiphertext intra_block_col_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
     ls::CkksPlaintextRingt h0_mask_pt_;
-    ls::CkksPlaintextRingt inv_n_pt_;  // 1/N,
+    ls::CkksPlaintextRingt inv_n_pt_;  // 1/N
     ls::CkksPlaintextRingt iv_pt_;     // inv_var
     ls::CkksPlaintextRingt eps_add_pt_;
+};
+
+// ============================================================
+// ParBlockColMajorLNXCentered — compute x_centered = x - mean(x)
+// Levels consumed: 2 (L -> L-2)
+// ============================================================
+class ParBlockColMajorLNXCentered : public Layer {
+public:
+    ParBlockColMajorLNXCentered(const ls::CkksParameter& param,
+                                Duo shape,  // full matrix: {M, n_heads * cols_per_head}
+                                uint32_t block_size,
+                                uint32_t n_heads,
+                                uint32_t init_level);
+    void prepare_weight();
+
+    std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
+
+private:
+    uint32_t m_, cols_per_head_, d_, n_slot_;
+    uint32_t n_heads_, n_h_padded_, S_, n_cts_per_block_idx_;
+    uint32_t chunk_size_, num_chunks_;
+    uint32_t num_block_rows_, num_block_cols_;
+    uint32_t total_dim_;
+
+    ls::CkksCiphertext intra_block_col_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
+
+    ls::CkksPlaintextRingt h0_mask_pt_;
+    ls::CkksPlaintextRingt inv_n_pt_;  // 1/N
 };
 
 // ============================================================
