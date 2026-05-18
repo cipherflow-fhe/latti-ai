@@ -625,6 +625,26 @@ class ActivationComputeNode(ComputeNode):
         self.zero_skip = [1, 1]
 
 
+class LayerNormComputeNode(ComputeNode):
+    """Represents a LayerNorm operator before compiler expansion.
+
+    Holds the epsilon, weight_path, and bias_path needed by the downstream
+    expand_layer_norm pass to wire the LN subgraph correctly.
+    """
+
+    def __init__(
+        self,
+        layer_id: str,
+        epsilon: float = 1e-5,
+        weight_path: str = '',
+        bias_path: str = '',
+    ):
+        super().__init__(layer_id, 'layernorm', 1, 1)
+        self.epsilon = epsilon
+        self.weight_path = weight_path
+        self.bias_path = bias_path
+
+
 class LayerAbstractGraph:
     def __init__(self):
         self.dag = nx.DiGraph()
@@ -814,6 +834,14 @@ class LayerAbstractGraph:
                 if layer_type in ('polyact', 'relu2d'):
                     compute_node.path = layer_json.get('weight_path', '')
                     compute_node.order = layer_json.get('order', 0)
+
+            elif layer_type == 'layernorm':
+                compute_node = LayerNormComputeNode(
+                    key,
+                    epsilon=layer_json.get('epsilon', 1e-5),
+                    weight_path=layer_json.get('weight_path', ''),
+                    bias_path=layer_json.get('bias_path', ''),
+                )
 
             else:
                 compute_node = ComputeNode(key, layer_type, channel_input, channel_output)
@@ -1024,6 +1052,45 @@ class LayerAbstractGraph:
                     'type': layer_type,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
+                }
+            if layer_type == 'ln_stats':
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
+                    'epsilon': layer.epsilon,
+                }
+            if layer_type == 'ln_cent':
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
+                }
+            if layer_type == 'ln_init':
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
+                }
+            if layer_type == 'ln_iter':
+                edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
+                if all(v is not None for v in edge_indices.values()):
+                    input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: edge_indices[n])]
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
+                }
+            if layer_type == 'ln_affine':
+                edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
+                if all(v is not None for v in edge_indices.values()):
+                    input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: edge_indices[n])]
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
+                    'weight_path': layer.weight_path,
+                    'bias_path': layer.bias_path,
                 }
             if 'fc' in layer_type:
                 absorb_type = list()

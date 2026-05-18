@@ -38,6 +38,7 @@ from .operations.ConvTranspose import ConvTransposeComputeNode
 from .operations.PolyAct import PolyActComputeNode
 from .operations.MatMul import MatMulComputeNode
 from .operations.Transpose import TransposeComputeNode
+from .operations.LayerNorm import LayerNormComputeNode
 from .onnx_model_manipulations import simplify_onnx_model
 
 log = logging.getLogger(__name__)
@@ -174,6 +175,8 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_m
                 compute_node = MatMulComputeNode.from_onnx_node(n, features_nodes)
             case 'Transpose':
                 compute_node = TransposeComputeNode.from_onnx_node(n, features_nodes)
+            case 'LayerNorm':
+                compute_node = LayerNormComputeNode.from_onnx_node(n, features_nodes)
             case 'RangeNormPoly2d':
                 compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
             case 'RangeNormPoly1d':
