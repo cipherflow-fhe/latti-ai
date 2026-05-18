@@ -1,0 +1,351 @@
+/*
+ * Copyright (c) 2025-2026 CipherFlow (Shenzhen) Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include "par_block_col_major_polyactrn.h"
+#include "layer_util.h"
+#include <cassert>
+
+using namespace std;
+using namespace lattisense;
+
+// ============================================================
+// ParBlockColMajorPolyActRNGamma
+// ============================================================
+
+ParBlockColMajorPolyActRNGamma::ParBlockColMajorPolyActRNGamma(const CkksParameter& param,
+                                                               Duo shape,
+                                                               uint32_t block_size,
+                                                               uint32_t n_heads,
+                                                               uint32_t init_level,
+                                                               Array<double, 1>&& gamma)
+    : Layer(param), gamma_vals_(move(gamma)) {
+    level_ = init_level;
+    m_ = shape[0];
+    d_ = block_size;
+    n_heads_ = n_heads;
+    cols_per_head_ = shape[1] / n_heads_;
+    n_h_padded_ = next_pow2(n_heads);
+    n_slot_ = param_.get_n() / 2;
+
+    if ((uint32_t)n_slot_ >= n_h_padded_ * d_ * d_) {
+        S_ = n_h_padded_;
+        chunk_size_ = n_h_padded_ * d_ * d_;
+        n_cts_per_block_idx_ = 1;
+    } else {
+        S_ = n_slot_ / (d_ * d_);
+        chunk_size_ = n_slot_;
+        n_cts_per_block_idx_ = n_h_padded_ / S_;
+    }
+    num_chunks_ = n_slot_ / chunk_size_;
+    num_block_rows_ = div_ceil(m_, d_);
+    num_block_cols_ = div_ceil(cols_per_head_, d_);
+}
+
+void ParBlockColMajorPolyActRNGamma::prepare_weight() {
+    CkksContext ctx = CkksContext::create_empty_context(param_);
+    double q_L = param_.get_q(level_);
+
+    uint32_t n_gamma_vecs = num_block_cols_ * n_cts_per_block_idx_;
+    gamma_pt_.resize(n_gamma_vecs);
+
+    for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
+        for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
+            vector<double> gamma_vec(n_slot_, 0.0);
+            for (uint32_t h_local = 0; h_local < S_; h_local++) {
+                uint32_t h = g * S_ + h_local;
+                for (uint32_t col = 0; col < d_; col++) {
+                    uint32_t actual_col = bj * d_ + col;
+                    for (uint32_t row = 0; row < d_; row++) {
+                        uint32_t base_slot = (row + d_ * col) * S_ + h_local;
+                        for (uint32_t ci = 0; ci < num_chunks_; ci++) {
+                            uint32_t slot = ci * chunk_size_ + base_slot;
+                            if (h < n_heads_ && actual_col < cols_per_head_) {
+                                gamma_vec[slot] = gamma_vals_.get(h * cols_per_head_ + actual_col);
+                            }
+                        }
+                    }
+                }
+            }
+            uint32_t idx = bj * n_cts_per_block_idx_ + g;
+            gamma_pt_[idx] = ctx.encode_ringt(gamma_vec, q_L);
+        }
+    }
+}
+
+FeatureMatEncrypted ParBlockColMajorPolyActRNGamma::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
+    double D = param_.get_default_scale();
+    uint32_t total_cts = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
+
+    FeatureMatEncrypted result(&ctx, level_ - 1);
+    result.shape = {m_, n_heads_ * cols_per_head_};
+    result.matmul_block_size = d_;
+    result.data.resize(total_cts);
+
+    parallel_for(total_cts, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
+        uint32_t block_idx = ct_idx / n_cts_per_block_idx_;
+        uint32_t g = ct_idx % n_cts_per_block_idx_;
+        uint32_t bj = block_idx / num_block_rows_;
+
+        uint32_t gamma_idx = bj * n_cts_per_block_idx_ + g;
+        auto gamma_mul = ctx_copy.ringt_to_mul(gamma_pt_[gamma_idx], level_);
+        auto product = ctx_copy.mult_plain_mul(x.data[ct_idx], gamma_mul);
+        result.data[ct_idx] = ctx_copy.rescale(product, D);
+    });
+
+    result.level = level_ - 1;
+    return result;
+}
+
+// ============================================================
+// ParBlockColMajorPolyActRNPoly
+// ============================================================
+
+ParBlockColMajorPolyActRNPoly::ParBlockColMajorPolyActRNPoly(const CkksParameter& param,
+                                                             Duo shape,
+                                                             uint32_t block_size,
+                                                             uint32_t n_heads,
+                                                             uint32_t init_level,
+                                                             Array<double, 2>&& coeffs,
+                                                             uint32_t degree)
+    : Layer(param), degree_(degree), coeffs_(move(coeffs)) {
+    assert(degree_ == 2 || degree_ == 4);
+    assert(coeffs_.get_shape()[0] == degree_ + 1);
+    assert(coeffs_.get_shape()[1] >= shape[1]);
+    level_ = init_level;
+    m_ = shape[0];
+    d_ = block_size;
+    n_heads_ = n_heads;
+    cols_per_head_ = shape[1] / n_heads_;
+    n_h_padded_ = next_pow2(n_heads);
+    n_slot_ = param_.get_n() / 2;
+
+    if ((uint32_t)n_slot_ >= n_h_padded_ * d_ * d_) {
+        S_ = n_h_padded_;
+        chunk_size_ = n_h_padded_ * d_ * d_;
+        n_cts_per_block_idx_ = 1;
+    } else {
+        S_ = n_slot_ / (d_ * d_);
+        chunk_size_ = n_slot_;
+        n_cts_per_block_idx_ = n_h_padded_ / S_;
+    }
+    num_chunks_ = n_slot_ / chunk_size_;
+    num_block_rows_ = div_ceil(m_, d_);
+    num_block_cols_ = div_ceil(cols_per_head_, d_);
+}
+
+// Helper: encode a per-column multiplicative plaintext for coefficient row `coeff_row`
+// in par format, for a given (bj, g) pair.
+static vector<double> build_par_coeff_vec(uint32_t n_slot,
+                                          uint32_t chunk_size,
+                                          uint32_t num_chunks,
+                                          uint32_t d,
+                                          uint32_t S,
+                                          uint32_t bj,
+                                          uint32_t g,
+                                          uint32_t n_heads,
+                                          uint32_t cols_per_head,
+                                          const Array<double, 2>& coeffs,
+                                          uint32_t coeff_row) {
+    vector<double> vec(n_slot, 0.0);
+    for (uint32_t h_local = 0; h_local < S; h_local++) {
+        uint32_t h = g * S + h_local;
+        for (uint32_t col = 0; col < d; col++) {
+            uint32_t actual_col = bj * d + col;
+            for (uint32_t row = 0; row < d; row++) {
+                uint32_t base_slot = (row + d * col) * S + h_local;
+                for (uint32_t ci = 0; ci < num_chunks; ci++) {
+                    uint32_t slot = ci * chunk_size + base_slot;
+                    if (h < n_heads && actual_col < cols_per_head) {
+                        vec[slot] = coeffs.get(coeff_row, h * cols_per_head + actual_col);
+                    }
+                }
+            }
+        }
+    }
+    return vec;
+}
+
+void ParBlockColMajorPolyActRNPoly::prepare_weight() {
+    CkksContext ctx = CkksContext::create_empty_context(param_);
+    double D = param_.get_default_scale();
+    double q_L = param_.get_q(level_);
+    double q_L1 = param_.get_q(level_ - 1);
+
+    uint32_t n_coeff_vecs = num_block_cols_ * n_cts_per_block_idx_;
+
+    // --- c2: per (bj, g)---
+    double c2_scale = q_L / D * q_L1;
+    c2_pt_.resize(n_coeff_vecs);
+    for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
+        for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
+            auto vec = build_par_coeff_vec(n_slot_, chunk_size_, num_chunks_, d_, S_, bj, g, n_heads_, cols_per_head_,
+                                           coeffs_, 2);
+            c2_pt_[bj * n_cts_per_block_idx_ + g] = ctx.encode_ringt(vec, c2_scale);
+        }
+    }
+
+    // --- c1: per (bj, g) ---
+    c1_pt_.resize(n_coeff_vecs);
+    for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
+        for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
+            auto vec = build_par_coeff_vec(n_slot_, chunk_size_, num_chunks_, d_, S_, bj, g, n_heads_, cols_per_head_,
+                                           coeffs_, 1);
+            c1_pt_[bj * n_cts_per_block_idx_ + g] = ctx.encode_ringt(vec, q_L);
+        }
+    }
+
+    // --- c0: per (bj, bi, g), scale D, with 0-padding ---
+    uint32_t total_c0 = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
+    c0_add_pt_.resize(total_c0);
+    for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
+        for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
+            for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
+                vector<double> vec(n_slot_, 0.0);
+                for (uint32_t h_local = 0; h_local < S_; h_local++) {
+                    uint32_t h = g * S_ + h_local;
+                    for (uint32_t col = 0; col < d_; col++) {
+                        uint32_t actual_col = bj * d_ + col;
+                        for (uint32_t row = 0; row < d_; row++) {
+                            uint32_t actual_row = bi * d_ + row;
+                            uint32_t base_slot = (row + d_ * col) * S_ + h_local;
+                            for (uint32_t ci = 0; ci < num_chunks_; ci++) {
+                                uint32_t slot = ci * chunk_size_ + base_slot;
+                                if (actual_row < m_ && h < n_heads_ && actual_col < cols_per_head_) {
+                                    vec[slot] = coeffs_.get(0, h * cols_per_head_ + actual_col);
+                                }
+                            }
+                        }
+                    }
+                }
+                uint32_t c0_idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
+                c0_add_pt_[c0_idx] = ctx.encode_ringt(vec, D);
+            }
+        }
+    }
+
+    // --- Degree-4 additional: c3 and c4 ---
+    if (degree_ == 4) {
+        double q_L2 = param_.get_q(level_ - 2);
+
+        double c4_scale = q_L / D * q_L / D * q_L1 / D * q_L2;
+        c4_pt_.resize(n_coeff_vecs);
+        for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
+            for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
+                auto vec = build_par_coeff_vec(n_slot_, chunk_size_, num_chunks_, d_, S_, bj, g, n_heads_,
+                                               cols_per_head_, coeffs_, 4);
+                c4_pt_[bj * n_cts_per_block_idx_ + g] = ctx.encode_ringt(vec, c4_scale);
+            }
+        }
+
+        double c3_scale = q_L / D * q_L / D * q_L2;
+        c3_pt_.resize(n_coeff_vecs);
+        for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
+            for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
+                auto vec = build_par_coeff_vec(n_slot_, chunk_size_, num_chunks_, d_, S_, bj, g, n_heads_,
+                                               cols_per_head_, coeffs_, 3);
+                c3_pt_[bj * n_cts_per_block_idx_ + g] = ctx.encode_ringt(vec, c3_scale);
+            }
+        }
+    }
+}
+
+FeatureMatEncrypted ParBlockColMajorPolyActRNPoly::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
+    double D = param_.get_default_scale();
+    uint32_t total_cts = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
+    uint32_t out_level = (degree_ == 4) ? level_ - 3 : level_ - 2;
+
+    FeatureMatEncrypted result(&ctx, out_level);
+    result.shape = {m_, n_heads_ * cols_per_head_};
+    result.matmul_block_size = d_;
+    result.data.resize(total_cts);
+
+    if (degree_ == 2) {
+        parallel_for(total_cts, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
+            uint32_t block_idx = ct_idx / n_cts_per_block_idx_;
+            uint32_t g = ct_idx % n_cts_per_block_idx_;
+            uint32_t bj = block_idx / num_block_rows_;
+            uint32_t ck_idx = bj * n_cts_per_block_idx_ + g;
+
+            // x^2 = x * x -> level L-1
+            auto x_sq_raw = ctx_copy.mult(x.data[ct_idx], x.data[ct_idx]);
+            auto x_sq = ctx_copy.rescale(ctx_copy.relinearize(x_sq_raw), D / param_.get_q(level_) * D);
+
+            // c2*x^2 -> level L-2, scale D
+            auto c2_mul = ctx_copy.ringt_to_mul(c2_pt_[ck_idx], level_ - 1);
+            auto c2x2 = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_sq, c2_mul), D);
+
+            // c1*x -> level L-1, scale D; drop to L-2
+            auto c1_mul = ctx_copy.ringt_to_mul(c1_pt_[ck_idx], level_);
+            auto c1x = ctx_copy.rescale(ctx_copy.mult_plain_mul(x.data[ct_idx], c1_mul), D);
+            auto c1x_drop = ctx_copy.drop_level(c1x);
+
+            // y = c0 + c1*x + c2*x^2
+            auto y = ctx_copy.add(c1x_drop, c2x2);
+            result.data[ct_idx] = ctx_copy.add_plain_ringt(y, c0_add_pt_[ct_idx]);
+        });
+    } else {
+        // degree == 4
+        double q_L2 = param_.get_q(level_ - 2);
+        double S_high = param_.get_q(level_) / D * q_L2;
+
+        parallel_for(total_cts, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
+            uint32_t block_idx = ct_idx / n_cts_per_block_idx_;
+            uint32_t g = ct_idx % n_cts_per_block_idx_;
+            uint32_t bj = block_idx / num_block_rows_;
+            uint32_t ck_idx = bj * n_cts_per_block_idx_ + g;
+
+            // === x^2 ===
+            auto x_sq_raw = ctx_copy.mult(x.data[ct_idx], x.data[ct_idx]);
+            auto x_sq = ctx_copy.rescale(ctx_copy.relinearize(x_sq_raw), D / param_.get_q(level_) * D);
+
+            // === Low part: c0 + c1*x + c2*x^2 -> level L-2, scale D ===
+            auto c2_mul = ctx_copy.ringt_to_mul(c2_pt_[ck_idx], level_ - 1);
+            auto c2x2 = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_sq, c2_mul), D);
+
+            auto c1_mul = ctx_copy.ringt_to_mul(c1_pt_[ck_idx], level_);
+            auto c1x = ctx_copy.rescale(ctx_copy.mult_plain_mul(x.data[ct_idx], c1_mul), D);
+            auto c1x_drop = ctx_copy.drop_level(c1x);
+
+            auto low = ctx_copy.add(c1x_drop, c2x2);
+            low = ctx_copy.add_plain_ringt(low, c0_add_pt_[ct_idx]);
+
+            // === High part: c3*x + c4*x^2 -> level L-2, scale S_high ===
+            auto c4_mul = ctx_copy.ringt_to_mul(c4_pt_[ck_idx], level_ - 1);
+            auto c4x2 = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_sq, c4_mul), S_high);
+
+            auto c3_mul = ctx_copy.ringt_to_mul(c3_pt_[ck_idx], level_);
+            auto c3x = ctx_copy.rescale(ctx_copy.mult_plain_mul(x.data[ct_idx], c3_mul), S_high);
+            auto c3x_drop = ctx_copy.drop_level(c3x);
+
+            auto high = ctx_copy.add(c3x_drop, c4x2);
+
+            // === Final: drop(low) + x^2 * high -> level L-3, scale D ===
+            auto x_sq_drop = ctx_copy.drop_level(x_sq);
+
+            auto product = ctx_copy.mult(x_sq_drop, high);
+            auto x2_high = ctx_copy.rescale(ctx_copy.relinearize(product), D);
+
+            auto low_drop = ctx_copy.drop_level(low);
+
+            result.data[ct_idx] = ctx_copy.add(low_drop, x2_high);
+        });
+    }
+
+    result.level = out_level;
+    return result;
+}
