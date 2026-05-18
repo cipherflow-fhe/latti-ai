@@ -60,6 +60,8 @@
 #include "fhe_layers/upsample_nearest_layer.h"
 #include "fhe_layers/block_col_major_layernorm.h"
 #include "fhe_layers/par_block_col_major_layernorm.h"
+#include "fhe_layers/block_col_major_polyactrn.h"
+#include "fhe_layers/par_block_col_major_polyactrn.h"
 #include "data_structs/feature_mat.h"
 #include "ut_util.h"
 #include <cxx_sdk_v2/cxx_fhe_task.h>
@@ -3145,10 +3147,15 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
         X_enc.matmul_block_size = d;
         X_enc.block_col_major_pack(X_mat, d, false, default_scale);
 
-        // Phase 1: Stats
+        // Phase 1a: Stats (a_cts only)
         BlockColMajorLNStats stats(param, {m, n}, d, init_level, eps, inv_var);
         stats.prepare_weight();
-        auto [a_cts, x_centered] = stats.run(context, X_enc);
+        auto a_cts = stats.run(context, X_enc);
+
+        // Phase 1b: XCentered
+        BlockColMajorLNXCentered xc(param, {m, n}, d, init_level);
+        xc.prepare_weight();
+        auto x_centered = xc.run(context, X_enc);
 
         // Phase 2: Minimax Init, 2 levels consumpsion
         BlockColMajorLNMinimaxInit minimax(param, d, init_level - 3, c0, c1, c2);
@@ -3239,10 +3246,15 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "
         X_enc.matmul_block_size = d;
         X_enc.par_block_col_major_pack(X_mat, d, n_heads, false, default_scale);
 
-        // Phase 1: Stats (full-dimension normalization: N = total_dim)
+        // Phase 1a: Stats (a_cts only)
         ParBlockColMajorLNStats stats(param, {seq_len, total_dim}, d, n_heads, init_level, eps, inv_var);
         stats.prepare_weight();
-        auto [a_cts, x_centered] = stats.run(context, X_enc);
+        auto a_cts = stats.run(context, X_enc);
+
+        // Phase 1b: XCentered
+        ParBlockColMajorLNXCentered xc(param, {seq_len, total_dim}, d, n_heads, init_level);
+        xc.prepare_weight();
+        auto x_centered = xc.run(context, X_enc);
 
         // Phase 2: Minimax Init (a is now at init_level-4 due to par Stats extra mask level)
         ParBlockColMajorLNMinimaxInit minimax(param, d, init_level - 4, c0, c1, c2);
@@ -3303,6 +3315,131 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "
 
     SECTION("d=64, seq=197, heads=3, head_dim=64, iters=1") {
         run_par_ln_test(64, 197, 3, 64, 1, 11);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_polyactrn", "", HeteroProcessors) {
+    auto run_polyactrn_test = [&](uint32_t d, uint32_t m, uint32_t n, uint32_t degree, int init_level) {
+        // Generate random data
+        Array<double, 2> X_mat = gen_random_array<2>({m, n}, 1.0);
+        Array<double, 1> gamma = gen_random_array<1>({n}, 0.5);
+        Array<double, 2> coeffs = gen_random_array<2>({degree + 1, n}, 0.3);
+
+        // Encrypt
+        FeatureMatEncrypted X_enc(&this->context, init_level);
+        X_enc.shape = {m, n};
+        X_enc.matmul_block_size = d;
+        X_enc.block_col_major_pack(X_mat, d, false, this->default_scale);
+
+        // Phase 1: Gamma scaling
+        BlockColMajorPolyActRNGamma gamma_layer(this->param, {m, n}, d, init_level, gamma.copy());
+        gamma_layer.prepare_weight();
+        auto gamma_result = gamma_layer.run(this->context, X_enc);
+
+        // Phase 2: Polynomial
+        uint32_t poly_level = init_level - 1;
+        BlockColMajorPolyActRNPoly poly(this->param, {m, n}, d, poly_level, coeffs.copy(), degree);
+        poly.prepare_weight();
+        auto result_enc = poly.run(this->context, gamma_result);
+
+        // Unpack
+        auto result = result_enc.block_col_major_unpack(m, n, d);
+
+        // Compute expected: poly(gamma * x)
+        Array<double, 2> expected({(uint64_t)m, (uint64_t)n});
+        for (uint32_t i = 0; i < m; i++) {
+            for (uint32_t j = 0; j < n; j++) {
+                double gx = gamma.get(j) * X_mat.get(i, j);
+                double poly_val = 0.0;
+                double gx_pow = 1.0;
+                for (uint32_t k = 0; k <= degree; k++) {
+                    poly_val += coeffs.get(k, j) * gx_pow;
+                    gx_pow *= gx;
+                }
+                expected.set(i, j, poly_val);
+            }
+        }
+
+        print_double_message(result.to_array_1d().data(), "output_mg", 10);
+        print_double_message(expected.to_array_1d().data(), "output_expected", 10);
+
+        auto compare_result = compare(expected, result);
+        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    };
+
+    SECTION("degree=2, d=64, m=197, n=192") {
+        run_polyactrn_test(64, 197, 192, 2, 3);
+    }
+    SECTION("degree=4, d=64, m=197, n=192") {
+        run_polyactrn_test(64, 197, 192, 4, 4);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_polyactrn", "", HeteroProcessors) {
+    auto run_par_polyactrn_test = [&](uint32_t d, uint32_t seq_len, uint32_t n_heads, uint32_t head_dim,
+                                      uint32_t degree, int init_level) {
+        uint32_t total_dim = n_heads * head_dim;
+
+        // Generate random data
+        Array<double, 2> X_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
+        Array<double, 1> gamma = gen_random_array<1>({total_dim}, 0.5);
+        Array<double, 2> coeffs = gen_random_array<2>({degree + 1, total_dim}, 0.3);
+
+        // Encrypt using par_block_col_major_pack
+        FeatureMatEncrypted X_enc(&this->context, init_level);
+        X_enc.shape = {seq_len, head_dim};
+        X_enc.matmul_block_size = d;
+        X_enc.par_block_col_major_pack(X_mat, d, n_heads, false, this->default_scale);
+
+        // Phase 1: Gamma scaling
+        ParBlockColMajorPolyActRNGamma gamma_layer(this->param, {seq_len, total_dim}, d, n_heads, init_level,
+                                                   gamma.copy());
+        gamma_layer.prepare_weight();
+        auto gamma_result = gamma_layer.run(this->context, X_enc);
+
+        // Phase 2: Polynomial
+        uint32_t poly_level = init_level - 1;
+        ParBlockColMajorPolyActRNPoly poly(this->param, {seq_len, total_dim}, d, n_heads, poly_level, coeffs.copy(),
+                                           degree);
+        poly.prepare_weight();
+        auto result_enc = poly.run(this->context, gamma_result);
+
+        // Unpack
+        auto result = result_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
+
+        // Compute expected: poly(gamma * x)
+        Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
+        for (uint32_t i = 0; i < seq_len; i++) {
+            for (uint32_t j = 0; j < total_dim; j++) {
+                double gx = gamma.get(j) * X_mat.get(i, j);
+                double poly_val = 0.0;
+                double gx_pow = 1.0;
+                for (uint32_t k = 0; k <= degree; k++) {
+                    poly_val += coeffs.get(k, j) * gx_pow;
+                    gx_pow *= gx;
+                }
+                expected.set(i, j, poly_val);
+            }
+        }
+
+        print_double_message(result.to_array_1d().data(), "output_mg", 10);
+        print_double_message(expected.to_array_1d().data(), "output_expected", 10);
+
+        auto compare_result = compare(expected, result);
+        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    };
+
+    SECTION("degree=2, d=64, seq=197, heads=3, head_dim=64") {
+        run_par_polyactrn_test(64, 197, 3, 64, 2, 3);
+    }
+    SECTION("degree=4, d=64, seq=197, heads=3, head_dim=64") {
+        run_par_polyactrn_test(64, 197, 3, 64, 4, 4);
     }
 }
 
