@@ -1039,6 +1039,7 @@ class LayerAbstractGraph:
                     'type': layer_type,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
+                    'weight_path': layer_id + '.weight',
                 }
             if layer_type == 'partranspose':
                 layers[layer_id] = {
