@@ -21,7 +21,7 @@
 #include "../data_structs/feature_mat.h"
 
 // ============================================================
-// BlockColMajorLNStats — Phase 1: compute scaled variance (a) and x_centered
+// BlockColMajorLNStats — Phase 1: compute scaled variance (a)
 // ============================================================
 class BlockColMajorLNStats : public Layer {
 public:
@@ -33,20 +33,37 @@ public:
                          double inv_var);
     void prepare_weight();
 
-    std::pair<std::vector<ls::CkksCiphertext>, std::vector<ls::CkksCiphertext>> run(ls::CkksContext& ctx,
-                                                                                    const FeatureMatEncrypted& x);
+    std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
 
 private:
     uint32_t m_, n_, d_, n_slot_, chunk_size_, num_chunks_;
     uint32_t num_block_rows_, num_block_cols_;
     double eps_, inv_var_;
 
-    // Row-sum helper: sum all d column elements per row within a single block ct
     ls::CkksCiphertext intra_block_row_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
-    ls::CkksPlaintextRingt inv_n_pt_;    // 1/N,
-    ls::CkksPlaintextRingt iv_pt_;       // inv_var,
+    ls::CkksPlaintextRingt inv_n_pt_;    // 1/N
+    ls::CkksPlaintextRingt iv_pt_;       // inv_var
     ls::CkksPlaintextRingt eps_add_pt_;  // eps*inv_var
+};
+
+// ============================================================
+// BlockColMajorLNXCentered — compute x_centered = x - mean(x)
+// ============================================================
+class BlockColMajorLNXCentered : public Layer {
+public:
+    BlockColMajorLNXCentered(const ls::CkksParameter& param, Duo shape, uint32_t block_size, uint32_t init_level);
+    void prepare_weight();
+
+    std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
+
+private:
+    uint32_t m_, n_, d_, n_slot_, chunk_size_, num_chunks_;
+    uint32_t num_block_rows_, num_block_cols_;
+
+    ls::CkksCiphertext intra_block_row_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
+
+    ls::CkksPlaintextRingt inv_n_pt_;  // 1/N
 };
 
 // ============================================================
