@@ -145,6 +145,8 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 'pack_num': graph.dag.nodes[node]['pack_num'],
                 'invalid_fill': node.invalid_fill,
             }
+            if node.data_type:
+                param_dict[node.node_id]['data_type'] = node.data_type
 
     task_config = {
         'task_type': 'fhe',
@@ -258,10 +260,13 @@ def update_shape_for_btp(graph: LayerAbstractGraph):
         elif compute_node.layer_type == 'parcpmm':
             succs[0].shape[0] = preds[0].shape[0]
         elif compute_node.layer_type == 'partranspose':
-            succs[0].shape[0] = preds[0].shape[1] if len(preds[0].shape) > 1 else preds[0].shape[0]
-            succs[0].shape[1] = preds[0].shape[0]
+            n_heads = max(1, config.n_heads)
+            succs[0].shape[0] = preds[0].shape[1] // n_heads if len(preds[0].shape) > 1 else preds[0].shape[0]
+            succs[0].shape[1] = preds[0].shape[0] * n_heads
         elif compute_node.layer_type == 'parccmm':
             succs[0].shape[0] = preds[0].shape[0]
+            if len(preds) > 1 and len(preds[1].shape) > 1:
+                succs[0].shape[1] = preds[1].shape[1]
         else:
             for i in range(2):
                 succs[0].shape[i] = preds[0].shape[i]
