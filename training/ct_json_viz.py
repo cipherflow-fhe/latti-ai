@@ -59,7 +59,8 @@ def main(input_filename, output_folder, output_name='graph.gv'):
 
     output_path = os.path.join(output_folder, output_name)
     graph.render(output_path, format='pdf', view=False)
-    print(f'Graph saved to {output_path}.pdf')
+    graph.render(output_path, format='png', view=False)
+    print(f'Graph saved to {output_path}.pdf and {output_path}.png')
 
 
 if __name__ == '__main__':

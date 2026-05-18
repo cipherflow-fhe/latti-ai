@@ -48,7 +48,7 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     transforms.process_polyact(pt_graph)
     transforms.set_level_costs(pt_graph)
 
-    from absorb_scale_dp import absorb_scale_dp
+    from absorb_scale_dp_iter import absorb_scale_dp
 
     absorb_scale_dp(pt_graph)
 

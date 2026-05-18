@@ -325,6 +325,7 @@ class BranchInBranchMultcoeff(nn.Module):
 
     def __init__(self):
         super().__init__()
+        self.conv = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
         self.bn = nn.BatchNorm2d(32)
         self.conv_a = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
         self.bn_a = nn.BatchNorm2d(32)
@@ -332,9 +333,35 @@ class BranchInBranchMultcoeff(nn.Module):
         self.bn_b = nn.BatchNorm2d(32)
 
     def forward(self, x):
-        x = self.bn(x)
-        inner = self.bn_a(self.conv_a(x)) + self.bn_b(self.conv_b(x))  # 内层 add
+        x = self.conv(x) + x
+        inner = self.bn_a(self.conv_a(x)) + self.bn_b(x)  # 内层 add
         return (inner + x) * 0.5  # 外层 add + mult_coeff
+
+
+class MultiInputBranchInBranchMultcoeff(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn = nn.BatchNorm2d(32)
+        self.conv_a = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn_a = nn.BatchNorm2d(32)
+        self.conv_b = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn_b = nn.BatchNorm2d(32)
+        self.bn_c = nn.BatchNorm2d(32)
+
+    def forward(self, x, x1):
+        x = self.conv(x) + x
+        # x_1_1 = self.conv(x1)
+        # x_1_2 = self.bn(x1)
+        # out1 = torch.cat([x_1_1, x_1_2, x], dim=1)
+        # inner = self.bn_a(self.conv_a(x)) + self.bn_b(x)  # 内层 add
+        # inner = torch.cat([self.bn_a(self.conv_a(x)), self.bn_b(x), self.bn_c(x)],dim=1)
+        conv_out1 = self.conv_a(x)
+        conv_out2 = self.conv_b(x)
+        inner = self.conv_a(conv_out1) + self.bn_b(conv_out2) + self.bn_c(x)
+        out2 = 0.5 * inner + x
+        out2 = x + out2
+        return out2  # 外层 add + mult_coeff
 
 
 class ThreeBranchMultcoeff(nn.Module):
@@ -373,7 +400,7 @@ class DeepNestedMultcoeff(nn.Module):
         self.bn3 = nn.BatchNorm2d(32)
 
     def forward(self, x):
-        x = self.conv1(x)
+        x = self.bn1(x)
         x1 = self.bn1(self.conv1(x)) + x
         x2 = self.bn2(self.conv2(x1)) + x1
         x3 = self.bn3(self.conv3(x2)) + x2
@@ -418,6 +445,30 @@ class NewModel(nn.Module):
         out1 = torch.cat([self.bn(x), self.conv1(x)], dim=1)  # 32 + 32 = 64
         # 外层 cat：conv2(64→32) + bn1(64) + identity(64) = 32 + 64 + 64 = 160
         out2 = torch.cat([self.conv2(out1), self.bn1(out1), self.bn2(out1)], dim=1)
+        out = out2 * 0.5
+        return out
+
+
+class NewModel1(nn.Module):
+    def __init__(self):
+        super().__init__()
+        n_cat = 96
+        self.conv = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)  # 内 cat 的 conv 臂
+        self.conv1 = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.conv1_1 = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.bn = nn.BatchNorm2d(32)
+        self.bn0 = nn.BatchNorm2d(32)
+        # 内 cat 后 channel = 32 + 32 = 64，下游层按 64 设
+        self.conv2 = nn.Conv2d(n_cat, 32, kernel_size=3, padding=1, bias=False)  # 外 cat 的 conv 臂
+        self.bn1 = nn.BatchNorm2d(n_cat)  # 外 cat 的 bn 臂
+        self.bn2 = nn.BatchNorm2d(n_cat)
+
+    def forward(self, x):
+        # mc_out = x * 0.5
+        x = self.bn(x)
+        out1 = torch.cat([self.bn(x), self.bn0(x), self.conv1(x)], dim=1)  # 32 + 32 = 64
+        # 外层 cat：conv2(64→32) + bn1(64) + identity(64) = 32 + 64 + 64 = 160
+        out2 = torch.cat([self.conv2(out1), self.bn1(out1)], dim=1)
         out = out2 * 0.5
         return out
 

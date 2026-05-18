@@ -683,6 +683,12 @@ class TestLayerInteraction(CompilerTestBase):
         model = nn_modules.BranchInBranchMultcoeff()
         graph, score = self._export_and_compile(model, (1, 32, 32, 32))
 
+    def test_multi_input_branch_in_branch_multcoeff(self):
+        """外层 add(内层三输入 add, identity) * 0.5：
+        分支里还有分支，scale 要正确分配到所有叶子。"""
+        model = nn_modules.MultiInputBranchInBranchMultcoeff()
+        graph, score = self._export_and_compile(model, [(1, 32, 32, 32), (1, 32, 32, 32)])
+
     def test_three_branch_multcoeff(self):
         """三条臂汇入同一 add，再 *0.5：测试 input_index 多臂场景。"""
         model = nn_modules.ThreeBranchMultcoeff()
@@ -699,6 +705,13 @@ class TestLayerInteraction(CompilerTestBase):
         期望：conv 臂吸收 scale，identity 臂或 add 后插 mult_scalar，编译不报错。
         """
         # model = nn_modules.MultCoeffThenResidual()
+        model = nn_modules.NewModel()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+    def test_cat_branch_multcoeff(self):
+        """cat 的多分支输出后接 mult_coeff：
+        scale 应在共享上游或各分支上正确吸收/补偿，编译不报错。
+        """
         model = nn_modules.NewModel()
         graph, score = self._export_and_compile(model, (1, 32, 32, 32))
 
