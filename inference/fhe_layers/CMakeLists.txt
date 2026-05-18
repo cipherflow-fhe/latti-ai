@@ -30,6 +30,10 @@ add_library(fhe_layers
   par_block_col_major_transpose.cpp
   par_block_col_major_ccmm.cpp
   par_block_col_major_cpmm.cpp
+  block_col_major_layernorm.cpp
+  par_block_col_major_layernorm.cpp
+  block_col_major_polyactrn.cpp
+  par_block_col_major_polyactrn.cpp
   ../data_structs/feature.cpp
   ../data_structs/feature1d.cpp
   ../data_structs/feature2d.cpp
