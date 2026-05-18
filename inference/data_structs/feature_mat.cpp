@@ -133,7 +133,7 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
     int n_slot = context->get_parameter().get_n() / 2;
     const int N_THREAD = 4;
 
-    // Determine chunk sizing and n_blocks_per_chunk(S)
+    // Determine chunk sizing and n_heads_per_chunk(S)
     uint32_t S, chunk_size, n_cts_per_block_idx;
     if ((uint32_t)n_slot >= n_h_padded * d * d) {
         S = n_h_padded;
