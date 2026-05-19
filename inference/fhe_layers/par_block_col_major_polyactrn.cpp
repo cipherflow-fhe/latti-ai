@@ -26,7 +26,6 @@ using namespace lattisense;
 // ============================================================
 // ParBlockColMajorPolyActRNGamma
 // ============================================================
-
 ParBlockColMajorPolyActRNGamma::ParBlockColMajorPolyActRNGamma(const CkksParameter& param,
                                                                Duo shape,
                                                                uint32_t block_size,
@@ -62,9 +61,31 @@ ParBlockColMajorPolyActRNGamma::ParBlockColMajorPolyActRNGamma(const CkksParamet
     num_block_cols_ = div_ceil(cols_per_head_, d_);
 }
 
+CkksPlaintextRingt
+ParBlockColMajorPolyActRNGamma::generate_gamma_pt(CkksContext& ctx, uint32_t mb, uint32_t bj, uint32_t g) const {
+    double q_L = param_.get_q(level_);
+    vector<double> gamma_vec(n_slot_, 0.0);
+    for (uint32_t h_local = 0; h_local < S_; h_local++) {
+        uint32_t h = g * S_ + h_local;
+        for (uint32_t col = 0; col < d_; col++) {
+            uint32_t actual_col = bj * d_ + col;
+            for (uint32_t row = 0; row < d_; row++) {
+                uint32_t base_slot = (row + d_ * col) * S_ + h_local;
+                for (uint32_t ci = 0; ci < num_chunks_; ci++) {
+                    uint32_t slot = ci * chunk_size_ + base_slot;
+                    if (h < n_heads_ && actual_col < cols_per_head_) {
+                        uint32_t global_col = mb * n_heads_ * cols_per_head_ + h * cols_per_head_ + actual_col;
+                        gamma_vec[slot] = gamma_vals_.get(global_col);
+                    }
+                }
+            }
+        }
+    }
+    return ctx.encode_ringt(gamma_vec, q_L);
+}
+
 void ParBlockColMajorPolyActRNGamma::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
-    double q_L = param_.get_q(level_);
 
     uint32_t n_gamma_vecs = K_ * num_block_cols_ * n_cts_per_block_idx_;
     gamma_pt_.resize(n_gamma_vecs);
@@ -72,26 +93,8 @@ void ParBlockColMajorPolyActRNGamma::prepare_weight() {
     for (uint32_t mb = 0; mb < K_; mb++) {
         for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
             for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-                vector<double> gamma_vec(n_slot_, 0.0);
-                for (uint32_t h_local = 0; h_local < S_; h_local++) {
-                    uint32_t h = g * S_ + h_local;
-                    for (uint32_t col = 0; col < d_; col++) {
-                        uint32_t actual_col = bj * d_ + col;
-                        for (uint32_t row = 0; row < d_; row++) {
-                            uint32_t base_slot = (row + d_ * col) * S_ + h_local;
-                            for (uint32_t ci = 0; ci < num_chunks_; ci++) {
-                                uint32_t slot = ci * chunk_size_ + base_slot;
-                                if (h < n_heads_ && actual_col < cols_per_head_) {
-                                    uint32_t global_col =
-                                        mb * n_heads_ * cols_per_head_ + h * cols_per_head_ + actual_col;
-                                    gamma_vec[slot] = gamma_vals_.get(global_col);
-                                }
-                            }
-                        }
-                    }
-                }
                 uint32_t idx = (mb * num_block_cols_ + bj) * n_cts_per_block_idx_ + g;
-                gamma_pt_[idx] = ctx.encode_ringt(gamma_vec, q_L);
+                gamma_pt_[idx] = generate_gamma_pt(ctx, mb, bj, g);
             }
         }
     }
