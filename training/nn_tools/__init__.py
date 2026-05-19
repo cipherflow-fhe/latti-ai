@@ -25,6 +25,7 @@ from .replace import (
     replace_activation,
     replace_activation_with_poly,
     replace_maxpool_with_avgpool,
+    replace_layernorm_with_fhe,
     replace_general_avgpool_with_depthwise_conv,
     prepare_for_fhe,
 )
@@ -50,6 +51,7 @@ __all__ = [
     'replace_activation',
     'replace_activation_with_poly',
     'replace_maxpool_with_avgpool',
+    'replace_layernorm_with_fhe',
     'replace_general_avgpool_with_depthwise_conv',
     'prepare_for_fhe',
     # Export

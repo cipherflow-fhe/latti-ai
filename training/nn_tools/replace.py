@@ -24,7 +24,7 @@ from typing import Type, Callable
 
 import torch.nn as nn
 
-from .activations import RangeNormPoly2d, PolyAct, PolyActRNPoly
+from .activations import RangeNormPoly2d, PolyAct, PolyActRNPoly, FHELayerNorm
 from .modules import DepthwiseAvgPool2d
 
 log = logging.getLogger(__name__)
@@ -92,6 +92,21 @@ def replace_activation_with_poly(
 
     activation_name = old_cls.__name__.lower()
     replace_activation(model, old_cls, new_module_factory, upper_bound, hermite_coeffs, activation_name)
+    return model
+
+
+def replace_layernorm_with_fhe(model: nn.Module) -> nn.Module:
+    """Replace all ``nn.LayerNorm`` with ``FHELayerNorm`` in-place."""
+    for name, child in list(model.named_children()):
+        replace_layernorm_with_fhe(child)
+
+        if isinstance(child, nn.LayerNorm):
+            new_module = FHELayerNorm(child.normalized_shape, eps=child.eps)
+            if child.elementwise_affine:
+                new_module.weight.data.copy_(child.weight.data)
+                new_module.bias.data.copy_(child.bias.data)
+            setattr(model, name, new_module)
+            log.debug('Replaced %s: LayerNorm -> FHELayerNorm', name)
     return model
 
 
@@ -331,6 +346,7 @@ def prepare_for_fhe(
     import torch
 
     replace_maxpool_with_avgpool(model)
+    replace_layernorm_with_fhe(model)
     _replace_general_avgpool_recursive(model, freeze=True)
     replace_activation_with_poly(model, new_module_factory=poly_module, upper_bound=upper_bound, degree=degree)
     replace_activation_with_poly(
