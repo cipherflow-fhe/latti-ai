@@ -33,9 +33,11 @@ class MatMulComputeNode(ComputeNode):
         layer_type: str,
         feature_input: list[FeatureNode],
         feature_output: list[FeatureNode],
+        weight_path: str = '',
         is_mpc=False,
     ):
         super(MatMulComputeNode, self).__init__(layer_id, layer_type, feature_input, feature_output)
+        self.weight_path = weight_path
         feature_output[0].skip = [1, 1]
 
     @override
@@ -44,20 +46,24 @@ class MatMulComputeNode(ComputeNode):
         info['type'] = self.layer_type
         info['feature_input'] = [i.node_id for i in self.feature_input]
         info['feature_output'] = [i.node_id for i in self.feature_output]
+        if self.layer_type == 'parcpmm' and self.weight_path:
+            info['weight_path'] = self.weight_path
         return info
 
     @staticmethod
     def from_onnx_node(x: NodeProto, features_nodes) -> 'MatMulComputeNode':
         layer_id = format_id(x.name)
         input1_id = format_id(x.input[1])
+        weight_path = ''
         if input1_id in features_nodes:
             layer_type = 'parccmm'
             feature_input = [features_nodes[format_id(x.input[0])], features_nodes[input1_id]]
         else:
             layer_type = 'parcpmm'
             feature_input = [features_nodes[format_id(x.input[0])]]
+            weight_path = x.input[1]
         feature_output = [features_nodes[format_id(x.output[0])]]
         attrs = ComputeNode.get_attr_value_dict(x)
         log.debug('%s', attrs)
 
-        return MatMulComputeNode(layer_id, layer_type, feature_input, feature_output)
+        return MatMulComputeNode(layer_id, layer_type, feature_input, feature_output, weight_path)

@@ -19,6 +19,7 @@
 #include "par_block_col_major_layernorm.h"
 #include <cassert>
 #include <cmath>
+#include <stdexcept>
 
 using namespace std;
 using namespace lattisense;
@@ -65,8 +66,8 @@ ParBlockColMajorLNStats::ParBlockColMajorLNStats(const CkksParameter& param,
     num_block_cols_ = div_ceil(cols_per_head_, d_);
 }
 
-void ParBlockColMajorLNStats::prepare_weight() {
-    CkksContext ctx = CkksContext::create_empty_context(param_);
+CkksPlaintextRingt
+ParBlockColMajorLNStats::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t, uint32_t, uint32_t) const {
     double D = param_.get_default_scale();
     double q_L = param_.get_q(level_);
     double q_L1 = param_.get_q(level_ - 1);
@@ -74,26 +75,37 @@ void ParBlockColMajorLNStats::prepare_weight() {
     double q_L3 = param_.get_q(level_ - 3);
     double norm_dim = static_cast<double>(total_dim_);
 
-    // h=0 mask for cross-head sum cleanup
-    vector<double> h0_mask(n_slot_, 0.0);
-    for (uint32_t i = 0; i < (uint32_t)n_slot_; i++) {
-        uint32_t pos_in_chunk = i % chunk_size_;
-        uint32_t h_local = pos_in_chunk % S_;
-        if (h_local == 0)
-            h0_mask[i] = 1.0;
+    if (pt_idx == 0) {
+        vector<double> h0_mask(n_slot_, 0.0);
+        for (uint32_t i = 0; i < (uint32_t)n_slot_; i++) {
+            uint32_t pos_in_chunk = i % chunk_size_;
+            uint32_t h_local = pos_in_chunk % S_;
+            if (h_local == 0)
+                h0_mask[i] = 1.0;
+        }
+        return ctx.encode_ringt(h0_mask, q_L);
     }
-    h0_mask_pt_ = ctx.encode_ringt(h0_mask, q_L);
+    if (pt_idx == 1) {
+        vector<double> inv_n_vec(n_slot_, 1.0 / norm_dim);
+        return ctx.encode_ringt(inv_n_vec, q_L1);
+    }
+    if (pt_idx == 2) {
+        vector<double> iv_vec(n_slot_, inv_var_);
+        return ctx.encode_ringt(iv_vec, q_L2 / D * q_L3);
+    }
+    if (pt_idx == 3) {
+        vector<double> eps_vec(n_slot_, eps_ * inv_var_);
+        return ctx.encode_ringt(eps_vec, D);
+    }
+    throw runtime_error("ParBlockColMajorLNStats: unknown pt_idx " + to_string(pt_idx));
+}
 
-    vector<double> inv_n_vec(n_slot_, 1.0 / norm_dim);
-    inv_n_pt_ = ctx.encode_ringt(inv_n_vec, q_L1);
-
-    double iv_scale = q_L2 / D * q_L3;
-    vector<double> iv_vec(n_slot_, inv_var_);
-    iv_pt_ = ctx.encode_ringt(iv_vec, iv_scale);
-
-    // eps add: a at level L-4, scale D
-    vector<double> eps_vec(n_slot_, eps_ * inv_var_);
-    eps_add_pt_ = ctx.encode_ringt(eps_vec, D);
+void ParBlockColMajorLNStats::prepare_weight() {
+    CkksContext ctx = CkksContext::create_empty_context(param_);
+    h0_mask_pt_ = generate_pt(ctx, 0);
+    inv_n_pt_ = generate_pt(ctx, 1);
+    iv_pt_ = generate_pt(ctx, 2);
+    eps_add_pt_ = generate_pt(ctx, 3);
 }
 
 CkksCiphertext ParBlockColMajorLNStats::intra_block_col_sum(CkksContext& ctx, const CkksCiphertext& ct) const {
@@ -275,24 +287,33 @@ ParBlockColMajorLNXCentered::ParBlockColMajorLNXCentered(const CkksParameter& pa
     num_block_cols_ = div_ceil(cols_per_head_, d_);
 }
 
-void ParBlockColMajorLNXCentered::prepare_weight() {
-    CkksContext ctx = CkksContext::create_empty_context(param_);
+CkksPlaintextRingt
+ParBlockColMajorLNXCentered::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t, uint32_t, uint32_t) const {
     double q_L = param_.get_q(level_);
     double q_L1 = param_.get_q(level_ - 1);
     double norm_dim = static_cast<double>(total_dim_);
 
-    // h=0 mask for cross-head sum cleanup
-    vector<double> h0_mask(n_slot_, 0.0);
-    for (uint32_t i = 0; i < (uint32_t)n_slot_; i++) {
-        uint32_t pos_in_chunk = i % chunk_size_;
-        uint32_t h_local = pos_in_chunk % S_;
-        if (h_local == 0)
-            h0_mask[i] = 1.0;
+    if (pt_idx == 0) {
+        vector<double> h0_mask(n_slot_, 0.0);
+        for (uint32_t i = 0; i < (uint32_t)n_slot_; i++) {
+            uint32_t pos_in_chunk = i % chunk_size_;
+            uint32_t h_local = pos_in_chunk % S_;
+            if (h_local == 0)
+                h0_mask[i] = 1.0;
+        }
+        return ctx.encode_ringt(h0_mask, q_L);
     }
-    h0_mask_pt_ = ctx.encode_ringt(h0_mask, q_L);
+    if (pt_idx == 1) {
+        vector<double> inv_n_vec(n_slot_, 1.0 / norm_dim);
+        return ctx.encode_ringt(inv_n_vec, q_L1);
+    }
+    throw runtime_error("ParBlockColMajorLNXCentered: unknown pt_idx " + to_string(pt_idx));
+}
 
-    vector<double> inv_n_vec(n_slot_, 1.0 / norm_dim);
-    inv_n_pt_ = ctx.encode_ringt(inv_n_vec, q_L1);
+void ParBlockColMajorLNXCentered::prepare_weight() {
+    CkksContext ctx = CkksContext::create_empty_context(param_);
+    h0_mask_pt_ = generate_pt(ctx, 0);
+    inv_n_pt_ = generate_pt(ctx, 1);
 }
 
 CkksCiphertext ParBlockColMajorLNXCentered::intra_block_col_sum(CkksContext& ctx, const CkksCiphertext& ct) const {
@@ -390,21 +411,32 @@ ParBlockColMajorLNMinimaxInit::ParBlockColMajorLNMinimaxInit(const CkksParameter
     chunk_size_ = d_ * d_;
 }
 
-void ParBlockColMajorLNMinimaxInit::prepare_weight() {
-    CkksContext ctx = CkksContext::create_empty_context(param_);
+CkksPlaintextRingt
+ParBlockColMajorLNMinimaxInit::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t, uint32_t, uint32_t) const {
     double D = param_.get_default_scale();
     double q_L = param_.get_q(level_);
-    double q_L1 = param_.get_q(level_ - 1);
 
-    double c2_scale = q_L / D * q_L1;
-    vector<double> c2_vec(n_slot_, c2_);
-    c2_norm_pt_ = ctx.encode_ringt(c2_vec, c2_scale);
+    if (pt_idx == 0) {
+        vector<double> c0_vec(n_slot_, c0_);
+        return ctx.encode_ringt(c0_vec, D);
+    }
+    if (pt_idx == 1) {
+        vector<double> c1_vec(n_slot_, c1_);
+        return ctx.encode_ringt(c1_vec, q_L);
+    }
+    if (pt_idx == 2) {
+        double q_L1 = param_.get_q(level_ - 1);
+        vector<double> c2_vec(n_slot_, c2_);
+        return ctx.encode_ringt(c2_vec, q_L / D * q_L1);
+    }
+    throw runtime_error("ParBlockColMajorLNMinimaxInit: unknown pt_idx " + to_string(pt_idx));
+}
 
-    vector<double> c1_vec(n_slot_, c1_);
-    c1_pt_ = ctx.encode_ringt(c1_vec, q_L);
-
-    vector<double> c0_vec(n_slot_, c0_);
-    c0_add_pt_ = ctx.encode_ringt(c0_vec, D);
+void ParBlockColMajorLNMinimaxInit::prepare_weight() {
+    CkksContext ctx = CkksContext::create_empty_context(param_);
+    c0_add_pt_ = generate_pt(ctx, 0);
+    c1_pt_ = generate_pt(ctx, 1);
+    c2_norm_pt_ = generate_pt(ctx, 2);
 }
 
 vector<CkksCiphertext> ParBlockColMajorLNMinimaxInit::run(CkksContext& ctx, const vector<CkksCiphertext>& a_cts) {
@@ -447,20 +479,28 @@ ParBlockColMajorLNGoldschmidt::ParBlockColMajorLNGoldschmidt(const CkksParameter
     chunk_size_ = d_ * d_;
 }
 
-void ParBlockColMajorLNGoldschmidt::prepare_weight() {
-    CkksContext ctx = CkksContext::create_empty_context(param_);
+CkksPlaintextRingt
+ParBlockColMajorLNGoldschmidt::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t, uint32_t, uint32_t) const {
     double D = param_.get_default_scale();
     double q_L = param_.get_q(level_);
     double q_L1 = param_.get_q(level_ - 1);
     double q_L2 = param_.get_q(level_ - 2);
 
-    double three_scale = D / q_L * D / q_L1 * D;
-    vector<double> three_vec(n_slot_, 3.0);
-    three_pt_ = ctx.encode_ringt(three_vec, three_scale);
+    if (pt_idx == 0) {
+        vector<double> three_vec(n_slot_, 3.0);
+        return ctx.encode_ringt(three_vec, D / q_L * D / q_L1 * D);
+    }
+    if (pt_idx == 1) {
+        vector<double> half_vec(n_slot_, 0.5);
+        return ctx.encode_ringt(half_vec, q_L / D * q_L / D * q_L1 / D * q_L2);
+    }
+    throw runtime_error("ParBlockColMajorLNGoldschmidt: unknown pt_idx " + to_string(pt_idx));
+}
 
-    double half_scale = q_L / D * q_L / D * q_L1 / D * q_L2;
-    vector<double> half_vec(n_slot_, 0.5);
-    half_norm_pt_ = ctx.encode_ringt(half_vec, half_scale);
+void ParBlockColMajorLNGoldschmidt::prepare_weight() {
+    CkksContext ctx = CkksContext::create_empty_context(param_);
+    three_pt_ = generate_pt(ctx, 0);
+    half_norm_pt_ = generate_pt(ctx, 1);
 }
 
 vector<CkksCiphertext> ParBlockColMajorLNGoldschmidt::run(CkksContext& ctx,
@@ -543,65 +583,75 @@ ParBlockColMajorLNAffine::ParBlockColMajorLNAffine(const CkksParameter& param,
     num_block_cols_ = div_ceil(cols_per_head_, d_);
 }
 
-void ParBlockColMajorLNAffine::prepare_weight() {
-    CkksContext ctx = CkksContext::create_empty_context(param_);
+CkksPlaintextRingt
+ParBlockColMajorLNAffine::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t bi, uint32_t bj, uint32_t g) const {
     double D = param_.get_default_scale();
-    double q_L = param_.get_q(y_level_);
-    double q_L1 = param_.get_q(y_level_ - 1);
-    double beta_scale = D;
 
-    uint32_t n_gamma_vecs = num_block_cols_ * n_cts_per_block_idx_;
-    gamma_pt_.resize(n_gamma_vecs);
-
-    for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
-        for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-            vector<double> gamma_vec(n_slot_, 0.0);
-            for (uint32_t h_local = 0; h_local < S_; h_local++) {
-                uint32_t h = g * S_ + h_local;
-                for (uint32_t col = 0; col < d_; col++) {
-                    uint32_t actual_col = bj * d_ + col;
-                    for (uint32_t row = 0; row < d_; row++) {
-                        uint32_t base_slot = (row + d_ * col) * S_ + h_local;
-                        for (uint32_t ci = 0; ci < num_chunks_; ci++) {
-                            uint32_t slot = ci * chunk_size_ + base_slot;
-                            if (h < n_heads_ && actual_col < cols_per_head_) {
-                                gamma_vec[slot] = inv_std_ * gamma_vals_.get(h * cols_per_head_ + actual_col);
-                            }
+    if (pt_idx == 0) {
+        double q_L = param_.get_q(y_level_);
+        double q_L1 = param_.get_q(y_level_ - 1);
+        vector<double> gamma_vec(n_slot_, 0.0);
+        for (uint32_t h_local = 0; h_local < S_; h_local++) {
+            uint32_t h = g * S_ + h_local;
+            for (uint32_t col = 0; col < d_; col++) {
+                uint32_t actual_col = bj * d_ + col;
+                for (uint32_t row = 0; row < d_; row++) {
+                    uint32_t base_slot = (row + d_ * col) * S_ + h_local;
+                    for (uint32_t ci = 0; ci < num_chunks_; ci++) {
+                        uint32_t slot = ci * chunk_size_ + base_slot;
+                        if (h < n_heads_ && actual_col < cols_per_head_) {
+                            gamma_vec[slot] = inv_std_ * gamma_vals_.get(h * cols_per_head_ + actual_col);
                         }
                     }
                 }
             }
-            uint32_t idx = bj * n_cts_per_block_idx_ + g;
-            gamma_pt_[idx] = ctx.encode_ringt(gamma_vec, q_L / D * q_L1);
         }
+        return ctx.encode_ringt(gamma_vec, q_L / D * q_L1);
     }
 
-    // beta: per (bj, bi, g) to handle row and column masking
-    uint32_t total_beta = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
-    beta_add_pt_.resize(total_beta);
-
-    for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
-        for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
-            for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-                vector<double> beta_vec(n_slot_, 0.0);
-                for (uint32_t h_local = 0; h_local < S_; h_local++) {
-                    uint32_t h = g * S_ + h_local;
-                    for (uint32_t col = 0; col < d_; col++) {
-                        uint32_t actual_col = bj * d_ + col;
-                        for (uint32_t row = 0; row < d_; row++) {
-                            uint32_t actual_row = bi * d_ + row;
-                            uint32_t base_slot = (row + d_ * col) * S_ + h_local;
-                            for (uint32_t ci = 0; ci < num_chunks_; ci++) {
-                                uint32_t slot = ci * chunk_size_ + base_slot;
-                                if (actual_row < m_ && h < n_heads_ && actual_col < cols_per_head_) {
-                                    beta_vec[slot] = beta_vals_.get(h * cols_per_head_ + actual_col);
-                                }
-                            }
+    if (pt_idx == 1) {
+        vector<double> beta_vec(n_slot_, 0.0);
+        for (uint32_t h_local = 0; h_local < S_; h_local++) {
+            uint32_t h = g * S_ + h_local;
+            for (uint32_t col = 0; col < d_; col++) {
+                uint32_t actual_col = bj * d_ + col;
+                for (uint32_t row = 0; row < d_; row++) {
+                    uint32_t actual_row = bi * d_ + row;
+                    uint32_t base_slot = (row + d_ * col) * S_ + h_local;
+                    for (uint32_t ci = 0; ci < num_chunks_; ci++) {
+                        uint32_t slot = ci * chunk_size_ + base_slot;
+                        if (actual_row < m_ && h < n_heads_ && actual_col < cols_per_head_) {
+                            beta_vec[slot] = beta_vals_.get(h * cols_per_head_ + actual_col);
                         }
                     }
                 }
-                uint32_t beta_idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
-                beta_add_pt_[beta_idx] = ctx.encode_ringt(beta_vec, beta_scale);
+            }
+        }
+        return ctx.encode_ringt(beta_vec, D);
+    }
+
+    throw runtime_error("ParBlockColMajorLNAffine: unknown pt_idx " + to_string(pt_idx));
+}
+
+void ParBlockColMajorLNAffine::prepare_weight() {
+    CkksContext ctx = CkksContext::create_empty_context(param_);
+
+    uint32_t n_gamma_vecs = num_block_cols_ * n_cts_per_block_idx_;
+    gamma_pt_.resize(n_gamma_vecs);
+    for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
+        for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
+            uint32_t idx = bj * n_cts_per_block_idx_ + g;
+            gamma_pt_[idx] = generate_pt(ctx, 0, 0, bj, g);
+        }
+    }
+
+    uint32_t total_beta = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
+    beta_add_pt_.resize(total_beta);
+    for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
+        for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
+            for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
+                uint32_t idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
+                beta_add_pt_[idx] = generate_pt(ctx, 1, bi, bj, g);
             }
         }
     }
