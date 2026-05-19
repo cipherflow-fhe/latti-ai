@@ -642,15 +642,15 @@ def set_level_costs(graph: LayerAbstractGraph):
             graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type == 'parccmm':
             graph.dag.nodes[compute_node]['level_cost'] = 3
-        elif compute_node.layer_type == 'ln_stats':
+        elif compute_node.layer_type == 'pcmstats':
             graph.dag.nodes[compute_node]['level_cost'] = 4
-        elif compute_node.layer_type == 'ln_cent':
+        elif compute_node.layer_type == 'pcmcenter':
             graph.dag.nodes[compute_node]['level_cost'] = 2
-        elif compute_node.layer_type == 'ln_init':
+        elif compute_node.layer_type == 'pcminit':
             graph.dag.nodes[compute_node]['level_cost'] = 2
-        elif compute_node.layer_type == 'ln_iter':
+        elif compute_node.layer_type == 'pcmgs':
             graph.dag.nodes[compute_node]['level_cost'] = 3
-        elif compute_node.layer_type == 'ln_affine':
+        elif compute_node.layer_type == 'pcmaffine':
             graph.dag.nodes[compute_node]['level_cost'] = 2
         else:
             graph.dag.nodes[compute_node]['level_cost'] = 0
@@ -963,48 +963,48 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
         y_nodes = [y0] + [make_feature(f'{base_id}_y{i + 1}') for i in range(n_iter)]
 
         # Sub-compute nodes
-        ln_stats1 = ComputeNode(f'{base_id}_ln_stats', 'ln_stats', 1, 1)
-        ln_stats1.epsilon = epsilon
-        ln_stats2 = ComputeNode(f'{base_id}_ln_cent', 'ln_cent', 1, 1)
-        ln_init = ComputeNode(f'{base_id}_ln_init', 'ln_init', 1, 1)
-        ln_iters = [ComputeNode(f'{base_id}_ln_iter_{i}', 'ln_iter', 1, 1) for i in range(n_iter)]
-        ln_affine = ComputeNode(f'{base_id}_ln_affine', 'ln_affine', 1, 1)
-        ln_affine.weight_path = weight_path
-        ln_affine.bias_path = bias_path
+        pcmstats = ComputeNode(f'{base_id}_pcmstats', 'pcmstats', 1, 1)
+        pcmstats.epsilon = epsilon
+        pcmcenter = ComputeNode(f'{base_id}_pcmcenter', 'pcmcenter', 1, 1)
+        pcminit = ComputeNode(f'{base_id}_pcminit', 'pcminit', 1, 1)
+        pcmgs_nodes = [ComputeNode(f'{base_id}_pcmgs_{i}', 'pcmgs', 1, 1) for i in range(n_iter)]
+        pcmaffine = ComputeNode(f'{base_id}_pcmaffine', 'pcmaffine', 1, 1)
+        pcmaffine.weight_path = weight_path
+        pcmaffine.bias_path = bias_path
 
         # Remove the original layernorm node (keeps x_in and out in the graph)
         graph.dag.remove_node(ln_node)
 
-        # 1a. x_in → ln_stats → a  (computes mean/variance stats, costs 3 levels)
-        graph.dag.add_node(ln_stats1, **c_attrs(3, ln_stats1.layer_id))
+        # 1a. x_in → pcmstats → a  (computes mean/variance stats, costs 3 levels)
+        graph.dag.add_node(pcmstats, **c_attrs(3, pcmstats.layer_id))
         graph.dag.add_node(a, **f_attrs(a))
-        graph.dag.add_edge(x_in, ln_stats1)
-        graph.dag.add_edge(ln_stats1, a)
+        graph.dag.add_edge(x_in, pcmstats)
+        graph.dag.add_edge(pcmstats, a)
 
-        # 1b. x_in → ln_cent → x_c  (centers x, costs 1 level)
-        graph.dag.add_node(ln_stats2, **c_attrs(1, ln_stats2.layer_id))
+        # 1b. x_in → pcmcenter → x_c  (centers x, costs 1 level)
+        graph.dag.add_node(pcmcenter, **c_attrs(1, pcmcenter.layer_id))
         graph.dag.add_node(x_c, **f_attrs(x_c))
-        graph.dag.add_edge(x_in, ln_stats2)
-        graph.dag.add_edge(ln_stats2, x_c)
+        graph.dag.add_edge(x_in, pcmcenter)
+        graph.dag.add_edge(pcmcenter, x_c)
 
-        # 2. a → ln_init → y0
-        graph.dag.add_node(ln_init, **c_attrs(2, ln_init.layer_id))
+        # 2. a → pcminit → y0
+        graph.dag.add_node(pcminit, **c_attrs(2, pcminit.layer_id))
         graph.dag.add_node(y0, **f_attrs(y0))
-        graph.dag.add_edge(a, ln_init)
-        graph.dag.add_edge(ln_init, y0)
+        graph.dag.add_edge(a, pcminit)
+        graph.dag.add_edge(pcminit, y0)
 
-        # 3. [y_prev, a] → ln_iter_i → y_next  (repeated n_iter times)
-        for i, (ln_iter_i, y_next) in enumerate(zip(ln_iters, y_nodes[1:])):
+        # 3. [y_prev, a] → pcmgs_i → y_next  (repeated n_iter times)
+        for i, (pcmgs_i, y_next) in enumerate(zip(pcmgs_nodes, y_nodes[1:])):
             y_prev = y_nodes[i]
-            graph.dag.add_node(ln_iter_i, **c_attrs(3, ln_iter_i.layer_id))
+            graph.dag.add_node(pcmgs_i, **c_attrs(3, pcmgs_i.layer_id))
             graph.dag.add_node(y_next, **f_attrs(y_next))
-            graph.dag.add_edge(y_prev, ln_iter_i, input_index=0)
-            graph.dag.add_edge(a, ln_iter_i, input_index=1)
-            graph.dag.add_edge(ln_iter_i, y_next)
+            graph.dag.add_edge(y_prev, pcmgs_i, input_index=0)
+            graph.dag.add_edge(a, pcmgs_i, input_index=1)
+            graph.dag.add_edge(pcmgs_i, y_next)
 
-        # 4. [x_c, y_final] → ln_affine → out
+        # 4. [x_c, y_final] → pcmaffine → out
         y_final = y_nodes[-1]
-        graph.dag.add_node(ln_affine, **c_attrs(2, ln_affine.layer_id))
-        graph.dag.add_edge(x_c, ln_affine, input_index=0)
-        graph.dag.add_edge(y_final, ln_affine, input_index=1)
-        graph.dag.add_edge(ln_affine, out)
+        graph.dag.add_node(pcmaffine, **c_attrs(2, pcmaffine.layer_id))
+        graph.dag.add_edge(x_c, pcmaffine, input_index=0)
+        graph.dag.add_edge(y_final, pcmaffine, input_index=1)
+        graph.dag.add_edge(pcmaffine, out)
