@@ -38,6 +38,9 @@ public:
     // Returns a_cts[num_block_rows]
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
 
+    ls::CkksPlaintextRingt
+    generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
+
 private:
     uint32_t m_, cols_per_head_, d_, n_slot_;
     uint32_t n_heads_, n_h_padded_, S_, n_cts_per_block_idx_;
@@ -69,6 +72,9 @@ public:
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
 
+    ls::CkksPlaintextRingt
+    generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
+
 private:
     uint32_t m_, cols_per_head_, d_, n_slot_;
     uint32_t n_heads_, n_h_padded_, S_, n_cts_per_block_idx_;
@@ -98,6 +104,9 @@ public:
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& a_cts);
 
+    ls::CkksPlaintextRingt
+    generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
+
 private:
     uint32_t d_, n_slot_, chunk_size_;
     double c0_, c1_, c2_;
@@ -120,6 +129,9 @@ public:
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx,
                                         const std::vector<ls::CkksCiphertext>& y_cts,
                                         const std::vector<ls::CkksCiphertext>& a_cts);
+
+    ls::CkksPlaintextRingt
+    generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
 
 private:
     uint32_t d_, n_slot_, chunk_size_;
@@ -147,6 +159,9 @@ public:
     FeatureMatEncrypted run(ls::CkksContext& ctx,
                             const std::vector<ls::CkksCiphertext>& x_centered,
                             const std::vector<ls::CkksCiphertext>& y_cts);
+
+    ls::CkksPlaintextRingt
+    generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
 
 private:
     uint32_t m_, cols_per_head_, d_, n_slot_;

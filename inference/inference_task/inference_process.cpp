@@ -201,59 +201,6 @@ void InitInferenceProcess::_init_conv1d_layer(const string& key, const json& lay
     }
 }
 
-// Compute block_size d for block_col_major: largest power-of-2 with d <= min(m,n) and d^2 <= n_slot.
-static uint32_t calc_matmul_block_size(const Duo& shape, uint32_t n_slot) {
-    uint32_t max_d = min({shape[0], shape[1], (uint32_t)sqrt(n_slot)});
-    uint32_t d = 1;
-    while (d * 2 <= max_d)
-        d *= 2;
-    return d;
-}
-
-void InitInferenceProcess::_init_cpmm_layer(const string& key, const json& layer, const hid_t& h5_file) {
-    FeatureNode feat_in(json_features[layer["feature_input"][0].get<string>()]);
-    FeatureNode feat_out(json_features[layer["feature_output"][0].get<string>()]);
-    CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-
-    Duo shape_A = feat_in.shape;
-    Duo shape_B = {shape_A[1], feat_out.shape[1]};
-    uint32_t block_size = layer.contains("matmul_block_size") ? layer["matmul_block_size"].get<uint32_t>() :
-                                                                calc_matmul_block_size(shape_A, param.get_n() / 2);
-
-    auto weight = _load_h5_tensor<2>(layer, h5_file, "weight", {(uint64_t)shape_B[0], (uint64_t)shape_B[1]});
-
-    auto cpmm = MakeU<BlockColMajorCPMM>(param, shape_A, shape_B, move(weight), block_size, feat_in.level);
-    _prepare_layer(key, move(cpmm), [](BlockColMajorCPMM&) {}, [](BlockColMajorCPMM& l) { l.precompute_diagonals(); });
-}
-
-void InitInferenceProcess::_init_ccmm_layer(const string& key, const json& layer) {
-    FeatureNode feat_A(json_features[layer["feature_input"][0].get<string>()]);
-    FeatureNode feat_B(json_features[layer["feature_input"][1].get<string>()]);
-    CkksParameter& param = *ckks_parameters_.at(feat_A.ckks_parameter_id);
-
-    Duo shape_A = feat_A.shape;
-    Duo shape_B = feat_B.shape;
-    uint32_t block_size = layer.contains("matmul_block_size") ? layer["matmul_block_size"].get<uint32_t>() :
-                                                                calc_matmul_block_size(shape_A, param.get_n() / 2);
-
-    auto ccmm = MakeU<BlockColMajorCCMM>(param, shape_A, shape_B, block_size, block_size, feat_A.level, feat_B.level);
-    _prepare_layer(key, move(ccmm), [](BlockColMajorCCMM&) {}, [](BlockColMajorCCMM& l) { l.precompute_diagonals(); });
-}
-
-void InitInferenceProcess::_init_transpose_layer(const string& key, const json& layer) {
-    FeatureNode feat_in(json_features[layer["feature_input"][0].get<string>()]);
-    CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-
-    Duo shape = feat_in.shape;
-    uint32_t block_size = layer.contains("matmul_block_size") ? layer["matmul_block_size"].get<uint32_t>() :
-                                                                calc_matmul_block_size(shape, param.get_n() / 2);
-
-    auto transpose = MakeU<BlockColMajorTranspose>(param, shape, block_size, feat_in.level);
-    _prepare_layer(
-        key, move(transpose), [](BlockColMajorTranspose&) {},
-        [](BlockColMajorTranspose& l) { l.precompute_diagonals(); });
-}
-
 void InitInferenceProcess::_init_parcpmm_layer(const string& key, const json& layer, const hid_t& h5_file) {
     FeatureNode feat_in(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feat_out(json_features[layer["feature_output"][0].get<string>()]);
@@ -744,12 +691,8 @@ void InitInferenceProcess::load_model_prepare() {
             _init_fhe_avgpool1d_layer(key, value, is_adaptive_avgpool);
         } else if (layer_type == "conv1d") {
             _init_conv1d_layer(key, value, h5_file);
-        } else if (layer_type == "cpmm") {
-            _init_cpmm_layer(key, value, h5_file);
-        } else if (layer_type == "ccmm") {
-            _init_ccmm_layer(key, value);
-        } else if (layer_type == "transpose") {
-            _init_transpose_layer(key, value);
+        } else if (layer_type == "cpmm" || layer_type == "ccmm" || layer_type == "transpose") {
+            throw runtime_error("non-par matrix ops are unsupported; use parcpmm/parccmm/partranspose");
         } else if (layer_type == "parcpmm") {
             _init_parcpmm_layer(key, value, h5_file);
         } else if (layer_type == "parccmm") {
@@ -1140,26 +1083,8 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     throw runtime_error("input is not available, expect Feature1DEncrypted");
                 }
                 fhe_timer.stop();
-            } else if (layer_type == "cpmm") {
-                fhe_timer.start();
-                const FeatureMatEncrypted& inputMat =
-                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
-                result = MakeU<FeatureMatEncrypted>(fp->get_layer<BlockColMajorCPMM>(key).run(context, inputMat));
-                fhe_timer.stop();
-            } else if (layer_type == "ccmm") {
-                fhe_timer.start();
-                const FeatureMatEncrypted& inputA =
-                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
-                const FeatureMatEncrypted& inputB =
-                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[1]));
-                result = MakeU<FeatureMatEncrypted>(fp->get_layer<BlockColMajorCCMM>(key).run(context, inputA, inputB));
-                fhe_timer.stop();
-            } else if (layer_type == "transpose") {
-                fhe_timer.start();
-                const FeatureMatEncrypted& inputMat =
-                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
-                result = MakeU<FeatureMatEncrypted>(fp->get_layer<BlockColMajorTranspose>(key).run(context, inputMat));
-                fhe_timer.stop();
+            } else if (layer_type == "cpmm" || layer_type == "ccmm" || layer_type == "transpose") {
+                throw runtime_error("non-par matrix ops are unsupported; use parcpmm/parccmm/partranspose");
             } else if (layer_type == "parcpmm") {
                 fhe_timer.start();
                 const FeatureMatEncrypted& inputMat =
@@ -1710,18 +1635,8 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                     result1d = fp->get_layer<Conv1DPackedLayer>(key).run_plaintext(input0);
                 }
             }
-            if (layer_type == "cpmm") {
-                auto& input0 = p_feature_mat_x[feature_input[0]];
-                result_mat = fp->get_layer<BlockColMajorCPMM>(key).run_plaintext(input0);
-            }
-            if (layer_type == "ccmm") {
-                auto& input0 = p_feature_mat_x[feature_input[0]];
-                auto& input1 = p_feature_mat_x[feature_input[1]];
-                result_mat = fp->get_layer<BlockColMajorCCMM>(key).run_plaintext(input0, input1);
-            }
-            if (layer_type == "transpose") {
-                auto& input0 = p_feature_mat_x[feature_input[0]];
-                result_mat = fp->get_layer<BlockColMajorTranspose>(key).run_plaintext(input0);
+            if (layer_type == "cpmm" || layer_type == "ccmm" || layer_type == "transpose") {
+                throw runtime_error("non-par matrix ops are unsupported; use parcpmm/parccmm/partranspose");
             }
             if (layer_type == "parcpmm") {
                 auto& input0 = p_feature_mat_x[feature_input[0]];
@@ -1846,28 +1761,6 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         par_G = (n_slot_val >= n_h_padded * par_d * par_d) ? 1 : n_h_padded / (n_slot_val / (par_d * par_d));
     }
 
-    auto get_nonpar_matmul_block_size = [&](const string& output_id, const FeatureNode& feature_output) -> uint32_t {
-        if (feature_output.matmul_block_size > 0) {
-            return feature_output.matmul_block_size;
-        }
-        uint32_t n_slot_val = ckks_contexts.at(feature_output.ckks_parameter_id)->get_parameter().get_n() / 2;
-        for (const auto& layer : json_layers.items()) {
-            auto outputs = layer.value()["feature_output"].get<vector<string>>();
-            if (find(outputs.begin(), outputs.end(), output_id) == outputs.end()) {
-                continue;
-            }
-            if (layer.value().contains("matmul_block_size")) {
-                return layer.value()["matmul_block_size"].get<uint32_t>();
-            }
-            auto inputs = layer.value()["feature_input"].get<vector<string>>();
-            if (!inputs.empty()) {
-                FeatureNode producer_input(json_features[inputs[0]]);
-                return calc_matmul_block_size(producer_input.shape, n_slot_val);
-            }
-        }
-        return calc_matmul_block_size(feature_output.shape, n_slot_val);
-    };
-
     vector<vector<CkksCiphertext>> z_lists(json_data["output_feature"].size());
     vector<uint32_t> output_mat_block_sizes(json_data["output_feature"].size(), 0);
     for (int out_idx = 0; out_idx < (int)json_data["output_feature"].size(); out_idx++) {
@@ -1877,20 +1770,18 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         level = feature_output.level;
         int n_out_num;
         if (feature_output.is_mat) {
-            uint32_t d = get_nonpar_matmul_block_size(ki.get<string>(), feature_output);
-            if (fp->n_heads > 1 && par_d > 0) {
-                d = par_d;
-                // par format: CT count from per-head block grid × G
-                uint32_t r = feature_output.shape[0];
-                uint32_t c = feature_output.shape[1];
-                if (r % fp->n_heads == 0 && r > d)
-                    r /= fp->n_heads;
-                if (c % fp->n_heads == 0 && c > d)
-                    c /= fp->n_heads;
-                n_out_num = div_ceil(r, d) * div_ceil(c, d) * par_G;
-            } else {
-                n_out_num = div_ceil(feature_output.shape[0], d) * div_ceil(feature_output.shape[1], d);
+            if (fp->n_heads <= 1 || par_d == 0) {
+                throw runtime_error("feature_mat only supports par matrix ops");
             }
+            uint32_t d = par_d;
+            // par format: CT count from per-head block grid × G
+            uint32_t r = feature_output.shape[0];
+            uint32_t c = feature_output.shape[1];
+            if (r % fp->n_heads == 0 && r > d)
+                r /= fp->n_heads;
+            if (c % fp->n_heads == 0 && c > d)
+                c /= fp->n_heads;
+            n_out_num = div_ceil(r, d) * div_ceil(c, d) * par_G;
             output_mat_block_sizes[out_idx] = d;
         } else {
             n_out_num = div_ceil(feature_output.channel, feature_output.pack_channel_per_ciphertext);
@@ -2064,15 +1955,8 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
                 data_sources.emplace_back(
                     key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<Avgpool1DLayer>(key))));
             }
-        } else if (layer_type == "cpmm") {
-            data_sources.emplace_back(
-                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<BlockColMajorCPMM>(key))));
-        } else if (layer_type == "ccmm") {
-            data_sources.emplace_back(
-                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<BlockColMajorCCMM>(key))));
-        } else if (layer_type == "transpose") {
-            data_sources.emplace_back(
-                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<BlockColMajorTranspose>(key))));
+        } else if (layer_type == "cpmm" || layer_type == "ccmm" || layer_type == "transpose") {
+            throw runtime_error("non-par matrix ops are unsupported; use parcpmm/parccmm/partranspose");
         } else if (layer_type == "parcpmm") {
             data_sources.emplace_back(
                 key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParBlockColMajorCPMM>(key))));
@@ -2243,24 +2127,9 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         } else if (op_class == "Avgpool1DLayer") {
             auto* layer = static_cast<Avgpool1DLayer*>(layer_ptr);
             pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
-        } else if (op_class == "BlockColMajorCPMM") {
-            auto* layer = static_cast<BlockColMajorCPMM*>(layer_ptr);
-            pt = layer->generate_diag_pt(ckks_ctx, attrs.value("bj", i), attrs.value("bp", j), k);
-        } else if (op_class == "BlockColMajorCCMM") {
-            auto* layer = static_cast<BlockColMajorCCMM*>(layer_ptr);
-            if (type == "sigma_pt")
-                pt = layer->generate_sigma_pt(ckks_ctx, attrs.value("k", i));
-            else if (type == "tau_pt")
-                pt = layer->generate_tau_pt(ckks_ctx, attrs.value("offset_idx", i));
-            else if (type == "psi_k0_pt")
-                pt = layer->generate_psi_k0_pt(ckks_ctx);
-            else if (type == "psi_wk_pt")
-                pt = layer->generate_psi_wk_pt(ckks_ctx, i);
-            else
-                pt = layer->generate_psi_wkd_pt(ckks_ctx, i);
-        } else if (op_class == "BlockColMajorTranspose") {
-            auto* layer = static_cast<BlockColMajorTranspose*>(layer_ptr);
-            pt = layer->generate_transpose_diag_pt(ckks_ctx, attrs.value("k_idx", i));
+        } else if (op_class == "BlockColMajorCPMM" || op_class == "BlockColMajorCCMM" ||
+                   op_class == "BlockColMajorTranspose") {
+            throw runtime_error("encode_pt: non-par matrix ops are unsupported; use par op_class");
         } else if (op_class == "ParBlockColMajorCPMM") {
             auto* layer = static_cast<ParBlockColMajorCPMM*>(layer_ptr);
             if (type == "mask_h0_pt")
@@ -2280,6 +2149,30 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
                 pt = layer->generate_psi_wk_pt(ckks_ctx, i);
             else
                 pt = layer->generate_psi_wkd_pt(ckks_ctx, i);
+        } else if (op_class == "ParBlockColMajorPolyActRNPoly") {
+            auto* layer = static_cast<ParBlockColMajorPolyActRNPoly*>(layer_ptr);
+            pt = layer->generate_coeff_pt(ckks_ctx, attrs.value("coeff_idx", i), attrs.value("bi", 0),
+                                          attrs.value("bj", j), attrs.value("g", k));
+        } else if (op_class == "ParBlockColMajorLNStats") {
+            auto* layer = static_cast<ParBlockColMajorLNStats*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                    attrs.value("g", k));
+        } else if (op_class == "ParBlockColMajorLNXCentered") {
+            auto* layer = static_cast<ParBlockColMajorLNXCentered*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                    attrs.value("g", k));
+        } else if (op_class == "ParBlockColMajorLNMinimaxInit") {
+            auto* layer = static_cast<ParBlockColMajorLNMinimaxInit*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                    attrs.value("g", k));
+        } else if (op_class == "ParBlockColMajorLNGoldschmidt") {
+            auto* layer = static_cast<ParBlockColMajorLNGoldschmidt*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                    attrs.value("g", k));
+        } else if (op_class == "ParBlockColMajorLNAffine") {
+            auto* layer = static_cast<ParBlockColMajorLNAffine*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                    attrs.value("g", k));
         } else if (op_class == "ParBlockColMajorTranspose") {
             auto* layer = static_cast<ParBlockColMajorTranspose*>(layer_ptr);
             pt = layer->generate_transpose_diag_pt(ckks_ctx, attrs.value("k_idx", i));
