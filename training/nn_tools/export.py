@@ -602,6 +602,15 @@ def export_h5_from_onnx(
             if bp:
                 out[bp] = b
 
+        elif ltype == 'parcpmm':
+            wp = layer.get('weight_path', '')
+            if wp not in onnx_weights:
+                log.warning('parcpmm weight not in ONNX: %s', wp)
+                continue
+            out[wp] = onnx_weights[wp].copy()
+            if verbose:
+                log.info('ParCPMM:                  %s', wp)
+
         elif ltype == 'polyact':
             wp = layer.get('weight_path', '')
             if layer_key not in polyact_info:

@@ -180,85 +180,91 @@ static vector<double> build_par_coeff_vec(uint32_t n_slot,
     return vec;
 }
 
-void ParBlockColMajorPolyActRNPoly::prepare_weight() {
-    CkksContext ctx = CkksContext::create_empty_context(param_);
+CkksPlaintextRingt ParBlockColMajorPolyActRNPoly::generate_coeff_pt(CkksContext& ctx,
+                                                                    uint32_t coeff_idx,
+                                                                    uint32_t bi,
+                                                                    uint32_t bj,
+                                                                    uint32_t g) const {
+    assert(coeff_idx <= degree_);
+
     double D = param_.get_default_scale();
     double q_L = param_.get_q(level_);
-    double q_L1 = param_.get_q(level_ - 1);
+    double scale = D;
 
-    uint32_t n_coeff_vecs = num_block_cols_ * n_cts_per_block_idx_;
-
-    // --- c2: per (bj, g)---
-    double c2_scale = q_L / D * q_L1;
-    c2_pt_.resize(n_coeff_vecs);
-    for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
-        for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-            auto vec = build_par_coeff_vec(n_slot_, chunk_size_, num_chunks_, d_, S_, bj, g, n_heads_, cols_per_head_,
-                                           coeffs_, 2);
-            c2_pt_[bj * n_cts_per_block_idx_ + g] = ctx.encode_ringt(vec, c2_scale);
-        }
+    if (coeff_idx == 1) {
+        scale = q_L;
+    } else if (coeff_idx == 2) {
+        double q_L1 = param_.get_q(level_ - 1);
+        scale = q_L / D * q_L1;
+    } else if (coeff_idx == 3) {
+        assert(degree_ == 4);
+        double q_L2 = param_.get_q(level_ - 2);
+        scale = q_L / D * q_L / D * q_L2;
+    } else if (coeff_idx == 4) {
+        assert(degree_ == 4);
+        double q_L1 = param_.get_q(level_ - 1);
+        double q_L2 = param_.get_q(level_ - 2);
+        scale = q_L / D * q_L / D * q_L1 / D * q_L2;
     }
 
-    // --- c1: per (bj, g) ---
+    if (coeff_idx != 0) {
+        auto vec = build_par_coeff_vec(n_slot_, chunk_size_, num_chunks_, d_, S_, bj, g, n_heads_, cols_per_head_,
+                                       coeffs_, coeff_idx);
+        return ctx.encode_ringt(vec, scale);
+    }
+
+    vector<double> vec(n_slot_, 0.0);
+    for (uint32_t h_local = 0; h_local < S_; h_local++) {
+        uint32_t h = g * S_ + h_local;
+        for (uint32_t col = 0; col < d_; col++) {
+            uint32_t actual_col = bj * d_ + col;
+            for (uint32_t row = 0; row < d_; row++) {
+                uint32_t actual_row = bi * d_ + row;
+                uint32_t base_slot = (row + d_ * col) * S_ + h_local;
+                for (uint32_t ci = 0; ci < num_chunks_; ci++) {
+                    uint32_t slot = ci * chunk_size_ + base_slot;
+                    if (actual_row < m_ && h < n_heads_ && actual_col < cols_per_head_) {
+                        vec[slot] = coeffs_.get(0, h * cols_per_head_ + actual_col);
+                    }
+                }
+            }
+        }
+    }
+    return ctx.encode_ringt(vec, scale);
+}
+
+void ParBlockColMajorPolyActRNPoly::prepare_weight() {
+    CkksContext ctx = CkksContext::create_empty_context(param_);
+    uint32_t n_coeff_vecs = num_block_cols_ * n_cts_per_block_idx_;
+
+    c2_pt_.resize(n_coeff_vecs);
     c1_pt_.resize(n_coeff_vecs);
     for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
         for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-            auto vec = build_par_coeff_vec(n_slot_, chunk_size_, num_chunks_, d_, S_, bj, g, n_heads_, cols_per_head_,
-                                           coeffs_, 1);
-            c1_pt_[bj * n_cts_per_block_idx_ + g] = ctx.encode_ringt(vec, q_L);
+            uint32_t idx = bj * n_cts_per_block_idx_ + g;
+            c2_pt_[idx] = generate_coeff_pt(ctx, 2, 0, bj, g);
+            c1_pt_[idx] = generate_coeff_pt(ctx, 1, 0, bj, g);
         }
     }
 
-    // --- c0: per (bj, bi, g), scale D, with 0-padding ---
-    uint32_t total_c0 = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
-    c0_add_pt_.resize(total_c0);
+    c0_add_pt_.resize(num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_);
     for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
         for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
             for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-                vector<double> vec(n_slot_, 0.0);
-                for (uint32_t h_local = 0; h_local < S_; h_local++) {
-                    uint32_t h = g * S_ + h_local;
-                    for (uint32_t col = 0; col < d_; col++) {
-                        uint32_t actual_col = bj * d_ + col;
-                        for (uint32_t row = 0; row < d_; row++) {
-                            uint32_t actual_row = bi * d_ + row;
-                            uint32_t base_slot = (row + d_ * col) * S_ + h_local;
-                            for (uint32_t ci = 0; ci < num_chunks_; ci++) {
-                                uint32_t slot = ci * chunk_size_ + base_slot;
-                                if (actual_row < m_ && h < n_heads_ && actual_col < cols_per_head_) {
-                                    vec[slot] = coeffs_.get(0, h * cols_per_head_ + actual_col);
-                                }
-                            }
-                        }
-                    }
-                }
-                uint32_t c0_idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
-                c0_add_pt_[c0_idx] = ctx.encode_ringt(vec, D);
+                uint32_t idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
+                c0_add_pt_[idx] = generate_coeff_pt(ctx, 0, bi, bj, g);
             }
         }
     }
 
-    // --- Degree-4 additional: c3 and c4 ---
     if (degree_ == 4) {
-        double q_L2 = param_.get_q(level_ - 2);
-
-        double c4_scale = q_L / D * q_L / D * q_L1 / D * q_L2;
         c4_pt_.resize(n_coeff_vecs);
-        for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
-            for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-                auto vec = build_par_coeff_vec(n_slot_, chunk_size_, num_chunks_, d_, S_, bj, g, n_heads_,
-                                               cols_per_head_, coeffs_, 4);
-                c4_pt_[bj * n_cts_per_block_idx_ + g] = ctx.encode_ringt(vec, c4_scale);
-            }
-        }
-
-        double c3_scale = q_L / D * q_L / D * q_L2;
         c3_pt_.resize(n_coeff_vecs);
         for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
             for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-                auto vec = build_par_coeff_vec(n_slot_, chunk_size_, num_chunks_, d_, S_, bj, g, n_heads_,
-                                               cols_per_head_, coeffs_, 3);
-                c3_pt_[bj * n_cts_per_block_idx_ + g] = ctx.encode_ringt(vec, c3_scale);
+                uint32_t idx = bj * n_cts_per_block_idx_ + g;
+                c4_pt_[idx] = generate_coeff_pt(ctx, 4, 0, bj, g);
+                c3_pt_[idx] = generate_coeff_pt(ctx, 3, 0, bj, g);
             }
         }
     }
