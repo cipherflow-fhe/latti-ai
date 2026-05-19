@@ -843,7 +843,36 @@ class TransposeTest(nn.Module):
 class CCMMTest(nn.Module):
     def __init__(self):
         super().__init__()
-        # self.qkv = nn.Linear(192, 1, False)
 
     def forward(self, x0, x1):
         return x0 @ x1
+
+
+class HeadWiseAKTTest(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x0, x1):
+        return x0 @ x1.transpose(-2, -1)
+
+
+class CPMMSquareTest(nn.Module):
+    """Linear with output_dim == input_dim (SQUARE mode for par CPMM)."""
+
+    def __init__(self, dim=64):
+        super().__init__()
+        self.linear = nn.Linear(dim, dim, bias=False)
+
+    def forward(self, x):
+        return self.linear(x)
+
+
+class LayerNorm(nn.Module):
+    def __init__(self, normalized_shape=192):
+        super().__init__()
+        from nn_tools import FHELayerNorm
+
+        self.ln = FHELayerNorm(normalized_shape)
+
+    def forward(self, x):
+        return self.ln(x)

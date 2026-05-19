@@ -342,6 +342,8 @@ class CompilerTestBase(unittest.TestCase):
         test_name,
         style='ordinary',
         replace=True,
+        feature_mat=False,
+        n_heads=0,
         **export_kwargs,
     ):
         """Full E2E pipeline: compile model and generate all files for C++ inference test.
@@ -373,9 +375,11 @@ class CompilerTestBase(unittest.TestCase):
         )
 
         # Step 2: ONNX → JSON
-        onnx_to_json(temp_onnx, temp_json, style)
+        onnx_to_json(temp_onnx, temp_json, style, feature_mat=feature_mat)
 
         # Step 3: Compile (produces task/server/ and task/client/)
+        if n_heads:
+            config.n_heads = n_heads
         graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=temp_json,
@@ -427,17 +431,23 @@ class CompilerTestBase(unittest.TestCase):
         # Step 8: Generate random input CSV(s)
         for input_name, input_param in task_config['task_input_param'].items():
             dim = input_param['dim']
-            channel = input_param['channel']
             csv_path = client_dir / f'{input_name}.csv'
-            if dim == 2:
+            if input_param.get('data_type') == 'feature_mat':
+                h, w = input_param['shape']
+                data = np.random.uniform(-1, 1, (h, w))
+                np.savetxt(csv_path, data, delimiter=',', fmt='%.6f')
+            elif dim == 2:
+                channel = input_param['channel']
                 h, w = input_param['shape']
                 data = np.random.uniform(-1, 1, (channel, h * w))
                 np.savetxt(csv_path, data, delimiter=',', fmt='%.6f')
             elif dim == 1:
+                channel = input_param['channel']
                 (length,) = input_param['shape']
                 data = np.random.uniform(-1, 1, (channel, length))
                 np.savetxt(csv_path, data, delimiter=',', fmt='%.6f')
             elif dim == 0:
+                channel = input_param['channel']
                 data = np.random.uniform(-1, 1, (channel,))
                 np.savetxt(csv_path, data.reshape(1, -1), delimiter=',', fmt='%.6f')
             else:
@@ -542,6 +552,10 @@ class TestSingleLayer(CompilerTestBase):
     def test_ccmm(self):
         model = nn_modules.CCMMTest()
         self._export_and_compile(model, [(32, 64), (64, 64)], style='multiplexed', feature_mat=True)
+
+    def test_layernorm(self):
+        model = nn_modules.LayerNorm()
+        self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
 
 
 class TestLayerInteraction(CompilerTestBase):
@@ -1174,6 +1188,45 @@ class TestE2ESingleLayer(CompilerTestBase):
                 with self.subTest(test_name=test_name):
                     model = nn_modules.SingleAdaptiveAvgpool1d(output_size=output_size)
                     self._export_compile_and_deploy(model, (1, 32, shape), test_name, style='multiplexed')
+
+    # ── Matrix operations (BlockColMajor / ParBlockColMajor) ──
+
+    def test_par_block_col_major_transpose(self):
+        """ParBlockColMajorTranspose E2E: n_heads=2."""
+        model = nn_modules.TransposeTest()
+        self._export_compile_and_deploy(
+            model,
+            (1, 32, 64),
+            'par_block_col_major_transpose',
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=2,
+        )
+
+    def test_par_block_col_major_ccmm(self):
+        """ParBlockColMajorCCMM E2E: head-wise A @ K^T, n_heads=2."""
+        model = nn_modules.HeadWiseAKTTest()
+        self._export_compile_and_deploy(
+            model,
+            [(32, 64), (32, 64)],
+            'par_block_col_major_ccmm',
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=2,
+            input_names=['x0', 'x1'],
+        )
+
+    def test_par_block_col_major_cpmm(self):
+        """ParBlockColMajorCPMM E2E: x @ W (SQUARE), n_heads=2."""
+        model = nn_modules.CPMMSquareTest(dim=64)
+        self._export_compile_and_deploy(
+            model,
+            (1, 32, 64),
+            'par_block_col_major_cpmm',
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=2,
+        )
 
 
 class TestE2EMultipleLayer(CompilerTestBase):
