@@ -113,6 +113,7 @@ InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool i
     is_absorb_polyrelu = config["is_absorb_polyrelu"];
     if (config.contains("n_heads"))
         n_heads = config["n_heads"];
+    layernorm_param = config.value("layernorm_param", json::object());
     Timer timer(true);
 }
 
@@ -329,8 +330,12 @@ void InitInferenceProcess::_init_pcmstats_layer(const string& key, const json& l
     double inv_var;
     if (layer.contains("inv_var")) {
         inv_var = layer.at("inv_var").get<double>();
+    } else if (layernorm_param.contains("inv_var")) {
+        inv_var = layernorm_param.at("inv_var").get<double>();
     } else {
-        double var_std_bound = get_json_value_any<double>(layer, {"var_std_bound"});
+        double var_std_bound = layer.contains("var_std_bound") ?
+                                   layer.at("var_std_bound").get<double>() :
+                                   get_json_value_any<double>(layernorm_param, {"var_std_bound"});
         inv_var = 1.0 / (var_std_bound * var_std_bound);
     }
 
@@ -360,6 +365,10 @@ void InitInferenceProcess::_init_pcminit_layer(const string& key, const json& la
         c0 = layer.at("coeffs")[0].get<double>();
         c1 = layer.at("coeffs")[1].get<double>();
         c2 = layer.at("coeffs")[2].get<double>();
+    } else if (layernorm_param.contains("minimax_init_coeffs")) {
+        c0 = layernorm_param.at("minimax_init_coeffs")[0].get<double>();
+        c1 = layernorm_param.at("minimax_init_coeffs")[1].get<double>();
+        c2 = layernorm_param.at("minimax_init_coeffs")[2].get<double>();
     } else {
         c0 = get_json_value_any<double>(layer, {"c0"});
         c1 = get_json_value_any<double>(layer, {"c1"});
@@ -391,8 +400,13 @@ void InitInferenceProcess::_init_pcmaffine_layer(const string& key, const json& 
     double inv_std;
     if (layer.contains("inv_std")) {
         inv_std = layer.at("inv_std").get<double>();
+    } else if (layernorm_param.contains("inv_std")) {
+        inv_std = layernorm_param.at("inv_std").get<double>();
     } else {
-        inv_std = 1.0 / get_json_value_any<double>(layer, {"var_std_bound"});
+        double var_std_bound = layer.contains("var_std_bound") ?
+                                   layer.at("var_std_bound").get<double>() :
+                                   get_json_value_any<double>(layernorm_param, {"var_std_bound"});
+        inv_std = 1.0 / var_std_bound;
     }
     auto gamma = load_h5_tensor_any<1>(layer, h5_file, {"gamma", "weight"}, {feat_xc.shape[1]});
     auto beta = load_h5_tensor_any<1>(layer, h5_file, {"beta", "bias"}, {feat_xc.shape[1]});
@@ -1759,7 +1773,10 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
             if (layer_type == "bootstrapping" or layer_type == "drop_level" or layer_type == "batchnorm" or
                 layer_type == "batchnorm2d" or layer_type == "identity") {
                 FeatureNode feature_input0(json_features[feature_input[0]]);
-                if (feature_input0.dim == 2) {
+                if (feature_input0.is_mat) {
+                    auto& input0 = p_feature_mat_x[feature_input[0]];
+                    result_mat = input0.copy();
+                } else if (feature_input0.dim == 2) {
                     auto& input0 = p_feature2d_x[feature_input[0]];
                     result = input0.copy();
                 } else if (feature_input0.dim == 1) {
@@ -1935,8 +1952,27 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 auto& input0 = p_feature_mat_x[feature_input[0]];
                 result_mat = fp->get_layer<ParBlockColMajorTranspose>(key).run_plaintext(input0);
             }
-            if (is_pcm_layer_type(layer_type)) {
-                throw runtime_error("run_task_plaintext: PCM par block-col-major layer is not implemented");
+            if (layer_type == "pcmstats") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                result_mat = fp->get_layer<ParBlockColMajorLNStats>(key).run_plaintext(input0);
+            }
+            if (layer_type == "pcmcenter") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                result_mat = fp->get_layer<ParBlockColMajorLNXCentered>(key).run_plaintext(input0);
+            }
+            if (layer_type == "pcminit") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                result_mat = fp->get_layer<ParBlockColMajorLNMinimaxInit>(key).run_plaintext(input0);
+            }
+            if (layer_type == "pcmgs") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                auto& input1 = p_feature_mat_x[feature_input[1]];
+                result_mat = fp->get_layer<ParBlockColMajorLNGoldschmidt>(key).run_plaintext(input0, input1);
+            }
+            if (layer_type == "pcmaffine") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                auto& input1 = p_feature_mat_x[feature_input[1]];
+                result_mat = fp->get_layer<ParBlockColMajorLNAffine>(key).run_plaintext(input0, input1);
             }
             if (result.get_size() != 0) {
                 p_feature2d_x[feature_output_id] = move(result);

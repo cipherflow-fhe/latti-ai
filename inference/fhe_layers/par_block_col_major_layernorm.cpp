@@ -254,6 +254,23 @@ vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const Feat
     return move(a_cts);
 }
 
+Array<double, 2> ParBlockColMajorLNStats::run_plaintext(const Array<double, 2>& x) const {
+    Array<double, 2> result({m_, 1});
+    for (uint32_t i = 0; i < m_; i++) {
+        double sum_x = 0.0;
+        double sum_x2 = 0.0;
+        for (uint32_t j = 0; j < total_dim_; j++) {
+            double v = x.get(i, j);
+            sum_x += v;
+            sum_x2 += v * v;
+        }
+        double mean = sum_x / total_dim_;
+        double var = sum_x2 / total_dim_ - mean * mean;
+        result.set(i, 0, (var + eps_) * inv_var_);
+    }
+    return result;
+}
+
 // ============================================================
 // ParBlockColMajorLNXCentered
 // ============================================================
@@ -394,6 +411,21 @@ vector<CkksCiphertext> ParBlockColMajorLNXCentered::run(CkksContext& ctx, const 
     return move(x_centered);
 }
 
+Array<double, 2> ParBlockColMajorLNXCentered::run_plaintext(const Array<double, 2>& x) const {
+    Array<double, 2> result({m_, total_dim_});
+    for (uint32_t i = 0; i < m_; i++) {
+        double sum_x = 0.0;
+        for (uint32_t j = 0; j < total_dim_; j++) {
+            sum_x += x.get(i, j);
+        }
+        double mean = sum_x / total_dim_;
+        for (uint32_t j = 0; j < total_dim_; j++) {
+            result.set(i, j, x.get(i, j) - mean);
+        }
+    }
+    return result;
+}
+
 // ============================================================
 // ParBlockColMajorLNMinimaxInit (same logic as block version)
 // ============================================================
@@ -463,6 +495,18 @@ vector<CkksCiphertext> ParBlockColMajorLNMinimaxInit::run(CkksContext& ctx, cons
     });
 
     return y_cts;
+}
+
+Array<double, 2> ParBlockColMajorLNMinimaxInit::run_plaintext(const Array<double, 2>& a) const {
+    auto shape = a.get_shape();
+    Array<double, 2> result(shape);
+    for (uint64_t i = 0; i < shape[0]; i++) {
+        for (uint64_t j = 0; j < shape[1]; j++) {
+            double v = a.get(i, j);
+            result.set(i, j, c0_ + c1_ * v + c2_ * v * v);
+        }
+    }
+    return result;
 }
 
 // ============================================================
@@ -546,6 +590,20 @@ vector<CkksCiphertext> ParBlockColMajorLNGoldschmidt::run(CkksContext& ctx,
     });
 
     return y_new;
+}
+
+Array<double, 2> ParBlockColMajorLNGoldschmidt::run_plaintext(const Array<double, 2>& y,
+                                                              const Array<double, 2>& a) const {
+    auto shape = y.get_shape();
+    Array<double, 2> result(shape);
+    for (uint64_t i = 0; i < shape[0]; i++) {
+        for (uint64_t j = 0; j < shape[1]; j++) {
+            double yv = y.get(i, j);
+            double av = a.get(i, j);
+            result.set(i, j, 0.5 * yv * (3.0 - av * yv * yv));
+        }
+    }
+    return result;
 }
 
 // ============================================================
@@ -689,5 +747,19 @@ FeatureMatEncrypted ParBlockColMajorLNAffine::run(CkksContext& ctx,
     });
 
     result.level = y_level_ - 2;
+    return result;
+}
+
+Array<double, 2> ParBlockColMajorLNAffine::run_plaintext(const Array<double, 2>& x_centered,
+                                                         const Array<double, 2>& y) const {
+    uint32_t total_dim = n_heads_ * cols_per_head_;
+    Array<double, 2> result({m_, total_dim});
+    for (uint32_t i = 0; i < m_; i++) {
+        double yi = y.get(i, 0);
+        for (uint32_t j = 0; j < total_dim; j++) {
+            double out = x_centered.get(i, j) * yi * inv_std_ * gamma_vals_.get(j) + beta_vals_.get(j);
+            result.set(i, j, out);
+        }
+    }
     return result;
 }

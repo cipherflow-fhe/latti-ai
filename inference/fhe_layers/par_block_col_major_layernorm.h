@@ -37,6 +37,7 @@ public:
 
     // Returns a_cts[num_block_rows]
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
+    Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
     ls::CkksPlaintextRingt
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
@@ -71,6 +72,7 @@ public:
     void prepare_weight();
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
+    Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
     ls::CkksPlaintextRingt
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
@@ -103,6 +105,7 @@ public:
     void prepare_weight();
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& a_cts);
+    Array<double, 2> run_plaintext(const Array<double, 2>& a) const;
 
     ls::CkksPlaintextRingt
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
@@ -129,6 +132,7 @@ public:
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx,
                                         const std::vector<ls::CkksCiphertext>& y_cts,
                                         const std::vector<ls::CkksCiphertext>& a_cts);
+    Array<double, 2> run_plaintext(const Array<double, 2>& y, const Array<double, 2>& a) const;
 
     ls::CkksPlaintextRingt
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
@@ -159,6 +163,7 @@ public:
     FeatureMatEncrypted run(ls::CkksContext& ctx,
                             const std::vector<ls::CkksCiphertext>& x_centered,
                             const std::vector<ls::CkksCiphertext>& y_cts);
+    Array<double, 2> run_plaintext(const Array<double, 2>& x_centered, const Array<double, 2>& y) const;
 
     ls::CkksPlaintextRingt
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
