@@ -1762,7 +1762,7 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
 void InferenceProcess::prepare_task() {
     register_custom_executors(task_custom_executors_);
     if (compute_device == ComputeDevice::GPU) {
-        fhe_task_gpu_ = make_unique<FheTaskGpu>(fp->project_path, gpu_device);
+        fhe_task_gpu_ = make_unique<FheTaskGpu>(fp->project_path);
         fhe_task_gpu_->bind_custom_executors(task_custom_executors_);
     } else {
         fhe_task_cpu_ = make_unique<FheTaskCpu>(fp->project_path);

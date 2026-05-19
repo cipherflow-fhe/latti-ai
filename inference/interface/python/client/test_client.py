@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+# Copyright (c) 2025-2026 CipherFlow (Shenzhen) Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Test latti_client: setup, encrypt, export_eval_context, export_full_context, decrypt."""
 
 import csv
@@ -24,8 +40,15 @@ def test_import():
     assert hasattr(latti_client, 'InferenceClient')
     assert hasattr(latti_client, 'DecryptedOutput')
     methods = [m for m in dir(latti_client.InferenceClient) if not m.startswith('_')]
-    for required in ['setup', 'release', 'encrypt', 'decrypt', 'export_eval_context',
-                     'export_full_context', 'load_full_context']:
+    for required in [
+        'setup',
+        'release',
+        'encrypt',
+        'decrypt',
+        'export_eval_context',
+        'export_full_context',
+        'load_full_context',
+    ]:
         assert required in methods, f'missing method: {required}'
     print('[PASS] import')
 
@@ -91,8 +114,7 @@ def test_export_full_context(client, eval_ctx):
     assert isinstance(full_ctx, bytes) and len(full_ctx) > 0
     # full_ctx includes the secret key; eval_ctx does not. So full_ctx must be strictly larger.
     # This catches regressions where make_public_context() is inadvertently called.
-    assert len(full_ctx) > len(eval_ctx), \
-        f'full_ctx ({len(full_ctx)}) should be larger than eval_ctx ({len(eval_ctx)})'
+    assert len(full_ctx) > len(eval_ctx), f'full_ctx ({len(full_ctx)}) should be larger than eval_ctx ({len(eval_ctx)})'
     delta_mb = (len(full_ctx) - len(eval_ctx)) / 1024 / 1024
     print(f'[PASS] export_full_context ({len(full_ctx) / 1024 / 1024:.1f} MB, +{delta_mb:.1f} MB vs eval)')
     return full_ctx

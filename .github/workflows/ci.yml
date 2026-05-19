@@ -39,6 +39,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install CMake 3.30.4
+        run: python3 -m pip install --upgrade cmake==3.30.4 -i https://mirrors.aliyun.com/pypi/simple/
+
       - name: Install Python dependencies
         run: pip install -r training/requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
 
@@ -84,7 +87,8 @@ jobs:
           cmake -B build \
             -DINFERENCE_SDK_ENABLE_GPU=ON \
             -DLATTISENSE_CUDA_ARCH=${CUDA_ARCH} \
-            -DHEONGPU_CCCL_GIT_URL=https://gitee.com/nvidia_mirror/cccl.git
+            -DHEONGPU_CCCL_GIT_URL=https://gitee.com/mirrors_NVIDIA/cccl.git \
+            -DHEONGPU_SPDLOG_GIT_URL=https://gitee.com/mirror-luyi/spdlog.git
           cmake --build build -j$(nproc)
 
       - name: Save HEonGPU cache

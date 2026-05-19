@@ -28,8 +28,7 @@
 static Napi::Buffer<uint8_t> bytes_to_buffer(Napi::Env env, Bytes&& b) {
     auto* owned = new Bytes(std::move(b));
     return Napi::Buffer<uint8_t>::New(
-        env, owned->data(), owned->size(),
-        [](Napi::Env, uint8_t* /*data*/, Bytes* hint) { delete hint; }, owned);
+        env, owned->data(), owned->size(), [](Napi::Env, uint8_t* /*data*/, Bytes* hint) { delete hint; }, owned);
 }
 
 static Bytes buffer_to_bytes(Napi::Value val) {
