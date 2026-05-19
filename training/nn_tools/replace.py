@@ -24,7 +24,7 @@ from typing import Type, Callable
 
 import torch.nn as nn
 
-from .activations import RangeNormPoly2d, PolyAct
+from .activations import RangeNormPoly2d, PolyAct, PolyActRNPoly
 from .modules import DepthwiseAvgPool2d
 
 log = logging.getLogger(__name__)
@@ -333,6 +333,13 @@ def prepare_for_fhe(
     replace_maxpool_with_avgpool(model)
     _replace_general_avgpool_recursive(model, freeze=True)
     replace_activation_with_poly(model, new_module_factory=poly_module, upper_bound=upper_bound, degree=degree)
+    replace_activation_with_poly(
+        model,
+        old_cls=nn.GELU,
+        new_module_factory=PolyActRNPoly,
+        upper_bound=upper_bound,
+        degree=degree,
+    )
 
     if input_size is not None:
         has_lazy_poly = any(isinstance(m, RangeNormPoly2d) and m.rangenorm.running_max is None for m in model.modules())

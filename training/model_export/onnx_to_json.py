@@ -35,7 +35,7 @@ from .operations.MaxPool import MaxPoolComputeNode
 from .operations.Sigmoid import SigmoidComputeNode
 from .operations.PolyRelu import PolyReluComputeNode
 from .operations.ConvTranspose import ConvTransposeComputeNode
-from .operations.PolyAct import PolyActComputeNode
+from .operations.PolyAct import PolyActComputeNode, PolyActRNPolyComputeNode
 from .operations.MatMul import MatMulComputeNode
 from .operations.Transpose import TransposeComputeNode
 from .operations.LayerNorm import LayerNormComputeNode
@@ -120,7 +120,9 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_m
     features_nodes = gen_data_nodes(value_infos, feature_mat=feature_mat)
     compute_nodes: dict[str, ComputeNode] = {}
 
-    constant_nodes = dict()
+    constant_nodes = {
+        format_id(init.name): [numpy_helper.to_array(init), numpy_helper.to_array(init)] for init in graph.initializer
+    }
 
     for n in graph.node:
         name = format_id(n.output[0])
@@ -183,6 +185,8 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_m
                 compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
             case 'PolyAct':
                 compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
+            case 'PolyActRNPoly':
+                compute_node = PolyActRNPolyComputeNode.from_onnx_node(n, features_nodes)
             case _:
                 kwargs = {}
                 if 'Add' in n.op_type:

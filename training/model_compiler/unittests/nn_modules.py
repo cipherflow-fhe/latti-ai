@@ -61,6 +61,15 @@ class SingleAct1d(nn.Module):
         return x
 
 
+class SingleGelu(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.gelu0 = nn.GELU()
+
+    def forward(self, x):
+        return self.gelu0(x)
+
+
 class SingleAvgpool2d(nn.Module):
     """AvgPool2d with configurable kernel_size, stride, and padding."""
 
@@ -830,6 +839,15 @@ class QKVTest(nn.Module):
 
     def forward(self, x):
         return self.qkv(x)
+
+
+class PCMGammaTest(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.gamma = nn.Parameter(torch.ones(192))
+
+    def forward(self, x):
+        return x * self.gamma
 
 
 class TransposeTest(nn.Module):
