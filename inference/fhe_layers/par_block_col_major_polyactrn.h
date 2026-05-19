@@ -32,6 +32,7 @@ public:
                                    Duo shape,
                                    uint32_t block_size,
                                    uint32_t n_heads,
+                                   uint32_t K,
                                    uint32_t init_level,
                                    Array<double, 1>&& gamma);
     void prepare_weight();
@@ -40,12 +41,13 @@ public:
 
 private:
     uint32_t m_, cols_per_head_, d_, n_slot_;
+    uint32_t K_, total_dim_;
     uint32_t n_heads_, n_h_padded_, S_, n_cts_per_block_idx_;
     uint32_t chunk_size_, num_chunks_;
     uint32_t num_block_rows_, num_block_cols_;
     Array<double, 1> gamma_vals_;
 
-    std::vector<ls::CkksPlaintextRingt> gamma_pt_;  // per (bj, g)
+    std::vector<ls::CkksPlaintextRingt> gamma_pt_;  // per (mb, bj, g)
 };
 
 // ============================================================
@@ -62,6 +64,7 @@ public:
                                   Duo shape,
                                   uint32_t block_size,
                                   uint32_t n_heads,
+                                  uint32_t K,
                                   uint32_t init_level,
                                   Array<double, 2>&& coeffs,
                                   uint32_t degree);
@@ -71,6 +74,7 @@ public:
 
 private:
     uint32_t m_, cols_per_head_, d_, n_slot_;
+    uint32_t K_, total_dim_;
     uint32_t n_heads_, n_h_padded_, S_, n_cts_per_block_idx_;
     uint32_t chunk_size_, num_chunks_;
     uint32_t num_block_rows_, num_block_cols_;
@@ -78,11 +82,11 @@ private:
     Array<double, 2> coeffs_;
 
     // Degree >= 2
-    std::vector<ls::CkksPlaintextRingt> c2_pt_;      // per (bj, g)
-    std::vector<ls::CkksPlaintextRingt> c1_pt_;      // per (bj, g)
-    std::vector<ls::CkksPlaintextRingt> c0_add_pt_;  // per (bi, bj, g)
+    std::vector<ls::CkksPlaintextRingt> c2_pt_;      // per (mb, bj, g)
+    std::vector<ls::CkksPlaintextRingt> c1_pt_;      // per (mb, bj, g)
+    std::vector<ls::CkksPlaintextRingt> c0_add_pt_;  // per (mb, bi, bj, g)
 
     // Degree 4 only
-    std::vector<ls::CkksPlaintextRingt> c4_pt_;  // per (bj, g)
-    std::vector<ls::CkksPlaintextRingt> c3_pt_;  // per (bj, g)
+    std::vector<ls::CkksPlaintextRingt> c4_pt_;  // per (mb, bj, g)
+    std::vector<ls::CkksPlaintextRingt> c3_pt_;  // per (mb, bj, g)
 };
