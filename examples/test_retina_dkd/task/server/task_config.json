@@ -9,34 +9,59 @@
     ],
     "is_absorb_polyrelu": false,
     "pack_style": "multiplexed",
+    "is_parallel_big_size": true,
     "task_input_id": [
-        "input"
+        "input_0",
+        "input_1",
+        "input_2"
     ],
     "task_output_id": [
         "output"
     ],
     "task_input_param": {
-        "input": {
+        "input_0": {
             "dim": 2,
             "channel": 3,
             "scale": 1.0,
             "ckks_scale": 1,
             "shape": [
-                128,
-                128
+                512,
+                512
             ],
             "skip": [
                 1,
                 1
             ],
             "ckks_parameter_id": "param0",
-            "level": 5,
+            "level": 1,
             "depth": -1,
             "pack_num": 2,
             "invalid_fill": [
                 1,
                 1
             ]
+        },
+        "input_1": {
+            "dim": 0,
+            "channel": 2,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "skip": 256,
+            "ckks_parameter_id": "param0",
+            "level": 1,
+            "depth": -1,
+            "pack_num": 128
+        },
+        "input_2": {
+            "dim": 0,
+            "channel": 3,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "skip": 256,
+            "ckks_parameter_id": "param0",
+            "level": 1,
+            "depth": -1,
+            "pack_num": 128
         }
     },
     "task_output_param": {
