@@ -2151,8 +2151,8 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
                 pt = layer->generate_psi_wkd_pt(ckks_ctx, i);
         } else if (op_class == "ParBlockColMajorPolyActRNPoly") {
             auto* layer = static_cast<ParBlockColMajorPolyActRNPoly*>(layer_ptr);
-            pt = layer->generate_coeff_pt(ckks_ctx, attrs.value("coeff_idx", i), attrs.value("bi", 0),
-                                          attrs.value("bj", j), attrs.value("g", k));
+            pt = layer->generate_coeff_pt(ckks_ctx, attrs.value("coeff_idx", i), attrs.value("mb", 0),
+                                          attrs.value("bi", 0), attrs.value("bj", j), attrs.value("g", k));
         } else if (op_class == "ParBlockColMajorLNStats") {
             auto* layer = static_cast<ParBlockColMajorLNStats*>(layer_ptr);
             pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
