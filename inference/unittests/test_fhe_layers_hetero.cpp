@@ -3574,7 +3574,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         }
 
         auto layer_ptr = std::make_shared<ParBlockColMajorPolyActRNPoly>(res.param, Duo{seq_len, total_dim}, d, n_heads,
-                                                                         level, coeffs.copy(), degree);
+                                                                         1, level, coeffs.copy(), degree);
 
         FeatureMatEncrypted X_enc(&res.context, level);
         X_enc.shape = {seq_len, head_dim};
