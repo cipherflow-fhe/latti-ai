@@ -3395,14 +3395,14 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_polyactrn", "
         X_enc.par_block_col_major_pack(X_mat, d, n_heads, false, this->default_scale);
 
         // Phase 1: Gamma scaling
-        ParBlockColMajorPolyActRNGamma gamma_layer(this->param, {seq_len, total_dim}, d, n_heads, init_level,
+        ParBlockColMajorPolyActRNGamma gamma_layer(this->param, {seq_len, total_dim}, d, n_heads, 1, init_level,
                                                    gamma.copy());
         gamma_layer.prepare_weight();
         auto gamma_result = gamma_layer.run(this->context, X_enc);
 
         // Phase 2: Polynomial
         uint32_t poly_level = init_level - 1;
-        ParBlockColMajorPolyActRNPoly poly(this->param, {seq_len, total_dim}, d, n_heads, poly_level, coeffs.copy(),
+        ParBlockColMajorPolyActRNPoly poly(this->param, {seq_len, total_dim}, d, n_heads, 1, poly_level, coeffs.copy(),
                                            degree);
         poly.prepare_weight();
         auto result_enc = poly.run(this->context, gamma_result);
@@ -3440,6 +3440,107 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_polyactrn", "
     }
     SECTION("degree=4, d=64, seq=197, heads=3, head_dim=64") {
         run_par_polyactrn_test(64, 197, 3, 64, 4, 4);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_cpmm_expand_polyactrn_reduce", "", HeteroProcessors) {
+    auto run_test = [&](uint32_t d, uint32_t seq_len, uint32_t n_heads, uint32_t head_dim, uint32_t K, uint32_t degree,
+                        int init_level) {
+        uint32_t total_dim = n_heads * head_dim;
+        uint32_t expanded_dim = K * total_dim;
+
+        // Generate random data
+        Array<double, 2> A_mat = gen_random_array<2>({seq_len, total_dim}, 0.5);
+        Array<double, 2> W_expand = gen_random_array<2>({total_dim, expanded_dim}, 0.1);
+        Array<double, 1> gamma = gen_random_array<1>({expanded_dim}, 0.3);
+        Array<double, 2> coeffs = gen_random_array<2>({degree + 1, expanded_dim}, 0.2);
+        Array<double, 2> W_reduce = gen_random_array<2>({expanded_dim, total_dim}, 0.1);
+
+        // === Plaintext reference ===
+        // 1. mid = A @ W_expand
+        std::vector<double> mid(seq_len * expanded_dim, 0.0);
+        for (uint32_t i = 0; i < seq_len; i++)
+            for (uint32_t j = 0; j < expanded_dim; j++) {
+                double s = 0;
+                for (uint32_t k = 0; k < total_dim; k++)
+                    s += A_mat.get(i, k) * W_expand.get(k, j);
+                mid[i * expanded_dim + j] = s;
+            }
+
+        // 2-3. poly(gamma * mid)
+        std::vector<double> poly_out(seq_len * expanded_dim, 0.0);
+        for (uint32_t i = 0; i < seq_len; i++)
+            for (uint32_t j = 0; j < expanded_dim; j++) {
+                double gx = gamma.get(j) * mid[i * expanded_dim + j];
+                double val = 0.0, gx_pow = 1.0;
+                for (uint32_t c = 0; c <= degree; c++) {
+                    val += coeffs.get(c, j) * gx_pow;
+                    gx_pow *= gx;
+                }
+                poly_out[i * expanded_dim + j] = val;
+            }
+
+        // 4. result = poly_out @ W_reduce
+        Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
+        for (uint32_t i = 0; i < seq_len; i++)
+            for (uint32_t j = 0; j < total_dim; j++) {
+                double s = 0;
+                for (uint32_t k = 0; k < expanded_dim; k++)
+                    s += poly_out[i * expanded_dim + k] * W_reduce.get(k, j);
+                expected.set(i, j, s);
+            }
+
+        // === FHE computation ===
+        // Pack input in standard par format
+        FeatureMatEncrypted A_enc(&this->context, init_level);
+        A_enc.shape = {seq_len, head_dim};
+        A_enc.matmul_block_size = d;
+        A_enc.par_block_col_major_pack(A_mat, d, n_heads, false, this->default_scale);
+
+        // Layer 1: CPMM EXPAND  (2 levels: init_level -> init_level-2)
+        ParBlockColMajorCPMM cpmm_expand(this->param, Duo{seq_len, head_dim}, W_expand, d, n_heads, init_level);
+        cpmm_expand.precompute_diagonals();
+        auto expand_result = cpmm_expand.run(this->context, A_enc);
+
+        // Layer 2: Gamma  (1 level: init_level-2 -> init_level-3)
+        int gamma_level = init_level - 2;
+        ParBlockColMajorPolyActRNGamma gamma_layer(this->param, {seq_len, expanded_dim}, d, n_heads, K, gamma_level,
+                                                   gamma.copy());
+        gamma_layer.prepare_weight();
+        auto gamma_result = gamma_layer.run(this->context, expand_result);
+
+        // Layer 3: Poly  (2 or 3 levels: init_level-3 -> init_level-5 or init_level-6)
+        int poly_level = init_level - 3;
+        ParBlockColMajorPolyActRNPoly poly_layer(this->param, {seq_len, expanded_dim}, d, n_heads, K, poly_level,
+                                                 coeffs.copy(), degree);
+        poly_layer.prepare_weight();
+        auto poly_result = poly_layer.run(this->context, gamma_result);
+
+        // Layer 4: CPMM REDUCE  (2 levels)
+        int reduce_level = (degree == 2) ? init_level - 5 : init_level - 6;
+        ParBlockColMajorCPMM cpmm_reduce(this->param, Duo{seq_len, head_dim}, W_reduce, d, n_heads, reduce_level);
+        cpmm_reduce.precompute_diagonals();
+        auto final_result = cpmm_reduce.run(this->context, poly_result);
+
+        // Unpack (standard par format after reduce, no K)
+        auto result = final_result.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
+
+        // Compare
+        print_double_message(result.to_array_1d().data(), "output_mg", 10);
+        print_double_message(expected.to_array_1d().data(), "output_expected", 10);
+
+        auto compare_result = compare(expected, result);
+        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    };
+
+    SECTION("degree=2, K=2, d=16, seq=53, heads=3, head_dim=16") {
+        run_test(16, 53, 3, 16, 2, 2, 7);
+    }
+    SECTION("degree=4, K=2, d=16, seq=53, heads=3, head_dim=16") {
+        run_test(16, 53, 3, 16, 2, 4, 8);
     }
 }
 
