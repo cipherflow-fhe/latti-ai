@@ -643,9 +643,9 @@ def set_level_costs(graph: LayerAbstractGraph):
         elif compute_node.layer_type == 'parccmm':
             graph.dag.nodes[compute_node]['level_cost'] = 3
         elif compute_node.layer_type == 'ln_stats':
-            graph.dag.nodes[compute_node]['level_cost'] = 3
+            graph.dag.nodes[compute_node]['level_cost'] = 4
         elif compute_node.layer_type == 'ln_cent':
-            graph.dag.nodes[compute_node]['level_cost'] = 1
+            graph.dag.nodes[compute_node]['level_cost'] = 2
         elif compute_node.layer_type == 'ln_init':
             graph.dag.nodes[compute_node]['level_cost'] = 2
         elif compute_node.layer_type == 'ln_iter':
