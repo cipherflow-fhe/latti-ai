@@ -44,6 +44,13 @@ from inference.model_generator.layers.poly_relu2d import *
 from inference.model_generator.layers.upsample_layer import *
 from inference.model_generator.layers.par_block_col_major_ccmm import ParBlockColMajorCCMM
 from inference.model_generator.layers.par_block_col_major_cpmm import ParBlockColMajorCPMM
+from inference.model_generator.layers.par_block_col_major_layernorm import (
+    ParBlockColMajorLNAffine,
+    ParBlockColMajorLNGoldschmidt,
+    ParBlockColMajorLNMinimaxInit,
+    ParBlockColMajorLNStats,
+    ParBlockColMajorLNXCentered,
+)
 from inference.model_generator.layers.par_block_col_major_transpose import ParBlockColMajorTranspose
 from training.model_compiler.components import (
     N16QP1546H192H32,
@@ -155,10 +162,16 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     block_size = shape_per_head[1]
                     G = _par_group_count(block_size, n_heads, n // 2)
                     n_packed = math.ceil(shape_per_head[0] / block_size) * G
+                elif consumer_type in {'pcmstats', 'pcmcenter'}:
+                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=False)
+                    par_feature_shapes[input_fid] = shape_per_head
+                    block_size = shape_per_head[1]
+                    G = _par_group_count(block_size, n_heads, n // 2)
+                    n_packed = _par_ct_count(shape_per_head, block_size, G)
                 else:
                     raise ValueError(
                         f"feature_mat input '{input_fid}' is consumed by unsupported non-par matrix layer "
-                        f"'{consumer_type}'; use parcpmm/parccmm/partranspose"
+                        f"'{consumer_type}'; use parcpmm/parccmm/partranspose or layernorm PCM stages"
                     )
             else:
                 pack = int(feat['pack_num'])
@@ -187,6 +200,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             input_args.append(Argument(input_fid, x))
 
     _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose'}
+    _PCM_LAYER_TYPES = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine'}
+    _FEATURE_MAT_LAYER_TYPES = _PAR_MATRIX_LAYER_TYPES | _PCM_LAYER_TYPES
     _UNSUPPORTED_MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose'}
 
     for layer_id, layer_config in config_info['layer'].items():
@@ -202,16 +217,17 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 f"Layer '{layer_id}' has unsupported non-par matrix type '{layer_config['type']}'; "
                 'use parcpmm/parccmm/partranspose'
             )
-        if layer_config['type'] in _PAR_MATRIX_LAYER_TYPES:
-            level = int(config_info['feature'][layer_input_feature_ids[0]]['level'])
+        input_feat0 = config_info['feature'][layer_input_feature_ids[0]]
+        if layer_config['type'] in _FEATURE_MAT_LAYER_TYPES or input_feat0.get('data_type') == 'feature_mat':
+            level = int(input_feat0['level'])
         else:
             groups = 1
             n_in_channel = int(layer_config['channel_input'])
             n_out_channel = int(layer_config['channel_output'])
 
-            skip = config_info['feature'][layer_input_feature_ids[0]]['skip']
-            pack = int(config_info['feature'][layer_input_feature_ids[0]]['pack_num'])
-            level = int(config_info['feature'][layer_input_feature_ids[0]]['level'])
+            skip = input_feat0['skip']
+            pack = int(input_feat0['pack_num'])
+            level = int(input_feat0['level'])
             n_packed_in_channel = math.ceil(n_in_channel / pack)
             n_packed_out_channel = math.ceil(n_out_channel / pack)
 
@@ -1026,6 +1042,91 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             )
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             par_feature_shapes[layer_output_feature_ids[0]] = (shape_A[0], shape_B[1])
+
+        elif layer_config['type'] == 'pcmstats':
+            n_heads = task_config_info.get('n_heads', 1)
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            shape = tuple(feat_in['shape'])
+            block_size = shape[1] // n_heads
+            layer = ParBlockColMajorLNStats(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
+
+            if input_fid not in feature_id_to_nodes_map:
+                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], block_size)
+
+        elif layer_config['type'] == 'pcmcenter':
+            n_heads = task_config_info.get('n_heads', 1)
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            shape = tuple(feat_in['shape'])
+            block_size = shape[1] // n_heads
+            layer = ParBlockColMajorLNXCentered(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
+
+            if input_fid not in feature_id_to_nodes_map:
+                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], block_size)
+
+        elif layer_config['type'] == 'pcminit':
+            n_heads = task_config_info.get('n_heads', 1)
+            feat_in = config_info['feature'][layer_input_feature_ids[0]]
+            block_size = feat_in['shape'][1] // n_heads
+            layer = ParBlockColMajorLNMinimaxInit(block_size=block_size, n_slot=n // 2)
+
+            data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(
+                feature_id_to_nodes_map[layer_input_feature_ids[0]], data_source
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = par_feature_shapes.get(layer_input_feature_ids[0])
+
+        elif layer_config['type'] == 'pcmgs':
+            n_heads = task_config_info.get('n_heads', 1)
+            feat_in = config_info['feature'][layer_input_feature_ids[0]]
+            block_size = feat_in['shape'][1] // n_heads
+            layer = ParBlockColMajorLNGoldschmidt(block_size=block_size, n_slot=n // 2)
+
+            data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(
+                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                feature_id_to_nodes_map[layer_input_feature_ids[1]],
+                data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = par_feature_shapes.get(layer_input_feature_ids[0])
+
+        elif layer_config['type'] == 'pcmaffine':
+            n_heads = task_config_info.get('n_heads', 1)
+            feat_in = config_info['feature'][layer_input_feature_ids[0]]
+            shape = tuple(feat_in['shape'])
+            block_size = shape[1] // n_heads
+            layer = ParBlockColMajorLNAffine(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
+
+            data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(
+                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                feature_id_to_nodes_map[layer_input_feature_ids[1]],
+                data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], block_size)
 
         else:
             raise ValueError(f'Unsupported layer type: {layer_config["type"]}')

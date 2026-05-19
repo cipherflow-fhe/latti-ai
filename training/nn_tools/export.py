@@ -611,6 +611,18 @@ def export_h5_from_onnx(
             if verbose:
                 log.info('ParCPMM:                  %s', wp)
 
+        elif ltype == 'pcmaffine':
+            wp = layer.get('weight_path', '')
+            bp = layer.get('bias_path', '')
+            if wp not in onnx_weights:
+                log.warning('pcmaffine weight not in ONNX: %s', wp)
+                continue
+            out[wp] = onnx_weights[wp].copy()
+            if bp:
+                out[bp] = onnx_weights[bp].copy() if bp in onnx_weights else np.zeros_like(out[wp])
+            if verbose:
+                log.info('PCMAffine:                %s', wp)
+
         elif ltype == 'polyact':
             wp = layer.get('weight_path', '')
             if layer_key not in polyact_info:

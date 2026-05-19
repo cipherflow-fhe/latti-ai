@@ -101,6 +101,7 @@ public:
     json json_data;
     json json_features;
     json json_layers;
+    json layernorm_param;
     bool is_lazy = false;
     // Time statistics
     double total_fhe_time = 0.0;
