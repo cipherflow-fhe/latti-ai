@@ -674,6 +674,10 @@ def set_level_costs(graph: LayerAbstractGraph):
             graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type == 'parccmm':
             graph.dag.nodes[compute_node]['level_cost'] = 3
+        elif compute_node.layer_type == 'pcmgamma':
+            graph.dag.nodes[compute_node]['level_cost'] = 1
+        elif compute_node.layer_type == 'pcmpoly':
+            graph.dag.nodes[compute_node]['level_cost'] = 2 if compute_node.order == 2 else 3
         elif compute_node.layer_type == 'pcmstats':
             graph.dag.nodes[compute_node]['level_cost'] = 4
         elif compute_node.layer_type == 'pcmcenter':
