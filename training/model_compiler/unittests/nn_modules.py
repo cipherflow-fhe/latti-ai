@@ -865,3 +865,14 @@ class CPMMSquareTest(nn.Module):
 
     def forward(self, x):
         return self.linear(x)
+
+
+class LayerNorm(nn.Module):
+    def __init__(self, normalized_shape=192):
+        super().__init__()
+        from nn_tools import FHELayerNorm
+
+        self.ln = FHELayerNorm(normalized_shape)
+
+    def forward(self, x):
+        return self.ln(x)

@@ -553,6 +553,10 @@ class TestSingleLayer(CompilerTestBase):
         model = nn_modules.CCMMTest()
         self._export_and_compile(model, [(32, 64), (64, 64)], style='multiplexed', feature_mat=True)
 
+    def test_layernorm(self):
+        model = nn_modules.LayerNorm()
+        self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
+
 
 class TestLayerInteraction(CompilerTestBase):
     def test_mismatched_scale(self):
