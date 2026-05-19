@@ -29,9 +29,10 @@ def main(input_filename, output_folder, output_name='graph.gv'):
     graph.attr(ranksep='0.2')
 
     for feature_id, feature_p in ct_json['feature'].items():
-        label_str = f'{feature_p["channel"]}'
+        channel = feature_p.get('channel', '')
+        label_str = f'{channel}' if channel != '' else ''
         if 'shape' in feature_p.keys():
-            label_str += f', {feature_p["shape"]}'
+            label_str += (', ' if label_str else '') + f'{feature_p["shape"]}'
         label_str += f', lv{feature_p["level"]}'
         feature_scale = float(feature_p['scale'])
         if abs(feature_scale - 1.0) > 0.00001:

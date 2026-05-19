@@ -40,9 +40,6 @@
 #include "fhe_layers/conv2d_depthwise.h"
 #include "fhe_layers/dense_packed_layer.h"
 #include "fhe_layers/reshape_layer.h"
-#include "fhe_layers/block_col_major_ccmm.h"
-#include "fhe_layers/block_col_major_cpmm.h"
-#include "fhe_layers/block_col_major_transpose.h"
 #include "fhe_layers/par_block_col_major_transpose.h"
 #include "fhe_layers/par_block_col_major_ccmm.h"
 #include "fhe_layers/par_block_col_major_cpmm.h"
@@ -1547,33 +1544,6 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
         void* layer_ptr = cd_ptr->get_typed_data<void>();
 
         CkksPlaintextRingt pt = [&]() -> CkksPlaintextRingt {
-            if (op_class == "BlockColMajorTranspose") {
-                auto* layer = static_cast<BlockColMajorTranspose*>(layer_ptr);
-                if (type == "transpose_diag_pt")
-                    return layer->generate_transpose_diag_pt(*ctx_ptr, attrs.value("k_idx", 0));
-                throw std::runtime_error("encode_pt: unknown type for BlockColMajorTranspose: " + type);
-            }
-            if (op_class == "BlockColMajorCPMM") {
-                auto* layer = static_cast<BlockColMajorCPMM*>(layer_ptr);
-                if (type == "diag_pt")
-                    return layer->generate_diag_pt(*ctx_ptr, attrs.value("bj", 0), attrs.value("bp", 0),
-                                                   attrs.value("k", 0));
-                throw std::runtime_error("encode_pt: unknown type for BlockColMajorCPMM: " + type);
-            }
-            if (op_class == "BlockColMajorCCMM") {
-                auto* layer = static_cast<BlockColMajorCCMM*>(layer_ptr);
-                if (type == "sigma_pt")
-                    return layer->generate_sigma_pt(*ctx_ptr, attrs.value("k", 0));
-                if (type == "tau_pt")
-                    return layer->generate_tau_pt(*ctx_ptr, attrs.value("offset_idx", 0));
-                if (type == "psi_k0_pt")
-                    return layer->generate_psi_k0_pt(*ctx_ptr);
-                if (type == "psi_wk_pt")
-                    return layer->generate_psi_wk_pt(*ctx_ptr, attrs.value("i", 1));
-                if (type == "psi_wkd_pt")
-                    return layer->generate_psi_wkd_pt(*ctx_ptr, attrs.value("i", 1));
-                throw std::runtime_error("encode_pt: unknown type for BlockColMajorCCMM: " + type);
-            }
             if (op_class == "ParBlockColMajorCPMM") {
                 auto* layer = static_cast<ParBlockColMajorCPMM*>(layer_ptr);
                 if (type == "diag_pt")
@@ -1586,7 +1556,8 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
             if (op_class == "ParBlockColMajorTranspose") {
                 auto* layer = static_cast<ParBlockColMajorTranspose*>(layer_ptr);
                 if (type == "transpose_diag_pt")
-                    return layer->generate_transpose_diag_pt(*ctx_ptr, attrs.value("k_idx", 0));
+                    return layer->generate_transpose_diag_pt(
+                        *ctx_ptr, (attrs.contains("k_idx") ? attrs.at("k_idx").get<uint32_t>() : attrs.value("i", 0u)));
                 throw std::runtime_error("encode_pt: unknown type for ParBlockColMajorTranspose: " + type);
             }
             if (op_class == "ParBlockColMajorCCMM") {
@@ -1602,6 +1573,36 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
                 if (type == "psi_wkd_pt")
                     return layer->generate_psi_wkd_pt(*ctx_ptr, attrs.value("i", 1));
                 throw std::runtime_error("encode_pt: unknown type for ParBlockColMajorCCMM: " + type);
+            }
+            if (op_class == "ParBlockColMajorPolyActRNPoly") {
+                auto* layer = static_cast<ParBlockColMajorPolyActRNPoly*>(layer_ptr);
+                return layer->generate_coeff_pt(*ctx_ptr, attrs.value("coeff_idx", 0), attrs.value("mb", 0),
+                                                attrs.value("bi", 0), attrs.value("bj", 0), attrs.value("g", 0));
+            }
+            if (op_class == "ParBlockColMajorLNStats") {
+                auto* layer = static_cast<ParBlockColMajorLNStats*>(layer_ptr);
+                return layer->generate_pt(*ctx_ptr, attrs.value("pt_idx", 0), attrs.value("bi", 0),
+                                          attrs.value("bj", 0), attrs.value("g", 0));
+            }
+            if (op_class == "ParBlockColMajorLNXCentered") {
+                auto* layer = static_cast<ParBlockColMajorLNXCentered*>(layer_ptr);
+                return layer->generate_pt(*ctx_ptr, attrs.value("pt_idx", 0), attrs.value("bi", 0),
+                                          attrs.value("bj", 0), attrs.value("g", 0));
+            }
+            if (op_class == "ParBlockColMajorLNMinimaxInit") {
+                auto* layer = static_cast<ParBlockColMajorLNMinimaxInit*>(layer_ptr);
+                return layer->generate_pt(*ctx_ptr, attrs.value("pt_idx", 0), attrs.value("bi", 0),
+                                          attrs.value("bj", 0), attrs.value("g", 0));
+            }
+            if (op_class == "ParBlockColMajorLNGoldschmidt") {
+                auto* layer = static_cast<ParBlockColMajorLNGoldschmidt*>(layer_ptr);
+                return layer->generate_pt(*ctx_ptr, attrs.value("pt_idx", 0), attrs.value("bi", 0),
+                                          attrs.value("bj", 0), attrs.value("g", 0));
+            }
+            if (op_class == "ParBlockColMajorLNAffine") {
+                auto* layer = static_cast<ParBlockColMajorLNAffine*>(layer_ptr);
+                return layer->generate_pt(*ctx_ptr, attrs.value("pt_idx", 0), attrs.value("bi", 0),
+                                          attrs.value("bj", 0), attrs.value("g", 0));
             }
             throw std::runtime_error("encode_pt: unknown op_class: " + op_class);
         }();
@@ -1659,159 +1660,6 @@ static void run_block_col_major_e2e_test(HeteroFixture<T>& fixture,
     std::cout << "  max_rel_error = " << std::scientific << rel_err << "\n";
     REQUIRE(rel_err < 0.05);
 }
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
-                               "single_block_transpose_sweep",
-                               "[block_col_major_e2e]",
-                               HeteroProcessors) {
-    auto& res = SharedHeteroResources::get();
-    const uint32_t d = 16;
-    const int level = 1;
-    vector<uint32_t> dims = {16, 20};
-
-    FOR_EACH_SECTION(uint32_t m, dims, "m=" + to_string(m)) {
-        FOR_EACH_SECTION(uint32_t n, dims, "n=" + to_string(n)) {
-            fs::path server_dir = base_path / "CKKS_block_col_major_transpose" /
-                                  ("d_16_M_" + to_string(m) + "_N_" + to_string(n)) / "level_1" / "server";
-            if (!fs::exists(server_dir / "mega_ag.json"))
-                return;
-
-            auto A = gen_random_array<2>({m, n}, 1.0);
-
-            auto layer_ptr = std::make_shared<BlockColMajorTranspose>(res.param, Duo{m, n}, d, level);
-            auto ref_output = layer_ptr->run_plaintext(A);
-
-            FeatureMatEncrypted A_enc(&res.context, level);
-            A_enc.block_col_major_pack(A, d, false, res.param.get_default_scale());
-
-            static vector<CkksCiphertext> in_cts, out_cts;
-            static vector<CustomData> layer_data;
-            in_cts.clear();
-            out_cts.clear();
-            layer_data.clear();
-
-            for (auto& ct : A_enc.data)
-                in_cts.push_back(ct.copy());
-            layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
-
-            for (uint32_t i = 0; i < in_cts.size(); i++)
-                out_cts.push_back(res.context.new_ciphertext(level - 1, res.param.get_default_scale()));
-
-            vector<CxxVectorArgument> cxx_args = {
-                {"input", &in_cts},
-                {"_transpose_layer", &layer_data},
-                {"output", &out_cts},
-            };
-            run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {n, m}, d, 0, false, out_cts);
-        }
-    }
-}
-
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_block_cpmm_sweep", "[block_col_major_e2e]", HeteroProcessors) {
-    auto& res = SharedHeteroResources::get();
-    const uint32_t d = 16;
-    const int level = 1;
-    vector<uint32_t> dims = {16, 20};
-
-    FOR_EACH_SECTION(uint32_t m, dims, "m=" + to_string(m)) {
-        FOR_EACH_SECTION(uint32_t n, dims, "n=" + to_string(n)) {
-            FOR_EACH_SECTION(uint32_t p, dims, "p=" + to_string(p)) {
-                fs::path server_dir = base_path / "CKKS_block_col_major_cpmm" /
-                                      ("d_16_M_" + to_string(m) + "_N_" + to_string(n) + "_P_" + to_string(p)) /
-                                      "level_1" / "server";
-                if (!fs::exists(server_dir / "mega_ag.json"))
-                    return;
-
-                auto A = gen_random_array<2>({m, n}, 1.0);
-                auto B = gen_random_array<2>({n, p}, 0.1);
-
-                auto layer_ptr = std::make_shared<BlockColMajorCPMM>(res.param, Duo{m, n}, Duo{n, p}, B, d, level);
-                auto ref_output = layer_ptr->run_plaintext(A);
-
-                FeatureMatEncrypted A_enc(&res.context, level);
-                A_enc.block_col_major_pack(A, d, false, res.param.get_default_scale());
-
-                static vector<CkksCiphertext> A_cts, out_cts;
-                static vector<CustomData> layer_data;
-                A_cts.clear();
-                out_cts.clear();
-                layer_data.clear();
-
-                for (auto& ct : A_enc.data)
-                    A_cts.push_back(ct.copy());
-                layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
-
-                uint32_t n_out = div_ceil(m, d) * div_ceil(p, d);
-                for (uint32_t i = 0; i < n_out; i++)
-                    out_cts.push_back(res.context.new_ciphertext(level - 1, res.param.get_default_scale()));
-
-                vector<CxxVectorArgument> cxx_args = {
-                    {"A_input", &A_cts},
-                    {"_cpmm_layer", &layer_data},
-                    {"output", &out_cts},
-                };
-                run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {m, p}, d, 0, false, out_cts);
-            }
-        }
-    }
-}
-
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_block_ccmm_sweep", "[block_col_major_e2e]", HeteroProcessors) {
-    auto& res = SharedHeteroResources::get();
-    const uint32_t d = 16;
-    const int level = 3;
-    vector<uint32_t> dims = {16, 20};
-
-    FOR_EACH_SECTION(uint32_t m, dims, "m=" + to_string(m)) {
-        FOR_EACH_SECTION(uint32_t n, dims, "n=" + to_string(n)) {
-            FOR_EACH_SECTION(uint32_t p, dims, "p=" + to_string(p)) {
-                fs::path server_dir = base_path / "CKKS_block_col_major_ccmm" /
-                                      ("d_16_M_" + to_string(m) + "_N_" + to_string(n) + "_P_" + to_string(p)) /
-                                      "level_3" / "server";
-                if (!fs::exists(server_dir / "mega_ag.json"))
-                    return;
-
-                auto A = gen_random_array<2>({m, n}, 1.0);
-                auto B = gen_random_array<2>({n, p}, 0.1);
-
-                auto layer_ptr =
-                    std::make_shared<BlockColMajorCCMM>(res.param, Duo{m, n}, Duo{n, p}, d, d, level, level);
-                layer_ptr->precompute_diagonals();
-                auto ref_output = layer_ptr->run_plaintext(A, B);
-
-                FeatureMatEncrypted A_enc(&res.context, level);
-                A_enc.block_col_major_pack(A, d, false, res.param.get_default_scale());
-                FeatureMatEncrypted B_enc(&res.context, level);
-                B_enc.block_col_major_pack(B, d, false, res.param.get_default_scale());
-
-                static vector<CkksCiphertext> A_cts, B_cts, out_cts;
-                static vector<CustomData> layer_data;
-                A_cts.clear();
-                B_cts.clear();
-                out_cts.clear();
-                layer_data.clear();
-
-                for (auto& ct : A_enc.data)
-                    A_cts.push_back(ct.copy());
-                for (auto& ct : B_enc.data)
-                    B_cts.push_back(ct.copy());
-                layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
-
-                uint32_t n_out = div_ceil(m, d) * div_ceil(p, d);
-                for (uint32_t i = 0; i < n_out; i++)
-                    out_cts.push_back(res.context.new_ciphertext(level - 3, res.param.get_default_scale()));
-
-                vector<CxxVectorArgument> cxx_args = {
-                    {"A_input", &A_cts},
-                    {"B_input", &B_cts},
-                    {"_ccmm_layer", &layer_data},
-                    {"output", &out_cts},
-                };
-                run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {m, p}, d, 0, false, out_cts);
-            }
-        }
-    }
-}
-
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_cpmm_square", "[block_col_major_e2e]", HeteroProcessors) {
     auto& res = SharedHeteroResources::get();
 
@@ -3545,140 +3393,6 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_cpmm_expand_polyactrn_reduce"
 }
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
-                               "single_block_col_major_transpose",
-                               "[block_col_major_e2e]",
-                               HeteroProcessors) {
-    auto& res = SharedHeteroResources::get();
-    fs::path server_dir = base_path / "CKKS_block_col_major_transpose" / "level_5" / "server";
-    if (!fs::exists(server_dir / "mega_ag.json"))
-        return;
-
-    const uint32_t M = 8, K = 8, d = 4;
-    const int level = 5;
-
-    auto A = gen_random_array<2>({M, K}, 1.0);
-
-    auto layer_ptr = std::make_shared<BlockColMajorTranspose>(res.param, Duo{M, K}, d, level);
-    auto ref_output = layer_ptr->run_plaintext(A);
-
-    FeatureMatEncrypted A_enc(&res.context, level);
-    A_enc.block_col_major_pack(A, d, false, res.param.get_default_scale());
-
-    static vector<CkksCiphertext> in_cts, out_cts;
-    static vector<CustomData> layer_data;
-    in_cts.clear();
-    out_cts.clear();
-    layer_data.clear();
-
-    for (auto& ct : A_enc.data)
-        in_cts.push_back(ct.copy());
-    layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
-
-    for (uint32_t i = 0; i < in_cts.size(); i++)
-        out_cts.push_back(res.context.new_ciphertext(level - 1, res.param.get_default_scale()));
-
-    vector<CxxVectorArgument> cxx_args = {
-        {"input", &in_cts},
-        {"_transpose_layer", &layer_data},
-        {"output", &out_cts},
-    };
-    run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {K, M}, d, 0, false, out_cts);
-}
-
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
-                               "single_block_col_major_cpmm",
-                               "[block_col_major_e2e]",
-                               HeteroProcessors) {
-    auto& res = SharedHeteroResources::get();
-    fs::path server_dir = base_path / "CKKS_block_col_major_cpmm" / "level_5" / "server";
-    if (!fs::exists(server_dir / "mega_ag.json"))
-        return;
-
-    const uint32_t M = 8, K = 8, P = 8, d = 4;
-    const int level = 5;
-
-    auto A = gen_random_array<2>({M, K}, 1.0);
-    auto B = gen_random_array<2>({K, P}, 0.1);
-
-    auto layer_ptr = std::make_shared<BlockColMajorCPMM>(res.param, Duo{M, K}, Duo{K, P}, B, d, level);
-    auto ref_output = layer_ptr->run_plaintext(A);
-
-    FeatureMatEncrypted A_enc(&res.context, level);
-    A_enc.block_col_major_pack(A, d, false, res.param.get_default_scale());
-
-    static vector<CkksCiphertext> A_cts, out_cts;
-    static vector<CustomData> layer_data;
-    A_cts.clear();
-    out_cts.clear();
-    layer_data.clear();
-
-    for (auto& ct : A_enc.data)
-        A_cts.push_back(ct.copy());
-    layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
-
-    uint32_t n_out = div_ceil(M, d) * div_ceil(P, d);
-    for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(res.context.new_ciphertext(level - 1, res.param.get_default_scale()));
-
-    vector<CxxVectorArgument> cxx_args = {
-        {"A_input", &A_cts},
-        {"_cpmm_layer", &layer_data},
-        {"output", &out_cts},
-    };
-    run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {M, P}, d, 0, false, out_cts);
-}
-
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
-                               "single_block_col_major_ccmm",
-                               "[block_col_major_e2e]",
-                               HeteroProcessors) {
-    auto& res = SharedHeteroResources::get();
-    fs::path server_dir = base_path / "CKKS_block_col_major_ccmm" / "level_7" / "server";
-    if (!fs::exists(server_dir / "mega_ag.json"))
-        return;
-
-    const uint32_t M = 8, K = 8, P = 8, d = 4;
-    const int level = 7;
-
-    auto A = gen_random_array<2>({M, K}, 1.0);
-    auto B = gen_random_array<2>({K, P}, 0.1);
-
-    auto layer_ptr = std::make_shared<BlockColMajorCCMM>(res.param, Duo{M, K}, Duo{K, P}, d, d, level, level);
-    layer_ptr->precompute_diagonals();
-    auto ref_output = layer_ptr->run_plaintext(A, B);
-
-    FeatureMatEncrypted A_enc(&res.context, level);
-    A_enc.block_col_major_pack(A, d, false, res.param.get_default_scale());
-    FeatureMatEncrypted B_enc(&res.context, level);
-    B_enc.block_col_major_pack(B, d, false, res.param.get_default_scale());
-
-    static vector<CkksCiphertext> A_cts, B_cts, out_cts;
-    static vector<CustomData> layer_data;
-    A_cts.clear();
-    B_cts.clear();
-    out_cts.clear();
-    layer_data.clear();
-
-    for (auto& ct : A_enc.data)
-        A_cts.push_back(ct.copy());
-    for (auto& ct : B_enc.data)
-        B_cts.push_back(ct.copy());
-    layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
-
-    uint32_t n_out = div_ceil(M, d) * div_ceil(P, d);
-    for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(res.context.new_ciphertext(level - 3, res.param.get_default_scale()));
-
-    vector<CxxVectorArgument> cxx_args = {
-        {"A_input", &A_cts},
-        {"B_input", &B_cts},
-        {"_ccmm_layer", &layer_data},
-        {"output", &out_cts},
-    };
-    run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {M, P}, d, 0, false, out_cts);
-}
-
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
                                "single_par_block_col_major_cpmm",
                                "[block_col_major_e2e]",
                                HeteroProcessors) {
@@ -3826,4 +3540,207 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         {"output", &out_cts},
     };
     run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {M, P}, d, n_heads, true, out_cts);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "single_par_block_col_major_polyactrn_poly",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+
+    auto run_generated_polyactrn_poly = [&](uint32_t degree, int level) {
+        fs::path server_dir = base_path / "CKKS_par_block_col_major_polyactrn_poly" / ("degree_" + to_string(degree)) /
+                              ("level_" + to_string(level)) / "server";
+        if (!fs::exists(server_dir / "mega_ag.json"))
+            return;
+
+        const uint32_t seq_len = 8, n_heads = 2, head_dim = 4, d = 4;
+        const uint32_t total_dim = n_heads * head_dim;
+
+        auto X = gen_random_array<2>({seq_len, total_dim}, 0.5);
+        auto coeffs = gen_random_array<2>({degree + 1, total_dim}, 0.2);
+
+        Array<double, 2> ref_output({(uint64_t)seq_len, (uint64_t)total_dim});
+        for (uint32_t i = 0; i < seq_len; i++) {
+            for (uint32_t j = 0; j < total_dim; j++) {
+                double x_pow = 1.0;
+                double y = 0.0;
+                for (uint32_t k = 0; k <= degree; k++) {
+                    y += coeffs.get(k, j) * x_pow;
+                    x_pow *= X.get(i, j);
+                }
+                ref_output.set(i, j, y);
+            }
+        }
+
+        auto layer_ptr = std::make_shared<ParBlockColMajorPolyActRNPoly>(res.param, Duo{seq_len, total_dim}, d, n_heads,
+                                                                         level, coeffs.copy(), degree);
+
+        FeatureMatEncrypted X_enc(&res.context, level);
+        X_enc.shape = {seq_len, head_dim};
+        X_enc.matmul_block_size = d;
+        X_enc.par_block_col_major_pack(X, d, n_heads, false, res.param.get_default_scale());
+
+        static vector<CkksCiphertext> in_cts, out_cts;
+        static vector<CustomData> layer_data;
+        in_cts.clear();
+        out_cts.clear();
+        layer_data.clear();
+
+        for (auto& ct : X_enc.data)
+            in_cts.push_back(ct.copy());
+        layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+        uint32_t num_block_rows = div_ceil(seq_len, d);
+        uint32_t num_block_cols = div_ceil(head_dim, d);
+        uint32_t n_h_padded = 1;
+        while (n_h_padded < n_heads)
+            n_h_padded <<= 1;
+        uint32_t n_slot = res.param.get_n() / 2;
+        uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+        uint32_t n_out = num_block_rows * num_block_cols * G;
+        int out_level = level - (degree == 4 ? 3 : 2);
+
+        for (uint32_t i = 0; i < n_out; i++)
+            out_cts.push_back(res.context.new_ciphertext(out_level, res.param.get_default_scale()));
+
+        string layer_id = "_poly_layer_deg" + to_string(degree);
+        vector<CxxVectorArgument> cxx_args = {
+            {"input", &in_cts},
+            {layer_id, &layer_data},
+            {"output", &out_cts},
+        };
+        run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {seq_len, head_dim}, d, n_heads, true,
+                                     out_cts);
+    };
+
+    SECTION("degree=2, level=3") {
+        run_generated_polyactrn_poly(2, 3);
+    }
+    SECTION("degree=4, level=4") {
+        run_generated_polyactrn_poly(4, 4);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "single_par_block_col_major_layernorm",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    fs::path server_dir = base_path / "CKKS_par_block_col_major_layernorm" / "level_11" / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    const int N = 32768;
+    CkksParameter param = CkksParameter::create_parameter(N);
+    CkksContext context = CkksContext::create_random_context(param);
+    context.gen_rotation_keys();
+
+    const uint32_t seq_len = 8, n_heads = 2, head_dim = 4, d = 4, num_iters = 1;
+    const uint32_t total_dim = n_heads * head_dim;
+    const int init_level = 11;
+    const double eps = 1e-5;
+    const double var_std_bound = 4.0;
+    const double inv_var = 1.0 / (var_std_bound * var_std_bound);
+    const double inv_std = 1.0 / var_std_bound;
+    const double c0 = 6.19067182, c1 = -16.15885111, c2 = 11.52830778;
+
+    auto X = gen_random_array<2>({seq_len, total_dim}, 0.5);
+    auto gamma = gen_random_array<1>({total_dim}, 0.5);
+    auto beta = gen_random_array<1>({total_dim}, 0.1);
+
+    Array<double, 2> ref_output({(uint64_t)seq_len, (uint64_t)total_dim});
+    for (uint32_t i = 0; i < seq_len; i++) {
+        double sum_x = 0.0, sum_x2 = 0.0;
+        for (uint32_t j = 0; j < total_dim; j++) {
+            double v = X.get(i, j);
+            sum_x += v;
+            sum_x2 += v * v;
+        }
+        double mean = sum_x / total_dim;
+        double var = sum_x2 / total_dim - mean * mean;
+        double a = (var + eps) * inv_var;
+        double y = c0 + c1 * a + c2 * a * a;
+        for (uint32_t k = 0; k < num_iters; k++) {
+            y = 0.5 * y * (3.0 - a * y * y);
+        }
+        for (uint32_t j = 0; j < total_dim; j++) {
+            double x_norm = (X.get(i, j) - mean) * inv_std * y;
+            ref_output.set(i, j, x_norm * gamma.get(j) + beta.get(j));
+        }
+    }
+
+    auto stats_layer =
+        std::make_shared<ParBlockColMajorLNStats>(param, Duo{seq_len, total_dim}, d, n_heads, init_level, eps, inv_var);
+    auto xcenter_layer =
+        std::make_shared<ParBlockColMajorLNXCentered>(param, Duo{seq_len, total_dim}, d, n_heads, init_level);
+    auto minimax_layer = std::make_shared<ParBlockColMajorLNMinimaxInit>(param, d, init_level - 4, c0, c1, c2);
+    auto gold_layer = std::make_shared<ParBlockColMajorLNGoldschmidt>(param, d, init_level - 6);
+    auto affine_layer = std::make_shared<ParBlockColMajorLNAffine>(param, Duo{seq_len, total_dim}, d, n_heads, 2,
+                                                                   inv_std, gamma.copy(), beta.copy());
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.shape = {seq_len, head_dim};
+    X_enc.matmul_block_size = d;
+    X_enc.par_block_col_major_pack(X, d, n_heads, false, param.get_default_scale());
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> stats_data, xcenter_data, minimax_data, gold_data, affine_data;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    stats_data.emplace_back(static_cast<void*>(stats_layer.get()));
+    xcenter_data.emplace_back(static_cast<void*>(xcenter_layer.get()));
+    minimax_data.emplace_back(static_cast<void*>(minimax_layer.get()));
+    gold_data.emplace_back(static_cast<void*>(gold_layer.get()));
+    affine_data.emplace_back(static_cast<void*>(affine_layer.get()));
+
+    uint32_t num_block_rows = div_ceil(seq_len, d);
+    uint32_t num_block_cols = div_ceil(head_dim, d);
+    uint32_t n_h_padded = 1;
+    while (n_h_padded < n_heads)
+        n_h_padded <<= 1;
+    uint32_t n_slot = param.get_n() / 2;
+    uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+    uint32_t n_out = num_block_rows * num_block_cols * G;
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(0, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_ln_stats_layer", &stats_data},
+        {"_ln_xcenter_layer", &xcenter_data},
+        {"_ln_minimax_layer", &minimax_data},
+        {"_ln_gold_layer", &gold_data},
+        {"_ln_affine_layer", &affine_data},
+        {"output", &out_cts},
+    };
+
+    std::unordered_map<std::string, ExecutorFunc> executors;
+    executors["encode_pt"] = make_block_col_major_encode_pt_executor();
+    if constexpr (is_same_v<TestType, ProcessorCpu>) {
+        FheTaskCpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        task.run(&context, cxx_args);
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    } else if constexpr (is_same_v<TestType, ProcessorGpu>) {
+        FheTaskGpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        task.run(&context, cxx_args);
+#endif
+    }
+
+    FeatureMatEncrypted out_enc(&context, 0);
+    for (auto& ct : out_cts)
+        out_enc.data.push_back(std::move(ct));
+    out_enc.shape = {seq_len, head_dim};
+    out_enc.matmul_block_size = d;
+    auto actual = out_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
+
+    print_double_message(actual.to_array_1d().data(), "output_mg", 10);
+    print_double_message(ref_output.to_array_1d().data(), "output_expected", 10);
+
+    auto compare_result = compare(ref_output, actual);
+    std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+              << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
 }

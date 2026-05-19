@@ -32,12 +32,17 @@ from inference.model_generator.layers.add_pack import AddLayer  # noqa: E402
 from inference.model_generator.layers.avgpool2d_layer import Avgpool2DLayer  # noqa: E402
 from inference.model_generator.layers.avgpool1d_layer import Avgpool1DLayer  # noqa: E402
 from inference.model_generator.layers.mult_scaler import MultScalarLayer  # noqa: E402
-from inference.model_generator.layers.block_col_major_transpose import BlockColMajorTranspose  # noqa: E402
-from inference.model_generator.layers.block_col_major_cpmm import BlockColMajorCPMM  # noqa: E402
-from inference.model_generator.layers.block_col_major_ccmm import BlockColMajorCCMM  # noqa: E402
 from inference.model_generator.layers.par_block_col_major_cpmm import ParBlockColMajorCPMM  # noqa: E402
 from inference.model_generator.layers.par_block_col_major_transpose import ParBlockColMajorTranspose  # noqa: E402
 from inference.model_generator.layers.par_block_col_major_ccmm import ParBlockColMajorCCMM  # noqa: E402
+from inference.model_generator.layers.par_block_col_major_polyactrn import ParBlockColMajorPolyActRNPoly  # noqa: E402
+from inference.model_generator.layers.par_block_col_major_layernorm import (  # noqa: E402
+    ParBlockColMajorLNAffine,
+    ParBlockColMajorLNGoldschmidt,
+    ParBlockColMajorLNMinimaxInit,
+    ParBlockColMajorLNStats,
+    ParBlockColMajorLNXCentered,
+)
 from training.model_export.onnx_to_json import *  # noqa: E402
 
 
@@ -1465,80 +1470,6 @@ class TestLayerExport(unittest.TestCase):
                 fpga_acc=False,
             )
 
-    def test_block_col_major_transpose(self):
-        """BlockColMajorTranspose: 8x8 matrix, d=4, N=16384."""
-        set_param('PN14QP438')
-        M, K, D, LEVEL = 8, 8, 4, 5
-        N_SLOT = 16384 // 2
-
-        layer = BlockColMajorTranspose(shape=(M, K), block_size=D, n_slot=N_SLOT)
-        n_cts = layer.num_blocks
-
-        input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=LEVEL) for k in range(n_cts)]
-        data_source = CustomDataNode(type='transpose_data_source', id='_transpose_layer')
-        output_cts = layer.call_custom_compute(input_cts, data_source)
-
-        process_custom_task(
-            input_args=[
-                Argument('input', input_cts),
-                Argument('_transpose_layer', [data_source]),
-            ],
-            output_args=[Argument('output', output_cts)],
-            output_instruction_path=base_path / 'CKKS_block_col_major_transpose' / f'level_{LEVEL}' / 'server',
-            fpga_acc=False,
-        )
-
-    def test_block_col_major_cpmm(self):
-        """BlockColMajorCPMM: A(8x8) * B(8x8), d=4, N=16384."""
-        set_param('PN14QP438')
-        M, K, P, D, LEVEL = 8, 8, 8, 4, 5
-        N_SLOT = 16384 // 2
-
-        layer = BlockColMajorCPMM(shape_A=(M, K), shape_B=(K, P), block_size=D, n_slot=N_SLOT)
-        n_A_cts = layer.num_block_rows_A * layer.num_block_cols_A
-
-        A_cts = [CkksCiphertextNode(f'A_ct_{k}', level=LEVEL) for k in range(n_A_cts)]
-        data_source = CustomDataNode(type='cpmm_data_source', id='_cpmm_layer')
-        output_cts = layer.call_custom_compute(A_cts, data_source)
-
-        process_custom_task(
-            input_args=[
-                Argument('A_input', A_cts),
-                Argument('_cpmm_layer', [data_source]),
-            ],
-            output_args=[Argument('output', output_cts)],
-            output_instruction_path=base_path / 'CKKS_block_col_major_cpmm' / f'level_{LEVEL}' / 'server',
-            fpga_acc=False,
-        )
-
-    def test_block_col_major_ccmm(self):
-        """BlockColMajorCCMM: A(8x8) * B(8x8), d=4, N=16384, level=7."""
-        set_param('PN14QP438')
-        M, N_dim, P, D, LEVEL = 8, 8, 8, 4, 7
-        N_SLOT = 16384 // 2
-
-        layer = BlockColMajorCCMM(shape_A=(M, N_dim), shape_B=(N_dim, P), block_size=D, n_slot=N_SLOT)
-
-        A_cts = [
-            CkksCiphertextNode(f'A_ct_{k}', level=LEVEL) for k in range(layer.num_block_rows_A * layer.num_block_cols_A)
-        ]
-        B_cts = [
-            CkksCiphertextNode(f'B_ct_{k}', level=LEVEL) for k in range(layer.num_block_rows_B * layer.num_block_cols_B)
-        ]
-        data_source = CustomDataNode(type='ccmm_data_source', id='_ccmm_layer')
-        output_cts = layer.call_custom_compute(A_cts, B_cts, data_source)
-
-        process_custom_task(
-            input_args=[
-                Argument('A_input', A_cts),
-                Argument('B_input', B_cts),
-                Argument('_ccmm_layer', [data_source]),
-            ],
-            output_args=[Argument('output', output_cts)],
-            output_instruction_path=base_path / 'CKKS_block_col_major_ccmm' / f'level_{LEVEL}' / 'server',
-            fpga_acc=False,
-        )
-
     def test_par_block_col_major_cpmm(self):
         """ParBlockColMajorCPMM SQUARE: A(8x4 per-head), W(8x8), d=4, n_heads=2, N=16384."""
         set_param('PN14QP438')
@@ -1623,104 +1554,80 @@ class TestLayerExport(unittest.TestCase):
             fpga_acc=False,
         )
 
-    def test_block_col_major_transpose_sweep(self):
-        """BlockColMajorTranspose sweep: d=16, dims=[16,20], level=1, N=16384."""
+    def test_par_block_col_major_polyactrn_poly(self):
+        """ParBlockColMajorPolyActRNPoly generated DAG: degree 2 and 4, d=4, n_heads=2."""
         set_param('PN14QP438')
-        D, LEVEL = 16, 1
+        seq_len, n_heads, head_dim, D = 8, 2, 4, 4
+        total_dim = n_heads * head_dim
         N_SLOT = 16384 // 2
-        dims = [16, 20]
 
-        for M in dims:
-            for N in dims:
-                layer = BlockColMajorTranspose(shape=(M, N), block_size=D, n_slot=N_SLOT)
-                n_cts = layer.num_blocks
+        for degree, level in [(2, 3), (4, 4)]:
+            layer = ParBlockColMajorPolyActRNPoly(
+                shape=(seq_len, total_dim),
+                block_size=D,
+                n_heads=n_heads,
+                n_slot=N_SLOT,
+                degree=degree,
+            )
+            input_cts = [CkksCiphertextNode(f'input_ct_deg{degree}_{k}', level=level) for k in range(layer.total_cts)]
+            data_source_id = f'_poly_layer_deg{degree}'
+            data_source = CustomDataNode(type='polyactrn_poly_data_source', id=data_source_id)
+            output_cts = layer.call_custom_compute(input_cts, data_source)
 
-                input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=LEVEL) for k in range(n_cts)]
-                data_source = CustomDataNode(type='transpose_data_source', id='_transpose_layer')
-                output_cts = layer.call_custom_compute(input_cts, data_source)
+            process_custom_task(
+                input_args=[
+                    Argument('input', input_cts),
+                    Argument(data_source_id, [data_source]),
+                ],
+                output_args=[Argument('output', output_cts)],
+                output_instruction_path=base_path
+                / 'CKKS_par_block_col_major_polyactrn_poly'
+                / f'degree_{degree}'
+                / f'level_{level}'
+                / 'server',
+                fpga_acc=False,
+            )
 
-                process_custom_task(
-                    input_args=[
-                        Argument('input', input_cts),
-                        Argument('_transpose_layer', [data_source]),
-                    ],
-                    output_args=[Argument('output', output_cts)],
-                    output_instruction_path=base_path
-                    / 'CKKS_block_col_major_transpose'
-                    / f'd_16_M_{M}_N_{N}'
-                    / 'level_1'
-                    / 'server',
-                    fpga_acc=False,
-                )
+    def test_par_block_col_major_layernorm(self):
+        """ParBlockColMajor LayerNorm generated DAG: stats/xcenter/minimax/gold/affine."""
+        set_param('PN15QP880')
+        seq_len, n_heads, head_dim, D = 8, 2, 4, 4
+        total_dim = n_heads * head_dim
+        N_SLOT = 32768 // 2
+        init_level = 11
 
-    def test_block_col_major_cpmm_sweep(self):
-        """BlockColMajorCPMM sweep: d=16, dims=[16,20], level=1, N=16384."""
-        set_param('PN14QP438')
-        D, LEVEL = 16, 1
-        N_SLOT = 16384 // 2
-        dims = [16, 20]
+        stats = ParBlockColMajorLNStats(shape=(seq_len, total_dim), block_size=D, n_heads=n_heads, n_slot=N_SLOT)
+        xcenter = ParBlockColMajorLNXCentered(shape=(seq_len, total_dim), block_size=D, n_heads=n_heads, n_slot=N_SLOT)
+        minimax = ParBlockColMajorLNMinimaxInit(block_size=D, n_slot=N_SLOT)
+        gold = ParBlockColMajorLNGoldschmidt(block_size=D, n_slot=N_SLOT)
+        affine = ParBlockColMajorLNAffine(shape=(seq_len, total_dim), block_size=D, n_heads=n_heads, n_slot=N_SLOT)
 
-        for M in dims:
-            for N in dims:
-                for P in dims:
-                    layer = BlockColMajorCPMM(shape_A=(M, N), shape_B=(N, P), block_size=D, n_slot=N_SLOT)
-                    n_A_cts = layer.num_block_rows_A * layer.num_block_cols_A
+        input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=init_level) for k in range(stats.total_cts)]
+        stats_data = CustomDataNode(type='layernorm_data_source', id='_ln_stats_layer')
+        xcenter_data = CustomDataNode(type='layernorm_data_source', id='_ln_xcenter_layer')
+        minimax_data = CustomDataNode(type='layernorm_data_source', id='_ln_minimax_layer')
+        gold_data = CustomDataNode(type='layernorm_data_source', id='_ln_gold_layer')
+        affine_data = CustomDataNode(type='layernorm_data_source', id='_ln_affine_layer')
 
-                    A_cts = [CkksCiphertextNode(f'A_ct_{k}', level=LEVEL) for k in range(n_A_cts)]
-                    data_source = CustomDataNode(type='cpmm_data_source', id='_cpmm_layer')
-                    output_cts = layer.call_custom_compute(A_cts, data_source)
+        a_cts = stats.call_custom_compute(input_cts, stats_data)
+        x_centered = xcenter.call_custom_compute(input_cts, xcenter_data)
+        y_cts = minimax.call_custom_compute(a_cts, minimax_data)
+        y_cts = gold.call_custom_compute(y_cts, a_cts, gold_data)
+        output_cts = affine.call_custom_compute(x_centered, y_cts, affine_data)
 
-                    process_custom_task(
-                        input_args=[
-                            Argument('A_input', A_cts),
-                            Argument('_cpmm_layer', [data_source]),
-                        ],
-                        output_args=[Argument('output', output_cts)],
-                        output_instruction_path=base_path
-                        / 'CKKS_block_col_major_cpmm'
-                        / f'd_16_M_{M}_N_{N}_P_{P}'
-                        / 'level_1'
-                        / 'server',
-                        fpga_acc=False,
-                    )
-
-    def test_block_col_major_ccmm_sweep(self):
-        """BlockColMajorCCMM sweep: d=16, dims=[16,20], level=3, N=16384."""
-        set_param('PN14QP438')
-        D, LEVEL = 16, 3
-        N_SLOT = 16384 // 2
-        dims = [16, 20]
-
-        for M in dims:
-            for N in dims:
-                for P in dims:
-                    layer = BlockColMajorCCMM(shape_A=(M, N), shape_B=(N, P), block_size=D, n_slot=N_SLOT)
-
-                    A_cts = [
-                        CkksCiphertextNode(f'A_ct_{k}', level=LEVEL)
-                        for k in range(layer.num_block_rows_A * layer.num_block_cols_A)
-                    ]
-                    B_cts = [
-                        CkksCiphertextNode(f'B_ct_{k}', level=LEVEL)
-                        for k in range(layer.num_block_rows_B * layer.num_block_cols_B)
-                    ]
-                    data_source = CustomDataNode(type='ccmm_data_source', id='_ccmm_layer')
-                    output_cts = layer.call_custom_compute(A_cts, B_cts, data_source)
-
-                    process_custom_task(
-                        input_args=[
-                            Argument('A_input', A_cts),
-                            Argument('B_input', B_cts),
-                            Argument('_ccmm_layer', [data_source]),
-                        ],
-                        output_args=[Argument('output', output_cts)],
-                        output_instruction_path=base_path
-                        / 'CKKS_block_col_major_ccmm'
-                        / f'd_16_M_{M}_N_{N}_P_{P}'
-                        / 'level_3'
-                        / 'server',
-                        fpga_acc=False,
-                    )
+        process_custom_task(
+            input_args=[
+                Argument('input', input_cts),
+                Argument('_ln_stats_layer', [stats_data]),
+                Argument('_ln_xcenter_layer', [xcenter_data]),
+                Argument('_ln_minimax_layer', [minimax_data]),
+                Argument('_ln_gold_layer', [gold_data]),
+                Argument('_ln_affine_layer', [affine_data]),
+            ],
+            output_args=[Argument('output', output_cts)],
+            output_instruction_path=base_path / 'CKKS_par_block_col_major_layernorm' / f'level_{init_level}' / 'server',
+            fpga_acc=False,
+        )
 
     def test_par_cpmm_square(self):
         """ParBlockColMajorCPMM SQUARE: two configs with n_heads=3."""

@@ -115,6 +115,59 @@ def _eval_hermite(x, hermite_coeffs, scale_after=1.0):
     return result
 
 
+class _LayerNormExport(torch.autograd.Function):
+    """ONNX export helper: emit LayerNorm as a single custom op ``nn_tools::LayerNorm``."""
+
+    @staticmethod
+    def forward(ctx, x, weight, bias, eps):
+        import torch.nn.functional as F
+
+        return F.layer_norm(x, weight.shape, weight, bias, eps)
+
+    @staticmethod
+    def symbolic(g, x, weight, bias, eps):
+        return g.op(
+            'nn_tools::LayerNorm',
+            x,
+            weight,
+            bias,
+            epsilon_f=eps,
+        ).setType(x.type())
+
+
+class FHELayerNorm(nn.Module):
+    """LayerNorm that exports as a single ``nn_tools::LayerNorm`` ONNX custom op.
+
+    Functionally identical to ``nn.LayerNorm`` during training and plain
+    inference.  During ONNX export the decomposed arithmetic (ReduceMean /
+    Sub / Pow / ...) is replaced by one node so the compiler can recognise
+    it directly.
+
+    Args:
+        normalized_shape: Last N dimensions to normalize over (int or tuple).
+        eps:              Numerical stability constant.
+    """
+
+    def __init__(self, normalized_shape, eps: float = 1e-5):
+        super().__init__()
+        if isinstance(normalized_shape, int):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(self.normalized_shape))
+        self.bias = nn.Parameter(torch.zeros(self.normalized_shape))
+
+    def forward(self, x):
+        if torch.onnx.is_in_onnx_export():
+            return _LayerNormExport.apply(x, self.weight, self.bias, self.eps)
+        import torch.nn.functional as F
+
+        return F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
+
+    def extra_repr(self):
+        return f'normalized_shape={self.normalized_shape}, eps={self.eps}'
+
+
 class _PolyActExport(torch.autograd.Function):
     """ONNX export helper: emit PolyAct as a single custom op."""
 

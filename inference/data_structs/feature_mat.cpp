@@ -33,6 +33,8 @@ void FeatureMatEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
                                                double scale_in) {
     uint32_t m = matrix.get_shape()[0];
     uint32_t n_cols = matrix.get_shape()[1];
+    shape = {m, n_cols};
+    matmul_block_size = d;
     uint32_t num_block_rows = div_ceil(m, d);
     uint32_t num_block_cols = div_ceil(n_cols, d);
     int n_slot = context->get_parameter().get_n() / 2;
@@ -124,6 +126,8 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
                                                    double scale_in) {
     uint32_t m = matrix.get_shape()[0];
     uint32_t total_cols = matrix.get_shape()[1];
+    shape = {m, total_cols};
+    matmul_block_size = d;
     uint32_t cols_per_head = total_cols / n_heads;
     uint32_t n_h_padded = next_power_of_2(n_heads);
     int n_slot = context->get_parameter().get_n() / 2;

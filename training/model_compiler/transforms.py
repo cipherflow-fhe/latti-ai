@@ -517,10 +517,13 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                 if compute_node.layer_type == 'parcpmm':
                     succ.shape[0] = preds[0].shape[0]
                 elif compute_node.layer_type == 'partranspose':
-                    succ.shape[0] = preds[0].shape[1] if len(preds[0].shape) > 1 else preds[0].shape[0]
-                    succ.shape[1] = preds[0].shape[0]
+                    n_heads = max(1, config.n_heads)
+                    succ.shape[0] = preds[0].shape[1] // n_heads if len(preds[0].shape) > 1 else preds[0].shape[0]
+                    succ.shape[1] = preds[0].shape[0] * n_heads
                 elif compute_node.layer_type == 'parccmm':
                     succ.shape[0] = preds[0].shape[0]
+                    if len(preds) > 1 and len(preds[1].shape) > 1:
+                        succ.shape[1] = preds[1].shape[1]
                 else:
                     for i in range(preds[0].dim):
                         succ.shape[i] = preds[0].shape[i]
@@ -533,6 +536,35 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
 
         process_special_info(graph, compute_node, preds, succ)
         populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)
+
+        # Par matrix layers: override pack_num.
+        # Generic _calc_pack_num uses full shape, but par format interleaves
+        # n_heads into each CT. Recompute from per-head block grid × G.
+        if compute_node.layer_type in ('parcpmm', 'parccmm', 'partranspose'):
+            n_slot = int(config.fhe_param.poly_modulus_degree // 2)
+            n_heads = config.n_heads
+            d = preds[0].shape[1] // n_heads  # block_size = n_per_head
+            n_h_padded = 1
+            while n_h_padded < n_heads:
+                n_h_padded <<= 1
+            if n_slot >= n_h_padded * d * d:
+                G = 1
+            else:
+                G = n_h_padded // (n_slot // (d * d))
+            for f_node in preds + [succ]:
+                if f_node.data_type == 'feature_mat':
+                    # Per-head shape: divide each dim by n_heads if it's a multiple
+                    r = (
+                        f_node.shape[0] // n_heads
+                        if f_node.shape[0] % n_heads == 0 and f_node.shape[0] > d
+                        else f_node.shape[0]
+                    )
+                    c = (
+                        f_node.shape[1] // n_heads
+                        if f_node.shape[1] % n_heads == 0 and f_node.shape[1] > d
+                        else f_node.shape[1]
+                    )
+                    graph.dag.nodes[f_node]['pack_num'] = math.ceil(r / d) * math.ceil(c / d) * G
 
 
 def combine_convs_with_upsamples(graph: LayerAbstractGraph):
@@ -642,6 +674,16 @@ def set_level_costs(graph: LayerAbstractGraph):
             graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type == 'parccmm':
             graph.dag.nodes[compute_node]['level_cost'] = 3
+        elif compute_node.layer_type == 'ln_stats':
+            graph.dag.nodes[compute_node]['level_cost'] = 4
+        elif compute_node.layer_type == 'ln_cent':
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type == 'ln_init':
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type == 'ln_iter':
+            graph.dag.nodes[compute_node]['level_cost'] = 3
+        elif compute_node.layer_type == 'ln_affine':
+            graph.dag.nodes[compute_node]['level_cost'] = 2
         else:
             graph.dag.nodes[compute_node]['level_cost'] = 0
 
@@ -899,3 +941,101 @@ def process_polyact(graph: LayerAbstractGraph) -> list:
         if isinstance(p, ComputeNode) and p.layer_type == 'polyact':
             miniprocess(graph, p, res_list, p.layer_id, True)
     return res_list
+
+
+def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
+    for ln_node in list(graph.dag.nodes):
+        if not isinstance(ln_node, LayerNormComputeNode):
+            continue
+
+        preds = list(graph.dag.predecessors(ln_node))
+        succs = list(graph.dag.successors(ln_node))
+        if len(preds) != 1 or len(succs) != 1:
+            raise ValueError(
+                f'LayerNorm node {ln_node.layer_id} must have exactly 1 input and 1 output, '
+                f'got {len(preds)} inputs and {len(succs)} outputs'
+            )
+        x_in: FeatureNode = preds[0]
+        out: FeatureNode = succs[0]
+
+        base_id = ln_node.layer_id
+        epsilon = ln_node.epsilon
+        weight_path = ln_node.weight_path
+        bias_path = ln_node.bias_path
+
+        x_in_attrs = graph.dag.nodes[x_in]
+        skip = list(x_in_attrs.get('skip', [1] * x_in.dim))
+        level = x_in_attrs.get('level', 0)
+        pack_num = x_in_attrs.get('pack_num', 1)
+
+        def make_feature(name: str) -> FeatureNode:
+            f = FeatureNode(
+                key=name,
+                dim=x_in.dim,
+                channel=x_in.channel,
+                scale=x_in.scale,
+                ckks_parameter_id=x_in.ckks_parameter_id,
+                ckks_scale=x_in.ckks_scale,
+                shape=list(x_in.shape),
+            )
+            f.data_type = x_in.data_type
+            return f
+
+        def f_attrs(f: FeatureNode) -> dict:
+            return {'name': f.node_id, 'skip': list(skip), 'level': level, 'pack_num': pack_num}
+
+        def c_attrs(level_cost: int, name: str) -> dict:
+            return {'name': name, 'level_cost': level_cost}
+
+        # Intermediate feature nodes
+        a = make_feature(f'{base_id}_a')
+        x_c = make_feature(f'{base_id}_x_c')
+        y0 = make_feature(f'{base_id}_y0')
+        y_nodes = [y0] + [make_feature(f'{base_id}_y{i + 1}') for i in range(n_iter)]
+
+        # Sub-compute nodes
+        ln_stats1 = ComputeNode(f'{base_id}_ln_stats', 'ln_stats', 1, 1)
+        ln_stats1.epsilon = epsilon
+        ln_stats2 = ComputeNode(f'{base_id}_ln_cent', 'ln_cent', 1, 1)
+        ln_init = ComputeNode(f'{base_id}_ln_init', 'ln_init', 1, 1)
+        ln_iters = [ComputeNode(f'{base_id}_ln_iter_{i}', 'ln_iter', 1, 1) for i in range(n_iter)]
+        ln_affine = ComputeNode(f'{base_id}_ln_affine', 'ln_affine', 1, 1)
+        ln_affine.weight_path = weight_path
+        ln_affine.bias_path = bias_path
+
+        # Remove the original layernorm node (keeps x_in and out in the graph)
+        graph.dag.remove_node(ln_node)
+
+        # 1a. x_in → ln_stats → a  (computes mean/variance stats, costs 3 levels)
+        graph.dag.add_node(ln_stats1, **c_attrs(3, ln_stats1.layer_id))
+        graph.dag.add_node(a, **f_attrs(a))
+        graph.dag.add_edge(x_in, ln_stats1)
+        graph.dag.add_edge(ln_stats1, a)
+
+        # 1b. x_in → ln_cent → x_c  (centers x, costs 1 level)
+        graph.dag.add_node(ln_stats2, **c_attrs(1, ln_stats2.layer_id))
+        graph.dag.add_node(x_c, **f_attrs(x_c))
+        graph.dag.add_edge(x_in, ln_stats2)
+        graph.dag.add_edge(ln_stats2, x_c)
+
+        # 2. a → ln_init → y0
+        graph.dag.add_node(ln_init, **c_attrs(2, ln_init.layer_id))
+        graph.dag.add_node(y0, **f_attrs(y0))
+        graph.dag.add_edge(a, ln_init)
+        graph.dag.add_edge(ln_init, y0)
+
+        # 3. [y_prev, a] → ln_iter_i → y_next  (repeated n_iter times)
+        for i, (ln_iter_i, y_next) in enumerate(zip(ln_iters, y_nodes[1:])):
+            y_prev = y_nodes[i]
+            graph.dag.add_node(ln_iter_i, **c_attrs(3, ln_iter_i.layer_id))
+            graph.dag.add_node(y_next, **f_attrs(y_next))
+            graph.dag.add_edge(y_prev, ln_iter_i, input_index=0)
+            graph.dag.add_edge(a, ln_iter_i, input_index=1)
+            graph.dag.add_edge(ln_iter_i, y_next)
+
+        # 4. [x_c, y_final] → ln_affine → out
+        y_final = y_nodes[-1]
+        graph.dag.add_node(ln_affine, **c_attrs(2, ln_affine.layer_id))
+        graph.dag.add_edge(x_c, ln_affine, input_index=0)
+        graph.dag.add_edge(y_final, ln_affine, input_index=1)
+        graph.dag.add_edge(ln_affine, out)

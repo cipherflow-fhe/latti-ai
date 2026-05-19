@@ -24,9 +24,6 @@ add_library(fhe_layers
   conv1d_packed_layer.cpp
   multiplexed_conv1d_pack_layer.cpp
   multiplexed_conv1d_depthwise_pack_layer.cpp
-  block_col_major_ccmm.cpp
-  block_col_major_cpmm.cpp
-  block_col_major_transpose.cpp
   par_block_col_major_transpose.cpp
   par_block_col_major_ccmm.cpp
   par_block_col_major_cpmm.cpp
