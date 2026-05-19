@@ -98,3 +98,44 @@ class PolyActComputeNode(ComputeNode):
 
         info['weight_path'] = f'{self.module_path}.weight'
         return info
+
+
+class PolyActRNPolyComputeNode(ComputeNode):
+    """Compute node for feature_mat polynomial activation."""
+
+    def __init__(
+        self,
+        layer_id: str,
+        feature_input: list[FeatureNode],
+        feature_output: list[FeatureNode],
+        weight_path: str = '',
+        degree: int = 4,
+    ):
+        super().__init__(layer_id, 'pcmpoly', feature_input, feature_output)
+        self.weight_path = weight_path
+        self.degree = degree
+        feature_output[0].shape = feature_input[0].shape
+        feature_output[0].skip = feature_input[0].skip
+        feature_output[0].data_type = feature_input[0].data_type
+
+    @staticmethod
+    def from_onnx_node(x: NodeProto, features_nodes) -> 'PolyActRNPolyComputeNode':
+        layer_id = format_id(x.name)
+        feature_input = [features_nodes[format_id(x.input[0])]]
+        feature_output = [features_nodes[format_id(x.output[0])]]
+        weight_path = x.input[1] if len(x.input) > 1 else f'{layer_id}.weight'
+        degree = 4
+        for attr in x.attribute:
+            if attr.name == 'degree':
+                degree = attr.i
+        return PolyActRNPolyComputeNode(layer_id, feature_input, feature_output, weight_path, degree)
+
+    @override
+    def to_json(self) -> dict:
+        return {
+            'type': self.layer_type,
+            'feature_input': [i.node_id for i in self.feature_input],
+            'feature_output': [i.node_id for i in self.feature_output],
+            'weight_path': self.weight_path,
+            'order': self.degree,
+        }
