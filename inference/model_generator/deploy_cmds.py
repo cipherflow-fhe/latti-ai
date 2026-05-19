@@ -42,6 +42,9 @@ from inference.model_generator.layers.poly_relu0d import *
 from inference.model_generator.layers.poly_relu1d import *
 from inference.model_generator.layers.poly_relu2d import *
 from inference.model_generator.layers.upsample_layer import *
+from inference.model_generator.layers.par_block_col_major_ccmm import ParBlockColMajorCCMM
+from inference.model_generator.layers.par_block_col_major_cpmm import ParBlockColMajorCPMM
+from inference.model_generator.layers.par_block_col_major_transpose import ParBlockColMajorTranspose
 from training.model_compiler.components import (
     N16QP1546H192H32,
     PN13QP218,
@@ -88,7 +91,24 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     config_info = read_config(os.path.join(task_path, 'nn_layers_ct_0.json'))
     input_args = list()
     feature_id_to_nodes_map = {}
+    par_feature_shapes = {}
     task_output_feature_ids = config_info['output_feature']
+
+    def _par_input_shape(feat, n_heads, split_rows=False):
+        rows, cols = feat['shape']
+        rows_per_head = rows // n_heads if split_rows else rows
+        return (rows_per_head, cols // n_heads)
+
+    def _par_ct_count(shape_per_head, block_size, G):
+        return math.ceil(shape_per_head[0] / block_size) * math.ceil(shape_per_head[1] / block_size) * G
+
+    def _par_group_count(block_size, n_heads, n_slot):
+        n_h_padded = 1
+        while n_h_padded < n_heads:
+            n_h_padded <<= 1
+        if n_slot >= n_h_padded * block_size * block_size:
+            return 1
+        return n_h_padded // (n_slot // (block_size * block_size))
 
     # Pre-add all graph-level input ciphertexts first so they precede weights in input_args.
     # This ensures the C++ signature position-matching works correctly for multi-input models.
@@ -105,74 +125,126 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
         for input_fid in config_info['input_feature']:
             feat = config_info['feature'][input_fid]
-            pack = int(feat['pack_num'])
             level = int(feat['level'])
-            n_in_channel_fid = int(feat['channel'])
-            n_packed = math.ceil(n_in_channel_fid / pack)
-            # Mirror the big_size expansion logic from the per-layer loop below:
-            # big_size conv2d / avgpool / mult_scalar (2D only) consume inputs as
-            #   n_in_channel * block_expansion[0] * block_expansion[1]
-            # ciphertexts, not the default ceil(channel / pack_num).
             consumer = first_use.get(input_fid)
-            if (
-                consumer is not None
-                and consumer.get('is_big_size', False)
-                and feat.get('dim', 2) == 2
-                and (consumer['type'] == 'conv2d' or 'avgpool' in consumer['type'] or consumer['type'] == 'mult_scalar')
-            ):
-                input_shape = feat['shape']
-                be0 = math.ceil(input_shape[0] / block_shape[0])
-                be1 = math.ceil(input_shape[1] / block_shape[1])
-                n_packed = n_in_channel_fid * be0 * be1
+            if feat.get('data_type') == 'feature_mat':
+                if consumer is None:
+                    continue
+                n_heads = task_config_info.get('n_heads', 1)
+                if n_heads <= 1:
+                    raise ValueError(f"feature_mat input '{input_fid}' only supports par matrix ops with n_heads > 1")
+                consumer_type = consumer['type']
+                if consumer_type == 'partranspose':
+                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=False)
+                    par_feature_shapes[input_fid] = shape_per_head
+                    block_size = shape_per_head[1]
+                    G = _par_group_count(block_size, n_heads, n // 2)
+                    n_packed = _par_ct_count(shape_per_head, block_size, G)
+                elif consumer_type == 'parccmm':
+                    idx = consumer['feature_input'].index(input_fid)
+                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=(idx == 1))
+                    par_feature_shapes[input_fid] = shape_per_head
+                    feat_A = config_info['feature'][consumer['feature_input'][0]]
+                    shape_A = _par_input_shape(feat_A, n_heads, split_rows=False)
+                    block_size = shape_A[1]
+                    G = _par_group_count(block_size, n_heads, n // 2)
+                    n_packed = _par_ct_count(shape_per_head, block_size, G)
+                elif consumer_type == 'parcpmm':
+                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=False)
+                    par_feature_shapes[input_fid] = shape_per_head
+                    block_size = shape_per_head[1]
+                    G = _par_group_count(block_size, n_heads, n // 2)
+                    n_packed = math.ceil(shape_per_head[0] / block_size) * G
+                else:
+                    raise ValueError(
+                        f"feature_mat input '{input_fid}' is consumed by unsupported non-par matrix layer "
+                        f"'{consumer_type}'; use parcpmm/parccmm/partranspose"
+                    )
+            else:
+                pack = int(feat['pack_num'])
+                n_in_channel_fid = int(feat['channel'])
+                n_packed = math.ceil(n_in_channel_fid / pack)
+                # Mirror the big_size expansion logic from the per-layer loop below:
+                # big_size conv2d / avgpool / mult_scalar (2D only) consume inputs as
+                #   n_in_channel * block_expansion[0] * block_expansion[1]
+                # ciphertexts, not the default ceil(channel / pack_num).
+                if (
+                    consumer is not None
+                    and consumer.get('is_big_size', False)
+                    and feat.get('dim', 2) == 2
+                    and (
+                        consumer['type'] == 'conv2d'
+                        or 'avgpool' in consumer['type']
+                        or consumer['type'] == 'mult_scalar'
+                    )
+                ):
+                    input_shape = feat['shape']
+                    be0 = math.ceil(input_shape[0] / block_shape[0])
+                    be1 = math.ceil(input_shape[1] / block_shape[1])
+                    n_packed = n_in_channel_fid * be0 * be1
             x = [CkksCiphertextNode(input_fid + f'input{k}', level=level) for k in range(n_packed)]
             feature_id_to_nodes_map[input_fid] = x
             input_args.append(Argument(input_fid, x))
+
+    _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose'}
+    _UNSUPPORTED_MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose'}
 
     for layer_id, layer_config in config_info['layer'].items():
         if layer_config['type'] == 'relu2d':
             continue
         layer_input_feature_ids = layer_config['feature_input']
         layer_output_feature_ids = layer_config['feature_output']
-        groups = 1
-        n_in_channel = int(layer_config['channel_input'])
-        n_out_channel = int(layer_config['channel_output'])
 
-        skip = config_info['feature'][layer_input_feature_ids[0]]['skip']
-        pack = int(config_info['feature'][layer_input_feature_ids[0]]['pack_num'])
-        level = int(config_info['feature'][layer_input_feature_ids[0]]['level'])
-        n_packed_in_channel = math.ceil(n_in_channel / pack)
-        n_packed_out_channel = math.ceil(n_out_channel / pack)
-
-        # For big_conv/big_avgpool/big_mult_scalar (2D only), input CT count differs from the default n_packed_in_channel
-        if (
-            (
-                layer_config['type'] == 'conv2d'
-                or 'avgpool' in layer_config['type']
-                or layer_config['type'] == 'mult_scalar'
+        # Matrix layer types have no channel_input/skip/pack. Non-par matrix ops are unsupported;
+        # par input registration is deferred to their own elif branches below.
+        if layer_config['type'] in _UNSUPPORTED_MATRIX_LAYER_TYPES:
+            raise ValueError(
+                f"Layer '{layer_id}' has unsupported non-par matrix type '{layer_config['type']}'; "
+                'use parcpmm/parccmm/partranspose'
             )
-            and layer_config.get('is_big_size', False)
-            and config_info['feature'][layer_input_feature_ids[0]].get('dim', 2) == 2
-        ):
-            input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
-            block_expansion = (
-                math.ceil(input_shape[0] / block_shape[0]),
-                math.ceil(input_shape[1] / block_shape[1]),
-            )
-            n_packed_in_channel = n_in_channel * block_expansion[0] * block_expansion[1]
+        if layer_config['type'] in _PAR_MATRIX_LAYER_TYPES:
+            level = int(config_info['feature'][layer_input_feature_ids[0]]['level'])
+        else:
+            groups = 1
+            n_in_channel = int(layer_config['channel_input'])
+            n_out_channel = int(layer_config['channel_output'])
 
-        if layer_config['type'] == 'conv1d':
-            _input_shape_1d = config_info['feature'][layer_input_feature_ids[0]]['shape'][0]
-            _skip_1d = skip[0] if isinstance(skip, list) else skip
-            if style == 'multiplexed':
-                n_packed_in_channel = math.ceil(n_in_channel / math.ceil(n // 2 / _input_shape_1d))
-            else:
-                n_packed_in_channel = math.ceil(n_in_channel / int(n // 2 // _input_shape_1d // _skip_1d))
+            skip = config_info['feature'][layer_input_feature_ids[0]]['skip']
+            pack = int(config_info['feature'][layer_input_feature_ids[0]]['pack_num'])
+            level = int(config_info['feature'][layer_input_feature_ids[0]]['level'])
+            n_packed_in_channel = math.ceil(n_in_channel / pack)
+            n_packed_out_channel = math.ceil(n_out_channel / pack)
 
-        for input_node in layer_input_feature_ids:
-            if input_node not in feature_id_to_nodes_map.keys():
-                x = [CkksCiphertextNode(input_node + f'input{k}', level=level) for k in range(n_packed_in_channel)]
-                feature_id_to_nodes_map.update({input_node: x})
-                input_args.append(Argument(input_node, x))
+            # For big_conv/big_avgpool/big_mult_scalar (2D only)
+            if (
+                (
+                    layer_config['type'] == 'conv2d'
+                    or 'avgpool' in layer_config['type']
+                    or layer_config['type'] == 'mult_scalar'
+                )
+                and layer_config.get('is_big_size', False)
+                and config_info['feature'][layer_input_feature_ids[0]].get('dim', 2) == 2
+            ):
+                input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
+                block_expansion = (
+                    math.ceil(input_shape[0] / block_shape[0]),
+                    math.ceil(input_shape[1] / block_shape[1]),
+                )
+                n_packed_in_channel = n_in_channel * block_expansion[0] * block_expansion[1]
+
+            if layer_config['type'] == 'conv1d':
+                _input_shape_1d = config_info['feature'][layer_input_feature_ids[0]]['shape'][0]
+                _skip_1d = skip[0] if isinstance(skip, list) else skip
+                if style == 'multiplexed':
+                    n_packed_in_channel = math.ceil(n_in_channel / math.ceil(n // 2 / _input_shape_1d))
+                else:
+                    n_packed_in_channel = math.ceil(n_in_channel / int(n // 2 // _input_shape_1d // _skip_1d))
+
+            for input_node in layer_input_feature_ids:
+                if input_node not in feature_id_to_nodes_map.keys():
+                    x = [CkksCiphertextNode(input_node + f'input{k}', level=level) for k in range(n_packed_in_channel)]
+                    feature_id_to_nodes_map.update({input_node: x})
+                    input_args.append(Argument(input_node, x))
 
         if layer_config['type'] == 'reshape':
             layer_output_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
@@ -845,6 +917,115 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                             feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, n
                         )
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+
+        elif layer_config['type'] == 'partranspose':
+            n_heads = task_config_info.get('n_heads', 1)
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            shape_per_head = par_feature_shapes.get(input_fid)
+            if shape_per_head is None:
+                shape_per_head = _par_input_shape(feat_in, n_heads, split_rows=False)
+                par_feature_shapes[input_fid] = shape_per_head
+            block_size = shape_per_head[1]
+
+            partranspose_layer = ParBlockColMajorTranspose(shape_per_head, block_size, n_heads, n // 2)
+            G = partranspose_layer.G
+            n_cts_in = partranspose_layer.num_blocks * G
+
+            # Register par-type input (deferred from the top of the loop)
+            if input_fid not in feature_id_to_nodes_map:
+                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='partranspose_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = partranspose_layer.call_custom_compute(
+                feature_id_to_nodes_map[input_fid],
+                data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape_per_head[1], shape_per_head[0])
+
+        elif layer_config['type'] == 'parcpmm':
+            n_heads = task_config_info.get('n_heads', 1)
+            feat_in = config_info['feature'][layer_input_feature_ids[0]]
+            feat_out = config_info['feature'][layer_output_feature_ids[0]]
+            shape_A_full = tuple(feat_in['shape'])
+            n_per_head = shape_A_full[1] // n_heads
+            block_size = n_per_head
+            # Python class expects per-head shape; C++ divides internally
+            shape_A = (shape_A_full[0], n_per_head)
+            W_shape = (shape_A_full[1], feat_out['shape'][1])
+
+            parcpmm_layer = ParBlockColMajorCPMM(shape_A, W_shape, block_size, n_heads, n // 2)
+
+            # Compute input CT count based on mode
+            if parcpmm_layer.mode == 'REDUCE':
+                n_cts_in = parcpmm_layer.K * parcpmm_layer.num_block_rows_A * parcpmm_layer.G
+            else:
+                n_cts_in = parcpmm_layer.num_block_rows_A * parcpmm_layer.G
+
+            # Register par-type input (deferred from the top of the loop)
+            input_fid = layer_input_feature_ids[0]
+            if input_fid not in feature_id_to_nodes_map:
+                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='parcpmm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = parcpmm_layer.call_custom_compute(
+                feature_id_to_nodes_map[input_fid],
+                data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+
+        elif layer_config['type'] == 'parccmm':
+            n_heads = task_config_info.get('n_heads', 1)
+            fid_A = layer_input_feature_ids[0]
+            fid_B = layer_input_feature_ids[1]
+            feat_A = config_info['feature'][fid_A]
+            feat_B = config_info['feature'][fid_B]
+
+            shape_A = par_feature_shapes.get(fid_A)
+            if shape_A is None:
+                shape_A = _par_input_shape(feat_A, n_heads, split_rows=False)
+                par_feature_shapes[fid_A] = shape_A
+            block_size = shape_A[1]
+
+            shape_B = par_feature_shapes.get(fid_B)
+            if shape_B is None:
+                # Raw parccmm RHS is stored as [H*N, H*P]; if it is produced by
+                # partranspose, par_feature_shapes already contains [N, P].
+                shape_B = _par_input_shape(feat_B, n_heads, split_rows=True)
+                par_feature_shapes[fid_B] = shape_B
+
+            parccmm_layer = ParBlockColMajorCCMM(shape_A, shape_B, block_size, n_heads, n // 2)
+            G = parccmm_layer.G
+
+            # Register par-type inputs (deferred from the top of the loop)
+            for idx, input_fid in enumerate(layer_input_feature_ids):
+                if input_fid not in feature_id_to_nodes_map:
+                    feat = config_info['feature'][input_fid]
+                    shape_per_head = par_feature_shapes.get(input_fid)
+                    if shape_per_head is None:
+                        shape_per_head = _par_input_shape(feat, n_heads, split_rows=(idx == 1))
+                        par_feature_shapes[input_fid] = shape_per_head
+                    n_cts = _par_ct_count(shape_per_head, block_size, G)
+                    x = [CkksCiphertextNode(input_fid + f'input{j}', level=int(feat['level'])) for j in range(n_cts)]
+                    feature_id_to_nodes_map[input_fid] = x
+                    input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='parccmm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = parccmm_layer.call_custom_compute(
+                feature_id_to_nodes_map[fid_A],
+                feature_id_to_nodes_map[fid_B],
+                data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape_A[0], shape_B[1])
 
         else:
             raise ValueError(f'Unsupported layer type: {layer_config["type"]}')

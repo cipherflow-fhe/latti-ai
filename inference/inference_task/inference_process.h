@@ -63,6 +63,9 @@ public:
     int pack_channel_per_ciphertext;
     int level = 0;
     double ckks_scale = 0.0;
+    bool is_mat = false;             // true when data_type == "feature_mat"
+    uint32_t matmul_block_size = 0;  // block size d for matrix operations
+    uint32_t n_heads = 0;            // number of heads for par_block_col_major
 
     FeatureNode(const json& json_data);
 
@@ -93,6 +96,7 @@ public:
     std::filesystem::path project_path;
     std::string pack_style;
     Duo block_shape;
+    uint32_t n_heads = 1;
     bool is_absorb_polyrelu;
     json json_data;
     json json_features;
@@ -133,6 +137,8 @@ public:
         ckks_layers_[key] = std::move(layer);
     }
 
+    std::map<std::string, UPtr<ls::CkksParameter>> ckks_parameters_;
+
 private:
     virtual void _init_conv_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     virtual void _init_square_layer(const std::string& key, const json& layer, const hid_t& h5_file);
@@ -162,9 +168,6 @@ private:
     void _init_upsample_layer(const std::string& key, const json& layer, const Duo& block_shape = {128, 256});
     void _init_upsample_nearest_layer(const std::string& key, const json& layer);
     void _init_conv1d_layer(const std::string& key, const json& layer, const hid_t& h5_file);
-    void _init_cpmm_layer(const std::string& key, const json& layer, const hid_t& h5_file);
-    void _init_ccmm_layer(const std::string& key, const json& layer);
-    void _init_transpose_layer(const std::string& key, const json& layer);
     void _init_parcpmm_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_parccmm_layer(const std::string& key, const json& layer);
     void _init_partranspose_layer(const std::string& key, const json& layer);
@@ -205,7 +208,6 @@ private:
         return h5_to_array<dim>(h5_file, layer.at(path_key).get<std::string>(), shape, scale);
     }
 
-    std::map<std::string, UPtr<ls::CkksParameter>> ckks_parameters_;
     std::map<std::string, UPtr<Layer>> ckks_layers_;
 };
 
@@ -245,6 +247,9 @@ private:
     void set_feature(const std::string& feature_id, UPtr<FeatureEncrypted> feature);
     template <typename T> T get_ciphertext_output_feature(const std::string& feature_id) {
         return dynamic_cast<const T&>(_get_feature(feature_id)).copy();
+    }
+    const FeatureEncrypted& get_output_feature_ref(const std::string& feature_id) {
+        return _get_feature(feature_id);
     }
 
 private:
