@@ -542,8 +542,13 @@ class TestSingleLayer(CompilerTestBase):
         )
 
     def test_qkv(self):
-        model = nn_modules.QKVTest()
-        self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
+        old_n_heads = config.n_heads
+        try:
+            config.n_heads = 3
+            model = nn_modules.QKVTest()
+            self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
+        finally:
+            config.n_heads = old_n_heads
 
     def test_transpose(self):
         model = nn_modules.TransposeTest()
@@ -556,6 +561,16 @@ class TestSingleLayer(CompilerTestBase):
     def test_layernorm(self):
         model = nn_modules.LayerNorm()
         self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
+
+    def test_pcmgamma(self):
+        model = nn_modules.PCMGammaTest()
+        graph, _ = self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
+        self.assertTrue(any(node.layer_type == 'pcmgamma' for node in graph.dag.nodes if isinstance(node, ComputeNode)))
+
+    def test_gelu(self):
+        model = nn_modules.SingleGelu()
+        graph, _ = self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
+        self.assertTrue(any(node.layer_type == 'pcmpoly' for node in graph.dag.nodes if isinstance(node, ComputeNode)))
 
 
 class TestLayerInteraction(CompilerTestBase):

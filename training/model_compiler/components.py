@@ -790,6 +790,15 @@ class LayerAbstractGraph:
             elif layer_type == 'parccmm':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
 
+            elif layer_type == 'pcmgamma':
+                compute_node = ComputeNode(key, layer_type, 1, 1)
+                compute_node.path = layer_json.get('weight_path', '')
+
+            elif layer_type == 'pcmpoly':
+                compute_node = ComputeNode(key, layer_type, 1, 1)
+                compute_node.path = layer_json.get('weight_path', '')
+                compute_node.order = layer_json.get('order', 4)
+
             elif 'fc' in layer_type:
                 weight_path = layer_json['weight_path']
                 bias_path = layer_json['bias_path']
@@ -1058,6 +1067,21 @@ class LayerAbstractGraph:
                     'type': layer_type,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
+                }
+            if layer_type == 'pcmgamma':
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
+                    'weight_path': layer.path,
+                }
+            if layer_type == 'pcmpoly':
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
+                    'weight_path': layer.path,
+                    'order': layer.order,
                 }
             if layer_type == 'pcmstats':
                 layers[layer_id] = {
