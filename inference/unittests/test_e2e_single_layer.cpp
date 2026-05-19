@@ -516,18 +516,6 @@ TEST_CASE("gpu/adaptive_avgpool1d", "[e2e][gpu]") {
     }
 }
 
-TEST_CASE("gpu/block_col_major_transpose", "[e2e][gpu]") {
-    run_e2e_test(single_layer_base_path / "block_col_major_transpose", true);
-}
-
-TEST_CASE("gpu/block_col_major_ccmm", "[e2e][gpu]") {
-    run_e2e_test(single_layer_base_path / "block_col_major_ccmm", true);
-}
-
-TEST_CASE("gpu/block_col_major_cpmm", "[e2e][gpu]") {
-    run_e2e_test(single_layer_base_path / "block_col_major_cpmm", true);
-}
-
 TEST_CASE("gpu/par_block_col_major_transpose", "[e2e][gpu]") {
     run_e2e_test(single_layer_base_path / "par_block_col_major_transpose", true);
 }

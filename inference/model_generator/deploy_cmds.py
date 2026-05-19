@@ -42,9 +42,6 @@ from inference.model_generator.layers.poly_relu0d import *
 from inference.model_generator.layers.poly_relu1d import *
 from inference.model_generator.layers.poly_relu2d import *
 from inference.model_generator.layers.upsample_layer import *
-from inference.model_generator.layers.block_col_major_ccmm import BlockColMajorCCMM
-from inference.model_generator.layers.block_col_major_cpmm import BlockColMajorCPMM
-from inference.model_generator.layers.block_col_major_transpose import BlockColMajorTranspose
 from inference.model_generator.layers.par_block_col_major_ccmm import ParBlockColMajorCCMM
 from inference.model_generator.layers.par_block_col_major_cpmm import ParBlockColMajorCPMM
 from inference.model_generator.layers.par_block_col_major_transpose import ParBlockColMajorTranspose
@@ -81,18 +78,6 @@ def set_param(param_name):
     else:
         param = Param.create_ckks_custom_param(n=fhe.poly_modulus_degree, p=fhe.p, q=fhe.q)
     set_fhe_param(param)
-
-
-def _calc_matmul_block_size(shape, n_slot):
-    """Compute block_size d for block_col_major packing.
-
-    Choose the largest power-of-2 d such that d <= min(m, n) and d^2 <= n_slot.
-    """
-    max_d = min(shape[0], shape[1], int(math.isqrt(n_slot)))
-    d = 1
-    while d * 2 <= max_d:
-        d *= 2
-    return d
 
 
 def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordinary', lazy=False):
@@ -146,6 +131,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 if consumer is None:
                     continue
                 n_heads = task_config_info.get('n_heads', 1)
+                if n_heads <= 1:
+                    raise ValueError(f"feature_mat input '{input_fid}' only supports par matrix ops with n_heads > 1")
                 consumer_type = consumer['type']
                 if consumer_type == 'partranspose':
                     shape_per_head = _par_input_shape(feat, n_heads, split_rows=False)
@@ -169,9 +156,9 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     G = _par_group_count(block_size, n_heads, n // 2)
                     n_packed = math.ceil(shape_per_head[0] / block_size) * G
                 else:
-                    _mat_block_size = _calc_matmul_block_size(feat['shape'], n // 2)
-                    n_packed = math.ceil(feat['shape'][0] / _mat_block_size) * math.ceil(
-                        feat['shape'][1] / _mat_block_size
+                    raise ValueError(
+                        f"feature_mat input '{input_fid}' is consumed by unsupported non-par matrix layer "
+                        f"'{consumer_type}'; use parcpmm/parccmm/partranspose"
                     )
             else:
                 pack = int(feat['pack_num'])
@@ -199,7 +186,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map[input_fid] = x
             input_args.append(Argument(input_fid, x))
 
-    _MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose', 'parcpmm', 'parccmm', 'partranspose'}
+    _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose'}
+    _UNSUPPORTED_MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose'}
 
     for layer_id, layer_config in config_info['layer'].items():
         if layer_config['type'] == 'relu2d':
@@ -207,27 +195,15 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         layer_input_feature_ids = layer_config['feature_input']
         layer_output_feature_ids = layer_config['feature_output']
 
-        # Matrix layer types have no channel_input/skip/pack — handle input registration
-        # and graph building in their own elif branches below.
-        _PAR_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose'}
-        if layer_config['type'] in _MATRIX_LAYER_TYPES:
+        # Matrix layer types have no channel_input/skip/pack. Non-par matrix ops are unsupported;
+        # par input registration is deferred to their own elif branches below.
+        if layer_config['type'] in _UNSUPPORTED_MATRIX_LAYER_TYPES:
+            raise ValueError(
+                f"Layer '{layer_id}' has unsupported non-par matrix type '{layer_config['type']}'; "
+                'use parcpmm/parccmm/partranspose'
+            )
+        if layer_config['type'] in _PAR_MATRIX_LAYER_TYPES:
             level = int(config_info['feature'][layer_input_feature_ids[0]]['level'])
-            if layer_config['type'] not in _PAR_LAYER_TYPES:
-                # Non-par: register inputs with block_col_major CT count
-                first_feat = config_info['feature'][layer_input_feature_ids[0]]
-                _mat_block_size = _calc_matmul_block_size(first_feat['shape'], n // 2)
-                for input_fid in layer_input_feature_ids:
-                    if input_fid not in feature_id_to_nodes_map:
-                        feat = config_info['feature'][input_fid]
-                        m_, k_ = feat['shape']
-                        n_cts = math.ceil(m_ / _mat_block_size) * math.ceil(k_ / _mat_block_size)
-                        x = [
-                            CkksCiphertextNode(input_fid + f'input{j}', level=int(feat['level'])) for j in range(n_cts)
-                        ]
-                        feature_id_to_nodes_map[input_fid] = x
-                        input_args.append(Argument(input_fid, x))
-            # Par types: input registration deferred to their own elif branches.
-            # Skip the generic channel/skip/pack reads.
         else:
             groups = 1
             n_in_channel = int(layer_config['channel_input'])

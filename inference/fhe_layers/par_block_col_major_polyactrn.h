@@ -69,6 +69,9 @@ public:
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
 
+    ls::CkksPlaintextRingt
+    generate_coeff_pt(ls::CkksContext& ctx, uint32_t coeff_idx, uint32_t bi, uint32_t bj, uint32_t g) const;
+
 private:
     uint32_t m_, cols_per_head_, d_, n_slot_;
     uint32_t n_heads_, n_h_padded_, S_, n_cts_per_block_idx_;

@@ -25,14 +25,6 @@ using namespace lattisense;
 
 using namespace fhe_ops_lib;
 
-static uint32_t calc_matmul_block_size(uint32_t rows, uint32_t cols, uint32_t n_slots) {
-    uint32_t d = 1;
-    while ((uint64_t)d * 2 <= rows && (uint64_t)d * 2 <= cols && (uint64_t)d * 2 * d * 2 <= n_slots) {
-        d *= 2;
-    }
-    return d;
-}
-
 InferenceClient::InferenceClient(const std::string& client_dir) : client_dir_(client_dir) {}
 
 InferenceClient::~InferenceClient() = default;
@@ -192,15 +184,17 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
                   << ")..." << std::endl;
 
         if (param.is_mat) {
+            if (param.n_heads <= 1) {
+                throw std::runtime_error("[Client] feature_mat input only supports par matrix ops with n_heads > 1: " +
+                                         name);
+            }
+            if (param.width % param.n_heads != 0) {
+                throw std::runtime_error("[Client] feature_mat width must be divisible by n_heads: " + name);
+            }
             auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.height, (uint64_t)param.width});
             FeatureMatEncrypted input_ct(context_ptr_, param.level);
-            if (param.n_heads > 1) {
-                uint32_t d = param.width / param.n_heads;
-                input_ct.par_block_col_major_pack(input_array, d, param.n_heads, false, scale);
-            } else {
-                uint32_t d = calc_matmul_block_size(param.height, param.width, n_slots_);
-                input_ct.block_col_major_pack(input_array, d, false, scale);
-            }
+            uint32_t d = param.width / param.n_heads;
+            input_ct.par_block_col_major_pack(input_array, d, param.n_heads, false, scale);
             result[name] = input_ct.serialize();
         } else if (param.dim == 0) {
             auto input_array = csv_to_array<1>(csv_path);
@@ -255,23 +249,22 @@ InferenceClient::decrypt(const std::map<std::string, Bytes>& encrypted_outputs) 
 
         DecryptedOutput result;
         if (param.is_mat) {
+            if (param.n_heads <= 1) {
+                throw std::runtime_error("[Client] feature_mat output only supports par matrix ops with n_heads > 1: " +
+                                         name);
+            }
             FeatureMatEncrypted output_ct(context_ptr_, 0);
             output_ct.deserialize(bytes);
-            Array<double, 2> decrypted;
-            if (param.n_heads > 1) {
-                uint32_t d = par_block_size_;
-                uint32_t m_per_head = param.height;
-                uint32_t n_per_head = d;
-                if (param.height % param.n_heads == 0 && param.height > d)
-                    m_per_head = param.height / param.n_heads;
-                decrypted = output_ct.par_block_col_major_unpack(m_per_head, n_per_head, d, param.n_heads);
-            } else {
-                uint32_t d = output_ct.matmul_block_size;
-                if (d == 0) {
-                    d = calc_matmul_block_size(param.height, param.width, n_slots_);
-                }
-                decrypted = output_ct.block_col_major_unpack(param.height, param.width, d);
+            uint32_t d = output_ct.matmul_block_size != 0 ? output_ct.matmul_block_size : par_block_size_;
+            if (d == 0) {
+                throw std::runtime_error("[Client] feature_mat output is missing par block size: " + name);
             }
+            Array<double, 2> decrypted;
+            uint32_t m_per_head = param.height;
+            uint32_t n_per_head = d;
+            if (param.height % param.n_heads == 0 && param.height > d)
+                m_per_head = param.height / param.n_heads;
+            decrypted = output_ct.par_block_col_major_unpack(m_per_head, n_per_head, d, param.n_heads);
             auto dec_1d = decrypted.to_array_1d();
             result.output = std::vector<double>(dec_1d.data(), dec_1d.data() + dec_1d.size());
         } else if (param.dim == 0) {
