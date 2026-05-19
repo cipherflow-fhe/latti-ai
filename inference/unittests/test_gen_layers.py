@@ -35,7 +35,10 @@ from inference.model_generator.layers.mult_scaler import MultScalarLayer  # noqa
 from inference.model_generator.layers.par_block_col_major_cpmm import ParBlockColMajorCPMM  # noqa: E402
 from inference.model_generator.layers.par_block_col_major_transpose import ParBlockColMajorTranspose  # noqa: E402
 from inference.model_generator.layers.par_block_col_major_ccmm import ParBlockColMajorCCMM  # noqa: E402
-from inference.model_generator.layers.par_block_col_major_polyactrn import ParBlockColMajorPolyActRNPoly  # noqa: E402
+from inference.model_generator.layers.par_block_col_major_polyactrn import (  # noqa: E402
+    ParBlockColMajorPolyActRNGamma,
+    ParBlockColMajorPolyActRNPoly,
+)
 from inference.model_generator.layers.par_block_col_major_layernorm import (  # noqa: E402
     ParBlockColMajorLNAffine,
     ParBlockColMajorLNGoldschmidt,
@@ -1554,34 +1557,46 @@ class TestLayerExport(unittest.TestCase):
             fpga_acc=False,
         )
 
-    def test_par_block_col_major_polyactrn_poly(self):
-        """ParBlockColMajorPolyActRNPoly generated DAG: degree 2 and 4, d=4, n_heads=2."""
+    def test_par_block_col_major_polyactrn(self):
+        """ParBlockColMajorPolyActRN generated DAG: gamma then degree 2/4 poly."""
         set_param('PN14QP438')
-        seq_len, n_heads, head_dim, D = 8, 2, 4, 4
+        seq_len, n_heads, head_dim, D = 197, 3, 64, 64
         total_dim = n_heads * head_dim
         N_SLOT = 16384 // 2
 
         for degree, level in [(2, 3), (4, 4)]:
-            layer = ParBlockColMajorPolyActRNPoly(
+            gamma_layer = ParBlockColMajorPolyActRNGamma(
+                shape=(seq_len, total_dim),
+                block_size=D,
+                n_heads=n_heads,
+                n_slot=N_SLOT,
+            )
+            poly_layer = ParBlockColMajorPolyActRNPoly(
                 shape=(seq_len, total_dim),
                 block_size=D,
                 n_heads=n_heads,
                 n_slot=N_SLOT,
                 degree=degree,
             )
-            input_cts = [CkksCiphertextNode(f'input_ct_deg{degree}_{k}', level=level) for k in range(layer.total_cts)]
-            data_source_id = f'_poly_layer_deg{degree}'
-            data_source = CustomDataNode(type='polyactrn_poly_data_source', id=data_source_id)
-            output_cts = layer.call_custom_compute(input_cts, data_source)
+            input_cts = [
+                CkksCiphertextNode(f'input_ct_deg{degree}_{k}', level=level) for k in range(gamma_layer.total_cts)
+            ]
+            gamma_data_id = f'_gamma_layer_deg{degree}'
+            poly_data_id = f'_poly_layer_deg{degree}'
+            gamma_data = CustomDataNode(type='polyactrn_gamma_data_source', id=gamma_data_id)
+            poly_data = CustomDataNode(type='polyactrn_poly_data_source', id=poly_data_id)
+            gamma_cts = gamma_layer.call_custom_compute(input_cts, gamma_data)
+            output_cts = poly_layer.call_custom_compute(gamma_cts, poly_data)
 
             process_custom_task(
                 input_args=[
                     Argument('input', input_cts),
-                    Argument(data_source_id, [data_source]),
+                    Argument(gamma_data_id, [gamma_data]),
+                    Argument(poly_data_id, [poly_data]),
                 ],
                 output_args=[Argument('output', output_cts)],
                 output_instruction_path=base_path
-                / 'CKKS_par_block_col_major_polyactrn_poly'
+                / 'CKKS_par_block_col_major_polyactrn'
                 / f'degree_{degree}'
                 / f'level_{level}'
                 / 'server',
@@ -1591,43 +1606,62 @@ class TestLayerExport(unittest.TestCase):
     def test_par_block_col_major_layernorm(self):
         """ParBlockColMajor LayerNorm generated DAG: stats/xcenter/minimax/gold/affine."""
         set_param('PN15QP880')
-        seq_len, n_heads, head_dim, D = 8, 2, 4, 4
-        total_dim = n_heads * head_dim
         N_SLOT = 32768 // 2
         init_level = 11
 
-        stats = ParBlockColMajorLNStats(shape=(seq_len, total_dim), block_size=D, n_heads=n_heads, n_slot=N_SLOT)
-        xcenter = ParBlockColMajorLNXCentered(shape=(seq_len, total_dim), block_size=D, n_heads=n_heads, n_slot=N_SLOT)
-        minimax = ParBlockColMajorLNMinimaxInit(block_size=D, n_slot=N_SLOT)
-        gold = ParBlockColMajorLNGoldschmidt(block_size=D, n_slot=N_SLOT)
-        affine = ParBlockColMajorLNAffine(shape=(seq_len, total_dim), block_size=D, n_heads=n_heads, n_slot=N_SLOT)
+        configs = [
+            (8, 2, 4, 4, base_path / 'CKKS_par_block_col_major_layernorm' / f'level_{init_level}' / 'server'),
+            (
+                197,
+                3,
+                64,
+                64,
+                base_path
+                / 'CKKS_par_block_col_major_layernorm'
+                / 'seq_197_heads_3_dim_64'
+                / f'level_{init_level}'
+                / 'server',
+            ),
+        ]
 
-        input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=init_level) for k in range(stats.total_cts)]
-        stats_data = CustomDataNode(type='layernorm_data_source', id='_ln_stats_layer')
-        xcenter_data = CustomDataNode(type='layernorm_data_source', id='_ln_xcenter_layer')
-        minimax_data = CustomDataNode(type='layernorm_data_source', id='_ln_minimax_layer')
-        gold_data = CustomDataNode(type='layernorm_data_source', id='_ln_gold_layer')
-        affine_data = CustomDataNode(type='layernorm_data_source', id='_ln_affine_layer')
+        for seq_len, n_heads, head_dim, D, output_path in configs:
+            total_dim = n_heads * head_dim
+            stats = ParBlockColMajorLNStats(shape=(seq_len, total_dim), block_size=D, n_heads=n_heads, n_slot=N_SLOT)
+            xcenter = ParBlockColMajorLNXCentered(
+                shape=(seq_len, total_dim), block_size=D, n_heads=n_heads, n_slot=N_SLOT
+            )
+            minimax = ParBlockColMajorLNMinimaxInit(block_size=D, n_slot=N_SLOT)
+            gold = ParBlockColMajorLNGoldschmidt(block_size=D, n_slot=N_SLOT)
+            affine = ParBlockColMajorLNAffine(shape=(seq_len, total_dim), block_size=D, n_heads=n_heads, n_slot=N_SLOT)
 
-        a_cts = stats.call_custom_compute(input_cts, stats_data)
-        x_centered = xcenter.call_custom_compute(input_cts, xcenter_data)
-        y_cts = minimax.call_custom_compute(a_cts, minimax_data)
-        y_cts = gold.call_custom_compute(y_cts, a_cts, gold_data)
-        output_cts = affine.call_custom_compute(x_centered, y_cts, affine_data)
+            input_cts = [
+                CkksCiphertextNode(f'input_ct_seq{seq_len}_{k}', level=init_level) for k in range(stats.total_cts)
+            ]
+            stats_data = CustomDataNode(type='layernorm_data_source', id='_ln_stats_layer')
+            xcenter_data = CustomDataNode(type='layernorm_data_source', id='_ln_xcenter_layer')
+            minimax_data = CustomDataNode(type='layernorm_data_source', id='_ln_minimax_layer')
+            gold_data = CustomDataNode(type='layernorm_data_source', id='_ln_gold_layer')
+            affine_data = CustomDataNode(type='layernorm_data_source', id='_ln_affine_layer')
 
-        process_custom_task(
-            input_args=[
-                Argument('input', input_cts),
-                Argument('_ln_stats_layer', [stats_data]),
-                Argument('_ln_xcenter_layer', [xcenter_data]),
-                Argument('_ln_minimax_layer', [minimax_data]),
-                Argument('_ln_gold_layer', [gold_data]),
-                Argument('_ln_affine_layer', [affine_data]),
-            ],
-            output_args=[Argument('output', output_cts)],
-            output_instruction_path=base_path / 'CKKS_par_block_col_major_layernorm' / f'level_{init_level}' / 'server',
-            fpga_acc=False,
-        )
+            a_cts = stats.call_custom_compute(input_cts, stats_data)
+            x_centered = xcenter.call_custom_compute(input_cts, xcenter_data)
+            y_cts = minimax.call_custom_compute(a_cts, minimax_data)
+            y_cts = gold.call_custom_compute(y_cts, a_cts, gold_data)
+            output_cts = affine.call_custom_compute(x_centered, y_cts, affine_data)
+
+            process_custom_task(
+                input_args=[
+                    Argument('input', input_cts),
+                    Argument('_ln_stats_layer', [stats_data]),
+                    Argument('_ln_xcenter_layer', [xcenter_data]),
+                    Argument('_ln_minimax_layer', [minimax_data]),
+                    Argument('_ln_gold_layer', [gold_data]),
+                    Argument('_ln_affine_layer', [affine_data]),
+                ],
+                output_args=[Argument('output', output_cts)],
+                output_instruction_path=output_path,
+                fpga_acc=False,
+            )
 
     def test_par_cpmm_square(self):
         """ParBlockColMajorCPMM SQUARE: two configs with n_heads=3."""
