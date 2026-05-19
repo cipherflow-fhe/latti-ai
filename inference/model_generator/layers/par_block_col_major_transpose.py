@@ -197,7 +197,7 @@ class ParBlockColMajorTranspose:
                 attributes={
                     'op_class': op_class,
                     'type': 'transpose_diag_pt',
-                    'k_idx': k_idx,
+                    'i': k_idx,
                 },
             )
             transpose_diag_pt.append(node)
