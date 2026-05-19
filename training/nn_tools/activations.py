@@ -223,6 +223,40 @@ class PolyAct(nn.Module):
         return f'degree={self.degree}, scale_before={self.scale_before}, scale_after={self.scale_after}'
 
 
+class _PolyActRNPolyExport(torch.autograd.Function):
+    """ONNX export helper: emit PolyActRNPoly as a single custom op."""
+
+    @staticmethod
+    def forward(ctx, x, degree, activation_name):
+        import torch.nn.functional as F
+
+        return F.gelu(x)
+
+    @staticmethod
+    def symbolic(g, x, degree, activation_name):
+        return g.op('nn_tools::PolyActRNPoly', x, degree_i=degree, activation_s=activation_name).setType(x.type())
+
+
+class PolyActRNPoly(nn.Module):
+    """GELU that exports as a single ``nn_tools::PolyActRNPoly`` ONNX custom op."""
+
+    def __init__(self, hermite_coeffs, num_features=0, activation_name='gelu', **kwargs):
+        super().__init__()
+        self.degree = len(hermite_coeffs) - 1
+        self.num_features = num_features
+        self.activation_name = activation_name
+
+    def forward(self, x):
+        if torch.onnx.is_in_onnx_export():
+            return _PolyActRNPolyExport.apply(x, self.degree, self.activation_name)
+        import torch.nn.functional as F
+
+        return F.gelu(x)
+
+    def extra_repr(self):
+        return f'degree={self.degree}, activation={self.activation_name}'
+
+
 class _RangeNormPoly1dExport(torch.autograd.Function):
     """ONNX export helper: emit RangeNormPoly1d as a single custom op."""
 

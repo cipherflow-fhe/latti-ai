@@ -54,6 +54,7 @@ from inference.model_generator.layers.poly_relu2d import PolyRelu2D
 from inference.model_generator.layers.par_block_col_major_ccmm import ParBlockColMajorCCMM
 from inference.model_generator.layers.par_block_col_major_cpmm import ParBlockColMajorCPMM
 from inference.model_generator.layers.par_block_col_major_transpose import ParBlockColMajorTranspose
+from inference.model_generator.layers.par_block_col_major_polyactrn import ParBlockColMajorPolyActRNPoly
 from inference.model_generator.layers.upsample_layer import UpsampleNearestLayer
 
 
@@ -893,6 +894,27 @@ class FheScoreParam:
         elif layer_type in ('add', 'add2d'):
             layer = AddLayer()
             return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
+        elif layer_type == 'pcmgamma':
+            m = preds[0].shape[0]
+            n_cols = preds[0].shape[1]
+            d = config.matmul_block_size or n_cols
+            n_cts = math.ceil(m / d) * math.ceil(n_cols / d)
+            return {'rotate': 0, 'mult_plain': n_cts, 'mult': 0, 'add': 0, 'rescale': n_cts}
+        elif layer_type == 'pcmpoly':
+            m = preds[0].shape[0]
+            n_cols = preds[0].shape[1]
+            n_slot = n // 2
+            try:
+                layer = ParBlockColMajorPolyActRNPoly(
+                    shape=(m, n_cols),
+                    block_size=config.matmul_block_size,
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                    degree=getattr(node, 'order', 4),
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError):
+                return None
         elif layer_type == 'parcpmm':
             m = preds[0].shape[0]
             n_total = preds[0].shape[1]
