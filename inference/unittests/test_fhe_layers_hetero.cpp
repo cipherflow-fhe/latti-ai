@@ -2333,11 +2333,11 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "add_layer", "", HeteroProcessors)
 }
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
-                               "feature_mat_add_layer_generated",
+                               "par_block_col_major_add_generated",
                                "[block_col_major_e2e]",
                                HeteroProcessors) {
     auto& res = SharedHeteroResources::get();
-    fs::path server_dir = base_path / "CKKS_feature_mat_add_layer" / "par_block_col_major" / "level_2" / "server";
+    fs::path server_dir = base_path / "CKKS_par_block_col_major_add" / "par_block_col_major" / "level_2" / "server";
     if (!fs::exists(server_dir / "mega_ag.json"))
         return;
 
@@ -2352,7 +2352,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     FeatureMatEncrypted x1_enc(&res.context, init_level);
     x1_enc.par_block_col_major_pack(x1, d, n_heads, false, res.param.get_default_scale());
 
-    FeatureMatAddLayer add_layer(res.param);
+    ParBlockColMajorAdd add_layer(res.param);
     auto expected = add_layer.run_plaintext(x0, x1);
 
     vector<CkksCiphertext> x0_cts, x1_cts, out_cts;

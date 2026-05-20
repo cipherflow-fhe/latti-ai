@@ -94,12 +94,12 @@ vector<double> AddLayer::run_plaintext_0d(const vector<double>& x0, const vector
     return y;
 }
 
-FeatureMatAddLayer::FeatureMatAddLayer(const CkksParameter& param_in) : Layer(param_in) {}
+ParBlockColMajorAdd::ParBlockColMajorAdd(const CkksParameter& param_in) : Layer(param_in) {}
 
-void FeatureMatAddLayer::add(CkksContext* ctx,
-                             const FeatureMatEncrypted& x0,
-                             const FeatureMatEncrypted& x1,
-                             FeatureMatEncrypted& result) const {
+void ParBlockColMajorAdd::add(CkksContext* ctx,
+                              const FeatureMatEncrypted& x0,
+                              const FeatureMatEncrypted& x1,
+                              FeatureMatEncrypted& result) const {
     assert(x0.data.size() == x1.data.size());
     assert(x0.shape == x1.shape);
     assert(x0.matmul_block_size == x1.matmul_block_size);
@@ -113,7 +113,7 @@ void FeatureMatAddLayer::add(CkksContext* ctx,
 }
 
 FeatureMatEncrypted
-FeatureMatAddLayer::run(CkksContext& ctx, const FeatureMatEncrypted& x0, const FeatureMatEncrypted& x1) {
+ParBlockColMajorAdd::run(CkksContext& ctx, const FeatureMatEncrypted& x0, const FeatureMatEncrypted& x1) {
     FeatureMatEncrypted result(&ctx, x0.level);
     result.dim = x0.dim;
     result.shape = x0.shape;
@@ -125,7 +125,7 @@ FeatureMatAddLayer::run(CkksContext& ctx, const FeatureMatEncrypted& x0, const F
     return result;
 }
 
-Array<double, 2> FeatureMatAddLayer::run_plaintext(const Array<double, 2>& x0, const Array<double, 2>& x1) const {
+Array<double, 2> ParBlockColMajorAdd::run_plaintext(const Array<double, 2>& x0, const Array<double, 2>& x1) const {
     auto shape = x0.get_shape();
     assert(shape == x1.get_shape());
     Array<double, 2> y(shape);

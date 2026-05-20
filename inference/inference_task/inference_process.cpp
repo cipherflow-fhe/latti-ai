@@ -474,7 +474,7 @@ void InitInferenceProcess::_init_add_layer(const string& key, const json& layer,
     FeatureNode feature_input1(json_features[layer["feature_input"][1].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     if (feature_input0.is_mat || feature_input1.is_mat || feature_output.is_mat) {
-        _init_feature_mat_add_layer(key, layer);
+        _init_par_block_col_major_add_layer(key, layer);
         return;
     }
     auto add2d = MakeU<AddLayer>(*ckks_parameters_.at(feature_input0.ckks_parameter_id));
@@ -482,14 +482,14 @@ void InitInferenceProcess::_init_add_layer(const string& key, const json& layer,
     _prepare_layer(key, move(add2d));
 }
 
-void InitInferenceProcess::_init_feature_mat_add_layer(const string& key, const json& layer) {
+void InitInferenceProcess::_init_par_block_col_major_add_layer(const string& key, const json& layer) {
     FeatureNode feature_input0(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_input1(json_features[layer["feature_input"][1].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     if (!feature_input0.is_mat || !feature_input1.is_mat || !feature_output.is_mat) {
         throw runtime_error("feature_mat add expects feature_mat inputs and output");
     }
-    auto add_mat = MakeU<FeatureMatAddLayer>(*ckks_parameters_.at(feature_input0.ckks_parameter_id));
+    auto add_mat = MakeU<ParBlockColMajorAdd>(*ckks_parameters_.at(feature_input0.ckks_parameter_id));
     _prepare_layer(key, move(add_mat));
 }
 
@@ -1042,8 +1042,8 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 if (feature_input0_node.is_mat && feature_input1_node.is_mat) {
                     const FeatureMatEncrypted& input0 = dynamic_cast<const FeatureMatEncrypted&>(feat0);
                     const FeatureMatEncrypted& input1 = dynamic_cast<const FeatureMatEncrypted&>(feat1);
-                    result =
-                        MakeU<FeatureMatEncrypted>(fp->get_layer<FeatureMatAddLayer>(key).run(context, input0, input1));
+                    result = MakeU<FeatureMatEncrypted>(
+                        fp->get_layer<ParBlockColMajorAdd>(key).run(context, input0, input1));
                 } else if (feature_input0_node.is_mat || feature_input1_node.is_mat) {
                     throw runtime_error("add2d: feature_mat inputs must both be feature_mat");
                 } else if (feat0.dim == 2 && feat1.dim == 2) {
@@ -1869,7 +1869,7 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 if (feature_input0.is_mat && feature_input1.is_mat) {
                     auto& input0 = p_feature_mat_x[feature_input[0]];
                     auto& input1 = p_feature_mat_x[feature_input[1]];
-                    result_mat = fp->get_layer<FeatureMatAddLayer>(key).run_plaintext(input0, input1);
+                    result_mat = fp->get_layer<ParBlockColMajorAdd>(key).run_plaintext(input0, input1);
                 } else if (feature_input0.is_mat || feature_input1.is_mat) {
                     throw runtime_error("add2d: feature_mat inputs must both be feature_mat");
                 } else if (feature_input0.dim == 2) {

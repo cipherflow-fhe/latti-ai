@@ -51,5 +51,5 @@ class AddLayer:
         return result
 
 
-class FeatureMatAddLayer(AddLayer):
+class ParBlockColMajorAdd(AddLayer):
     pass
