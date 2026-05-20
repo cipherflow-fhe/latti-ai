@@ -2565,8 +2565,30 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool1d_layer", "", He
 
         Avgpool1DLayer avgpool(s, stride);
 
-        Feature1DEncrypted output_feature = avgpool.run_adaptive_avgpool(this->context, input_feature);
+        Feature1DEncrypted output_feature(&this->context, init_level, skip * stride, stride);
+        for (uint32_t i = 0; i < n_ct; i++) {
+            output_feature.data.push_back(this->context.new_ciphertext(init_level, this->param.get_default_scale()));
+        }
 
+        fs::path project_path = base_path / ("CKKS_adaptive_avgpool1d/stride_" + to_string(stride)) /
+                                ("ch_" + to_string(n_channel) + "_shape_" + to_string(s)) /
+                                ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_feature.data});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output_feature.data});
+        }
+        this->run(project_path, cxx_args);
+
+        output_feature.skip = skip * stride;
+        output_feature.invalid_fill = stride;
+        output_feature.n_channel = n_channel;
+        output_feature.n_channel_per_ct = n_channel_per_ct;
+        output_feature.shape = s / stride;
         auto result_mg = output_feature.unpack_multiplexed();
 
         auto result_expected = avgpool.run_plaintext(input_array);
@@ -2598,7 +2620,6 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_avgpool1d_layer", "",
 
     auto run_multiplexed_avgpool1d_test = [&](uint32_t n_channel, uint32_t s, uint32_t stride) {
         uint32_t n_channel_per_ct = div_ceil(this->n_slot, s);
-        uint32_t n_ct = div_ceil(n_channel, n_channel_per_ct);
 
         Array<double, 2> input_array = gen_random_array<2>({n_channel, s}, 1.0);
 
@@ -2608,8 +2629,34 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_avgpool1d_layer", "",
         Avgpool1DLayer avgpool(s, stride);
         avgpool.prepare_weight(this->param, n_channel_per_ct, n_channel, init_level, skip, s);
 
-        Feature1DEncrypted output_feature = avgpool.run_multiplexed_avgpool(this->context, input_feature);
+        uint32_t out_channels_per_ct = n_channel_per_ct * stride;
+        uint32_t n_packed_out_channel = div_ceil(n_channel, out_channels_per_ct);
+        Feature1DEncrypted output_feature(&this->context, init_level - 1, skip * stride);
+        for (uint32_t i = 0; i < n_packed_out_channel; i++) {
+            output_feature.data.push_back(
+                this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+        }
 
+        fs::path project_path = base_path / ("CKKS_avgpool1d/stride_" + to_string(stride)) /
+                                ("ch_" + to_string(n_channel) + "_shape_" + to_string(s)) /
+                                ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_feature.data});
+            else if (name == "select_tensor_pt")
+                cxx_args.push_back({name, &avgpool.select_tensor_pt});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output_feature.data});
+        }
+        this->run(project_path, cxx_args);
+
+        output_feature.skip = skip * stride;
+        output_feature.n_channel = n_channel;
+        output_feature.n_channel_per_ct = n_channel_per_ct * stride;
+        output_feature.shape = s / stride;
         auto result_mg = output_feature.unpack_multiplexed();
 
         auto result_expected = avgpool.run_plaintext_multiplexed(input_array);
@@ -2843,7 +2890,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_1d_multiplexed", "", HeteroPro
         uint32_t n_out;
     };
     vector<Cfg> configs = {
-        {4, 2, 1, 8, 4}, {4, 4, 1, 8, 4}, {4, 4, 2, 8, 4}, {8, 2, 1, 16, 8}, {8, 4, 2, 16, 8}, {8, 8, 4, 8, 4},
+        {32, 2, 1, 16, 8},  {32, 2, 1, 64, 32}, {32, 4, 1, 32, 16}, {32, 4, 2, 32, 16},
+        {32, 4, 4, 32, 16}, {64, 2, 1, 16, 8},  {64, 4, 2, 64, 32}, {64, 8, 4, 64, 32},
     };
 
     FOR_EACH_SECTION(auto& cfg, configs,
@@ -2882,8 +2930,33 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_1d_multiplexed", "", HeteroPro
         DensePackedLayer dense(this->context.get_parameter(), move(weight), move(bias), n_block_per_ct, init_level, 0);
         dense.prepare_weight_for_1d_multiplexed(cfg.shape, cfg.skip, cfg.invalid_fill);
 
-        // Run
-        Feature0DEncrypted output = dense.run_1d_multiplexed(this->context, input_0d);
+        Feature0DEncrypted output(&this->context, init_level - 1);
+        output.skip = block_size;
+        output.n_channel = cfg.n_out;
+        output.n_channel_per_ct = n_block_per_ct;
+        for (uint32_t i = 0; i < n_packed_out; i++) {
+            output.data.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+        }
+
+        fs::path project_path =
+            base_path /
+            ("CKKS_fc_1d_multiplexed_shape" + to_string(cfg.shape) + "_skip" + to_string(cfg.skip) + "_inv" +
+             to_string(cfg.invalid_fill) + "_cin" + to_string(cfg.n_channel) + "_cout" + to_string(cfg.n_out)) /
+            ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_0d.data});
+            else if (name == "weight_pt")
+                cxx_args.push_back({name, &dense.weight_pt});
+            else if (name == "bias_pt")
+                cxx_args.push_back({name, &dense.bias_pt});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output.data});
+        }
+        this->run(project_path, cxx_args);
 
         // Unpack and compare
         Array<double, 1> output_mg = output.unpack();
