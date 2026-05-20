@@ -101,6 +101,7 @@ public:
     json json_data;
     json json_features;
     json json_layers;
+    json layernorm_param;
     bool is_lazy = false;
     // Time statistics
     double total_fhe_time = 0.0;
@@ -171,6 +172,13 @@ private:
     void _init_parcpmm_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_parccmm_layer(const std::string& key, const json& layer);
     void _init_partranspose_layer(const std::string& key, const json& layer);
+    void _init_pcmgamma_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pcmpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pcmstats_layer(const std::string& key, const json& layer);
+    void _init_pcmcenter_layer(const std::string& key, const json& layer);
+    void _init_pcminit_layer(const std::string& key, const json& layer);
+    void _init_pcmgs_layer(const std::string& key, const json& layer);
+    void _init_pcmaffine_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     template <typename T> void _prepare_layer(const std::string& key, UPtr<T> layer) {
         if (is_lazy) {
             layer->prepare_weight_lazy();

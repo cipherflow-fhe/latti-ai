@@ -38,6 +38,9 @@ public:
     void prepare_weight();
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
+    Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
+
+    ls::CkksPlaintextRingt generate_gamma_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t bj, uint32_t g) const;
 
 private:
     uint32_t m_, cols_per_head_, d_, n_slot_;
@@ -71,6 +74,7 @@ public:
     void prepare_weight();
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
+    Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
     ls::CkksPlaintextRingt generate_coeff_pt(ls::CkksContext& ctx,
                                              uint32_t coeff_idx,

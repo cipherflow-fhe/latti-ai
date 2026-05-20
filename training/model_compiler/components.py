@@ -287,6 +287,11 @@ class GlobalConfig:
             cls._instance.single_thread = config_dict.get('SINGLE_THREAD', False)
             cls._instance.n_heads = config_dict.get('N_HEADS', 1)
             cls._instance.matmul_block_size = config_dict.get('MATMUL_BLOCK_SIZE', 8)
+            cls._instance.layernorm_var_std_bound = config_dict.get('LAYERNORM_VAR_STD_BOUND', 4.0)
+            cls._instance.layernorm_minimax_init_coeffs = config_dict.get(
+                'LAYERNORM_MINIMAX_INIT_COEFFS',
+                [6.19067182, -16.15885111, 11.52830778],
+            )
 
         return cls._instance
 
