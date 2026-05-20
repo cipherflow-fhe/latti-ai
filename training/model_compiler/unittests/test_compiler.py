@@ -586,6 +586,11 @@ class TestSingleLayer(CompilerTestBase):
         )
         return graph, score
 
+    def test_linear_gelu(self):
+        model = nn_modules.LinearGelu()
+        graph, _ = self._export_and_compile(model, (197, 192), style='multiplexed', feature_mat=True)
+        
+        
 class TestLayerInteraction(CompilerTestBase):
     def test_mismatched_scale(self):
         model = nn_modules.MismatchedScale()

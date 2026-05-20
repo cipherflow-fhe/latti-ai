@@ -287,6 +287,7 @@ class GlobalConfig:
             cls._instance.single_thread = config_dict.get('SINGLE_THREAD', False)
             cls._instance.n_heads = config_dict.get('N_HEADS', 1)
             cls._instance.matmul_block_size = config_dict.get('MATMUL_BLOCK_SIZE', 8)
+            cls._instance.base_feat_dim = config_dict.get('BASE_FEAT_DIM', 0)
             cls._instance.layernorm_var_std_bound = config_dict.get('LAYERNORM_VAR_STD_BOUND', 4.0)
             cls._instance.layernorm_minimax_init_coeffs = config_dict.get(
                 'LAYERNORM_MINIMAX_INIT_COEFFS',
@@ -783,7 +784,7 @@ class LayerAbstractGraph:
             elif layer_type == 'parcpmm':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', '')
-                compute_node.out_features = layer_json.get('out_features', 0)
+                compute_node.weight_shape = layer_json.get('weight_shape', [])
 
             elif layer_type == 'partranspose':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
@@ -794,6 +795,11 @@ class LayerAbstractGraph:
             elif layer_type == 'pcmgamma':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', '')
+
+            elif layer_type == 'PolyActRN':
+                compute_node = ComputeNode(key, layer_type, 1, 1)
+                compute_node.path = layer_json.get('weight_path', '')
+                compute_node.order = layer_json.get('order', 4)
 
             elif layer_type == 'pcmpoly':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
@@ -1068,7 +1074,7 @@ class LayerAbstractGraph:
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                     'weight_path': layer.path,
-                    'out_features': layer.out_features,
+                    'weight_shape': layer.weight_shape,
                 }
             if layer_type == 'partranspose':
                 layers[layer_id] = {
@@ -1088,6 +1094,7 @@ class LayerAbstractGraph:
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                     'weight_path': layer.path,
+                    'K': getattr(layer, 'K', 1),
                 }
             if layer_type == 'pcmpoly':
                 layers[layer_id] = {
@@ -1096,6 +1103,7 @@ class LayerAbstractGraph:
                     'feature_output': output_feature_ids,
                     'weight_path': layer.path,
                     'order': layer.order,
+                    'K': getattr(layer, 'K', 1),
                 }
             if layer_type == 'pcmstats':
                 layers[layer_id] = {
