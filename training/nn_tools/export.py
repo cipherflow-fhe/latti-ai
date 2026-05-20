@@ -527,7 +527,27 @@ def export_h5_from_onnx(
         }
 
     # ------------------------------------------------------------------ #
-    # 3. Load JSON layer dict                                             #
+    # 3. Parse PolyActRNPoly node attributes                              #
+    # ------------------------------------------------------------------ #
+    def _format_id(onnx_id: str) -> str:
+        import re
+
+        return re.sub('[:/.]', '_', onnx_id)
+
+    pcmpoly_node_attrs = {}
+    for node in onnx_model.graph.node:
+        if node.op_type != 'PolyActRNPoly':
+            continue
+        attr = {a.name: a for a in node.attribute}
+        degree_attr = attr.get('degree') or attr.get('degree_i')
+        activation_attr = attr.get('activation') or attr.get('activation_s')
+        pcmpoly_node_attrs[_format_id(node.name)] = {
+            'degree': degree_attr.i if degree_attr is not None else 4,
+            'activation_name': activation_attr.s.decode() if activation_attr is not None else 'gelu',
+        }
+
+    # ------------------------------------------------------------------ #
+    # 4. Load JSON layer dict                                             #
     # ------------------------------------------------------------------ #
     with open(json_path) as f:
         json_data = _json.load(f)
@@ -611,6 +631,18 @@ def export_h5_from_onnx(
             if verbose:
                 log.info('ParCPMM:                  %s', wp)
 
+        elif ltype == 'pcmaffine':
+            wp = layer.get('weight_path', '')
+            bp = layer.get('bias_path', '')
+            if wp not in onnx_weights:
+                log.warning('pcmaffine weight not in ONNX: %s', wp)
+                continue
+            out[wp] = onnx_weights[wp].copy()
+            if bp:
+                out[bp] = onnx_weights[bp].copy() if bp in onnx_weights else np.zeros_like(out[wp])
+            if verbose:
+                log.info('PCMAffine:                %s', wp)
+
         elif ltype == 'polyact':
             wp = layer.get('weight_path', '')
             if layer_key not in polyact_info:
@@ -632,6 +664,28 @@ def export_h5_from_onnx(
                     'Polyact:                  %s  act=%s  (%dx%d)',
                     wp,
                     layer.get('activation', 'relu'),
+                    coeffs.shape[0],
+                    coeffs.shape[1],
+                )
+
+        elif ltype == 'pcmpoly':
+            wp = layer.get('weight_path', '')
+            if layer_key not in pcmpoly_node_attrs:
+                log.warning('pcmpoly ONNX node attrs missing: %s', layer_key)
+                continue
+            pinfo = pcmpoly_node_attrs[layer_key]
+            feat_in = json_data['feature'][layer['feature_input'][0]]
+            n_cols = int(feat_in['shape'][1])
+            hermite_coeffs = get_hermite_coeffs_for_module(
+                _resolve_activation_cls(pinfo['activation_name']), pinfo['degree']
+            )
+            coeffs = _compute_poly_coeffs(np.ones(n_cols), 1.0, 0.0, hermite_coeffs)
+            out[wp] = coeffs.flatten()
+            if verbose:
+                log.info(
+                    'PCMPoly:                  %s  act=%s  (%dx%d)',
+                    wp,
+                    pinfo['activation_name'],
                     coeffs.shape[0],
                     coeffs.shape[1],
                 )

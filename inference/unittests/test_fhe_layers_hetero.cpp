@@ -1574,10 +1574,15 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
                     return layer->generate_psi_wkd_pt(*ctx_ptr, attrs.value("i", 1));
                 throw std::runtime_error("encode_pt: unknown type for ParBlockColMajorCCMM: " + type);
             }
+            if (op_class == "ParBlockColMajorPolyActRNGamma") {
+                auto* layer = static_cast<ParBlockColMajorPolyActRNGamma*>(layer_ptr);
+                return layer->generate_gamma_pt(*ctx_ptr, attrs.value("mb", 0), attrs.value("bj", 0),
+                                                attrs.value("g", 0));
+            }
             if (op_class == "ParBlockColMajorPolyActRNPoly") {
                 auto* layer = static_cast<ParBlockColMajorPolyActRNPoly*>(layer_ptr);
-                return layer->generate_coeff_pt(*ctx_ptr, attrs.value("coeff_idx", 0), attrs.value("bi", 0),
-                                                attrs.value("bj", 0), attrs.value("g", 0));
+                return layer->generate_coeff_pt(*ctx_ptr, attrs.value("coeff_idx", 0), attrs.value("mb", 0),
+                                                attrs.value("bi", 0), attrs.value("bj", 0), attrs.value("g", 0));
             }
             if (op_class == "ParBlockColMajorLNStats") {
                 auto* layer = static_cast<ParBlockColMajorLNStats*>(layer_ptr);
@@ -2560,8 +2565,30 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool1d_layer", "", He
 
         Avgpool1DLayer avgpool(s, stride);
 
-        Feature1DEncrypted output_feature = avgpool.run_adaptive_avgpool(this->context, input_feature);
+        Feature1DEncrypted output_feature(&this->context, init_level, skip * stride, stride);
+        for (uint32_t i = 0; i < n_ct; i++) {
+            output_feature.data.push_back(this->context.new_ciphertext(init_level, this->param.get_default_scale()));
+        }
 
+        fs::path project_path = base_path / ("CKKS_adaptive_avgpool1d/stride_" + to_string(stride)) /
+                                ("ch_" + to_string(n_channel) + "_shape_" + to_string(s)) /
+                                ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_feature.data});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output_feature.data});
+        }
+        this->run(project_path, cxx_args);
+
+        output_feature.skip = skip * stride;
+        output_feature.invalid_fill = stride;
+        output_feature.n_channel = n_channel;
+        output_feature.n_channel_per_ct = n_channel_per_ct;
+        output_feature.shape = s / stride;
         auto result_mg = output_feature.unpack_multiplexed();
 
         auto result_expected = avgpool.run_plaintext(input_array);
@@ -2593,7 +2620,6 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_avgpool1d_layer", "",
 
     auto run_multiplexed_avgpool1d_test = [&](uint32_t n_channel, uint32_t s, uint32_t stride) {
         uint32_t n_channel_per_ct = div_ceil(this->n_slot, s);
-        uint32_t n_ct = div_ceil(n_channel, n_channel_per_ct);
 
         Array<double, 2> input_array = gen_random_array<2>({n_channel, s}, 1.0);
 
@@ -2603,8 +2629,34 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_avgpool1d_layer", "",
         Avgpool1DLayer avgpool(s, stride);
         avgpool.prepare_weight(this->param, n_channel_per_ct, n_channel, init_level, skip, s);
 
-        Feature1DEncrypted output_feature = avgpool.run_multiplexed_avgpool(this->context, input_feature);
+        uint32_t out_channels_per_ct = n_channel_per_ct * stride;
+        uint32_t n_packed_out_channel = div_ceil(n_channel, out_channels_per_ct);
+        Feature1DEncrypted output_feature(&this->context, init_level - 1, skip * stride);
+        for (uint32_t i = 0; i < n_packed_out_channel; i++) {
+            output_feature.data.push_back(
+                this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+        }
 
+        fs::path project_path = base_path / ("CKKS_avgpool1d/stride_" + to_string(stride)) /
+                                ("ch_" + to_string(n_channel) + "_shape_" + to_string(s)) /
+                                ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_feature.data});
+            else if (name == "select_tensor_pt")
+                cxx_args.push_back({name, &avgpool.select_tensor_pt});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output_feature.data});
+        }
+        this->run(project_path, cxx_args);
+
+        output_feature.skip = skip * stride;
+        output_feature.n_channel = n_channel;
+        output_feature.n_channel_per_ct = n_channel_per_ct * stride;
+        output_feature.shape = s / stride;
         auto result_mg = output_feature.unpack_multiplexed();
 
         auto result_expected = avgpool.run_plaintext_multiplexed(input_array);
@@ -2838,7 +2890,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_1d_multiplexed", "", HeteroPro
         uint32_t n_out;
     };
     vector<Cfg> configs = {
-        {4, 2, 1, 8, 4}, {4, 4, 1, 8, 4}, {4, 4, 2, 8, 4}, {8, 2, 1, 16, 8}, {8, 4, 2, 16, 8}, {8, 8, 4, 8, 4},
+        {32, 2, 1, 16, 8},  {32, 2, 1, 64, 32}, {32, 4, 1, 32, 16}, {32, 4, 2, 32, 16},
+        {32, 4, 4, 32, 16}, {64, 2, 1, 16, 8},  {64, 4, 2, 64, 32}, {64, 8, 4, 64, 32},
     };
 
     FOR_EACH_SECTION(auto& cfg, configs,
@@ -2877,8 +2930,33 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_1d_multiplexed", "", HeteroPro
         DensePackedLayer dense(this->context.get_parameter(), move(weight), move(bias), n_block_per_ct, init_level, 0);
         dense.prepare_weight_for_1d_multiplexed(cfg.shape, cfg.skip, cfg.invalid_fill);
 
-        // Run
-        Feature0DEncrypted output = dense.run_1d_multiplexed(this->context, input_0d);
+        Feature0DEncrypted output(&this->context, init_level - 1);
+        output.skip = block_size;
+        output.n_channel = cfg.n_out;
+        output.n_channel_per_ct = n_block_per_ct;
+        for (uint32_t i = 0; i < n_packed_out; i++) {
+            output.data.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+        }
+
+        fs::path project_path =
+            base_path /
+            ("CKKS_fc_1d_multiplexed_shape" + to_string(cfg.shape) + "_skip" + to_string(cfg.skip) + "_inv" +
+             to_string(cfg.invalid_fill) + "_cin" + to_string(cfg.n_channel) + "_cout" + to_string(cfg.n_out)) /
+            ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_0d.data});
+            else if (name == "weight_pt")
+                cxx_args.push_back({name, &dense.weight_pt});
+            else if (name == "bias_pt")
+                cxx_args.push_back({name, &dense.bias_pt});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output.data});
+        }
+        this->run(project_path, cxx_args);
 
         // Unpack and compare
         Array<double, 1> output_mg = output.unpack();
@@ -3066,104 +3144,128 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
     }
 }
 
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_layernorm", "", HeteroProcessors) {
-    // LayerNorm needs higher levels; use local context with N=32768
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_block_col_major_layernorm",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    fs::path server_dir =
+        base_path / "CKKS_par_block_col_major_layernorm" / "seq_197_heads_3_dim_64" / "level_11" / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
     const int N = 32768;
     CkksParameter param = CkksParameter::create_parameter(N);
     CkksContext context = CkksContext::create_random_context(param);
     context.gen_rotation_keys();
-    double default_scale = param.get_default_scale();
 
-    auto run_par_ln_test = [&](uint32_t d, uint32_t seq_len, uint32_t n_heads, uint32_t head_dim, uint32_t num_iters,
-                               int init_level) {
-        double eps = 1e-5;
-        double var_std_bound = 4.0;
-        double inv_var = 1.0 / (var_std_bound * var_std_bound);
-        double inv_std = 1.0 / var_std_bound;
-        double c0 = 6.19067182, c1 = -16.15885111, c2 = 11.52830778;
-        uint32_t total_dim = n_heads * head_dim;
+    const uint32_t seq_len = 197, n_heads = 3, head_dim = 64, d = 64, num_iters = 1;
+    const uint32_t total_dim = n_heads * head_dim;
+    const int init_level = 11;
+    const double eps = 1e-5;
+    const double var_std_bound = 4.0;
+    const double inv_var = 1.0 / (var_std_bound * var_std_bound);
+    const double inv_std = 1.0 / var_std_bound;
+    const double c0 = 6.19067182, c1 = -16.15885111, c2 = 11.52830778;
 
-        // Generate random data
-        Array<double, 2> X_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
-        Array<double, 1> gamma = gen_random_array<1>({total_dim}, 0.5);
-        Array<double, 1> beta = gen_random_array<1>({total_dim}, 0.1);
+    auto X_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
+    auto gamma = gen_random_array<1>({total_dim}, 0.5);
+    auto beta = gen_random_array<1>({total_dim}, 0.1);
 
-        // Encrypt using par_block_col_major_pack
-        FeatureMatEncrypted X_enc(&context, init_level);
-        X_enc.shape = {seq_len, head_dim};
-        X_enc.matmul_block_size = d;
-        X_enc.par_block_col_major_pack(X_mat, d, n_heads, false, default_scale);
-
-        // Phase 1a: Stats (a_cts only)
-        ParBlockColMajorLNStats stats(param, {seq_len, total_dim}, d, n_heads, init_level, eps, inv_var);
-        stats.prepare_weight();
-        auto a_cts = stats.run(context, X_enc);
-
-        // Phase 1b: XCentered
-        ParBlockColMajorLNXCentered xc(param, {seq_len, total_dim}, d, n_heads, init_level);
-        xc.prepare_weight();
-        auto x_centered = xc.run(context, X_enc);
-
-        // Phase 2: Minimax Init (a is now at init_level-4 due to par Stats extra mask level)
-        ParBlockColMajorLNMinimaxInit minimax(param, d, init_level - 4, c0, c1, c2);
-        minimax.prepare_weight();
-        auto y_cts = minimax.run(context, a_cts);
-
-        // Phase 3: Goldschmidt (3 levels per iteration, was 4)
+    Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
+    for (uint32_t i = 0; i < seq_len; i++) {
+        double sum_x = 0.0, sum_x2 = 0.0;
+        for (uint32_t j = 0; j < total_dim; j++) {
+            double v = X_mat.get(i, j);
+            sum_x += v;
+            sum_x2 += v * v;
+        }
+        double mean = sum_x / total_dim;
+        double var = sum_x2 / total_dim - mean * mean;
+        double a = (var + eps) * inv_var;
+        double y = c0 + c1 * a + c2 * a * a;
         for (uint32_t k = 0; k < num_iters; k++) {
-            uint32_t y_level = init_level - 6 - 3 * k;
-            ParBlockColMajorLNGoldschmidt gold(param, d, y_level);
-            gold.prepare_weight();
-            y_cts = gold.run(context, y_cts, a_cts);
+            y = 0.5 * y * (3.0 - a * y * y);
         }
-
-        // Phase 4: Affine
-        uint32_t y_final_level = init_level - 6 - 3 * num_iters;
-        ParBlockColMajorLNAffine affine(param, {seq_len, total_dim}, d, n_heads, y_final_level, inv_std, gamma.copy(),
-                                        beta.copy());
-        affine.prepare_weight();
-        FeatureMatEncrypted result_enc = affine.run(context, x_centered, y_cts);
-
-        // Unpack
-        auto result = result_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
-
-        // Compute expected (full-dimension normalization across all heads)
-        Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
-        for (uint32_t i = 0; i < seq_len; i++) {
-            double sum_x = 0.0, sum_x2 = 0.0;
-            for (uint32_t j = 0; j < total_dim; j++) {
-                double v = X_mat.get(i, j);
-                sum_x += v;
-                sum_x2 += v * v;
-            }
-            double mean = sum_x / total_dim;
-            double var = sum_x2 / total_dim - mean * mean;
-            double a = (var + eps) * inv_var;
-
-            double y = c0 + c1 * a + c2 * a * a;
-            for (uint32_t k = 0; k < num_iters; k++) {
-                y = 0.5 * y * (3.0 - a * y * y);
-            }
-
-            for (uint32_t j = 0; j < total_dim; j++) {
-                double x_norm = (X_mat.get(i, j) - mean) * inv_std * y;
-                expected.set(i, j, x_norm * gamma.get(j) + beta.get(j));
-            }
+        for (uint32_t j = 0; j < total_dim; j++) {
+            double x_norm = (X_mat.get(i, j) - mean) * inv_std * y;
+            expected.set(i, j, x_norm * gamma.get(j) + beta.get(j));
         }
+    }
 
-        print_double_message(result.to_array_1d().data(), "output_mg", 10);
-        print_double_message(expected.to_array_1d().data(), "output_expected", 10);
+    auto stats_layer =
+        std::make_shared<ParBlockColMajorLNStats>(param, Duo{seq_len, total_dim}, d, n_heads, init_level, eps, inv_var);
+    auto xcenter_layer =
+        std::make_shared<ParBlockColMajorLNXCentered>(param, Duo{seq_len, total_dim}, d, n_heads, init_level);
+    auto minimax_layer = std::make_shared<ParBlockColMajorLNMinimaxInit>(param, d, init_level - 4, c0, c1, c2);
+    auto gold_layer = std::make_shared<ParBlockColMajorLNGoldschmidt>(param, d, init_level - 6);
+    auto affine_layer = std::make_shared<ParBlockColMajorLNAffine>(param, Duo{seq_len, total_dim}, d, n_heads,
+                                                                   init_level - 9, inv_std, gamma.copy(), beta.copy());
 
-        auto compare_result = compare(expected, result);
-        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
-                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
-        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
-        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.shape = {seq_len, head_dim};
+    X_enc.matmul_block_size = d;
+    X_enc.par_block_col_major_pack(X_mat, d, n_heads, false, param.get_default_scale());
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> stats_data, xcenter_data, minimax_data, gold_data, affine_data;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    stats_data.emplace_back(static_cast<void*>(stats_layer.get()));
+    xcenter_data.emplace_back(static_cast<void*>(xcenter_layer.get()));
+    minimax_data.emplace_back(static_cast<void*>(minimax_layer.get()));
+    gold_data.emplace_back(static_cast<void*>(gold_layer.get()));
+    affine_data.emplace_back(static_cast<void*>(affine_layer.get()));
+
+    uint32_t num_block_rows = div_ceil(seq_len, d);
+    uint32_t num_block_cols = div_ceil(head_dim, d);
+    uint32_t n_h_padded = 1;
+    while (n_h_padded < n_heads)
+        n_h_padded <<= 1;
+    uint32_t n_slot = param.get_n() / 2;
+    uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+    uint32_t n_out = num_block_rows * num_block_cols * G;
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(0, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_ln_stats_layer", &stats_data},
+        {"_ln_xcenter_layer", &xcenter_data},
+        {"_ln_minimax_layer", &minimax_data},
+        {"_ln_gold_layer", &gold_data},
+        {"_ln_affine_layer", &affine_data},
+        {"output", &out_cts},
     };
 
-    SECTION("d=64, seq=197, heads=3, head_dim=64, iters=1") {
-        run_par_ln_test(64, 197, 3, 64, 1, 11);
+    std::unordered_map<std::string, ExecutorFunc> executors;
+    executors["encode_pt"] = make_block_col_major_encode_pt_executor();
+    if constexpr (is_same_v<TestType, ProcessorCpu>) {
+        FheTaskCpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        task.run(&context, cxx_args);
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    } else if constexpr (is_same_v<TestType, ProcessorGpu>) {
+        FheTaskGpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        task.run(&context, cxx_args);
+#endif
     }
+
+    FeatureMatEncrypted out_enc(&context, 0);
+    for (auto& ct : out_cts)
+        out_enc.data.push_back(std::move(ct));
+    out_enc.shape = {seq_len, head_dim};
+    out_enc.matmul_block_size = d;
+    auto result = out_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
+
+    print_double_message(result.to_array_1d().data(), "output_mg", 10);
+    print_double_message(expected.to_array_1d().data(), "output_expected", 10);
+
+    auto compare_result = compare(expected, result);
+    std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+              << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
 }
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_polyactrn", "", HeteroProcessors) {
@@ -3226,38 +3328,24 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_polyactrn", "", H
     }
 }
 
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_polyactrn", "", HeteroProcessors) {
-    auto run_par_polyactrn_test = [&](uint32_t d, uint32_t seq_len, uint32_t n_heads, uint32_t head_dim,
-                                      uint32_t degree, int init_level) {
-        uint32_t total_dim = n_heads * head_dim;
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_block_col_major_polyactrn",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
 
-        // Generate random data
+    auto run_par_polyactrn_test = [&](uint32_t degree, int init_level) {
+        fs::path server_dir = base_path / "CKKS_par_block_col_major_polyactrn" / ("degree_" + to_string(degree)) /
+                              ("level_" + to_string(init_level)) / "server";
+        if (!fs::exists(server_dir / "mega_ag.json"))
+            return;
+
+        const uint32_t d = 64, seq_len = 197, n_heads = 3, head_dim = 64;
+        const uint32_t total_dim = n_heads * head_dim;
+
         Array<double, 2> X_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
         Array<double, 1> gamma = gen_random_array<1>({total_dim}, 0.5);
         Array<double, 2> coeffs = gen_random_array<2>({degree + 1, total_dim}, 0.3);
-
-        // Encrypt using par_block_col_major_pack
-        FeatureMatEncrypted X_enc(&this->context, init_level);
-        X_enc.shape = {seq_len, head_dim};
-        X_enc.matmul_block_size = d;
-        X_enc.par_block_col_major_pack(X_mat, d, n_heads, false, this->default_scale);
-
-        // Phase 1: Gamma scaling
-        ParBlockColMajorPolyActRNGamma gamma_layer(this->param, {seq_len, total_dim}, d, n_heads, init_level,
-                                                   gamma.copy());
-        gamma_layer.prepare_weight();
-        auto gamma_result = gamma_layer.run(this->context, X_enc);
-
-        // Phase 2: Polynomial
-        uint32_t poly_level = init_level - 1;
-        ParBlockColMajorPolyActRNPoly poly(this->param, {seq_len, total_dim}, d, n_heads, poly_level, coeffs.copy(),
-                                           degree);
-        poly.prepare_weight();
-        auto result_enc = poly.run(this->context, gamma_result);
-
-        // Unpack
-        auto result = result_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
-
         // Compute expected: poly(gamma * x)
         Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
         for (uint32_t i = 0; i < seq_len; i++) {
@@ -3273,21 +3361,164 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_col_major_polyactrn", "
             }
         }
 
-        print_double_message(result.to_array_1d().data(), "output_mg", 10);
-        print_double_message(expected.to_array_1d().data(), "output_expected", 10);
+        auto gamma_layer = std::make_shared<ParBlockColMajorPolyActRNGamma>(res.param, Duo{seq_len, total_dim}, d,
+                                                                            n_heads, 1, init_level, gamma.copy());
+        auto poly_layer = std::make_shared<ParBlockColMajorPolyActRNPoly>(
+            res.param, Duo{seq_len, total_dim}, d, n_heads, 1, init_level - 1, coeffs.copy(), degree);
 
-        auto compare_result = compare(expected, result);
-        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
-                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
-        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
-        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+        FeatureMatEncrypted X_enc(&res.context, init_level);
+        X_enc.shape = {seq_len, head_dim};
+        X_enc.matmul_block_size = d;
+        X_enc.par_block_col_major_pack(X_mat, d, n_heads, false, res.param.get_default_scale());
+
+        vector<CkksCiphertext> in_cts, out_cts;
+        vector<CustomData> gamma_data, poly_data;
+        for (auto& ct : X_enc.data)
+            in_cts.push_back(ct.copy());
+        gamma_data.emplace_back(static_cast<void*>(gamma_layer.get()));
+        poly_data.emplace_back(static_cast<void*>(poly_layer.get()));
+
+        uint32_t num_block_rows = div_ceil(seq_len, d);
+        uint32_t num_block_cols = div_ceil(head_dim, d);
+        uint32_t n_h_padded = 1;
+        while (n_h_padded < n_heads)
+            n_h_padded <<= 1;
+        uint32_t n_slot = res.param.get_n() / 2;
+        uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+        uint32_t n_out = num_block_rows * num_block_cols * G;
+        int out_level = init_level - 1 - (degree == 4 ? 3 : 2);
+        for (uint32_t i = 0; i < n_out; i++)
+            out_cts.push_back(res.context.new_ciphertext(out_level, res.param.get_default_scale()));
+
+        string gamma_layer_id = "_gamma_layer_deg" + to_string(degree);
+        string poly_layer_id = "_poly_layer_deg" + to_string(degree);
+        vector<CxxVectorArgument> cxx_args = {
+            {"input", &in_cts},
+            {gamma_layer_id, &gamma_data},
+            {poly_layer_id, &poly_data},
+            {"output", &out_cts},
+        };
+        run_block_col_major_e2e_test(*this, server_dir, cxx_args, expected, {seq_len, head_dim}, d, n_heads, true,
+                                     out_cts);
     };
 
     SECTION("degree=2, d=64, seq=197, heads=3, head_dim=64") {
-        run_par_polyactrn_test(64, 197, 3, 64, 2, 3);
+        run_par_polyactrn_test(2, 3);
     }
     SECTION("degree=4, d=64, seq=197, heads=3, head_dim=64") {
-        run_par_polyactrn_test(64, 197, 3, 64, 4, 4);
+        run_par_polyactrn_test(4, 4);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_cpmm_expand_polyactrn_reduce",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+
+    auto run_test = [&](uint32_t d, uint32_t seq_len, uint32_t n_heads, uint32_t head_dim, uint32_t K, uint32_t degree,
+                        int init_level) {
+        fs::path server_dir = base_path /
+                              ("CKKS_par_cpmm_expand_polyactrn_reduce_m" + to_string(seq_len) + "_heads" +
+                               to_string(n_heads) + "_dim" + to_string(head_dim) + "_K" + to_string(K)) /
+                              ("degree_" + to_string(degree)) / ("level_" + to_string(init_level)) / "server";
+        if (!fs::exists(server_dir / "mega_ag.json"))
+            return;
+
+        uint32_t total_dim = n_heads * head_dim;
+        uint32_t expanded_dim = K * total_dim;
+
+        Array<double, 2> A_mat = gen_random_array<2>({seq_len, total_dim}, 0.5);
+        Array<double, 2> W_expand = gen_random_array<2>({total_dim, expanded_dim}, 0.1);
+        Array<double, 1> gamma = gen_random_array<1>({expanded_dim}, 0.3);
+        Array<double, 2> coeffs = gen_random_array<2>({degree + 1, expanded_dim}, 0.2);
+        Array<double, 2> W_reduce = gen_random_array<2>({expanded_dim, total_dim}, 0.1);
+
+        std::vector<double> mid(seq_len * expanded_dim, 0.0);
+        for (uint32_t i = 0; i < seq_len; i++)
+            for (uint32_t j = 0; j < expanded_dim; j++) {
+                double s = 0;
+                for (uint32_t k = 0; k < total_dim; k++)
+                    s += A_mat.get(i, k) * W_expand.get(k, j);
+                mid[i * expanded_dim + j] = s;
+            }
+
+        std::vector<double> poly_out(seq_len * expanded_dim, 0.0);
+        for (uint32_t i = 0; i < seq_len; i++)
+            for (uint32_t j = 0; j < expanded_dim; j++) {
+                double gx = gamma.get(j) * mid[i * expanded_dim + j];
+                double val = 0.0, gx_pow = 1.0;
+                for (uint32_t c = 0; c <= degree; c++) {
+                    val += coeffs.get(c, j) * gx_pow;
+                    gx_pow *= gx;
+                }
+                poly_out[i * expanded_dim + j] = val;
+            }
+
+        Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
+        for (uint32_t i = 0; i < seq_len; i++)
+            for (uint32_t j = 0; j < total_dim; j++) {
+                double s = 0;
+                for (uint32_t k = 0; k < expanded_dim; k++)
+                    s += poly_out[i * expanded_dim + k] * W_reduce.get(k, j);
+                expected.set(i, j, s);
+            }
+
+        auto expand_ptr =
+            std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{seq_len, head_dim}, W_expand, d, n_heads, init_level);
+        expand_ptr->precompute_diagonals();
+
+        int gamma_level = init_level - 2;
+        auto gamma_ptr = std::make_shared<ParBlockColMajorPolyActRNGamma>(res.param, Duo{seq_len, expanded_dim}, d,
+                                                                          n_heads, K, gamma_level, gamma.copy());
+
+        int poly_level = init_level - 3;
+        auto poly_ptr = std::make_shared<ParBlockColMajorPolyActRNPoly>(res.param, Duo{seq_len, expanded_dim}, d,
+                                                                        n_heads, K, poly_level, coeffs.copy(), degree);
+
+        int reduce_level = (degree == 2) ? init_level - 5 : init_level - 6;
+        auto reduce_ptr = std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{seq_len, head_dim}, W_reduce, d,
+                                                                 n_heads, reduce_level);
+        reduce_ptr->precompute_diagonals();
+
+        FeatureMatEncrypted A_enc(&res.context, init_level);
+        A_enc.shape = {seq_len, head_dim};
+        A_enc.matmul_block_size = d;
+        A_enc.par_block_col_major_pack(A_mat, d, n_heads, false, res.param.get_default_scale());
+
+        vector<CkksCiphertext> in_cts, out_cts;
+        vector<CustomData> expand_data, gamma_data, poly_data, reduce_data;
+        for (auto& ct : A_enc.data)
+            in_cts.push_back(ct.copy());
+        expand_data.emplace_back(static_cast<void*>(expand_ptr.get()));
+        gamma_data.emplace_back(static_cast<void*>(gamma_ptr.get()));
+        poly_data.emplace_back(static_cast<void*>(poly_ptr.get()));
+        reduce_data.emplace_back(static_cast<void*>(reduce_ptr.get()));
+
+        uint32_t num_block_rows_A = div_ceil(seq_len, d);
+        uint32_t n_h_padded = 1;
+        while (n_h_padded < n_heads)
+            n_h_padded <<= 1;
+        uint32_t n_slot = res.param.get_n() / 2;
+        uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+        uint32_t n_out = num_block_rows_A * G;
+        int out_level = reduce_level - 2;
+        for (uint32_t i = 0; i < n_out; i++)
+            out_cts.push_back(res.context.new_ciphertext(out_level, res.param.get_default_scale()));
+
+        vector<CxxVectorArgument> cxx_args = {
+            {"input", &in_cts},          {"_expand_cpmm", &expand_data}, {"_gamma_layer", &gamma_data},
+            {"_poly_layer", &poly_data}, {"_reduce_cpmm", &reduce_data}, {"output", &out_cts},
+        };
+        run_block_col_major_e2e_test(*this, server_dir, cxx_args, expected, {seq_len, head_dim}, d, n_heads, true,
+                                     out_cts);
+    };
+
+    SECTION("degree=2, K=2, d=16, seq=53, heads=3, head_dim=16") {
+        run_test(16, 53, 3, 16, 2, 2, 7);
+    }
+    SECTION("degree=4, K=2, d=16, seq=53, heads=3, head_dim=16") {
+        run_test(16, 53, 3, 16, 2, 4, 8);
     }
 }
 
@@ -3473,7 +3704,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         }
 
         auto layer_ptr = std::make_shared<ParBlockColMajorPolyActRNPoly>(res.param, Duo{seq_len, total_dim}, d, n_heads,
-                                                                         level, coeffs.copy(), degree);
+                                                                         1, level, coeffs.copy(), degree);
 
         FeatureMatEncrypted X_enc(&res.context, level);
         X_enc.shape = {seq_len, head_dim};
@@ -3519,127 +3750,4 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     SECTION("degree=4, level=4") {
         run_generated_polyactrn_poly(4, 4);
     }
-}
-
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
-                               "single_par_block_col_major_layernorm",
-                               "[block_col_major_e2e]",
-                               HeteroProcessors) {
-    fs::path server_dir = base_path / "CKKS_par_block_col_major_layernorm" / "level_11" / "server";
-    if (!fs::exists(server_dir / "mega_ag.json"))
-        return;
-
-    const int N = 32768;
-    CkksParameter param = CkksParameter::create_parameter(N);
-    CkksContext context = CkksContext::create_random_context(param);
-    context.gen_rotation_keys();
-
-    const uint32_t seq_len = 8, n_heads = 2, head_dim = 4, d = 4, num_iters = 1;
-    const uint32_t total_dim = n_heads * head_dim;
-    const int init_level = 11;
-    const double eps = 1e-5;
-    const double var_std_bound = 4.0;
-    const double inv_var = 1.0 / (var_std_bound * var_std_bound);
-    const double inv_std = 1.0 / var_std_bound;
-    const double c0 = 6.19067182, c1 = -16.15885111, c2 = 11.52830778;
-
-    auto X = gen_random_array<2>({seq_len, total_dim}, 0.5);
-    auto gamma = gen_random_array<1>({total_dim}, 0.5);
-    auto beta = gen_random_array<1>({total_dim}, 0.1);
-
-    Array<double, 2> ref_output({(uint64_t)seq_len, (uint64_t)total_dim});
-    for (uint32_t i = 0; i < seq_len; i++) {
-        double sum_x = 0.0, sum_x2 = 0.0;
-        for (uint32_t j = 0; j < total_dim; j++) {
-            double v = X.get(i, j);
-            sum_x += v;
-            sum_x2 += v * v;
-        }
-        double mean = sum_x / total_dim;
-        double var = sum_x2 / total_dim - mean * mean;
-        double a = (var + eps) * inv_var;
-        double y = c0 + c1 * a + c2 * a * a;
-        for (uint32_t k = 0; k < num_iters; k++) {
-            y = 0.5 * y * (3.0 - a * y * y);
-        }
-        for (uint32_t j = 0; j < total_dim; j++) {
-            double x_norm = (X.get(i, j) - mean) * inv_std * y;
-            ref_output.set(i, j, x_norm * gamma.get(j) + beta.get(j));
-        }
-    }
-
-    auto stats_layer =
-        std::make_shared<ParBlockColMajorLNStats>(param, Duo{seq_len, total_dim}, d, n_heads, init_level, eps, inv_var);
-    auto xcenter_layer =
-        std::make_shared<ParBlockColMajorLNXCentered>(param, Duo{seq_len, total_dim}, d, n_heads, init_level);
-    auto minimax_layer = std::make_shared<ParBlockColMajorLNMinimaxInit>(param, d, init_level - 4, c0, c1, c2);
-    auto gold_layer = std::make_shared<ParBlockColMajorLNGoldschmidt>(param, d, init_level - 6);
-    auto affine_layer = std::make_shared<ParBlockColMajorLNAffine>(param, Duo{seq_len, total_dim}, d, n_heads, 2,
-                                                                   inv_std, gamma.copy(), beta.copy());
-
-    FeatureMatEncrypted X_enc(&context, init_level);
-    X_enc.shape = {seq_len, head_dim};
-    X_enc.matmul_block_size = d;
-    X_enc.par_block_col_major_pack(X, d, n_heads, false, param.get_default_scale());
-
-    vector<CkksCiphertext> in_cts, out_cts;
-    vector<CustomData> stats_data, xcenter_data, minimax_data, gold_data, affine_data;
-    for (auto& ct : X_enc.data)
-        in_cts.push_back(ct.copy());
-    stats_data.emplace_back(static_cast<void*>(stats_layer.get()));
-    xcenter_data.emplace_back(static_cast<void*>(xcenter_layer.get()));
-    minimax_data.emplace_back(static_cast<void*>(minimax_layer.get()));
-    gold_data.emplace_back(static_cast<void*>(gold_layer.get()));
-    affine_data.emplace_back(static_cast<void*>(affine_layer.get()));
-
-    uint32_t num_block_rows = div_ceil(seq_len, d);
-    uint32_t num_block_cols = div_ceil(head_dim, d);
-    uint32_t n_h_padded = 1;
-    while (n_h_padded < n_heads)
-        n_h_padded <<= 1;
-    uint32_t n_slot = param.get_n() / 2;
-    uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
-    uint32_t n_out = num_block_rows * num_block_cols * G;
-    for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(context.new_ciphertext(0, param.get_default_scale()));
-
-    vector<CxxVectorArgument> cxx_args = {
-        {"input", &in_cts},
-        {"_ln_stats_layer", &stats_data},
-        {"_ln_xcenter_layer", &xcenter_data},
-        {"_ln_minimax_layer", &minimax_data},
-        {"_ln_gold_layer", &gold_data},
-        {"_ln_affine_layer", &affine_data},
-        {"output", &out_cts},
-    };
-
-    std::unordered_map<std::string, ExecutorFunc> executors;
-    executors["encode_pt"] = make_block_col_major_encode_pt_executor();
-    if constexpr (is_same_v<TestType, ProcessorCpu>) {
-        FheTaskCpu task(server_dir.string());
-        task.bind_custom_executors(executors);
-        task.run(&context, cxx_args);
-#ifdef INFERENCE_SDK_ENABLE_GPU
-    } else if constexpr (is_same_v<TestType, ProcessorGpu>) {
-        FheTaskGpu task(server_dir.string());
-        task.bind_custom_executors(executors);
-        task.run(&context, cxx_args);
-#endif
-    }
-
-    FeatureMatEncrypted out_enc(&context, 0);
-    for (auto& ct : out_cts)
-        out_enc.data.push_back(std::move(ct));
-    out_enc.shape = {seq_len, head_dim};
-    out_enc.matmul_block_size = d;
-    auto actual = out_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
-
-    print_double_message(actual.to_array_1d().data(), "output_mg", 10);
-    print_double_message(ref_output.to_array_1d().data(), "output_expected", 10);
-
-    auto compare_result = compare(ref_output, actual);
-    std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
-              << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
-    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
-    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
 }
