@@ -1218,6 +1218,20 @@ class TestE2ESingleLayer(CompilerTestBase):
             n_heads=2,
         )
 
+    def test_par_block_col_major_add(self):
+        """ParBlockColMajorAdd E2E, n_heads=2."""
+        model = nn_modules.SingleAdd()
+        graph, _ = self._export_compile_and_deploy(
+            model,
+            [(1, 32, 64), (1, 32, 64)],
+            'par_block_col_major_add',
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=2,
+            input_names=['x0', 'x1'],
+        )
+        self.assertIsNotNone(graph)
+
     def test_par_block_col_major_ccmm(self):
         """ParBlockColMajorCCMM E2E: head-wise A @ K^T, n_heads=2."""
         model = nn_modules.HeadWiseAKTTest()
