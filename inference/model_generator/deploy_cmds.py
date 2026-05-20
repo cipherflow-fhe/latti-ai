@@ -118,6 +118,12 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             return 1
         return n_h_padded // (n_slot // (block_size * block_size))
 
+    def _feature_mat_ct_info(feat, n_heads, n_slot, split_rows=False, block_size=None):
+        shape_per_head = _par_input_shape(feat, n_heads, split_rows=split_rows)
+        block_size = int(block_size or feat.get('matmul_block_size', 0) or shape_per_head[1])
+        G = _par_group_count(block_size, n_heads, n_slot)
+        return shape_per_head, block_size, G, _par_ct_count(shape_per_head, block_size, G)
+
     # Pre-add all graph-level input ciphertexts first so they precede weights in input_args.
     # This ensures the C++ signature position-matching works correctly for multi-input models.
     # Only needed when there are multiple graph-level inputs; single-input models are handled
@@ -163,16 +169,13 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     block_size = shape_per_head[1]
                     G = _par_group_count(block_size, n_heads, n // 2)
                     n_packed = math.ceil(shape_per_head[0] / block_size) * G
-                elif consumer_type in {'pcmstats', 'pcmcenter', 'pcmpoly'}:
-                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=False)
+                elif consumer_type in {'pcmstats', 'pcmcenter', 'pcmpoly', 'add', 'add2d'}:
+                    shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n // 2)
                     par_feature_shapes[input_fid] = shape_per_head
-                    block_size = shape_per_head[1]
-                    G = _par_group_count(block_size, n_heads, n // 2)
-                    n_packed = _par_ct_count(shape_per_head, block_size, G)
                 else:
                     raise ValueError(
                         f"feature_mat input '{input_fid}' is consumed by unsupported non-par matrix layer "
-                        f"'{consumer_type}'; use parcpmm/parccmm/partranspose or PCM stages"
+                        f"'{consumer_type}'; use parcpmm/parccmm/partranspose, PCM stages, or add2d"
                     )
             else:
                 pack = int(feat['pack_num'])
@@ -627,13 +630,47 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif layer_config['type'] in ('add', 'add2d'):
-            layer_output_nodes = [
-                add(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]][i],
-                    feature_id_to_nodes_map[layer_input_feature_ids[1]][i],
+            is_feature_mat_add = any(
+                config_info['feature'][fid].get('data_type') == 'feature_mat' for fid in layer_input_feature_ids
+            )
+            if is_feature_mat_add:
+                if not all(
+                    config_info['feature'][fid].get('data_type') == 'feature_mat' for fid in layer_input_feature_ids
+                ):
+                    raise ValueError('feature_mat add expects all inputs to be feature_mat')
+                n_heads = task_config_info.get('n_heads', 1)
+                if n_heads <= 1:
+                    raise ValueError('feature_mat add currently expects par block-col-major inputs with n_heads > 1')
+
+                shape_per_head = par_feature_shapes.get(layer_input_feature_ids[0])
+                if shape_per_head is None:
+                    shape_per_head, _, _, _ = _feature_mat_ct_info(input_feat0, n_heads, n // 2)
+                    par_feature_shapes[layer_input_feature_ids[0]] = shape_per_head
+                block_size = int(input_feat0.get('matmul_block_size', 0) or shape_per_head[1])
+
+                for input_fid in layer_input_feature_ids:
+                    if input_fid not in feature_id_to_nodes_map:
+                        feat = config_info['feature'][input_fid]
+                        input_shape, _, _, n_cts = _feature_mat_ct_info(feat, n_heads, n // 2, block_size=block_size)
+                        par_feature_shapes[input_fid] = input_shape
+                        x = [
+                            CkksCiphertextNode(input_fid + f'input{j}', level=int(feat['level'])) for j in range(n_cts)
+                        ]
+                        feature_id_to_nodes_map[input_fid] = x
+                        input_args.append(Argument(input_fid, x))
+
+                add_layer = FeatureMatAddLayer()
+                layer_output_nodes = add_layer.call(
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                    feature_id_to_nodes_map[layer_input_feature_ids[1]],
                 )
-                for i in range(len(feature_id_to_nodes_map[layer_input_feature_ids[0]]))
-            ]
+                par_feature_shapes[layer_output_feature_ids[0]] = shape_per_head
+            else:
+                add_layer = AddLayer()
+                layer_output_nodes = add_layer.call(
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                    feature_id_to_nodes_map[layer_input_feature_ids[1]],
+                )
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif 'concat2d' in layer_config['type']:
