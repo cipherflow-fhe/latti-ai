@@ -31,7 +31,7 @@
     },
     "layer": {
         "_vit": {
-            "type": "vit",
+            "type": "CustomMultiHeadAttention",
             "feature_input": [
                 "input"
             ],
