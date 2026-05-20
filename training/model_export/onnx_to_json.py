@@ -123,6 +123,7 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_m
     constant_nodes = {
         format_id(init.name): [numpy_helper.to_array(init), numpy_helper.to_array(init)] for init in graph.initializer
     }
+    weight_shapes = {init.name: list(init.dims) for init in graph.initializer}
 
     for n in graph.node:
         name = format_id(n.output[0])
@@ -174,7 +175,7 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_m
             case 'ConvTranspose':
                 compute_node = ConvTransposeComputeNode.from_onnx_node(n, features_nodes)
             case 'MatMul':
-                compute_node = MatMulComputeNode.from_onnx_node(n, features_nodes)
+                compute_node = MatMulComputeNode.from_onnx_node(n, features_nodes, weight_shapes)
             case 'Transpose':
                 compute_node = TransposeComputeNode.from_onnx_node(n, features_nodes)
             case 'LayerNorm':

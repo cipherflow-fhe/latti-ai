@@ -516,13 +516,12 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
             else:
                 if compute_node.layer_type == 'parcpmm':
                     succ.shape[0] = preds[0].shape[0]
-                    out_features = getattr(compute_node, 'out_features', 0)
-                    if out_features > 0:
-                        succ.shape[1] = out_features
+                    weight_shape = getattr(compute_node, 'weight_shape', [])
+                    if len(weight_shape) >= 2:
+                        succ.shape[1] = weight_shape[-1]
                 elif compute_node.layer_type == 'partranspose':
-                    n_heads = max(1, config.n_heads)
-                    succ.shape[0] = preds[0].shape[1] // n_heads if len(preds[0].shape) > 1 else preds[0].shape[0]
-                    succ.shape[1] = preds[0].shape[0] * n_heads
+                    succ.shape[0] = preds[0].shape[1]
+                    succ.shape[1] = preds[0].shape[0]
                 elif compute_node.layer_type == 'parccmm':
                     succ.shape[0] = preds[0].shape[0]
                     if len(preds) > 1 and len(preds[1].shape) > 1:
@@ -1006,13 +1005,13 @@ def expand_multi_head_attention(graph: LayerAbstractGraph):
 
         q_node = ComputeNode(f'{base_id}_q_layer', 'parcpmm', 1, 1)
         q_node.path = getattr(vit_node, 'q_weight_path', f'{base_id}.q.weight')
-        q_node.out_features = n
+        q_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
         k_node = ComputeNode(f'{base_id}_k_layer', 'parcpmm', 1, 1)
         k_node.path = getattr(vit_node, 'k_weight_path', f'{base_id}.k.weight')
-        k_node.out_features = n
+        k_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
         v_node = ComputeNode(f'{base_id}_v_layer', 'parcpmm', 1, 1)
         v_node.path = getattr(vit_node, 'v_weight_path', f'{base_id}.v.weight')
-        v_node.out_features = n
+        v_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
         kt_node = ComputeNode(f'{base_id}_kt_layer', 'partranspose', 1, 1)
         qkt_node = ComputeNode(f'{base_id}_qkt_layer', 'parccmm', 1, 1)
         gamma_node = ComputeNode(f'{base_id}_gamma', 'pcmgamma', 1, 1)
@@ -1022,7 +1021,7 @@ def expand_multi_head_attention(graph: LayerAbstractGraph):
         poly_node.order = getattr(vit_node, 'poly_order', 4)
         qktv_node = ComputeNode(f'{base_id}_qktv_layer', 'parccmm', 1, 1)
         out_node = ComputeNode(f'{base_id}_out', 'parcpmm', 1, 1)
-        out_node.out_features = n
+        out_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
         out_node.path = getattr(vit_node, 'proj_weight_path', f'{base_id}.proj.weight')
 
         graph.dag.remove_node(vit_node)
@@ -1064,6 +1063,69 @@ def expand_multi_head_attention(graph: LayerAbstractGraph):
 
         graph.dag.add_edge(qktv, out_node)
         graph.dag.add_edge(out_node, out)
+
+
+def expand_poly_act_rn(graph: LayerAbstractGraph):
+    for node in list(graph.dag.nodes):
+        if not (isinstance(node, ComputeNode) and node.layer_type == 'PolyActRN'):
+            continue
+
+        preds = list(graph.dag.predecessors(node))
+        succs = list(graph.dag.successors(node))
+        if len(preds) != 1 or len(succs) != 1:
+            raise ValueError(
+                f'PolyActRN node {node.layer_id} must have exactly 1 input and 1 output, '
+                f'got {len(preds)} inputs and {len(succs)} outputs'
+            )
+        x_in: FeatureNode = preds[0]
+        out: FeatureNode = succs[0]
+
+        base_id = node.layer_id
+        weight_path = node.path
+        order = node.order
+
+        x_in_attrs = graph.dag.nodes[x_in]
+        skip = list(x_in_attrs.get('skip', [1] * x_in.dim))
+        level = x_in_attrs.get('level', 0)
+        pack_num = x_in_attrs.get('pack_num', 1)
+
+        def make_feature(name: str) -> FeatureNode:
+            f = FeatureNode(
+                key=name,
+                dim=x_in.dim,
+                channel=x_in.channel,
+                scale=x_in.scale,
+                ckks_parameter_id=x_in.ckks_parameter_id,
+                ckks_scale=x_in.ckks_scale,
+                shape=list(x_in.shape),
+            )
+            f.data_type = x_in.data_type
+            return f
+
+        def f_attrs(f: FeatureNode) -> dict:
+            return {'name': f.node_id, 'skip': list(skip), 'level': level, 'pack_num': pack_num}
+
+        def c_attrs(level_cost: int, name: str) -> dict:
+            return {'name': name, 'level_cost': level_cost}
+
+        mid = make_feature(f'{base_id}_gamma_out')
+
+        gamma_node = ComputeNode(f'{base_id}_gamma', 'pcmgamma', 1, 1)
+        gamma_node.path = weight_path
+        poly_node = ComputeNode(f'{base_id}_poly', 'pcmpoly', 1, 1)
+        poly_node.path = weight_path
+        poly_node.order = order
+
+        graph.dag.remove_node(node)
+
+        graph.dag.add_node(gamma_node, **c_attrs(1, gamma_node.layer_id))
+        graph.dag.add_node(poly_node, **c_attrs(3 if order > 2 else 2, poly_node.layer_id))
+        graph.dag.add_node(mid, **f_attrs(mid))
+
+        graph.dag.add_edge(x_in, gamma_node)
+        graph.dag.add_edge(gamma_node, mid)
+        graph.dag.add_edge(mid, poly_node)
+        graph.dag.add_edge(poly_node, out)
 
 
 def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
@@ -1162,3 +1224,25 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
         graph.dag.add_edge(x_c, pcmaffine, input_index=0)
         graph.dag.add_edge(y_final, pcmaffine, input_index=1)
         graph.dag.add_edge(pcmaffine, out)
+
+
+def set_pcm_K(graph: LayerAbstractGraph):
+    """Set K attribute on pcmgamma and pcmpoly nodes.
+
+    K = ceil(input_shape[1] / BASE_FEAT_DIM), where BASE_FEAT_DIM comes from
+    config.base_feat_dim.  If base_feat_dim <= 0, K defaults to 1.
+    """
+    base_feat_dim = config.base_feat_dim
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode):
+            continue
+        if node.layer_type not in ('pcmgamma', 'pcmpoly'):
+            continue
+        preds = list(graph.dag.predecessors(node))
+        if not preds:
+            continue
+        in_shape = preds[0].shape
+        if base_feat_dim > 0 and len(in_shape) >= 2:
+            node.K = math.ceil(in_shape[1] / base_feat_dim)
+        else:
+            node.K = 1

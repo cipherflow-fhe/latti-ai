@@ -892,3 +892,14 @@ class LayerNorm(nn.Module):
 
     def forward(self, x):
         return self.ln(x)
+
+class LinearGelu(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.cpmm = nn.Linear(192, 384, False)
+        self.gelu = nn.GELU()
+
+    def forward(self, x):
+        cpmm_res = self.cpmm(x)
+        res = self.gelu(cpmm_res)
+        return res
