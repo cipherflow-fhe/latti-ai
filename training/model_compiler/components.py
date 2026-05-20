@@ -800,7 +800,7 @@ class LayerAbstractGraph:
                 compute_node.path = layer_json.get('weight_path', '')
                 compute_node.order = layer_json.get('order', 4)
 
-            elif layer_type == 'vit':
+            elif layer_type == 'CustomMultiHeadAttention':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.q_weight_path = layer_json.get('q_weight_path', f'{key}.q.weight')
                 compute_node.k_weight_path = layer_json.get('k_weight_path', f'{key}.k.weight')

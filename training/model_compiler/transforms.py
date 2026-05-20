@@ -954,7 +954,7 @@ def process_polyact(graph: LayerAbstractGraph) -> list:
 
 def expand_vit(graph: LayerAbstractGraph):
     for vit_node in list(graph.dag.nodes):
-        if not (isinstance(vit_node, ComputeNode) and vit_node.layer_type == 'vit'):
+        if not (isinstance(vit_node, ComputeNode) and vit_node.layer_type == 'CustomMultiHeadAttention'):
             continue
 
         preds = list(graph.dag.predecessors(vit_node))
