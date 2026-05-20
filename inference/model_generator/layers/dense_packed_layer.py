@@ -583,7 +583,8 @@ class DensePackedLayer:
         n_rotations_per_ct = min(n_block_input, n_num_pre_ct)
         rotated_cts = []
         for x_id in range(x_size):
-            rotated_cts.append(self.populate_rotations_1_side(x_rep[x_id], n_rotations_per_ct - 1, block_size))
+            n_used = min(n_num_pre_ct, n_block_input - x_id * n_num_pre_ct)
+            rotated_cts.append(self.populate_rotations_1_side(x_rep[x_id], n_used - 1, block_size))
 
         result = []
 

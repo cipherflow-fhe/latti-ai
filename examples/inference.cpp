@@ -27,11 +27,11 @@
 #include <string>
 #include <vector>
 
+#include "fhe_ops_lib/utils.h"
 #include "interface/inference_client.h"
 #include "interface/inference_server.h"
 
 using namespace std;
-namespace ls = lattisense;
 
 int main(int argc, char* argv[]) {
     string task_dir;
@@ -103,7 +103,7 @@ int main(int argc, char* argv[]) {
 
     // --- Server side: load model and run encrypted inference ---
     cout << "[Step 3/5] Server loading model and importing context..." << endl;
-    InferenceServer server(task_dir + "/server", use_gpu);
+    InferenceServer server(task_dir + "/server", use_gpu, 1);
     server.import_eval_context(eval_ctx);
     server.load_model();
 
@@ -120,12 +120,12 @@ int main(int argc, char* argv[]) {
     // --- Display results ---
     cout << "========== Results ==========" << endl;
     for (auto& [name, result] : results) {
-        ls::print_double_message(result.output.data(), ("Encrypted output [" + name + "]").c_str(), 1);
+        fhe_ops_lib::print_double_message(result.output.data(), ("Encrypted output [" + name + "]").c_str(), 1);
     }
 
     auto plaintext_outputs = server.evaluate_plaintext(input_csvs);
     for (auto& [name, plaintext_output] : plaintext_outputs) {
-        ls::print_double_message(plaintext_output.data(), ("Plaintext output [" + name + "]").c_str(), 1);
+        fhe_ops_lib::print_double_message(plaintext_output.data(), ("Plaintext output [" + name + "]").c_str(), 1);
     }
 
     if (verify) {
