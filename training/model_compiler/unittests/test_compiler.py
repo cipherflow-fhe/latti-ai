@@ -1231,6 +1231,31 @@ class TestE2ESingleLayer(CompilerTestBase):
             input_names=['x0', 'x1'],
         )
 
+    def test_par_block_col_major_layernorm(self):
+        """ParBlockColMajor LayerNorm E2E, n_heads=2."""
+        model = nn_modules.LayerNorm(normalized_shape=64)
+        self._export_compile_and_deploy(
+            model,
+            (1, 32, 64),
+            'par_block_col_major_layernorm',
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=2,
+        )
+
+    def test_par_block_col_major_gelu(self):
+        """ParBlockColMajor GELU E2E, n_heads=2."""
+        model = nn_modules.SingleGelu()
+        graph, _ = self._export_compile_and_deploy(
+            model,
+            (1, 32, 64),
+            'par_block_col_major_gelu',
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=2,
+        )
+        self.assertTrue(any(node.layer_type == 'pcmpoly' for node in graph.dag.nodes if isinstance(node, ComputeNode)))
+
     def test_par_block_col_major_cpmm(self):
         """ParBlockColMajorCPMM E2E: x @ W (SQUARE), n_heads=2."""
         model = nn_modules.CPMMSquareTest(dim=64)
