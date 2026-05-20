@@ -1111,14 +1111,14 @@ class TestLayerExport(unittest.TestCase):
                     fpga_acc=False,
                 )
 
-    def test_feature_mat_add_layer(self):
+    def test_par_block_col_major_add(self):
         level = 2
         m = 8
         n_heads = 2
         head_dim = 4
         total_dim = n_heads * head_dim
         d = 4
-        task_path = base_path / 'CKKS_feature_mat_add_layer' / 'par_block_col_major' / f'level_{level}' / 'server'
+        task_path = base_path / 'CKKS_par_block_col_major_add' / 'par_block_col_major' / f'level_{level}' / 'server'
         task_path.mkdir(parents=True, exist_ok=True)
 
         feature = {

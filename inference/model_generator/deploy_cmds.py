@@ -659,7 +659,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         feature_id_to_nodes_map[input_fid] = x
                         input_args.append(Argument(input_fid, x))
 
-                add_layer = FeatureMatAddLayer()
+                add_layer = ParBlockColMajorAdd()
                 layer_output_nodes = add_layer.call(
                     feature_id_to_nodes_map[layer_input_feature_ids[0]],
                     feature_id_to_nodes_map[layer_input_feature_ids[1]],

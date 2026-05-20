@@ -145,7 +145,7 @@ private:
     virtual void _init_square_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     virtual void _init_dense_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     virtual void _init_add_layer(const std::string& key, const json& layer, const std::string& block_input_feature);
-    virtual void _init_feature_mat_add_layer(const std::string& key, const json& layer);
+    virtual void _init_par_block_col_major_add_layer(const std::string& key, const json& layer);
     virtual void _init_reshape_layer(const std::string& key, const json& layer);
     virtual void _init_mult_scalar_layer(const std::string& key,
                                          const json& layer,

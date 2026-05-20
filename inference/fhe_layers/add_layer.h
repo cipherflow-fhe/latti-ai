@@ -35,9 +35,9 @@ public:
     add(ls::CkksContext* ctx, const Feature2DEncrypted& x0, const Feature2DEncrypted& x1, Feature2DEncrypted& result);
 };
 
-class FeatureMatAddLayer : public Layer {
+class ParBlockColMajorAdd : public Layer {
 public:
-    FeatureMatAddLayer(const ls::CkksParameter& param_in);
+    ParBlockColMajorAdd(const ls::CkksParameter& param_in);
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x0, const FeatureMatEncrypted& x1);
     Array<double, 2> run_plaintext(const Array<double, 2>& x0, const Array<double, 2>& x1) const;
     void add(ls::CkksContext* ctx,
