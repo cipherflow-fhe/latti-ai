@@ -1111,6 +1111,55 @@ class TestLayerExport(unittest.TestCase):
                     fpga_acc=False,
                 )
 
+    def test_feature_mat_add_layer(self):
+        level = 2
+        m = 8
+        n_heads = 2
+        head_dim = 4
+        total_dim = n_heads * head_dim
+        d = 4
+        task_path = base_path / 'CKKS_feature_mat_add_layer' / 'par_block_col_major' / f'level_{level}' / 'server'
+        task_path.mkdir(parents=True, exist_ok=True)
+
+        feature = {
+            'dim': 2,
+            'scale': 1.0,
+            'ckks_scale': 1.0,
+            'shape': [m, total_dim],
+            'ckks_parameter_id': 'ckks',
+            'level': level,
+            'data_type': 'feature_mat',
+            'matmul_block_size': d,
+        }
+        config = {
+            'input_feature': ['input0', 'input1'],
+            'output_feature': ['output'],
+            'feature': {
+                'input0': dict(feature),
+                'input1': dict(feature),
+                'output': dict(feature),
+            },
+            'layer': {
+                'add0': {
+                    'type': 'add2d',
+                    'feature_input': ['input0', 'input1'],
+                    'feature_output': ['output'],
+                }
+            },
+        }
+        task_config = {
+            'pack_style': 'ordinary',
+            'block_shape': [64, 64],
+            'is_absorb_polyrelu': False,
+            'n_heads': n_heads,
+        }
+        with open(task_path / 'task_config.json', 'w', encoding='utf-8') as f:
+            json.dump(task_config, f)
+        with open(task_path / 'nn_layers_ct_0.json', 'w', encoding='utf-8') as f:
+            json.dump(config, f)
+
+        gen_custom_task(str(task_path))
+
     def test_avgpool2d_layer(self):
         N = 16384
         set_param('PN14QP438')

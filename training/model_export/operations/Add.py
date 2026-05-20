@@ -32,6 +32,10 @@ class AddComputeNode(ComputeNode):
         super(AddComputeNode, self).__init__(layer_id, layer_type, feature_input, feature_output)
         feature_output[0].skip = feature_input[0].skip
         feature_output[0].level = 1
+        if feature_input[0].data_type == 'feature_mat':
+            feature_output[0].shape = feature_input[0].shape
+            feature_output[0].data_type = feature_input[0].data_type
+            feature_output[0].level = min(feature_input[0].level, feature_input[1].level)
 
     @override
     def to_torch_code(self) -> dict[str, list[str]]:

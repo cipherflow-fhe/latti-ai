@@ -473,10 +473,24 @@ void InitInferenceProcess::_init_add_layer(const string& key, const json& layer,
     FeatureNode feature_input0(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_input1(json_features[layer["feature_input"][1].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
-    CkksParameter& param = *ckks_parameters_.at(feature_input0.ckks_parameter_id);
+    if (feature_input0.is_mat || feature_input1.is_mat || feature_output.is_mat) {
+        _init_feature_mat_add_layer(key, layer);
+        return;
+    }
     auto add2d = MakeU<AddLayer>(*ckks_parameters_.at(feature_input0.ckks_parameter_id));
     add2d->target_ckks_scale = feature_output.ckks_scale;
     _prepare_layer(key, move(add2d));
+}
+
+void InitInferenceProcess::_init_feature_mat_add_layer(const string& key, const json& layer) {
+    FeatureNode feature_input0(json_features[layer["feature_input"][0].get<string>()]);
+    FeatureNode feature_input1(json_features[layer["feature_input"][1].get<string>()]);
+    FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
+    if (!feature_input0.is_mat || !feature_input1.is_mat || !feature_output.is_mat) {
+        throw runtime_error("feature_mat add expects feature_mat inputs and output");
+    }
+    auto add_mat = MakeU<FeatureMatAddLayer>(*ckks_parameters_.at(feature_input0.ckks_parameter_id));
+    _prepare_layer(key, move(add_mat));
 }
 
 void InitInferenceProcess::_init_mult_scalar_layer(const string& key,
@@ -1021,10 +1035,18 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.stop();
             } else if (layer_type == "add2d") {
                 fhe_timer.start();
-                double target_ckks_scale = json_features[feature_output[0]]["ckks_scale"];
+                FeatureNode feature_input0_node(json_features[feature_input[0]]);
+                FeatureNode feature_input1_node(json_features[feature_input[1]]);
                 const FeatureEncrypted& feat0 = _get_feature(feature_input[0]);
                 const FeatureEncrypted& feat1 = _get_feature(feature_input[1]);
-                if (feat0.dim == 2 && feat1.dim == 2) {
+                if (feature_input0_node.is_mat && feature_input1_node.is_mat) {
+                    const FeatureMatEncrypted& input0 = dynamic_cast<const FeatureMatEncrypted&>(feat0);
+                    const FeatureMatEncrypted& input1 = dynamic_cast<const FeatureMatEncrypted&>(feat1);
+                    result =
+                        MakeU<FeatureMatEncrypted>(fp->get_layer<FeatureMatAddLayer>(key).run(context, input0, input1));
+                } else if (feature_input0_node.is_mat || feature_input1_node.is_mat) {
+                    throw runtime_error("add2d: feature_mat inputs must both be feature_mat");
+                } else if (feat0.dim == 2 && feat1.dim == 2) {
                     const Feature2DEncrypted& input0 = dynamic_cast<const Feature2DEncrypted&>(feat0);
                     const Feature2DEncrypted& input1 = dynamic_cast<const Feature2DEncrypted&>(feat1);
                     result = MakeU<Feature2DEncrypted>(fp->get_layer<AddLayer>(key).run(context, input0, input1));
@@ -1596,7 +1618,7 @@ void InferenceProcess::run_task(bool is_mpc) {
     uint32_t par_d = 0, par_G = 1;
     if (fp->n_heads > 1) {
         FeatureNode first_input(json_features[fp->json_data["input_feature"][0].get<string>()]);
-        par_d = first_input.shape[1] / fp->n_heads;
+        par_d = first_input.matmul_block_size != 0 ? first_input.matmul_block_size : first_input.shape[1] / fp->n_heads;
         uint32_t n_h_padded = 1;
         while (n_h_padded < fp->n_heads)
             n_h_padded <<= 1;
@@ -1634,7 +1656,8 @@ void InferenceProcess::run_task(bool is_mpc) {
         if (feature_output.is_mat) {
             auto output = MakeU<FeatureMatEncrypted>(output_context, feature_output.level);
             output->shape = feature_output.shape;
-            output->matmul_block_size = par_d;
+            output->matmul_block_size =
+                feature_output.matmul_block_size != 0 ? feature_output.matmul_block_size : par_d;
             for (int i = 0; i < n_out_num; i++) {
                 output->data.push_back(output_context->new_ciphertext(feature_output.level, encode_scale));
             }
@@ -1843,7 +1866,13 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
             if (layer_type == "add2d") {
                 FeatureNode feature_input0(json_features[feature_input[0]]);
                 FeatureNode feature_input1(json_features[feature_input[1]]);
-                if (feature_input0.dim == 2) {
+                if (feature_input0.is_mat && feature_input1.is_mat) {
+                    auto& input0 = p_feature_mat_x[feature_input[0]];
+                    auto& input1 = p_feature_mat_x[feature_input[1]];
+                    result_mat = fp->get_layer<FeatureMatAddLayer>(key).run_plaintext(input0, input1);
+                } else if (feature_input0.is_mat || feature_input1.is_mat) {
+                    throw runtime_error("add2d: feature_mat inputs must both be feature_mat");
+                } else if (feature_input0.dim == 2) {
                     auto& input0 = p_feature2d_x[feature_input[0]];
                     auto& input1 = p_feature2d_x[feature_input[1]];
                     result = fp->get_layer<AddLayer>(key).run_plaintext(input0, input1);
@@ -2084,7 +2113,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
     uint32_t par_d = 0, par_G = 1;
     if (fp->n_heads > 1) {
         FeatureNode first_input(json_features[json_data["input_feature"][0].get<string>()]);
-        par_d = first_input.shape[1] / fp->n_heads;
+        par_d = first_input.matmul_block_size != 0 ? first_input.matmul_block_size : first_input.shape[1] / fp->n_heads;
         uint32_t n_h_padded = 1;
         while (n_h_padded < fp->n_heads)
             n_h_padded <<= 1;
@@ -2113,7 +2142,8 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
             if (c % fp->n_heads == 0 && c > d)
                 c /= fp->n_heads;
             n_out_num = div_ceil(r, d) * div_ceil(c, d) * par_G;
-            output_mat_block_sizes[out_idx] = d;
+            output_mat_block_sizes[out_idx] =
+                feature_output.matmul_block_size != 0 ? feature_output.matmul_block_size : par_d;
         } else {
             n_out_num = div_ceil(feature_output.channel, feature_output.pack_channel_per_ciphertext);
             if (feature_output.shape[0] > block_shape[0] || feature_output.shape[1] > block_shape[1]) {
