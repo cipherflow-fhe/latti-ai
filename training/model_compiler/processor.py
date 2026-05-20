@@ -148,6 +148,11 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
             if node.data_type:
                 param_dict[node.node_id]['data_type'] = node.data_type
 
+    layernorm_stage_types = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine'}
+    has_layernorm = any(
+        isinstance(node, ComputeNode) and node.layer_type in layernorm_stage_types for node in graph.dag.nodes
+    )
+
     task_config = {
         'task_type': 'fhe',
         'task_num': 1,
@@ -165,6 +170,11 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
         'server_task': server_task,
         'use_btp': use_btp,
     }
+    if has_layernorm:
+        task_config['layernorm_param'] = {
+            'var_std_bound': config.layernorm_var_std_bound,
+            'minimax_init_coeffs': list(config.layernorm_minimax_init_coeffs),
+        }
     os.makedirs(file_path, exist_ok=True)
     with open(os.path.join(file_path, 'task_config.json'), 'w') as f:
         json.dump(task_config, f, indent=4, ensure_ascii=False)
