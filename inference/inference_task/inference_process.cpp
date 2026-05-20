@@ -1952,6 +1952,14 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 auto& input0 = p_feature_mat_x[feature_input[0]];
                 result_mat = fp->get_layer<ParBlockColMajorTranspose>(key).run_plaintext(input0);
             }
+            if (layer_type == "pcmgamma") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                result_mat = fp->get_layer<ParBlockColMajorPolyActRNGamma>(key).run_plaintext(input0);
+            }
+            if (layer_type == "pcmpoly") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                result_mat = fp->get_layer<ParBlockColMajorPolyActRNPoly>(key).run_plaintext(input0);
+            }
             if (layer_type == "pcmstats") {
                 auto& input0 = p_feature_mat_x[feature_input[0]];
                 result_mat = fp->get_layer<ParBlockColMajorLNStats>(key).run_plaintext(input0);

@@ -128,6 +128,16 @@ FeatureMatEncrypted ParBlockColMajorPolyActRNGamma::run(CkksContext& ctx, const 
     return result;
 }
 
+Array<double, 2> ParBlockColMajorPolyActRNGamma::run_plaintext(const Array<double, 2>& x) const {
+    Array<double, 2> result({m_, total_dim_});
+    for (uint32_t i = 0; i < m_; i++) {
+        for (uint32_t j = 0; j < total_dim_; j++) {
+            result.set(i, j, x.get(i, j) * gamma_vals_.get(j));
+        }
+    }
+    return result;
+}
+
 // ============================================================
 // ParBlockColMajorPolyActRNPoly
 // ============================================================
@@ -395,5 +405,21 @@ FeatureMatEncrypted ParBlockColMajorPolyActRNPoly::run(CkksContext& ctx, const F
     }
 
     result.level = out_level;
+    return result;
+}
+
+Array<double, 2> ParBlockColMajorPolyActRNPoly::run_plaintext(const Array<double, 2>& x) const {
+    Array<double, 2> result({m_, total_dim_});
+    for (uint32_t i = 0; i < m_; i++) {
+        for (uint32_t j = 0; j < total_dim_; j++) {
+            double v = x.get(i, j);
+            double out = coeffs_.get(0, j) + coeffs_.get(1, j) * v + coeffs_.get(2, j) * v * v;
+            if (degree_ == 4) {
+                double v2 = v * v;
+                out += coeffs_.get(3, j) * v2 * v + coeffs_.get(4, j) * v2 * v2;
+            }
+            result.set(i, j, out);
+        }
+    }
     return result;
 }
