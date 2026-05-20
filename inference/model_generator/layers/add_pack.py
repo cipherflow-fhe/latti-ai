@@ -49,7 +49,3 @@ class AddLayer:
             res = add(x1[i], x2[i])
             result.append(res)
         return result
-
-
-class ParBlockColMajorAdd(AddLayer):
-    pass
