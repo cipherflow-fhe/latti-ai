@@ -29,6 +29,8 @@ jobs:
         - /opt/heongpu-cache:/opt/heongpu-cache
         - /opt/go-mod-cache:/root/go/pkg/mod
     timeout-minutes: 120
+    env:
+      PYTHONPATH: ${{ github.workspace }}/inference/lattisense:${{ github.workspace }}
 
     steps:
       - name: Configure git proxy
