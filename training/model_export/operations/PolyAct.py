@@ -111,7 +111,7 @@ class PolyActRNPolyComputeNode(ComputeNode):
         weight_path: str = '',
         degree: int = 4,
     ):
-        super().__init__(layer_id, 'pcmpoly', feature_input, feature_output)
+        super().__init__(layer_id, 'PolyActRN', feature_input, feature_output)
         self.weight_path = weight_path
         self.degree = degree
         feature_output[0].shape = feature_input[0].shape

@@ -34,10 +34,12 @@ class MatMulComputeNode(ComputeNode):
         feature_input: list[FeatureNode],
         feature_output: list[FeatureNode],
         weight_path: str = '',
+        weight_shape: list[int] | None = None,
         is_mpc=False,
     ):
         super(MatMulComputeNode, self).__init__(layer_id, layer_type, feature_input, feature_output)
         self.weight_path = weight_path
+        self.weight_shape = weight_shape or []
         feature_output[0].skip = [1, 1]
 
     @override
@@ -48,13 +50,16 @@ class MatMulComputeNode(ComputeNode):
         info['feature_output'] = [i.node_id for i in self.feature_output]
         if self.layer_type == 'parcpmm' and self.weight_path:
             info['weight_path'] = self.weight_path
+        if self.layer_type == 'parcpmm' and self.weight_shape:
+            info['weight_shape'] = self.weight_shape
         return info
 
     @staticmethod
-    def from_onnx_node(x: NodeProto, features_nodes) -> 'MatMulComputeNode':
+    def from_onnx_node(x: NodeProto, features_nodes, weight_shapes: dict | None = None) -> 'MatMulComputeNode':
         layer_id = format_id(x.name)
         input1_id = format_id(x.input[1])
         weight_path = ''
+        weight_shape = []
         if input1_id in features_nodes:
             layer_type = 'parccmm'
             feature_input = [features_nodes[format_id(x.input[0])], features_nodes[input1_id]]
@@ -62,8 +67,10 @@ class MatMulComputeNode(ComputeNode):
             layer_type = 'parcpmm'
             feature_input = [features_nodes[format_id(x.input[0])]]
             weight_path = x.input[1]
+            if weight_shapes and x.input[1] in weight_shapes:
+                weight_shape = list(weight_shapes[x.input[1]])
         feature_output = [features_nodes[format_id(x.output[0])]]
         attrs = ComputeNode.get_attr_value_dict(x)
         log.debug('%s', attrs)
 
-        return MatMulComputeNode(layer_id, layer_type, feature_input, feature_output, weight_path)
+        return MatMulComputeNode(layer_id, layer_type, feature_input, feature_output, weight_path, weight_shape)
