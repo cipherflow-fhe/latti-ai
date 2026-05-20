@@ -1,0 +1,46 @@
+{
+    "input_feature": [
+        "input"
+    ],
+    "output_feature": [
+        "output"
+    ],
+    "feature": {
+        "input": {
+            "dim": 2,
+            "scale": 1,
+            "shape": [
+                197,
+                192
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 0,
+            "data_type": "feature_mat"
+        },
+        "output": {
+            "dim": 2,
+            "scale": 1,
+            "shape": [
+                197,
+                192
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 0,
+            "data_type": "feature_mat"
+        }
+    },
+    "layer": {
+        "_vit": {
+            "type": "CustomMultiHeadAttention",
+            "feature_input": [
+                "input"
+            ],
+            "feature_output": [
+                "output"
+            ],
+            "n_heads": 3,
+            "weight_path": "ln.weight",
+            "bias_path": "ln.bias"
+        }
+    }
+}

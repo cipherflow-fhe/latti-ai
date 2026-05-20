@@ -42,6 +42,7 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     # update_skip_for_btp(pt_graph)
     # update_level_cost_for_btp(pt_graph)
     set_is_adaptive_avgpool(pt_graph)
+    transforms.expand_multi_head_attention(pt_graph)
     transforms.expand_layer_norm(pt_graph)
     transforms.split_upsampling_layers(pt_graph)
     transforms.infer_shapes_skips_and_pack_num(pt_graph)
@@ -250,6 +251,7 @@ def run_pipeline(
     num_workers: int = os.cpu_count(),
     style: str | None = None,
     graph_type: str | None = None,
+    is_use_btp: bool =False
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -274,14 +276,19 @@ def run_pipeline(
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
 
-    use_btp = False
-    succeeded, graph, score = try_no_btp(raw_graph)
-    if not succeeded:
+    if not is_use_btp:
+        use_btp = False
+        succeeded, graph, score = try_no_btp(raw_graph)
+        if not succeeded:
+            use_btp = True
+            succeeded, graph, score = try_btp(num_experiments, raw_graph, temperature, num_workers)
+            if not succeeded:
+                raise ValueError('Compilation failed.')
+    else:
         use_btp = True
         succeeded, graph, score = try_btp(num_experiments, raw_graph, temperature, num_workers)
         if not succeeded:
             raise ValueError('Compilation failed.')
-
     dump_graph(graph, output_dir, score, use_btp=use_btp)
 
     return graph, score
