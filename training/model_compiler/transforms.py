@@ -952,7 +952,7 @@ def process_polyact(graph: LayerAbstractGraph) -> list:
     return res_list
 
 
-def expand_vit(graph: LayerAbstractGraph):
+def expand_multi_head_attention(graph: LayerAbstractGraph):
     for vit_node in list(graph.dag.nodes):
         if not (isinstance(vit_node, ComputeNode) and vit_node.layer_type == 'CustomMultiHeadAttention'):
             continue

@@ -42,7 +42,7 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     # update_skip_for_btp(pt_graph)
     # update_level_cost_for_btp(pt_graph)
     set_is_adaptive_avgpool(pt_graph)
-    transforms.expand_vit(pt_graph)
+    transforms.expand_multi_head_attention(pt_graph)
     transforms.expand_layer_norm(pt_graph)
     transforms.split_upsampling_layers(pt_graph)
     transforms.infer_shapes_skips_and_pack_num(pt_graph)
