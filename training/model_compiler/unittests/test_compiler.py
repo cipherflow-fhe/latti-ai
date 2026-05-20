@@ -571,7 +571,20 @@ class TestSingleLayer(CompilerTestBase):
         model = nn_modules.SingleGelu()
         graph, _ = self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
         self.assertTrue(any(node.layer_type == 'pcmpoly' for node in graph.dag.nodes if isinstance(node, ComputeNode)))
-
+    
+    def test_vit(self):
+        self.temp_json_path = 'training/model_compiler/unittests/vit_pt.json'
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+            style='multiplexed',
+            graph_type='btp',
+            is_use_btp=True
+        )
+        return graph, score
 
 class TestLayerInteraction(CompilerTestBase):
     def test_mismatched_scale(self):

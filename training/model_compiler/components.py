@@ -778,6 +778,7 @@ class LayerAbstractGraph:
             elif layer_type == 'parcpmm':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', '')
+                compute_node.out_features = layer_json.get('out_features', 0)
 
             elif layer_type == 'partranspose':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
@@ -793,6 +794,18 @@ class LayerAbstractGraph:
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', '')
                 compute_node.order = layer_json.get('order', 4)
+
+            elif layer_type == 'vit':
+                compute_node = ComputeNode(key, layer_type, 1, 1)
+                compute_node.q_weight_path = layer_json.get('q_weight_path', f'{key}.q.weight')
+                compute_node.k_weight_path = layer_json.get('k_weight_path', f'{key}.k.weight')
+                compute_node.v_weight_path = layer_json.get('v_weight_path', f'{key}.v.weight')
+                compute_node.proj_weight_path = layer_json.get(
+                    'proj_weight_path', layer_json.get('out_weight_path', f'{key}.proj.weight')
+                )
+                compute_node.gamma_path = layer_json.get('gamma_path', f'{key}.gamma')
+                compute_node.poly_weight_path = layer_json.get('poly_weight_path', f'{key}.poly.weight')
+                compute_node.poly_order = layer_json.get('poly_order', layer_json.get('order', 4))
 
             elif 'fc' in layer_type:
                 weight_path = layer_json['weight_path']
@@ -1050,6 +1063,7 @@ class LayerAbstractGraph:
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                     'weight_path': layer.path,
+                    'out_features': layer.out_features,
                 }
             if layer_type == 'partranspose':
                 layers[layer_id] = {

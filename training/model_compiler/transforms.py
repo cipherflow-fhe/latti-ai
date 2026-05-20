@@ -516,6 +516,9 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
             else:
                 if compute_node.layer_type == 'parcpmm':
                     succ.shape[0] = preds[0].shape[0]
+                    out_features = getattr(compute_node, 'out_features', 0)
+                    if out_features > 0:
+                        succ.shape[1] = out_features
                 elif compute_node.layer_type == 'partranspose':
                     n_heads = max(1, config.n_heads)
                     succ.shape[0] = preds[0].shape[1] // n_heads if len(preds[0].shape) > 1 else preds[0].shape[0]
@@ -549,8 +552,10 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                 n_h_padded <<= 1
             if n_slot >= n_h_padded * d * d:
                 G = 1
-            else:
+            elif n_slot >= d * d:
                 G = n_h_padded // (n_slot // (d * d))
+            else:
+                G = n_h_padded
             for f_node in preds + [succ]:
                 if f_node.data_type == 'feature_mat':
                     # Per-head shape: divide each dim by n_heads if it's a multiple
@@ -945,6 +950,120 @@ def process_polyact(graph: LayerAbstractGraph) -> list:
         if isinstance(p, ComputeNode) and p.layer_type == 'polyact':
             miniprocess(graph, p, res_list, p.layer_id, True)
     return res_list
+
+
+def expand_vit(graph: LayerAbstractGraph):
+    for vit_node in list(graph.dag.nodes):
+        if not (isinstance(vit_node, ComputeNode) and vit_node.layer_type == 'vit'):
+            continue
+
+        preds = list(graph.dag.predecessors(vit_node))
+        succs = list(graph.dag.successors(vit_node))
+        if len(preds) != 1 or len(succs) != 1:
+            raise ValueError(
+                f'ViT node {vit_node.layer_id} must have exactly 1 input and 1 output, '
+                f'got {len(preds)} inputs and {len(succs)} outputs'
+            )
+        x_in: FeatureNode = preds[0]
+        out: FeatureNode = succs[0]
+
+        base_id = vit_node.layer_id
+        x_in_attrs = graph.dag.nodes[x_in]
+        skip = list(x_in_attrs.get('skip', [1] * x_in.dim))
+        level = x_in_attrs.get('level', 0)
+        pack_num = x_in_attrs.get('pack_num', 1)
+        m = x_in.shape[0]
+        n = x_in.shape[1]
+        n_heads = max(1, config.n_heads)
+
+        def make_feature(name: str, shape: list[int] | None = None) -> FeatureNode:
+            f = FeatureNode(
+                key=name,
+                dim=x_in.dim,
+                channel=x_in.channel,
+                scale=x_in.scale,
+                ckks_parameter_id=x_in.ckks_parameter_id,
+                ckks_scale=x_in.ckks_scale,
+                shape=list(shape if shape is not None else x_in.shape),
+            )
+            f.data_type = x_in.data_type
+            return f
+
+        def f_attrs(f: FeatureNode) -> dict:
+            return {'name': f.node_id, 'skip': list(skip), 'level': level, 'pack_num': pack_num}
+
+        def c_attrs(level_cost: int, name: str) -> dict:
+            return {'name': name, 'level_cost': level_cost}
+
+        q = make_feature(f'{base_id}_q')
+        k = make_feature(f'{base_id}_k')
+        v = make_feature(f'{base_id}_v')
+        kt = make_feature(f'{base_id}_kt', [n // n_heads, m * n_heads])
+        qkt = make_feature(f'{base_id}_qkt', [m, m * n_heads])
+        qkt_gamma = make_feature(f'{base_id}_qkt_gamma', [m, m * n_heads])
+        qkt_poly = make_feature(f'{base_id}_qkt_polyact', [m, m * n_heads])
+        qktv = make_feature(f'{base_id}_qktv', list(out.shape))
+
+        q_node = ComputeNode(f'{base_id}_q_layer', 'parcpmm', 1, 1)
+        q_node.path = getattr(vit_node, 'q_weight_path', f'{base_id}.q.weight')
+        q_node.out_features = n
+        k_node = ComputeNode(f'{base_id}_k_layer', 'parcpmm', 1, 1)
+        k_node.path = getattr(vit_node, 'k_weight_path', f'{base_id}.k.weight')
+        k_node.out_features = n
+        v_node = ComputeNode(f'{base_id}_v_layer', 'parcpmm', 1, 1)
+        v_node.path = getattr(vit_node, 'v_weight_path', f'{base_id}.v.weight')
+        v_node.out_features = n
+        kt_node = ComputeNode(f'{base_id}_kt_layer', 'partranspose', 1, 1)
+        qkt_node = ComputeNode(f'{base_id}_qkt_layer', 'parccmm', 1, 1)
+        gamma_node = ComputeNode(f'{base_id}_gamma', 'pcmgamma', 1, 1)
+        gamma_node.path = getattr(vit_node, 'gamma_path', f'{base_id}.gamma')
+        poly_node = ComputeNode(f'{base_id}_poly', 'pcmpoly', 1, 1)
+        poly_node.path = getattr(vit_node, 'poly_weight_path', f'{base_id}.poly.weight')
+        poly_node.order = getattr(vit_node, 'poly_order', 4)
+        qktv_node = ComputeNode(f'{base_id}_qktv_layer', 'parccmm', 1, 1)
+        out_node = ComputeNode(f'{base_id}_out', 'parcpmm', 1, 1)
+        out_node.out_features = n
+        out_node.path = getattr(vit_node, 'proj_weight_path', f'{base_id}.proj.weight')
+
+        graph.dag.remove_node(vit_node)
+
+        for node in (q_node, k_node, v_node):
+            graph.dag.add_node(node, **c_attrs(2, node.layer_id))
+        graph.dag.add_node(kt_node, **c_attrs(1, kt_node.layer_id))
+        graph.dag.add_node(qkt_node, **c_attrs(3, qkt_node.layer_id))
+        graph.dag.add_node(gamma_node, **c_attrs(1, gamma_node.layer_id))
+        graph.dag.add_node(poly_node, **c_attrs(3, poly_node.layer_id))
+        graph.dag.add_node(qktv_node, **c_attrs(3, qktv_node.layer_id))
+        graph.dag.add_node(out_node, **c_attrs(2, out_node.layer_id))
+
+        for f in (q, k, v, kt, qkt, qkt_gamma, qkt_poly, qktv):
+            graph.dag.add_node(f, **f_attrs(f))
+
+        graph.dag.add_edge(x_in, q_node)
+        graph.dag.add_edge(q_node, q)
+        graph.dag.add_edge(x_in, k_node)
+        graph.dag.add_edge(k_node, k)
+        graph.dag.add_edge(x_in, v_node)
+        graph.dag.add_edge(v_node, v)
+
+        graph.dag.add_edge(k, kt_node)
+        graph.dag.add_edge(kt_node, kt)
+
+        graph.dag.add_edge(q, qkt_node, input_index=0)
+        graph.dag.add_edge(kt, qkt_node, input_index=1)
+        graph.dag.add_edge(qkt_node, qkt)
+
+        graph.dag.add_edge(qkt, gamma_node)
+        graph.dag.add_edge(gamma_node, qkt_gamma)
+        graph.dag.add_edge(qkt_gamma, poly_node)
+        graph.dag.add_edge(poly_node, qkt_poly)
+
+        graph.dag.add_edge(qkt_poly, qktv_node, input_index=0)
+        graph.dag.add_edge(v, qktv_node, input_index=1)
+        graph.dag.add_edge(qktv_node, qktv)
+
+        graph.dag.add_edge(qktv, out_node)
+        graph.dag.add_edge(out_node, out)
 
 
 def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
