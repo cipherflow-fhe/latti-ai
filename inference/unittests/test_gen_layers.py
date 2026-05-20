@@ -1812,6 +1812,75 @@ class TestLayerExport(unittest.TestCase):
             fpga_acc=False,
         )
 
+    def test_par_cpmm_expand_polyactrn_reduce(self):
+        """Par CPMM expand -> gamma -> degree 2/4 poly -> reduce mega pipeline."""
+        set_param('PN14QP438')
+        N_SLOT = 16384 // 2
+        m, n_heads, head_dim, K_factor = 53, 3, 16, 2
+        total_dim = n_heads * head_dim
+        expanded_dim = K_factor * total_dim
+
+        for degree, init_level in [(2, 7), (4, 8)]:
+            expand_layer = ParBlockColMajorCPMM(
+                shape_A=(m, head_dim),
+                W_shape=(total_dim, expanded_dim),
+                block_size=head_dim,
+                n_heads=n_heads,
+                n_slot=N_SLOT,
+            )
+            n_in_cts = expand_layer.num_block_rows_A * expand_layer.G
+            input_cts = [CkksCiphertextNode(f'input_ct_deg{degree}_{k}', level=init_level) for k in range(n_in_cts)]
+            expand_data = CustomDataNode(type='cpmm_data_source', id='_expand_cpmm')
+            expanded_cts = expand_layer.call_custom_compute(input_cts, expand_data)
+
+            gamma_layer = ParBlockColMajorPolyActRNGamma(
+                shape=(m, expanded_dim),
+                block_size=head_dim,
+                n_heads=n_heads,
+                n_slot=N_SLOT,
+                K=K_factor,
+            )
+            gamma_data = CustomDataNode(type='polyactrn_gamma_data_source', id='_gamma_layer')
+            gamma_cts = gamma_layer.call_custom_compute(expanded_cts, gamma_data)
+
+            poly_layer = ParBlockColMajorPolyActRNPoly(
+                shape=(m, expanded_dim),
+                block_size=head_dim,
+                n_heads=n_heads,
+                n_slot=N_SLOT,
+                degree=degree,
+                K=K_factor,
+            )
+            poly_data = CustomDataNode(type='polyactrn_poly_data_source', id='_poly_layer')
+            poly_cts = poly_layer.call_custom_compute(gamma_cts, poly_data)
+
+            reduce_layer = ParBlockColMajorCPMM(
+                shape_A=(m, head_dim),
+                W_shape=(expanded_dim, total_dim),
+                block_size=head_dim,
+                n_heads=n_heads,
+                n_slot=N_SLOT,
+            )
+            reduce_data = CustomDataNode(type='cpmm_data_source', id='_reduce_cpmm')
+            result_cts = reduce_layer.call_custom_compute(poly_cts, reduce_data)
+
+            process_custom_task(
+                input_args=[
+                    Argument('input', input_cts),
+                    Argument('_expand_cpmm', [expand_data]),
+                    Argument('_gamma_layer', [gamma_data]),
+                    Argument('_poly_layer', [poly_data]),
+                    Argument('_reduce_cpmm', [reduce_data]),
+                ],
+                output_args=[Argument('output', result_cts)],
+                output_instruction_path=base_path
+                / f'CKKS_par_cpmm_expand_polyactrn_reduce_m{m}_heads{n_heads}_dim{head_dim}_K{K_factor}'
+                / f'degree_{degree}'
+                / f'level_{init_level}'
+                / 'server',
+                fpga_acc=False,
+            )
+
     def test_par_full_attention(self):
         """Full FHE attention: X→Q,K,V (3 CPMMs) → Transpose(K) → Q*K^T (CCMM) → attn*V (CCMM).
 
