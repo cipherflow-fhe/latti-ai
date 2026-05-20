@@ -123,6 +123,12 @@ jobs:
             -DLATTI_AI_BUILD=$GITHUB_WORKSPACE/build
           cmake --build . -j$(nproc)
 
+      - name: Generate example instructions
+        run: |
+          export PYTHONPATH="$GITHUB_WORKSPACE/inference/lattisense:$PYTHONPATH"
+          python3 inference/interface/gen_mega_ag.py --task-dir examples/test_mnist/task
+          python3 inference/interface/gen_mega_ag.py --task-dir examples/test_cifar10/task
+
       - name: Test pybind11 modules
         timeout-minutes: 10
         run: |
@@ -141,11 +147,6 @@ jobs:
           cd build/inference/unittests
           ./test_e2e_single_layer "[e2e][gpu]"
           ./test_e2e_multiple_layer "[e2e][gpu]"
-
-      - name: Generate example instructions
-        run: |
-          python3 inference/interface/gen_mega_ag.py --task-dir examples/test_mnist/task
-          python3 inference/interface/gen_mega_ag.py --task-dir examples/test_cifar10/task
 
       - name: Run example tests (GPU only)
         timeout-minutes: 60
