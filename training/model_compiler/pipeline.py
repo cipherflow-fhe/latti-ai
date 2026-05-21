@@ -45,6 +45,7 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     transforms.expand_multi_head_attention(pt_graph)
     transforms.expand_layer_norm(pt_graph)
     transforms.expand_poly_act_rn(pt_graph)
+    transforms.expand_parcpmm_add_pt(pt_graph)
     transforms.split_upsampling_layers(pt_graph)
     transforms.infer_shapes_skips_and_pack_num(pt_graph)
     transforms.set_pcm_K(pt_graph)
