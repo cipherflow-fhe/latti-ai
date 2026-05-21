@@ -2332,6 +2332,45 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "add_layer", "", HeteroProcessors)
     }
 }
 
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_block_col_major_add_generated",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+    fs::path server_dir = base_path / "CKKS_par_block_col_major_add" / "par_block_col_major" / "level_2" / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    const int init_level = 2;
+    const uint32_t m = 8, n_heads = 2, head_dim = 4, d = 4;
+    const uint32_t total_dim = n_heads * head_dim;
+    auto x0 = gen_random_array<2>({m, total_dim}, 1.0);
+    auto x1 = gen_random_array<2>({m, total_dim}, 1.0);
+
+    FeatureMatEncrypted x0_enc(&res.context, init_level);
+    x0_enc.par_block_col_major_pack(x0, d, n_heads, false, res.param.get_default_scale());
+    FeatureMatEncrypted x1_enc(&res.context, init_level);
+    x1_enc.par_block_col_major_pack(x1, d, n_heads, false, res.param.get_default_scale());
+
+    ParBlockColMajorAdd add_layer(res.param);
+    auto expected = add_layer.run_plaintext(x0, x1);
+
+    vector<CkksCiphertext> x0_cts, x1_cts, out_cts;
+    for (auto& ct : x0_enc.data)
+        x0_cts.push_back(ct.copy());
+    for (auto& ct : x1_enc.data)
+        x1_cts.push_back(ct.copy());
+    for (size_t i = 0; i < x0_enc.data.size(); i++)
+        out_cts.push_back(res.context.new_ciphertext(init_level, res.param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input0", &x0_cts},
+        {"input1", &x1_cts},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, expected, {m, head_dim}, d, n_heads, true, out_cts);
+}
+
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "avgpool2d_layer", "", HeteroProcessors) {
     int init_level = 3;
     Duo skip = {1, 1};

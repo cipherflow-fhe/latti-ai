@@ -17,6 +17,7 @@
  */
 
 #include "add_layer.h"
+#include <cassert>
 
 using namespace std;
 using namespace lattisense;
@@ -89,6 +90,49 @@ vector<double> AddLayer::run_plaintext_0d(const vector<double>& x0, const vector
     vector<double> y(x0.size());
     for (size_t i = 0; i < x0.size(); i++) {
         y[i] = x0[i] + x1[i];
+    }
+    return y;
+}
+
+ParBlockColMajorAdd::ParBlockColMajorAdd(const CkksParameter& param_in) : Layer(param_in) {}
+
+void ParBlockColMajorAdd::add(CkksContext* ctx,
+                              const FeatureMatEncrypted& x0,
+                              const FeatureMatEncrypted& x1,
+                              FeatureMatEncrypted& result) const {
+    assert(x0.data.size() == x1.data.size());
+    assert(x0.shape == x1.shape);
+    assert(x0.matmul_block_size == x1.matmul_block_size);
+    assert(x0.level == x1.level);
+
+    int n_ct = x0.data.size();
+    result.data.resize(n_ct);
+    parallel_for(n_ct, th_nums, *ctx, [&](CkksContext& ctx_copy, int ct_idx) {
+        result.data[ct_idx] = ctx_copy.add(x0.data[ct_idx], x1.data[ct_idx]);
+    });
+}
+
+FeatureMatEncrypted
+ParBlockColMajorAdd::run(CkksContext& ctx, const FeatureMatEncrypted& x0, const FeatureMatEncrypted& x1) {
+    FeatureMatEncrypted result(&ctx, x0.level);
+    result.dim = x0.dim;
+    result.shape = x0.shape;
+    result.matmul_block_size = x0.matmul_block_size;
+    result.n_channel = x0.n_channel;
+    result.n_channel_per_ct = x0.n_channel_per_ct;
+    add(&ctx, x0, x1, result);
+    result.level = result.data.empty() ? x0.level : result.data[0].get_level();
+    return result;
+}
+
+Array<double, 2> ParBlockColMajorAdd::run_plaintext(const Array<double, 2>& x0, const Array<double, 2>& x1) const {
+    auto shape = x0.get_shape();
+    assert(shape == x1.get_shape());
+    Array<double, 2> y(shape);
+    for (uint32_t i = 0; i < shape[0]; i++) {
+        for (uint32_t j = 0; j < shape[1]; j++) {
+            y.set(i, j, x0.get(i, j) + x1.get(i, j));
+        }
     }
     return y;
 }
