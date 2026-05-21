@@ -501,6 +501,21 @@ void InitInferenceProcess::_init_par_block_col_major_add_layer(const string& key
     _prepare_layer(key, move(add_mat));
 }
 
+void InitInferenceProcess::_init_par_block_col_major_add_pt_layer(const string& key,
+                                                                  const json& layer,
+                                                                  const hid_t& h5_file) {
+    FeatureNode feat_in(json_features[layer["feature_input"][0].get<string>()]);
+    FeatureNode feat_out(json_features[layer["feature_output"][0].get<string>()]);
+    CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
+
+    uint32_t block_size = feat_in.shape[1] / n_heads;
+    auto B = _load_h5_tensor<2>(layer, h5_file, "weight", {(uint64_t)feat_in.shape[0], (uint64_t)feat_in.shape[1]});
+
+    auto add_pt = MakeU<ParBlockColMajorAddPt>(param, feat_in.shape, block_size, n_heads, feat_in.level, move(B));
+    _prepare_layer(
+        key, move(add_pt), [](ParBlockColMajorAddPt&) {}, [](ParBlockColMajorAddPt& l) { l.precompute_pts(); });
+}
+
 void InitInferenceProcess::_init_mult_scalar_layer(const string& key,
                                                    const json& layer,
                                                    const hid_t& h5_file,
@@ -889,6 +904,8 @@ void InitInferenceProcess::load_model_prepare() {
             _init_parccmm_layer(key, value);
         } else if (layer_type == "partranspose") {
             _init_partranspose_layer(key, value);
+        } else if (layer_type == "par_add_pt") {
+            _init_par_block_col_major_add_pt_layer(key, value, h5_file);
         } else if (layer_type == "pcmgamma") {
             _init_pcmgamma_layer(key, value, h5_file);
         } else if (layer_type == "pcmpoly") {
@@ -1318,6 +1335,12 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
                 result =
                     MakeU<FeatureMatEncrypted>(fp->get_layer<ParBlockColMajorTranspose>(key).run(context, inputMat));
+                fhe_timer.stop();
+            } else if (layer_type == "par_add_pt") {
+                fhe_timer.start();
+                const FeatureMatEncrypted& inputMat =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
+                result = MakeU<FeatureMatEncrypted>(fp->get_layer<ParBlockColMajorAddPt>(key).run(context, inputMat));
                 fhe_timer.stop();
             } else if (layer_type == "pcmgamma") {
                 fhe_timer.start();
@@ -1989,6 +2012,10 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 auto& input0 = p_feature_mat_x[feature_input[0]];
                 result_mat = fp->get_layer<ParBlockColMajorTranspose>(key).run_plaintext(input0);
             }
+            if (layer_type == "par_add_pt") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                result_mat = fp->get_layer<ParBlockColMajorAddPt>(key).run_plaintext(input0);
+            }
             if (layer_type == "pcmgamma") {
                 auto& input0 = p_feature_mat_x[feature_input[0]];
                 result_mat = fp->get_layer<ParBlockColMajorPolyActRNGamma>(key).run_plaintext(input0);
@@ -2335,6 +2362,9 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
         } else if (layer_type == "partranspose") {
             data_sources.emplace_back(
                 key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParBlockColMajorTranspose>(key))));
+        } else if (layer_type == "par_add_pt") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParBlockColMajorAddPt>(key))));
         } else if (layer_type == "pcmgamma") {
             data_sources.emplace_back(
                 key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParBlockColMajorPolyActRNGamma>(key))));
@@ -2571,6 +2601,9 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         } else if (op_class == "ParBlockColMajorTranspose") {
             auto* layer = static_cast<ParBlockColMajorTranspose*>(layer_ptr);
             pt = layer->generate_transpose_diag_pt(ckks_ctx, attrs.value("k_idx", i));
+        } else if (op_class == "ParBlockColMajorAddPt") {
+            auto* layer = static_cast<ParBlockColMajorAddPt*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("bi", i), attrs.value("bj", j), attrs.value("g", k));
         } else {
             throw runtime_error("encode_pt: unknown op_class: " + op_class);
         }
