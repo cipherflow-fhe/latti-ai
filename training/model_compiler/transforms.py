@@ -1227,11 +1227,7 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
 
 
 def set_pcm_K(graph: LayerAbstractGraph):
-    """Set K attribute on pcmgamma and pcmpoly nodes.
-
-    K = ceil(input_shape[1] / BASE_FEAT_DIM), where BASE_FEAT_DIM comes from
-    config.base_feat_dim.  If base_feat_dim <= 0, K defaults to 1.
-    """
+    """Set K attribute on pcmgamma and pcmpoly nodes."""
     base_feat_dim = config.base_feat_dim
     for node in graph.dag.nodes:
         if not isinstance(node, ComputeNode):
@@ -1246,3 +1242,25 @@ def set_pcm_K(graph: LayerAbstractGraph):
             node.K = math.ceil(in_shape[1] / base_feat_dim)
         else:
             node.K = 1
+
+    def get_prev_compute(feature_node: FeatureNode) -> ComputeNode | None:
+        prev_compute_nodes = [p for p in graph.dag.predecessors(feature_node) if isinstance(p, ComputeNode)]
+        if not prev_compute_nodes:
+            return None
+        return prev_compute_nodes[0]
+
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode) or node.layer_type not in ('pcmgamma', 'pcmpoly'):
+            continue
+        preds = list(graph.dag.predecessors(node))
+        if not preds:
+            continue
+        prev_compute = get_prev_compute(preds[0])
+        if node.layer_type == 'pcmgamma' and prev_compute is not None and prev_compute.layer_type == 'parccmm':
+            node.K = 1
+        elif node.layer_type == 'pcmpoly' and prev_compute is not None:
+            prev_preds = list(graph.dag.predecessors(prev_compute))
+            if prev_preds:
+                prev_prev_compute = get_prev_compute(prev_preds[0])
+                if prev_prev_compute is not None and prev_prev_compute.layer_type == 'parccmm':
+                    node.K = 1
