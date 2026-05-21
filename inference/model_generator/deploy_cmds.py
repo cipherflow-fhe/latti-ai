@@ -44,6 +44,7 @@ from inference.model_generator.layers.poly_relu2d import *
 from inference.model_generator.layers.upsample_layer import *
 from inference.model_generator.layers.par_block_col_major_ccmm import ParBlockColMajorCCMM
 from inference.model_generator.layers.par_block_col_major_cpmm import ParBlockColMajorCPMM
+from inference.model_generator.layers.par_block_col_major_add_pt import ParBlockColMajorAddPt
 from inference.model_generator.layers.par_block_col_major_layernorm import (
     ParBlockColMajorLNAffine,
     ParBlockColMajorLNGoldschmidt,
@@ -169,7 +170,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     block_size = shape_per_head[1]
                     G = _par_group_count(block_size, n_heads, n // 2)
                     n_packed = math.ceil(shape_per_head[0] / block_size) * G
-                elif consumer_type in {'pcmstats', 'pcmcenter', 'pcmpoly', 'add', 'add2d'}:
+                elif consumer_type in {'pcmstats', 'pcmcenter', 'pcmpoly', 'add', 'add2d', 'par_add_pt'}:
                     shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n // 2)
                     par_feature_shapes[input_fid] = shape_per_head
                 else:
@@ -203,7 +204,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map[input_fid] = x
             input_args.append(Argument(input_fid, x))
 
-    _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose'}
+    _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose', 'par_add_pt'}
     _PCM_LAYER_TYPES = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine', 'pcmpoly'}
     _FEATURE_MAT_LAYER_TYPES = _PAR_MATRIX_LAYER_TYPES | _PCM_LAYER_TYPES
     _UNSUPPORTED_MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose'}
@@ -1001,6 +1002,31 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             par_feature_shapes[layer_output_feature_ids[0]] = (shape_per_head[1], shape_per_head[0])
 
+        elif layer_config['type'] == 'par_add_pt':
+            n_heads = task_config_info.get('n_heads', 1)
+            feat_in = config_info['feature'][layer_input_feature_ids[0]]
+            shape_full = tuple(feat_in['shape'])
+            n_per_head = shape_full[1] // n_heads
+            block_size = n_per_head
+
+            add_pt_layer = ParBlockColMajorAddPt(shape_full, block_size, n_heads, n // 2)
+
+            n_cts_in = add_pt_layer.total_cts
+
+            input_fid = layer_input_feature_ids[0]
+            if input_fid not in feature_id_to_nodes_map:
+                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='par_add_pt_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = add_pt_layer.call_custom_compute(
+                feature_id_to_nodes_map[input_fid],
+                data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+
         elif layer_config['type'] == 'parcpmm':
             n_heads = task_config_info.get('n_heads', 1)
             feat_in = config_info['feature'][layer_input_feature_ids[0]]
@@ -1012,7 +1038,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             shape_A = (shape_A_full[0], n_per_head)
             W_shape = (shape_A_full[1], feat_out['shape'][1])
 
-            parcpmm_layer = ParBlockColMajorCPMM(shape_A, W_shape, block_size, n_heads, n // 2)
+            has_bias = 'bias_path' in layer_config
+            parcpmm_layer = ParBlockColMajorCPMM(shape_A, W_shape, block_size, n_heads, n // 2, has_bias=has_bias)
 
             # Compute input CT count based on mode
             if parcpmm_layer.mode == 'REDUCE':

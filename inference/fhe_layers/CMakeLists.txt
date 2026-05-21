@@ -27,6 +27,7 @@ add_library(fhe_layers
   par_block_col_major_transpose.cpp
   par_block_col_major_ccmm.cpp
   par_block_col_major_cpmm.cpp
+  par_block_col_major_add_pt.cpp
   block_col_major_layernorm.cpp
   par_block_col_major_layernorm.cpp
   block_col_major_polyactrn.cpp

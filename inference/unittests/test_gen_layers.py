@@ -33,6 +33,7 @@ from inference.model_generator.layers.avgpool2d_layer import Avgpool2DLayer  # n
 from inference.model_generator.layers.avgpool1d_layer import Avgpool1DLayer  # noqa: E402
 from inference.model_generator.layers.mult_scaler import MultScalarLayer  # noqa: E402
 from inference.model_generator.layers.par_block_col_major_cpmm import ParBlockColMajorCPMM  # noqa: E402
+from inference.model_generator.layers.par_block_col_major_add_pt import ParBlockColMajorAddPt  # noqa: E402
 from inference.model_generator.layers.par_block_col_major_transpose import ParBlockColMajorTranspose  # noqa: E402
 from inference.model_generator.layers.par_block_col_major_ccmm import ParBlockColMajorCCMM  # noqa: E402
 from inference.model_generator.layers.par_block_col_major_polyactrn import (  # noqa: E402
@@ -1160,6 +1161,56 @@ class TestLayerExport(unittest.TestCase):
 
         gen_custom_task(str(task_path))
 
+    def test_par_block_col_major_add_pt(self):
+        level = 2
+        m = 8
+        n_heads = 2
+        head_dim = 4
+        total_dim = n_heads * head_dim
+        d = 4
+        task_path = base_path / 'CKKS_par_block_col_major_add_pt' / 'par_block_col_major' / f'level_{level}' / 'server'
+        task_path.mkdir(parents=True, exist_ok=True)
+
+        feature_in = {
+            'dim': 2,
+            'scale': 1.0,
+            'ckks_scale': 1.0,
+            'shape': [m, total_dim],
+            'ckks_parameter_id': 'ckks',
+            'level': level,
+            'data_type': 'feature_mat',
+            'matmul_block_size': d,
+        }
+        config = {
+            'input_feature': ['input0'],
+            'output_feature': ['output'],
+            'feature': {
+                'input0': dict(feature_in),
+                'output': dict(feature_in),
+            },
+            'layer': {
+                'add_pt_0': {
+                    'type': 'par_add_pt',
+                    'feature_input': ['input0'],
+                    'feature_output': ['output'],
+                    'weight_path': 'add_pt_weight',
+                    'weight_shape': [m, total_dim],
+                }
+            },
+        }
+        task_config = {
+            'pack_style': 'ordinary',
+            'block_shape': [64, 64],
+            'is_absorb_polyrelu': False,
+            'n_heads': n_heads,
+        }
+        with open(task_path / 'task_config.json', 'w', encoding='utf-8') as f:
+            json.dump(task_config, f)
+        with open(task_path / 'nn_layers_ct_0.json', 'w', encoding='utf-8') as f:
+            json.dump(config, f)
+
+        gen_custom_task(str(task_path))
+
     def test_avgpool2d_layer(self):
         N = 16384
         set_param('PN14QP438')
@@ -1745,6 +1796,45 @@ class TestLayerExport(unittest.TestCase):
                 output_args=[Argument('output', output_cts)],
                 output_instruction_path=base_path
                 / 'CKKS_par_cpmm_square'
+                / f'm_{m}_heads_{n_heads}_dim_{head_dim}'
+                / f'level_{level}'
+                / 'server',
+                fpga_acc=False,
+            )
+
+    def test_par_cpmm_square_with_bias(self):
+        """ParBlockColMajorCPMM SQUARE with bias: n_heads=3."""
+        set_param('PN14QP438')
+        N_SLOT = 16384 // 2
+
+        configs = [
+            (53, 3, 16, 2),
+        ]
+
+        for m, n_heads, head_dim, level in configs:
+            total_dim = n_heads * head_dim
+            layer = ParBlockColMajorCPMM(
+                shape_A=(m, head_dim),
+                W_shape=(total_dim, total_dim),
+                block_size=head_dim,
+                n_heads=n_heads,
+                n_slot=N_SLOT,
+                has_bias=True,
+            )
+
+            n_in_cts = layer.num_block_rows_A * layer.G
+            input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=level) for k in range(n_in_cts)]
+            data_source = CustomDataNode(type='cpmm_data_source', id='_cpmm_layer')
+            output_cts = layer.call_custom_compute(input_cts, data_source)
+
+            process_custom_task(
+                input_args=[
+                    Argument('input', input_cts),
+                    Argument('_cpmm_layer', [data_source]),
+                ],
+                output_args=[Argument('output', output_cts)],
+                output_instruction_path=base_path
+                / 'CKKS_par_cpmm_square_with_bias'
                 / f'm_{m}_heads_{n_heads}_dim_{head_dim}'
                 / f'level_{level}'
                 / 'server',
