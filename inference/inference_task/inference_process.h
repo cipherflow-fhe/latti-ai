@@ -213,6 +213,7 @@ public:
     virtual ~InferenceProcess();
     InitInferenceProcess* fp;
     ComputeDevice compute_device = ComputeDevice::CPU;  // Default to CPU mode
+    int gpu_device = 0;
 
     std::map<std::string, UPtr<ls::CkksContext>> ckks_contexts;
 
@@ -221,10 +222,10 @@ public:
     std::vector<std::string> available_keys;
     std::map<std::string, Array1D> p_feature0d_x;
 
-    void run_task(bool is_mpc = false);
+    void run_task(bool is_mpc = false, ls::ProgressCallback progress_cb = nullptr);
     void run_task_sdk(bool is_mpc = false);
     void run_task_plaintext(bool is_mpc = false);
-    void run_task_lazy(bool is_mpc = false);
+    void run_task_lazy(bool is_mpc = false, ls::ProgressCallback progress_cb = nullptr);
 
     // load_model
     void prepare_task();

@@ -58,6 +58,7 @@
 #include "fhe_layers/mult_scaler.h"
 #include "fhe_layers/upsample_layer.h"
 #include "fhe_layers/upsample_nearest_layer.h"
+#include "fhe_ops_lib/utils.h"
 #include "ut_util.h"
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include <lattisense/lib/nlohmann/json.hpp>

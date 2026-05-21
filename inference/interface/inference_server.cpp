@@ -23,8 +23,8 @@
 
 using namespace lattisense;
 
-InferenceServer::InferenceServer(const std::string& server_dir, bool use_gpu)
-    : server_dir_(server_dir), use_gpu_(use_gpu) {}
+InferenceServer::InferenceServer(const std::string& server_dir, bool use_gpu, int gpu_device)
+    : server_dir_(server_dir), use_gpu_(use_gpu), gpu_device_(gpu_device) {}
 
 InferenceServer::~InferenceServer() = default;
 
@@ -112,13 +112,15 @@ void InferenceServer::load_model() {
 
     if (use_gpu_) {
         fp_->compute_device = ComputeDevice::GPU;
+        fp_->gpu_device = gpu_device_;
     }
     fp_->prepare_task();
 
     std::cout << "[Server] Done." << std::endl;
 }
 
-std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::string, Bytes>& encrypted_inputs) {
+std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::string, Bytes>& encrypted_inputs,
+                                                       lattisense::ProgressCallback progress_cb) {
     // Deserialize and set all input ciphertexts
     for (auto& [name, bytes] : encrypted_inputs) {
         auto it = input_params_.find(name);
@@ -148,7 +150,7 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
     std::cout << "[Server] Device: " << (use_gpu_ ? "GPU" : "CPU") << std::endl;
     Timer timer;
     timer.start();
-    fp_->run_task_lazy();
+    fp_->run_task_lazy(false, progress_cb);
     timer.stop();
     timer.print("Encrypted inference time");
     std::cout << "[Server] Done." << std::endl;
