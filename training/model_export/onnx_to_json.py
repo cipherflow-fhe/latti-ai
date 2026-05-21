@@ -98,6 +98,114 @@ def get_constant(const_node: onnx.NodeProto):
     return const_value
 
 
+class CustomMultiHeadAttentionComputeNode(ComputeNode):
+    def __init__(
+        self,
+        layer_id: str,
+        feature_input: list[FeatureNode],
+        feature_output: list[FeatureNode],
+        q_weight_path: str,
+        k_weight_path: str,
+        v_weight_path: str,
+        proj_weight_path: str,
+        gamma_path: str,
+        poly_weight_path: str,
+        poly_order: int = 4,
+        n_heads: int = 0,
+        head_dim: int = 0,
+    ):
+        super().__init__(layer_id, 'CustomMultiHeadAttention', feature_input, feature_output)
+        self.q_weight_path = q_weight_path
+        self.k_weight_path = k_weight_path
+        self.v_weight_path = v_weight_path
+        self.proj_weight_path = proj_weight_path
+        self.gamma_path = gamma_path
+        self.poly_weight_path = poly_weight_path
+        self.poly_order = poly_order
+        self.n_heads = n_heads
+        self.head_dim = head_dim
+
+    @staticmethod
+    def _split_qkv_weight_paths(qkv_weight_path: str, layer_id: str) -> tuple[str, str, str]:
+        if qkv_weight_path.endswith('.qkv.weight'):
+            prefix = qkv_weight_path[: -len('.qkv.weight')]
+            return f'{prefix}.q.weight', f'{prefix}.k.weight', f'{prefix}.v.weight'
+        return f'{layer_id}.q.weight', f'{layer_id}.k.weight', f'{layer_id}.v.weight'
+
+    @staticmethod
+    def _gamma_path(running_max_path: str, layer_id: str) -> str:
+        if running_max_path.endswith('.running_max_concat'):
+            return running_max_path[: -len('.running_max_concat')] + '.gamma'
+        return f'{layer_id}.gamma'
+
+    @staticmethod
+    def _poly_weight_path(poly_coeff_paths: list[str], layer_id: str) -> str:
+        if poly_coeff_paths:
+            first_path = poly_coeff_paths[0]
+            suffix = first_path.rsplit('.', 1)[-1]
+            if suffix.startswith('a') and suffix[1:].isdigit():
+                return first_path.rsplit('.', 1)[0] + '.weight'
+        return f'{layer_id}.poly.weight'
+
+    @staticmethod
+    def _poly_order(poly_coeff_paths: list[str], default: int = 4) -> int:
+        order = 0
+        for path in poly_coeff_paths:
+            suffix = path.rsplit('.', 1)[-1]
+            if suffix.startswith('a') and suffix[1:].isdigit():
+                order = max(order, int(suffix[1:]))
+        return order or default
+
+    @staticmethod
+    def from_onnx_node(x: onnx.NodeProto, features_nodes) -> 'CustomMultiHeadAttentionComputeNode':
+        layer_id = format_id(x.name)
+        feature_input = [features_nodes[format_id(x.input[0])]]
+        feature_output = [features_nodes[format_id(x.output[0])]]
+        attrs = ComputeNode.get_attr_value_dict(x)
+
+        qkv_weight_path = x.input[1] if len(x.input) > 1 else ''
+        q_weight_path, k_weight_path, v_weight_path = CustomMultiHeadAttentionComputeNode._split_qkv_weight_paths(
+            qkv_weight_path, layer_id
+        )
+        proj_weight_path = x.input[3] if len(x.input) > 3 else f'{layer_id}.proj.weight'
+        running_max_path = x.input[5] if len(x.input) > 5 else ''
+        poly_coeff_paths = list(x.input[6:])
+
+        return CustomMultiHeadAttentionComputeNode(
+            layer_id=layer_id,
+            feature_input=feature_input,
+            feature_output=feature_output,
+            q_weight_path=q_weight_path,
+            k_weight_path=k_weight_path,
+            v_weight_path=v_weight_path,
+            proj_weight_path=proj_weight_path,
+            gamma_path=CustomMultiHeadAttentionComputeNode._gamma_path(running_max_path, layer_id),
+            poly_weight_path=CustomMultiHeadAttentionComputeNode._poly_weight_path(poly_coeff_paths, layer_id),
+            poly_order=CustomMultiHeadAttentionComputeNode._poly_order(poly_coeff_paths),
+            n_heads=int(attrs.get('num_heads', attrs.get('n_heads', 0))),
+            head_dim=int(attrs.get('head_dim', 0)),
+        )
+
+    def to_json(self) -> dict:
+        info = {
+            'type': self.layer_type,
+            'feature_input': [i.node_id for i in self.feature_input],
+            'feature_output': [i.node_id for i in self.feature_output],
+            'q_weight_path': self.q_weight_path,
+            'k_weight_path': self.k_weight_path,
+            'v_weight_path': self.v_weight_path,
+            'proj_weight_path': self.proj_weight_path,
+            'gamma_path': self.gamma_path,
+            'poly_weight_path': self.poly_weight_path,
+            'poly_order': self.poly_order,
+        }
+        if self.n_heads:
+            info['n_heads'] = self.n_heads
+        if self.head_dim:
+            info['head_dim'] = self.head_dim
+        return info
+
+
 def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_mat: bool = False):
     """Convert an ONNX model file to the JSON format for encrypted inference.
 
@@ -187,6 +295,14 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_m
             case 'PolyAct':
                 compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
             case 'PolyActRNPoly':
+                compute_node = PolyActRNPolyComputeNode.from_onnx_node(n, features_nodes)
+            case 'Linear':
+                compute_node = MatMulComputeNode.from_onnx_node(n, features_nodes, weight_shapes)
+            case 'CustomLayerNorm':
+                compute_node = LayerNormComputeNode.from_onnx_node(n, features_nodes)
+            case 'CustomMultiHeadAttention':
+                compute_node = CustomMultiHeadAttentionComputeNode.from_onnx_node(n, features_nodes)
+            case 'PolyActRN':
                 compute_node = PolyActRNPolyComputeNode.from_onnx_node(n, features_nodes)
             case _:
                 kwargs = {}

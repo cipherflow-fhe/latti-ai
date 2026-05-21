@@ -590,7 +590,22 @@ class TestSingleLayer(CompilerTestBase):
         model = nn_modules.LinearGelu()
         graph, _ = self._export_and_compile(model, (197, 192), style='multiplexed', feature_mat=True)
         
-        
+    def test_vit_from_onnx(self):
+        self.temp_onnx_path = 'runs/poly_deit_tiny_patch16_224.onnx'
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed', feature_mat=True)
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+            style='multiplexed',
+            graph_type='btp',
+            is_use_btp=True
+        )
+        return graph, score
+    
+    
 class TestLayerInteraction(CompilerTestBase):
     def test_mismatched_scale(self):
         model = nn_modules.MismatchedScale()
