@@ -1083,6 +1083,9 @@ class LayerAbstractGraph:
                     'feature_output': output_feature_ids,
                 }
             if layer_type == 'parccmm':
+                edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
+                if all(v is not None for v in edge_indices.values()):
+                    input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: edge_indices[n])]
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
