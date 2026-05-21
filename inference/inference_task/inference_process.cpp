@@ -257,7 +257,15 @@ void InitInferenceProcess::_init_parcpmm_layer(const string& key, const json& la
     Duo W_shape = {shape_A[1], feat_out.shape[1]};
     auto weight = _load_h5_tensor<2>(layer, h5_file, "weight", {(uint64_t)W_shape[0], (uint64_t)W_shape[1]});
 
-    auto parcpmm = MakeU<ParBlockColMajorCPMM>(param, per_head_A, move(weight), block_size, n_heads, feat_in.level);
+    // Optionally load bias
+    Array<double, 1> bias;
+    if (layer.contains("bias_path")) {
+        uint32_t W_cols = feat_out.shape[1];
+        bias = _load_h5_tensor<1>(layer, h5_file, "bias", {(uint64_t)W_cols});
+    }
+
+    auto parcpmm =
+        MakeU<ParBlockColMajorCPMM>(param, per_head_A, move(weight), block_size, n_heads, feat_in.level, move(bias));
     _prepare_layer(
         key, move(parcpmm), [](ParBlockColMajorCPMM&) {}, [](ParBlockColMajorCPMM& l) { l.precompute_diagonals(); });
 }
@@ -2516,6 +2524,8 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             auto* layer = static_cast<ParBlockColMajorCPMM*>(layer_ptr);
             if (type == "mask_h0_pt")
                 pt = layer->generate_mask_h0_pt(ckks_ctx);
+            else if (type == "bias_pt")
+                pt = layer->generate_bias_pt(ckks_ctx, attrs.value("mb", i), attrs.value("bi", j), attrs.value("g", k));
             else
                 pt = layer->generate_diag_pt(ckks_ctx, attrs.value("mb", i), attrs.value("g", j), attrs.value("bp", k),
                                              attrs.value("k", l));

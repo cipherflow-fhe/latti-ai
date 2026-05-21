@@ -1012,7 +1012,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             shape_A = (shape_A_full[0], n_per_head)
             W_shape = (shape_A_full[1], feat_out['shape'][1])
 
-            parcpmm_layer = ParBlockColMajorCPMM(shape_A, W_shape, block_size, n_heads, n // 2)
+            has_bias = 'bias_path' in layer_config
+            parcpmm_layer = ParBlockColMajorCPMM(shape_A, W_shape, block_size, n_heads, n // 2, has_bias=has_bias)
 
             # Compute input CT count based on mode
             if parcpmm_layer.mode == 'REDUCE':

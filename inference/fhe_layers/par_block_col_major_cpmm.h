@@ -43,7 +43,8 @@ public:
                          const Array<double, 2>& W_mat,  // weight matrix: n×n, n×Kn, or Kn×n
                          uint32_t block_size,
                          uint32_t n_heads,
-                         uint32_t level_A);
+                         uint32_t level_A,
+                         Array<double, 1>&& bias = Array<double, 1>());
     void precompute_diagonals();
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A);
     Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
@@ -60,6 +61,11 @@ public:
     ls::CkksPlaintextRingt
     generate_diag_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const;
     ls::CkksPlaintextRingt generate_mask_h0_pt(ls::CkksContext& ctx) const;
+    ls::CkksPlaintextRingt generate_bias_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t bi, uint32_t g) const;
+
+    bool has_bias() const {
+        return has_bias_;
+    }
 
 private:
     enum class Mode { SQUARE, EXPAND, REDUCE };
@@ -84,6 +90,9 @@ private:
 
     // Build mask that selects h=0 positions only
     std::vector<double> build_head0_mask() const;
+
+    // Build bias plaintext vector for output CT at (mb, bi, g)
+    std::vector<double> build_bias_vec(uint32_t mb, uint32_t bi, uint32_t g) const;
 
     static int get_block_index(int bi, int bj, int num_block_rows);
 
@@ -111,4 +120,9 @@ private:
 
     // Mask plaintext for selecting h=0 after cross-head sum
     ls::CkksPlaintextRingt mask_h0_pt_;
+
+    // Bias support
+    bool has_bias_ = false;
+    Array<double, 1> bias_vals_;
+    std::vector<ls::CkksPlaintextRingt> bias_pt_;  // indexed [mb * R * G + bi * G + g]
 };
