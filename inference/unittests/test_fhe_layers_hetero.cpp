@@ -43,6 +43,7 @@
 #include "fhe_layers/par_block_col_major_transpose.h"
 #include "fhe_layers/par_block_col_major_ccmm.h"
 #include "fhe_layers/par_block_col_major_cpmm.h"
+#include "fhe_layers/par_block_col_major_add_pt.h"
 #include "fhe_layers/conv1d_packed_layer.h"
 #include "fhe_layers/multiplexed_conv1d_pack_layer.h"
 #include "fhe_layers/multiplexed_conv1d_depthwise_pack_layer.h"
@@ -1563,6 +1564,10 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
                         *ctx_ptr, (attrs.contains("k_idx") ? attrs.at("k_idx").get<uint32_t>() : attrs.value("i", 0u)));
                 throw std::runtime_error("encode_pt: unknown type for ParBlockColMajorTranspose: " + type);
             }
+            if (op_class == "ParBlockColMajorAddPt") {
+                auto* layer = static_cast<ParBlockColMajorAddPt*>(layer_ptr);
+                return layer->generate_pt(*ctx_ptr, attrs.value("bi", 0), attrs.value("bj", 0), attrs.value("g", 0));
+            }
             if (op_class == "ParBlockColMajorCCMM") {
                 auto* layer = static_cast<ParBlockColMajorCCMM*>(layer_ptr);
                 if (type == "sigma_pt")
@@ -2438,6 +2443,45 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     vector<CxxVectorArgument> cxx_args = {
         {"input0", &x0_cts},
         {"input1", &x1_cts},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, expected, {m, head_dim}, d, n_heads, true, out_cts);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_block_col_major_add_pt_generated",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+    fs::path server_dir = base_path / "CKKS_par_block_col_major_add_pt" / "par_block_col_major" / "level_2" / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    const int init_level = 2;
+    const uint32_t m = 8, n_heads = 2, head_dim = 4, d = 4;
+    const uint32_t total_dim = n_heads * head_dim;
+    auto A = gen_random_array<2>({m, total_dim}, 1.0);
+    auto B = gen_random_array<2>({m, total_dim}, 0.5);
+
+    auto layer_ptr =
+        std::make_shared<ParBlockColMajorAddPt>(res.param, Duo{m, total_dim}, d, n_heads, init_level, std::move(B));
+    layer_ptr->precompute_pts();
+    auto expected = layer_ptr->run_plaintext(A);
+
+    FeatureMatEncrypted A_enc(&res.context, init_level);
+    A_enc.par_block_col_major_pack(A, d, n_heads, false, res.param.get_default_scale());
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : A_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+    for (size_t i = 0; i < A_enc.data.size(); i++)
+        out_cts.push_back(res.context.new_ciphertext(init_level, res.param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input0", &in_cts},
+        {"add_pt_0", &layer_data},
         {"output", &out_cts},
     };
     run_block_col_major_e2e_test(*this, server_dir, cxx_args, expected, {m, head_dim}, d, n_heads, true, out_cts);
