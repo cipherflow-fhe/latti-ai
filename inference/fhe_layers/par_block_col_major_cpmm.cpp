@@ -29,7 +29,8 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
                                            const Array<double, 2>& W_mat,
                                            uint32_t block_size,
                                            uint32_t n_heads,
-                                           uint32_t level_A)
+                                           uint32_t level_A,
+                                           Array<double, 1>&& bias)
     : Layer(param_in) {
     level_ = level_A;
     d_ = block_size;
@@ -97,6 +98,14 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
         }
         W_padded_[mb] = std::move(W_sub);
     }
+
+    // Bias support
+    if (bias.get_shape()[0] > 0) {
+        has_bias_ = true;
+        uint32_t expected_bias_len = (mode_ == Mode::EXPAND) ? K_ * n_total_per_mb_ : n_total_per_mb_;
+        assert(bias.get_shape()[0] == expected_bias_len);
+        bias_vals_ = std::move(bias);
+    }
 }
 
 int ParBlockColMajorCPMM::get_block_index(int bi, int bj, int num_block_rows) {
@@ -159,6 +168,34 @@ std::vector<double> ParBlockColMajorCPMM::build_head0_mask() const {
     return mask;
 }
 
+// Note: CPMM requires n_per_head_ <= d_ (each head fits in a single block column),
+// so there is only one block column per head (num_block_cols = 1).  Therefore `col`
+// here is already the actual column index within the head — no bj offset is needed.
+std::vector<double> ParBlockColMajorCPMM::build_bias_vec(uint32_t mb, uint32_t bi, uint32_t g) const {
+    uint32_t S = n_blocks_per_chunk_;
+
+    vector<double> bias_vec(n_slot_, 0.0);
+    for (uint32_t h_local = 0; h_local < S; h_local++) {
+        uint32_t h = g * S + h_local;
+        // col is the actual per-head column index (no bj offset) because
+        // n_per_head_ <= d_ guarantees num_block_cols == 1 for each head.
+        for (uint32_t col = 0; col < d_; col++) {
+            for (uint32_t row = 0; row < d_; row++) {
+                uint32_t actual_row = bi * d_ + row;
+                uint32_t base_slot = (row + d_ * col) * S + h_local;
+                for (uint32_t ci = 0; ci < num_chunks_; ci++) {
+                    uint32_t slot = ci * chunk_size_ + base_slot;
+                    if (actual_row < m_ && h < n_heads_ && col < n_per_head_) {
+                        uint32_t global_col = mb * n_total_per_mb_ + h * n_per_head_ + col;
+                        bias_vec[slot] = bias_vals_.get(global_col);
+                    }
+                }
+            }
+        }
+    }
+    return bias_vec;
+}
+
 void ParBlockColMajorCPMM::precompute_diagonals() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
 
@@ -185,6 +222,22 @@ void ParBlockColMajorCPMM::precompute_diagonals() {
     // Mask for selecting h=0 after cross-head sum
     auto mask_vec = build_head0_mask();
     mask_h0_pt_ = ctx.encode_ringt(mask_vec, mask_scale);
+
+    // Bias plaintexts (encoded at default scale, matching output CT scale at level L-2)
+    if (has_bias_) {
+        double D = param_.get_default_scale();
+        uint32_t n_out_mbs = (mode_ == Mode::EXPAND) ? K_ : 1;
+        uint32_t total_bias_pts = n_out_mbs * num_block_rows_A_ * n_cts_per_block_idx_;
+        bias_pt_.resize(total_bias_pts);
+        for (uint32_t mb = 0; mb < n_out_mbs; mb++) {
+            for (uint32_t bi = 0; bi < num_block_rows_A_; bi++) {
+                for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
+                    uint32_t idx = mb * num_block_rows_A_ * n_cts_per_block_idx_ + bi * n_cts_per_block_idx_ + g;
+                    bias_pt_[idx] = ctx.encode_ringt(build_bias_vec(mb, bi, g), D);
+                }
+            }
+        }
+    }
 }
 
 CkksPlaintextRingt
@@ -194,6 +247,11 @@ ParBlockColMajorCPMM::generate_diag_pt(CkksContext& ctx, uint32_t mb, uint32_t g
 
 CkksPlaintextRingt ParBlockColMajorCPMM::generate_mask_h0_pt(CkksContext& ctx) const {
     return ctx.encode_ringt(build_head0_mask(), param_.get_q(level_ - 1));
+}
+
+CkksPlaintextRingt
+ParBlockColMajorCPMM::generate_bias_pt(CkksContext& ctx, uint32_t mb, uint32_t bi, uint32_t g) const {
+    return ctx.encode_ringt(build_bias_vec(mb, bi, g), param_.get_default_scale());
 }
 
 // block_mult_cpmm: d rotations + d pt_muls + (d-1) adds + 1 rescale
@@ -323,6 +381,14 @@ FeatureMatEncrypted ParBlockColMajorCPMM::run(CkksContext& ctx, const FeatureMat
             all_mbs[i] = i;
         result.data = run_core(ctx, A.data, all_mbs);
     }
+
+    // Add bias if present (plaintext addition, no level consumed)
+    if (has_bias_) {
+        for (size_t i = 0; i < result.data.size(); i++) {
+            result.data[i] = ctx.add_plain_ringt(result.data[i], bias_pt_[i]);
+        }
+    }
+
     return result;
 }
 
@@ -335,6 +401,8 @@ Array<double, 2> ParBlockColMajorCPMM::run_plaintext(const Array<double, 2>& A) 
                 double s = 0;
                 for (uint32_t k = 0; k < n_total; k++)
                     s += A.get(i, k) * W_padded_[0].get(k, j);
+                if (has_bias_)
+                    s += bias_vals_.get(j);
                 C.set(i, j, s);
             }
         return C;
@@ -347,6 +415,8 @@ Array<double, 2> ParBlockColMajorCPMM::run_plaintext(const Array<double, 2>& A) 
                     double s = 0;
                     for (uint32_t k = 0; k < n_total; k++)
                         s += A.get(i, k) * W_padded_[mb].get(k, j);
+                    if (has_bias_)
+                        s += bias_vals_.get(mb * n_total + j);
                     C.set(i, mb * n_total + j, s);
                 }
         return C;
@@ -359,6 +429,8 @@ Array<double, 2> ParBlockColMajorCPMM::run_plaintext(const Array<double, 2>& A) 
                 for (uint32_t mb = 0; mb < K_; mb++)
                     for (uint32_t k = 0; k < n_total; k++)
                         s += A.get(i, mb * n_total + k) * W_padded_[mb].get(k, j);
+                if (has_bias_)
+                    s += bias_vals_.get(j);
                 C.set(i, j, s);
             }
         return C;

@@ -52,7 +52,9 @@ class ParBlockColMajorCPMM:
     Level consumption: 2 levels (1 for block_mult_cpmm + 1 for head-sum mask).
     """
 
-    def __init__(self, shape_A: tuple, W_shape: tuple, block_size: int, n_heads: int, n_slot: int):
+    def __init__(
+        self, shape_A: tuple, W_shape: tuple, block_size: int, n_heads: int, n_slot: int, has_bias: bool = False
+    ):
         """
         Args:
             shape_A:    (m, n_per_head) — per-head row/col of A.
@@ -60,6 +62,7 @@ class ParBlockColMajorCPMM:
             block_size: d, block size for diagonal encoding.
             n_heads:    number of interleaved heads.
             n_slot:     N/2 (number of CKKS slots per ciphertext).
+            has_bias:   whether to add bias after matrix multiplication.
         """
         self.m = shape_A[0]
         self.n_per_head = shape_A[1]
@@ -101,6 +104,9 @@ class ParBlockColMajorCPMM:
             assert W_cols == self.n_total_per_mb and W_rows % W_cols == 0
             self.K = W_rows // W_cols
 
+        self.has_bias = has_bias
+        self.n_out_mbs = self.K if self.mode == 'EXPAND' else 1
+
     # ------------------------------------------------------------------ #
     #  Plaintext node creation                                            #
     # ------------------------------------------------------------------ #
@@ -126,7 +132,17 @@ class ParBlockColMajorCPMM:
             diag_pt.append(diag_pt_mb)
 
         mask_h0_pt = CkksPlaintextRingtNode(f'cpmm_mask_h0_{layer_id}')
-        return diag_pt, mask_h0_pt
+
+        bias_pt = None
+        if self.has_bias:
+            bias_pt = [
+                CkksPlaintextRingtNode(f'cpmm_bias_{layer_id}_{mb}_{bi}_{g}')
+                for mb in range(self.n_out_mbs)
+                for bi in range(self.num_block_rows_A)
+                for g in range(self.G)
+            ]
+
+        return diag_pt, mask_h0_pt, bias_pt
 
     # ------------------------------------------------------------------ #
     #  Primitives — mirror C++ block_mult_cpmm and head_sum              #
@@ -227,7 +243,7 @@ class ParBlockColMajorCPMM:
     #  Public call — pre-declared weights                                 #
     # ------------------------------------------------------------------ #
 
-    def call(self, A_cts: list, diag_pt, mask_h0_pt) -> list:
+    def call(self, A_cts: list, diag_pt, mask_h0_pt, bias_pt=None) -> list:
         """Build computation DAG using pre-declared plaintext nodes.
 
         Mirrors C++ run().
@@ -238,6 +254,7 @@ class ParBlockColMajorCPMM:
                          REDUCE:        K * num_block_rows_A * G entries.
             diag_pt:     from make_pt_nodes(), shape [K][G][n_heads][d].
             mask_h0_pt:  from make_pt_nodes().
+            bias_pt:     from make_pt_nodes(), list of n_out_mbs * R * G nodes (or None).
         Returns:
             list of output CkksCiphertextNode.
         """
@@ -246,9 +263,14 @@ class ParBlockColMajorCPMM:
             for mb in range(self.K):
                 mb_cts = self._run_core(A_cts, [mb], diag_pt, mask_h0_pt)
                 result.extend(mb_cts)
-            return result
         else:
-            return self._run_core(A_cts, list(range(self.K)), diag_pt, mask_h0_pt)
+            result = self._run_core(A_cts, list(range(self.K)), diag_pt, mask_h0_pt)
+
+        # Add bias if present (plaintext addition, no level consumed)
+        if bias_pt is not None:
+            result = [add(ct, bp) for ct, bp in zip(result, bias_pt)]
+
+        return result
 
     # ------------------------------------------------------------------ #
     #  Custom-compute — inline weight declaration (lazy path)            #
@@ -295,7 +317,28 @@ class ParBlockColMajorCPMM:
             attributes={'op_class': op_class, 'type': 'mask_h0_pt'},
         )
 
-        return self.call(A_cts, diag_pt, mask_h0_pt)
+        bias_pt = None
+        if self.has_bias:
+            bias_pt = []
+            for mb in range(self.n_out_mbs):
+                for bi in range(self.num_block_rows_A):
+                    for g in range(self.G):
+                        bp_node = CkksPlaintextRingtNode(f'encode_pt_bias_{mb}_{bi}_{g}')
+                        custom_compute(
+                            inputs=[data_source],
+                            output=bp_node,
+                            type='encode_pt',
+                            attributes={
+                                'op_class': op_class,
+                                'type': 'bias_pt',
+                                'mb': mb,
+                                'bi': bi,
+                                'g': g,
+                            },
+                        )
+                        bias_pt.append(bp_node)
+
+        return self.call(A_cts, diag_pt, mask_h0_pt, bias_pt)
 
     # ------------------------------------------------------------------ #
     #  FHE operation count                                                #
@@ -365,5 +408,10 @@ class ParBlockColMajorCPMM:
         # Similarly, G bps are "first" in their g_out group; the rest need an add.
         ops[lv]['rotate'] += n_calls * R * (n_heads - G)
         ops[lv]['add'] += n_calls * R * (n_heads - G)
+
+        # Bias addition (still at level L-2, no level consumed)
+        if self.has_bias:
+            n_bias_cts = self.n_out_mbs * R * G
+            ops[lv]['add'] += n_bias_cts
 
         return dict(ops)

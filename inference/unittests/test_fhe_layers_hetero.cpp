@@ -1551,6 +1551,9 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
                                                    attrs.value("bp", 0), attrs.value("k", 0));
                 if (type == "mask_h0_pt")
                     return layer->generate_mask_h0_pt(*ctx_ptr);
+                if (type == "bias_pt")
+                    return layer->generate_bias_pt(*ctx_ptr, attrs.value("mb", 0), attrs.value("bi", 0),
+                                                   attrs.value("g", 0));
                 throw std::runtime_error("encode_pt: unknown type for ParBlockColMajorCPMM: " + type);
             }
             if (op_class == "ParBlockColMajorTranspose") {
@@ -1694,6 +1697,75 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_cpmm_square", "[block_
 
         auto layer_ptr =
             std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{cfg.m, cfg.head_dim}, W, d, cfg.n_heads, cfg.level);
+        layer_ptr->precompute_diagonals();
+        auto ref_output = layer_ptr->run_plaintext(A);
+
+        FeatureMatEncrypted A_enc(&res.context, cfg.level);
+        A_enc.par_block_col_major_pack(A, d, cfg.n_heads, false, res.param.get_default_scale());
+
+        static vector<CkksCiphertext> in_cts, out_cts;
+        static vector<CustomData> layer_data;
+        in_cts.clear();
+        out_cts.clear();
+        layer_data.clear();
+
+        for (auto& ct : A_enc.data)
+            in_cts.push_back(ct.copy());
+        layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+        uint32_t num_block_rows_A = div_ceil(cfg.m, d);
+        uint32_t n_h_padded = 1;
+        while (n_h_padded < cfg.n_heads)
+            n_h_padded <<= 1;
+        uint32_t n_slot = res.param.get_n() / 2;
+        uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+        uint32_t n_out = num_block_rows_A * G;
+
+        for (uint32_t i = 0; i < n_out; i++)
+            out_cts.push_back(res.context.new_ciphertext(cfg.level - 2, res.param.get_default_scale()));
+
+        vector<CxxVectorArgument> cxx_args = {
+            {"input", &in_cts},
+            {"_cpmm_layer", &layer_data},
+            {"output", &out_cts},
+        };
+        run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {cfg.m, cfg.head_dim}, d, cfg.n_heads,
+                                     true, out_cts);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "single_par_cpmm_square_with_bias",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+
+    struct Cfg {
+        uint32_t m, n_heads, head_dim;
+        int level;
+    };
+    vector<Cfg> configs = {
+        {53, 3, 16, 2},
+    };
+
+    FOR_EACH_SECTION(auto& cfg, configs,
+                     "m=" + to_string(cfg.m) + "_heads=" + to_string(cfg.n_heads) + "_dim=" + to_string(cfg.head_dim)) {
+        uint32_t d = cfg.head_dim;
+        uint32_t total_dim = cfg.n_heads * cfg.head_dim;
+
+        fs::path server_dir =
+            base_path / "CKKS_par_cpmm_square_with_bias" /
+            ("m_" + to_string(cfg.m) + "_heads_" + to_string(cfg.n_heads) + "_dim_" + to_string(cfg.head_dim)) /
+            ("level_" + to_string(cfg.level)) / "server";
+        if (!fs::exists(server_dir / "mega_ag.json"))
+            return;
+
+        auto W = gen_random_array<2>({total_dim, total_dim}, 0.1);
+        auto A = gen_random_array<2>({cfg.m, total_dim}, 0.5);
+        auto bias = gen_random_array<1>({total_dim}, 0.3);
+
+        auto layer_ptr = std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{cfg.m, cfg.head_dim}, W, d, cfg.n_heads,
+                                                                cfg.level, std::move(bias));
         layer_ptr->precompute_diagonals();
         auto ref_output = layer_ptr->run_plaintext(A);
 

@@ -1751,6 +1751,45 @@ class TestLayerExport(unittest.TestCase):
                 fpga_acc=False,
             )
 
+    def test_par_cpmm_square_with_bias(self):
+        """ParBlockColMajorCPMM SQUARE with bias: n_heads=3."""
+        set_param('PN14QP438')
+        N_SLOT = 16384 // 2
+
+        configs = [
+            (53, 3, 16, 2),
+        ]
+
+        for m, n_heads, head_dim, level in configs:
+            total_dim = n_heads * head_dim
+            layer = ParBlockColMajorCPMM(
+                shape_A=(m, head_dim),
+                W_shape=(total_dim, total_dim),
+                block_size=head_dim,
+                n_heads=n_heads,
+                n_slot=N_SLOT,
+                has_bias=True,
+            )
+
+            n_in_cts = layer.num_block_rows_A * layer.G
+            input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=level) for k in range(n_in_cts)]
+            data_source = CustomDataNode(type='cpmm_data_source', id='_cpmm_layer')
+            output_cts = layer.call_custom_compute(input_cts, data_source)
+
+            process_custom_task(
+                input_args=[
+                    Argument('input', input_cts),
+                    Argument('_cpmm_layer', [data_source]),
+                ],
+                output_args=[Argument('output', output_cts)],
+                output_instruction_path=base_path
+                / 'CKKS_par_cpmm_square_with_bias'
+                / f'm_{m}_heads_{n_heads}_dim_{head_dim}'
+                / f'level_{level}'
+                / 'server',
+                fpga_acc=False,
+            )
+
     def test_par_block_qkt_v_attention(self):
         """Par attention pipeline: Q*K^T then attn*V, seq_len=53, n_heads=3, head_dim=16, init_level=7."""
         set_param('PN14QP438')
