@@ -987,7 +987,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
     fp->total_fhe_time += fhe_timer.get_duration().count();
 }
 
-void InferenceProcess::run_task(bool is_mpc) {
+void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
     // Reset time statistics for each request
     fp->total_fhe_time = 0.0;
     fp->total_fpga_time = 0.0;
@@ -1255,7 +1255,7 @@ void InferenceProcess::run_task(bool is_mpc) {
             if (!fhe_task_cpu_) {
                 prepare_task();
             }
-            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
+            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
@@ -1263,7 +1263,8 @@ void InferenceProcess::run_task(bool is_mpc) {
             if (!fhe_task_gpu_) {
                 prepare_task();
             }
-            fhe_time = fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
+            fhe_time =
+                fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb, gpu_device);
             break;
         }
 #else
@@ -1508,7 +1509,7 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
     }
 }
 
-void InferenceProcess::run_task_lazy(bool is_mpc) {
+void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_cb) {
     fp->total_fhe_time = 0.0;
     fp->total_fpga_time = 0.0;
 
@@ -1608,7 +1609,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
             if (!fhe_task_cpu_) {
                 prepare_task();
             }
-            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
+            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
@@ -1616,7 +1617,8 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
             if (!fhe_task_gpu_) {
                 prepare_task();
             }
-            fhe_time = fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
+            fhe_time =
+                fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb, gpu_device);
             break;
         }
 #else

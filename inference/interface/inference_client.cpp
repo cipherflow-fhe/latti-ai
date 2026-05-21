@@ -24,7 +24,9 @@ using namespace lattisense;
 
 using namespace fhe_ops_lib;
 
-InferenceClient::InferenceClient(const std::string& client_dir) : client_dir_(client_dir) {}
+InferenceClient::InferenceClient(const std::string& client_dir) : client_dir_(client_dir) {
+    read_configuration();
+}
 
 InferenceClient::~InferenceClient() = default;
 
@@ -125,8 +127,29 @@ double InferenceClient::get_default_scale() const {
 }
 
 void InferenceClient::setup() {
-    read_configuration();
     create_crypto_context();
+}
+
+void InferenceClient::release() {
+    std::cout << "[Client] Releasing in-memory key material..." << std::endl;
+    ckks_context_.reset();
+    btp_context_.reset();
+    ckks_param_.reset();
+    btp_param_.reset();
+    context_ptr_ = nullptr;
+    std::cout << "[Client] Done." << std::endl;
+}
+
+void InferenceClient::load_full_context(const Bytes& full_bytes) {
+    std::cout << "[Client] Loading full context (with secret key)..." << std::endl;
+    if (needs_btp_) {
+        btp_context_ = std::make_unique<CkksBtpContext>(CkksBtpContext::deserialize(full_bytes));
+        context_ptr_ = btp_context_.get();
+    } else {
+        ckks_context_ = std::make_unique<CkksContext>(CkksContext::deserialize_advanced(full_bytes));
+        context_ptr_ = ckks_context_.get();
+    }
+    std::cout << "[Client] Done." << std::endl;
 }
 
 Bytes InferenceClient::export_eval_context() const {
@@ -137,9 +160,28 @@ Bytes InferenceClient::export_eval_context() const {
         std::cout << "[Client] Serializing BTP context..." << std::endl;
         result = pub_ctx.serialize();
     } else {
-        auto pub_ctx = ckks_context_->make_public_context();
+        // For all currently supported task graphs, the server only needs computation keys
+        // (relin + rotation). Drop PK to shrink the upload. NOTE: UpsampleLayer calls
+        // encrypt_asymmetric server-side; if a future task uses that layer, PK must be
+        // included here.
+        auto pub_ctx = ckks_context_->make_public_context(false, true, true);
         std::cout << "[Client] Serializing CKKS context..." << std::endl;
         result = pub_ctx.serialize_advanced();
+    }
+    std::cout << "[Client] Done." << std::endl;
+    return result;
+}
+
+Bytes InferenceClient::export_full_context() const {
+    std::cout << "[Client] Exporting full context (with secret key)..." << std::endl;
+    Bytes result;
+    if (needs_btp_) {
+        std::cout << "[Client] Serializing BTP context..." << std::endl;
+        result = btp_context_->serialize();
+    } else {
+        // No make_public_context() here — keep the SK in the bytes.
+        std::cout << "[Client] Serializing CKKS context..." << std::endl;
+        result = ckks_context_->serialize_advanced();
     }
     std::cout << "[Client] Done." << std::endl;
     return result;

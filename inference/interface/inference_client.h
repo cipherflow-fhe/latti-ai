@@ -58,7 +58,8 @@ struct InputParam {
 ///
 /// Holds the secret key and is responsible for:
 /// - Generating the full CKKS key pair
-/// - Exporting a public-only evaluation context for the server
+/// - Exporting a computation-keys-only evaluation context (no SK, no PK) for the server
+/// - Exporting the full context (incl. SK) for client-side persistence
 /// - Encrypting input data
 /// - Decrypting inference results
 ///
@@ -73,12 +74,28 @@ public:
     InferenceClient(InferenceClient&&) = default;
     InferenceClient& operator=(InferenceClient&&) = default;
 
-    /// Read configuration and generate crypto context with keys.
+    /// Generate crypto context with keys.
     void setup();
+
+    /// Release all in-memory key material immediately.
+    /// After this call, encrypt()/decrypt() will fail until setup() or load_full_context()
+    /// is called again. Use this to free GBs of key memory without waiting for the GC to
+    /// finalize the wrapper object.
+    void release();
 
     /// Export a public-only evaluation context (serialized bytes).
     /// The server uses this to perform encrypted computation without the secret key.
     Bytes export_eval_context() const;
+
+    /// Export the full client state including the secret key.
+    /// Contents: SK + PK + relin + rotation. Size is comparable to eval_context.
+    /// Pair with load_full_context() to restore a client that can both encrypt and decrypt.
+    Bytes export_full_context() const;
+
+    /// Restore a full client (with secret key) from bytes produced by export_full_context().
+    /// After this call, both encrypt() and decrypt() work.
+    /// Typically call exactly one of {setup, load_full_context}; calling both replaces the context.
+    void load_full_context(const Bytes& full_bytes);
 
     /// Encrypt inputs from CSV files and return serialized ciphertexts.
     /// @param input_csvs  Map of input name -> CSV file path.
