@@ -60,10 +60,6 @@ FeatureNode::FeatureNode(const json& json_data)
         shape = {json_data["shape"][0], json_data["shape"][1]};
         if (json_data.contains("head_shape"))
             head_shape = {json_data["head_shape"][0], json_data["head_shape"][1]};
-        if (json_data.contains("matmul_block_size"))
-            matmul_block_size = json_data["matmul_block_size"];
-        if (json_data.contains("n_heads"))
-            n_heads = json_data["n_heads"];
     } else if (dim == 2) {
         shape = {json_data["shape"][0], json_data["shape"][1]};
         skip = {json_data["skip"][0], json_data["skip"][1]};
@@ -113,9 +109,8 @@ InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool i
         block_shape = {config["block_shape"][0], config["block_shape"][1]};
     }
     is_absorb_polyrelu = config["is_absorb_polyrelu"];
-    if (config.contains("n_heads"))
-        n_heads = config["n_heads"];
-    matmul_block_size = config.value("matmul_block_size", 0u);
+    n_heads = config.at("n_heads").get<uint32_t>();
+    matmul_block_size = config.at("matmul_block_size").get<uint32_t>();
     layernorm_param = config.value("layernorm_param", json::object());
     Timer timer(true);
 }
@@ -153,15 +148,18 @@ static Duo get_feature_mat_head_shape(const FeatureNode& feature, const string& 
     return feature.head_shape;
 }
 
-static uint32_t
-get_matmul_block_size(const FeatureNode& feature, const string& feature_id, uint32_t global_matmul_block_size) {
-    if (global_matmul_block_size != 0) {
-        return global_matmul_block_size;
+static uint32_t get_config_n_heads(uint32_t config_n_heads) {
+    if (config_n_heads <= 1) {
+        throw runtime_error("n_heads must be set in task_config.json for feature_mat layers");
     }
-    if (feature.matmul_block_size != 0) {
-        return feature.matmul_block_size;
+    return config_n_heads;
+}
+
+static uint32_t get_config_matmul_block_size(uint32_t config_matmul_block_size) {
+    if (config_matmul_block_size == 0) {
+        throw runtime_error("matmul_block_size must be set in task_config.json for feature_mat layers");
     }
-    return get_feature_mat_head_shape(feature, feature_id)[1];
+    return config_matmul_block_size;
 }
 
 static bool is_pcm_layer_type(const string& layer_type) {
@@ -260,7 +258,7 @@ void InitInferenceProcess::_init_parcpmm_layer(const string& key, const json& la
 
     Duo shape_A = feat_in.shape;
     Duo per_head_A = get_feature_mat_head_shape(feat_in, feat_in_id);
-    uint32_t block_size = get_matmul_block_size(feat_in, feat_in_id, matmul_block_size);
+    uint32_t block_size = get_config_matmul_block_size(matmul_block_size);
 
     Duo W_shape = {shape_A[1], feat_out.shape[1]};
     auto weight = _load_h5_tensor<2>(layer, h5_file, "weight", {(uint64_t)W_shape[0], (uint64_t)W_shape[1]});
@@ -272,8 +270,8 @@ void InitInferenceProcess::_init_parcpmm_layer(const string& key, const json& la
         bias = _load_h5_tensor<1>(layer, h5_file, "bias", {(uint64_t)W_cols});
     }
 
-    auto parcpmm =
-        MakeU<ParBlockColMajorCPMM>(param, per_head_A, move(weight), block_size, n_heads, feat_in.level, move(bias));
+    auto parcpmm = MakeU<ParBlockColMajorCPMM>(param, per_head_A, move(weight), block_size, get_config_n_heads(n_heads),
+                                               feat_in.level, move(bias));
     _prepare_layer(
         key, move(parcpmm), [](ParBlockColMajorCPMM&) {}, [](ParBlockColMajorCPMM& l) { l.precompute_diagonals(); });
 }
@@ -287,9 +285,10 @@ void InitInferenceProcess::_init_parccmm_layer(const string& key, const json& la
 
     Duo per_head_A = get_feature_mat_head_shape(feat_A, feat_A_id);
     Duo per_head_B = get_feature_mat_head_shape(feat_B, feat_B_id);
-    uint32_t block_size = get_matmul_block_size(feat_A, feat_A_id, matmul_block_size);
+    uint32_t block_size = get_config_matmul_block_size(matmul_block_size);
 
-    auto parccmm = MakeU<ParBlockColMajorCCMM>(param, per_head_A, per_head_B, block_size, n_heads, feat_A.level);
+    auto parccmm = MakeU<ParBlockColMajorCCMM>(param, per_head_A, per_head_B, block_size, get_config_n_heads(n_heads),
+                                               feat_A.level);
     _prepare_layer(
         key, move(parccmm), [](ParBlockColMajorCCMM&) {}, [](ParBlockColMajorCCMM& l) { l.precompute_diagonals(); });
 }
@@ -300,9 +299,10 @@ void InitInferenceProcess::_init_partranspose_layer(const string& key, const jso
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
 
     Duo per_head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
-    uint32_t block_size = get_matmul_block_size(feat_in, feat_in_id, matmul_block_size);
+    uint32_t block_size = get_config_matmul_block_size(matmul_block_size);
 
-    auto partranspose = MakeU<ParBlockColMajorTranspose>(param, per_head_shape, block_size, n_heads, feat_in.level);
+    auto partranspose =
+        MakeU<ParBlockColMajorTranspose>(param, per_head_shape, block_size, get_config_n_heads(n_heads), feat_in.level);
     _prepare_layer(
         key, move(partranspose), [](ParBlockColMajorTranspose&) {},
         [](ParBlockColMajorTranspose& l) { l.precompute_diagonals(); });
@@ -312,12 +312,12 @@ void InitInferenceProcess::_init_pcmgamma_layer(const string& key, const json& l
     const string feat_in_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_in(json_features[feat_in_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-    uint32_t block_size = get_matmul_block_size(feat_in, feat_in_id, matmul_block_size);
+    uint32_t block_size = get_config_matmul_block_size(matmul_block_size);
     uint32_t K = layer.contains("K") ? layer.at("K").get<uint32_t>() : layer.value("k", 1u);
     auto gamma = load_h5_tensor_any<1>(layer, h5_file, {"gamma", "weight"}, {feat_in.shape[1]});
 
-    auto pcmgamma =
-        MakeU<ParBlockColMajorPolyActRNGamma>(param, feat_in.shape, block_size, n_heads, K, feat_in.level, move(gamma));
+    auto pcmgamma = MakeU<ParBlockColMajorPolyActRNGamma>(param, feat_in.shape, block_size, get_config_n_heads(n_heads),
+                                                          K, feat_in.level, move(gamma));
     _prepare_layer(
         key, move(pcmgamma), [](ParBlockColMajorPolyActRNGamma&) {},
         [](ParBlockColMajorPolyActRNGamma& l) { l.prepare_weight(); });
@@ -327,13 +327,13 @@ void InitInferenceProcess::_init_pcmpoly_layer(const string& key, const json& la
     const string feat_in_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_in(json_features[feat_in_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-    uint32_t block_size = get_matmul_block_size(feat_in, feat_in_id, matmul_block_size);
+    uint32_t block_size = get_config_matmul_block_size(matmul_block_size);
     uint32_t K = layer.contains("K") ? layer.at("K").get<uint32_t>() : layer.value("k", 1u);
     uint32_t degree = layer.contains("degree") ? layer["degree"].get<uint32_t>() : layer.at("order").get<uint32_t>();
     auto coeffs = load_h5_tensor_any<2>(layer, h5_file, {"coeffs", "coeff", "weight"}, {degree + 1, feat_in.shape[1]});
 
-    auto pcmpoly = MakeU<ParBlockColMajorPolyActRNPoly>(param, feat_in.shape, block_size, n_heads, K, feat_in.level,
-                                                        move(coeffs), degree);
+    auto pcmpoly = MakeU<ParBlockColMajorPolyActRNPoly>(param, feat_in.shape, block_size, get_config_n_heads(n_heads),
+                                                        K, feat_in.level, move(coeffs), degree);
     _prepare_layer(
         key, move(pcmpoly), [](ParBlockColMajorPolyActRNPoly&) {},
         [](ParBlockColMajorPolyActRNPoly& l) { l.prepare_weight(); });
@@ -343,7 +343,7 @@ void InitInferenceProcess::_init_pcmstats_layer(const string& key, const json& l
     const string feat_in_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_in(json_features[feat_in_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-    uint32_t block_size = get_matmul_block_size(feat_in, feat_in_id, matmul_block_size);
+    uint32_t block_size = get_config_matmul_block_size(matmul_block_size);
     double eps = get_json_value_any<double>(layer, {"eps", "epsilon"});
     double inv_var;
     if (layer.contains("inv_var")) {
@@ -357,8 +357,8 @@ void InitInferenceProcess::_init_pcmstats_layer(const string& key, const json& l
         inv_var = 1.0 / (var_std_bound * var_std_bound);
     }
 
-    auto pcmstats =
-        MakeU<ParBlockColMajorLNStats>(param, feat_in.shape, block_size, n_heads, feat_in.level, eps, inv_var);
+    auto pcmstats = MakeU<ParBlockColMajorLNStats>(param, feat_in.shape, block_size, get_config_n_heads(n_heads),
+                                                   feat_in.level, eps, inv_var);
     _prepare_layer(
         key, move(pcmstats), [](ParBlockColMajorLNStats&) {}, [](ParBlockColMajorLNStats& l) { l.prepare_weight(); });
 }
@@ -367,9 +367,10 @@ void InitInferenceProcess::_init_pcmcenter_layer(const string& key, const json& 
     const string feat_in_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_in(json_features[feat_in_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-    uint32_t block_size = get_matmul_block_size(feat_in, feat_in_id, matmul_block_size);
+    uint32_t block_size = get_config_matmul_block_size(matmul_block_size);
 
-    auto pcmcenter = MakeU<ParBlockColMajorLNXCentered>(param, feat_in.shape, block_size, n_heads, feat_in.level);
+    auto pcmcenter = MakeU<ParBlockColMajorLNXCentered>(param, feat_in.shape, block_size, get_config_n_heads(n_heads),
+                                                        feat_in.level);
     _prepare_layer(
         key, move(pcmcenter), [](ParBlockColMajorLNXCentered&) {},
         [](ParBlockColMajorLNXCentered& l) { l.prepare_weight(); });
@@ -379,7 +380,7 @@ void InitInferenceProcess::_init_pcminit_layer(const string& key, const json& la
     const string feat_in_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_in(json_features[feat_in_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-    uint32_t block_size = get_matmul_block_size(feat_in, feat_in_id, matmul_block_size);
+    uint32_t block_size = get_config_matmul_block_size(matmul_block_size);
     double c0, c1, c2;
     if (layer.contains("coeffs")) {
         c0 = layer.at("coeffs")[0].get<double>();
@@ -405,7 +406,7 @@ void InitInferenceProcess::_init_pcmgs_layer(const string& key, const json& laye
     const string feat_y_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_y(json_features[feat_y_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_y.ckks_parameter_id);
-    uint32_t block_size = get_matmul_block_size(feat_y, feat_y_id, matmul_block_size);
+    uint32_t block_size = get_config_matmul_block_size(matmul_block_size);
 
     auto pcmgs = MakeU<ParBlockColMajorLNGoldschmidt>(param, block_size, feat_y.level);
     _prepare_layer(
@@ -418,7 +419,7 @@ void InitInferenceProcess::_init_pcmaffine_layer(const string& key, const json& 
     FeatureNode feat_xc(json_features[feat_xc_id]);
     FeatureNode feat_y(json_features[layer["feature_input"][1].get<string>()]);
     CkksParameter& param = *ckks_parameters_.at(feat_xc.ckks_parameter_id);
-    uint32_t block_size = get_matmul_block_size(feat_xc, feat_xc_id, matmul_block_size);
+    uint32_t block_size = get_config_matmul_block_size(matmul_block_size);
     double inv_std;
     if (layer.contains("inv_std")) {
         inv_std = layer.at("inv_std").get<double>();
@@ -433,8 +434,8 @@ void InitInferenceProcess::_init_pcmaffine_layer(const string& key, const json& 
     auto gamma = load_h5_tensor_any<1>(layer, h5_file, {"gamma", "weight"}, {feat_xc.shape[1]});
     auto beta = load_h5_tensor_any<1>(layer, h5_file, {"beta", "bias"}, {feat_xc.shape[1]});
 
-    auto pcmaffine = MakeU<ParBlockColMajorLNAffine>(param, feat_xc.shape, block_size, n_heads, feat_y.level, inv_std,
-                                                     move(gamma), move(beta));
+    auto pcmaffine = MakeU<ParBlockColMajorLNAffine>(param, feat_xc.shape, block_size, get_config_n_heads(n_heads),
+                                                     feat_y.level, inv_std, move(gamma), move(beta));
     _prepare_layer(
         key, move(pcmaffine), [](ParBlockColMajorLNAffine&) {},
         [](ParBlockColMajorLNAffine& l) { l.prepare_weight(); });
@@ -522,10 +523,14 @@ void InitInferenceProcess::_init_par_block_col_major_add_pt_layer(const string& 
     FeatureNode feat_out(json_features[layer["feature_output"][0].get<string>()]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
 
-    uint32_t block_size = feat_in.shape[1] / n_heads;
+    const string feat_in_id = layer["feature_input"][0].get<string>();
+    get_feature_mat_head_shape(feat_in, feat_in_id);
+    uint32_t block_size = get_config_matmul_block_size(matmul_block_size);
+    uint32_t config_n_heads = get_config_n_heads(n_heads);
     auto B = _load_h5_tensor<2>(layer, h5_file, "weight", {(uint64_t)feat_in.shape[0], (uint64_t)feat_in.shape[1]});
 
-    auto add_pt = MakeU<ParBlockColMajorAddPt>(param, feat_in.shape, block_size, n_heads, feat_in.level, move(B));
+    auto add_pt =
+        MakeU<ParBlockColMajorAddPt>(param, feat_in.shape, block_size, config_n_heads, feat_in.level, move(B));
     _prepare_layer(
         key, move(add_pt), [](ParBlockColMajorAddPt&) {}, [](ParBlockColMajorAddPt& l) { l.precompute_pts(); });
 }
@@ -1668,7 +1673,7 @@ void InferenceProcess::run_task(bool is_mpc) {
     if (fp->n_heads > 1) {
         const string first_input_id = fp->json_data["input_feature"][0].get<string>();
         FeatureNode first_input(json_features[first_input_id]);
-        par_d = get_matmul_block_size(first_input, first_input_id, fp->matmul_block_size);
+        par_d = get_config_matmul_block_size(fp->matmul_block_size);
         uint32_t n_h_padded = 1;
         while (n_h_padded < fp->n_heads)
             n_h_padded <<= 1;
@@ -2158,11 +2163,11 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
     string context_id;
     int level;
 
-    // For par format (n_heads > 1), precompute block_size d and G from the first input feature.
+    // For par format (n_heads > 1), precompute block_size d and G from task config.
     uint32_t par_d = 0, par_G = 1;
     if (fp->n_heads > 1) {
         FeatureNode first_input(json_features[json_data["input_feature"][0].get<string>()]);
-        par_d = first_input.matmul_block_size != 0 ? first_input.matmul_block_size : first_input.shape[1] / fp->n_heads;
+        par_d = get_config_matmul_block_size(fp->matmul_block_size);
         uint32_t n_h_padded = 1;
         while (n_h_padded < fp->n_heads)
             n_h_padded <<= 1;
@@ -2183,16 +2188,9 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
                 throw runtime_error("feature_mat only supports par matrix ops");
             }
             uint32_t d = par_d;
-            // par format: CT count from per-head block grid × G
-            uint32_t r = feature_output.shape[0];
-            uint32_t c = feature_output.shape[1];
-            if (r % fp->n_heads == 0 && r > d)
-                r /= fp->n_heads;
-            if (c % fp->n_heads == 0 && c > d)
-                c /= fp->n_heads;
-            n_out_num = div_ceil(r, d) * div_ceil(c, d) * par_G;
-            output_mat_block_sizes[out_idx] =
-                feature_output.matmul_block_size != 0 ? feature_output.matmul_block_size : par_d;
+            Duo output_head_shape = get_feature_mat_head_shape(feature_output, ki.get<string>());
+            n_out_num = div_ceil(output_head_shape[0], d) * div_ceil(output_head_shape[1], d) * par_G;
+            output_mat_block_sizes[out_idx] = par_d;
         } else {
             n_out_num = div_ceil(feature_output.channel, feature_output.pack_channel_per_ciphertext);
             if (feature_output.shape[0] > block_shape[0] || feature_output.shape[1] > block_shape[1]) {
@@ -2245,6 +2243,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
             FeatureMatEncrypted fmat(ckks_contexts.at(feature_output.ckks_parameter_id).get(), feature_output.level);
             fmat.data = move(z_lists[out_idx]);
             fmat.shape = feature_output.shape;
+            fmat.head_shape = get_feature_mat_head_shape(feature_output, ki.get<string>());
             fmat.matmul_block_size = output_mat_block_sizes[out_idx];
             result = make_unique<FeatureMatEncrypted>(move(fmat));
         } else if (feature_output.dim == 2) {
