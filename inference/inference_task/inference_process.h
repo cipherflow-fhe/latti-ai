@@ -64,9 +64,7 @@ public:
     int pack_channel_per_ciphertext;
     int level = 0;
     double ckks_scale = 0.0;
-    bool is_mat = false;             // true when data_type == "feature_mat"
-    uint32_t matmul_block_size = 0;  // block size d for matrix operations
-    uint32_t n_heads = 0;            // number of heads for par_block_col_major
+    bool is_mat = false;  // true when data_type == "feature_mat"
 
     FeatureNode(const json& json_data);
 
