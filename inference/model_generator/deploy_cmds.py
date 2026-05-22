@@ -104,6 +104,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     task_output_feature_ids = config_info['output_feature']
 
     def _par_input_shape(feat, n_heads, split_rows=False):
+        if 'head_shape' in feat:
+            return tuple(feat['head_shape'])
         rows, cols = feat['shape']
         rows_per_head = rows // n_heads if split_rows else rows
         return (rows_per_head, cols // n_heads)

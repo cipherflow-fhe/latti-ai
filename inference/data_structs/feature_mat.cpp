@@ -34,6 +34,7 @@ void FeatureMatEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
     uint32_t m = matrix.get_shape()[0];
     uint32_t n_cols = matrix.get_shape()[1];
     shape = {m, n_cols};
+    head_shape = {m, n_cols};
     matmul_block_size = d;
     uint32_t num_block_rows = div_ceil(m, d);
     uint32_t num_block_cols = div_ceil(n_cols, d);
@@ -128,6 +129,7 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
     uint32_t m = matrix.get_shape()[0];
     uint32_t total_cols = matrix.get_shape()[1];
     shape = {m, total_cols};
+    head_shape = {m, head_dim};
     matmul_block_size = d;
     uint32_t cols_per_head = head_dim;
     uint32_t n = cols_per_head * n_heads;  // columns per megablock
@@ -339,6 +341,7 @@ FeatureMatEncrypted FeatureMatEncrypted::drop_level(int n_level_to_drop) const {
     int new_level = level - n_level_to_drop;
     FeatureMatEncrypted result(context, new_level);
     result.shape = shape;
+    result.head_shape = head_shape;
     result.matmul_block_size = matmul_block_size;
     result.data.resize(data.size());
     parallel_for(data.size(), th_nums, *context, [&](CkksContext& ctx_copy, int ct_idx) {

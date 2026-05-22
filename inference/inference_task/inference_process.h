@@ -55,6 +55,7 @@ public:
     uint32_t channel;
     double scale;
     Duo shape = {0, 0};
+    Duo head_shape = {0, 0};
     Duo skip = {1, 1};
     Duo special_skip = {1, 1};  // 0D from special_info.skip
     Duo invalid_fill = {0, 0};  // 0D from special_info，2D
@@ -97,6 +98,7 @@ public:
     std::string pack_style;
     Duo block_shape;
     uint32_t n_heads = 1;
+    uint32_t matmul_block_size = 0;
     bool is_absorb_polyrelu;
     json json_data;
     json json_features;

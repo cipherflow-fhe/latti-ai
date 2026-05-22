@@ -487,6 +487,16 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
         if isinstance(node, FeatureNode) and graph.dag.in_degree(node) == 0 and node.dim == 0:
             graph.dag.nodes[node]['skip'] = [leading_skip]
 
+    # Initialize head_shape for feature_mat input nodes.
+    n_heads = getattr(config, 'n_heads', 1)
+    head_dim = getattr(config, 'head_dim', 0)
+    for node in sorted_nodes:
+        if isinstance(node, FeatureNode) and graph.dag.in_degree(node) == 0:
+            if node.data_type == 'feature_mat' and node.head_shape is None and n_heads > 1:
+                if head_dim <= 0:
+                    raise ValueError('HEAD_DIM must be set when N_HEADS > 1 for feature_mat inputs')
+                node.head_shape = [node.shape[0], head_dim]
+
     for compute_node in sorted_compute_nodes:
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
         succ: FeatureNode = next(graph.dag.successors(compute_node))
@@ -519,17 +529,26 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                     weight_shape = getattr(compute_node, 'weight_shape', [])
                     if len(weight_shape) >= 2:
                         succ.shape[1] = weight_shape[-1]
+                    if preds[0].head_shape is not None:
+                        succ.head_shape = list(preds[0].head_shape)
                 elif compute_node.layer_type == 'partranspose':
                     succ.shape[0] = preds[0].shape[1]
                     succ.shape[1] = preds[0].shape[0]
+                    if preds[0].head_shape is not None:
+                        succ.head_shape = [preds[0].head_shape[1], preds[0].head_shape[0]]
                 elif compute_node.layer_type == 'parccmm':
                     succ.shape[0] = preds[0].shape[0]
                     if len(preds) > 1 and len(preds[1].shape) > 1:
                         succ.shape[1] = preds[1].shape[1]
+                    if preds[0].head_shape is not None and len(preds) > 1 and preds[1].head_shape is not None:
+                        succ.head_shape = [preds[0].head_shape[0], preds[1].head_shape[1]]
                 else:
                     for i in range(preds[0].dim):
                         succ.shape[i] = preds[0].shape[i]
                         graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
+                # Propagate head_shape for feature_mat pass-through layers
+                if succ.head_shape is None and preds[0].head_shape is not None:
+                    succ.head_shape = list(preds[0].head_shape)
         if preds[0].dim >= 1 and any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
             graph.dag.nodes[succ]['skip'] = [1] * preds[0].dim
             if any(succ.shape[i] < config.block_shape[i] for i in range(succ.dim)):
@@ -545,7 +564,12 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
         if compute_node.layer_type in ('parcpmm', 'parccmm', 'partranspose'):
             n_slot = int(config.fhe_param.poly_modulus_degree // 2)
             n_heads = config.n_heads
-            d = preds[0].shape[1] // n_heads  # block_size = n_per_head
+            if preds[0].head_shape is not None:
+                d = preds[0].head_shape[1]
+            else:
+                d = getattr(config, 'head_dim', 0) or preds[0].shape[1] // n_heads
+            if d <= 0:
+                raise ValueError('HEAD_DIM must be set for par matrix feature_mat packing')
             n_h_padded = 1
             while n_h_padded < n_heads:
                 n_h_padded <<= 1
@@ -557,17 +581,20 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                 G = n_h_padded
             for f_node in preds + [succ]:
                 if f_node.data_type == 'feature_mat':
-                    # Per-head shape: divide each dim by n_heads if it's a multiple
-                    r = (
-                        f_node.shape[0] // n_heads
-                        if f_node.shape[0] % n_heads == 0 and f_node.shape[0] > d
-                        else f_node.shape[0]
-                    )
-                    c = (
-                        f_node.shape[1] // n_heads
-                        if f_node.shape[1] % n_heads == 0 and f_node.shape[1] > d
-                        else f_node.shape[1]
-                    )
+                    if f_node.head_shape is not None:
+                        r, c = f_node.head_shape
+                    else:
+                        # Per-head shape: divide each dim by n_heads if it's a multiple
+                        r = (
+                            f_node.shape[0] // n_heads
+                            if f_node.shape[0] % n_heads == 0 and f_node.shape[0] > d
+                            else f_node.shape[0]
+                        )
+                        c = (
+                            f_node.shape[1] // n_heads
+                            if f_node.shape[1] % n_heads == 0 and f_node.shape[1] > d
+                            else f_node.shape[1]
+                        )
                     graph.dag.nodes[f_node]['pack_num'] = math.ceil(r / d) * math.ceil(c / d) * G
 
 
