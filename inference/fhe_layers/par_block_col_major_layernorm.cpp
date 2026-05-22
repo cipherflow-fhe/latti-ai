@@ -722,6 +722,7 @@ FeatureMatEncrypted ParBlockColMajorLNAffine::run(CkksContext& ctx,
     uint32_t total_cts = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
 
     FeatureMatEncrypted result(&ctx, y_level_ - 2);
+    result.head_shape = {m_, cols_per_head_};
     result.shape = {m_, n_heads_ * cols_per_head_};
     result.matmul_block_size = d_;
     result.data.resize(total_cts);

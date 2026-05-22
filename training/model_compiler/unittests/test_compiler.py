@@ -344,6 +344,7 @@ class CompilerTestBase(unittest.TestCase):
         replace=True,
         feature_mat=False,
         n_heads=0,
+        head_dim=0,
         **export_kwargs,
     ):
         """Full E2E pipeline: compile model and generate all files for C++ inference test.
@@ -379,7 +380,10 @@ class CompilerTestBase(unittest.TestCase):
 
         # Step 3: Compile (produces task/server/ and task/client/)
         if n_heads:
+            if head_dim <= 0:
+                raise ValueError('head_dim must be provided when n_heads is set')
             config.n_heads = n_heads
+            config.head_dim = head_dim
         graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=temp_json,
@@ -543,12 +547,15 @@ class TestSingleLayer(CompilerTestBase):
 
     def test_qkv(self):
         old_n_heads = config.n_heads
+        old_head_dim = config.head_dim
         try:
             config.n_heads = 3
+            config.head_dim = 64
             model = nn_modules.QKVTest()
             self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
         finally:
             config.n_heads = old_n_heads
+            config.head_dim = old_head_dim
 
     def test_transpose(self):
         model = nn_modules.TransposeTest()
@@ -1250,6 +1257,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             style='multiplexed',
             feature_mat=True,
             n_heads=2,
+            head_dim=32,
         )
 
     def test_par_block_col_major_add(self):
@@ -1262,6 +1270,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             style='multiplexed',
             feature_mat=True,
             n_heads=2,
+            head_dim=32,
             input_names=['x0', 'x1'],
         )
         self.assertIsNotNone(graph)
@@ -1276,6 +1285,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             style='multiplexed',
             feature_mat=True,
             n_heads=2,
+            head_dim=32,
             input_names=['x0', 'x1'],
         )
 
@@ -1289,6 +1299,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             style='multiplexed',
             feature_mat=True,
             n_heads=2,
+            head_dim=32,
         )
 
     def test_par_block_col_major_gelu(self):
@@ -1301,6 +1312,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             style='multiplexed',
             feature_mat=True,
             n_heads=2,
+            head_dim=32,
         )
         self.assertTrue(any(node.layer_type == 'pcmpoly' for node in graph.dag.nodes if isinstance(node, ComputeNode)))
 
@@ -1314,6 +1326,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             style='multiplexed',
             feature_mat=True,
             n_heads=2,
+            head_dim=32,
         )
 
 

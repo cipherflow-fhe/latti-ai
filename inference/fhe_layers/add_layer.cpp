@@ -116,6 +116,7 @@ FeatureMatEncrypted
 ParBlockColMajorAdd::run(CkksContext& ctx, const FeatureMatEncrypted& x0, const FeatureMatEncrypted& x1) {
     FeatureMatEncrypted result(&ctx, x0.level);
     result.dim = x0.dim;
+    result.head_shape = x0.head_shape;
     result.shape = x0.shape;
     result.matmul_block_size = x0.matmul_block_size;
     result.n_channel = x0.n_channel;

@@ -419,7 +419,8 @@ ParBlockColMajorCCMM::run(CkksContext& ctx, const FeatureMatEncrypted& A, const 
     FeatureMatEncrypted result(&ctx, A.level);
     result.data = run_core(ctx, A.data, B.data);
     result.level = A.level - 3;  // block_mult consumes 3 levels
-    result.shape = {m_, p_};     // per-head result shape
+    result.head_shape = {A.head_shape[0], B.head_shape[1]};
+    result.shape = {A.shape[0], B.shape[1]};
     result.matmul_block_size = d_;
     return result;
 }
