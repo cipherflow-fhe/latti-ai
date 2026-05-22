@@ -253,7 +253,10 @@ def run_pipeline(
     num_workers: int = os.cpu_count(),
     style: str | None = None,
     graph_type: str | None = None,
-    is_use_btp: bool =False
+    is_use_btp: bool = False,
+    n_heads: int | None = None,
+    head_dim: int | None = None,
+    matmul_block_size: int | None = None,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -274,7 +277,16 @@ def run_pipeline(
         config.style = style
     if graph_type is not None:
         config.graph_type = graph_type
-    print(f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}')
+    if n_heads is not None:
+        config.n_heads = n_heads
+    if head_dim is not None:
+        config.head_dim = head_dim
+    if matmul_block_size is not None:
+        config.matmul_block_size = matmul_block_size
+    print(
+        f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
+        f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}'
+    )
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
 
