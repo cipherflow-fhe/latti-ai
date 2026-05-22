@@ -39,6 +39,7 @@
                 "output"
             ],
             "n_heads": 3,
+            "head_dim": 64,
             "weight_path": "ln.weight",
             "bias_path": "ln.bias"
         }
