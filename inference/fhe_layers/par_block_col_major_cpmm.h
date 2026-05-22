@@ -106,6 +106,8 @@ private:
     uint32_t n_per_head_;      // columns per head in A
     uint32_t n_total_per_mb_;  // total columns per megablock = n_heads * n_per_head
     uint32_t out_cols_;        // actual output columns (W_cols, may be < K_col * n_total_per_mb)
+    uint32_t W_rows_;          // original weight matrix row count
+    uint32_t W_cols_;          // original weight matrix column count (== out_cols_)
     uint32_t d_;               // block size
     uint32_t n_slot_;
     uint32_t chunk_size_;  // S * d^2
