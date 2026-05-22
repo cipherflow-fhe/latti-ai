@@ -122,13 +122,16 @@ static uint32_t next_power_of_2(uint32_t x) {
 void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matrix,
                                                    uint32_t d,
                                                    uint32_t n_heads,
+                                                   uint32_t head_dim,
                                                    bool is_symmetric,
                                                    double scale_in) {
     uint32_t m = matrix.get_shape()[0];
     uint32_t total_cols = matrix.get_shape()[1];
     shape = {m, total_cols};
     matmul_block_size = d;
-    uint32_t cols_per_head = total_cols / n_heads;
+    uint32_t cols_per_head = head_dim;
+    uint32_t n = cols_per_head * n_heads;  // columns per megablock
+    uint32_t K_col = div_ceil(total_cols, n);
     uint32_t n_h_padded = next_power_of_2(n_heads);
     int n_slot = context->get_parameter().get_n() / 2;
     const int N_THREAD = 4;
@@ -148,35 +151,41 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
 
     uint32_t num_block_rows = div_ceil(m, d);
     uint32_t num_block_cols = div_ceil(cols_per_head, d);
-    uint32_t total_vecs = num_block_rows * num_block_cols * n_cts_per_block_idx;
+    uint32_t cts_per_mb = num_block_rows * num_block_cols * n_cts_per_block_idx;
+    uint32_t total_vecs = K_col * cts_per_mb;
 
     vector<vector<double>> block_vecs(total_vecs);
 
-    // Column-major block order: for bj, for bi, for g (group number of cts for the same block idx)
-    for (uint32_t bj = 0; bj < num_block_cols; bj++) {
-        for (uint32_t bi = 0; bi < num_block_rows; bi++) {
-            for (uint32_t g = 0; g < n_cts_per_block_idx; g++) {
-                uint32_t vec_idx = (bi + num_block_rows * bj) * n_cts_per_block_idx + g;
-                vector<double> vec(n_slot, 0.0);
+    for (uint32_t col_mb = 0; col_mb < K_col; col_mb++) {
+        // Column-major block order: for bj, for bi, for g
+        for (uint32_t bj = 0; bj < num_block_cols; bj++) {
+            for (uint32_t bi = 0; bi < num_block_rows; bi++) {
+                for (uint32_t g = 0; g < n_cts_per_block_idx; g++) {
+                    uint32_t local_idx = (bi + num_block_rows * bj) * n_cts_per_block_idx + g;
+                    uint32_t vec_idx = col_mb * cts_per_mb + local_idx;
+                    vector<double> vec(n_slot, 0.0);
 
-                for (uint32_t h_local = 0; h_local < S; h_local++) {
-                    uint32_t h = g * S + h_local;  // global head index
-                    for (uint32_t col = 0; col < d; col++) {
-                        for (uint32_t row = 0; row < d; row++) {
-                            uint32_t r = bi * d + row;
-                            uint32_t c = bj * d + col;
-                            double val = 0.0;
-                            if (h < n_heads && r < m && c < cols_per_head) {
-                                val = matrix.get(r, h * cols_per_head + c);
-                            }
-                            uint32_t base_slot = (row + d * col) * S + h_local;
-                            for (uint32_t ci = 0; ci < num_chunks; ci++) {
-                                vec[ci * chunk_size + base_slot] = val;
+                    for (uint32_t h_local = 0; h_local < S; h_local++) {
+                        uint32_t h = g * S + h_local;  // global head index
+                        for (uint32_t col = 0; col < d; col++) {
+                            for (uint32_t row = 0; row < d; row++) {
+                                uint32_t r = bi * d + row;
+                                uint32_t c = bj * d + col;
+                                double val = 0.0;
+                                if (h < n_heads && r < m && c < cols_per_head) {
+                                    uint32_t global_col = col_mb * n + h * cols_per_head + c;
+                                    if (global_col < total_cols)
+                                        val = matrix.get(r, global_col);
+                                }
+                                uint32_t base_slot = (row + d * col) * S + h_local;
+                                for (uint32_t ci = 0; ci < num_chunks; ci++) {
+                                    vec[ci * chunk_size + base_slot] = val;
+                                }
                             }
                         }
                     }
+                    block_vecs[vec_idx] = move(vec);
                 }
-                block_vecs[vec_idx] = move(vec);
             }
         }
     }
@@ -201,6 +210,7 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
 
 Array<double, 2>
 FeatureMatEncrypted::par_block_col_major_unpack(uint32_t m, uint32_t n_per_head, uint32_t d, uint32_t n_heads) const {
+    uint32_t total_cols = shape[1];
     uint32_t n_h_padded = next_power_of_2(n_heads);
     int n_slot = context->get_parameter().get_n() / 2;
     const int N_THREAD = 4;
@@ -218,37 +228,49 @@ FeatureMatEncrypted::par_block_col_major_unpack(uint32_t m, uint32_t n_per_head,
 
     uint32_t num_block_rows = div_ceil(m, d);
     uint32_t num_block_cols = div_ceil(n_per_head, d);
-    uint32_t total_vecs = num_block_rows * num_block_cols * n_cts_per_block_idx;
-    uint32_t total_cols = n_heads * n_per_head;
+    uint32_t cts_per_mb = num_block_rows * num_block_cols * n_cts_per_block_idx;
 
+    // Infer K_col (number of output megablocks) from ciphertext count
+    uint32_t K_col = data.size() / cts_per_mb;
+    assert(K_col * cts_per_mb == data.size());
+
+    uint32_t n = n_heads * n_per_head;  // columns per megablock
     Array<double, 2> result({(uint64_t)m, (uint64_t)total_cols});
 
-    parallel_for(total_vecs, N_THREAD, *context, [&](CkksContext& ctx_copy, int vec_idx) {
-        // Recover bi, bj, g from vec_idx
-        uint32_t block_idx = vec_idx / n_cts_per_block_idx;
-        uint32_t g = vec_idx % n_cts_per_block_idx;
-        uint32_t bi = block_idx % num_block_rows;
-        uint32_t bj = block_idx / num_block_rows;
+    for (uint32_t col_mb = 0; col_mb < K_col; col_mb++) {
+        uint32_t ct_offset = col_mb * cts_per_mb;
 
-        CkksPlaintext x_pt = ctx_copy.decrypt(data[vec_idx]);
-        Array1D x_mg = ctx_copy.decode(x_pt);
+        parallel_for(cts_per_mb, N_THREAD, *context, [&](CkksContext& ctx_copy, int local_idx) {
+            uint32_t vec_idx = ct_offset + local_idx;
+            // Recover bi, bj, g from local_idx
+            uint32_t block_idx = local_idx / n_cts_per_block_idx;
+            uint32_t g = local_idx % n_cts_per_block_idx;
+            uint32_t bi = block_idx % num_block_rows;
+            uint32_t bj = block_idx / num_block_rows;
 
-        for (uint32_t h_local = 0; h_local < S; h_local++) {
-            uint32_t h = g * S + h_local;
-            if (h >= n_heads)
-                continue;
-            for (uint32_t col = 0; col < d; col++) {
-                for (uint32_t row = 0; row < d; row++) {
-                    uint32_t r = bi * d + row;
-                    uint32_t c = bj * d + col;
-                    if (r < m && c < n_per_head) {
-                        uint32_t slot = (row + d * col) * S + h_local;
-                        result.set(r, h * n_per_head + c, x_mg[slot]);
+            CkksPlaintext x_pt = ctx_copy.decrypt(data[vec_idx]);
+            Array1D x_mg = ctx_copy.decode(x_pt);
+
+            for (uint32_t h_local = 0; h_local < S; h_local++) {
+                uint32_t h = g * S + h_local;
+                if (h >= n_heads)
+                    continue;
+                for (uint32_t col = 0; col < d; col++) {
+                    for (uint32_t row = 0; row < d; row++) {
+                        uint32_t r = bi * d + row;
+                        uint32_t c = bj * d + col;
+                        if (r < m && c < n_per_head) {
+                            uint32_t global_col = col_mb * n + h * n_per_head + c;
+                            if (global_col < total_cols) {
+                                uint32_t slot = (row + d * col) * S + h_local;
+                                result.set(r, global_col, x_mg[slot]);
+                            }
+                        }
                     }
                 }
             }
-        }
-    });
+        });
+    }
     return result;
 }
 

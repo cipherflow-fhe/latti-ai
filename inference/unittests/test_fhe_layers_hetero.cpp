@@ -1662,6 +1662,7 @@ static void run_block_col_major_e2e_test(HeteroFixture<T>& fixture,
     out_enc.shape = out_shape;
     out_enc.matmul_block_size = out_d;
 
+    out_enc.shape[1] = ref_output.get_shape()[1];
     Array<double, 2> actual({1, 1});
     if (is_par) {
         actual = out_enc.par_block_col_major_unpack(out_shape[0], out_shape[1], out_d, out_n_heads);
@@ -1706,7 +1707,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_cpmm_square", "[block_
         auto ref_output = layer_ptr->run_plaintext(A);
 
         FeatureMatEncrypted A_enc(&res.context, cfg.level);
-        A_enc.par_block_col_major_pack(A, d, cfg.n_heads, false, res.param.get_default_scale());
+        A_enc.par_block_col_major_pack(A, d, cfg.n_heads, d, false, res.param.get_default_scale());
 
         static vector<CkksCiphertext> in_cts, out_cts;
         static vector<CustomData> layer_data;
@@ -1746,28 +1747,29 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto& res = SharedHeteroResources::get();
 
     struct Cfg {
-        uint32_t m, n_heads, head_dim;
+        uint32_t m, n_heads, head_dim, W_cols;
         int level;
     };
     vector<Cfg> configs = {
-        {53, 3, 16, 2},
+        {53, 3, 16, 35, 2},  // W_cols=35 < total_dim=48, non-square but K_row=K_col=1
     };
 
     FOR_EACH_SECTION(auto& cfg, configs,
-                     "m=" + to_string(cfg.m) + "_heads=" + to_string(cfg.n_heads) + "_dim=" + to_string(cfg.head_dim)) {
+                     "m=" + to_string(cfg.m) + "_heads=" + to_string(cfg.n_heads) + "_dim=" + to_string(cfg.head_dim) +
+                         "_wcols=" + to_string(cfg.W_cols)) {
         uint32_t d = cfg.head_dim;
         uint32_t total_dim = cfg.n_heads * cfg.head_dim;
 
-        fs::path server_dir =
-            base_path / "CKKS_par_cpmm_square_with_bias" /
-            ("m_" + to_string(cfg.m) + "_heads_" + to_string(cfg.n_heads) + "_dim_" + to_string(cfg.head_dim)) /
-            ("level_" + to_string(cfg.level)) / "server";
+        fs::path server_dir = base_path / "CKKS_par_cpmm_square_with_bias" /
+                              ("m_" + to_string(cfg.m) + "_heads_" + to_string(cfg.n_heads) + "_dim_" +
+                               to_string(cfg.head_dim) + "_wcols_" + to_string(cfg.W_cols)) /
+                              ("level_" + to_string(cfg.level)) / "server";
         if (!fs::exists(server_dir / "mega_ag.json"))
             return;
 
-        auto W = gen_random_array<2>({total_dim, total_dim}, 0.1);
+        auto W = gen_random_array<2>({total_dim, cfg.W_cols}, 0.1);
         auto A = gen_random_array<2>({cfg.m, total_dim}, 0.5);
-        auto bias = gen_random_array<1>({total_dim}, 0.3);
+        auto bias = gen_random_array<1>({cfg.W_cols}, 0.3);
 
         auto layer_ptr = std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{cfg.m, cfg.head_dim}, W, d, cfg.n_heads,
                                                                 cfg.level, std::move(bias));
@@ -1775,7 +1777,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         auto ref_output = layer_ptr->run_plaintext(A);
 
         FeatureMatEncrypted A_enc(&res.context, cfg.level);
-        A_enc.par_block_col_major_pack(A, d, cfg.n_heads, false, res.param.get_default_scale());
+        A_enc.par_block_col_major_pack(A, d, cfg.n_heads, d, false, res.param.get_default_scale());
 
         static vector<CkksCiphertext> in_cts, out_cts;
         static vector<CustomData> layer_data;
@@ -1806,6 +1808,129 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {cfg.m, cfg.head_dim}, d, cfg.n_heads,
                                      true, out_cts);
     }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "single_par_cpmm_expand_with_bias",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+
+    // m=53, n_heads=3, head_dim=16, total_dim=48, W_cols=100 (non-divisible, K_col=ceil(100/48)=3)
+    const uint32_t m = 53, n_heads = 3, head_dim = 16, d = head_dim;
+    const uint32_t total_dim = n_heads * head_dim;
+    const uint32_t W_cols = 100;
+    const int level = 2;
+    const uint32_t K_col = div_ceil(W_cols, total_dim);  // 3
+
+    fs::path server_dir = base_path / "CKKS_par_cpmm_expand_with_bias" /
+                          ("m_" + to_string(m) + "_heads_" + to_string(n_heads) + "_dim_" + to_string(head_dim) +
+                           "_wcols_" + to_string(W_cols)) /
+                          ("level_" + to_string(level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto W = gen_random_array<2>({total_dim, W_cols}, 0.1);
+    auto A = gen_random_array<2>({m, total_dim}, 0.5);
+    auto bias = gen_random_array<1>({W_cols}, 0.3);
+
+    auto layer_ptr =
+        std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{m, head_dim}, W, d, n_heads, level, std::move(bias));
+    layer_ptr->precompute_diagonals();
+    auto ref_output = layer_ptr->run_plaintext(A);
+
+    FeatureMatEncrypted A_enc(&res.context, level);
+    A_enc.par_block_col_major_pack(A, d, n_heads, head_dim, false, res.param.get_default_scale());
+
+    static vector<CkksCiphertext> in_cts, out_cts;
+    static vector<CustomData> layer_data;
+    in_cts.clear();
+    out_cts.clear();
+    layer_data.clear();
+
+    for (auto& ct : A_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+    uint32_t num_block_rows_A = div_ceil(m, d);
+    uint32_t n_h_padded = 1;
+    while (n_h_padded < n_heads)
+        n_h_padded <<= 1;
+    uint32_t n_slot = res.param.get_n() / 2;
+    uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+    uint32_t n_out = K_col * num_block_rows_A * G;
+
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(res.context.new_ciphertext(level - 2, res.param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_cpmm_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {m, head_dim}, d, n_heads, true, out_cts);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "single_par_cpmm_reduce_with_bias",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+
+    // m=53, n_heads=3, head_dim=16, total_dim=48, W_rows=100 (non-divisible, K_row=ceil(100/48)=3)
+    const uint32_t m = 53, n_heads = 3, head_dim = 16, d = head_dim;
+    const uint32_t total_dim = n_heads * head_dim;
+    const uint32_t W_rows = 100;
+    const int level = 2;
+    const uint32_t K_row = div_ceil(W_rows, total_dim);  // 3
+
+    fs::path server_dir = base_path / "CKKS_par_cpmm_reduce_with_bias" /
+                          ("m_" + to_string(m) + "_heads_" + to_string(n_heads) + "_dim_" + to_string(head_dim) +
+                           "_wrows_" + to_string(W_rows)) /
+                          ("level_" + to_string(level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto W = gen_random_array<2>({W_rows, total_dim}, 0.1);
+    // REDUCE input has K_row megablocks: m × (K_row * total_dim) padded columns
+    auto A = gen_random_array<2>({m, W_rows}, 0.5);
+    auto bias = gen_random_array<1>({total_dim}, 0.3);
+
+    auto layer_ptr =
+        std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{m, head_dim}, W, d, n_heads, level, std::move(bias));
+    layer_ptr->precompute_diagonals();
+    auto ref_output = layer_ptr->run_plaintext(A);
+
+    FeatureMatEncrypted A_enc(&res.context, level);
+    A_enc.par_block_col_major_pack(A, d, n_heads, head_dim, false, res.param.get_default_scale());
+
+    static vector<CkksCiphertext> in_cts, out_cts;
+    static vector<CustomData> layer_data;
+    in_cts.clear();
+    out_cts.clear();
+    layer_data.clear();
+
+    for (auto& ct : A_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+    uint32_t num_block_rows_A = div_ceil(m, d);
+    uint32_t n_h_padded = 1;
+    while (n_h_padded < n_heads)
+        n_h_padded <<= 1;
+    uint32_t n_slot = res.param.get_n() / 2;
+    uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+    uint32_t n_out = num_block_rows_A * G;  // REDUCE: single output megablock
+
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(res.context.new_ciphertext(level - 2, res.param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_cpmm_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {m, head_dim}, d, n_heads, true, out_cts);
 }
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_attention", "[block_col_major_e2e]", HeteroProcessors) {
@@ -1851,11 +1976,11 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_attention", "[block_co
 
     // Pack Q, K, V
     FeatureMatEncrypted Q_enc(&res.context, init_level);
-    Q_enc.par_block_col_major_pack(Q_mat, d, n_heads, false, res.param.get_default_scale());
+    Q_enc.par_block_col_major_pack(Q_mat, d, n_heads, d, false, res.param.get_default_scale());
     FeatureMatEncrypted K_enc(&res.context, init_level);
-    K_enc.par_block_col_major_pack(K_mat, d, n_heads, false, res.param.get_default_scale());
+    K_enc.par_block_col_major_pack(K_mat, d, n_heads, d, false, res.param.get_default_scale());
     FeatureMatEncrypted V_enc(&res.context, init_level);
-    V_enc.par_block_col_major_pack(V_mat, d, n_heads, false, res.param.get_default_scale());
+    V_enc.par_block_col_major_pack(V_mat, d, n_heads, d, false, res.param.get_default_scale());
 
     static vector<CkksCiphertext> Q_cts, K_cts, V_cts, out_cts;
     static vector<CustomData> kt_data, qkt_data, attnv_data;
@@ -1956,7 +2081,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_full_attention", "[blo
 
     // Pack input X
     FeatureMatEncrypted X_enc(&res.context, init_level);
-    X_enc.par_block_col_major_pack(X_mat, d, n_heads, false, res.param.get_default_scale());
+    X_enc.par_block_col_major_pack(X_mat, d, n_heads, d, false, res.param.get_default_scale());
 
     static vector<CkksCiphertext> X_cts, out_cts;
     static vector<CustomData> q_data, k_data, v_data, kt_data, qkt_data, attnv_data;
@@ -2050,7 +2175,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     // Pack input
     FeatureMatEncrypted A_enc(&this->context, init_level);
-    A_enc.par_block_col_major_pack(A_mat, d, n_heads, false, this->param.get_default_scale());
+    A_enc.par_block_col_major_pack(A_mat, d, n_heads, d, false, this->param.get_default_scale());
 
     static vector<CkksCiphertext> in_cts, out_cts;
     static vector<CustomData> expand_data, reduce_data;
@@ -2425,9 +2550,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto x1 = gen_random_array<2>({m, total_dim}, 1.0);
 
     FeatureMatEncrypted x0_enc(&res.context, init_level);
-    x0_enc.par_block_col_major_pack(x0, d, n_heads, false, res.param.get_default_scale());
+    x0_enc.par_block_col_major_pack(x0, d, n_heads, d, false, res.param.get_default_scale());
     FeatureMatEncrypted x1_enc(&res.context, init_level);
-    x1_enc.par_block_col_major_pack(x1, d, n_heads, false, res.param.get_default_scale());
+    x1_enc.par_block_col_major_pack(x1, d, n_heads, d, false, res.param.get_default_scale());
 
     ParBlockColMajorAdd add_layer(res.param);
     auto expected = add_layer.run_plaintext(x0, x1);
@@ -2469,7 +2594,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto expected = layer_ptr->run_plaintext(A);
 
     FeatureMatEncrypted A_enc(&res.context, init_level);
-    A_enc.par_block_col_major_pack(A, d, n_heads, false, res.param.get_default_scale());
+    A_enc.par_block_col_major_pack(A, d, n_heads, d, false, res.param.get_default_scale());
 
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> layer_data;
@@ -3359,7 +3484,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     FeatureMatEncrypted X_enc(&context, init_level);
     X_enc.shape = {seq_len, head_dim};
     X_enc.matmul_block_size = d;
-    X_enc.par_block_col_major_pack(X_mat, d, n_heads, false, param.get_default_scale());
+    X_enc.par_block_col_major_pack(X_mat, d, n_heads, d, false, param.get_default_scale());
 
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> stats_data, xcenter_data, minimax_data, gold_data, affine_data;
@@ -3409,7 +3534,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     FeatureMatEncrypted out_enc(&context, 0);
     for (auto& ct : out_cts)
         out_enc.data.push_back(std::move(ct));
-    out_enc.shape = {seq_len, head_dim};
+    out_enc.shape = {seq_len, total_dim};
     out_enc.matmul_block_size = d;
     auto result = out_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
 
@@ -3524,7 +3649,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         FeatureMatEncrypted X_enc(&res.context, init_level);
         X_enc.shape = {seq_len, head_dim};
         X_enc.matmul_block_size = d;
-        X_enc.par_block_col_major_pack(X_mat, d, n_heads, false, res.param.get_default_scale());
+        X_enc.par_block_col_major_pack(X_mat, d, n_heads, d, false, res.param.get_default_scale());
 
         vector<CkksCiphertext> in_cts, out_cts;
         vector<CustomData> gamma_data, poly_data;
@@ -3639,7 +3764,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         FeatureMatEncrypted A_enc(&res.context, init_level);
         A_enc.shape = {seq_len, head_dim};
         A_enc.matmul_block_size = d;
-        A_enc.par_block_col_major_pack(A_mat, d, n_heads, false, res.param.get_default_scale());
+        A_enc.par_block_col_major_pack(A_mat, d, n_heads, d, false, res.param.get_default_scale());
 
         vector<CkksCiphertext> in_cts, out_cts;
         vector<CustomData> expand_data, gamma_data, poly_data, reduce_data;
@@ -3698,7 +3823,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto ref_output = layer_ptr->run_plaintext(A);
 
     FeatureMatEncrypted A_enc(&res.context, level);
-    A_enc.par_block_col_major_pack(A, d, n_heads, false, res.param.get_default_scale());
+    A_enc.par_block_col_major_pack(A, d, n_heads, d, false, res.param.get_default_scale());
 
     static vector<CkksCiphertext> in_cts, out_cts;
     static vector<CustomData> layer_data;
@@ -3747,7 +3872,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto ref_output = layer_ptr->run_plaintext(A);
 
     FeatureMatEncrypted A_enc(&res.context, level);
-    A_enc.par_block_col_major_pack(A, d, n_heads, false, res.param.get_default_scale());
+    A_enc.par_block_col_major_pack(A, d, n_heads, K, false, res.param.get_default_scale());
 
     static vector<CkksCiphertext> in_cts, out_cts;
     static vector<CustomData> layer_data;
@@ -3790,9 +3915,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto ref_output = layer_ptr->run_plaintext(A, B);
 
     FeatureMatEncrypted A_enc(&res.context, level);
-    A_enc.par_block_col_major_pack(A, d, n_heads, false, res.param.get_default_scale());
+    A_enc.par_block_col_major_pack(A, d, n_heads, N_dim, false, res.param.get_default_scale());
     FeatureMatEncrypted B_enc(&res.context, level);
-    B_enc.par_block_col_major_pack(B, d, n_heads, false, res.param.get_default_scale());
+    B_enc.par_block_col_major_pack(B, d, n_heads, P, false, res.param.get_default_scale());
 
     static vector<CkksCiphertext> A_cts, B_cts, out_cts;
     static vector<CustomData> layer_data;
@@ -3864,7 +3989,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         FeatureMatEncrypted X_enc(&res.context, level);
         X_enc.shape = {seq_len, head_dim};
         X_enc.matmul_block_size = d;
-        X_enc.par_block_col_major_pack(X, d, n_heads, false, res.param.get_default_scale());
+        X_enc.par_block_col_major_pack(X, d, n_heads, d, false, res.param.get_default_scale());
 
         static vector<CkksCiphertext> in_cts, out_cts;
         static vector<CustomData> layer_data;

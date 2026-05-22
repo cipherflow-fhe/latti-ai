@@ -39,12 +39,15 @@ public:
 
     // Parallel (interleaved) block column-major packing: interleave blocks from
     // multiple heads at the same block position into a single ciphertext.
-    // matrix shape: m × (n_heads * cols_per_head), block_size d = head_dim.
+    // head_dim: columns per head within each megablock.
     void par_block_col_major_pack(const Array<double, 2>& matrix,
                                   uint32_t d,
                                   uint32_t n_heads,
+                                  uint32_t head_dim,
                                   bool is_symmetric = false,
                                   double scale_in = DEFAULT_SCALE);
+    // Unpack: K_col is inferred from data.size(). n_per_head = head_dim within each megablock.
+    // total_cols is taken from shape[1].
     Array<double, 2> par_block_col_major_unpack(uint32_t m, uint32_t n_per_head, uint32_t d, uint32_t n_heads) const;
 
     void decompress();
