@@ -1255,7 +1255,7 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
 
 def set_pcm_K(graph: LayerAbstractGraph):
     """Set K attribute on pcmgamma and pcmpoly nodes."""
-    base_feat_dim = config.base_feat_dim
+    base_feat_dim = config.n_heads * config.matmul_block_size
     for node in graph.dag.nodes:
         if not isinstance(node, ComputeNode):
             continue

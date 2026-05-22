@@ -285,10 +285,10 @@ class GlobalConfig:
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
             cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'polyact']
             cls._instance.single_thread = config_dict.get('SINGLE_THREAD', False)
-            cls._instance.n_heads = config_dict.get('N_HEADS', 1)
-            cls._instance.head_dim = config_dict.get('HEAD_DIM', 0)
-            cls._instance.matmul_block_size = config_dict.get('MATMUL_BLOCK_SIZE', 8)
-            cls._instance.base_feat_dim = config_dict.get('BASE_FEAT_DIM', 0)
+            cls._instance.n_heads = 1
+            cls._instance.head_dim = 0
+            cls._instance.matmul_block_size = 0
+            cls._instance.base_feat_dim = 0
             cls._instance.layernorm_var_std_bound = config_dict.get('LAYERNORM_VAR_STD_BOUND', 4.0)
             cls._instance.layernorm_minimax_init_coeffs = config_dict.get(
                 'LAYERNORM_MINIMAX_INIT_COEFFS',
@@ -821,13 +821,6 @@ class LayerAbstractGraph:
                 compute_node.gamma_path = layer_json.get('gamma_path', f'{key}.gamma')
                 compute_node.poly_weight_path = layer_json.get('poly_weight_path', f'{key}.poly.weight')
                 compute_node.poly_order = layer_json.get('poly_order', layer_json.get('order', 4))
-                compute_node.n_heads = int(layer_json.get('num_heads', layer_json.get('n_heads', config.n_heads)))
-                compute_node.head_dim = int(layer_json.get('head_dim', config.matmul_block_size))
-                if compute_node.n_heads > 0:
-                    config.n_heads = compute_node.n_heads
-                if compute_node.head_dim > 0:
-                    config.matmul_block_size = compute_node.head_dim
-                config.base_feat_dim = config.matmul_block_size * config.n_heads
 
             elif 'fc' in layer_type:
                 weight_path = layer_json['weight_path']
