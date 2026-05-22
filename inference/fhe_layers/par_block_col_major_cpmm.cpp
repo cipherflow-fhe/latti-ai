@@ -61,49 +61,57 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
 
     num_block_rows_A_ = div_ceil(m_, d_);
 
-    // Auto-detect mode from W dimensions
+    // Auto-detect mode from W dimensions.
+    // Pad both dimensions to multiples of n_total_per_mb_ using ceil, then
+    // compare to determine mode.  Exactly one of K_row, K_col must be 1.
     uint32_t W_rows = W_mat.get_shape()[0];
     uint32_t W_cols = W_mat.get_shape()[1];
+    uint32_t n = n_total_per_mb_;
 
-    if (W_rows == W_cols) {
+    K_row_ = div_ceil(W_rows, n);
+    K_col_ = div_ceil(W_cols, n);
+
+    if (K_row_ == K_col_) {
         mode_ = Mode::SQUARE;
-        K_ = 1;
-        assert(W_rows == n_total_per_mb_);
-    } else if (W_cols > W_rows) {
+        assert(K_row_ == 1 && "SQUARE mode requires K_row == K_col == 1");
+    } else if (K_col_ > K_row_) {
         mode_ = Mode::EXPAND;
-        assert(W_rows == n_total_per_mb_ && W_cols % W_rows == 0);
-        K_ = W_cols / W_rows;
+        assert(K_row_ == 1 && "EXPAND mode requires K_row == 1");
     } else {
         mode_ = Mode::REDUCE;
-        assert(W_cols == n_total_per_mb_ && W_rows % W_cols == 0);
-        K_ = W_rows / W_cols;
+        assert(K_col_ == 1 && "REDUCE mode requires K_col == 1");
     }
+    K_ = std::max(K_row_, K_col_);
 
-    // Split and pad K sub-weights
+    // Actual output column count (before ceil-padding)
+    out_cols_ = W_cols;
+    W_rows_ = W_rows;
+    W_cols_ = W_cols;
+
+    // Split and pad K sub-weights.
+    // For EXPAND: K sub-weights along columns, last one zero-padded if W_cols % n != 0.
+    // For REDUCE: K sub-weights along rows, last one zero-padded if W_rows % n != 0.
     uint32_t padded_dim = n_h_padded_ * d_;
     W_padded_.resize(K_);
     for (uint32_t mb = 0; mb < K_; mb++) {
         Array<double, 2> W_sub({padded_dim, padded_dim});
-        for (uint32_t i = 0; i < n_total_per_mb_; i++) {
-            for (uint32_t j = 0; j < n_total_per_mb_; j++) {
-                double val;
-                if (mode_ == Mode::EXPAND)
-                    val = W_mat.get(i, mb * n_total_per_mb_ + j);
-                else if (mode_ == Mode::REDUCE)
-                    val = W_mat.get(mb * n_total_per_mb_ + i, j);
-                else
-                    val = W_mat.get(i, j);
+        for (uint32_t i = 0; i < n; i++) {
+            for (uint32_t j = 0; j < n; j++) {
+                uint32_t src_row = (mode_ == Mode::REDUCE) ? mb * n + i : i;
+                uint32_t src_col = (mode_ == Mode::EXPAND) ? mb * n + j : j;
+                double val = 0.0;
+                if (src_row < W_rows && src_col < W_cols)
+                    val = W_mat.get(src_row, src_col);
                 W_sub.set(i, j, val);
             }
         }
         W_padded_[mb] = std::move(W_sub);
     }
 
-    // Bias support
+    // Bias support — bias length matches the actual output columns, not the padded K_col*n
     if (bias.get_shape()[0] > 0) {
         has_bias_ = true;
-        uint32_t expected_bias_len = (mode_ == Mode::EXPAND) ? K_ * n_total_per_mb_ : n_total_per_mb_;
-        assert(bias.get_shape()[0] == expected_bias_len);
+        assert(bias.get_shape()[0] == out_cols_);
         bias_vals_ = std::move(bias);
     }
 }
@@ -187,7 +195,8 @@ std::vector<double> ParBlockColMajorCPMM::build_bias_vec(uint32_t mb, uint32_t b
                     uint32_t slot = ci * chunk_size_ + base_slot;
                     if (actual_row < m_ && h < n_heads_ && col < n_per_head_) {
                         uint32_t global_col = mb * n_total_per_mb_ + h * n_per_head_ + col;
-                        bias_vec[slot] = bias_vals_.get(global_col);
+                        if (global_col < out_cols_)
+                            bias_vec[slot] = bias_vals_.get(global_col);
                     }
                 }
             }
@@ -226,10 +235,9 @@ void ParBlockColMajorCPMM::precompute_diagonals() {
     // Bias plaintexts (encoded at default scale, matching output CT scale at level L-2)
     if (has_bias_) {
         double D = param_.get_default_scale();
-        uint32_t n_out_mbs = (mode_ == Mode::EXPAND) ? K_ : 1;
-        uint32_t total_bias_pts = n_out_mbs * num_block_rows_A_ * n_cts_per_block_idx_;
+        uint32_t total_bias_pts = K_col_ * num_block_rows_A_ * n_cts_per_block_idx_;
         bias_pt_.resize(total_bias_pts);
-        for (uint32_t mb = 0; mb < n_out_mbs; mb++) {
+        for (uint32_t mb = 0; mb < K_col_; mb++) {
             for (uint32_t bi = 0; bi < num_block_rows_A_; bi++) {
                 for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
                     uint32_t idx = mb * num_block_rows_A_ * n_cts_per_block_idx_ + bi * n_cts_per_block_idx_ + g;
@@ -393,46 +401,19 @@ FeatureMatEncrypted ParBlockColMajorCPMM::run(CkksContext& ctx, const FeatureMat
 }
 
 Array<double, 2> ParBlockColMajorCPMM::run_plaintext(const Array<double, 2>& A) const {
-    uint32_t n_total = n_total_per_mb_;
-    if (mode_ == Mode::SQUARE) {
-        Array<double, 2> C({m_, n_total});
-        for (uint32_t i = 0; i < m_; i++)
-            for (uint32_t j = 0; j < n_total; j++) {
-                double s = 0;
-                for (uint32_t k = 0; k < n_total; k++)
-                    s += A.get(i, k) * W_padded_[0].get(k, j);
-                if (has_bias_)
-                    s += bias_vals_.get(j);
-                C.set(i, j, s);
+    uint32_t n = n_total_per_mb_;
+    uint32_t A_rows = A.get_shape()[0];
+    Array<double, 2> C({(uint64_t)A_rows, (uint64_t)W_cols_});
+    for (uint32_t i = 0; i < A_rows; i++)
+        for (uint32_t j = 0; j < W_cols_; j++) {
+            double s = 0;
+            for (uint32_t k = 0; k < W_rows_; k++) {
+                uint32_t mb = k / n + j / n;
+                s += A.get(i, k) * W_padded_[mb].get(k % n, j % n);
             }
-        return C;
-    } else if (mode_ == Mode::EXPAND) {
-        uint32_t out_cols = K_ * n_total;
-        Array<double, 2> C({m_, out_cols});
-        for (uint32_t mb = 0; mb < K_; mb++)
-            for (uint32_t i = 0; i < m_; i++)
-                for (uint32_t j = 0; j < n_total; j++) {
-                    double s = 0;
-                    for (uint32_t k = 0; k < n_total; k++)
-                        s += A.get(i, k) * W_padded_[mb].get(k, j);
-                    if (has_bias_)
-                        s += bias_vals_.get(mb * n_total + j);
-                    C.set(i, mb * n_total + j, s);
-                }
-        return C;
-    } else {
-        // REDUCE
-        Array<double, 2> C({m_, n_total});
-        for (uint32_t i = 0; i < m_; i++)
-            for (uint32_t j = 0; j < n_total; j++) {
-                double s = 0;
-                for (uint32_t mb = 0; mb < K_; mb++)
-                    for (uint32_t k = 0; k < n_total; k++)
-                        s += A.get(i, mb * n_total + k) * W_padded_[mb].get(k, j);
-                if (has_bias_)
-                    s += bias_vals_.get(j);
-                C.set(i, j, s);
-            }
-        return C;
-    }
+            if (has_bias_)
+                s += bias_vals_.get(j);
+            C.set(i, j, s);
+        }
+    return C;
 }
