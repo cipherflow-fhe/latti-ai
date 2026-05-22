@@ -107,7 +107,8 @@ FeatureMatEncrypted ParBlockColMajorPolyActRNGamma::run(CkksContext& ctx, const 
     assert(x.data.size() >= static_cast<size_t>(total_cts));
 
     FeatureMatEncrypted result(&ctx, level_ - 1);
-    result.shape = {m_, total_dim_};
+    result.head_shape = x.head_shape;
+    result.shape = x.shape;
     result.matmul_block_size = d_;
     result.data.resize(total_cts);
 
@@ -324,7 +325,8 @@ FeatureMatEncrypted ParBlockColMajorPolyActRNPoly::run(CkksContext& ctx, const F
     uint32_t out_level = (degree_ == 4) ? level_ - 3 : level_ - 2;
 
     FeatureMatEncrypted result(&ctx, out_level);
-    result.shape = {m_, total_dim_};
+    result.head_shape = x.head_shape;
+    result.shape = x.shape;
     result.matmul_block_size = d_;
     result.data.resize(total_cts);
 

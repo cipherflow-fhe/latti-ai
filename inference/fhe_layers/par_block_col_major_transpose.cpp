@@ -185,7 +185,8 @@ FeatureMatEncrypted ParBlockColMajorTranspose::run(CkksContext& ctx, const Featu
     FeatureMatEncrypted result(&ctx, input.level);
     result.data = run_core(ctx, input.data);
     result.level = input.level - 1;  // transpose consumes 1 level
-    result.shape = {n_, m_};         // transposed per-head shape
+    result.head_shape = {input.head_shape[1], input.head_shape[0]};
+    result.shape = {input.shape[1], input.shape[0]};
     result.matmul_block_size = d_;
     return result;
 }

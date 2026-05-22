@@ -286,6 +286,7 @@ class GlobalConfig:
             cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'polyact']
             cls._instance.single_thread = config_dict.get('SINGLE_THREAD', False)
             cls._instance.n_heads = config_dict.get('N_HEADS', 1)
+            cls._instance.head_dim = config_dict.get('HEAD_DIM', 0)
             cls._instance.matmul_block_size = config_dict.get('MATMUL_BLOCK_SIZE', 8)
             cls._instance.base_feat_dim = config_dict.get('BASE_FEAT_DIM', 0)
             cls._instance.layernorm_var_std_bound = config_dict.get('LAYERNORM_VAR_STD_BOUND', 4.0)
@@ -334,6 +335,7 @@ class FeatureNode:
         self.sp_info = {'skip': [1, 1], 'invalid_fill': [1, 1], 'shape': [1, 1]}
         self.has_sp_info = False
         self.data_type: str = ''
+        self.head_shape: list = None  # per-head shape for feature_mat
 
     def __repr__(self) -> str:
         return f'{self.node_id}'
@@ -706,6 +708,8 @@ class LayerAbstractGraph:
             else:
                 raise ValueError(f'Unsupported feature dim: {dim}')
             node.data_type = feature_json.get('data_type', '')
+            if 'head_shape' in feature_json:
+                node.head_shape = feature_json['head_shape']
             graph_info.dag.add_node(node, name=key, skip=skip)
             feature_dict[key] = node
 
@@ -1362,6 +1366,8 @@ class LayerAbstractGraph:
                             'pack_num': pack_num,
                             'data_type': feature.data_type,
                         }
+                        if feature.head_shape is not None:
+                            feature_dict['head_shape'] = [int(x) for x in feature.head_shape]
                     else:
                         feature_dict = {
                             'dim': dim,
