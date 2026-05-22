@@ -194,7 +194,7 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
             auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.height, (uint64_t)param.width});
             FeatureMatEncrypted input_ct(context_ptr_, param.level);
             uint32_t d = param.width / param.n_heads;
-            input_ct.par_block_col_major_pack(input_array, d, param.n_heads, false, scale);
+            input_ct.par_block_col_major_pack(input_array, d, param.n_heads, d, false, scale);
             result[name] = input_ct.serialize();
         } else if (param.dim == 0) {
             auto input_array = csv_to_array<1>(csv_path);

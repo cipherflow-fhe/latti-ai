@@ -1803,19 +1803,20 @@ class TestLayerExport(unittest.TestCase):
             )
 
     def test_par_cpmm_square_with_bias(self):
-        """ParBlockColMajorCPMM SQUARE with bias: n_heads=3."""
+        """ParBlockColMajorCPMM SQUARE with bias: non-square W (W_cols < total_dim), n_heads=3."""
         set_param('PN14QP438')
         N_SLOT = 16384 // 2
 
+        # (m, n_heads, head_dim, W_cols, level)
         configs = [
-            (53, 3, 16, 2),
+            (53, 3, 16, 35, 2),  # W_cols=35 < total_dim=48, K_row=K_col=1
         ]
 
-        for m, n_heads, head_dim, level in configs:
+        for m, n_heads, head_dim, W_cols, level in configs:
             total_dim = n_heads * head_dim
             layer = ParBlockColMajorCPMM(
                 shape_A=(m, head_dim),
-                W_shape=(total_dim, total_dim),
+                W_shape=(total_dim, W_cols),
                 block_size=head_dim,
                 n_heads=n_heads,
                 n_slot=N_SLOT,
@@ -1835,7 +1836,88 @@ class TestLayerExport(unittest.TestCase):
                 output_args=[Argument('output', output_cts)],
                 output_instruction_path=base_path
                 / 'CKKS_par_cpmm_square_with_bias'
-                / f'm_{m}_heads_{n_heads}_dim_{head_dim}'
+                / f'm_{m}_heads_{n_heads}_dim_{head_dim}_wcols_{W_cols}'
+                / f'level_{level}'
+                / 'server',
+                fpga_acc=False,
+            )
+
+    def test_par_cpmm_expand_with_bias(self):
+        """ParBlockColMajorCPMM EXPAND with bias: non-regular W_cols, n_heads=3."""
+        set_param('PN14QP438')
+        N_SLOT = 16384 // 2
+
+        # m=53, n_heads=3, head_dim=16, total_dim=48, W_cols=100 (not divisible by 48)
+        configs = [
+            (53, 3, 16, 100, 2),
+        ]
+
+        for m, n_heads, head_dim, W_cols, level in configs:
+            total_dim = n_heads * head_dim
+            layer = ParBlockColMajorCPMM(
+                shape_A=(m, head_dim),
+                W_shape=(total_dim, W_cols),
+                block_size=head_dim,
+                n_heads=n_heads,
+                n_slot=N_SLOT,
+                has_bias=True,
+            )
+
+            n_in_cts = layer.num_block_rows_A * layer.G
+            input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=level) for k in range(n_in_cts)]
+            data_source = CustomDataNode(type='cpmm_data_source', id='_cpmm_layer')
+            output_cts = layer.call_custom_compute(input_cts, data_source)
+
+            process_custom_task(
+                input_args=[
+                    Argument('input', input_cts),
+                    Argument('_cpmm_layer', [data_source]),
+                ],
+                output_args=[Argument('output', output_cts)],
+                output_instruction_path=base_path
+                / 'CKKS_par_cpmm_expand_with_bias'
+                / f'm_{m}_heads_{n_heads}_dim_{head_dim}_wcols_{W_cols}'
+                / f'level_{level}'
+                / 'server',
+                fpga_acc=False,
+            )
+
+    def test_par_cpmm_reduce_with_bias(self):
+        """ParBlockColMajorCPMM REDUCE with bias: non-regular W_rows, n_heads=3."""
+        set_param('PN14QP438')
+        N_SLOT = 16384 // 2
+
+        # m=53, n_heads=3, head_dim=16, total_dim=48, W_rows=100 (not divisible by 48)
+        configs = [
+            (53, 3, 16, 100, 2),
+        ]
+
+        for m, n_heads, head_dim, W_rows, level in configs:
+            total_dim = n_heads * head_dim
+            layer = ParBlockColMajorCPMM(
+                shape_A=(m, head_dim),
+                W_shape=(W_rows, total_dim),
+                block_size=head_dim,
+                n_heads=n_heads,
+                n_slot=N_SLOT,
+                has_bias=True,
+            )
+
+            # REDUCE: input has K_row megablocks
+            n_in_cts = layer.K * layer.num_block_rows_A * layer.G
+            input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=level) for k in range(n_in_cts)]
+            data_source = CustomDataNode(type='cpmm_data_source', id='_cpmm_layer')
+            output_cts = layer.call_custom_compute(input_cts, data_source)
+
+            process_custom_task(
+                input_args=[
+                    Argument('input', input_cts),
+                    Argument('_cpmm_layer', [data_source]),
+                ],
+                output_args=[Argument('output', output_cts)],
+                output_instruction_path=base_path
+                / 'CKKS_par_cpmm_reduce_with_bias'
+                / f'm_{m}_heads_{n_heads}_dim_{head_dim}_wrows_{W_rows}'
                 / f'level_{level}'
                 / 'server',
                 fpga_acc=False,

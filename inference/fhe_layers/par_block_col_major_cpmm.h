@@ -97,12 +97,15 @@ private:
     static int get_block_index(int bi, int bj, int num_block_rows);
 
     Mode mode_;
-    uint32_t K_;                              // megablock count (1 for square)
+    uint32_t K_;      // max(K_row, K_col) — the "active" megablock count
+    uint32_t K_row_;  // ceil(W_rows / n_total) — row-direction megablock count (1 for SQUARE/EXPAND)
+    uint32_t K_col_;  // ceil(W_cols / n_total) — col-direction megablock count (1 for SQUARE/REDUCE)
     std::vector<Array<double, 2>> W_padded_;  // K padded sub-weights
 
     uint32_t m_;               // rows of A (and result)
     uint32_t n_per_head_;      // columns per head in A
     uint32_t n_total_per_mb_;  // total columns per megablock = n_heads * n_per_head
+    uint32_t out_cols_;        // actual output columns (W_cols, may be < K_col * n_total_per_mb)
     uint32_t d_;               // block size
     uint32_t n_slot_;
     uint32_t chunk_size_;  // S * d^2

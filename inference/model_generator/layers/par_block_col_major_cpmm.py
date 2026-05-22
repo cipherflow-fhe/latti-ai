@@ -89,20 +89,24 @@ class ParBlockColMajorCPMM:
         self.num_chunks = n_slot // self.chunk_size
         self.num_block_rows_A = math.ceil(self.m / self.d)
 
-        # Mode detection — mirrors C++ constructor
+        # Mode detection — mirrors C++ constructor.
+        # Pad both W dimensions to multiples of n_total, then compare to determine mode.
+        # Exactly one of K_row, K_col must be 1; K = max(K_row, K_col).
         W_rows, W_cols = W_shape
-        if W_rows == W_cols:
+        n = self.n_total_per_mb
+        K_row = math.ceil(W_rows / n)
+        K_col = math.ceil(W_cols / n)
+
+        if K_row == K_col:
             self.mode = 'SQUARE'
-            self.K = 1
-            assert W_rows == self.n_total_per_mb
-        elif W_cols > W_rows:
+            assert K_row == 1, 'SQUARE mode requires K_row == K_col == 1'
+        elif K_col > K_row:
             self.mode = 'EXPAND'
-            assert W_rows == self.n_total_per_mb and W_cols % W_rows == 0
-            self.K = W_cols // W_rows
+            assert K_row == 1, 'EXPAND mode requires K_row == 1'
         else:
             self.mode = 'REDUCE'
-            assert W_cols == self.n_total_per_mb and W_rows % W_cols == 0
-            self.K = W_rows // W_cols
+            assert K_col == 1, 'REDUCE mode requires K_col == 1'
+        self.K = max(K_row, K_col)
 
         self.has_bias = has_bias
         self.n_out_mbs = self.K if self.mode == 'EXPAND' else 1
