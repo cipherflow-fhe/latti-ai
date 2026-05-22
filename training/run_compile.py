@@ -23,6 +23,7 @@ Supports both ONNX model files (.onnx) and pre-converted JSON files (pt.json)
 """
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -36,6 +37,18 @@ from nn_tools import export_h5_from_onnx
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 log = logging.getLogger(__name__)
+
+
+def read_compile_config(config_path: str) -> dict[str, int]:
+    if not config_path:
+        return {}
+    with open(config_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    return {
+        'n_heads': int(data['n_heads']),
+        'head_dim': int(data['head_dim']),
+        'matmul_block_size': int(data['matmul_block_size']),
+    }
 
 
 def main():
@@ -83,6 +96,13 @@ Examples:
 
     parser.add_argument(
         '--temperature', type=float, default=1.0, help='Temperature parameter for randomization (default: 0.0)'
+    )
+
+    parser.add_argument(
+        '--config',
+        type=str,
+        default='',
+        help='Compile config JSON path containing n_heads, head_dim, matmul_block_size',
     )
 
     args = parser.parse_args()
@@ -134,9 +154,13 @@ Examples:
     else:
         pt_json_path = input_path
 
+    compile_config = read_compile_config(args.config)
+
     print(f'\n[Compile] Input: {pt_json_path}')
     print(f'[Compile] Output: {output_dir}')
-    print(f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}')
+    print(
+        f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, COMPILE_CONFIG={args.config or "<none>"}'
+    )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
     try:
@@ -148,6 +172,7 @@ Examples:
             num_workers=args.num_workers,
             style=args.style,
             graph_type=args.graph_type,
+            **compile_config,
         )
 
         print(f'\n[Compile] Success! Output: {output_dir}')
