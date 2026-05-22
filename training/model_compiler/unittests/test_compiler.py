@@ -598,9 +598,12 @@ class TestSingleLayer(CompilerTestBase):
         graph, _ = self._export_and_compile(model, (197, 192), style='multiplexed', feature_mat=True)
 
     def test_vit_from_onnx(self):
-        # self.temp_onnx_path = 'runs/poly_deit_tiny_patch16_224.onnx'
-        self.temp_onnx_path = 'runs/deit_tiny_patch16_224_until_block0_after_mlp_add.onnx'
+        self.temp_onnx_path = 'runs/poly_deit_tiny_patch16_224.onnx'
+        # self.temp_onnx_path = 'runs/deit_tiny_patch16_224_until_block0_after_mlp_add.onnx'
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed', feature_mat=True)
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
+
         graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
@@ -610,6 +613,9 @@ class TestSingleLayer(CompilerTestBase):
             style='multiplexed',
             graph_type='btp',
             is_use_btp=True,
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
         )
         return graph, score
 

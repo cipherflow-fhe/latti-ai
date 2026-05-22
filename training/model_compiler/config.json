@@ -4,9 +4,5 @@
   "MPC_REFRESH": false,
   "APPROX_POLY_TYPE": "polyact",
   "SET_LEVEL_MAX": true,
-  "SINGLE_THREAD": false,
-  "N_HEADS": 1,
-  "HEAD_DIM": 0,
-  "MATMUL_BLOCK_SIZE": 1,
-  "BASE_FEAT_DIM": 192
+  "SINGLE_THREAD": false
 }
