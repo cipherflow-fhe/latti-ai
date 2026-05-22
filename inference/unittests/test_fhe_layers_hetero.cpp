@@ -1659,10 +1659,9 @@ static void run_block_col_major_e2e_test(HeteroFixture<T>& fixture,
     out_enc.data.clear();
     for (auto& ct : out_cts)
         out_enc.data.push_back(std::move(ct));
-    out_enc.shape = out_shape;
+    out_enc.head_shape = out_shape;
+    out_enc.shape = {out_shape[0], ref_output.get_shape()[1]};
     out_enc.matmul_block_size = out_d;
-
-    out_enc.shape[1] = ref_output.get_shape()[1];
     Array<double, 2> actual({1, 1});
     if (is_par) {
         actual = out_enc.par_block_col_major_unpack(out_shape[0], out_shape[1], out_d, out_n_heads);
@@ -3534,6 +3533,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     FeatureMatEncrypted out_enc(&context, 0);
     for (auto& ct : out_cts)
         out_enc.data.push_back(std::move(ct));
+    out_enc.head_shape = {seq_len, head_dim};
     out_enc.shape = {seq_len, total_dim};
     out_enc.matmul_block_size = d;
     auto result = out_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
