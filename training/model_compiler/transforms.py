@@ -198,6 +198,9 @@ def add_layer(
     )
     feature_node_out.sp_info = feature_node_in.sp_info.copy()
 
+    if feature_node_in.head_shape is not None:
+        feature_node_out.head_shape = list(feature_node_in.head_shape)
+
     if insert_node:
         new_compute_node = insert_node
     else:
