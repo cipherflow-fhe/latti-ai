@@ -52,7 +52,10 @@ from inference.model_generator.layers.par_block_col_major_layernorm import (
     ParBlockColMajorLNStats,
     ParBlockColMajorLNXCentered,
 )
-from inference.model_generator.layers.par_block_col_major_polyactrn import ParBlockColMajorPolyActRNPoly
+from inference.model_generator.layers.par_block_col_major_polyactrn import (
+    ParBlockColMajorPolyActRNGamma,
+    ParBlockColMajorPolyActRNPoly,
+)
 from inference.model_generator.layers.par_block_col_major_transpose import ParBlockColMajorTranspose
 from training.model_compiler.components import (
     N16QP1546H192H32,
@@ -103,6 +106,22 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     par_feature_shapes = {}
     task_output_feature_ids = config_info['output_feature']
 
+    def _require_positive_task_config_int(field_name, layer_id, layer_type):
+        if field_name not in task_config_info:
+            raise ValueError(f"Layer '{layer_id}' ({layer_type}) requires '{field_name}' in task_config.json")
+        try:
+            value = int(task_config_info[field_name])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Layer '{layer_id}' ({layer_type}) requires positive integer '{field_name}' in task_config.json, "
+                f'got {task_config_info[field_name]!r}'
+            ) from exc
+        if value <= 0:
+            raise ValueError(
+                f"Layer '{layer_id}' ({layer_type}) requires positive '{field_name}' in task_config.json, got {value}"
+            )
+        return value
+
     def _par_input_shape(feat, n_heads, split_rows=False):
         if 'head_shape' in feat:
             return tuple(feat['head_shape'])
@@ -147,7 +166,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             if feat.get('data_type') == 'feature_mat':
                 if consumer is None:
                     continue
-                n_heads = task_config_info.get('n_heads', 1)
+                n_heads = _require_positive_task_config_int('n_heads', input_fid, consumer['type'])
                 if n_heads <= 1:
                     raise ValueError(f"feature_mat input '{input_fid}' only supports par matrix ops with n_heads > 1")
                 consumer_type = consumer['type']
@@ -172,7 +191,11 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     block_size = shape_per_head[1]
                     G = _par_group_count(block_size, n_heads, n // 2)
                     n_packed = math.ceil(shape_per_head[0] / block_size) * G
-                elif consumer_type in {'pcmstats', 'pcmcenter', 'pcmpoly', 'add', 'add2d', 'par_add_pt'}:
+                elif consumer_type in {'pcmgamma', 'pcmpoly'}:
+                    block_size = _require_positive_task_config_int('matmul_block_size', input_fid, consumer_type)
+                    shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n // 2, block_size=block_size)
+                    par_feature_shapes[input_fid] = shape_per_head
+                elif consumer_type in {'pcmstats', 'pcmcenter', 'add', 'add2d', 'par_add_pt'}:
                     shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n // 2)
                     par_feature_shapes[input_fid] = shape_per_head
                 else:
@@ -207,7 +230,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             input_args.append(Argument(input_fid, x))
 
     _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose', 'par_add_pt'}
-    _PCM_LAYER_TYPES = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine', 'pcmpoly'}
+    _PCM_LAYER_TYPES = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine', 'pcmgamma', 'pcmpoly'}
     _FEATURE_MAT_LAYER_TYPES = _PAR_MATRIX_LAYER_TYPES | _PCM_LAYER_TYPES
     _UNSUPPORTED_MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose'}
 
@@ -1195,16 +1218,40 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], block_size)
 
+        elif layer_config['type'] == 'pcmgamma':
+            n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_config['type'])
+            block_size = _require_positive_task_config_int('matmul_block_size', layer_id, layer_config['type'])
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            shape = tuple(feat_in['shape'])
+            K = layer_config.get('K', layer_config.get('k', 1))
+            layer = ParBlockColMajorPolyActRNGamma(
+                shape=shape,
+                block_size=block_size,
+                n_heads=n_heads,
+                n_slot=n // 2,
+                K=K,
+            )
+
+            if input_fid not in feature_id_to_nodes_map:
+                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='polyactrn_gamma_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], block_size)
+
         elif layer_config['type'] == 'pcmpoly':
-            n_heads = task_config_info.get('n_heads', 1)
+            n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_config['type'])
+            block_size = _require_positive_task_config_int('matmul_block_size', layer_id, layer_config['type'])
             input_fid = layer_input_feature_ids[0]
             feat_in = config_info['feature'][input_fid]
             shape = tuple(feat_in['shape'])
             K = layer_config.get('K', layer_config.get('k', 1))
             degree = layer_config.get('degree', layer_config.get('order', 2))
-            block_size = layer_config.get(
-                'block_size', layer_config.get('matmul_block_size', shape[1] // (K * n_heads))
-            )
             layer = ParBlockColMajorPolyActRNPoly(
                 shape=shape,
                 block_size=block_size,
