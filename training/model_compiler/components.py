@@ -793,8 +793,9 @@ class LayerAbstractGraph:
                 compute_node.bias_path = layer_json.get('bias_path', '')
                 compute_node.to_expand = layer_json.get('to_expand', False)
 
-            elif layer_type == 'add_pt':
+            elif layer_type in ('add_pt', 'par_add_pt'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
+                compute_node.path = layer_json.get('weight_path', layer_json.get('bias_path', ''))
                 compute_node.bias_path = layer_json.get('bias_path', '')
 
             elif layer_type == 'partranspose':
@@ -806,15 +807,22 @@ class LayerAbstractGraph:
             elif layer_type == 'pcmgamma':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', '')
+                compute_node.gamma_path = layer_json.get('gamma_path', '')
+                compute_node.running_max_path = layer_json.get('running_max_path', '')
 
             elif layer_type == 'PolyActRN':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', '')
+                compute_node.running_max_path = layer_json.get('running_max_path', compute_node.path)
+                compute_node.gamma_path = layer_json.get('gamma_path', '')
+                compute_node.coeffs_path = layer_json.get('coeffs_path', '')
                 compute_node.order = layer_json.get('order', 4)
 
             elif layer_type == 'pcmpoly':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', '')
+                compute_node.coeffs_path = layer_json.get('coeffs_path', '')
+                compute_node.running_max_path = layer_json.get('running_max_path', '')
                 compute_node.order = layer_json.get('order', 4)
 
             elif layer_type == 'CustomMultiHeadAttention':
@@ -827,6 +835,10 @@ class LayerAbstractGraph:
                 )
                 compute_node.gamma_path = layer_json.get('gamma_path', f'{key}.gamma')
                 compute_node.poly_weight_path = layer_json.get('poly_weight_path', f'{key}.poly.weight')
+                compute_node.q_bias_path = layer_json.get('q_bias_path', '')
+                compute_node.k_bias_path = layer_json.get('k_bias_path', '')
+                compute_node.v_bias_path = layer_json.get('v_bias_path', '')
+                compute_node.proj_bias_path = layer_json.get('proj_bias_path', '')
                 compute_node.poly_order = layer_json.get('poly_order', layer_json.get('order', 4))
 
             elif 'fc' in layer_type:
@@ -1091,13 +1103,17 @@ class LayerAbstractGraph:
                     layers[layer_id]['bias_path'] = layer.bias_path
                 if getattr(layer, 'to_expand', False):
                     layers[layer_id]['to_expand'] = True
-            if layer_type == 'add_pt':
+            if layer_type in ('add_pt', 'par_add_pt'):
+                path = getattr(layer, 'path', '') or layer.bias_path
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
-                    'bias_path': layer.bias_path,
                 }
+                if layer_type == 'par_add_pt':
+                    layers[layer_id]['weight_path'] = path
+                else:
+                    layers[layer_id]['bias_path'] = path
             if layer_type == 'partranspose':
                 layers[layer_id] = {
                     'type': layer_type,
@@ -1121,6 +1137,10 @@ class LayerAbstractGraph:
                     'weight_path': layer.path,
                     'K': getattr(layer, 'K', 1),
                 }
+                if getattr(layer, 'gamma_path', ''):
+                    layers[layer_id]['gamma_path'] = layer.gamma_path
+                if getattr(layer, 'running_max_path', ''):
+                    layers[layer_id]['running_max_path'] = layer.running_max_path
             if layer_type == 'pcmpoly':
                 layers[layer_id] = {
                     'type': layer_type,
@@ -1130,6 +1150,10 @@ class LayerAbstractGraph:
                     'order': layer.order,
                     'K': getattr(layer, 'K', 1),
                 }
+                if getattr(layer, 'coeffs_path', ''):
+                    layers[layer_id]['coeffs_path'] = layer.coeffs_path
+                if getattr(layer, 'running_max_path', ''):
+                    layers[layer_id]['running_max_path'] = layer.running_max_path
             if layer_type == 'pcmstats':
                 layers[layer_id] = {
                     'type': layer_type,

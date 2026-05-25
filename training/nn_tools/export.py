@@ -473,6 +473,7 @@ def export_h5_from_onnx(
     json_path: str,
     h5_path: str,
     verbose: bool = True,
+    feature_mat: bool = False,
 ) -> str:
     """Export FHE-ready H5 weights from ONNX + JSON, without a PyTorch model.
 
@@ -489,10 +490,21 @@ def export_h5_from_onnx(
         json_path: Path to the FHE layer JSON (``nn_layers_ct_*.json``).
         h5_path:   Output H5 file path.
         verbose:   Log progress information.
+        feature_mat: Use the feature_mat CT-layer-driven exporter.
 
     Returns:
         Path to the saved H5 file.
     """
+    if feature_mat:
+        from .feature_mat_h5 import export_feature_mat_h5_from_onnx
+
+        return export_feature_mat_h5_from_onnx(
+            onnx_path=onnx_path,
+            json_path=json_path,
+            h5_path=h5_path,
+            verbose=verbose,
+        )
+
     import json as _json
 
     import numpy as np

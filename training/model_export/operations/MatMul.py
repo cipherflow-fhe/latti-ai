@@ -83,7 +83,7 @@ class MatMulComputeNode(ComputeNode):
         log.debug('%s', attrs)
         has_bias_input = len(x.input) > 2 and bool(x.input[2])
         has_fused_bias_attr = 'fused_bias' in attrs
-        to_expand = layer_type == 'parcpmm' and x.op_type == 'Linear' and (has_bias_input or has_fused_bias_attr)
+        to_expand = False
         if layer_type == 'parcpmm' and x.op_type == 'Linear':
             if has_bias_input:
                 bias_path = x.input[2]
@@ -95,6 +95,11 @@ class MatMulComputeNode(ComputeNode):
                     bias_path = fused_bias
                 else:
                     bias_path = weight_path.replace('.weight', '.bias')
+
+            if bias_path:
+                bias_shape = list(weight_shapes.get(bias_path, [])) if weight_shapes else []
+                non_unit_dims = [dim for dim in bias_shape if int(dim) != 1]
+                to_expand = len(non_unit_dims) > 1 or (has_fused_bias_attr and not bias_shape)
 
         return MatMulComputeNode(
             layer_id,
