@@ -1356,7 +1356,6 @@ class LayerAbstractGraph:
                             'shape': shape,
                             'ckks_parameter_id': ckks_parameter_id,
                             'level': level,
-                            'pack_num': pack_num,
                             'data_type': feature.data_type,
                         }
                         if feature.head_shape is not None:
