@@ -386,6 +386,7 @@ class ComputeNode:
         self.bias_scale = 1
         self.weight_scale_list = [1, 1, 1, 1, 1]
         self.path = ''
+        self.bias_path = ''
         self.poly_path = ''
 
     def __repr__(self) -> str:
@@ -789,6 +790,12 @@ class LayerAbstractGraph:
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', '')
                 compute_node.weight_shape = layer_json.get('weight_shape', [])
+                compute_node.bias_path = layer_json.get('bias_path', '')
+                compute_node.to_expand = layer_json.get('to_expand', False)
+
+            elif layer_type == 'add_pt':
+                compute_node = ComputeNode(key, layer_type, 1, 1)
+                compute_node.bias_path = layer_json.get('bias_path', '')
 
             elif layer_type == 'partranspose':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
@@ -1079,6 +1086,17 @@ class LayerAbstractGraph:
                     'feature_output': output_feature_ids,
                     'weight_path': layer.path,
                     'weight_shape': layer.weight_shape,
+                }
+                if layer.bias_path:
+                    layers[layer_id]['bias_path'] = layer.bias_path
+                if getattr(layer, 'to_expand', False):
+                    layers[layer_id]['to_expand'] = True
+            if layer_type == 'add_pt':
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
+                    'bias_path': layer.bias_path,
                 }
             if layer_type == 'partranspose':
                 layers[layer_id] = {
