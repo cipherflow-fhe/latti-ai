@@ -52,6 +52,9 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
             ip.width = param["shape"][1];
             ip.matmul_block_size = param.value("matmul_block_size", 0u);
             ip.n_heads = param.value("n_heads", global_n_heads);
+            if (param.contains("head_shape")) {
+                ip.head_shape = {param["head_shape"][0].get<uint32_t>(), param["head_shape"][1].get<uint32_t>()};
+            }
         } else if (ip.dim == 2) {
             ip.height = param["shape"][0];
             ip.width = param["shape"][1];
@@ -78,6 +81,9 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
             op.width = param["shape"][1];
             op.matmul_block_size = param.value("matmul_block_size", 0u);
             op.n_heads = param.value("n_heads", global_n_heads);
+            if (param.contains("head_shape")) {
+                op.head_shape = {param["head_shape"][0].get<uint32_t>(), param["head_shape"][1].get<uint32_t>()};
+            }
         } else if (op.dim == 0) {
             op.skip = param["skip"];
         } else if (op.dim == 1) {
