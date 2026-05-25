@@ -923,7 +923,7 @@ void InitInferenceProcess::load_model_prepare() {
             _init_parccmm_layer(key, value);
         } else if (layer_type == "partranspose") {
             _init_partranspose_layer(key, value);
-        } else if (layer_type == "par_add_pt") {
+        } else if (layer_type == "pcm_add_pt") {
             _init_par_block_col_major_add_pt_layer(key, value, h5_file);
         } else if (layer_type == "pcmgamma") {
             _init_pcmgamma_layer(key, value, h5_file);
@@ -1355,7 +1355,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 result =
                     MakeU<FeatureMatEncrypted>(fp->get_layer<ParBlockColMajorTranspose>(key).run(context, inputMat));
                 fhe_timer.stop();
-            } else if (layer_type == "par_add_pt") {
+            } else if (layer_type == "pcm_add_pt") {
                 fhe_timer.start();
                 const FeatureMatEncrypted& inputMat =
                     dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
@@ -2031,7 +2031,7 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 auto& input0 = p_feature_mat_x[feature_input[0]];
                 result_mat = fp->get_layer<ParBlockColMajorTranspose>(key).run_plaintext(input0);
             }
-            if (layer_type == "par_add_pt") {
+            if (layer_type == "pcm_add_pt") {
                 auto& input0 = p_feature_mat_x[feature_input[0]];
                 result_mat = fp->get_layer<ParBlockColMajorAddPt>(key).run_plaintext(input0);
             }
@@ -2375,7 +2375,7 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
         } else if (layer_type == "partranspose") {
             data_sources.emplace_back(
                 key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParBlockColMajorTranspose>(key))));
-        } else if (layer_type == "par_add_pt") {
+        } else if (layer_type == "pcm_add_pt") {
             data_sources.emplace_back(
                 key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParBlockColMajorAddPt>(key))));
         } else if (layer_type == "pcmgamma") {
