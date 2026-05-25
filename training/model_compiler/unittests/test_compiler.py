@@ -1360,6 +1360,31 @@ class TestE2ESingleLayer(CompilerTestBase):
         )
         self.assertIsNotNone(graph)
 
+    def test_par_block_col_major_add_pt(self):
+        """ParBlockColMajorAddPt E2E: feature_mat input plus plaintext matrix."""
+        model = nn_modules.SingleAddPt(rows=32, cols=64)
+        graph, _ = self._export_compile_and_deploy(
+            model,
+            (1, 32, 64),
+            'par_block_col_major_add_pt',
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=2,
+            head_dim=32,
+            matmul_block_size=32,
+        )
+
+        layer_types = [node.layer_type for node in graph.dag.nodes if isinstance(node, ComputeNode)]
+        self.assertIn('pcm_add_pt', layer_types)
+
+        server_json = self.e2e_base_path / 'par_block_col_major_add_pt' / 'task' / 'server' / 'nn_layers_ct_0.json'
+        with open(server_json, 'r') as f:
+            layers = json.load(f)['layer']
+        pcm_layers = [layer for layer in layers.values() if layer['type'] == 'pcm_add_pt']
+        self.assertEqual(len(pcm_layers), 1)
+        self.assertEqual(len(pcm_layers[0]['feature_input']), 1)
+        self.assertIn('weight_path', pcm_layers[0])
+
     def test_par_block_col_major_ccmm(self):
         """ParBlockColMajorCCMM E2E: head-wise A @ K^T, n_heads=2."""
         model = nn_modules.HeadWiseAKTTest()

@@ -82,24 +82,11 @@ class MatMulComputeNode(ComputeNode):
         attrs = ComputeNode.get_attr_value_dict(x)
         log.debug('%s', attrs)
         has_bias_input = len(x.input) > 2 and bool(x.input[2])
-        has_fused_bias_attr = 'fused_bias' in attrs
-        to_expand = False
+        has_fused_bias_input = has_bias_input and 'fused_bias' in x.input[2]
+        to_expand = layer_type == 'parcpmm' and x.op_type == 'Linear' and has_fused_bias_input
         if layer_type == 'parcpmm' and x.op_type == 'Linear':
             if has_bias_input:
                 bias_path = x.input[2]
-            elif has_fused_bias_attr:
-                fused_bias = attrs['fused_bias']
-                if isinstance(fused_bias, bytes):
-                    bias_path = fused_bias.decode('utf-8')
-                elif isinstance(fused_bias, str):
-                    bias_path = fused_bias
-                else:
-                    bias_path = weight_path.replace('.weight', '.bias')
-
-            if bias_path:
-                bias_shape = list(weight_shapes.get(bias_path, [])) if weight_shapes else []
-                non_unit_dims = [dim for dim in bias_shape if int(dim) != 1]
-                to_expand = len(non_unit_dims) > 1 or (has_fused_bias_attr and not bias_shape)
 
         return MatMulComputeNode(
             layer_id,
