@@ -43,6 +43,7 @@ struct OutputParam {
     bool is_mat = false;
     uint32_t matmul_block_size = 0;
     uint32_t n_heads = 0;
+    Duo head_shape = {0, 0};
 };
 
 /// Per-input parameters read from task_config.json.
@@ -58,6 +59,7 @@ struct InputParam {
     bool is_mat = false;
     uint32_t matmul_block_size = 0;
     uint32_t n_heads = 0;
+    Duo head_shape = {0, 0};
 };
 
 /// Client-side encrypted inference interface.
