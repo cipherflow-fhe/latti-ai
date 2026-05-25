@@ -31,7 +31,7 @@
 
 template <typename T, int dim> class Array {
 public:
-    Array() {}
+    Array() : _shape{} {}
 
     Array(Array&& other) noexcept {
         swap(_data, other._data);

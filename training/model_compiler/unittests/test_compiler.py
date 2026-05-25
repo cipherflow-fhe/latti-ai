@@ -308,6 +308,9 @@ class CompilerTestBase(unittest.TestCase):
         graph_type='btp',
         replace=True,
         feature_mat=False,
+        n_heads=0,
+        head_dim=0,
+        matmul_block_size=0,
         **export_kwargs,
     ):
         if replace:
@@ -332,6 +335,9 @@ class CompilerTestBase(unittest.TestCase):
             num_workers=1,
             style=style,
             graph_type=graph_type,
+            n_heads=n_heads if n_heads else None,
+            head_dim=head_dim if head_dim else None,
+            matmul_block_size=matmul_block_size if matmul_block_size else None,
         )
         return graph, score
 
@@ -550,40 +556,94 @@ class TestSingleLayer(CompilerTestBase):
         )
 
     def test_qkv(self):
-        old_n_heads = config.n_heads
-        old_head_dim = config.head_dim
-        try:
-            config.n_heads = 3
-            config.head_dim = 64
-            model = nn_modules.QKVTest()
-            self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
-        finally:
-            config.n_heads = old_n_heads
-            config.head_dim = old_head_dim
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
+        model = nn_modules.QKVTest()
+        self._export_and_compile(
+            model,
+            (1, 197, 192),
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
 
     def test_transpose(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
         model = nn_modules.TransposeTest()
-        self._export_and_compile(model, (1, 32, 64), style='multiplexed', feature_mat=True)
+        self._export_and_compile(
+            model,
+            (1, 32, 64),
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
 
     def test_ccmm(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
         model = nn_modules.CCMMTest()
-        self._export_and_compile(model, [(32, 64), (64, 64)], style='multiplexed', feature_mat=True)
+        self._export_and_compile(
+            model,
+            [(32, 64), (64, 64)],
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
 
     def test_layernorm(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
         model = nn_modules.LayerNorm()
-        self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
+        self._export_and_compile(
+            model,
+            (1, 197, 192),
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
 
     def test_pcmgamma(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
         model = nn_modules.PCMGammaTest()
-        graph, _ = self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
+        graph, _ = self._export_and_compile(
+            model,
+            (1, 197, 192),
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
         self.assertTrue(any(node.layer_type == 'pcmgamma' for node in graph.dag.nodes if isinstance(node, ComputeNode)))
 
     def test_gelu(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
         model = nn_modules.SingleGelu()
-        graph, _ = self._export_and_compile(model, (1, 197, 192), style='multiplexed', feature_mat=True)
+        graph, _ = self._export_and_compile(
+            model,
+            (1, 197, 192),
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
         self.assertTrue(any(node.layer_type == 'pcmpoly' for node in graph.dag.nodes if isinstance(node, ComputeNode)))
 
     def test_multi_head_attention(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
         self.temp_json_path = 'training/model_compiler/unittests/pt_graphs/multi_head_attention.json'
         graph, score = run_pipeline(
             num_experiments=1,
@@ -594,12 +654,25 @@ class TestSingleLayer(CompilerTestBase):
             style='multiplexed',
             graph_type='btp',
             is_use_btp=True,
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
         )
         return graph, score
 
     def test_linear_gelu(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
         model = nn_modules.LinearGelu()
-        graph, _ = self._export_and_compile(model, (197, 192), style='multiplexed', feature_mat=True)
+        graph, _ = self._export_and_compile(
+            model,
+            (197, 192),
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
 
     def test_vit_from_onnx(self):
         self.temp_onnx_path = 'runs/poly_deit_tiny_patch16_224.onnx'
