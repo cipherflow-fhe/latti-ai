@@ -198,6 +198,9 @@ def add_layer(
     )
     feature_node_out.sp_info = feature_node_in.sp_info.copy()
 
+    if feature_node_in.head_shape is not None:
+        feature_node_out.head_shape = list(feature_node_in.head_shape)
+
     if insert_node:
         new_compute_node = insert_node
     else:
@@ -532,16 +535,20 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                     if preds[0].head_shape is not None:
                         succ.head_shape = list(preds[0].head_shape)
                 elif compute_node.layer_type == 'partranspose':
-                    succ.shape[0] = preds[0].shape[1]
-                    succ.shape[1] = preds[0].shape[0]
                     if preds[0].head_shape is not None:
                         succ.head_shape = [preds[0].head_shape[1], preds[0].head_shape[0]]
+                        succ.shape[0] = succ.head_shape[0]
+                        succ.shape[1] = succ.head_shape[1] * n_heads
+                    else:
+                        succ.shape[0] = preds[0].shape[1]
+                        succ.shape[1] = preds[0].shape[0]
                 elif compute_node.layer_type == 'parccmm':
                     succ.shape[0] = preds[0].shape[0]
-                    if len(preds) > 1 and len(preds[1].shape) > 1:
-                        succ.shape[1] = preds[1].shape[1]
                     if preds[0].head_shape is not None and len(preds) > 1 and preds[1].head_shape is not None:
                         succ.head_shape = [preds[0].head_shape[0], preds[1].head_shape[1]]
+                        succ.shape[1] = succ.head_shape[1] * n_heads
+                    elif len(preds) > 1 and len(preds[1].shape) > 1:
+                        succ.shape[1] = preds[1].shape[1]
                 else:
                     for i in range(preds[0].dim):
                         succ.shape[i] = preds[0].shape[i]
