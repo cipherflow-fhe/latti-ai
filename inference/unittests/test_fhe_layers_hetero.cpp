@@ -1660,7 +1660,7 @@ static void run_block_col_major_e2e_test(HeteroFixture<T>& fixture,
     for (auto& ct : out_cts)
         out_enc.data.push_back(std::move(ct));
     out_enc.head_shape = out_shape;
-    out_enc.shape = {out_shape[0], ref_output.get_shape()[1]};
+    out_enc.shape = {out_shape[0], static_cast<uint32_t>(ref_output.get_shape()[1])};
     out_enc.matmul_block_size = out_d;
     Array<double, 2> actual({1, 1});
     if (is_par) {

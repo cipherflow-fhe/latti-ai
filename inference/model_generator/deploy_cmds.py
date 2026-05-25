@@ -197,7 +197,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         raise ValueError(f"parcpmm input '{input_fid}' per-head width exceeds matmul_block_size")
                     G = _par_group_count(block_size, n_heads, n // 2)
                     n_packed = math.ceil(shape_per_head[0] / block_size) * G
-                elif consumer_type in {'pcmstats', 'pcmcenter', 'pcmgamma', 'pcmpoly', 'add', 'add2d', 'par_add_pt'}:
+                elif consumer_type in {'pcmstats', 'pcmcenter', 'pcmgamma', 'pcmpoly', 'add', 'add2d', 'pcm_add_pt'}:
                     shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n // 2, feature_id=input_fid)
                     par_feature_shapes[input_fid] = shape_per_head
                 else:
@@ -231,7 +231,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map[input_fid] = x
             input_args.append(Argument(input_fid, x))
 
-    _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose', 'par_add_pt'}
+    _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose', 'pcm_add_pt'}
     _PCM_LAYER_TYPES = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine', 'pcmgamma', 'pcmpoly'}
     _FEATURE_MAT_LAYER_TYPES = _PAR_MATRIX_LAYER_TYPES | _PCM_LAYER_TYPES
     _UNSUPPORTED_MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose'}
@@ -1033,7 +1033,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             par_feature_shapes[layer_output_feature_ids[0]] = (shape_per_head[1], shape_per_head[0])
 
-        elif layer_config['type'] == 'par_add_pt':
+        elif layer_config['type'] == 'pcm_add_pt':
             n_heads = task_config_info.get('n_heads', 1)
             feat_in = config_info['feature'][layer_input_feature_ids[0]]
             shape_full = tuple(feat_in['shape'])
@@ -1049,7 +1049,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
-            data_source = CustomDataNode(type='par_add_pt_data_source', id=f'{layer_id}')
+            data_source = CustomDataNode(type='pcm_add_pt_data_source', id=f'{layer_id}')
             input_args.append(Argument(f'{layer_id}', [data_source]))
             layer_output_nodes = add_pt_layer.call_custom_compute(
                 feature_id_to_nodes_map[input_fid],

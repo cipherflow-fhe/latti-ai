@@ -631,6 +631,15 @@ def export_h5_from_onnx(
             if verbose:
                 log.info('ParCPMM:                  %s', wp)
 
+        elif ltype == 'pcm_add_pt':
+            wp = layer.get('weight_path', '')
+            if wp not in onnx_weights:
+                log.warning('pcm_add_pt weight not in ONNX: %s', wp)
+                continue
+            out[wp] = onnx_weights[wp].copy()
+            if verbose:
+                log.info('PCMAddPT:                 %s', wp)
+
         elif ltype == 'pcmaffine':
             wp = layer.get('weight_path', '')
             bp = layer.get('bias_path', '')

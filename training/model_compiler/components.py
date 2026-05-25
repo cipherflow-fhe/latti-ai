@@ -797,6 +797,10 @@ class LayerAbstractGraph:
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.bias_path = layer_json.get('bias_path', '')
 
+            elif layer_type == 'pcm_add_pt':
+                compute_node = ComputeNode(key, layer_type, 1, 1)
+                compute_node.path = layer_json.get('weight_path', '')
+
             elif layer_type == 'partranspose':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
 
@@ -1097,6 +1101,13 @@ class LayerAbstractGraph:
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                     'bias_path': layer.bias_path,
+                }
+            if layer_type == 'pcm_add_pt':
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
+                    'weight_path': layer.path,
                 }
             if layer_type == 'partranspose':
                 layers[layer_id] = {
