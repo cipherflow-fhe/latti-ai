@@ -109,7 +109,7 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
     }
 
     // Bias support — bias length matches the actual output columns, not the padded K_col*n
-    if (bias.get_shape()[0] > 0) {
+    if (bias.get_size() > 0) {
         has_bias_ = true;
         assert(bias.get_shape()[0] == out_cols_);
         bias_vals_ = std::move(bias);
