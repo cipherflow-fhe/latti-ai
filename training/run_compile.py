@@ -39,7 +39,7 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 log = logging.getLogger(__name__)
 
 
-def read_compile_config(config_path: str) -> dict[str, int]:
+def read_compile_config(config_path: str) -> dict[str, int | bool]:
     if not config_path:
         return {}
     with open(config_path, 'r', encoding='utf-8') as f:
@@ -48,6 +48,7 @@ def read_compile_config(config_path: str) -> dict[str, int]:
         'n_heads': int(data['n_heads']),
         'head_dim': int(data['head_dim']),
         'matmul_block_size': int(data['matmul_block_size']),
+        'is_feature_mat': bool(data.get('is_feature_mat', False)),
     }
 
 
@@ -130,6 +131,8 @@ Examples:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    compile_config = read_compile_config(args.config)
+    is_feature_mat = bool(compile_config.get('is_feature_mat', False))
     onnx_path = input_path if is_onnx else None
 
     if is_onnx:
@@ -141,7 +144,7 @@ Examples:
         print(f'[ONNX→JSON] Style: {onnx_style}')
 
         try:
-            onnx_to_json(str(input_path), str(pt_json_path), onnx_style)
+            onnx_to_json(str(input_path), str(pt_json_path), onnx_style, feature_mat=is_feature_mat)
             log.info('[ONNX→JSON] Done: %s → %s (style=%s)', input_path, pt_json_path, onnx_style)
         except Exception as e:
             print(f'\n[Error] ONNX to JSON conversion failed: {e}')
@@ -153,8 +156,6 @@ Examples:
         input_path = pt_json_path
     else:
         pt_json_path = input_path
-
-    compile_config = read_compile_config(args.config)
 
     print(f'\n[Compile] Input: {pt_json_path}')
     print(f'[Compile] Output: {output_dir}')
@@ -172,7 +173,9 @@ Examples:
             num_workers=args.num_workers,
             style=args.style,
             graph_type=args.graph_type,
-            **compile_config,
+            n_heads=compile_config.get('n_heads'),
+            head_dim=compile_config.get('head_dim'),
+            matmul_block_size=compile_config.get('matmul_block_size'),
         )
 
         print(f'\n[Compile] Success! Output: {output_dir}')
