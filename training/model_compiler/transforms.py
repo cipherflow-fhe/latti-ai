@@ -486,8 +486,8 @@ def expand_parcpmm_add_pt(graph: LayerAbstractGraph):
         new_feature.data_type = old_feature.data_type
 
         add_pt_id = make_unique_id(f'{parcpmm_node.layer_id}_add_pt')
-        add_pt_node = ComputeNode(add_pt_id, 'add_pt', parcpmm_node.channel_output, parcpmm_node.channel_output)
-        add_pt_node.bias_path = bias_path
+        add_pt_node = ComputeNode(add_pt_id, 'pcm_add_pt', parcpmm_node.channel_output, parcpmm_node.channel_output)
+        add_pt_node.path = bias_path
 
         new_feature_args = copy.deepcopy(graph.dag.nodes[old_feature])
         new_feature_args['name'] = new_feature.node_id
@@ -738,7 +738,7 @@ def set_level_costs(graph: LayerAbstractGraph):
             graph.dag.nodes[compute_node]['level_cost'] = 1 if has_uneven else 0
         elif compute_node.layer_type == 'parcpmm':
             graph.dag.nodes[compute_node]['level_cost'] = 2
-        elif compute_node.layer_type == 'add_pt':
+        elif compute_node.layer_type in {'add_pt', 'pcm_add_pt'}:
             graph.dag.nodes[compute_node]['level_cost'] = 0
         elif compute_node.layer_type == 'partranspose':
             graph.dag.nodes[compute_node]['level_cost'] = 1

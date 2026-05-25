@@ -154,6 +154,16 @@ class SingleAdd(nn.Module):
         return x0 + x1
 
 
+class SingleAddPt(nn.Module):
+    def __init__(self, rows=32, cols=64):
+        super().__init__()
+        bias = torch.linspace(-0.5, 0.5, steps=rows * cols, dtype=torch.float32).reshape(1, rows, cols)
+        self.register_buffer('bias', bias)
+
+    def forward(self, x):
+        return x + self.bias
+
+
 class ConvWithBatchNorms(nn.Module):
     def __init__(self):
         super().__init__()
@@ -892,6 +902,7 @@ class LayerNorm(nn.Module):
 
     def forward(self, x):
         return self.ln(x)
+
 
 class LinearGelu(nn.Module):
     def __init__(self):

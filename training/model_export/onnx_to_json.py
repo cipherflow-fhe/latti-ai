@@ -98,6 +98,30 @@ def get_constant(const_node: onnx.NodeProto):
     return const_value
 
 
+class PcmAddPtComputeNode(ComputeNode):
+    def __init__(
+        self,
+        layer_id: str,
+        feature_input: list[FeatureNode],
+        feature_output: list[FeatureNode],
+        weight_path: str,
+    ):
+        super().__init__(layer_id, 'pcm_add_pt', feature_input, feature_output)
+        self.weight_path = weight_path
+        feature_output[0].skip = list(feature_input[0].skip)
+        feature_output[0].shape = list(feature_input[0].shape)
+        feature_output[0].level = feature_input[0].level
+        feature_output[0].data_type = feature_input[0].data_type
+
+    def to_json(self) -> dict:
+        return {
+            'type': self.layer_type,
+            'feature_input': [i.node_id for i in self.feature_input],
+            'feature_output': [i.node_id for i in self.feature_output],
+            'weight_path': self.weight_path,
+        }
+
+
 class CustomMultiHeadAttentionComputeNode(ComputeNode):
     def __init__(
         self,
@@ -220,6 +244,7 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_m
         format_id(init.name): [numpy_helper.to_array(init), numpy_helper.to_array(init)] for init in graph.initializer
     }
     weight_shapes = {init.name: list(init.dims) for init in graph.initializer}
+    initializer_names = {init.name for init in graph.initializer}
 
     for n in graph.node:
         name = format_id(n.output[0])
@@ -293,15 +318,45 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_m
             case 'PolyActRN':
                 compute_node = PolyActRNPolyComputeNode.from_onnx_node(n, features_nodes)
             case _:
-                kwargs = {}
-                if 'Add' in n.op_type:
-                    inp = [format_id(i) for i in n.input]
+                if n.op_type == 'Add' and feature_mat:
+                    raw_inputs = list(n.input)
+                    constant_inputs = [raw for raw in raw_inputs if format_id(raw) in constant_nodes]
+                    constant_ids = {format_id(raw) for raw in constant_inputs}
+                    feature_inputs = [
+                        raw
+                        for raw in raw_inputs
+                        if format_id(raw) in features_nodes and format_id(raw) not in constant_ids
+                    ]
+                    if len(feature_inputs) == 1 and len(constant_inputs) == 1:
+                        weight_path = constant_inputs[0]
+                        if weight_path not in initializer_names:
+                            raise ValueError(
+                                f'feature_mat Add constant for node {n.name} must be an ONNX initializer, got {weight_path}'
+                            )
+                        compute_node = PcmAddPtComputeNode(
+                            format_id(n.name),
+                            [features_nodes[format_id(feature_inputs[0])]],
+                            [features_nodes[format_id(n.output[0])]],
+                            weight_path,
+                        )
+                    else:
+                        kwargs = {
+                            'layer_id': format_id(n.name),
+                            'layer_type': get_type_id(n.op_type),
+                            'feature_input': [features_nodes[i] for i in inp if i in features_nodes],
+                            'feature_output': [features_nodes[i] for i in out if i in features_nodes],
+                        }
+                        compute_node = get_op_code_generator(n.op_type, **kwargs)
+                else:
+                    kwargs = {}
+                    if 'Add' in n.op_type:
+                        inp = [format_id(i) for i in n.input]
 
-                kwargs['layer_id'] = format_id(n.name)
-                kwargs['layer_type'] = get_type_id(n.op_type)
-                kwargs['feature_input'] = [features_nodes[i] for i in inp if i in features_nodes]
-                kwargs['feature_output'] = [features_nodes[i] for i in out if i in features_nodes]
-                compute_node = get_op_code_generator(n.op_type, **kwargs)
+                    kwargs['layer_id'] = format_id(n.name)
+                    kwargs['layer_type'] = get_type_id(n.op_type)
+                    kwargs['feature_input'] = [features_nodes[i] for i in inp if i in features_nodes]
+                    kwargs['feature_output'] = [features_nodes[i] for i in out if i in features_nodes]
+                    compute_node = get_op_code_generator(n.op_type, **kwargs)
 
         compute_nodes[format_id(n.name)] = compute_node
 
