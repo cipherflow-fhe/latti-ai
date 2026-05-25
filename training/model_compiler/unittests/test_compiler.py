@@ -1282,6 +1282,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             feature_mat=True,
             n_heads=2,
             head_dim=32,
+            matmul_block_size=32,
             input_names=['x0', 'x1'],
         )
         self.assertIsNotNone(graph)
@@ -1297,6 +1298,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             feature_mat=True,
             n_heads=2,
             head_dim=32,
+            matmul_block_size=32,
             input_names=['x0', 'x1'],
         )
 
