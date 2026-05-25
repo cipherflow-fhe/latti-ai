@@ -40,6 +40,7 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
 
     // Store all input keys and per-input parameters
     uint32_t global_n_heads = task_config.value("n_heads", 0u);
+    uint32_t global_matmul_block_size = task_config.value("matmul_block_size", 0u);
     for (auto& [name, param] : task_config["task_input_param"].items()) {
         input_keys_.push_back(name);
         InputParam ip;
@@ -50,7 +51,10 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
         if (ip.is_mat) {
             ip.height = param["shape"][0];
             ip.width = param["shape"][1];
-            ip.matmul_block_size = param.value("matmul_block_size", 0u);
+            if (param.contains("head_shape")) {
+                ip.head_shape = {param["head_shape"][0], param["head_shape"][1]};
+            }
+            ip.matmul_block_size = param.value("matmul_block_size", global_matmul_block_size);
             ip.n_heads = param.value("n_heads", global_n_heads);
             if (param.contains("head_shape")) {
                 ip.head_shape = {param["head_shape"][0].get<uint32_t>(), param["head_shape"][1].get<uint32_t>()};
@@ -79,7 +83,10 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
         if (op.is_mat) {
             op.height = param["shape"][0];
             op.width = param["shape"][1];
-            op.matmul_block_size = param.value("matmul_block_size", 0u);
+            if (param.contains("head_shape")) {
+                op.head_shape = {param["head_shape"][0], param["head_shape"][1]};
+            }
+            op.matmul_block_size = param.value("matmul_block_size", global_matmul_block_size);
             op.n_heads = param.value("n_heads", global_n_heads);
             if (param.contains("head_shape")) {
                 op.head_shape = {param["head_shape"][0].get<uint32_t>(), param["head_shape"][1].get<uint32_t>()};

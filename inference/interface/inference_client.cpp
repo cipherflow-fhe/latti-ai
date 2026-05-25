@@ -42,6 +42,7 @@ void InferenceClient::read_configuration() {
 
     // Read per-output parameters
     uint32_t global_n_heads = task_config_.value("n_heads", 0u);
+    uint32_t global_matmul_block_size = task_config_.value("matmul_block_size", 0u);
     for (auto& [name, param] : task_config_["task_output_param"].items()) {
         OutputParam op;
         op.dim = param["dim"];
@@ -50,7 +51,10 @@ void InferenceClient::read_configuration() {
         if (op.is_mat) {
             op.height = param["shape"][0];
             op.width = param["shape"][1];
-            op.matmul_block_size = param.value("matmul_block_size", 0u);
+            if (param.contains("head_shape")) {
+                op.head_shape = {param["head_shape"][0], param["head_shape"][1]};
+            }
+            op.matmul_block_size = param.value("matmul_block_size", global_matmul_block_size);
             op.n_heads = param.value("n_heads", global_n_heads);
             if (param.contains("head_shape")) {
                 op.head_shape = {param["head_shape"][0].get<uint32_t>(), param["head_shape"][1].get<uint32_t>()};
@@ -85,7 +89,10 @@ void InferenceClient::read_configuration() {
         if (ip.is_mat) {
             ip.height = param["shape"][0];
             ip.width = param["shape"][1];
-            ip.matmul_block_size = param.value("matmul_block_size", 0u);
+            if (param.contains("head_shape")) {
+                ip.head_shape = {param["head_shape"][0], param["head_shape"][1]};
+            }
+            ip.matmul_block_size = param.value("matmul_block_size", global_matmul_block_size);
             ip.n_heads = param.value("n_heads", global_n_heads);
             if (param.contains("head_shape")) {
                 ip.head_shape = {param["head_shape"][0].get<uint32_t>(), param["head_shape"][1].get<uint32_t>()};
@@ -108,7 +115,8 @@ void InferenceClient::read_configuration() {
     if (global_n_heads > 1 && !input_params_.empty()) {
         auto& first_ip = input_params_.begin()->second;
         if (first_ip.is_mat) {
-            par_block_size_ = first_ip.width / global_n_heads;
+            par_block_size_ =
+                first_ip.matmul_block_size != 0 ? first_ip.matmul_block_size : first_ip.width / global_n_heads;
         }
     }
 
@@ -267,10 +275,18 @@ InferenceClient::decrypt(const std::map<std::string, Bytes>& encrypted_outputs) 
                 throw std::runtime_error("[Client] feature_mat output is missing par block size: " + name);
             }
             Array<double, 2> decrypted;
-            uint32_t m_per_head = param.head_shape[0] != 0 ? param.head_shape[0] : param.height;
-            uint32_t n_per_head = param.head_shape[1] != 0 ? param.head_shape[1] : d;
-            if (param.head_shape[0] == 0 && param.height % param.n_heads == 0 && param.height > d)
+            uint32_t m_per_head = param.height;
+            uint32_t n_per_head = d;
+            if (param.head_shape[0] != 0 && param.head_shape[1] != 0) {
+                n_per_head = param.head_shape[1];
+                if (param.height == param.head_shape[0] * param.n_heads && param.width == param.head_shape[1]) {
+                    m_per_head = param.height;
+                } else {
+                    m_per_head = param.head_shape[0];
+                }
+            } else if (param.height % param.n_heads == 0 && param.height > d) {
                 m_per_head = param.height / param.n_heads;
+            }
             decrypted = output_ct.par_block_col_major_unpack(m_per_head, n_per_head, d, param.n_heads);
             auto dec_1d = decrypted.to_array_1d();
             result.output = std::vector<double>(dec_1d.data(), dec_1d.data() + dec_1d.size());
