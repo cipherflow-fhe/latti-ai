@@ -122,9 +122,15 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             )
         return value
 
-    def _par_input_shape(feat, n_heads, split_rows=False):
+    def _matmul_block_size():
+        return _require_positive_task_config_int('matmul_block_size', 'par block-col-major', 'task')
+
+    def _par_input_shape(feat, n_heads, split_rows=False, feature_id=None):
         if 'head_shape' in feat:
             return tuple(feat['head_shape'])
+        if feat.get('data_type') == 'feature_mat':
+            name = f" '{feature_id}'" if feature_id is not None else ''
+            raise ValueError(f'feature_mat{name} must define head_shape for par block-col-major layers')
         rows, cols = feat['shape']
         rows_per_head = rows // n_heads if split_rows else rows
         return (rows_per_head, cols // n_heads)
@@ -140,9 +146,9 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             return 1
         return n_h_padded // (n_slot // (block_size * block_size))
 
-    def _feature_mat_ct_info(feat, n_heads, n_slot, split_rows=False, block_size=None):
-        shape_per_head = _par_input_shape(feat, n_heads, split_rows=split_rows)
-        block_size = int(block_size or feat.get('matmul_block_size', 0) or shape_per_head[1])
+    def _feature_mat_ct_info(feat, n_heads, n_slot, split_rows=False, block_size=None, feature_id=None):
+        shape_per_head = _par_input_shape(feat, n_heads, split_rows=split_rows, feature_id=feature_id)
+        block_size = int(block_size or _matmul_block_size())
         G = _par_group_count(block_size, n_heads, n_slot)
         return shape_per_head, block_size, G, _par_ct_count(shape_per_head, block_size, G)
 
@@ -171,32 +177,28 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     raise ValueError(f"feature_mat input '{input_fid}' only supports par matrix ops with n_heads > 1")
                 consumer_type = consumer['type']
                 if consumer_type == 'partranspose':
-                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=False)
+                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=False, feature_id=input_fid)
                     par_feature_shapes[input_fid] = shape_per_head
-                    block_size = shape_per_head[1]
+                    block_size = _matmul_block_size()
                     G = _par_group_count(block_size, n_heads, n // 2)
                     n_packed = _par_ct_count(shape_per_head, block_size, G)
                 elif consumer_type == 'parccmm':
                     idx = consumer['feature_input'].index(input_fid)
-                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=(idx == 1))
+                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=(idx == 1), feature_id=input_fid)
                     par_feature_shapes[input_fid] = shape_per_head
-                    feat_A = config_info['feature'][consumer['feature_input'][0]]
-                    shape_A = _par_input_shape(feat_A, n_heads, split_rows=False)
-                    block_size = shape_A[1]
+                    block_size = _matmul_block_size()
                     G = _par_group_count(block_size, n_heads, n // 2)
                     n_packed = _par_ct_count(shape_per_head, block_size, G)
                 elif consumer_type == 'parcpmm':
-                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=False)
+                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=False, feature_id=input_fid)
                     par_feature_shapes[input_fid] = shape_per_head
-                    block_size = shape_per_head[1]
+                    block_size = _matmul_block_size()
+                    if shape_per_head[1] > block_size:
+                        raise ValueError(f"parcpmm input '{input_fid}' per-head width exceeds matmul_block_size")
                     G = _par_group_count(block_size, n_heads, n // 2)
                     n_packed = math.ceil(shape_per_head[0] / block_size) * G
-                elif consumer_type in {'pcmgamma', 'pcmpoly'}:
-                    block_size = _require_positive_task_config_int('matmul_block_size', input_fid, consumer_type)
-                    shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n // 2, block_size=block_size)
-                    par_feature_shapes[input_fid] = shape_per_head
-                elif consumer_type in {'pcmstats', 'pcmcenter', 'add', 'add2d', 'par_add_pt'}:
-                    shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n // 2)
+                elif consumer_type in {'pcmstats', 'pcmcenter', 'pcmgamma', 'pcmpoly', 'add', 'add2d', 'par_add_pt'}:
+                    shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n // 2, feature_id=input_fid)
                     par_feature_shapes[input_fid] = shape_per_head
                 else:
                     raise ValueError(
@@ -670,14 +672,18 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
                 shape_per_head = par_feature_shapes.get(layer_input_feature_ids[0])
                 if shape_per_head is None:
-                    shape_per_head, _, _, _ = _feature_mat_ct_info(input_feat0, n_heads, n // 2)
+                    shape_per_head, _, _, _ = _feature_mat_ct_info(
+                        input_feat0, n_heads, n // 2, feature_id=layer_input_feature_ids[0]
+                    )
                     par_feature_shapes[layer_input_feature_ids[0]] = shape_per_head
-                block_size = int(input_feat0.get('matmul_block_size', 0) or shape_per_head[1])
+                block_size = _matmul_block_size()
 
                 for input_fid in layer_input_feature_ids:
                     if input_fid not in feature_id_to_nodes_map:
                         feat = config_info['feature'][input_fid]
-                        input_shape, _, _, n_cts = _feature_mat_ct_info(feat, n_heads, n // 2, block_size=block_size)
+                        input_shape, _, _, n_cts = _feature_mat_ct_info(
+                            feat, n_heads, n // 2, block_size=block_size, feature_id=input_fid
+                        )
                         par_feature_shapes[input_fid] = input_shape
                         x = [
                             CkksCiphertextNode(input_fid + f'input{j}', level=int(feat['level'])) for j in range(n_cts)
@@ -1004,9 +1010,9 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feat_in = config_info['feature'][input_fid]
             shape_per_head = par_feature_shapes.get(input_fid)
             if shape_per_head is None:
-                shape_per_head = _par_input_shape(feat_in, n_heads, split_rows=False)
+                shape_per_head = _par_input_shape(feat_in, n_heads, split_rows=False, feature_id=input_fid)
                 par_feature_shapes[input_fid] = shape_per_head
-            block_size = shape_per_head[1]
+            block_size = _matmul_block_size()
 
             partranspose_layer = ParBlockColMajorTranspose(shape_per_head, block_size, n_heads, n // 2)
             G = partranspose_layer.G
@@ -1031,8 +1037,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             n_heads = task_config_info.get('n_heads', 1)
             feat_in = config_info['feature'][layer_input_feature_ids[0]]
             shape_full = tuple(feat_in['shape'])
-            n_per_head = shape_full[1] // n_heads
-            block_size = n_per_head
+            block_size = _matmul_block_size()
 
             add_pt_layer = ParBlockColMajorAddPt(shape_full, block_size, n_heads, n // 2)
 
@@ -1057,10 +1062,10 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feat_in = config_info['feature'][layer_input_feature_ids[0]]
             feat_out = config_info['feature'][layer_output_feature_ids[0]]
             shape_A_full = tuple(feat_in['shape'])
-            n_per_head = shape_A_full[1] // n_heads
-            block_size = n_per_head
-            # Python class expects per-head shape; C++ divides internally
-            shape_A = (shape_A_full[0], n_per_head)
+            block_size = _matmul_block_size()
+            shape_A = _par_input_shape(feat_in, n_heads, split_rows=False, feature_id=layer_input_feature_ids[0])
+            if shape_A[1] > block_size:
+                raise ValueError(f"parcpmm layer '{layer_id}' input per-head width exceeds matmul_block_size")
             W_shape = (shape_A_full[1], feat_out['shape'][1])
 
             has_bias = 'bias_path' in layer_config
@@ -1096,15 +1101,15 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
             shape_A = par_feature_shapes.get(fid_A)
             if shape_A is None:
-                shape_A = _par_input_shape(feat_A, n_heads, split_rows=False)
+                shape_A = _par_input_shape(feat_A, n_heads, split_rows=False, feature_id=fid_A)
                 par_feature_shapes[fid_A] = shape_A
-            block_size = shape_A[1]
+            block_size = _matmul_block_size()
 
             shape_B = par_feature_shapes.get(fid_B)
             if shape_B is None:
                 # Raw parccmm RHS is stored as [H*N, H*P]; if it is produced by
                 # partranspose, par_feature_shapes already contains [N, P].
-                shape_B = _par_input_shape(feat_B, n_heads, split_rows=True)
+                shape_B = _par_input_shape(feat_B, n_heads, split_rows=True, feature_id=fid_B)
                 par_feature_shapes[fid_B] = shape_B
 
             parccmm_layer = ParBlockColMajorCCMM(shape_A, shape_B, block_size, n_heads, n // 2)
@@ -1116,7 +1121,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     feat = config_info['feature'][input_fid]
                     shape_per_head = par_feature_shapes.get(input_fid)
                     if shape_per_head is None:
-                        shape_per_head = _par_input_shape(feat, n_heads, split_rows=(idx == 1))
+                        shape_per_head = _par_input_shape(feat, n_heads, split_rows=(idx == 1), feature_id=input_fid)
                         par_feature_shapes[input_fid] = shape_per_head
                     n_cts = _par_ct_count(shape_per_head, block_size, G)
                     x = [CkksCiphertextNode(input_fid + f'input{j}', level=int(feat['level'])) for j in range(n_cts)]
@@ -1138,7 +1143,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             input_fid = layer_input_feature_ids[0]
             feat_in = config_info['feature'][input_fid]
             shape = tuple(feat_in['shape'])
-            block_size = shape[1] // n_heads
+            block_size = _matmul_block_size()
             layer = ParBlockColMajorLNStats(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
 
             if input_fid not in feature_id_to_nodes_map:
@@ -1150,14 +1155,14 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             input_args.append(Argument(f'{layer_id}', [data_source]))
             layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
-            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], block_size)
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], 1)
 
         elif layer_config['type'] == 'pcmcenter':
             n_heads = task_config_info.get('n_heads', 1)
             input_fid = layer_input_feature_ids[0]
             feat_in = config_info['feature'][input_fid]
             shape = tuple(feat_in['shape'])
-            block_size = shape[1] // n_heads
+            block_size = _matmul_block_size()
             layer = ParBlockColMajorLNXCentered(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
 
             if input_fid not in feature_id_to_nodes_map:
@@ -1169,12 +1174,12 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             input_args.append(Argument(f'{layer_id}', [data_source]))
             layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
-            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], block_size)
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], shape[1] // n_heads)
 
         elif layer_config['type'] == 'pcminit':
             n_heads = task_config_info.get('n_heads', 1)
             feat_in = config_info['feature'][layer_input_feature_ids[0]]
-            block_size = feat_in['shape'][1] // n_heads
+            block_size = _matmul_block_size()
             layer = ParBlockColMajorLNMinimaxInit(block_size=block_size, n_slot=n // 2)
 
             data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
@@ -1188,7 +1193,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         elif layer_config['type'] == 'pcmgs':
             n_heads = task_config_info.get('n_heads', 1)
             feat_in = config_info['feature'][layer_input_feature_ids[0]]
-            block_size = feat_in['shape'][1] // n_heads
+            block_size = _matmul_block_size()
             layer = ParBlockColMajorLNGoldschmidt(block_size=block_size, n_slot=n // 2)
 
             data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
@@ -1205,7 +1210,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             n_heads = task_config_info.get('n_heads', 1)
             feat_in = config_info['feature'][layer_input_feature_ids[0]]
             shape = tuple(feat_in['shape'])
-            block_size = shape[1] // n_heads
+            block_size = _matmul_block_size()
             layer = ParBlockColMajorLNAffine(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
 
             data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
@@ -1216,15 +1221,19 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 data_source,
             )
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
-            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], block_size)
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], shape[1] // n_heads)
 
         elif layer_config['type'] == 'pcmgamma':
             n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_config['type'])
-            block_size = _require_positive_task_config_int('matmul_block_size', layer_id, layer_config['type'])
             input_fid = layer_input_feature_ids[0]
             feat_in = config_info['feature'][input_fid]
             shape = tuple(feat_in['shape'])
-            K = layer_config.get('K', layer_config.get('k', 1))
+            K = int(layer_config.get('K', layer_config.get('k', 1)))
+            block_size = _matmul_block_size()
+            if shape[1] % (K * n_heads) != 0:
+                raise ValueError(
+                    f"pcmgamma layer '{layer_id}' expects full feature shape with cols divisible by K * n_heads"
+                )
             layer = ParBlockColMajorPolyActRNGamma(
                 shape=shape,
                 block_size=block_size,
@@ -1242,16 +1251,22 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             input_args.append(Argument(f'{layer_id}', [data_source]))
             layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
-            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], block_size)
+            par_feature_shapes[layer_output_feature_ids[0]] = par_feature_shapes.get(
+                input_fid, (shape[0], shape[1] // (K * n_heads))
+            )
 
         elif layer_config['type'] == 'pcmpoly':
             n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_config['type'])
-            block_size = _require_positive_task_config_int('matmul_block_size', layer_id, layer_config['type'])
             input_fid = layer_input_feature_ids[0]
             feat_in = config_info['feature'][input_fid]
             shape = tuple(feat_in['shape'])
-            K = layer_config.get('K', layer_config.get('k', 1))
+            K = int(layer_config.get('K', layer_config.get('k', 1)))
             degree = layer_config.get('degree', layer_config.get('order', 2))
+            block_size = _matmul_block_size()
+            if shape[1] % (K * n_heads) != 0:
+                raise ValueError(
+                    f"pcmpoly layer '{layer_id}' expects full feature shape with cols divisible by K * n_heads"
+                )
             layer = ParBlockColMajorPolyActRNPoly(
                 shape=shape,
                 block_size=block_size,
@@ -1270,7 +1285,9 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             input_args.append(Argument(f'{layer_id}', [data_source]))
             layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
-            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], block_size)
+            par_feature_shapes[layer_output_feature_ids[0]] = par_feature_shapes.get(
+                input_fid, (shape[0], shape[1] // (K * n_heads))
+            )
 
         else:
             raise ValueError(f'Unsupported layer type: {layer_config["type"]}')
