@@ -111,8 +111,6 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
         gamma_path: str,
         poly_weight_path: str,
         poly_order: int = 4,
-        n_heads: int = 0,
-        head_dim: int = 0,
     ):
         super().__init__(layer_id, 'CustomMultiHeadAttention', feature_input, feature_output)
         self.q_weight_path = q_weight_path
@@ -122,8 +120,6 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
         self.gamma_path = gamma_path
         self.poly_weight_path = poly_weight_path
         self.poly_order = poly_order
-        self.n_heads = n_heads
-        self.head_dim = head_dim
 
     @staticmethod
     def _split_qkv_weight_paths(qkv_weight_path: str, layer_id: str) -> tuple[str, str, str]:
@@ -161,8 +157,6 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
         layer_id = format_id(x.name)
         feature_input = [features_nodes[format_id(x.input[0])]]
         feature_output = [features_nodes[format_id(x.output[0])]]
-        attrs = ComputeNode.get_attr_value_dict(x)
-
         qkv_weight_path = x.input[1] if len(x.input) > 1 else ''
         q_weight_path, k_weight_path, v_weight_path = CustomMultiHeadAttentionComputeNode._split_qkv_weight_paths(
             qkv_weight_path, layer_id
@@ -182,8 +176,6 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
             gamma_path=CustomMultiHeadAttentionComputeNode._gamma_path(running_max_path, layer_id),
             poly_weight_path=CustomMultiHeadAttentionComputeNode._poly_weight_path(poly_coeff_paths, layer_id),
             poly_order=CustomMultiHeadAttentionComputeNode._poly_order(poly_coeff_paths),
-            n_heads=int(attrs.get('num_heads', attrs.get('n_heads', 0))),
-            head_dim=int(attrs.get('head_dim', 0)),
         )
 
     def to_json(self) -> dict:
@@ -199,10 +191,6 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
             'poly_weight_path': self.poly_weight_path,
             'poly_order': self.poly_order,
         }
-        if self.n_heads:
-            info['n_heads'] = self.n_heads
-        if self.head_dim:
-            info['head_dim'] = self.head_dim
         return info
 
 
