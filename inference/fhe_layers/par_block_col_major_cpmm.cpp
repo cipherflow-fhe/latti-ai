@@ -20,6 +20,7 @@
 #include "layer_util.h"
 #include <cassert>
 #include <cmath>
+#include <stdexcept>
 
 using namespace std;
 using namespace lattisense;
@@ -40,7 +41,9 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
     n_per_head_ = shape_A[1];
     n_total_per_mb_ = n_heads_ * n_per_head_;
 
-    assert(n_per_head_ <= d_ && "per-head width must fit in one block column");
+    if (d_ == 0 || n_per_head_ > d_) {
+        throw runtime_error("ParBlockColMajorCPMM requires block_size >= per-head width");
+    }
 
     n_slot_ = param_.get_n() / 2;
     n_h_padded_ = next_pow2(n_heads);
@@ -111,7 +114,7 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
     // Bias support — bias length matches the actual output columns, not the padded K_col*n
     if (bias.get_size() > 0) {
         has_bias_ = true;
-        assert(bias.get_shape()[0] == out_cols_);
+        assert(bias.get_size() == out_cols_);
         bias_vals_ = std::move(bias);
     }
 }

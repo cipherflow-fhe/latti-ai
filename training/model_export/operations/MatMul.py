@@ -35,11 +35,15 @@ class MatMulComputeNode(ComputeNode):
         feature_output: list[FeatureNode],
         weight_path: str = '',
         weight_shape: list[int] | None = None,
+        bias_path: str = '',
         is_mpc=False,
+        to_expand: bool = False,
     ):
         super(MatMulComputeNode, self).__init__(layer_id, layer_type, feature_input, feature_output)
         self.weight_path = weight_path
         self.weight_shape = weight_shape or []
+        self.bias_path = bias_path
+        self.to_expand = to_expand
         feature_output[0].skip = [1, 1]
 
     @override
@@ -52,6 +56,10 @@ class MatMulComputeNode(ComputeNode):
             info['weight_path'] = self.weight_path
         if self.layer_type == 'parcpmm' and self.weight_shape:
             info['weight_shape'] = self.weight_shape
+        if self.layer_type == 'parcpmm' and self.bias_path:
+            info['bias_path'] = self.bias_path
+        if self.layer_type == 'parcpmm' and self.to_expand:
+            info['to_expand'] = True
         return info
 
     @staticmethod
@@ -60,6 +68,7 @@ class MatMulComputeNode(ComputeNode):
         input1_id = format_id(x.input[1])
         weight_path = ''
         weight_shape = []
+        bias_path = ''
         if input1_id in features_nodes:
             layer_type = 'parccmm'
             feature_input = [features_nodes[format_id(x.input[0])], features_nodes[input1_id]]
@@ -72,5 +81,28 @@ class MatMulComputeNode(ComputeNode):
         feature_output = [features_nodes[format_id(x.output[0])]]
         attrs = ComputeNode.get_attr_value_dict(x)
         log.debug('%s', attrs)
+        has_bias_input = len(x.input) > 2 and bool(x.input[2])
+        has_fused_bias_attr = 'fused_bias' in attrs
+        to_expand = layer_type == 'parcpmm' and x.op_type == 'Linear' and (has_bias_input or has_fused_bias_attr)
+        if layer_type == 'parcpmm' and x.op_type == 'Linear':
+            if has_bias_input:
+                bias_path = x.input[2]
+            elif has_fused_bias_attr:
+                fused_bias = attrs['fused_bias']
+                if isinstance(fused_bias, bytes):
+                    bias_path = fused_bias.decode('utf-8')
+                elif isinstance(fused_bias, str):
+                    bias_path = fused_bias
+                else:
+                    bias_path = weight_path.replace('.weight', '.bias')
 
-        return MatMulComputeNode(layer_id, layer_type, feature_input, feature_output, weight_path, weight_shape)
+        return MatMulComputeNode(
+            layer_id,
+            layer_type,
+            feature_input,
+            feature_output,
+            weight_path,
+            weight_shape,
+            bias_path=bias_path,
+            to_expand=to_expand,
+        )

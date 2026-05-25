@@ -894,6 +894,9 @@ class FheScoreParam:
         elif layer_type in ('add', 'add2d'):
             layer = AddLayer()
             return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
+        elif layer_type == 'add_pt':
+            n_cts = self.dag.nodes[preds[0]]['pack_num']
+            return {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': n_cts, 'rescale': 0}
         elif layer_type == 'pcmgamma':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
