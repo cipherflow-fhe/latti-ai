@@ -147,8 +147,8 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
             }
             if node.data_type:
                 param_dict[node.node_id]['data_type'] = node.data_type
-            if node.data_type == 'feature_mat' and node.head_shape is not None:
-                param_dict[node.node_id]['head_shape'] = [int(x) for x in node.head_shape]
+                if node.data_type == 'feature_mat' and node.head_shape is not None:
+                    param_dict[node.node_id]['head_shape'] = [int(x) for x in node.head_shape]
 
     layernorm_stage_types = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine'}
     has_layernorm = any(
