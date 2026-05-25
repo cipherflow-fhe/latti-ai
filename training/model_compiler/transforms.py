@@ -634,47 +634,6 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
         process_special_info(graph, compute_node, preds, succ)
         populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)
 
-        # Par matrix layers: override pack_num.
-        # Generic _calc_pack_num uses full shape, but par format interleaves
-        # n_heads into each CT. Recompute from per-head block grid × G.
-        if compute_node.layer_type in ('parcpmm', 'parccmm', 'partranspose'):
-            n_slot = int(config.fhe_param.poly_modulus_degree // 2)
-            n_heads = config.n_heads
-            if preds[0].head_shape is not None:
-                d = preds[0].head_shape[1]
-            else:
-                d = getattr(config, 'head_dim', 0) or preds[0].shape[1] // n_heads
-            if d <= 0:
-                raise ValueError('HEAD_DIM must be set for par matrix feature_mat packing')
-            n_h_padded = 1
-            while n_h_padded < n_heads:
-                n_h_padded <<= 1
-            if n_slot >= n_h_padded * d * d:
-                G = 1
-            elif n_slot >= d * d:
-                G = n_h_padded // (n_slot // (d * d))
-            else:
-                G = n_h_padded
-            for f_node in preds + [succ]:
-                if f_node.data_type == 'feature_mat':
-                    if f_node.head_shape is not None:
-                        r, c = f_node.head_shape
-                    else:
-                        # Per-head shape: divide each dim by n_heads if it's a multiple
-                        r = (
-                            f_node.shape[0] // n_heads
-                            if f_node.shape[0] % n_heads == 0 and f_node.shape[0] > d
-                            else f_node.shape[0]
-                        )
-                        c = (
-                            f_node.shape[1] // n_heads
-                            if f_node.shape[1] % n_heads == 0 and f_node.shape[1] > d
-                            else f_node.shape[1]
-                        )
-                    graph.dag.nodes[f_node]['pack_num'] = math.ceil(r / d) * math.ceil(c / d) * G
-        elif compute_node.layer_type == 'add_pt' and preds[0].data_type == 'feature_mat':
-            graph.dag.nodes[succ]['pack_num'] = graph.dag.nodes[preds[0]]['pack_num']
-
 
 def combine_convs_with_upsamples(graph: LayerAbstractGraph):
     for upsample_node in list(graph.dag.nodes):
