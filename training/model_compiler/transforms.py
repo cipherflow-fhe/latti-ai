@@ -431,6 +431,75 @@ def split_upsampling_layers(graph: LayerAbstractGraph):
             conv_node.upsample_factor = [1] * conv_node.dim
 
 
+def expand_parcpmm_add_pt(graph: LayerAbstractGraph):
+    used_ids = set()
+    for node in graph.dag.nodes:
+        if hasattr(node, 'node_id'):
+            used_ids.add(node.node_id)
+        if hasattr(node, 'layer_id'):
+            used_ids.add(node.layer_id)
+
+    def make_unique_id(base_id: str) -> str:
+        if base_id not in used_ids:
+            used_ids.add(base_id)
+            return base_id
+        idx = 1
+        while f'{base_id}_{idx}' in used_ids:
+            idx += 1
+        unique_id = f'{base_id}_{idx}'
+        used_ids.add(unique_id)
+        return unique_id
+
+    for parcpmm_node in list(graph.dag.nodes):
+        if not isinstance(parcpmm_node, ComputeNode):
+            continue
+        if parcpmm_node.layer_type != 'parcpmm' or not getattr(parcpmm_node, 'to_expand', False):
+            continue
+
+        bias_path = getattr(parcpmm_node, 'bias_path', '')
+        if not bias_path:
+            raise ValueError(f'parcpmm layer {parcpmm_node.layer_id} has to_expand=True but no bias_path')
+
+        old_feature_list = list(graph.dag.successors(parcpmm_node))
+        if len(old_feature_list) != 1:
+            raise ValueError(
+                f'Expected exactly one output feature for parcpmm layer {parcpmm_node.layer_id}, '
+                f'got {len(old_feature_list)}'
+            )
+        old_feature = old_feature_list[0]
+
+        new_feature = FeatureNode(
+            key=make_unique_id(f'{parcpmm_node.layer_id}_add_pt_input'),
+            dim=old_feature.dim,
+            channel=old_feature.channel,
+            scale=old_feature.scale,
+            ckks_parameter_id=old_feature.ckks_parameter_id,
+            ckks_scale=old_feature.ckks_scale,
+            shape=list(old_feature.shape),
+        )
+        new_feature.invalid_fill = list(old_feature.invalid_fill)
+        new_feature.sp_info = copy.deepcopy(old_feature.sp_info)
+        new_feature.has_sp_info = old_feature.has_sp_info
+        new_feature.data_type = old_feature.data_type
+
+        add_pt_id = make_unique_id(f'{parcpmm_node.layer_id}_add_pt')
+        add_pt_node = ComputeNode(add_pt_id, 'add_pt', parcpmm_node.channel_output, parcpmm_node.channel_output)
+        add_pt_node.bias_path = bias_path
+
+        new_feature_args = copy.deepcopy(graph.dag.nodes[old_feature])
+        new_feature_args['name'] = new_feature.node_id
+        _insert_layer_after_compute(
+            graph.dag,
+            parcpmm_node,
+            new_feature,
+            add_pt_node,
+            new_feature_args=new_feature_args,
+            new_compute_args={'name': add_pt_id, 'level_cost': 0},
+        )
+        parcpmm_node.bias_path = ''
+        parcpmm_node.to_expand = False
+
+
 def process_special_info(
     graph: LayerAbstractGraph, compute_node: ComputeNode, preds: list[FeatureNode], succ: FeatureNode
 ):
@@ -600,6 +669,8 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                             else f_node.shape[1]
                         )
                     graph.dag.nodes[f_node]['pack_num'] = math.ceil(r / d) * math.ceil(c / d) * G
+        elif compute_node.layer_type == 'add_pt' and preds[0].data_type == 'feature_mat':
+            graph.dag.nodes[succ]['pack_num'] = graph.dag.nodes[preds[0]]['pack_num']
 
 
 def combine_convs_with_upsamples(graph: LayerAbstractGraph):
@@ -705,6 +776,8 @@ def set_level_costs(graph: LayerAbstractGraph):
             graph.dag.nodes[compute_node]['level_cost'] = 1 if has_uneven else 0
         elif compute_node.layer_type == 'parcpmm':
             graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type == 'add_pt':
+            graph.dag.nodes[compute_node]['level_cost'] = 0
         elif compute_node.layer_type == 'partranspose':
             graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type == 'parccmm':
