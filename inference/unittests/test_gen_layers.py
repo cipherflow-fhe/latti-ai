@@ -1190,7 +1190,7 @@ class TestLayerExport(unittest.TestCase):
             },
             'layer': {
                 'add_pt_0': {
-                    'type': 'par_add_pt',
+                    'type': 'pcm_add_pt',
                     'feature_input': ['input0'],
                     'feature_output': ['output'],
                     'weight_path': 'add_pt_weight',

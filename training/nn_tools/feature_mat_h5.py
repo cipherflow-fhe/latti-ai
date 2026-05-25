@@ -99,7 +99,7 @@ def export_feature_mat_h5_from_onnx(
             _export_pcmpoly(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
         elif ltype == 'pcmaffine':
             _export_pcmaffine(layer_key, layer, features, onnx_weights, out)
-        elif ltype in ('add_pt', 'par_add_pt'):
+        elif ltype in ('add_pt', 'pcm_add_pt'):
             _export_add_pt(layer_key, layer, features, onnx_weights, out)
 
     h5_dir = os.path.dirname(h5_path)
@@ -277,7 +277,7 @@ def _export_add_pt(
 ) -> None:
     path = layer.get('weight_path') or layer.get('bias_path')
     if not path:
-        raise KeyError(f'{layer_key}: add_pt/par_add_pt requires weight_path or bias_path')
+        raise KeyError(f'{layer_key}: add_pt/pcm_add_pt requires weight_path or bias_path')
     if path not in onnx_weights:
         raise KeyError(f'{layer_key}: add_pt source not found in ONNX: {path}')
     fin = _feature(features, layer['feature_input'][0], layer_key)
