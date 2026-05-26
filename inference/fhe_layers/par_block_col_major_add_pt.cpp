@@ -43,6 +43,8 @@ ParBlockColMajorAddPt::ParBlockColMajorAddPt(const CkksParameter& param_in,
 
     n_h_padded_ = next_pow2(n_heads);
     n_slot_ = param_.get_n() / 2;
+    assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
+    assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
 
     if (n_slot_ >= n_h_padded_ * d_ * d_) {
         S_ = n_h_padded_;
@@ -51,6 +53,9 @@ ParBlockColMajorAddPt::ParBlockColMajorAddPt(const CkksParameter& param_in,
     } else {
         S_ = n_slot_ / (d_ * d_);
         chunk_size_ = n_slot_;
+        if (S_ == 1) {
+            n_h_padded_ = n_heads_;
+        }
         n_cts_per_block_idx_ = n_h_padded_ / S_;
     }
     num_chunks_ = n_slot_ / chunk_size_;

@@ -78,6 +78,8 @@ class ParBlockColMajorCCMM:
         else:
             self.S = n_slot // (self.d * self.d)
             self.chunk_size = n_slot
+            if self.S == 1:
+                self.n_h_padded = self.n_heads
             self.G = self.n_h_padded // self.S
 
         assert n_slot % self.chunk_size == 0
