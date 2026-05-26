@@ -110,25 +110,46 @@ class PolyActRNPolyComputeNode(ComputeNode):
         feature_output: list[FeatureNode],
         weight_path: str = '',
         degree: int = 4,
+        gamma_path: str = '',
+        coeffs_path: str = '',
     ):
         super().__init__(layer_id, 'PolyActRN', feature_input, feature_output)
         self.weight_path = weight_path
+        self.running_max_path = weight_path
+        self.gamma_path = gamma_path
+        self.coeffs_path = coeffs_path
         self.degree = degree
         feature_output[0].shape = feature_input[0].shape
         feature_output[0].skip = feature_input[0].skip
         feature_output[0].data_type = feature_input[0].data_type
 
     @staticmethod
+    def _path_prefix(running_max_path: str, layer_id: str) -> str:
+        suffix = '.rangenorm.running_max'
+        if running_max_path.endswith(suffix):
+            return running_max_path[: -len(suffix)]
+        return layer_id
+
+    @staticmethod
     def from_onnx_node(x: NodeProto, features_nodes) -> 'PolyActRNPolyComputeNode':
         layer_id = format_id(x.name)
         feature_input = [features_nodes[format_id(x.input[0])]]
         feature_output = [features_nodes[format_id(x.output[0])]]
-        weight_path = x.input[1] if len(x.input) > 1 else f'{layer_id}.weight'
+        weight_path = x.input[1] if len(x.input) > 1 else f'{layer_id}.rangenorm.running_max'
+        prefix = PolyActRNPolyComputeNode._path_prefix(weight_path, layer_id)
         degree = 4
         for attr in x.attribute:
             if attr.name == 'degree':
                 degree = attr.i
-        return PolyActRNPolyComputeNode(layer_id, feature_input, feature_output, weight_path, degree)
+        return PolyActRNPolyComputeNode(
+            layer_id,
+            feature_input,
+            feature_output,
+            weight_path,
+            degree,
+            gamma_path=f'{prefix}.gamma',
+            coeffs_path=f'{prefix}.weight',
+        )
 
     @override
     def to_json(self) -> dict:
@@ -137,5 +158,8 @@ class PolyActRNPolyComputeNode(ComputeNode):
             'feature_input': [i.node_id for i in self.feature_input],
             'feature_output': [i.node_id for i in self.feature_output],
             'weight_path': self.weight_path,
+            'running_max_path': self.running_max_path,
+            'gamma_path': self.gamma_path,
+            'coeffs_path': self.coeffs_path,
             'order': self.degree,
         }

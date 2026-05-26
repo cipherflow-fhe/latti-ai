@@ -198,6 +198,7 @@ Examples:
                         onnx_path=str(onnx_path),
                         json_path=str(json_path),
                         h5_path=str(h5_path),
+                        feature_mat=is_feature_mat,
                     )
                     print(f'[H5 Export] Done: {h5_path}')
                 except Exception as e:
