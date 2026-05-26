@@ -54,7 +54,17 @@ from inference.model_generator.layers.poly_relu2d import PolyRelu2D
 from inference.model_generator.layers.par_block_col_major_ccmm import ParBlockColMajorCCMM
 from inference.model_generator.layers.par_block_col_major_cpmm import ParBlockColMajorCPMM
 from inference.model_generator.layers.par_block_col_major_transpose import ParBlockColMajorTranspose
-from inference.model_generator.layers.par_block_col_major_polyactrn import ParBlockColMajorPolyActRNPoly
+from inference.model_generator.layers.par_block_col_major_polyactrn import (
+    ParBlockColMajorPolyActRNGamma,
+    ParBlockColMajorPolyActRNPoly,
+)
+from inference.model_generator.layers.par_block_col_major_layernorm import (
+    ParBlockColMajorLNAffine,
+    ParBlockColMajorLNGoldschmidt,
+    ParBlockColMajorLNMinimaxInit,
+    ParBlockColMajorLNStats,
+    ParBlockColMajorLNXCentered,
+)
 from inference.model_generator.layers.upsample_layer import UpsampleNearestLayer
 
 
@@ -900,9 +910,19 @@ class FheScoreParam:
         elif layer_type == 'pcmgamma':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
-            d = config.matmul_block_size or n_cols
-            n_cts = math.ceil(m / d) * math.ceil(n_cols / d)
-            return {'rotate': 0, 'mult_plain': n_cts, 'mult': 0, 'add': 0, 'rescale': n_cts}
+            n_slot = n // 2
+            try:
+                layer = ParBlockColMajorPolyActRNGamma(
+                    shape=(m, n_cols),
+                    block_size=config.matmul_block_size,
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                    K=getattr(node, 'K', 1),
+                )
+                n_cts = layer.total_cts
+                return {'rotate': 0, 'mult_plain': n_cts, 'mult': 0, 'add': 0, 'rescale': n_cts}
+            except (AssertionError, ValueError):
+                return None
         elif layer_type == 'pcmpoly':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
@@ -914,8 +934,85 @@ class FheScoreParam:
                     n_heads=config.n_heads,
                     n_slot=n_slot,
                     degree=getattr(node, 'order', 4),
+                    K=getattr(node, 'K', 1),
                 )
                 return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError):
+                return None
+        elif layer_type == 'pcmstats':
+            m = preds[0].shape[0]
+            n_cols = preds[0].shape[1]
+            n_slot = n // 2
+            try:
+                layer = ParBlockColMajorLNStats(
+                    shape=(m, n_cols),
+                    block_size=config.matmul_block_size,
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError):
+                return None
+        elif layer_type == 'pcmcenter':
+            m = preds[0].shape[0]
+            n_cols = preds[0].shape[1]
+            n_slot = n // 2
+            try:
+                layer = ParBlockColMajorLNXCentered(
+                    shape=(m, n_cols),
+                    block_size=config.matmul_block_size,
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError):
+                return None
+        elif layer_type == 'pcminit':
+            m = preds[0].shape[0]
+            block_size = config.matmul_block_size
+            n_slot = n // 2
+            try:
+                layer = ParBlockColMajorLNMinimaxInit(block_size=block_size, n_slot=n_slot)
+                return layer.get_fhe_op_count(math.ceil(m / block_size), self.input_mult_level)
+            except (AssertionError, ValueError):
+                return None
+        elif layer_type == 'pcmgs':
+            ordered_preds = sorted(
+                preds,
+                key=lambda p: self.dag.edges[p, node].get('input_index')
+                if self.dag.edges[p, node].get('input_index') is not None
+                else 0,
+            )
+            m = ordered_preds[0].shape[0]
+            block_size = config.matmul_block_size
+            n_slot = n // 2
+            level_y = self.dag.nodes[ordered_preds[0]]['level']
+            level_a = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else None
+            try:
+                layer = ParBlockColMajorLNGoldschmidt(block_size=block_size, n_slot=n_slot)
+                return layer.get_fhe_op_count(math.ceil(m / block_size), level_y, level_a)
+            except (AssertionError, ValueError):
+                return None
+        elif layer_type == 'pcmaffine':
+            ordered_preds = sorted(
+                preds,
+                key=lambda p: self.dag.edges[p, node].get('input_index')
+                if self.dag.edges[p, node].get('input_index') is not None
+                else 0,
+            )
+            m = ordered_preds[0].shape[0]
+            n_cols = ordered_preds[0].shape[1]
+            n_slot = n // 2
+            level_x = self.dag.nodes[ordered_preds[0]]['level']
+            level_y = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else self.input_mult_level
+            try:
+                layer = ParBlockColMajorLNAffine(
+                    shape=(m, n_cols),
+                    block_size=config.matmul_block_size,
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(level_y, level_x)
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'parcpmm':

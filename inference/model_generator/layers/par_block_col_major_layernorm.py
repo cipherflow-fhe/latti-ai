@@ -17,6 +17,7 @@
 import sys
 import math
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -30,6 +31,26 @@ def _next_pow2(n: int) -> int:
     while p < n:
         p <<= 1
     return p
+
+
+def _pow2_step_count(n: int) -> int:
+    count = 0
+    step = 1
+    while step < n:
+        count += 1
+        step <<= 1
+    return count
+
+
+def _new_ops():
+    return defaultdict(
+        lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'relin': 0, 'add': 0, 'rescale': 0, 'drop_level': 0}
+    )
+
+
+def _add_drop_level_ops(ops, level: int, n_ct: int, drop: int):
+    for i in range(drop):
+        ops[level - i]['drop_level'] += n_ct
 
 
 class _ParBlockColMajorLNBase:
@@ -150,6 +171,40 @@ class ParBlockColMajorLNStats(_ParBlockColMajorLNBase):
         eps_add_pt = self._make_pt(data_source, self.op_class, 3)
         return self.call(input_cts, h0_mask_pt, inv_n_pt, iv_pt, eps_add_pt)
 
+    def get_fhe_op_count(self, level: int) -> dict:
+        ops = _new_ops()
+        n = self.total_cts
+        R = self.num_block_rows
+        col_steps = _pow2_step_count(self.d)
+        head_steps = _pow2_step_count(self.S)
+        cross_sum_adds = R * max(0, self.num_block_cols * self.G - 1)
+
+        ops[level]['rotate'] += n * col_steps + R * head_steps
+        ops[level]['add'] += n * col_steps + cross_sum_adds + R * head_steps
+        ops[level]['mult'] += n
+        ops[level]['relin'] += n
+        ops[level]['mult_plain'] += R
+        ops[level]['rescale'] += n + R
+
+        ops[level - 1]['rotate'] += n * col_steps + 2 * R * head_steps
+        ops[level - 1]['add'] += n * col_steps + cross_sum_adds + 2 * R * head_steps
+        ops[level - 1]['mult_plain'] += 2 * R
+        ops[level - 1]['rescale'] += 2 * R
+
+        ops[level - 2]['rotate'] += R * head_steps
+        ops[level - 2]['add'] += R * head_steps
+        ops[level - 2]['mult'] += R
+        ops[level - 2]['relin'] += R
+        ops[level - 2]['mult_plain'] += R
+        ops[level - 2]['rescale'] += 2 * R
+
+        ops[level - 3]['add'] += R
+        ops[level - 3]['mult_plain'] += R
+        ops[level - 3]['rescale'] += R
+
+        ops[level - 4]['add'] += R
+        return dict(ops)
+
 
 class ParBlockColMajorLNXCentered(_ParBlockColMajorLNBase):
     op_class = 'ParBlockColMajorLNXCentered'
@@ -176,6 +231,29 @@ class ParBlockColMajorLNXCentered(_ParBlockColMajorLNBase):
         h0_mask_pt = self._make_pt(data_source, self.op_class, 0)
         inv_n_pt = self._make_pt(data_source, self.op_class, 1)
         return self.call(input_cts, h0_mask_pt, inv_n_pt)
+
+    def get_fhe_op_count(self, level: int) -> dict:
+        ops = _new_ops()
+        n = self.total_cts
+        R = self.num_block_rows
+        col_steps = _pow2_step_count(self.d)
+        head_steps = _pow2_step_count(self.S)
+        cross_sum_adds = R * max(0, self.num_block_cols * self.G - 1)
+
+        ops[level]['rotate'] += n * col_steps + R * head_steps
+        ops[level]['add'] += n * col_steps + cross_sum_adds + R * head_steps
+        ops[level]['mult_plain'] += R
+        ops[level]['rescale'] += R
+        ops[level]['drop_level'] += n
+
+        ops[level - 1]['rotate'] += R * head_steps
+        ops[level - 1]['add'] += R * head_steps
+        ops[level - 1]['mult_plain'] += R
+        ops[level - 1]['rescale'] += R
+        ops[level - 1]['drop_level'] += n
+
+        ops[level - 2]['add'] += n
+        return dict(ops)
 
 
 class ParBlockColMajorLNMinimaxInit:
@@ -211,6 +289,21 @@ class ParBlockColMajorLNMinimaxInit:
         c1_pt = self._make_pt(data_source, 1)
         c2_norm_pt = self._make_pt(data_source, 2)
         return self.call(a_cts, c0_add_pt, c1_pt, c2_norm_pt)
+
+    def get_fhe_op_count(self, n_ct: int, level: int) -> dict:
+        ops = _new_ops()
+
+        ops[level]['mult'] += n_ct
+        ops[level]['relin'] += n_ct
+        ops[level]['mult_plain'] += n_ct
+        ops[level]['rescale'] += 2 * n_ct
+
+        ops[level - 1]['mult_plain'] += n_ct
+        ops[level - 1]['rescale'] += n_ct
+        ops[level - 1]['drop_level'] += n_ct
+
+        ops[level - 2]['add'] += 2 * n_ct
+        return dict(ops)
 
 
 class ParBlockColMajorLNGoldschmidt:
@@ -252,6 +345,26 @@ class ParBlockColMajorLNGoldschmidt:
         three_pt = self._make_pt(data_source, 0)
         half_norm_pt = self._make_pt(data_source, 1)
         return self.call(y_cts, a_cts, three_pt, half_norm_pt)
+
+    def get_fhe_op_count(self, n_ct: int, level: int, a_level: int | None = None) -> dict:
+        ops = _new_ops()
+        if a_level is not None and a_level > level:
+            _add_drop_level_ops(ops, a_level, n_ct, a_level - level)
+
+        ops[level]['mult'] += 2 * n_ct
+        ops[level]['relin'] += 2 * n_ct
+        ops[level]['mult_plain'] += n_ct
+        ops[level]['rescale'] += 3 * n_ct
+
+        ops[level - 1]['mult'] += n_ct
+        ops[level - 1]['relin'] += n_ct
+        ops[level - 1]['rescale'] += n_ct
+        ops[level - 1]['drop_level'] += n_ct
+
+        ops[level - 2]['add'] += n_ct
+        ops[level - 2]['mult_plain'] += n_ct
+        ops[level - 2]['rescale'] += n_ct
+        return dict(ops)
 
 
 class ParBlockColMajorLNAffine(_ParBlockColMajorLNBase):
@@ -296,3 +409,20 @@ class ParBlockColMajorLNAffine(_ParBlockColMajorLNBase):
             beta_add_pt.append(beta_bi)
 
         return self.call(x_centered, y_cts, gamma_pt, beta_add_pt)
+
+    def get_fhe_op_count(self, level: int, x_centered_level: int | None = None) -> dict:
+        ops = _new_ops()
+        n = self.total_cts
+
+        ops[level]['mult_plain'] += n
+        ops[level]['rescale'] += n
+
+        if x_centered_level is not None and x_centered_level > level - 1:
+            _add_drop_level_ops(ops, x_centered_level, n, x_centered_level - (level - 1))
+
+        ops[level - 1]['mult'] += n
+        ops[level - 1]['relin'] += n
+        ops[level - 1]['rescale'] += n
+
+        ops[level - 2]['add'] += n
+        return dict(ops)
