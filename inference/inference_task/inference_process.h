@@ -20,6 +20,8 @@
 
 #include <hdf5.h>
 
+#include <atomic>
+#include <mutex>
 #include <stdexcept>
 
 #include "util.h"
@@ -226,6 +228,7 @@ public:
     void run_task_sdk(bool is_mpc = false);
     void run_task_plaintext(bool is_mpc = false);
     void run_task_lazy(bool is_mpc = false, ls::ProgressCallback progress_cb = nullptr);
+    void request_cancel() noexcept;
 
     // load_model
     void prepare_task();
@@ -245,6 +248,9 @@ private:
     std::map<std::string, UPtr<FeatureEncrypted>> intermediate_result_;
     const FeatureEncrypted& _get_feature(const std::string& feature_id);
 
+    std::atomic<bool> evaluation_active_{false};
+    std::atomic<bool> cancel_requested_{false};
+    std::mutex task_mutex_;
 #ifdef INFERENCE_SDK_ENABLE_GPU
     std::unique_ptr<lattisense::FheTaskGpu> fhe_task_gpu_;
 #endif

@@ -61,6 +61,9 @@ public:
     std::map<std::string, Bytes> evaluate(const std::map<std::string, Bytes>& encrypted_inputs,
                                           ls::ProgressCallback progress_cb = nullptr);
 
+    /// Request cancellation of the currently running encrypted inference task.
+    void request_cancel() noexcept;
+
     /// Run plaintext inference on CSV input files (for verification).
     std::map<std::string, std::vector<double>> evaluate_plaintext(const std::map<std::string, std::string>& input_csvs);
 

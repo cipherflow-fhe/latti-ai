@@ -54,7 +54,7 @@ target_link_libraries(latti_inference PRIVATE
 
 # Set RPATH so the .so can find shared libs relative to itself
 set_target_properties(latti_inference PROPERTIES
-    INSTALL_RPATH "$ORIGIN;$ORIGIN/../../../build/inference/lattisense"
+    INSTALL_RPATH "$ORIGIN;$ORIGIN/../../../build/inference/lattisense;$ORIGIN/../../../../build/inference/lattisense"
     BUILD_WITH_INSTALL_RPATH ON
 )
 

@@ -34,6 +34,30 @@ InferenceProcess::InferenceProcess(InitInferenceProcess* fp_in) {
 
 InferenceProcess::~InferenceProcess() {}
 
+void InferenceProcess::request_cancel() noexcept {
+    if (!evaluation_active_.load()) {
+        return;
+    }
+
+    cancel_requested_.store(true);
+    std::lock_guard<std::mutex> lock(task_mutex_);
+    switch (compute_device) {
+#ifdef INFERENCE_SDK_ENABLE_GPU
+        case ComputeDevice::GPU:
+            if (fhe_task_gpu_) {
+                fhe_task_gpu_->request_cancel();
+            }
+            break;
+#endif
+        case ComputeDevice::CPU:
+            if (fhe_task_cpu_) {
+                fhe_task_cpu_->request_cancel();
+            }
+            break;
+        default: break;
+    }
+}
+
 FeatureNode::FeatureNode(const string& node_id_in,
                          int dim_in,
                          int channel_in,
@@ -1510,6 +1534,15 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
 }
 
 void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_cb) {
+    cancel_requested_.store(false);
+    evaluation_active_.store(true);
+    struct EvaluationActiveGuard {
+        InferenceProcess& process;
+        ~EvaluationActiveGuard() {
+            process.evaluation_active_.store(false);
+        }
+    } evaluation_active_guard{*this};
+
     fp->total_fhe_time = 0.0;
     fp->total_fpga_time = 0.0;
 
@@ -1606,19 +1639,51 @@ void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_
     // 4. run
     switch (compute_device) {
         case ComputeDevice::CPU: {
-            if (!fhe_task_cpu_) {
-                prepare_task();
+            FheTaskCpu* task = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(task_mutex_);
+                if (!fhe_task_cpu_) {
+                    prepare_task();
+                }
+                task = fhe_task_cpu_.get();
+                if (cancel_requested_.load()) {
+                    throw TaskCancelledException();
+                }
             }
-            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb);
+            ls::ProgressCallback cancel_aware_progress_cb = [this, progress_cb, task](int completed, int total) {
+                if (cancel_requested_.load()) {
+                    task->request_cancel();
+                }
+                if (progress_cb) {
+                    progress_cb(completed, total);
+                }
+            };
+            fhe_time = fhe_time + task->run(ckks_contexts.at(context_id).get(), cxx_args, cancel_aware_progress_cb);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
         case ComputeDevice::GPU: {
-            if (!fhe_task_gpu_) {
-                prepare_task();
+            FheTaskGpu* task = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(task_mutex_);
+                if (!fhe_task_gpu_) {
+                    prepare_task();
+                }
+                task = fhe_task_gpu_.get();
+                if (cancel_requested_.load()) {
+                    throw TaskCancelledException();
+                }
             }
-            fhe_time =
-                fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb, gpu_device);
+            ls::ProgressCallback cancel_aware_progress_cb = [this, progress_cb, task](int completed, int total) {
+                if (cancel_requested_.load()) {
+                    task->request_cancel();
+                }
+                if (progress_cb) {
+                    progress_cb(completed, total);
+                }
+            };
+            fhe_time = fhe_time +
+                       task->run(ckks_contexts.at(context_id).get(), cxx_args, cancel_aware_progress_cb, gpu_device);
             break;
         }
 #else

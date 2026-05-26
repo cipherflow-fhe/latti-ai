@@ -172,6 +172,12 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
     return encrypted_outputs;
 }
 
+void InferenceServer::request_cancel() noexcept {
+    if (fp_) {
+        fp_->request_cancel();
+    }
+}
+
 std::map<std::string, std::vector<double>>
 InferenceServer::evaluate_plaintext(const std::map<std::string, std::string>& input_csvs) {
     for (auto& [name, csv_path] : input_csvs) {

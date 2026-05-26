@@ -1,31 +1,46 @@
-# Build artifacts
+# Build outputs
 build/
 vs_build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+install_manifest.txt
 Testing/
+*.a
+*.so
+*.dylib
+*.dll
+*.pyd
 
 # Dependencies
 node_modules/
 deps/
+venv/
 
 # Python artifacts
 __pycache__/
 *.pyc
 *.egg-info/
-venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 **/test_venv/
 **/.pyarmor/
 
-# IDE and local tooling
+# Local tooling and editor state
 .vs/
 .vscode/
 .idea/
 .cache/
+.claude/
+.playwright-mcp/
+.superpowers/
 .codex
 AGENTS.md
 CLAUDE.md
-.superpowers
-.playwright-mcp
-.claude
 
 # OS files
 .DS_Store
@@ -53,6 +68,7 @@ export/**/*.yaml
 # Generated task files
 config_user.json
 gen_task/*.json
+**/ergs/
 **/mega_ag.json
 **/task_signature.json
 *plan.md

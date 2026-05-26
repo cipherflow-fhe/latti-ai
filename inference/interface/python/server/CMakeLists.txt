@@ -51,6 +51,6 @@ if(OpenMP_CXX_FOUND)
 endif()
 
 set_target_properties(latti_server PROPERTIES
-    INSTALL_RPATH "$ORIGIN:$ORIGIN/../../../../build/inference/lattisense"
+    INSTALL_RPATH "$ORIGIN:$ORIGIN/../../../../build/inference/lattisense:$ORIGIN/../../../../../build/inference/lattisense"
     BUILD_WITH_INSTALL_RPATH ON
 )

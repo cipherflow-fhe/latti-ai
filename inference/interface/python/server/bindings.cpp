@@ -91,6 +91,7 @@ PYBIND11_MODULE(latti_server, m) {
                 return to_pybytes_dict(result);
             },
             py::arg("encrypted_inputs"), py::arg("progress_callback") = py::none())
+        .def("request_cancel", &InferenceServer::request_cancel)
         .def("evaluate_plaintext", &InferenceServer::evaluate_plaintext, py::arg("input_csvs"),
              py::call_guard<py::gil_scoped_release>());
 }

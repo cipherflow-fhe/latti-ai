@@ -63,7 +63,7 @@ def find_task_dirs():
 def test_import():
     assert hasattr(latti_server, 'InferenceServer')
     methods = [m for m in dir(latti_server.InferenceServer) if not m.startswith('_')]
-    for required in ['import_eval_context', 'load_model', 'evaluate', 'evaluate_plaintext']:
+    for required in ['import_eval_context', 'load_model', 'evaluate', 'request_cancel', 'evaluate_plaintext']:
         assert required in methods, f'missing method: {required}'
     print('[PASS] import')
 
