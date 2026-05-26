@@ -702,7 +702,7 @@ class TestSingleLayer(CompilerTestBase):
             json_path=str(server_dir / 'nn_layers_ct_0.json'),
             h5_path=str(server_dir / 'model_parameters.h5'),
             verbose=False,
-            feature_mat=True,
+            feature_mat=compile_config['is_feature_mat'],
         )
         return graph, score
 
