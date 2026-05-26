@@ -107,14 +107,37 @@ def get_compute_score(
     compute: ComputeNode,
     param_dict: dict[str, FheParameter],
 ) -> float:
-    if compute.layer_type in ['conv2d', 'fc0', 'add2d', 'polyact', 'avgpool1d', 'avgpool2d']:
+    supported_fhe_score_layers = {
+        'conv1d',
+        'conv2d',
+        'fc0',
+        'avgpool1d',
+        'avgpool2d',
+        'polyact',
+        'mult_scalar',
+        'add',
+        'add2d',
+        'add_pt',
+        'parcpmm',
+        'partranspose',
+        'parccmm',
+        'pcmgamma',
+        'pcmpoly',
+        'pcmstats',
+        'pcmcenter',
+        'pcminit',
+        'pcmgs',
+        'pcmaffine',
+        'upsample_nearest',
+        'resize',
+    }
+    if compute.layer_type in supported_fhe_score_layers:
         preds = list(enclosing_graph.predecessors(compute))
         level = min(enclosing_graph.nodes[p]['level'] for p in preds)
         s_param = FheScoreParam(enclosing_graph, compute, param_dict, level)
         score = s_param.get_score()
         return score
-    else:
-        return 0.0
+    return 0.0
 
 
 def get_restoring_score(dag, restore_node, param_dict):
