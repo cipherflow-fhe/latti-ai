@@ -51,6 +51,8 @@ ParBlockColMajorLNStats::ParBlockColMajorLNStats(const CkksParameter& param,
     cols_per_head_ = total_dim_ / n_heads_;
     n_h_padded_ = next_power_of_2(n_heads);
     n_slot_ = param_.get_n() / 2;
+    assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
+    assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
 
     if ((uint32_t)n_slot_ >= n_h_padded_ * d_ * d_) {
         S_ = n_h_padded_;
@@ -59,6 +61,9 @@ ParBlockColMajorLNStats::ParBlockColMajorLNStats(const CkksParameter& param,
     } else {
         S_ = n_slot_ / (d_ * d_);
         chunk_size_ = n_slot_;
+        if (S_ == 1) {
+            n_h_padded_ = n_heads_;
+        }
         n_cts_per_block_idx_ = n_h_padded_ / S_;
     }
     num_chunks_ = n_slot_ / chunk_size_;
@@ -289,6 +294,8 @@ ParBlockColMajorLNXCentered::ParBlockColMajorLNXCentered(const CkksParameter& pa
     cols_per_head_ = total_dim_ / n_heads_;
     n_h_padded_ = next_power_of_2(n_heads);
     n_slot_ = param_.get_n() / 2;
+    assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
+    assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
 
     if ((uint32_t)n_slot_ >= n_h_padded_ * d_ * d_) {
         S_ = n_h_padded_;
@@ -297,6 +304,9 @@ ParBlockColMajorLNXCentered::ParBlockColMajorLNXCentered(const CkksParameter& pa
     } else {
         S_ = n_slot_ / (d_ * d_);
         chunk_size_ = n_slot_;
+        if (S_ == 1) {
+            n_h_padded_ = n_heads_;
+        }
         n_cts_per_block_idx_ = n_h_padded_ / S_;
     }
     num_chunks_ = n_slot_ / chunk_size_;
@@ -626,6 +636,8 @@ ParBlockColMajorLNAffine::ParBlockColMajorLNAffine(const CkksParameter& param,
     cols_per_head_ = shape[1] / n_heads_;
     n_h_padded_ = next_power_of_2(n_heads);
     n_slot_ = param_.get_n() / 2;
+    assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
+    assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
 
     if ((uint32_t)n_slot_ >= n_h_padded_ * d_ * d_) {
         S_ = n_h_padded_;
@@ -634,6 +646,9 @@ ParBlockColMajorLNAffine::ParBlockColMajorLNAffine(const CkksParameter& param,
     } else {
         S_ = n_slot_ / (d_ * d_);
         chunk_size_ = n_slot_;
+        if (S_ == 1) {
+            n_h_padded_ = n_heads_;
+        }
         n_cts_per_block_idx_ = n_h_padded_ / S_;
     }
     num_chunks_ = n_slot_ / chunk_size_;

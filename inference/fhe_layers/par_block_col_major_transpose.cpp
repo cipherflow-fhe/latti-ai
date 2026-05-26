@@ -40,6 +40,8 @@ ParBlockColMajorTranspose::ParBlockColMajorTranspose(const CkksParameter& param_
     n_ = n;
 
     n_slot_ = param_.get_n() / 2;
+    assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
+    assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
     n_h_padded_ = next_pow2(n_heads);
 
     // Determine chunk sizing
@@ -50,6 +52,9 @@ ParBlockColMajorTranspose::ParBlockColMajorTranspose(const CkksParameter& param_
     } else {
         n_blocks_per_chunk_ = n_slot_ / (d_ * d_);
         chunk_size_ = n_slot_;
+        if (n_blocks_per_chunk_ == 1) {
+            n_h_padded_ = n_heads_;
+        }
         n_cts_per_block_idx_ = n_h_padded_ / n_blocks_per_chunk_;
     }
 

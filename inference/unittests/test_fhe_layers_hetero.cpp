@@ -1723,6 +1723,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_cpmm_square", "[block_
         while (n_h_padded < cfg.n_heads)
             n_h_padded <<= 1;
         uint32_t n_slot = res.param.get_n() / 2;
+        if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+            n_h_padded = cfg.n_heads;
+        }
         uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
         uint32_t n_out = num_block_rows_A * G;
 
@@ -1793,6 +1796,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         while (n_h_padded < cfg.n_heads)
             n_h_padded <<= 1;
         uint32_t n_slot = res.param.get_n() / 2;
+        if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+            n_h_padded = cfg.n_heads;
+        }
         uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
         uint32_t n_out = num_block_rows_A * G;
 
@@ -1856,6 +1862,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
     uint32_t n_slot = res.param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
     uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
     uint32_t n_out = K_col * num_block_rows_A * G;
 
@@ -1918,6 +1927,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
     uint32_t n_slot = res.param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
     uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
     uint32_t n_out = num_block_rows_A * G;  // REDUCE: single output megablock
 
@@ -2109,6 +2121,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_full_attention", "[blo
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
     uint32_t n_slot = res.param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
     uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
     uint32_t n_out = num_block_rows_out * G;
     for (uint32_t i = 0; i < n_out; i++)
@@ -2194,6 +2209,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
     uint32_t n_slot = this->param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
     uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
     uint32_t n_out = num_block_rows_A * G;
 
@@ -3501,6 +3519,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
     uint32_t n_slot = param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
     uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
     uint32_t n_out = num_block_rows * num_block_cols * G;
     for (uint32_t i = 0; i < n_out; i++)
@@ -3664,6 +3685,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         while (n_h_padded < n_heads)
             n_h_padded <<= 1;
         uint32_t n_slot = res.param.get_n() / 2;
+        if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+            n_h_padded = n_heads;
+        }
         uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
         uint32_t n_out = num_block_rows * num_block_cols * G;
         int out_level = init_level - 1 - (degree == 4 ? 3 : 2);
@@ -3780,6 +3804,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         while (n_h_padded < n_heads)
             n_h_padded <<= 1;
         uint32_t n_slot = res.param.get_n() / 2;
+        if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+            n_h_padded = n_heads;
+        }
         uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
         uint32_t n_out = num_block_rows_A * G;
         int out_level = reduce_level - 2;
@@ -3840,6 +3867,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
     uint32_t n_slot = res.param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
     uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
     uint32_t n_out = num_block_rows_A * G;
 
@@ -3937,6 +3967,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
     uint32_t n_slot = res.param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
     uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
     n_out *= G;
 
@@ -4007,6 +4040,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         while (n_h_padded < n_heads)
             n_h_padded <<= 1;
         uint32_t n_slot = res.param.get_n() / 2;
+        if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+            n_h_padded = n_heads;
+        }
         uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
         uint32_t n_out = num_block_rows * num_block_cols * G;
         int out_level = level - (degree == 4 ? 3 : 2);
