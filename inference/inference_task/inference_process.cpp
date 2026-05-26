@@ -1678,7 +1678,15 @@ void InferenceProcess::run_task(bool is_mpc) {
         while (n_h_padded < fp->n_heads)
             n_h_padded <<= 1;
         uint32_t n_slot_val = ckks_contexts.at(first_input.ckks_parameter_id)->get_parameter().get_n() / 2;
-        par_G = (n_slot_val >= n_h_padded * par_d * par_d) ? 1 : n_h_padded / (n_slot_val / (par_d * par_d));
+        if (n_slot_val >= n_h_padded * par_d * par_d) {
+            par_G = 1;
+        } else {
+            uint32_t S = n_slot_val / (par_d * par_d);
+            if (S == 1) {
+                n_h_padded = fp->n_heads;
+            }
+            par_G = n_h_padded / S;
+        }
     }
 
     string context_id;
@@ -2172,7 +2180,15 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         while (n_h_padded < fp->n_heads)
             n_h_padded <<= 1;
         uint32_t n_slot_val = ckks_contexts.at(first_input.ckks_parameter_id)->get_parameter().get_n() / 2;
-        par_G = (n_slot_val >= n_h_padded * par_d * par_d) ? 1 : n_h_padded / (n_slot_val / (par_d * par_d));
+        if (n_slot_val >= n_h_padded * par_d * par_d) {
+            par_G = 1;
+        } else {
+            uint32_t S = n_slot_val / (par_d * par_d);
+            if (S == 1) {
+                n_h_padded = fp->n_heads;
+            }
+            par_G = n_h_padded / S;
+        }
     }
 
     vector<vector<CkksCiphertext>> z_lists(json_data["output_feature"].size());

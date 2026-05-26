@@ -144,7 +144,10 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             n_h_padded <<= 1
         if n_slot >= n_h_padded * block_size * block_size:
             return 1
-        return n_h_padded // (n_slot // (block_size * block_size))
+        S = n_slot // (block_size * block_size)
+        if S == 1:
+            n_h_padded = n_heads
+        return n_h_padded // S
 
     def _feature_mat_ct_info(feat, n_heads, n_slot, split_rows=False, block_size=None, feature_id=None):
         shape_per_head = _par_input_shape(feat, n_heads, split_rows=split_rows, feature_id=feature_id)

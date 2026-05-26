@@ -1341,15 +1341,15 @@ class TestE2ESingleLayer(CompilerTestBase):
     # ── Matrix operations (BlockColMajor / ParBlockColMajor) ──
 
     def test_par_block_col_major_transpose(self):
-        """ParBlockColMajorTranspose E2E: n_heads=2."""
+        """ParBlockColMajorTranspose E2E: n_heads=3."""
         model = nn_modules.TransposeTest()
         self._export_compile_and_deploy(
             model,
-            (1, 32, 64),
+            (1, 32, 96),
             'par_block_col_major_transpose',
             style='multiplexed',
             feature_mat=True,
-            n_heads=2,
+            n_heads=3,
             head_dim=32,
             matmul_block_size=32,
         )
@@ -1372,14 +1372,14 @@ class TestE2ESingleLayer(CompilerTestBase):
 
     def test_par_block_col_major_add_pt(self):
         """ParBlockColMajorAddPt E2E: feature_mat input plus plaintext matrix."""
-        model = nn_modules.SingleAddPt(rows=32, cols=64)
+        model = nn_modules.SingleAddPt(rows=32, cols=96)
         graph, _ = self._export_compile_and_deploy(
             model,
-            (1, 32, 64),
+            (1, 32, 96),
             'par_block_col_major_add_pt',
             style='multiplexed',
             feature_mat=True,
-            n_heads=2,
+            n_heads=3,
             head_dim=32,
             matmul_block_size=32,
         )
@@ -1396,15 +1396,15 @@ class TestE2ESingleLayer(CompilerTestBase):
         self.assertIn('weight_path', pcm_layers[0])
 
     def test_par_block_col_major_ccmm(self):
-        """ParBlockColMajorCCMM E2E: head-wise A @ K^T, n_heads=2."""
+        """ParBlockColMajorCCMM E2E: head-wise A @ K^T, n_heads=3."""
         model = nn_modules.HeadWiseAKTTest()
         self._export_compile_and_deploy(
             model,
-            [(32, 64), (32, 64)],
+            [(32, 96), (32, 96)],
             'par_block_col_major_ccmm',
             style='multiplexed',
             feature_mat=True,
-            n_heads=2,
+            n_heads=3,
             head_dim=32,
             matmul_block_size=32,
             input_names=['x0', 'x1'],
@@ -1440,15 +1440,15 @@ class TestE2ESingleLayer(CompilerTestBase):
         self.assertTrue(any(node.layer_type == 'pcmpoly' for node in graph.dag.nodes if isinstance(node, ComputeNode)))
 
     def test_par_block_col_major_cpmm(self):
-        """ParBlockColMajorCPMM E2E: x @ W (SQUARE), n_heads=2."""
-        model = nn_modules.CPMMSquareTest(dim=64)
+        """ParBlockColMajorCPMM E2E: x @ W (SQUARE), n_heads=3."""
+        model = nn_modules.CPMMSquareTest(dim=96)
         self._export_compile_and_deploy(
             model,
-            (1, 32, 64),
+            (1, 32, 96),
             'par_block_col_major_cpmm',
             style='multiplexed',
             feature_mat=True,
-            n_heads=2,
+            n_heads=3,
             head_dim=32,
             matmul_block_size=32,
         )
