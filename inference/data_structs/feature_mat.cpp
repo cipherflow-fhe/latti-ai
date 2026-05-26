@@ -147,6 +147,9 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
     } else {
         S = n_slot / (d * d);
         chunk_size = n_slot;
+        if (S == 1) {
+            n_h_padded = n_heads;
+        }
         n_cts_per_block_idx = n_h_padded / S;
     }
     uint32_t num_chunks = n_slot / chunk_size;
@@ -225,6 +228,9 @@ FeatureMatEncrypted::par_block_col_major_unpack(uint32_t m, uint32_t n_per_head,
     } else {
         S = n_slot / (d * d);
         chunk_size = n_slot;
+        if (S == 1) {
+            n_h_padded = n_heads;
+        }
         n_cts_per_block_idx = n_h_padded / S;
     }
 
