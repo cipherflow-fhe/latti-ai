@@ -134,6 +134,10 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
         proj_weight_path: str,
         gamma_path: str,
         poly_weight_path: str,
+        q_bias_path: str = '',
+        k_bias_path: str = '',
+        v_bias_path: str = '',
+        proj_bias_path: str = '',
         poly_order: int = 4,
     ):
         super().__init__(layer_id, 'CustomMultiHeadAttention', feature_input, feature_output)
@@ -143,6 +147,10 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
         self.proj_weight_path = proj_weight_path
         self.gamma_path = gamma_path
         self.poly_weight_path = poly_weight_path
+        self.q_bias_path = q_bias_path
+        self.k_bias_path = k_bias_path
+        self.v_bias_path = v_bias_path
+        self.proj_bias_path = proj_bias_path
         self.poly_order = poly_order
 
     @staticmethod
@@ -151,6 +159,15 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
             prefix = qkv_weight_path[: -len('.qkv.weight')]
             return f'{prefix}.q.weight', f'{prefix}.k.weight', f'{prefix}.v.weight'
         return f'{layer_id}.q.weight', f'{layer_id}.k.weight', f'{layer_id}.v.weight'
+
+    @staticmethod
+    def _split_qkv_bias_paths(qkv_bias_path: str, layer_id: str) -> tuple[str, str, str]:
+        if not qkv_bias_path:
+            return '', '', ''
+        if qkv_bias_path.endswith('.qkv.bias'):
+            prefix = qkv_bias_path[: -len('.qkv.bias')]
+            return f'{prefix}.q.bias', f'{prefix}.k.bias', f'{prefix}.v.bias'
+        return f'{layer_id}.q.bias', f'{layer_id}.k.bias', f'{layer_id}.v.bias'
 
     @staticmethod
     def _gamma_path(running_max_path: str, layer_id: str) -> str:
@@ -182,10 +199,15 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
         feature_input = [features_nodes[format_id(x.input[0])]]
         feature_output = [features_nodes[format_id(x.output[0])]]
         qkv_weight_path = x.input[1] if len(x.input) > 1 else ''
+        qkv_bias_path = x.input[2] if len(x.input) > 2 else ''
         q_weight_path, k_weight_path, v_weight_path = CustomMultiHeadAttentionComputeNode._split_qkv_weight_paths(
             qkv_weight_path, layer_id
         )
+        q_bias_path, k_bias_path, v_bias_path = CustomMultiHeadAttentionComputeNode._split_qkv_bias_paths(
+            qkv_bias_path, layer_id
+        )
         proj_weight_path = x.input[3] if len(x.input) > 3 else f'{layer_id}.proj.weight'
+        proj_bias_path = x.input[4] if len(x.input) > 4 else ''
         running_max_path = x.input[5] if len(x.input) > 5 else ''
         poly_coeff_paths = list(x.input[6:])
 
@@ -199,6 +221,10 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
             proj_weight_path=proj_weight_path,
             gamma_path=CustomMultiHeadAttentionComputeNode._gamma_path(running_max_path, layer_id),
             poly_weight_path=CustomMultiHeadAttentionComputeNode._poly_weight_path(poly_coeff_paths, layer_id),
+            q_bias_path=q_bias_path,
+            k_bias_path=k_bias_path,
+            v_bias_path=v_bias_path,
+            proj_bias_path=proj_bias_path,
             poly_order=CustomMultiHeadAttentionComputeNode._poly_order(poly_coeff_paths),
         )
 
@@ -215,6 +241,14 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
             'poly_weight_path': self.poly_weight_path,
             'poly_order': self.poly_order,
         }
+        if self.q_bias_path:
+            info['q_bias_path'] = self.q_bias_path
+        if self.k_bias_path:
+            info['k_bias_path'] = self.k_bias_path
+        if self.v_bias_path:
+            info['v_bias_path'] = self.v_bias_path
+        if self.proj_bias_path:
+            info['proj_bias_path'] = self.proj_bias_path
         return info
 
 
