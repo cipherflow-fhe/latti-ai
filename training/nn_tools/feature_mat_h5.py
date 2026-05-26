@@ -129,7 +129,7 @@ def _index_onnx_sources(onnx_model: onnx.ModelProto) -> tuple[dict[str, Attentio
             running_max_path = _input_or_empty(node, 5)
             coeff_paths = tuple(node.input[6:])
             gamma_path = _attention_gamma_path(running_max_path, node.name)
-            coeffs_path = _attention_coeffs_path(coeff_paths, node.name)
+            coeffs_path = _attention_coeffs_path(coeff_paths, running_max_path, node.name)
             source = AttentionSource(
                 qkv_weight_path=qkv_weight_path,
                 qkv_bias_path=qkv_bias_path,
@@ -387,7 +387,15 @@ def _attention_gamma_path(running_max_path: str, node_name: str) -> str:
     return _format_id(node_name) + '.gamma'
 
 
-def _attention_coeffs_path(coeff_paths: tuple[str, ...], node_name: str) -> str:
+def _attention_coeffs_path(coeff_paths: tuple[str, ...], running_max_path: str, node_name: str) -> str:
+    if running_max_path.endswith('.running_max_concat'):
+        attn_prefix = running_max_path[: -len('.running_max_concat')]
+        if coeff_paths:
+            coeff_prefix = coeff_paths[0].rsplit('.', 1)[0]
+            marker = '.attn.'
+            if marker in coeff_prefix and attn_prefix.endswith('.attn'):
+                return f'{attn_prefix}.{coeff_prefix.split(marker, 1)[1]}.weight'
+        return f'{attn_prefix}.poly.weight'
     if coeff_paths:
         first = coeff_paths[0]
         suffix = first.rsplit('.', 1)[-1]
