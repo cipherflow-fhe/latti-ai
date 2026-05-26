@@ -415,6 +415,7 @@ class CompilerTestBase(unittest.TestCase):
             json_path=str(json_path),
             h5_path=str(h5_path),
             verbose=False,
+            feature_mat=feature_mat,
         )
 
         # Step 6: Read pack_style and param_name from configs
@@ -693,6 +694,15 @@ class TestSingleLayer(CompilerTestBase):
             n_heads=int(compile_config['n_heads']),
             head_dim=int(compile_config['head_dim']),
             matmul_block_size=int(compile_config['matmul_block_size']),
+        )
+
+        server_dir = script_dir / 'task' / 'server'
+        export_h5_from_onnx(
+            onnx_path=str(self.temp_onnx_path),
+            json_path=str(server_dir / 'nn_layers_ct_0.json'),
+            h5_path=str(server_dir / 'model_parameters.h5'),
+            verbose=False,
+            feature_mat=compile_config['is_feature_mat'],
         )
         return graph, score
 
@@ -1359,6 +1369,31 @@ class TestE2ESingleLayer(CompilerTestBase):
             input_names=['x0', 'x1'],
         )
         self.assertIsNotNone(graph)
+
+    def test_par_block_col_major_add_pt(self):
+        """ParBlockColMajorAddPt E2E: feature_mat input plus plaintext matrix."""
+        model = nn_modules.SingleAddPt(rows=32, cols=64)
+        graph, _ = self._export_compile_and_deploy(
+            model,
+            (1, 32, 64),
+            'par_block_col_major_add_pt',
+            style='multiplexed',
+            feature_mat=True,
+            n_heads=2,
+            head_dim=32,
+            matmul_block_size=32,
+        )
+
+        layer_types = [node.layer_type for node in graph.dag.nodes if isinstance(node, ComputeNode)]
+        self.assertIn('pcm_add_pt', layer_types)
+
+        server_json = self.e2e_base_path / 'par_block_col_major_add_pt' / 'task' / 'server' / 'nn_layers_ct_0.json'
+        with open(server_json, 'r') as f:
+            layers = json.load(f)['layer']
+        pcm_layers = [layer for layer in layers.values() if layer['type'] == 'pcm_add_pt']
+        self.assertEqual(len(pcm_layers), 1)
+        self.assertEqual(len(pcm_layers[0]['feature_input']), 1)
+        self.assertIn('weight_path', pcm_layers[0])
 
     def test_par_block_col_major_ccmm(self):
         """ParBlockColMajorCCMM E2E: head-wise A @ K^T, n_heads=2."""

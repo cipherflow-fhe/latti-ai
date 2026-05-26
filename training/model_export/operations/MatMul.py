@@ -87,7 +87,6 @@ class MatMulComputeNode(ComputeNode):
         if layer_type == 'parcpmm' and x.op_type == 'Linear':
             if has_bias_input:
                 bias_path = x.input[2]
-                
 
         return MatMulComputeNode(
             layer_id,
