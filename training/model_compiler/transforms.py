@@ -197,6 +197,7 @@ def add_layer(
         shape,
     )
     feature_node_out.sp_info = feature_node_in.sp_info.copy()
+    feature_node_out.data_type = feature_node_in.data_type
 
     if feature_node_in.head_shape is not None:
         feature_node_out.head_shape = list(feature_node_in.head_shape)
@@ -484,6 +485,8 @@ def expand_parcpmm_add_pt(graph: LayerAbstractGraph):
         new_feature.sp_info = copy.deepcopy(old_feature.sp_info)
         new_feature.has_sp_info = old_feature.has_sp_info
         new_feature.data_type = old_feature.data_type
+        if old_feature.head_shape is not None:
+            new_feature.head_shape = list(old_feature.head_shape)
 
         add_pt_id = make_unique_id(f'{parcpmm_node.layer_id}_add_pt')
         add_pt_node = ComputeNode(add_pt_id, 'pcm_add_pt', parcpmm_node.channel_output, parcpmm_node.channel_output)
@@ -1071,12 +1074,15 @@ def expand_multi_head_attention(graph: LayerAbstractGraph):
 
         q_node = ComputeNode(f'{base_id}_q_layer', 'parcpmm', 1, 1)
         q_node.path = getattr(vit_node, 'q_weight_path', f'{base_id}.q.weight')
+        q_node.bias_path = getattr(vit_node, 'q_bias_path', '')
         q_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
         k_node = ComputeNode(f'{base_id}_k_layer', 'parcpmm', 1, 1)
         k_node.path = getattr(vit_node, 'k_weight_path', f'{base_id}.k.weight')
+        k_node.bias_path = getattr(vit_node, 'k_bias_path', '')
         k_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
         v_node = ComputeNode(f'{base_id}_v_layer', 'parcpmm', 1, 1)
         v_node.path = getattr(vit_node, 'v_weight_path', f'{base_id}.v.weight')
+        v_node.bias_path = getattr(vit_node, 'v_bias_path', '')
         v_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
         kt_node = ComputeNode(f'{base_id}_kt_layer', 'partranspose', 1, 1)
         qkt_node = ComputeNode(f'{base_id}_qkt_layer', 'parccmm', 1, 1)
@@ -1089,6 +1095,7 @@ def expand_multi_head_attention(graph: LayerAbstractGraph):
         out_node = ComputeNode(f'{base_id}_out', 'parcpmm', 1, 1)
         out_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
         out_node.path = getattr(vit_node, 'proj_weight_path', f'{base_id}.proj.weight')
+        out_node.bias_path = getattr(vit_node, 'proj_bias_path', '')
 
         graph.dag.remove_node(vit_node)
 
@@ -1147,7 +1154,14 @@ def expand_poly_act_rn(graph: LayerAbstractGraph):
         out: FeatureNode = succs[0]
 
         base_id = node.layer_id
-        weight_path = node.path
+        running_max_path = getattr(node, 'running_max_path', '') or node.path
+        gamma_path = getattr(node, 'gamma_path', '')
+        coeffs_path = getattr(node, 'coeffs_path', '')
+        rn_suffix = '.rangenorm.running_max'
+        if running_max_path.endswith(rn_suffix):
+            prefix = running_max_path[: -len(rn_suffix)]
+            gamma_path = gamma_path or f'{prefix}.gamma'
+            coeffs_path = coeffs_path or f'{prefix}.weight'
         order = node.order
 
         x_in_attrs = graph.dag.nodes[x_in]
@@ -1177,9 +1191,15 @@ def expand_poly_act_rn(graph: LayerAbstractGraph):
         mid = make_feature(f'{base_id}_gamma_out')
 
         gamma_node = ComputeNode(f'{base_id}_gamma', 'pcmgamma', 1, 1)
-        gamma_node.path = weight_path
+        gamma_node.path = running_max_path
+        gamma_node.running_max_path = running_max_path
+        if gamma_path:
+            gamma_node.gamma_path = gamma_path
         poly_node = ComputeNode(f'{base_id}_poly', 'pcmpoly', 1, 1)
-        poly_node.path = weight_path
+        poly_node.path = running_max_path
+        poly_node.running_max_path = running_max_path
+        if coeffs_path:
+            poly_node.coeffs_path = coeffs_path
         poly_node.order = order
 
         graph.dag.remove_node(node)

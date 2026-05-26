@@ -415,6 +415,7 @@ class CompilerTestBase(unittest.TestCase):
             json_path=str(json_path),
             h5_path=str(h5_path),
             verbose=False,
+            feature_mat=feature_mat,
         )
 
         # Step 6: Read pack_style and param_name from configs
@@ -693,6 +694,15 @@ class TestSingleLayer(CompilerTestBase):
             n_heads=int(compile_config['n_heads']),
             head_dim=int(compile_config['head_dim']),
             matmul_block_size=int(compile_config['matmul_block_size']),
+        )
+
+        server_dir = script_dir / 'task' / 'server'
+        export_h5_from_onnx(
+            onnx_path=str(self.temp_onnx_path),
+            json_path=str(server_dir / 'nn_layers_ct_0.json'),
+            h5_path=str(server_dir / 'model_parameters.h5'),
+            verbose=False,
+            feature_mat=compile_config['is_feature_mat'],
         )
         return graph, score
 
