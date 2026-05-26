@@ -176,7 +176,15 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
         return f'{layer_id}.gamma'
 
     @staticmethod
-    def _poly_weight_path(poly_coeff_paths: list[str], layer_id: str) -> str:
+    def _poly_weight_path(poly_coeff_paths: list[str], running_max_path: str, layer_id: str) -> str:
+        if running_max_path.endswith('.running_max_concat'):
+            attn_prefix = running_max_path[: -len('.running_max_concat')]
+            if poly_coeff_paths:
+                coeff_prefix = poly_coeff_paths[0].rsplit('.', 1)[0]
+                marker = '.attn.'
+                if marker in coeff_prefix and attn_prefix.endswith('.attn'):
+                    return f'{attn_prefix}.{coeff_prefix.split(marker, 1)[1]}.weight'
+            return f'{attn_prefix}.poly.weight'
         if poly_coeff_paths:
             first_path = poly_coeff_paths[0]
             suffix = first_path.rsplit('.', 1)[-1]
@@ -220,7 +228,9 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
             v_weight_path=v_weight_path,
             proj_weight_path=proj_weight_path,
             gamma_path=CustomMultiHeadAttentionComputeNode._gamma_path(running_max_path, layer_id),
-            poly_weight_path=CustomMultiHeadAttentionComputeNode._poly_weight_path(poly_coeff_paths, layer_id),
+            poly_weight_path=CustomMultiHeadAttentionComputeNode._poly_weight_path(
+                poly_coeff_paths, running_max_path, layer_id
+            ),
             q_bias_path=q_bias_path,
             k_bias_path=k_bias_path,
             v_bias_path=v_bias_path,
