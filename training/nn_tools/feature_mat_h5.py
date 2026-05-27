@@ -357,6 +357,16 @@ def _coeff_matrix(
         if path not in onnx_weights:
             raise KeyError(f'polynomial coeff not found in ONNX: {path}')
         coeff[idx] = float(np.asarray(onnx_weights[path]).reshape(-1)[0])
+
+    # Hermite basis → standard monomial basis:
+    #   He_2(x) = x² - 1       →  a2 contributes -a2 to c0
+    #   He_4(x) = x⁴ - 6x² + 3 →  a4 contributes +3a4 to c0, -6a4 to c2
+    if degree >= 2:
+        coeff[0] -= coeff[2]
+    if degree >= 4:
+        coeff[0] += 3 * coeff[4]
+        coeff[2] -= 6 * coeff[4]
+
     return coeff.reshape(-1, 1) * scale.reshape(1, -1)
 
 
