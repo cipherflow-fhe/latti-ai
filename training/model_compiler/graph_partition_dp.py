@@ -118,6 +118,7 @@ def get_compute_score(
         'add',
         'add2d',
         'add_pt',
+        'pcm_add_pt',
         'parcpmm',
         'partranspose',
         'parccmm',
@@ -148,6 +149,10 @@ def get_restoring_score(dag, restore_node, param_dict):
     return s_param.get_score()
 
 
+def get_min_feature_level() -> int:
+    return 1 if config.mpc_refresh or config.graph_type == 'mpc' or config.set_btp_scale is not None else 0
+
+
 def restore_level_at(new_graph: nx.DiGraph, node: FeatureNode, param_dict):
     restore_node = transforms.add_btp_layer(
         new_graph, node, param_dict, config.fhe_param.max_level - new_graph.nodes[node]['level']
@@ -175,7 +180,7 @@ def reconstruct_graph_from_vec(
         if lv < AUX_LV:
             new_graph.nodes[node]['level'] = lv
         else:
-            new_graph.nodes[node]['level'] = 0
+            new_graph.nodes[node]['level'] = get_min_feature_level()
             restore_level_at(new_graph, node, param_dict)
 
     return new_graph
@@ -217,10 +222,7 @@ class GraphPartitioner:
 
             succ_c = list(subgraph.successors(node))
             if len(succ_c) == 0:
-                if config.mpc_refresh or config.graph_type == 'mpc':
-                    level_dict[node] = 1
-                elif config.graph_type == 'btp' and not config.mpc_refresh:
-                    level_dict[node] = 0
+                level_dict[node] = get_min_feature_level()
             else:
                 successing_subg_compute_nodes = [c for c in succ_c if c in subg_nodes]
                 input_feature_lv: list[int] = []
@@ -261,8 +263,9 @@ class GraphPartitioner:
         other_frontier = [f for f in frontier if idx_to_node[f.node_idx] not in predecessors]
         frontier = pred_frontier + other_frontier
 
+        min_feature_level = get_min_feature_level()
         new_frontier = frontier.copy()
-        new_frontier.append(NodeLevel(node_to_idx[new_node], 0))
+        new_frontier.append(NodeLevel(node_to_idx[new_node], min_feature_level))
         processed_feature_nodes.add(new_node)
         nodes_became_internal: list[int] = []
         for node_max_lv in frontier:
@@ -277,7 +280,7 @@ class GraphPartitioner:
 
         new_frontier_solutions = dict()
 
-        for terminal_lv in range(config.fhe_param.max_level + 1):
+        for terminal_lv in range(min_feature_level, config.fhe_param.max_level + 1):
             if dag.nodes[leading_comp]['level_cost'] + terminal_lv > config.fhe_param.max_level:
                 continue
 
@@ -288,7 +291,7 @@ class GraphPartitioner:
                     list(range(dag.nodes[leading_comp]['level_cost'] + terminal_lv, node_max_lv.level + 1)) + [AUX_LV]
                 )
             for node_max_lv in other_frontier:
-                frontier_lvs.append(list(range(node_max_lv.level + 1)) + [AUX_LV])
+                frontier_lvs.append(list(range(min_feature_level, node_max_lv.level + 1)) + [AUX_LV])
 
             frontier_lv_product = product(*frontier_lvs)
 
@@ -324,17 +327,17 @@ class GraphPartitioner:
                     new_sol_graph_vec[node_to_idx[new_node]] = terminal_lv
                     new_frontier_solutions[new_frontier_key_tuple] = (sol_cost, new_sol_graph_vec)
 
-            # leaf nodes only need lv=0 solutions.
+            # leaf nodes only need the minimum output-level solution.
             if len(list(dag.successors(new_node))) == 0:
                 break
 
             new_frontier[-1] = NodeLevel(node_to_idx[new_node], terminal_lv)
 
-            if terminal_lv == 0:
+            if terminal_lv == min_feature_level:
                 aux_lv_solutions = {}
                 for k, solution in new_frontier_solutions.items():
                     new_node_lv_idx = k.index(NodeLevel(node_to_idx[new_node], terminal_lv))
-                    assert k[new_node_lv_idx].level == 0
+                    assert k[new_node_lv_idx].level == min_feature_level
                     sol_key = list(k)
                     sol_key[new_node_lv_idx] = NodeLevel(node_to_idx[new_node], AUX_LV)
 
@@ -425,8 +428,9 @@ class GraphPartitioner:
             frontier.append(NodeLevel(node_to_idx[node], config.fhe_param.max_level))
             processed_feature_nodes.add(node)
 
+        min_feature_level = get_min_feature_level()
         frontier_indices = [x.node_idx for x in frontier]
-        for lv_comb in product(range(config.fhe_param.max_level + 1), repeat=len(frontier)):
+        for lv_comb in product(range(min_feature_level, config.fhe_param.max_level + 1), repeat=len(frontier)):
             init_graph_vec = np.zeros(len(node_to_idx), dtype=np.uint8)
             node_lv: list[NodeLevel] = []
             for idx, lv in zip(frontier_indices, lv_comb):
@@ -451,7 +455,9 @@ class GraphPartitioner:
             )
             pbar.update(1)
 
-        final_solution_frontier = tuple(sorted((NodeLevel(x.node_idx, 0) for x in frontier), key=lambda x: x.node_idx))
+        final_solution_frontier = tuple(
+            sorted((NodeLevel(x.node_idx, min_feature_level) for x in frontier), key=lambda x: x.node_idx)
+        )
         final_score, final_dag_vec = frontier_solutions[final_solution_frontier]
 
         final_dag = reconstruct_graph_from_vec(final_dag_vec, H, node_to_idx, self.param_dict)

@@ -676,8 +676,8 @@ class TestSingleLayer(CompilerTestBase):
         )
 
     def test_vit_from_onnx(self):
-        self.temp_onnx_path = 'runs/poly_deit_tiny_patch16_224.onnx'
-        # self.temp_onnx_path = 'runs/deit_tiny_patch16_224_until_block0_after_mlp_add.onnx'
+        # self.temp_onnx_path = 'runs/poly_deit_tiny_patch16_224.onnx'
+        self.temp_onnx_path = 'runs/deit_tiny_patch16_224_until_block0_after_mlp_add.onnx'
         onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed', feature_mat=True)
         with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
             compile_config = json.load(f)
@@ -694,6 +694,7 @@ class TestSingleLayer(CompilerTestBase):
             n_heads=int(compile_config['n_heads']),
             head_dim=int(compile_config['head_dim']),
             matmul_block_size=int(compile_config['matmul_block_size']),
+            set_btp_scale=0.5,
         )
 
         server_dir = script_dir / 'task' / 'server'

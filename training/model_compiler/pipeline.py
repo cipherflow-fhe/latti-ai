@@ -16,6 +16,7 @@
 
 
 from pathlib import Path
+import copy
 
 import components
 from components import LayerAbstractGraph, config, PN13QP218, PN14QP438, PN15QP880, PN16QP1761, N16QP1546H192H32
@@ -56,6 +57,12 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     transforms.absorb_scale(pt_graph)
 
     return pt_graph
+
+
+def set_fhe_param(params):
+    config.fhe_param = copy.deepcopy(params)
+    if config.set_btp_scale is not None:
+        config.fhe_param.max_level -= 1
 
 
 def set_block_shape(params, raw_graph: LayerAbstractGraph):
@@ -101,7 +108,7 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
     no_btp_params = [PN13QP218, PN14QP438, PN15QP880, PN16QP1761]
 
     for params in no_btp_params:
-        config.fhe_param = params
+        set_fhe_param(params)
         set_block_shape(config.fhe_param, raw_graph)
         print(f'Trying FheParam {config.fhe_param.name}')
 
@@ -139,7 +146,7 @@ def try_btp(
     btp_param_list = [N16QP1546H192H32]
     valid_results = []
     for params in btp_param_list:
-        config.fhe_param = params
+        set_fhe_param(params)
         set_block_shape(config.fhe_param, raw_graph)
 
         # (1) Pre-process
@@ -207,6 +214,86 @@ def post_process(graph: LayerAbstractGraph):
     return graph
 
 
+def _unique_graph_node_id(graph: LayerAbstractGraph, base_id: str, attr_name: str) -> str:
+    existing_ids = {getattr(node, attr_name, None) for node in graph.dag.nodes}
+    node_id = base_id
+    idx = 1
+    while node_id in existing_ids:
+        node_id = f'{base_id}_{idx}'
+        idx += 1
+    return node_id
+
+
+def _clone_feature_node(feature: FeatureNode, node_id: str) -> FeatureNode:
+    cloned = copy.deepcopy(feature)
+    cloned.node_id = node_id
+    return cloned
+
+
+def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
+    if config.set_btp_scale is None:
+        return
+
+    btp_scale = float(config.set_btp_scale)
+    if btp_scale == 0:
+        raise ValueError('set_btp_scale cannot be 0 when inserting BTP scale gamma layers')
+
+    dag = graph.dag
+    for btp_node in list(dag.nodes):
+        if not isinstance(btp_node, ComputeNode) or btp_node.layer_type != 'bootstrapping':
+            continue
+
+        preds = list(dag.predecessors(btp_node))
+        succs = list(dag.successors(btp_node))
+        if len(preds) != 1 or len(succs) != 1:
+            raise ValueError(f'Expected bootstrapping node {btp_node.layer_id} to have one input and one output')
+
+        pred_feature = preds[0]
+        succ_feature = succs[0]
+
+        pre_gamma_id = _unique_graph_node_id(graph, f'{btp_node.layer_id}_pre_pcmgamma', 'layer_id')
+        post_gamma_id = _unique_graph_node_id(graph, f'{btp_node.layer_id}_post_pcmgamma', 'layer_id')
+        pre_feature_id = _unique_graph_node_id(graph, f'{pre_gamma_id}_output', 'node_id')
+        post_gamma_input_feature_id = _unique_graph_node_id(graph, f'{post_gamma_id}_input', 'node_id')
+
+        pre_gamma = ComputeNode(pre_gamma_id, 'pcmgamma', btp_node.channel_input, btp_node.channel_input)
+        pre_gamma.depth = btp_node.depth
+        pre_gamma.path = f'{pre_gamma_id}.weight'
+        pre_gamma.btp_scale = btp_scale
+
+        post_gamma = ComputeNode(post_gamma_id, 'pcmgamma', btp_node.channel_output, btp_node.channel_output)
+        post_gamma.depth = btp_node.depth
+        post_gamma.path = f'{post_gamma_id}.weight'
+        post_gamma.btp_scale = 1 / btp_scale
+
+        pre_feature = _clone_feature_node(pred_feature, pre_feature_id)
+        post_gamma_input_feature = _clone_feature_node(succ_feature, post_gamma_input_feature_id)
+
+        pred_to_btp_attrs = copy.deepcopy(dag.edges[pred_feature, btp_node])
+        btp_to_succ_attrs = copy.deepcopy(dag.edges[btp_node, succ_feature])
+        pre_feature_attrs = copy.deepcopy(dag.nodes[pred_feature])
+        pre_feature_attrs['name'] = pre_feature.node_id
+        pre_feature_attrs['level'] = 0
+        post_gamma_input_feature_attrs = copy.deepcopy(dag.nodes[succ_feature])
+        post_gamma_input_feature_attrs['name'] = post_gamma_input_feature.node_id
+        post_gamma_input_feature_attrs['level'] = config.fhe_param.max_level + 1
+
+        dag.remove_edge(pred_feature, btp_node)
+        dag.remove_edge(btp_node, succ_feature)
+
+        dag.add_node(pre_gamma, name=pre_gamma_id, level_cost=0)
+        dag.add_node(pre_feature, **pre_feature_attrs)
+        dag.add_edge(pred_feature, pre_gamma, **pred_to_btp_attrs)
+        dag.add_edge(pre_gamma, pre_feature)
+        dag.add_edge(pre_feature, btp_node, **pred_to_btp_attrs)
+
+        dag.add_node(post_gamma, name=post_gamma_id, level_cost=0)
+        dag.add_node(post_gamma_input_feature, **post_gamma_input_feature_attrs)
+        dag.add_edge(btp_node, post_gamma_input_feature, **btp_to_succ_attrs)
+        dag.add_edge(post_gamma_input_feature, post_gamma)
+        dag.add_edge(post_gamma, succ_feature)
+
+
 def dump_graph(
     graph: LayerAbstractGraph,
     output_dir: Path,
@@ -222,6 +309,7 @@ def dump_graph(
     client_dir.mkdir(parents=True, exist_ok=True)
 
     erg0_path = ergs_dir / 'nn_layers_ct_0.json'
+    insert_btp_scale_gamma_layers(graph)
     graph.to_json(dict(), str(erg0_path), score=score)
 
     if use_btp:
@@ -258,6 +346,7 @@ def run_pipeline(
     n_heads: int | None = None,
     head_dim: int | None = None,
     matmul_block_size: int | None = None,
+    set_btp_scale: float | None = None,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -273,6 +362,7 @@ def run_pipeline(
         num_workers: Number of parallel worker processes
         style: Computation style (STYLE)
         graph_type: Graph type (GRAPH_TYPE)
+        set_btp_scale: if not None, wrap BTP with pcmgamma scales and enable special level handling
     """
     if style is not None:
         config.style = style
@@ -284,9 +374,11 @@ def run_pipeline(
         config.head_dim = head_dim
     if matmul_block_size is not None:
         config.matmul_block_size = matmul_block_size
+    config.set_btp_scale = set_btp_scale
     print(
         f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
-        f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}'
+        f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
+        f'SET_BTP_SCALE={config.set_btp_scale}'
     )
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)

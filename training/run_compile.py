@@ -106,6 +106,13 @@ Examples:
         help='Compile config JSON path containing n_heads, head_dim, matmul_block_size',
     )
 
+    parser.add_argument(
+        '--set_btp_scale',
+        type=float,
+        default=None,
+        help='Wrap each bootstrapping layer with pcmgamma layers using this scale',
+    )
+
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -133,6 +140,7 @@ Examples:
 
     compile_config = read_compile_config(args.config)
     is_feature_mat = bool(compile_config.get('is_feature_mat', False))
+    set_btp_scale = args.set_btp_scale
     onnx_path = input_path if is_onnx else None
 
     if is_onnx:
@@ -160,7 +168,8 @@ Examples:
     print(f'\n[Compile] Input: {pt_json_path}')
     print(f'[Compile] Output: {output_dir}')
     print(
-        f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, COMPILE_CONFIG={args.config or "<none>"}'
+        f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, '
+        f'COMPILE_CONFIG={args.config or "<none>"}, SET_BTP_SCALE={set_btp_scale}'
     )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
@@ -176,6 +185,7 @@ Examples:
             n_heads=compile_config.get('n_heads'),
             head_dim=compile_config.get('head_dim'),
             matmul_block_size=compile_config.get('matmul_block_size'),
+            set_btp_scale=set_btp_scale,
         )
 
         print(f'\n[Compile] Success! Output: {output_dir}')

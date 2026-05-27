@@ -198,7 +198,9 @@ def _export_pcmgamma(
     fin = _feature(features, layer['feature_input'][0], layer_key)
     expected_shape = (int(fin['shape'][1]),)
 
-    if dst_path in attention_sources:
+    if 'btp_scale' in layer:
+        gamma = np.full(expected_shape, float(layer['btp_scale']), dtype=np.float64)
+    elif dst_path in attention_sources:
         source = attention_sources[dst_path]
         gamma = 1.0 / _scale_factor(source.running_max_path, source.upper_bound, source.eps, onnx_weights)
     else:

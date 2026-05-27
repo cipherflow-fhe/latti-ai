@@ -283,6 +283,7 @@ class GlobalConfig:
             cls._instance.mpc_refresh = config_dict.get('MPC_REFRESH', False)
             cls._instance.approx_poly_type = config_dict.get('APPROX_POLY_TYPE', 'polyact')
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
+            cls._instance.set_btp_scale = None
             cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'polyact']
             cls._instance.single_thread = config_dict.get('SINGLE_THREAD', False)
             cls._instance.n_heads = 1
@@ -813,6 +814,7 @@ class LayerAbstractGraph:
                 compute_node.path = layer_json.get('weight_path', '')
                 compute_node.gamma_path = layer_json.get('gamma_path', '')
                 compute_node.running_max_path = layer_json.get('running_max_path', '')
+                compute_node.btp_scale = layer_json.get('btp_scale')
 
             elif layer_type == 'PolyActRN':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
@@ -1146,6 +1148,8 @@ class LayerAbstractGraph:
                     layers[layer_id]['gamma_path'] = layer.gamma_path
                 if getattr(layer, 'running_max_path', ''):
                     layers[layer_id]['running_max_path'] = layer.running_max_path
+                if getattr(layer, 'btp_scale', None) is not None:
+                    layers[layer_id]['btp_scale'] = layer.btp_scale
             if layer_type == 'pcmpoly':
                 layers[layer_id] = {
                     'type': layer_type,
