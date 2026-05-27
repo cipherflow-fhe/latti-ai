@@ -530,6 +530,67 @@ class TestLayerInteraction(CompilerTestBase):
         model = nn_modules.MismatchedScale()
         graph, score = self._export_and_compile(model, (1, 32, 64, 64))
 
+    def test_nested_fork_join_multcoeff_target_leak(self):
+        model = nn_modules.NestedForkJoinMultcoeff()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+        # mult_scalars = [
+        #     node for node in graph.dag.nodes if isinstance(node, ComputeNode) and node.layer_type == 'mult_scalar'
+        # ]
+        # self.assertFalse(any('_bn_side' in node.layer_id for node in mult_scalars))
+
+    def test_nested_fork_join_multcoeff_not_globally_optimal(self):
+        model = nn_modules.NestedForkJoinMultcoeffNonOptimal()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+        mult_scalars = [
+            node for node in graph.dag.nodes if isinstance(node, ComputeNode) and node.layer_type == 'mult_scalar'
+        ]
+        self.assertEqual(len(mult_scalars), 3)
+        self.assertTrue(any('_bn_left_side' in node.layer_id for node in mult_scalars))
+        self.assertTrue(any('_bn_root_side' in node.layer_id for node in mult_scalars))
+        self.assertFalse(any('_Add' in node.layer_id for node in mult_scalars))
+
+    def test_nested_fork_join_multcoeff_intermediate_not_globally_optimal(self):
+        model = nn_modules.NestedForkJoinMultcoeffIntermediateNonOptimal()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+        mult_scalars = [
+            node for node in graph.dag.nodes if isinstance(node, ComputeNode) and node.layer_type == 'mult_scalar'
+        ]
+        # self.assertEqual(len(mult_scalars), 3)
+        # self.assertTrue(any('_bn_left_BatchNormalization' in node.layer_id for node in mult_scalars))
+        # self.assertTrue(any('_bn_left_side' in node.layer_id for node in mult_scalars))
+        # self.assertTrue(any('_Add_2' in node.layer_id for node in mult_scalars))
+        # self.assertFalse(any('_bn_root_sides' in node.layer_id for node in mult_scalars))
+
+    def test_nested_fork_join_multcoeff_double_pre(self):
+        model = nn_modules.NestedForkJoinMultcoeffDoublePre()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+        mult_scalars = [
+            node for node in graph.dag.nodes if isinstance(node, ComputeNode) and node.layer_type == 'mult_scalar'
+        ]
+        # self.assertEqual(len(mult_scalars), 4)
+        # self.assertTrue(any('_bn_left_BatchNormalization' in node.layer_id for node in mult_scalars))
+        # self.assertTrue(any('_bn_left_side' in node.layer_id for node in mult_scalars))
+        # self.assertTrue(any('_bn_right_BatchNormalization' in node.layer_id for node in mult_scalars))
+        # self.assertTrue(any('_bn_right_side' in node.layer_id for node in mult_scalars))
+        # self.assertFalse(any('_bn_root_sides' in node.layer_id for node in mult_scalars))
+        # self.assertFalse(any('_Concat' in node.layer_id for node in mult_scalars))
+
+    def test_target_aware_add_output_target(self):
+        model = nn_modules.AddOutputTargetSuboptimal()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+    def test_target_aware_intermediate_go_up(self):
+        model = nn_modules.IntermediateGoUpTargetAware()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+    def test_target_aware_global_dp_vs_local_sink(self):
+        model = nn_modules.TargetAwareGlobalDpVsLocalSink()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
     def test_three_conv_concat_relu(self):
         """cat([conv1(x), conv2(x), conv3(x)], dim=1) → relu."""
         model = nn_modules.ThreeConvConcatRelu()
@@ -669,7 +730,6 @@ class TestLayerInteraction(CompilerTestBase):
         """should be absorbed into conv or identity branch."""
         model = nn_modules.ConvResidualMultcoeff()
         graph, score = self._export_and_compile(model, (1, 32, 32, 32))
-        # The scale factor 0.5 should be absorbed — no free mult_coeff node should remain
 
     def test_double_residual_multcoeff(self):
         """两层残差叠加后 *0.5：scale 需穿透两个 add，最终无 mult_coeff 残留，
@@ -705,7 +765,7 @@ class TestLayerInteraction(CompilerTestBase):
         期望：conv 臂吸收 scale，identity 臂或 add 后插 mult_scalar，编译不报错。
         """
         # model = nn_modules.MultCoeffThenResidual()
-        model = nn_modules.NewModel()
+        model = nn_modules.NewModel1()
         graph, score = self._export_and_compile(model, (1, 32, 32, 32))
 
     def test_cat_branch_multcoeff(self):
@@ -713,6 +773,40 @@ class TestLayerInteraction(CompilerTestBase):
         scale 应在共享上游或各分支上正确吸收/补偿，编译不报错。
         """
         model = nn_modules.NewModel()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+    def test_conv_residual_multcoeff_down(self):
+        """should be absorbed into conv or identity branch."""
+        model = nn_modules.ConvResidualMultcoeffDown()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+    def test_double_residual_multcoeff_down(self):
+        model = nn_modules.DoubleResidualMultcoeffDown()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+    def test_branch_in_branch_multcoeff_down(self):
+        model = nn_modules.BranchInBranchMultcoeffDown()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+    def test_three_branch_multcoeff_down(self):
+        model = nn_modules.ThreeBranchMultcoeffDown()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+    def test_deep_nested_multcoeff_down(self):
+        model = nn_modules.DeepNestedMultcoeffDown()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+    def test_cat_branch_multcoeff_down(self):
+        model = nn_modules.NewModelDown()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+
+    def test_multcoeff_then_residual_down(self):
+        """input → mc(×0.5) → mc_out → add(mc_out, conv(mc_out))
+        add 后面是 graph output，无下游吸收点。
+        期望：conv 臂吸收 scale，identity 臂或 add 后插 mult_scalar，编译不报错。
+        """
+        # model = nn_modules.MultCoeffThenResidual()
+        model = nn_modules.NewModel1Down()
         graph, score = self._export_and_compile(model, (1, 32, 32, 32))
 
 
