@@ -30,7 +30,13 @@ template <typename T, typename... Args> auto MakeU(Args&&... args) -> decltype(a
 }
 
 using Array1D = std::vector<double>;
+using Array2D = std::vector<std::vector<double>>;
+using Array3D = std::vector<std::vector<std::vector<double>>>;
+using Array4D = std::vector<std::vector<std::vector<std::vector<double>>>>;
 using Array1DUint = std::vector<uint64_t>;
+using Array2DUint = std::vector<std::vector<uint64_t>>;
+using Array3DUint = std::vector<std::vector<std::vector<uint64_t>>>;
+using Array4DUint = std::vector<std::vector<std::vector<std::vector<uint64_t>>>>;
 
 using Bytes = std::vector<uint8_t>;
 
