@@ -69,6 +69,9 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
 
     num_block_rows_A_ = div_ceil(m_, d_);
 
+    bsgs_bs_ = (uint32_t)ceil(sqrt((double)d_));
+    bsgs_gs_ = div_ceil(d_, bsgs_bs_);
+
     // Auto-detect mode from W dimensions.
     // Pad both dimensions to multiples of n_total_per_mb_ using ceil, then
     // compare to determine mode.  Exactly one of K_row, K_col must be 1.
@@ -134,19 +137,22 @@ int ParBlockColMajorCPMM::get_block_index(int bi, int bj, int num_block_rows) {
 // element at (row=i, col=j).  For the CPMM diagonal multiply, head h uses
 // weight block W_{h, bp}, so:
 //
-//   diag[(i + d*j) * S + h] = W_padded[megablock][h*d + (j+k)%d,  bp*d + j]
+//   diag[(i + d*j) * S + h] = W_padded[megablock][(g_input *S + h)*d + (j+k)%d,  bp*d + j]
 //
 // The value is constant across row index i (same as standard CPMM) but
 // differs across head index h (unlike standard CPMM which replicates).
 std::vector<double>
 ParBlockColMajorCPMM::build_block_diagonal(uint32_t megablock, uint32_t g_input, int bp, int k) const {
     uint32_t S = n_blocks_per_chunk_;
+    uint32_t g_bsgs = k / bsgs_bs_;
+    uint32_t b = k % bsgs_bs_;
 
     vector<double> diag_chunk(chunk_size_, 0.0);
     for (uint32_t j = 0; j < d_; j++) {
+        uint32_t j_col = (j + d_ - g_bsgs * bsgs_bs_ % d_) % d_;
         for (uint32_t h = 0; h < S; h++) {
-            uint32_t row = (g_input * S + h) * d_ + (j + k) % d_;
-            uint32_t col = bp * d_ + j;
+            uint32_t row = (g_input * S + h) * d_ + (j + b) % d_;
+            uint32_t col = bp * d_ + j_col;
             double val = W_padded_[megablock].get(row, col);
             for (uint32_t i = 0; i < d_; i++) {
                 diag_chunk[(i + d_ * j) * S + h] = val;
@@ -270,9 +276,8 @@ ParBlockColMajorCPMM::generate_bias_pt(CkksContext& ctx, uint32_t mb, uint32_t b
     return ctx.encode_ringt(build_bias_vec(mb, bi, g), param_.get_default_scale());
 }
 
-// block_mult_cpmm: d rotations + d pt_muls + (d-1) adds + 1 rescale
-// Computes a ciphertext's all interleaved heads' contributions to output block column bp in parallel.
-// Input level L -> Output level L-1
+// block_mult_cpmm with BSGS: (bsgs_bs-1) baby rotations + (bsgs_gs-1) giant rotations
+// + d pt_muls + (d-1) adds + 1 rescale.  Level L -> L-1.
 CkksCiphertext ParBlockColMajorCPMM::block_mult_cpmm(CkksContext& ctx,
                                                      const CkksCiphertext& a,
                                                      uint32_t megablock,
@@ -280,20 +285,40 @@ CkksCiphertext ParBlockColMajorCPMM::block_mult_cpmm(CkksContext& ctx,
                                                      int bp) const {
     double default_scale = param_.get_default_scale();
     uint32_t S = n_blocks_per_chunk_;
+    int unit = (int)(d_ * S);
+
+    auto baby_rots = populate_rotations_1_side(ctx, a, bsgs_bs_ - 1, unit);
+
     CkksCiphertext result(0);
+    bool result_init = false;
 
-    for (uint32_t k = 0; k < d_; k++) {
-        // Rotation scaled by S (same as par CCMM sigma)
-        int rot_amount = ((int)(d_ * k) * (int)S) % (int)chunk_size_;
-        CkksCiphertext rotated = (rot_amount == 0) ? a.copy() : ctx.rotate(a, rot_amount);
+    for (uint32_t g = 0; g < bsgs_gs_; g++) {
+        CkksCiphertext inner(0);
+        bool inner_init = false;
+        uint32_t b_end = std::min(bsgs_bs_, d_ - g * bsgs_bs_);
 
-        auto diag_mul = ctx.ringt_to_mul(diag_pt_[megablock][g_input][bp][k], level_);
-        auto product = ctx.mult_plain_mul(rotated, diag_mul);
+        for (uint32_t b = 0; b < b_end; b++) {
+            uint32_t k = g * bsgs_bs_ + b;
+            auto diag_mul = ctx.ringt_to_mul(diag_pt_[megablock][g_input][bp][k], level_);
+            auto product = ctx.mult_plain_mul(baby_rots[b], diag_mul);
 
-        if (k == 0) {
-            result = move(product);
+            if (!inner_init) {
+                inner = move(product);
+                inner_init = true;
+            } else {
+                inner = ctx.add(inner, product);
+            }
+        }
+
+        if (g > 0) {
+            inner = ctx.rotate(inner, (int)(g * bsgs_bs_) * unit);
+        }
+
+        if (!result_init) {
+            result = move(inner);
+            result_init = true;
         } else {
-            result = ctx.add(result, product);
+            result = ctx.add(result, inner);
         }
     }
     return ctx.rescale(result, default_scale);
