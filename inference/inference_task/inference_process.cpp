@@ -19,6 +19,8 @@
 #include "inference_process.h"
 #include "../lattisense/cxx_sdk_v2/cxx_fhe_task.h"
 #include <cmath>
+#include <fstream>
+#include <filesystem>
 #include <iostream>
 
 using namespace std;
@@ -1021,9 +1023,13 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.stop();
             } else if (layer_type == "bootstrapping") {
                 const int maximum_refreshed_level = 9;
+                FeatureNode d_input_node(json_features[feature_input[0]]);
                 const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 FeatureNode output_feature_node(json_features[feature_output_id]);
-                if (feature_node.dim == 2) {
+                if (d_input_node.is_mat) {
+                    const FeatureMatEncrypted& inputMat = dynamic_cast<const FeatureMatEncrypted&>(feature_node);
+                    result = MakeU<FeatureMatEncrypted>(inputMat.refresh_ciphertext());
+                } else if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     Feature2DEncrypted refresh_result = input2D.refresh_ciphertext();
                     if (maximum_refreshed_level > output_feature_node.level) {
@@ -1146,7 +1152,10 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 FeatureNode d_output_node(json_features[feature_output[0]]);
                 int n_level_to_drop = d_input_node.level - d_output_node.level;
                 const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
-                if (feature_node.dim == 2) {
+                if (d_input_node.is_mat) {
+                    const FeatureMatEncrypted& inputMat = dynamic_cast<const FeatureMatEncrypted&>(feature_node);
+                    result = MakeU<FeatureMatEncrypted>(inputMat.drop_level(n_level_to_drop));
+                } else if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
                     result = MakeU<Feature2DEncrypted>(input2D.drop_level(n_level_to_drop));
                 } else if (feature_node.dim == 1) {
@@ -1678,7 +1687,15 @@ void InferenceProcess::run_task(bool is_mpc) {
         while (n_h_padded < fp->n_heads)
             n_h_padded <<= 1;
         uint32_t n_slot_val = ckks_contexts.at(first_input.ckks_parameter_id)->get_parameter().get_n() / 2;
-        par_G = (n_slot_val >= n_h_padded * par_d * par_d) ? 1 : n_h_padded / (n_slot_val / (par_d * par_d));
+        if (n_slot_val >= n_h_padded * par_d * par_d) {
+            par_G = 1;
+        } else {
+            uint32_t S = n_slot_val / (par_d * par_d);
+            if (S == 1) {
+                n_h_padded = fp->n_heads;
+            }
+            par_G = n_h_padded / S;
+        }
     }
 
     string context_id;
@@ -2172,7 +2189,15 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         while (n_h_padded < fp->n_heads)
             n_h_padded <<= 1;
         uint32_t n_slot_val = ckks_contexts.at(first_input.ckks_parameter_id)->get_parameter().get_n() / 2;
-        par_G = (n_slot_val >= n_h_padded * par_d * par_d) ? 1 : n_h_padded / (n_slot_val / (par_d * par_d));
+        if (n_slot_val >= n_h_padded * par_d * par_d) {
+            par_G = 1;
+        } else {
+            uint32_t S = n_slot_val / (par_d * par_d);
+            if (S == 1) {
+                n_h_padded = fp->n_heads;
+            }
+            par_G = n_h_padded / S;
+        }
     }
 
     vector<vector<CkksCiphertext>> z_lists(json_data["output_feature"].size());
