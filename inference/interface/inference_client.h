@@ -86,7 +86,9 @@ public:
 
     /// Export a public-only evaluation context (serialized bytes).
     /// The server uses this to perform encrypted computation without the secret key.
-    Bytes export_eval_context() const;
+    /// When debug_mode is true, exports the full context (including secret key)
+    /// so the server can decrypt intermediate ciphertexts for debugging.
+    Bytes export_eval_context(bool debug_mode = false) const;
 
     /// Encrypt inputs from CSV files and return serialized ciphertexts.
     /// @param input_csvs  Map of input name -> CSV file path.

@@ -42,6 +42,18 @@ def main():
         required=True,
         help='Path to the task directory',
     )
+    parser.add_argument(
+        '--debug',
+        type=str,
+        default=None,
+        help='Comma-separated feature IDs to debug dump (intermediate ciphertexts)',
+    )
+    parser.add_argument(
+        '--debug-dir',
+        type=str,
+        default=None,
+        help='Directory for debug output CSVs (default: <server>/debug_output)',
+    )
     args = parser.parse_args()
 
     task_dir = os.path.abspath(args.task_dir)
@@ -76,9 +88,19 @@ def main():
     with open(server_config_path, 'r', encoding='utf-8') as f:
         server_config = json.load(f)
 
+    debug_features = args.debug.split(',') if args.debug else None
+
     for erg_name, erg_config in server_config['server_task'].items():
         if erg_config['enable_fpga']:
-            gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style, lazy=True)
+            gen_custom_task(
+                ergs_path,
+                use_gpu=True,
+                param_name=param_name,
+                style=style,
+                lazy=True,
+                debug_features=debug_features,
+                debug_dump_dir=args.debug_dir,
+            )
 
     print(f'Done: mega_ag generated for {task_dir}.')
 

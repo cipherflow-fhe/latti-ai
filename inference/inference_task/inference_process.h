@@ -272,4 +272,13 @@ private:
 #endif
     std::unique_ptr<lattisense::FheTaskCpu> fhe_task_cpu_;
     std::unordered_map<std::string, ExecutorFunc> task_custom_executors_;
+
+    // ====== Debug dump: driven by debug_config.json ======
+    json debug_config_;
+    bool debug_config_loaded_ = false;
+    void _debug_alloc_outputs(std::vector<ls::CxxVectorArgument>& cxx_args,
+                              std::vector<std::vector<ls::CkksCiphertext>>& debug_ct_storage);
+    void _debug_write_csvs(const std::vector<std::vector<ls::CkksCiphertext>>& debug_ct_storage);
+    // SDK mode: dump a single feature right after set_feature
+    void _debug_dump_feature_sdk(const std::string& feature_id);
 };

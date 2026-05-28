@@ -2657,3 +2657,114 @@ void InferenceProcess::set_feature(const string& feature_id, unique_ptr<FeatureE
 const FeatureEncrypted& InferenceProcess::_get_feature(const std::string& feature_id) {
     return *intermediate_result_[feature_id];
 }
+
+// // ==================== Debug dump ====================
+
+void InferenceProcess::_debug_alloc_outputs(vector<CxxVectorArgument>& cxx_args,
+                                            vector<vector<CkksCiphertext>>& debug_ct_storage) {
+    auto debug_path = fp->project_path / "debug_config.json";
+    if (!filesystem::exists(debug_path))
+        return;
+
+    debug_config_ = read_json(debug_path);
+    auto& features = debug_config_["debug_features"];
+
+    debug_ct_storage.resize(features.size());
+    int idx = 0;
+    for (auto& [fid, meta] : features.items()) {
+        int n_cts = meta["n_cts"];
+        int level = meta["level"];
+        string ckks_param_id = fp->json_features[fid]["ckks_parameter_id"].get<string>();
+        auto* ctx = ckks_contexts.at(ckks_param_id).get();
+        double scale = ctx->get_parameter().get_default_scale();
+
+        for (int i = 0; i < n_cts; i++) {
+            debug_ct_storage[idx].push_back(ctx->new_ciphertext(level, scale));
+        }
+        cxx_args.push_back(CxxVectorArgument{"__dbg__" + fid, &debug_ct_storage[idx]});
+        cout << "[DEBUG] allocated " << n_cts << " cts for " << fid << endl;
+        idx++;
+    }
+}
+
+void InferenceProcess::_debug_write_csvs(const vector<vector<CkksCiphertext>>& debug_ct_storage) {
+    if (debug_config_.empty() || !debug_config_.contains("debug_features"))
+        return;
+
+    string dump_dir = debug_config_["dump_dir"].get<string>();
+    filesystem::create_directories(dump_dir);
+
+    int idx = 0;
+    for (auto& [fid, meta] : debug_config_["debug_features"].items()) {
+        string ckks_param_id = fp->json_features[fid]["ckks_parameter_id"].get<string>();
+        auto* ctx = ckks_contexts.at(ckks_param_id).get();
+
+        string safe = fid;
+        replace(safe.begin(), safe.end(), '/', '_');
+        string path = dump_dir + "/" + safe + ".csv";
+
+        ofstream ofs(path);
+        ofs << "ct_index,slot_index,value\n";
+        for (int ci = 0; ci < (int)debug_ct_storage[idx].size(); ci++) {
+            auto pt = ctx->decrypt(debug_ct_storage[idx][ci]);
+            auto slots = ctx->decode(pt);
+            for (int si = 0; si < (int)slots.size(); si++) {
+                ofs << ci << "," << si << "," << setprecision(12) << slots[si] << "\n";
+            }
+        }
+        cout << "[DEBUG DUMP] " << fid << " -> " << path << " (" << debug_ct_storage[idx].size() << " cts)" << endl;
+        idx++;
+    }
+}
+
+void InferenceProcess::_debug_dump_feature_sdk(const string& feature_id) {
+    // Lazy-load debug_config_ once
+    if (!debug_config_loaded_) {
+        debug_config_loaded_ = true;
+        auto debug_path = fp->project_path / "debug_config.json";
+        if (filesystem::exists(debug_path)) {
+            debug_config_ = read_json(debug_path);
+        }
+    }
+    if (debug_config_.empty() || !debug_config_.contains("debug_features"))
+        return;
+    auto& features = debug_config_["debug_features"];
+    if (!features.contains(feature_id))
+        return;
+
+    string dump_dir = debug_config_["dump_dir"].get<string>();
+    filesystem::create_directories(dump_dir);
+
+    const FeatureEncrypted& feat = _get_feature(feature_id);
+    auto* ctx = feat.context;
+    if (!ctx)
+        return;
+
+    // Get data vector from any feature subclass
+    const vector<CkksCiphertext>* data_ptr = nullptr;
+    if (auto* f = dynamic_cast<const FeatureMatEncrypted*>(&feat))
+        data_ptr = &f->data;
+    else if (auto* f = dynamic_cast<const Feature2DEncrypted*>(&feat))
+        data_ptr = &f->data;
+    else if (auto* f = dynamic_cast<const Feature1DEncrypted*>(&feat))
+        data_ptr = &f->data;
+    else if (auto* f = dynamic_cast<const Feature0DEncrypted*>(&feat))
+        data_ptr = &f->data;
+    if (!data_ptr || data_ptr->empty())
+        return;
+
+    string safe = feature_id;
+    replace(safe.begin(), safe.end(), '/', '_');
+    string path = dump_dir + "/" + safe + ".csv";
+
+    ofstream ofs(path);
+    ofs << "ct_index,slot_index,value\n";
+    for (int ci = 0; ci < (int)data_ptr->size(); ci++) {
+        auto pt = ctx->decrypt((*data_ptr)[ci]);
+        auto slots = ctx->decode(pt);
+        for (int si = 0; si < (int)slots.size(); si++) {
+            ofs << ci << "," << si << "," << setprecision(12) << slots[si] << "\n";
+        }
+    }
+    cout << "[DEBUG DUMP] " << feature_id << " -> " << path << " (" << data_ptr->size() << " cts)" << endl;
+}

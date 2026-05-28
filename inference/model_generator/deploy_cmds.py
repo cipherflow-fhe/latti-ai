@@ -92,7 +92,15 @@ def set_param(param_name):
     set_fhe_param(param)
 
 
-def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordinary', lazy=False):
+def gen_custom_task(
+    task_path,
+    param_name='PN14QP438',
+    use_gpu=True,
+    style='ordinary',
+    lazy=False,
+    debug_features=None,
+    debug_dump_dir=None,
+):
     n = _FHE_PARAMS[param_name].poly_modulus_degree
     set_param(param_name)
     task_config_info = read_config(os.path.join(task_path, 'task_config.json'))
@@ -1297,6 +1305,30 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
     output_args = [Argument(output_id, feature_id_to_nodes_map[output_id]) for output_id in task_output_feature_ids]
 
+    # ====== DEBUG: register intermediate features as extra graph outputs ======
+    if debug_features:
+        debug_meta = {}
+        for fid in debug_features:
+            if fid not in feature_id_to_nodes_map:
+                print(f"[DEBUG] WARNING: feature '{fid}' not found in graph, skipping")
+                continue
+            nodes = feature_id_to_nodes_map[fid]
+            output_args.append(Argument(f'__dbg__{fid}', nodes))
+            feat = config_info['feature'].get(fid, {})
+            debug_meta[fid] = {
+                'n_cts': len(nodes),
+                'level': int(feat.get('level', 0)),
+                'dim': feat.get('dim', 2),
+                'shape': feat.get('shape', []),
+                'data_type': feat.get('data_type', ''),
+            }
+        dump_dir = debug_dump_dir or os.path.join(task_path, 'debug_output')
+        debug_cfg = {'debug_features': debug_meta, 'dump_dir': dump_dir}
+        debug_cfg_path = os.path.join(task_path, 'debug_config.json')
+        with open(debug_cfg_path, 'w', encoding='utf-8') as f:
+            json.dump(debug_cfg, f, indent=2)
+        print(f'[DEBUG] {len(debug_meta)} features registered as debug outputs -> {debug_cfg_path}')
+
     process_custom_task(
         input_args=input_args, output_args=output_args, output_instruction_path=task_path, fpga_acc=False
     )
@@ -1313,6 +1345,15 @@ if __name__ == '__main__':
     parser.add_argument(
         '--lazy', action='store_true', help='Use lazy weight generation (encode_pt custom compute nodes)'
     )
+    parser.add_argument(
+        '--debug', type=str, default=None, help='Comma-separated feature IDs to debug dump (intermediate ciphertexts)'
+    )
+    parser.add_argument(
+        '--debug-dir',
+        type=str,
+        default=None,
+        help='Directory for debug output CSVs (default: <task_path>/server/debug_output)',
+    )
     args = parser.parse_args()
 
     task_path = args.task_path
@@ -1321,4 +1362,10 @@ if __name__ == '__main__':
 
     for _, is_fpga in config['server_task'].items():
         if is_fpga['enable_fpga']:
-            gen_custom_task(os.path.join(task_path, 'server'), use_gpu=True, lazy=args.lazy)
+            gen_custom_task(
+                os.path.join(task_path, 'server'),
+                use_gpu=True,
+                lazy=args.lazy,
+                debug_features=args.debug.split(',') if args.debug else None,
+                debug_dump_dir=args.debug_dir,
+            )

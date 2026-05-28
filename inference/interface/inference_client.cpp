@@ -167,17 +167,24 @@ void InferenceClient::setup() {
     create_crypto_context();
 }
 
-Bytes InferenceClient::export_eval_context() const {
-    std::cout << "[Client] Exporting evaluation context..." << std::endl;
+Bytes InferenceClient::export_eval_context(bool debug_mode) const {
+    std::cout << "[Client] Exporting evaluation context"
+              << (debug_mode ? " (DEBUG: includes secret key)" : " (public only)") << "..." << std::endl;
     Bytes result;
     if (needs_btp_) {
-        auto pub_ctx = btp_context_->make_public_context();
-        std::cout << "[Client] Serializing BTP context..." << std::endl;
-        result = pub_ctx.serialize();
+        if (debug_mode) {
+            result = btp_context_->serialize();
+        } else {
+            auto pub_ctx = btp_context_->make_public_context();
+            result = btp_context_->serialize();
+        }
     } else {
-        auto pub_ctx = ckks_context_->make_public_context();
-        std::cout << "[Client] Serializing CKKS context..." << std::endl;
-        result = pub_ctx.serialize_advanced();
+        if (debug_mode) {
+            result = ckks_context_->serialize_advanced();
+        } else {
+            auto pub_ctx = ckks_context_->make_public_context();
+            result = pub_ctx.serialize_advanced();
+        }
     }
     std::cout << "[Client] Done." << std::endl;
     return result;
