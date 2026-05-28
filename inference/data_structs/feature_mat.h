@@ -56,4 +56,5 @@ public:
     Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;
     FeatureMatEncrypted drop_level(int n_level_to_drop) const;
+    FeatureMatEncrypted refresh_ciphertext() const;
 };

@@ -135,10 +135,15 @@ FeatureMatEncrypted ParBlockColMajorPolyActRNGamma::run(CkksContext& ctx, const 
 }
 
 Array<double, 2> ParBlockColMajorPolyActRNGamma::run_plaintext(const Array<double, 2>& x) const {
-    Array<double, 2> result({m_, total_dim_});
+    auto shape = x.get_shape();
+    if (shape[0] != m_ || (shape[1] != total_dim_ && shape[1] != 1)) {
+        throw runtime_error("ParBlockColMajorPolyActRNGamma plaintext input shape mismatch");
+    }
+
+    Array<double, 2> result({m_, shape[1]});
     for (uint32_t i = 0; i < m_; i++) {
-        for (uint32_t j = 0; j < total_dim_; j++) {
-            result.set(i, j, x.get(i, j) * gamma_vals_.get(j));
+        for (uint32_t j = 0; j < shape[1]; j++) {
+            result.set(i, j, x.get(i, j) * gamma_vals_.get(shape[1] == 1 ? 0 : j));
         }
     }
     return result;
