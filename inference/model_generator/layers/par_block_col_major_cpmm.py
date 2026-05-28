@@ -91,6 +91,9 @@ class ParBlockColMajorCPMM:
         self.num_chunks = n_slot // self.chunk_size
         self.num_block_rows_A = math.ceil(self.m / self.d)
 
+        self.bsgs_bs = math.ceil(math.sqrt(self.d))
+        self.bsgs_gs = math.ceil(self.d / self.bsgs_bs)
+
         # Mode detection — mirrors C++ constructor.
         # Pad both W dimensions to multiples of n_total, then compare to determine mode.
         # Exactly one of K_row, K_col must be 1; K = max(K_row, K_col).
@@ -155,25 +158,30 @@ class ParBlockColMajorCPMM:
     # ------------------------------------------------------------------ #
 
     def _block_mult_cpmm(self, a_ct, diag_pts_d: list):
-        """d rotations + d pt_muls + accumulate + rescale.
+        """BSGS block_mult_cpmm. Level L → L-1."""
+        d, S = self.d, self.S
+        bsgs_bs, bsgs_gs = self.bsgs_bs, self.bsgs_gs
+        unit = d * S
 
-        Mirrors C++ block_mult_cpmm().  Level L → L-1.
-        k=0 rotation is 0 and skipped; (d-1) actual rotations.
+        if bsgs_bs > 1:
+            baby_rots = [a_ct] + rotate_cols(a_ct, [b * unit for b in range(1, bsgs_bs)])
+        else:
+            baby_rots = [a_ct]
 
-        Args:
-            a_ct:       input CkksCiphertextNode at level L.
-            diag_pts_d: list of d CkksPlaintextRingtNode, diag_pts_d[k] for rotation k.
-        """
-        d, S, chunk_size = self.d, self.S, self.chunk_size
-        x_ct_list = []
-        w_pt_list = []
-        for k in range(d):
-            rot_amount = (d * k * S) % chunk_size
-            rotated = a_ct if rot_amount == 0 else rotate_cols(a_ct, [rot_amount])[0]
-            x_ct_list.append(rotated)
-            w_pt_list.append(diag_pts_d[k])
-        result = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
-        return rescale(result)
+        total = None
+        for g in range(bsgs_gs):
+            x_ct_list = []
+            w_pt_list = []
+            b_end = min(bsgs_bs, d - g * bsgs_bs)
+            for b in range(b_end):
+                k = g * bsgs_bs + b
+                x_ct_list.append(baby_rots[b])
+                w_pt_list.append(diag_pts_d[k])
+            inner = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+            if g > 0:
+                inner = rotate_cols(inner, [g * bsgs_bs * unit])[0]
+            total = inner if total is None else add(total, inner)
+        return rescale(total)
 
     def _head_sum(self, ct):
         """Tree-reduce sum across S head slots.
@@ -355,8 +363,8 @@ class ParBlockColMajorCPMM:
 
         Per (bi, bp) pair, per megablock-group pair (mb_i, g):
 
-          Level L — block_mult_cpmm:
-            rotate:     K_eff * G * (d-1)   [k=0 skipped, rot_amount=0]
+          Level L — block_mult_cpmm (BSGS):
+            rotate:     K_eff * G * (bsgs_bs-1 + bsgs_gs-1)
             mult_plain: K_eff * G * d
             add:        K_eff * G * (d-1)   [within ct_pt_mult_accumulate]
             rescale:    K_eff * G
@@ -395,8 +403,10 @@ class ParBlockColMajorCPMM:
         # Total (call, bi, bp) iterations
         total_bp = n_calls * R * n_heads
 
-        # Level L: block_mult_cpmm
-        ops[lv]['rotate'] += total_bp * K_eff * G * (d - 1)
+        # Level L: block_mult_cpmm (BSGS)
+        bsgs_bs = self.bsgs_bs
+        bsgs_gs = self.bsgs_gs
+        ops[lv]['rotate'] += total_bp * K_eff * G * (bsgs_bs - 1 + bsgs_gs - 1)
         ops[lv]['mult_plain'] += total_bp * K_eff * G * d
         ops[lv]['add'] += total_bp * K_eff * G * (d - 1)
         ops[lv]['rescale'] += total_bp * K_eff * G

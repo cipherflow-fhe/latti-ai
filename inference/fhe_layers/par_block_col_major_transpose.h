@@ -58,6 +58,9 @@ private:
     uint32_t n_blocks_per_chunk_;   // S: heads per chunk
     uint32_t n_cts_per_block_idx_;  // CTs per block position
 
+    uint32_t bsgs_bs_t_;
+    uint32_t bsgs_gs_t_;
+
     // Precomputed: (2d-1) transpose diagonal plaintexts
     std::vector<ls::CkksPlaintextRingt> transpose_diag_pt_;
 };
