@@ -27,6 +27,26 @@ FeatureMatEncrypted::FeatureMatEncrypted(CkksContext* context_in, int ct_level) 
     level = ct_level;
 }
 
+FeatureMatEncrypted FeatureMatEncrypted::refresh_ciphertext() const {
+    CkksBtpContext* ctx = dynamic_cast<CkksBtpContext*>(context);
+    if (ctx == nullptr) {
+        throw std::runtime_error("refresh_ciphertext() requires CkksBtpContext");
+    }
+    int new_level = 9;
+    FeatureMatEncrypted result(ctx, new_level);
+    result.data.resize(data.size());
+    parallel_for(data.size(), th_nums, *ctx, [&](CkksBtpContext& ctx_copy, int ct_idx) {
+        result.data[ct_idx] = ctx_copy.bootstrap(data[ct_idx]);
+        assert(new_level == result.data[ct_idx].get_level());
+    });
+    result.shape = shape;
+    result.head_shape = head_shape;
+    result.matmul_block_size = matmul_block_size;
+    result.n_channel = n_channel;
+    result.n_channel_per_ct = n_channel_per_ct;
+    return result;
+}
+
 void FeatureMatEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
                                                uint32_t d,
                                                bool is_symmetric,
