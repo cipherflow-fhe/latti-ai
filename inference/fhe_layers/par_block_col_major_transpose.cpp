@@ -63,6 +63,10 @@ ParBlockColMajorTranspose::ParBlockColMajorTranspose(const CkksParameter& param_
 
     num_block_rows_ = div_ceil(m, d_);
     num_block_cols_ = div_ceil(n, d_);
+
+    uint32_t n_t = 2 * d_ - 1;
+    bsgs_bs_t_ = (uint32_t)ceil(sqrt((double)n_t));
+    bsgs_gs_t_ = div_ceil(n_t, bsgs_bs_t_);
 }
 
 int ParBlockColMajorTranspose::get_block_index(int bi, int bj, int num_block_rows) {
@@ -88,6 +92,19 @@ std::vector<double> ParBlockColMajorTranspose::build_transpose_diagonal(int k) c
                 t_base[idx] = 1.0;
             }
         }
+    }
+
+    // BSGS shift: rotate base by -giant_rot/S to compensate
+    uint32_t j_idx = (uint32_t)(k + (int)(d_ - 1));
+    uint32_t g_bsgs = j_idx / bsgs_bs_t_;
+    int shift = (int)(d_ - 1) * (int)(g_bsgs * bsgs_bs_t_) - (int)((d_ - 1) * (d_ - 1));
+    shift = ((shift % (int)d_sq) + (int)d_sq) % (int)d_sq;
+    if (shift != 0) {
+        vector<double> t_shifted(d_sq, 0.0);
+        for (uint32_t idx = 0; idx < d_sq; idx++) {
+            t_shifted[idx] = t_base[(idx + d_sq - shift) % d_sq];
+        }
+        t_base = move(t_shifted);
     }
 
     // Expand by S: each base value replicated to S consecutive slots
@@ -128,32 +145,49 @@ CkksPlaintextRingt ParBlockColMajorTranspose::generate_transpose_diag_pt(CkksCon
     return ctx.encode_ringt(diag_vec, param_.get_q(level_));
 }
 
-// parallelly transpose each block in the interleaved block ciphertext
-// transpose_on_ct: (2d-1) rotations + (2d-1) pt_muls + (2d-2) adds + 1 rescale
-// Input level L -> Output level L-1
-// Rotation amounts scaled by n_blocks_per_chunk_ compared to non-interleaved version.
+// transpose_on_ct with BSGS: (bsgs_bs-1) baby + up to bsgs_gs giant rotations
+// + (2d-1) pt_muls + (2d-2) adds + 1 rescale.  Level L -> L-1.
 CkksCiphertext ParBlockColMajorTranspose::transpose_on_ct(CkksContext& ctx, const CkksCiphertext& ct) const {
     double default_scale = param_.get_default_scale();
     uint32_t S = n_blocks_per_chunk_;
     uint32_t d_sq = d_ * d_;
+    int unit = (int)(d_ - 1) * (int)S;
+    uint32_t n_t = 2 * d_ - 1;
+
+    auto baby_rots = populate_rotations_1_side(ctx, ct, bsgs_bs_t_ - 1, unit);
+
     CkksCiphertext result(0);
+    bool result_init = false;
 
-    int diag_idx = 0;
-    for (int k = -(int)(d_ - 1); k <= (int)(d_ - 1); k++) {
-        // Scaled rotation: ((d-1)*k * S) % chunk_size_
-        int base_diag = (((int)(d_ - 1) * k) % (int)d_sq + (int)d_sq) % (int)d_sq;
-        int rot_amount = (base_diag * (int)S) % (int)chunk_size_;
-        CkksCiphertext rotated = (rot_amount == 0) ? ct.copy() : ctx.rotate(ct, rot_amount);
+    for (uint32_t g = 0; g < bsgs_gs_t_; g++) {
+        CkksCiphertext inner(0);
+        bool inner_init = false;
+        uint32_t b_end = std::min(bsgs_bs_t_, n_t - g * bsgs_bs_t_);
 
-        auto diag_mul = ctx.ringt_to_mul(transpose_diag_pt_[diag_idx], level_);
-        auto product = ctx.mult_plain_mul(rotated, diag_mul);
+        for (uint32_t b = 0; b < b_end; b++) {
+            uint32_t diag_idx = g * bsgs_bs_t_ + b;
+            auto diag_mul = ctx.ringt_to_mul(transpose_diag_pt_[diag_idx], level_);
+            auto product = ctx.mult_plain_mul(baby_rots[b], diag_mul);
 
-        if (diag_idx == 0) {
-            result = move(product);
-        } else {
-            result = ctx.add(result, product);
+            if (!inner_init) {
+                inner = move(product);
+                inner_init = true;
+            } else {
+                inner = ctx.add(inner, product);
+            }
         }
-        diag_idx++;
+
+        int giant_rot = ((int)(d_ - 1) * (int)(g * bsgs_bs_t_) - (int)((d_ - 1) * (d_ - 1))) * (int)S;
+        giant_rot = ((giant_rot % (int)chunk_size_) + (int)chunk_size_) % (int)chunk_size_;
+        if (giant_rot != 0)
+            inner = ctx.rotate(inner, giant_rot);
+
+        if (!result_init) {
+            result = move(inner);
+            result_init = true;
+        } else {
+            result = ctx.add(result, inner);
+        }
     }
     return ctx.rescale(result, default_scale);
 }
