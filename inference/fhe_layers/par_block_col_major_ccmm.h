@@ -73,6 +73,11 @@ private:
     uint32_t n_blocks_per_chunk_;  // S
     uint32_t n_cts_per_block_idx_;
 
+    uint32_t bsgs_bs_sigma_;
+    uint32_t bsgs_gs_sigma_;
+    uint32_t bsgs_bs_tau_;
+    uint32_t bsgs_gs_tau_;
+
     // Precomputed diagonal plaintexts
     std::vector<ls::CkksPlaintextRingt> sigma_diag_pt_;       // d vectors
     std::vector<ls::CkksPlaintextRingt> tau_diag_pt_;         // 2d-1 vectors

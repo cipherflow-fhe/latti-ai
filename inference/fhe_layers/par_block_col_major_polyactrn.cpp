@@ -19,6 +19,7 @@
 #include "par_block_col_major_polyactrn.h"
 #include "layer_util.h"
 #include <cassert>
+#include <stdexcept>
 
 using namespace std;
 using namespace lattisense;

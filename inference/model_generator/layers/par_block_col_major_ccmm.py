@@ -92,6 +92,12 @@ class ParBlockColMajorCCMM:
 
         self.num_result_blocks = self.num_block_rows_A * self.num_block_cols_B
 
+        self.bsgs_bs_sigma = math.ceil(math.sqrt(self.d))
+        self.bsgs_gs_sigma = math.ceil(self.d / self.bsgs_bs_sigma)
+        n_tau = 2 * self.d - 1
+        self.bsgs_bs_tau = math.ceil(math.sqrt(n_tau))
+        self.bsgs_gs_tau = math.ceil(n_tau / self.bsgs_bs_tau)
+
     # ------------------------------------------------------------------ #
     #  Index helpers                                                       #
     # ------------------------------------------------------------------ #
@@ -106,32 +112,59 @@ class ParBlockColMajorCCMM:
     # ------------------------------------------------------------------ #
 
     def _sigma(self, a_ct, sigma_pt: list):
-        """d rotations + d pt_muls + accumulate + rescale.  Level L -> L-1.
-        Rotation amounts scaled by S."""
-        d = self.d
-        S = self.S
-        chunk_size = self.chunk_size
-        x_list, w_list = [], []
-        for k in range(d):
-            rot = (d * k * S) % chunk_size
-            rotated = a_ct if rot == 0 else rotate_cols(a_ct, [rot])[0]
-            x_list.append(rotated)
-            w_list.append(sigma_pt[k])
-        return rescale(ct_pt_mult_accumulate(x_list, w_list))
+        """BSGS sigma. Level L -> L-1."""
+        d, S = self.d, self.S
+        bsgs_bs, bsgs_gs = self.bsgs_bs_sigma, self.bsgs_gs_sigma
+        unit = d * S
+
+        if bsgs_bs > 1:
+            baby_rots = [a_ct] + rotate_cols(a_ct, [b * unit for b in range(1, bsgs_bs)])
+        else:
+            baby_rots = [a_ct]
+
+        total = None
+        for g in range(bsgs_gs):
+            x_list, w_list = [], []
+            b_end = min(bsgs_bs, d - g * bsgs_bs)
+            for b in range(b_end):
+                k = g * bsgs_bs + b
+                x_list.append(baby_rots[b])
+                w_list.append(sigma_pt[k])
+            inner = ct_pt_mult_accumulate(x_list, w_list)
+            giant_rot = g * bsgs_bs * unit
+            if giant_rot != 0:
+                inner = rotate_cols(inner, [giant_rot])[0]
+            total = inner if total is None else add(total, inner)
+        return rescale(total)
 
     def _tau(self, b_ct, tau_pt: list):
-        """(2d-1) rotations + pt_muls + accumulate + rescale.  Level L -> L-1.
-        Rotation amounts scaled by S."""
-        d = self.d
-        S = self.S
+        """BSGS tau. Level L -> L-1."""
+        d, S = self.d, self.S
         chunk_size = self.chunk_size
-        x_list, w_list = [], []
-        for idx, offset in enumerate(range(-(d - 1), d)):
-            rot = ((offset * S) % chunk_size + chunk_size) % chunk_size
-            rotated = b_ct if rot == 0 else rotate_cols(b_ct, [rot])[0]
-            x_list.append(rotated)
-            w_list.append(tau_pt[idx])
-        return rescale(ct_pt_mult_accumulate(x_list, w_list))
+        bsgs_bs, bsgs_gs = self.bsgs_bs_tau, self.bsgs_gs_tau
+        n_tau = 2 * d - 1
+        unit = S
+
+        if bsgs_bs > 1:
+            baby_rots = [b_ct] + rotate_cols(b_ct, [b * unit for b in range(1, bsgs_bs)])
+        else:
+            baby_rots = [b_ct]
+
+        total = None
+        for g in range(bsgs_gs):
+            x_list, w_list = [], []
+            b_end = min(bsgs_bs, n_tau - g * bsgs_bs)
+            for b_step in range(b_end):
+                j_idx = g * bsgs_bs + b_step
+                x_list.append(baby_rots[b_step])
+                w_list.append(tau_pt[j_idx])
+            inner = ct_pt_mult_accumulate(x_list, w_list)
+            giant_rot = (g * bsgs_bs - (d - 1)) * S
+            giant_rot = ((giant_rot % chunk_size) + chunk_size) % chunk_size
+            if giant_rot != 0:
+                inner = rotate_cols(inner, [giant_rot])[0]
+            total = inner if total is None else add(total, inner)
+        return rescale(total)
 
     def _phi(self, a_sigma, i: int):
         """Rotation by d*i*S positions within chunk.  Level unchanged."""
@@ -332,8 +365,10 @@ class ParBlockColMajorCCMM:
         n_block_mult = R * C * K * G
         n_output = R * C * G
 
-        # Level L: sigma + tau
-        ops[lv]['rotate'] += n_block_mult * 3 * (d - 1)
+        # Level L: sigma (BSGS) + tau (BSGS)
+        sigma_rots = self.bsgs_bs_sigma - 1 + self.bsgs_gs_sigma - 1
+        tau_rots = self.bsgs_bs_tau - 1 + self.bsgs_gs_tau  # all giant groups may have nonzero rot
+        ops[lv]['rotate'] += n_block_mult * (sigma_rots + tau_rots)
         ops[lv]['mult_plain'] += n_block_mult * (3 * d - 1)
         ops[lv]['add'] += n_block_mult * 3 * (d - 1)
         ops[lv]['rescale'] += n_block_mult * 2
