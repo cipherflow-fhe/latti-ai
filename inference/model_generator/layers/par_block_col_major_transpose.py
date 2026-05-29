@@ -87,6 +87,10 @@ class ParBlockColMajorTranspose:
         # Total CTs: num_block_rows * num_block_cols * G
         self.num_blocks = self.num_block_rows * self.num_block_cols
 
+        n_t = 2 * self.d - 1
+        self.bsgs_bs_t = math.ceil(math.sqrt(n_t))
+        self.bsgs_gs_t = math.ceil(n_t / self.bsgs_bs_t)
+
     # ------------------------------------------------------------------ #
     #  Index helpers                                                       #
     # ------------------------------------------------------------------ #
@@ -101,34 +105,34 @@ class ParBlockColMajorTranspose:
     # ------------------------------------------------------------------ #
 
     def _transpose_on_ct(self, ct, transpose_diag_pt: list):
-        """(2d-1) rotations + (2d-1) pt_muls + accumulate + rescale.
-
-        Mirrors C++ transpose_on_ct().  Level L -> L-1.
-        Rotation amounts scaled by S (n_blocks_per_chunk) compared to
-        non-interleaved version.
-
-        Args:
-            ct:                 input CkksCiphertextNode at level L.
-            transpose_diag_pt:  list of (2d-1) CkksPlaintextRingtNode.
-        """
+        """BSGS transpose_on_ct. Level L -> L-1."""
         d = self.d
         S = self.S
-        d_sq = d * d
         chunk_size = self.chunk_size
-        x_ct_list = []
-        w_pt_list = []
+        bsgs_bs, bsgs_gs = self.bsgs_bs_t, self.bsgs_gs_t
+        n_t = 2 * d - 1
+        unit = (d - 1) * S
 
-        diag_idx = 0
-        for k in range(-(d - 1), d):
-            base_diag = (((d - 1) * k) % d_sq + d_sq) % d_sq
-            rot_amount = (base_diag * S) % chunk_size
-            rotated = ct if rot_amount == 0 else rotate_cols(ct, [rot_amount])[0]
-            x_ct_list.append(rotated)
-            w_pt_list.append(transpose_diag_pt[diag_idx])
-            diag_idx += 1
+        if bsgs_bs > 1:
+            baby_rots = [ct] + rotate_cols(ct, [b * unit for b in range(1, bsgs_bs)])
+        else:
+            baby_rots = [ct]
 
-        result = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
-        return rescale(result)
+        total = None
+        for g in range(bsgs_gs):
+            x_ct_list, w_pt_list = [], []
+            b_end = min(bsgs_bs, n_t - g * bsgs_bs)
+            for b in range(b_end):
+                diag_idx = g * bsgs_bs + b
+                x_ct_list.append(baby_rots[b])
+                w_pt_list.append(transpose_diag_pt[diag_idx])
+            inner = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
+            giant_rot = ((d - 1) * g * bsgs_bs - (d - 1) ** 2) * S
+            giant_rot = ((giant_rot % chunk_size) + chunk_size) % chunk_size
+            if giant_rot != 0:
+                inner = rotate_cols(inner, [giant_rot])[0]
+            total = inner if total is None else add(total, inner)
+        return rescale(total)
 
     # ------------------------------------------------------------------ #
     #  Core compute -- mirrors C++ run_core                               #
@@ -230,7 +234,9 @@ class ParBlockColMajorTranspose:
         G = self.G
         total_cts = self.num_blocks * G
 
-        ops[lv]['rotate'] += total_cts * (2 * d - 2)
+        # Level L — transpose_on_ct (BSGS):
+        transpose_rots = self.bsgs_bs_t - 1 + self.bsgs_gs_t  # all giant groups may have nonzero rot
+        ops[lv]['rotate'] += total_cts * transpose_rots
         ops[lv]['mult_plain'] += total_cts * (2 * d - 1)
         ops[lv]['add'] += total_cts * (2 * d - 2)
         ops[lv]['rescale'] += total_cts

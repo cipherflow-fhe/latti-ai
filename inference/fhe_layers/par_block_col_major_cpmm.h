@@ -120,6 +120,9 @@ private:
     uint32_t n_blocks_per_chunk_;  // S
     uint32_t n_cts_per_block_idx_;
 
+    uint32_t bsgs_bs_;
+    uint32_t bsgs_gs_;
+
     // diag_pt_[mb][g][bp][k]: per-head diagonal for megablock mb, input group g, output block column bp, rotation k
     std::vector<std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>>> diag_pt_;
 
