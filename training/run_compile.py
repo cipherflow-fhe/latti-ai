@@ -113,6 +113,13 @@ Examples:
         help='Wrap each bootstrapping layer with pcmgamma layers using this scale',
     )
 
+    parser.add_argument(
+        '--btp_input_level',
+        type=int,
+        default=1,
+        help='Level assigned to the inserted pre-BTP feature when set_btp_scale is enabled',
+    )
+
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -141,6 +148,7 @@ Examples:
     compile_config = read_compile_config(args.config)
     is_feature_mat = bool(compile_config.get('is_feature_mat', False))
     set_btp_scale = args.set_btp_scale
+    btp_input_level = args.btp_input_level
     onnx_path = input_path if is_onnx else None
 
     if is_onnx:
@@ -169,7 +177,8 @@ Examples:
     print(f'[Compile] Output: {output_dir}')
     print(
         f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, '
-        f'COMPILE_CONFIG={args.config or "<none>"}, SET_BTP_SCALE={set_btp_scale}'
+        f'COMPILE_CONFIG={args.config or "<none>"}, SET_BTP_SCALE={set_btp_scale}, '
+        f'BTP_INPUT_LEVEL={btp_input_level}'
     )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
@@ -186,6 +195,7 @@ Examples:
             head_dim=compile_config.get('head_dim'),
             matmul_block_size=compile_config.get('matmul_block_size'),
             set_btp_scale=set_btp_scale,
+            btp_input_level=btp_input_level,
         )
 
         print(f'\n[Compile] Success! Output: {output_dir}')

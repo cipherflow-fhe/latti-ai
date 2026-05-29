@@ -347,6 +347,7 @@ def run_pipeline(
     head_dim: int | None = None,
     matmul_block_size: int | None = None,
     set_btp_scale: float | None = None,
+    btp_input_level: int = 1,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -363,6 +364,7 @@ def run_pipeline(
         style: Computation style (STYLE)
         graph_type: Graph type (GRAPH_TYPE)
         set_btp_scale: if not None, wrap BTP with pcmgamma scales and enable special level handling
+        btp_input_level: level assigned to the inserted pre-BTP feature when set_btp_scale is enabled
     """
     if style is not None:
         config.style = style
@@ -375,10 +377,11 @@ def run_pipeline(
     if matmul_block_size is not None:
         config.matmul_block_size = matmul_block_size
     config.set_btp_scale = set_btp_scale
+    config.btp_input_level = btp_input_level
     print(
         f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
         f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
-        f'SET_BTP_SCALE={config.set_btp_scale}'
+        f'SET_BTP_SCALE={config.set_btp_scale}, BTP_INPUT_LEVEL={config.btp_input_level}'
     )
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
