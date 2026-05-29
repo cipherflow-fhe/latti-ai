@@ -18,6 +18,28 @@ configure_file(
 add_executable(test_fhe_layers_hetero test_fhe_layers_hetero.cpp ut_util.cpp)
 target_link_libraries(test_fhe_layers_hetero PUBLIC fhe_layers lattisense)
 
+set(MPC_TEST_LIBS
+    -Wl,--start-group
+    mpc_layers
+    fhe_layers
+    log
+    SCI-Cheetah
+    Cheetah-Linear
+    gemini
+    SCI-Cheetah-BuildingBlocks
+    SCI-Math
+    SCI-LinearOT
+    SCI-BuildingBlocks
+    -Wl,--end-group
+    lattisense
+)
+
+add_executable(test_mpc_layers test_mpc_layers.cpp ut_util.cpp)
+target_link_libraries(test_mpc_layers PUBLIC ${MPC_TEST_LIBS})
+
+add_executable(test_mpc_layers_client test_mpc_layers_client.cpp)
+target_link_libraries(test_mpc_layers_client PUBLIC ${MPC_TEST_LIBS})
+
 if(INFERENCE_SDK_ENABLE_GPU)
     target_compile_definitions(test_fhe_layers_hetero PRIVATE INFERENCE_SDK_ENABLE_GPU)
 endif()

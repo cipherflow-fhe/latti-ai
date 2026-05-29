@@ -447,8 +447,8 @@ Feature2DShare::Feature2DShare(uint64_t q, int s) : FeatureShare{q, s} {}
 
 void Feature2DEncrypted::split_to_shares(Feature2DEncrypted* share0, Feature2DShare* share1) const {
     int n_slot = context->get_parameter().get_n() / 2;
-    double share_scale = ENC_TO_SHARE_SCALE;
-    int feature_bitlength = ENC_TO_SHARE_SCALE_BIT + 1;
+    double share_scale = DEFAULT_SCALE;
+    int feature_bitlength = DEFAULT_SCALE_BIT + 1;
     int sigma = SIGMA;
 
     Duo pre_skip_shape = shape * skip;
@@ -473,7 +473,7 @@ void Feature2DEncrypted::split_to_shares(Feature2DEncrypted* share0, Feature2DSh
         size_t start = i * n_slot;
         size_t length = i == data.size() - 1 ? (mask_d_span.size() - start) : n_slot;
         std::vector<double> mask_mg_vec(mask_d_span.begin() + start, mask_d_span.begin() + start + length);
-        CkksPlaintext mask_pt = context->encode(mask_mg_vec, level, ENC_TO_SHARE_SCALE);
+        CkksPlaintext mask_pt = context->encode(mask_mg_vec, level, DEFAULT_SCALE);
         CkksCiphertext share0_ct = context->add_plain(data[i], mask_pt);
         share0->data.push_back(move(share0_ct));
     }
@@ -518,8 +518,8 @@ void Feature2DEncrypted::split_to_shares_for_multi_channel_pack(Feature2DEncrypt
                                                                 Feature2DShare* share1) const {
     assert(this->packing_type == PackType::MultipleChannelPacking);
     int n_slot = context->get_parameter().get_n() / 2;
-    double share_scale = ENC_TO_SHARE_SCALE;
-    int feature_bitlength = ENC_TO_SHARE_SCALE_BIT + 1;
+    double share_scale = DEFAULT_SCALE;
+    int feature_bitlength = DEFAULT_SCALE_BIT + 1;
     int sigma = SIGMA;
     Duo pre_skip_shape = shape * skip;
     // cppcheck-suppress duplicateAssignExpression
@@ -594,7 +594,7 @@ Feature2DEncrypted Feature2DEncrypted::combine_with_share_new_protocol(const Fea
     result.n_channel_per_ct = this->n_channel_per_ct;
     result.shape = this->shape;
     result.skip = this->skip;
-    double scale = ENC_TO_SHARE_SCALE;
+    double scale = DEFAULT_SCALE;
     double encode_scale = pow(2, DEFAULT_SCALE_BIT);
     int n_ct = this->data.size();
 
@@ -636,7 +636,7 @@ Feature2DEncrypted Feature2DEncrypted::combine_with_share_new_protocol_for_multi
     result.n_channel_per_ct = this->n_channel_per_ct;
     result.shape = this->shape;
     result.skip = this->skip;
-    double scale = ENC_TO_SHARE_SCALE;
+    double scale = DEFAULT_SCALE;
     double encode_scale = pow(2, DEFAULT_SCALE_BIT);
     int n_ct = this->data.size();
 
@@ -697,7 +697,7 @@ Array<uint64_t, 1> Feature2DEncrypted::encrypt_from_share(const Feature2DShare& 
     this->shape = input_shape;
     Array<double, 1> y0_sub_mod_div_s(share.data.get_shape());
     Array<uint64_t, 1> y0_add_mod(share.data.get_shape());
-    double scale = ENC_TO_SHARE_SCALE;
+    double scale = DEFAULT_SCALE;
     for (int i = 0; i < share.data.get_size(); i++) {
         uint64_t y0_add_mod_value = (share.data[i] + (share.ring_mod / 2)) % share.ring_mod;
         y0_add_mod.set(i, y0_add_mod_value);

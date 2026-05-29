@@ -42,14 +42,14 @@ using json = nlohmann::ordered_json;
 #define th_nums 16
 
 const int SIGMA = 32;
-const int ENC_TO_SHARE_SCALE_BIT = 31;
-const double ENC_TO_SHARE_SCALE = pow(2, ENC_TO_SHARE_SCALE_BIT);
-
 const int DEFAULT_SCALE_BIT = 34;
 const double DEFAULT_SCALE = pow(2, DEFAULT_SCALE_BIT);
 
 const int RING_MOD_BIT = 44;
 const uint64_t RING_MOD = 1ULL << RING_MOD_BIT;
+
+const int T_SCALE_BIT = 6;
+const uint64_t T_SCALE = 1ULL << T_SCALE_BIT;
 
 const Duo BLOCK_SHAPE = {64, 64};
 

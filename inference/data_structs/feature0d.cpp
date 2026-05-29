@@ -248,7 +248,7 @@ Array<uint64_t, 1> Feature0DEncrypted::encrypt_from_share(const Feature0DShare& 
 
     Array<double, 1> out_data_mg(share.data.get_shape());
     Array<uint64_t, 1> data_add(share.data.get_shape());
-    double scale = ENC_TO_SHARE_SCALE;
+    double scale = DEFAULT_SCALE;
     for (int i = 0; i < share.data.get_size(); i++) {
         uint64_t data_add_value = (share.data[i] + (share.ring_mod / 2)) % share.ring_mod;
         data_add.set(i, data_add_value);
@@ -310,7 +310,7 @@ Feature0DEncrypted Feature0DEncrypted::combine_with_share_new_protocol(const Fea
     result.n_channel = this->n_channel;
     result.n_channel_per_ct = this->n_channel_per_ct;
     result.skip = this->skip;
-    double scale = ENC_TO_SHARE_SCALE;
+    double scale = DEFAULT_SCALE;
     double encode_scale = pow(2, DEFAULT_SCALE_BIT);
 
     for (int i = 0; i < this->data.size(); i++) {
@@ -346,7 +346,7 @@ void Feature0DEncrypted::split_to_shares(Feature0DEncrypted* share0, Feature0DSh
     int n_slot = context->get_parameter().get_n() / 2;
     double share_scale = pow(2, share1->scale_ord);
     int r_bitlength = 40;
-    int feature_bitlength = ENC_TO_SHARE_SCALE_BIT + 1;
+    int feature_bitlength = DEFAULT_SCALE_BIT + 1;
     int sigma = SIGMA;
     share0->n_channel = n_channel;
     share0->n_channel_per_ct = n_channel_per_ct;
@@ -365,7 +365,7 @@ void Feature0DEncrypted::split_to_shares(Feature0DEncrypted* share0, Feature0DSh
         }
         mask_d_mat.push_back(mask_d);
         r_mat.push_back(r);
-        CkksPlaintext mask_pt = context->encode(mask_d, level, ENC_TO_SHARE_SCALE);
+        CkksPlaintext mask_pt = context->encode(mask_d, level, DEFAULT_SCALE);
         CkksCiphertext share0_ct = context->add_plain(data[i], mask_pt);
 
         share0->data.push_back(move(share0_ct));
@@ -389,7 +389,7 @@ void Feature0DEncrypted::split_to_shares_reshape(Feature0DEncrypted* share0, Fea
     int n_slot = context->get_parameter().get_n() / 2;
     double share_scale = pow(2, share1->scale_ord);
     int r_bitlength = 40;
-    int feature_bitlength = ENC_TO_SHARE_SCALE_BIT + 1;
+    int feature_bitlength = DEFAULT_SCALE_BIT + 1;
     int sigma = SIGMA;
     share0->n_channel = n_channel;
     share0->n_channel_per_ct = n_channel_per_ct;
@@ -408,7 +408,7 @@ void Feature0DEncrypted::split_to_shares_reshape(Feature0DEncrypted* share0, Fea
         }
         r_mat.push_back(r);
         mask_d_mat.push_back(mask_d);
-        CkksPlaintext mask_pt = context->encode(mask_d, level, ENC_TO_SHARE_SCALE);
+        CkksPlaintext mask_pt = context->encode(mask_d, level, DEFAULT_SCALE);
         CkksCiphertext share0_ct = context->add_plain(data[i], mask_pt);
         share0->data.push_back(move(share0_ct));
     }
