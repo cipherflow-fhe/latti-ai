@@ -18,6 +18,9 @@
 from pathlib import Path
 import copy
 
+import networkx as nx
+import numpy as np
+
 import components
 from components import LayerAbstractGraph, config, PN13QP218, PN14QP438, PN15QP880, PN16QP1761, N16QP1546H192H32
 import processor
@@ -294,6 +297,207 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         dag.add_edge(post_gamma, succ_feature)
 
 
+def _ensure_finite_scale(scale: np.float64, context: str) -> np.float64:
+    scale = np.float64(scale)
+    if not np.isfinite(scale):
+        raise ValueError(f'Non-finite ckks_scale while propagating {context}: {scale}')
+    return scale
+
+
+def _default_ckks_scale() -> np.float64:
+    return _ensure_finite_scale(np.float64(2**config.fhe_param.log_default_scale), 'default_scale')
+
+
+def _q(level: int) -> np.float64:
+    if level < 0 or level >= len(config.fhe_param.q):
+        raise ValueError(f'Invalid CKKS q level {level}; q chain has {len(config.fhe_param.q)} levels')
+    return _ensure_finite_scale(np.float64(config.fhe_param.q[level]), f'q[{level}]')
+
+
+def _mult(lhs_scale, rhs_scale) -> np.float64:
+    return _ensure_finite_scale(np.float64(lhs_scale) * np.float64(rhs_scale), 'mult')
+
+
+def _rescale(product_scale, q_level) -> np.float64:
+    return _ensure_finite_scale(np.float64(product_scale) / np.float64(q_level), 'rescale')
+
+
+def _scale_farthest_from_default(scales: list[np.float64], default_scale: np.float64) -> np.float64:
+    if not scales:
+        raise ValueError('Cannot choose ckks_scale from an empty scale list')
+    return _ensure_finite_scale(
+        max(scales, key=lambda scale: abs(np.float64(scale) - default_scale)), 'farthest_from_default'
+    )
+
+
+def _ordered_feature_preds(graph: LayerAbstractGraph, node: ComputeNode) -> list[FeatureNode]:
+    preds = [pred for pred in graph.dag.predecessors(node) if isinstance(pred, FeatureNode)]
+    edge_indices = {pred: graph.dag.edges[pred, node].get('input_index') for pred in preds}
+    if preds and all(index is not None for index in edge_indices.values()):
+        return sorted(preds, key=lambda pred: edge_indices[pred])
+    return preds
+
+
+def _feature_level(graph: LayerAbstractGraph, feature: FeatureNode) -> int:
+    return int(graph.dag.nodes[feature]['level'])
+
+
+def _node_input_level(graph: LayerAbstractGraph, preds: list[FeatureNode]) -> int:
+    if not preds:
+        raise ValueError('Cannot compute input level without predecessor features')
+    return max(_feature_level(graph, pred) for pred in preds)
+
+
+def _passthrough_scale(preds: list[FeatureNode], default_scale: np.float64) -> np.float64:
+    return _scale_farthest_from_default([np.float64(pred.ckks_scale) for pred in preds], default_scale)
+
+
+def _propagate_pcmpoly_scale(input_scale: np.float64, level: int, default_scale: np.float64, order: int) -> np.float64:
+    q_l = _q(level)
+    q_l1 = _q(level - 1)
+
+    x_sq = _rescale(_mult(input_scale, input_scale), q_l)
+    c2_scale = _mult(_rescale(q_l, default_scale), q_l1)
+    c2x2 = _rescale(_mult(x_sq, c2_scale), q_l1)
+    c1x = _rescale(_mult(input_scale, q_l), q_l)
+    low = _scale_farthest_from_default([c2x2, c1x], default_scale)
+
+    if order == 2:
+        return low
+    if order != 4:
+        raise ValueError(f'Unsupported pcmpoly order {order}; expected 2 or 4')
+
+    q_l2 = _q(level - 2)
+    c4_scale = _mult(
+        _mult(_rescale(q_l, default_scale), _rescale(q_l, default_scale)), _mult(_rescale(q_l1, default_scale), q_l2)
+    )
+    c3_scale = _mult(_mult(_rescale(q_l, default_scale), _rescale(q_l, default_scale)), q_l2)
+    c4x2 = _rescale(_mult(x_sq, c4_scale), q_l1)
+    c3x = _rescale(_mult(input_scale, c3_scale), q_l)
+    high = _scale_farthest_from_default([c4x2, c3x], default_scale)
+    final = _rescale(_mult(x_sq, high), q_l2)
+    return _scale_farthest_from_default([low, final], default_scale)
+
+
+def _propagate_layer_ckks_scale(
+    graph: LayerAbstractGraph, node: ComputeNode, preds: list[FeatureNode], default_scale: np.float64
+) -> np.float64:
+    layer_type = node.layer_type
+    level = _node_input_level(graph, preds)
+    input_scale = np.float64(preds[0].ckks_scale)
+
+    if layer_type == 'bootstrapping':
+        return default_scale
+
+    if layer_type in ('partranspose', 'pcmgamma'):
+        q_l = _q(level)
+        return _rescale(_mult(input_scale, q_l), q_l)
+
+    if layer_type == 'parcpmm':
+        q_l = _q(level)
+        q_l1 = _q(level - 1)
+        scale = _rescale(_mult(input_scale, q_l), q_l)
+        return _rescale(_mult(scale, q_l1), q_l1)
+
+    if layer_type == 'parccmm':
+        if len(preds) < 2:
+            raise ValueError(f'parccmm node {node.layer_id} requires two inputs')
+        q_l = _q(level)
+        q_l1 = _q(level - 1)
+        q_l2 = _q(level - 2)
+        a_scale = np.float64(preds[0].ckks_scale)
+        b_scale = np.float64(preds[1].ckks_scale)
+        a_sigma = _rescale(_mult(a_scale, q_l), q_l)
+        b_tau = _rescale(_mult(b_scale, q_l), q_l)
+        psi_pt_scale = _mult(_rescale(q_l2, default_scale), q_l1)
+        b_psi = _rescale(_mult(b_tau, psi_pt_scale), q_l1)
+        return _rescale(_mult(a_sigma, b_psi), q_l2)
+
+    if layer_type == 'pcmpoly':
+        return _propagate_pcmpoly_scale(input_scale, level, default_scale, getattr(node, 'order', 4))
+
+    if layer_type == 'pcmstats':
+        q_l = _q(level)
+        q_l1 = _q(level - 1)
+        q_l2 = _q(level - 2)
+        q_l3 = _q(level - 3)
+        x_sq = _rescale(_mult(input_scale, input_scale), q_l)
+        sum_x = _rescale(_mult(input_scale, q_l), q_l)
+        mean = _rescale(_mult(sum_x, q_l1), q_l1)
+        sum_x_sq = _rescale(_mult(x_sq, q_l), q_l1)
+        e_x_sq = _rescale(_mult(sum_x_sq, q_l1), q_l2)
+        mean_sq = _rescale(_mult(mean, mean), q_l2)
+        var = _scale_farthest_from_default([e_x_sq, mean_sq], default_scale)
+        iv_scale = _mult(_rescale(q_l2, default_scale), q_l3)
+        return _rescale(_mult(var, iv_scale), q_l3)
+
+    if layer_type == 'pcminit':
+        q_l = _q(level)
+        q_l1 = _q(level - 1)
+        a_sq = _rescale(_mult(input_scale, input_scale), q_l)
+        c2_scale = _mult(_rescale(q_l, default_scale), q_l1)
+        c2a2 = _rescale(_mult(a_sq, c2_scale), q_l1)
+        c1a = _rescale(_mult(input_scale, q_l), q_l)
+        return _scale_farthest_from_default([c2a2, c1a], default_scale)
+
+    if layer_type == 'pcmgs':
+        if len(preds) < 2:
+            raise ValueError(f'pcmgs node {node.layer_id} requires two inputs')
+        y_scale = np.float64(preds[0].ckks_scale)
+        a_scale = np.float64(preds[1].ckks_scale)
+        y_level = _feature_level(graph, preds[0])
+        q_l = _q(y_level)
+        q_l1 = _q(y_level - 1)
+        q_l2 = _q(y_level - 2)
+        ya = _rescale(_mult(y_scale, a_scale), q_l)
+        yy = _rescale(_mult(y_scale, y_scale), q_l)
+        ya_yy = _rescale(_mult(ya, yy), q_l1)
+        three_scale = _mult(_mult(_rescale(default_scale, q_l), _rescale(default_scale, q_l1)), default_scale)
+        three_y = _rescale(_mult(y_scale, three_scale), q_l)
+        diff = _scale_farthest_from_default([ya_yy, three_y], default_scale)
+        half_scale = _mult(
+            _mult(_rescale(q_l, default_scale), _rescale(q_l, default_scale)),
+            _mult(_rescale(q_l1, default_scale), q_l2),
+        )
+        return _rescale(_mult(diff, half_scale), q_l2)
+
+    if layer_type == 'pcmaffine':
+        if len(preds) < 2:
+            raise ValueError(f'pcmaffine node {node.layer_id} requires two inputs')
+        x_centered_scale = np.float64(preds[0].ckks_scale)
+        y_scale = np.float64(preds[1].ckks_scale)
+        y_level = _feature_level(graph, preds[1])
+        q_l = _q(y_level)
+        q_l1 = _q(y_level - 1)
+        yw_scale = _mult(_rescale(q_l, default_scale), q_l1)
+        yw = _rescale(_mult(y_scale, yw_scale), q_l)
+        return _rescale(_mult(x_centered_scale, yw), q_l1)
+
+    return _passthrough_scale(preds, default_scale)
+
+
+def propagate_ckks_scales(graph: LayerAbstractGraph):
+    if not nx.is_directed_acyclic_graph(graph.dag):
+        raise ValueError('Cycle exists in graph, cannot propagate ckks_scale')
+
+    default_scale = _default_ckks_scale()
+    for node in graph.dag.nodes:
+        if isinstance(node, FeatureNode) and graph.dag.in_degree(node) == 0:
+            node.ckks_scale = default_scale
+
+    for node in nx.topological_sort(graph.dag):
+        if not isinstance(node, ComputeNode):
+            continue
+        preds = _ordered_feature_preds(graph, node)
+        succs = [succ for succ in graph.dag.successors(node) if isinstance(succ, FeatureNode)]
+        if not preds or not succs:
+            continue
+        output_scale = _propagate_layer_ckks_scale(graph, node, preds, default_scale)
+        output_scale = _ensure_finite_scale(output_scale, node.layer_id)
+        for succ in succs:
+            succ.ckks_scale = output_scale
+
+
 def dump_graph(
     graph: LayerAbstractGraph,
     output_dir: Path,
@@ -310,6 +514,7 @@ def dump_graph(
 
     erg0_path = ergs_dir / 'nn_layers_ct_0.json'
     insert_btp_scale_gamma_layers(graph)
+    propagate_ckks_scales(graph)
     graph.to_json(dict(), str(erg0_path), score=score)
 
     if use_btp:
