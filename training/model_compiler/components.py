@@ -295,7 +295,7 @@ class GlobalConfig:
                 'LAYERNORM_MINIMAX_INIT_COEFFS',
                 [6.19067182, -16.15885111, 11.52830778],
             )
-
+            cls._instance.btp_input_level = 1
         return cls._instance
 
 

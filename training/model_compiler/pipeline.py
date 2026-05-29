@@ -273,7 +273,7 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         btp_to_succ_attrs = copy.deepcopy(dag.edges[btp_node, succ_feature])
         pre_feature_attrs = copy.deepcopy(dag.nodes[pred_feature])
         pre_feature_attrs['name'] = pre_feature.node_id
-        pre_feature_attrs['level'] = 0
+        pre_feature_attrs['level'] = config.btp_input_level
         post_gamma_input_feature_attrs = copy.deepcopy(dag.nodes[succ_feature])
         post_gamma_input_feature_attrs['name'] = post_gamma_input_feature.node_id
         post_gamma_input_feature_attrs['level'] = config.fhe_param.max_level + 1

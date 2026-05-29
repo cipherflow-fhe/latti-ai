@@ -150,7 +150,12 @@ def get_restoring_score(dag, restore_node, param_dict):
 
 
 def get_min_feature_level() -> int:
-    return 1 if config.mpc_refresh or config.graph_type == 'mpc' or config.set_btp_scale is not None else 0
+    if config.mpc_refresh or config.graph_type == 'mpc':
+        return 1
+    elif config.set_btp_scale:
+        return config.btp_input_level + 1
+    else:
+        return 0
 
 
 def restore_level_at(new_graph: nx.DiGraph, node: FeatureNode, param_dict):
