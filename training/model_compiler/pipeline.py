@@ -278,16 +278,18 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         post_gamma_input_feature_attrs['name'] = post_gamma_input_feature.node_id
         post_gamma_input_feature_attrs['level'] = config.fhe_param.max_level + 1
 
+        dag.nodes[btp_node]['level_cost'] = 9
+
         dag.remove_edge(pred_feature, btp_node)
         dag.remove_edge(btp_node, succ_feature)
 
-        dag.add_node(pre_gamma, name=pre_gamma_id, level_cost=0)
+        dag.add_node(pre_gamma, name=pre_gamma_id, level_cost=1)
         dag.add_node(pre_feature, **pre_feature_attrs)
         dag.add_edge(pred_feature, pre_gamma, **pred_to_btp_attrs)
         dag.add_edge(pre_gamma, pre_feature)
         dag.add_edge(pre_feature, btp_node, **pred_to_btp_attrs)
 
-        dag.add_node(post_gamma, name=post_gamma_id, level_cost=0)
+        dag.add_node(post_gamma, name=post_gamma_id, level_cost=1)
         dag.add_node(post_gamma_input_feature, **post_gamma_input_feature_attrs)
         dag.add_edge(btp_node, post_gamma_input_feature, **btp_to_succ_attrs)
         dag.add_edge(post_gamma_input_feature, post_gamma)
