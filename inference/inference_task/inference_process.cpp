@@ -2094,6 +2094,7 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
             if (result_mat.get_size() != 0) {
                 p_feature_mat_x[feature_output_id] = move(result_mat);
             }
+            _debug_dump_plaintext_feature(feature_output_id);
             available_keys.push_back(feature_output_id);
             json_layers.erase(key);
             break;
@@ -2233,6 +2234,9 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         cxx_args.push_back(CxxVectorArgument{ki, &z_lists[out_idx]});
     }
 
+    vector<vector<CkksCiphertext>> debug_ct_storage;
+    _debug_alloc_outputs(cxx_args, debug_ct_storage);
+
     // 4. run
     switch (compute_device) {
         case ComputeDevice::CPU: {
@@ -2258,6 +2262,10 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         case ComputeDevice::FPGA:
             throw runtime_error("FPGA mode should use run_task_fpga() instead of run_task_lazy()");
         default: throw runtime_error("Unknown compute device type");
+    }
+
+    if (!debug_ct_storage.empty()) {
+        _debug_write_csvs(debug_ct_storage);
     }
 
     // 5. save results
@@ -2611,7 +2619,8 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
                 pt = layer->generate_psi_wkd_pt(ckks_ctx, i);
         } else if (op_class == "ParBlockColMajorPolyActRNGamma") {
             auto* layer = static_cast<ParBlockColMajorPolyActRNGamma*>(layer_ptr);
-            pt = layer->generate_gamma_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("bj", j), attrs.value("g", k));
+            pt = layer->generate_gamma_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("bi", 0), attrs.value("bj", j),
+                                          attrs.value("g", k));
         } else if (op_class == "ParBlockColMajorPolyActRNPoly") {
             auto* layer = static_cast<ParBlockColMajorPolyActRNPoly*>(layer_ptr);
             pt = layer->generate_coeff_pt(ckks_ctx, attrs.value("coeff_idx", i), attrs.value("mb", 0),
@@ -2715,6 +2724,157 @@ void InferenceProcess::_debug_write_csvs(const vector<vector<CkksCiphertext>>& d
         cout << "[DEBUG DUMP] " << fid << " -> " << path << " (" << debug_ct_storage[idx].size() << " cts)" << endl;
         idx++;
     }
+}
+
+void InferenceProcess::_debug_dump_plaintext_feature(const string& feature_id) {
+    if (!debug_config_loaded_) {
+        debug_config_loaded_ = true;
+        auto debug_path = fp->project_path / "debug_config.json";
+        if (filesystem::exists(debug_path)) {
+            debug_config_ = read_json(debug_path);
+        }
+    }
+    if (debug_config_.empty() || !debug_config_.contains("debug_features"))
+        return;
+    if (!debug_config_["debug_features"].contains(feature_id))
+        return;
+
+    filesystem::path enc_dump_dir = fp->project_path / "debug_output";
+    if (debug_config_.contains("dump_dir")) {
+        enc_dump_dir = filesystem::path(debug_config_["dump_dir"].get<string>());
+        if (enc_dump_dir.is_relative()) {
+            enc_dump_dir = fp->project_path / enc_dump_dir;
+        }
+    }
+    filesystem::path dump_dir = enc_dump_dir.parent_path() / "debug_output_pt";
+    filesystem::create_directories(dump_dir);
+
+    string safe = feature_id;
+    replace(safe.begin(), safe.end(), '/', '_');
+    filesystem::path path = dump_dir / (safe + ".csv");
+
+    ofstream ofs(path);
+    FeatureNode feature_node(fp->json_features[feature_id]);
+    if (feature_node.is_mat) {
+        auto it = p_feature_mat_x.find(feature_id);
+        if (it == p_feature_mat_x.end())
+            return;
+        const auto& arr = it->second;
+        auto shape = arr.get_shape();
+        auto ctx_it = ckks_contexts.find(feature_node.ckks_parameter_id);
+        if (ctx_it == ckks_contexts.end() || fp->n_heads <= 1 || fp->matmul_block_size == 0) {
+            ofs << "row,col,value\n";
+            for (uint64_t i = 0; i < shape[0]; i++) {
+                for (uint64_t j = 0; j < shape[1]; j++) {
+                    ofs << i << "," << j << "," << setprecision(12) << arr.get(i, j) << "\n";
+                }
+            }
+        } else {
+            uint32_t d = get_config_matmul_block_size(fp->matmul_block_size);
+            Duo head_shape = get_feature_mat_head_shape(feature_node, feature_id);
+            uint32_t m = head_shape[0];
+            uint32_t cols_per_head = head_shape[1];
+            uint32_t total_cols = shape[1];
+            uint32_t n_heads = fp->n_heads;
+            uint32_t n_h_padded = 1;
+            while (n_h_padded < n_heads)
+                n_h_padded <<= 1;
+
+            uint32_t n_slot = ctx_it->second->get_parameter().get_n() / 2;
+            uint32_t S = 1;
+            uint32_t chunk_size = n_h_padded * d * d;
+            uint32_t n_cts_per_block_idx = 1;
+            if (n_slot < chunk_size) {
+                S = n_slot / (d * d);
+                chunk_size = n_slot;
+                if (S == 1) {
+                    n_h_padded = n_heads;
+                }
+                n_cts_per_block_idx = n_h_padded / S;
+            } else {
+                S = n_h_padded;
+            }
+            uint32_t num_chunks = n_slot / chunk_size;
+            uint32_t num_block_rows = div_ceil(m, d);
+            uint32_t num_block_cols = div_ceil(cols_per_head, d);
+            uint32_t cts_per_mb = num_block_rows * num_block_cols * n_cts_per_block_idx;
+            uint32_t n_cols_per_mb = cols_per_head * n_heads;
+            uint32_t K_col = div_ceil(total_cols, n_cols_per_mb);
+
+            ofs << "ct_index,slot_index,value\n";
+            for (uint32_t col_mb = 0; col_mb < K_col; col_mb++) {
+                for (uint32_t bj = 0; bj < num_block_cols; bj++) {
+                    for (uint32_t bi = 0; bi < num_block_rows; bi++) {
+                        for (uint32_t g = 0; g < n_cts_per_block_idx; g++) {
+                            uint32_t local_idx = (bi + num_block_rows * bj) * n_cts_per_block_idx + g;
+                            uint32_t ct_idx = col_mb * cts_per_mb + local_idx;
+                            vector<double> slots(n_slot, 0.0);
+                            for (uint32_t h_local = 0; h_local < S; h_local++) {
+                                uint32_t h = g * S + h_local;
+                                for (uint32_t col = 0; col < d; col++) {
+                                    for (uint32_t row = 0; row < d; row++) {
+                                        uint32_t r = bi * d + row;
+                                        uint32_t c = bj * d + col;
+                                        double val = 0.0;
+                                        if (h < n_heads && r < m && c < cols_per_head) {
+                                            uint32_t global_col = col_mb * n_cols_per_mb + h * cols_per_head + c;
+                                            if (global_col < total_cols) {
+                                                val = arr.get(r, global_col);
+                                            }
+                                        }
+                                        uint32_t base_slot = (row + d * col) * S + h_local;
+                                        for (uint32_t ci = 0; ci < num_chunks; ci++) {
+                                            slots[ci * chunk_size + base_slot] = val;
+                                        }
+                                    }
+                                }
+                            }
+                            for (uint32_t si = 0; si < n_slot; si++) {
+                                ofs << ct_idx << "," << si << "," << setprecision(12) << slots[si] << "\n";
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if (feature_node.dim == 2) {
+        auto it = p_feature2d_x.find(feature_id);
+        if (it == p_feature2d_x.end())
+            return;
+        const auto& arr = it->second;
+        auto shape = arr.get_shape();
+        ofs << "channel,row,col,value\n";
+        for (uint64_t c = 0; c < shape[0]; c++) {
+            for (uint64_t i = 0; i < shape[1]; i++) {
+                for (uint64_t j = 0; j < shape[2]; j++) {
+                    ofs << c << "," << i << "," << j << "," << setprecision(12) << arr.get(c, i, j) << "\n";
+                }
+            }
+        }
+    } else if (feature_node.dim == 1) {
+        auto it = p_feature1d_x.find(feature_id);
+        if (it == p_feature1d_x.end())
+            return;
+        const auto& arr = it->second;
+        auto shape = arr.get_shape();
+        ofs << "channel,index,value\n";
+        for (uint64_t c = 0; c < shape[0]; c++) {
+            for (uint64_t i = 0; i < shape[1]; i++) {
+                ofs << c << "," << i << "," << setprecision(12) << arr.get(c, i) << "\n";
+            }
+        }
+    } else if (feature_node.dim == 0) {
+        auto it = p_feature0d_x.find(feature_id);
+        if (it == p_feature0d_x.end())
+            return;
+        const auto& arr = it->second;
+        ofs << "index,value\n";
+        for (uint64_t i = 0; i < arr.size(); i++) {
+            ofs << i << "," << setprecision(12) << arr[i] << "\n";
+        }
+    }
+
+    cout << "[DEBUG DUMP PT] " << feature_id << " -> " << path.string() << endl;
 }
 
 void InferenceProcess::_debug_dump_feature_sdk(const string& feature_id) {

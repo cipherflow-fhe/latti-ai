@@ -279,6 +279,7 @@ private:
     void _debug_alloc_outputs(std::vector<ls::CxxVectorArgument>& cxx_args,
                               std::vector<std::vector<ls::CkksCiphertext>>& debug_ct_storage);
     void _debug_write_csvs(const std::vector<std::vector<ls::CkksCiphertext>>& debug_ct_storage);
+    void _debug_dump_plaintext_feature(const std::string& feature_id);
     // SDK mode: dump a single feature right after set_feature
     void _debug_dump_feature_sdk(const std::string& feature_id);
 };
