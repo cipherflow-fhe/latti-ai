@@ -111,8 +111,8 @@ InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool i
         block_shape = {config["block_shape"][0], config["block_shape"][1]};
     }
     is_absorb_polyrelu = config["is_absorb_polyrelu"];
-    n_heads = config.at("n_heads").get<uint32_t>();
-    matmul_block_size = config.at("matmul_block_size").get<uint32_t>();
+    n_heads = config.value("n_heads", 1u);
+    matmul_block_size = config.value("matmul_block_size", 0u);
     layernorm_param = config.value("layernorm_param", json::object());
     Timer timer(true);
 }
@@ -2611,7 +2611,8 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
                 pt = layer->generate_psi_wkd_pt(ckks_ctx, i);
         } else if (op_class == "ParBlockColMajorPolyActRNGamma") {
             auto* layer = static_cast<ParBlockColMajorPolyActRNGamma*>(layer_ptr);
-            pt = layer->generate_gamma_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("bj", j), attrs.value("g", k));
+            pt = layer->generate_gamma_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("bi", 0), attrs.value("bj", j),
+                                          attrs.value("g", k));
         } else if (op_class == "ParBlockColMajorPolyActRNPoly") {
             auto* layer = static_cast<ParBlockColMajorPolyActRNPoly*>(layer_ptr);
             pt = layer->generate_coeff_pt(ckks_ctx, attrs.value("coeff_idx", i), attrs.value("mb", 0),
