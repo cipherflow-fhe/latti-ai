@@ -78,26 +78,37 @@ class ParBlockColMajorPolyActRNGamma:
             local_ct_idx = ct_idx % self.cts_per_mb
             block_idx = local_ct_idx // self.G
             g = local_ct_idx % self.G
+            bi = block_idx % self.num_block_rows
             bj = block_idx // self.num_block_rows
-            result[ct_idx] = rescale(mult(x, gamma_pt[mb][bj][g]))
+            result[ct_idx] = rescale(mult(x, gamma_pt[mb][bi][bj][g]))
         return result
 
     def call_custom_compute(self, input_cts: list, data_source) -> list:
         gamma_pt = []
         for mb in range(self.K):
             gamma_mb = []
-            for bj in range(self.num_block_cols):
-                gamma_row = []
-                for g in range(self.G):
-                    gamma_node = CkksPlaintextRingtNode(f'encode_pt_gamma_{mb}_{bj}_{g}')
-                    custom_compute(
-                        inputs=[data_source],
-                        output=gamma_node,
-                        type='encode_pt',
-                        attributes={'op_class': gamma_op_class, 'type': 'gamma_pt', 'mb': mb, 'bj': bj, 'g': g},
-                    )
-                    gamma_row.append(gamma_node)
-                gamma_mb.append(gamma_row)
+            for bi in range(self.num_block_rows):
+                gamma_bi = []
+                for bj in range(self.num_block_cols):
+                    gamma_row = []
+                    for g in range(self.G):
+                        gamma_node = CkksPlaintextRingtNode(f'encode_pt_gamma_{mb}_{bi}_{bj}_{g}')
+                        custom_compute(
+                            inputs=[data_source],
+                            output=gamma_node,
+                            type='encode_pt',
+                            attributes={
+                                'op_class': gamma_op_class,
+                                'type': 'gamma_pt',
+                                'mb': mb,
+                                'bi': bi,
+                                'bj': bj,
+                                'g': g,
+                            },
+                        )
+                        gamma_row.append(gamma_node)
+                    gamma_bi.append(gamma_row)
+                gamma_mb.append(gamma_bi)
             gamma_pt.append(gamma_mb)
         return self.call(input_cts, gamma_pt)
 
