@@ -306,7 +306,7 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         dag.add_edge(post_gamma, succ_feature)
 
 
-def _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node: ComputeNode, parcpmm_node: ComputeNode):
+def _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node: ComputeNode, parcpmm_node: ComputeNode, direction: str):
     def _value_or_empty(attr_name: str):
         value = getattr(pcmgamma_node, attr_name, '')
         return '' if value is None else value
@@ -317,6 +317,7 @@ def _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node: ComputeNode, parcpmm_node: 
         'gamma_path': _value_or_empty('gamma_path'),
         'running_max_path': _value_or_empty('running_max_path'),
         'btp_scale': _value_or_empty('btp_scale'),
+        'direction': direction,
     }
 
     existing_fuse_gama_info = getattr(parcpmm_node, 'fuse_gama_info', None)
@@ -343,7 +344,7 @@ def _try_fuse_pcmgamma_before_parcpmm(dag, pcmgamma_node: ComputeNode) -> bool:
         return False
 
     edge_attrs = copy.deepcopy(dag.edges[mid_feature, parcpmm_node])
-    _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, parcpmm_node)
+    _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, parcpmm_node, 'before_parcpmm')
     dag.remove_node(pcmgamma_node)
     dag.remove_node(mid_feature)
     dag.add_edge(input_feature, parcpmm_node, **edge_attrs)
@@ -368,7 +369,7 @@ def _try_fuse_pcmgamma_after_parcpmm(dag, pcmgamma_node: ComputeNode) -> bool:
         return False
 
     edge_attrs = copy.deepcopy(dag.edges[parcpmm_node, mid_feature])
-    _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, parcpmm_node)
+    _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, parcpmm_node, 'after_parcpmm')
     dag.remove_node(pcmgamma_node)
     dag.remove_node(mid_feature)
     dag.add_edge(parcpmm_node, output_feature, **edge_attrs)
