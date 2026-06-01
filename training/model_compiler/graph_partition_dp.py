@@ -464,7 +464,7 @@ class GraphPartitioner:
 
         temp_ab = LayerAbstractGraph()
         temp_ab.dag = final_dag
-        transforms.insert_drop_level_layers(temp_ab)
+        # transforms.insert_drop_level_layers(temp_ab)
 
         return final_score, temp_ab.dag
 

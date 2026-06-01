@@ -19,7 +19,17 @@ from pathlib import Path
 import copy
 
 import components
-from components import LayerAbstractGraph, config, PN13QP218, PN14QP438, PN15QP880, PN16QP1761, N16QP1546H192H32
+from components import (
+    ComputeNode,
+    FeatureNode,
+    LayerAbstractGraph,
+    config,
+    PN13QP218,
+    PN14QP438,
+    PN15QP880,
+    PN16QP1761,
+    N16QP1546H192H32,
+)
 import processor
 from processor import *
 from graph_partition_dp import *
@@ -296,6 +306,162 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         dag.add_edge(post_gamma, succ_feature)
 
 
+def _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node: ComputeNode, parcpmm_node: ComputeNode):
+    def _value_or_empty(attr_name: str):
+        value = getattr(pcmgamma_node, attr_name, '')
+        return '' if value is None else value
+
+    fuse_gama_info = {
+        'weight_path': _value_or_empty('path'),
+        'K': _value_or_empty('K'),
+        'gamma_path': _value_or_empty('gamma_path'),
+        'running_max_path': _value_or_empty('running_max_path'),
+        'btp_scale': _value_or_empty('btp_scale'),
+    }
+
+    existing_fuse_gama_info = getattr(parcpmm_node, 'fuse_gama_info', None)
+    if existing_fuse_gama_info is not None and existing_fuse_gama_info != fuse_gama_info:
+        raise ValueError(f'Cannot fuse multiple pcmgamma layers into parcpmm node {parcpmm_node.layer_id}')
+    parcpmm_node.fuse_gama_info = fuse_gama_info
+
+
+def _try_fuse_pcmgamma_before_parcpmm(dag, pcmgamma_node: ComputeNode) -> bool:
+    preds = list(dag.predecessors(pcmgamma_node))
+    succs = list(dag.successors(pcmgamma_node))
+    if len(preds) != 1 or len(succs) != 1:
+        return False
+
+    input_feature = preds[0]
+    mid_feature = succs[0]
+    if not isinstance(input_feature, FeatureNode) or not isinstance(mid_feature, FeatureNode):
+        return False
+    if dag.in_degree(mid_feature) != 1 or dag.out_degree(mid_feature) != 1:
+        return False
+
+    parcpmm_node = next(iter(dag.successors(mid_feature)), None)
+    if not isinstance(parcpmm_node, ComputeNode) or parcpmm_node.layer_type != 'parcpmm':
+        return False
+
+    edge_attrs = copy.deepcopy(dag.edges[mid_feature, parcpmm_node])
+    _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, parcpmm_node)
+    dag.remove_node(pcmgamma_node)
+    dag.remove_node(mid_feature)
+    dag.add_edge(input_feature, parcpmm_node, **edge_attrs)
+    return True
+
+
+def _try_fuse_pcmgamma_after_parcpmm(dag, pcmgamma_node: ComputeNode) -> bool:
+    preds = list(dag.predecessors(pcmgamma_node))
+    succs = list(dag.successors(pcmgamma_node))
+    if len(preds) != 1 or len(succs) != 1:
+        return False
+
+    mid_feature = preds[0]
+    output_feature = succs[0]
+    if not isinstance(mid_feature, FeatureNode) or not isinstance(output_feature, FeatureNode):
+        return False
+    if dag.in_degree(mid_feature) != 1 or dag.out_degree(mid_feature) != 1:
+        return False
+
+    parcpmm_node = next(iter(dag.predecessors(mid_feature)), None)
+    if not isinstance(parcpmm_node, ComputeNode) or parcpmm_node.layer_type != 'parcpmm':
+        return False
+
+    edge_attrs = copy.deepcopy(dag.edges[parcpmm_node, mid_feature])
+    _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, parcpmm_node)
+    dag.remove_node(pcmgamma_node)
+    dag.remove_node(mid_feature)
+    dag.add_edge(parcpmm_node, output_feature, **edge_attrs)
+    return True
+
+
+def fuse_pcmgamma_parcpmm_layers(graph: LayerAbstractGraph):
+    dag = graph.dag
+    changed = True
+    while changed:
+        changed = False
+        for node in list(dag.nodes):
+            if not isinstance(node, ComputeNode) or node.layer_type != 'pcmgamma':
+                continue
+            if _try_fuse_pcmgamma_before_parcpmm(dag, node) or _try_fuse_pcmgamma_after_parcpmm(dag, node):
+                changed = True
+                break
+
+
+def recompute_final_level(graph: LayerAbstractGraph):
+    dag = graph.dag
+    min_feature_level = get_min_feature_level()
+    reset_layer_types = {'bootstrapping', 'mpc_refresh'}
+    anchors: dict[FeatureNode, int] = {}
+
+    def set_anchor(feature: FeatureNode, level: int):
+        level = int(level)
+        existing_level = anchors.get(feature)
+        if existing_level is not None and existing_level != level:
+            raise ValueError(
+                f'Conflicting fixed levels for feature {feature.node_id}: {existing_level} vs {level}'
+            )
+        anchors[feature] = level
+
+    for node in dag.nodes:
+        if not isinstance(node, ComputeNode) or node.layer_type not in reset_layer_types:
+            continue
+        preds = [pred for pred in dag.predecessors(node) if isinstance(pred, FeatureNode)]
+        succs = [succ for succ in dag.successors(node) if isinstance(succ, FeatureNode)]
+        for feature in preds + succs:
+            if 'level' not in dag.nodes[feature]:
+                raise ValueError(f'Feature {feature.node_id} missing level before final level recompute')
+            set_anchor(feature, dag.nodes[feature]['level'])
+
+    for node in dag.nodes:
+        if not isinstance(node, FeatureNode) or dag.out_degree(node) != 0 or node in anchors:
+            continue
+        set_anchor(node, min_feature_level)
+
+    feature_levels: dict[FeatureNode, int] = {}
+    for node in reversed(list(nx.topological_sort(dag))):
+        if not isinstance(node, FeatureNode):
+            continue
+
+        regular_consumers = [
+            consumer
+            for consumer in dag.successors(node)
+            if isinstance(consumer, ComputeNode) and consumer.layer_type not in reset_layer_types
+        ]
+        downstream_req = min_feature_level if dag.out_degree(node) == 0 or regular_consumers else 0
+
+        for consumer in regular_consumers:
+            output_features = [succ for succ in dag.successors(consumer) if isinstance(succ, FeatureNode)]
+            if not output_features:
+                continue
+            missing_outputs = [feature.node_id for feature in output_features if feature not in feature_levels]
+            if missing_outputs:
+                raise ValueError(
+                    f'Cannot recompute level for {node.node_id}: outputs of {consumer.layer_id} not ready: '
+                    f'{missing_outputs}'
+                )
+            output_level = max(feature_levels[feature] for feature in output_features)
+            downstream_req = max(downstream_req, output_level + dag.nodes[consumer].get('level_cost', 0))
+
+        if node in anchors:
+            anchor_level = anchors[node]
+            if downstream_req > anchor_level:
+                raise ValueError(
+                    f'Fixed level of feature {node.node_id} is {anchor_level}, but downstream requires {downstream_req}'
+                )
+            feature_levels[node] = anchor_level
+        else:
+            feature_levels[node] = downstream_req
+
+    max_allowed_level = config.fhe_param.max_level + 1
+    for feature, level in feature_levels.items():
+        if level < 0 or level > max_allowed_level:
+            raise ValueError(
+                f'Final level of feature {feature.node_id} is out of range: {level}, max allowed {max_allowed_level}'
+            )
+        dag.nodes[feature]['level'] = int(level)
+
+
 def dump_graph(
     graph: LayerAbstractGraph,
     output_dir: Path,
@@ -312,6 +478,9 @@ def dump_graph(
 
     erg0_path = ergs_dir / 'nn_layers_ct_0.json'
     insert_btp_scale_gamma_layers(graph)
+    fuse_pcmgamma_parcpmm_layers(graph)
+    recompute_final_level(graph)
+    transforms.insert_drop_level_layers(graph)
     graph.to_json(dict(), str(erg0_path), score=score)
 
     if use_btp:
