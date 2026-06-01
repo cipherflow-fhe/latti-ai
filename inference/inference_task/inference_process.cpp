@@ -111,8 +111,8 @@ InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool i
         block_shape = {config["block_shape"][0], config["block_shape"][1]};
     }
     is_absorb_polyrelu = config["is_absorb_polyrelu"];
-    n_heads = config.at("n_heads").get<uint32_t>();
-    matmul_block_size = config.at("matmul_block_size").get<uint32_t>();
+    n_heads = config.value("n_heads", 1u);
+    matmul_block_size = config.value("matmul_block_size", 0u);
     layernorm_param = config.value("layernorm_param", json::object());
     Timer timer(true);
 }
