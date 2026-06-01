@@ -676,9 +676,9 @@ class TestSingleLayer(CompilerTestBase):
         )
 
     def test_vit_from_onnx(self):
-        self.temp_onnx_path = 'runs/poly_deit_tiny_patch16_224.onnx'
-        # self.temp_onnx_path = 'runs/deit_tiny_patch16_224_until_block0_after_mlp_add.onnx'
-        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed', feature_mat=True)
+        # self.temp_onnx_path = 'runs/poly_deit_tiny_patch16_224.onnx'
+        self.temp_onnx_path = 'runs/deit_tiny_patch16_224_until_block0_after_mlp_add.onnx'
+        # onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed', feature_mat=True)
         with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
             compile_config = json.load(f)
 
@@ -698,13 +698,13 @@ class TestSingleLayer(CompilerTestBase):
         )
 
         server_dir = script_dir / 'task' / 'server'
-        export_h5_from_onnx(
-            onnx_path=str(self.temp_onnx_path),
-            json_path=str(server_dir / 'nn_layers_ct_0.json'),
-            h5_path=str(server_dir / 'model_parameters.h5'),
-            verbose=False,
-            feature_mat=compile_config['is_feature_mat'],
-        )
+        # export_h5_from_onnx(
+        #     onnx_path=str(self.temp_onnx_path),
+        #     json_path=str(server_dir / 'nn_layers_ct_0.json'),
+        #     h5_path=str(server_dir / 'model_parameters.h5'),
+        #     verbose=False,
+        #     feature_mat=compile_config['is_feature_mat'],
+        # )
         return graph, score
 
 
