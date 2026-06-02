@@ -196,8 +196,8 @@ class ParBlockColMajorPolyActRNPoly:
 
             x_sq = rescale(relin(mult(x, x)))
 
-            c2x2 = rescale(mult(x_sq, c2_pt[mb][bj][g]))
-            c1x = rescale(mult(x, c1_pt[mb][bj][g]))
+            c2x2 = rescale(mult(x_sq, c2_pt[mb][bi][bj][g]))
+            c1x = rescale(mult(x, c1_pt[mb][bi][bj][g]))
             c1x_drop = drop_level(c1x)
 
             low = add(c1x_drop, c2x2)
@@ -207,8 +207,8 @@ class ParBlockColMajorPolyActRNPoly:
                 result[ct_idx] = low
                 continue
 
-            c4x2 = rescale(mult(x_sq, c4_pt[mb][bj][g]))
-            c3x = rescale(mult(x, c3_pt[mb][bj][g]))
+            c4x2 = rescale(mult(x_sq, c4_pt[mb][bi][bj][g]))
+            c3x = rescale(mult(x, c3_pt[mb][bi][bj][g]))
             c3x_drop = drop_level(c3x)
             high = add(c3x_drop, c4x2)
 
@@ -231,86 +231,96 @@ class ParBlockColMajorPolyActRNPoly:
             c1_mb = []
             c4_mb = []
             c3_mb = []
-            for bj in range(self.num_block_cols):
-                c2_row = []
-                c1_row = []
-                c4_row = []
-                c3_row = []
-                for g in range(self.G):
-                    c2_node = CkksPlaintextRingtNode(f'encode_pt_poly_c2_{mb}_{bj}_{g}')
-                    custom_compute(
-                        inputs=[data_source],
-                        output=c2_node,
-                        type='encode_pt',
-                        attributes={
-                            'op_class': op_class,
-                            'type': 'coeff_pt',
-                            'coeff_idx': 2,
-                            'mb': mb,
-                            'bi': 0,
-                            'bj': bj,
-                            'g': g,
-                        },
-                    )
-                    c2_row.append(c2_node)
+            for bi in range(self.num_block_rows):
+                c2_bi = []
+                c1_bi = []
+                c4_bi = []
+                c3_bi = []
+                for bj in range(self.num_block_cols):
+                    c2_row = []
+                    c1_row = []
+                    c4_row = []
+                    c3_row = []
+                    for g in range(self.G):
+                        c2_node = CkksPlaintextRingtNode(f'encode_pt_poly_c2_{mb}_{bi}_{bj}_{g}')
+                        custom_compute(
+                            inputs=[data_source],
+                            output=c2_node,
+                            type='encode_pt',
+                            attributes={
+                                'op_class': op_class,
+                                'type': 'coeff_pt',
+                                'coeff_idx': 2,
+                                'mb': mb,
+                                'bi': bi,
+                                'bj': bj,
+                                'g': g,
+                            },
+                        )
+                        c2_row.append(c2_node)
 
-                    c1_node = CkksPlaintextRingtNode(f'encode_pt_poly_c1_{mb}_{bj}_{g}')
-                    custom_compute(
-                        inputs=[data_source],
-                        output=c1_node,
-                        type='encode_pt',
-                        attributes={
-                            'op_class': op_class,
-                            'type': 'coeff_pt',
-                            'coeff_idx': 1,
-                            'mb': mb,
-                            'bi': 0,
-                            'bj': bj,
-                            'g': g,
-                        },
-                    )
-                    c1_row.append(c1_node)
+                        c1_node = CkksPlaintextRingtNode(f'encode_pt_poly_c1_{mb}_{bi}_{bj}_{g}')
+                        custom_compute(
+                            inputs=[data_source],
+                            output=c1_node,
+                            type='encode_pt',
+                            attributes={
+                                'op_class': op_class,
+                                'type': 'coeff_pt',
+                                'coeff_idx': 1,
+                                'mb': mb,
+                                'bi': bi,
+                                'bj': bj,
+                                'g': g,
+                            },
+                        )
+                        c1_row.append(c1_node)
 
+                        if self.degree == 4:
+                            c4_node = CkksPlaintextRingtNode(f'encode_pt_poly_c4_{mb}_{bi}_{bj}_{g}')
+                            custom_compute(
+                                inputs=[data_source],
+                                output=c4_node,
+                                type='encode_pt',
+                                attributes={
+                                    'op_class': op_class,
+                                    'type': 'coeff_pt',
+                                    'coeff_idx': 4,
+                                    'mb': mb,
+                                    'bi': bi,
+                                    'bj': bj,
+                                    'g': g,
+                                },
+                            )
+                            c4_row.append(c4_node)
+
+                            c3_node = CkksPlaintextRingtNode(f'encode_pt_poly_c3_{mb}_{bi}_{bj}_{g}')
+                            custom_compute(
+                                inputs=[data_source],
+                                output=c3_node,
+                                type='encode_pt',
+                                attributes={
+                                    'op_class': op_class,
+                                    'type': 'coeff_pt',
+                                    'coeff_idx': 3,
+                                    'mb': mb,
+                                    'bi': bi,
+                                    'bj': bj,
+                                    'g': g,
+                                },
+                            )
+                            c3_row.append(c3_node)
+
+                    c2_bi.append(c2_row)
+                    c1_bi.append(c1_row)
                     if self.degree == 4:
-                        c4_node = CkksPlaintextRingtNode(f'encode_pt_poly_c4_{mb}_{bj}_{g}')
-                        custom_compute(
-                            inputs=[data_source],
-                            output=c4_node,
-                            type='encode_pt',
-                            attributes={
-                                'op_class': op_class,
-                                'type': 'coeff_pt',
-                                'coeff_idx': 4,
-                                'mb': mb,
-                                'bi': 0,
-                                'bj': bj,
-                                'g': g,
-                            },
-                        )
-                        c4_row.append(c4_node)
-
-                        c3_node = CkksPlaintextRingtNode(f'encode_pt_poly_c3_{mb}_{bj}_{g}')
-                        custom_compute(
-                            inputs=[data_source],
-                            output=c3_node,
-                            type='encode_pt',
-                            attributes={
-                                'op_class': op_class,
-                                'type': 'coeff_pt',
-                                'coeff_idx': 3,
-                                'mb': mb,
-                                'bi': 0,
-                                'bj': bj,
-                                'g': g,
-                            },
-                        )
-                        c3_row.append(c3_node)
-
-                c2_mb.append(c2_row)
-                c1_mb.append(c1_row)
+                        c4_bi.append(c4_row)
+                        c3_bi.append(c3_row)
+                c2_mb.append(c2_bi)
+                c1_mb.append(c1_bi)
                 if self.degree == 4:
-                    c4_mb.append(c4_row)
-                    c3_mb.append(c3_row)
+                    c4_mb.append(c4_bi)
+                    c3_mb.append(c3_bi)
             c2_pt.append(c2_mb)
             c1_pt.append(c1_mb)
             if self.degree == 4:
