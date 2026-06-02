@@ -37,7 +37,7 @@ def process_levels(graph: LayerAbstractGraph):
                 succ = next(graph.dag.successors(node))
                 graph.dag.nodes[succ]['level'] = config.fhe_param.max_level
 
-    transforms.insert_drop_level_layers(graph)
+    # transforms.insert_drop_level_layers(graph)
 
 
 def get_leading_feature_nodes(dag: nx.DiGraph) -> list[FeatureNode]:

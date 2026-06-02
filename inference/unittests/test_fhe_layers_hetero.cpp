@@ -62,6 +62,7 @@
 #include "fhe_layers/par_block_col_major_polyactrn.h"
 #include "data_structs/feature_mat.h"
 #include "ut_util.h"
+#include <fhe_ops_lib/utils.h>
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include <cxx_sdk_v2/cxx_argument.h>
 #include <lattisense/lib/nlohmann/json.hpp>
@@ -267,8 +268,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "sq", "", HeteroProcessors) {
         SquareLayer square_layer(this->param);
         auto plain_output = square_layer.run_plaintext(input_array);
 
-        print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
-        print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
+        // print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+        // print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
 
         auto compare_result = compare(plain_output, output_mg);
         REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
@@ -1584,8 +1585,8 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
             }
             if (op_class == "ParBlockColMajorPolyActRNGamma") {
                 auto* layer = static_cast<ParBlockColMajorPolyActRNGamma*>(layer_ptr);
-                return layer->generate_gamma_pt(*ctx_ptr, attrs.value("mb", 0), attrs.value("bj", 0),
-                                                attrs.value("g", 0));
+                return layer->generate_gamma_pt(*ctx_ptr, attrs.value("mb", 0), attrs.value("bi", 0),
+                                                attrs.value("bj", 0), attrs.value("g", 0));
             }
             if (op_class == "ParBlockColMajorPolyActRNPoly") {
                 auto* layer = static_cast<ParBlockColMajorPolyActRNPoly*>(layer_ptr);

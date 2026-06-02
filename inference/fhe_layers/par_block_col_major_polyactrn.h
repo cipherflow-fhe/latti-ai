@@ -40,7 +40,8 @@ public:
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
-    ls::CkksPlaintextRingt generate_gamma_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t bj, uint32_t g) const;
+    ls::CkksPlaintextRingt
+    generate_gamma_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t bi, uint32_t bj, uint32_t g) const;
 
 private:
     uint32_t m_, cols_per_head_, d_, n_slot_;
@@ -50,7 +51,7 @@ private:
     uint32_t num_block_rows_, num_block_cols_;
     Array<double, 1> gamma_vals_;
 
-    std::vector<ls::CkksPlaintextRingt> gamma_pt_;  // per (mb, bj, g)
+    std::vector<ls::CkksPlaintextRingt> gamma_pt_;  // per (mb, bi, bj, g)
 };
 
 // ============================================================
