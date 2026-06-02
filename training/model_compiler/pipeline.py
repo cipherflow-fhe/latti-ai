@@ -306,12 +306,16 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         dag.add_edge(post_gamma, succ_feature)
 
 
-def _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node: ComputeNode, parcpmm_node: ComputeNode, direction: str):
+PCMGAMMA_ABSORB_TARGETS = {'pcmpoly', 'parcpmm'}
+PCMGAMMA_PASS_THROUGH_TYPES = {'pcmgamma'}
+
+
+def _pcmgamma_fuse_info(pcmgamma_node: ComputeNode, direction: str) -> dict:
     def _value_or_empty(attr_name: str):
         value = getattr(pcmgamma_node, attr_name, '')
         return '' if value is None else value
 
-    fuse_gama_info = {
+    return {
         'weight_path': _value_or_empty('path'),
         'K': _value_or_empty('K'),
         'gamma_path': _value_or_empty('gamma_path'),
@@ -320,73 +324,122 @@ def _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node: ComputeNode, parcpmm_node: 
         'direction': direction,
     }
 
-    existing_fuse_gama_info = getattr(parcpmm_node, 'fuse_gama_info', None)
-    if existing_fuse_gama_info is not None and existing_fuse_gama_info != fuse_gama_info:
-        raise ValueError(f'Cannot fuse multiple pcmgamma layers into parcpmm node {parcpmm_node.layer_id}')
-    parcpmm_node.fuse_gama_info = fuse_gama_info
+
+def _append_fuse_gama_info(node: ComputeNode, fuse_gama_info: dict):
+    existing_fuse_gama_info = getattr(node, 'fuse_gama_info', None)
+    if existing_fuse_gama_info is None:
+        node.fuse_gama_info = [fuse_gama_info]
+    elif isinstance(existing_fuse_gama_info, list):
+        existing_fuse_gama_info.append(fuse_gama_info)
+    else:
+        node.fuse_gama_info = [existing_fuse_gama_info, fuse_gama_info]
 
 
-def _try_fuse_pcmgamma_before_parcpmm(dag, pcmgamma_node: ComputeNode) -> bool:
+def _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node: ComputeNode, parcpmm_node: ComputeNode, direction: str):
+    _append_fuse_gama_info(parcpmm_node, _pcmgamma_fuse_info(pcmgamma_node, direction))
+
+
+def _fuse_pcmgamma_attrs_into_pcmpoly(pcmgamma_node: ComputeNode, pcmpoly_node: ComputeNode, direction: str):
+    _append_fuse_gama_info(pcmpoly_node, _pcmgamma_fuse_info(pcmgamma_node, direction))
+
+
+def _next_node_on_single_path(dag, node, search_direction: str):
+    if search_direction == 'up':
+        if dag.in_degree(node) != 1:
+            return None
+        return next(dag.predecessors(node))
+    if dag.out_degree(node) != 1:
+        return None
+    return next(dag.successors(node))
+
+
+def _find_pcmgamma_absorb_target(dag, pcmgamma_node: ComputeNode, search_direction: str) -> ComputeNode | None:
+    node = pcmgamma_node
+    while True:
+        node = _next_node_on_single_path(dag, node, search_direction)
+        if node is None:
+            return None
+
+        if isinstance(node, FeatureNode):
+            if dag.in_degree(node) != 1 or dag.out_degree(node) != 1:
+                return None
+            continue
+
+        if not isinstance(node, ComputeNode):
+            return None
+        if node.layer_type in PCMGAMMA_ABSORB_TARGETS:
+            return node
+        if node.layer_type not in PCMGAMMA_PASS_THROUGH_TYPES:
+            return None
+
+
+def _remove_pcmgamma_from_linear_path(dag, pcmgamma_node: ComputeNode, search_direction: str) -> bool:
     preds = list(dag.predecessors(pcmgamma_node))
     succs = list(dag.successors(pcmgamma_node))
     if len(preds) != 1 or len(succs) != 1:
         return False
 
     input_feature = preds[0]
-    mid_feature = succs[0]
-    if not isinstance(input_feature, FeatureNode) or not isinstance(mid_feature, FeatureNode):
-        return False
-    if dag.in_degree(mid_feature) != 1 or dag.out_degree(mid_feature) != 1:
-        return False
-
-    parcpmm_node = next(iter(dag.successors(mid_feature)), None)
-    if not isinstance(parcpmm_node, ComputeNode) or parcpmm_node.layer_type != 'parcpmm':
-        return False
-
-    edge_attrs = copy.deepcopy(dag.edges[mid_feature, parcpmm_node])
-    _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, parcpmm_node, 'before_parcpmm')
-    dag.remove_node(pcmgamma_node)
-    dag.remove_node(mid_feature)
-    dag.add_edge(input_feature, parcpmm_node, **edge_attrs)
-    return True
-
-
-def _try_fuse_pcmgamma_after_parcpmm(dag, pcmgamma_node: ComputeNode) -> bool:
-    preds = list(dag.predecessors(pcmgamma_node))
-    succs = list(dag.successors(pcmgamma_node))
-    if len(preds) != 1 or len(succs) != 1:
-        return False
-
-    mid_feature = preds[0]
     output_feature = succs[0]
-    if not isinstance(mid_feature, FeatureNode) or not isinstance(output_feature, FeatureNode):
-        return False
-    if dag.in_degree(mid_feature) != 1 or dag.out_degree(mid_feature) != 1:
+    if not isinstance(input_feature, FeatureNode) or not isinstance(output_feature, FeatureNode):
         return False
 
-    parcpmm_node = next(iter(dag.predecessors(mid_feature)), None)
-    if not isinstance(parcpmm_node, ComputeNode) or parcpmm_node.layer_type != 'parcpmm':
-        return False
+    if search_direction == 'up':
+        if dag.in_degree(input_feature) != 1 or dag.out_degree(input_feature) != 1:
+            return False
+        prev_compute = next(dag.predecessors(input_feature))
+        if not isinstance(prev_compute, ComputeNode):
+            return False
+        edge_attrs = copy.deepcopy(dag.edges[prev_compute, input_feature])
+        dag.remove_node(pcmgamma_node)
+        dag.remove_node(input_feature)
+        dag.add_edge(prev_compute, output_feature, **edge_attrs)
+    else:
+        if dag.in_degree(output_feature) != 1 or dag.out_degree(output_feature) != 1:
+            return False
+        next_compute = next(dag.successors(output_feature))
+        if not isinstance(next_compute, ComputeNode):
+            return False
+        edge_attrs = copy.deepcopy(dag.edges[output_feature, next_compute])
+        dag.remove_node(pcmgamma_node)
+        dag.remove_node(output_feature)
+        dag.add_edge(input_feature, next_compute, **edge_attrs)
 
-    edge_attrs = copy.deepcopy(dag.edges[parcpmm_node, mid_feature])
-    _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, parcpmm_node, 'after_parcpmm')
-    dag.remove_node(pcmgamma_node)
-    dag.remove_node(mid_feature)
-    dag.add_edge(parcpmm_node, output_feature, **edge_attrs)
     return True
 
 
-def fuse_pcmgamma_parcpmm_layers(graph: LayerAbstractGraph):
+def _absorb_pcmgamma_into_target(dag, pcmgamma_node: ComputeNode, target_node: ComputeNode, search_direction: str) -> bool:
+    direction = f'after_{target_node.layer_type}' if search_direction == 'up' else f'before_{target_node.layer_type}'
+    if target_node.layer_type == 'parcpmm':
+        _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, target_node, direction)
+    elif target_node.layer_type == 'pcmpoly':
+        _fuse_pcmgamma_attrs_into_pcmpoly(pcmgamma_node, target_node, direction)
+    else:
+        return False
+    return _remove_pcmgamma_from_linear_path(dag, pcmgamma_node, search_direction)
+
+
+def _try_absorb_pcmgamma(dag, pcmgamma_node: ComputeNode) -> bool:
+    for search_direction in ('up', 'down'):
+        target_node = _find_pcmgamma_absorb_target(dag, pcmgamma_node, search_direction)
+        if target_node is not None:
+            return _absorb_pcmgamma_into_target(dag, pcmgamma_node, target_node, search_direction)
+    return False
+
+
+def absorb_pcmgamma_layers(graph: LayerAbstractGraph):
     dag = graph.dag
     changed = True
     while changed:
         changed = False
         for node in list(dag.nodes):
-            if not isinstance(node, ComputeNode) or node.layer_type != 'pcmgamma':
-                continue
-            if _try_fuse_pcmgamma_before_parcpmm(dag, node) or _try_fuse_pcmgamma_after_parcpmm(dag, node):
+            if isinstance(node, ComputeNode) and node.layer_type == 'pcmgamma' and _try_absorb_pcmgamma(dag, node):
                 changed = True
                 break
+
+
+def fuse_pcmgamma_parcpmm_layers(graph: LayerAbstractGraph):
+    absorb_pcmgamma_layers(graph)
 
 
 def recompute_final_level(graph: LayerAbstractGraph):
@@ -479,7 +532,7 @@ def dump_graph(
 
     erg0_path = ergs_dir / 'nn_layers_ct_0.json'
     insert_btp_scale_gamma_layers(graph)
-    fuse_pcmgamma_parcpmm_layers(graph)
+    absorb_pcmgamma_layers(graph)
     recompute_final_level(graph)
     transforms.insert_drop_level_layers(graph)
     graph.to_json(dict(), str(erg0_path), score=score)
