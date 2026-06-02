@@ -384,7 +384,7 @@ class ParBlockColMajorLNAffine(_ParBlockColMajorLNBase):
             bi = block_idx % self.num_block_rows
             bj = block_idx // self.num_block_rows
 
-            yw = rescale(mult(y_cts[bi], gamma_pt[bj][g]))
+            yw = rescale(mult(y_cts[bi], gamma_pt[bi][bj][g]))
             xc = x_ct
             if xc.level > yw.level:
                 xc = drop_level(xc, xc.level - yw.level)
@@ -394,11 +394,14 @@ class ParBlockColMajorLNAffine(_ParBlockColMajorLNBase):
 
     def call_custom_compute(self, x_centered: list, y_cts: list, data_source) -> list:
         gamma_pt = []
-        for bj in range(self.num_block_cols):
-            gamma_row = []
-            for g in range(self.G):
-                gamma_row.append(self._make_pt(data_source, self.op_class, 0, 0, bj, g))
-            gamma_pt.append(gamma_row)
+        for bi in range(self.num_block_rows):
+            gamma_bi = []
+            for bj in range(self.num_block_cols):
+                gamma_bibj = []
+                for g in range(self.G):
+                    gamma_bibj.append(self._make_pt(data_source, self.op_class, 0, bi, bj, g))
+                gamma_bi.append(gamma_bibj)
+            gamma_pt.append(gamma_bi)
 
         beta_add_pt = []
         for bi in range(self.num_block_rows):
