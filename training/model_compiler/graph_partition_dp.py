@@ -153,14 +153,96 @@ def get_min_feature_level() -> int:
     return 1 if config.mpc_refresh or config.graph_type == 'mpc' or config.set_btp_scale is not None else 0
 
 
-def restore_level_at(new_graph: nx.DiGraph, node: FeatureNode, param_dict):
+BTP_SCALE_GAMMA_ABSORB_TARGETS: Final = {'pcmpoly', 'parcpmm'}
+BTP_SCALE_GAMMA_PASS_THROUGH_TYPES: Final = {'pcmgamma'}
+
+
+def can_absorb_btp_pre_gamma(dag: nx.DiGraph, feature: FeatureNode) -> bool:
+    if config.set_btp_scale is None:
+        return False
+
+    node = feature
+    first_feature = True
+    while True:
+        if not isinstance(node, FeatureNode) or dag.in_degree(node) != 1:
+            return False
+        if not first_feature and dag.out_degree(node) != 1:
+            return False
+
+        compute = next(dag.predecessors(node))
+        if not isinstance(compute, ComputeNode):
+            return False
+        if compute.layer_type in BTP_SCALE_GAMMA_ABSORB_TARGETS:
+            return True
+        if compute.layer_type not in BTP_SCALE_GAMMA_PASS_THROUGH_TYPES:
+            return False
+
+        preds = list(dag.predecessors(compute))
+        if len(preds) != 1:
+            return False
+        node = preds[0]
+        first_feature = False
+
+
+def can_absorb_btp_post_gamma(dag: nx.DiGraph, feature: FeatureNode) -> bool:
+    if config.set_btp_scale is None:
+        return False
+
+    node = feature
+    first_feature = True
+    while True:
+        if not isinstance(node, FeatureNode):
+            return False
+        if first_feature:
+            if dag.out_degree(node) != 1:
+                return False
+        elif dag.in_degree(node) != 1 or dag.out_degree(node) != 1:
+            return False
+
+        compute = next(dag.successors(node))
+        if not isinstance(compute, ComputeNode):
+            return False
+        if compute.layer_type in BTP_SCALE_GAMMA_ABSORB_TARGETS:
+            return True
+        if compute.layer_type not in BTP_SCALE_GAMMA_PASS_THROUGH_TYPES:
+            return False
+
+        succs = list(dag.successors(compute))
+        if len(succs) != 1:
+            return False
+        node = succs[0]
+        first_feature = False
+
+
+def get_btp_input_level(dag: nx.DiGraph, feature: FeatureNode) -> int:
+    if can_absorb_btp_pre_gamma(dag, feature):
+        return 0
+    return get_min_feature_level()
+
+
+def get_btp_output_level(dag: nx.DiGraph, feature: FeatureNode) -> int:
+    if can_absorb_btp_post_gamma(dag, feature):
+        return config.fhe_param.max_level + 1
+    return config.fhe_param.max_level
+
+
+def feature_level_for_state(dag: nx.DiGraph, feature: FeatureNode, level: int) -> int:
+    return level if level < AUX_LV else get_btp_output_level(dag, feature)
+
+
+def restore_level_at(new_graph: nx.DiGraph, node: FeatureNode, param_dict, output_level: int | None = None):
+    if output_level is None:
+        output_level = config.fhe_param.max_level
+    elif config.set_btp_scale is None:
+        raise ValueError('Custom BTP output level is only supported when set_btp_scale is enabled')
+
     restore_node = transforms.add_btp_layer(
-        new_graph, node, param_dict, config.fhe_param.max_level - new_graph.nodes[node]['level']
+        new_graph, node, param_dict, output_level - new_graph.nodes[node]['level']
     )
     score = get_restoring_score(new_graph, restore_node, param_dict)
     new_graph.nodes[restore_node]['score'] = score
     succ = list(new_graph.successors(restore_node))[0]
-    new_graph.nodes[succ]['level'] = config.fhe_param.max_level
+    new_graph.nodes[succ]['level'] = output_level
     return score
 
 
@@ -180,8 +262,12 @@ def reconstruct_graph_from_vec(
         if lv < AUX_LV:
             new_graph.nodes[node]['level'] = lv
         else:
-            new_graph.nodes[node]['level'] = get_min_feature_level()
-            restore_level_at(new_graph, node, param_dict)
+            if config.set_btp_scale is None:
+                new_graph.nodes[node]['level'] = get_min_feature_level()
+                restore_level_at(new_graph, node, param_dict)
+            else:
+                new_graph.nodes[node]['level'] = get_btp_input_level(template_graph, node)
+                restore_level_at(new_graph, node, param_dict, get_btp_output_level(template_graph, node))
 
     return new_graph
 
@@ -247,7 +333,7 @@ class GraphPartitioner:
                 succs: list[FeatureNode] = list(dag.successors(node))
                 dag.nodes[node]['level_cost'] = dag.nodes[preds[0]]['level'] - dag.nodes[succs[0]]['level']
 
-    def generate_solutions(
+    def generate_solutions_without_btp_scale(
         self,
         new_node: FeatureNode,
         frontier: list[NodeLevel],
@@ -350,6 +436,127 @@ class GraphPartitioner:
                     )
 
                 new_frontier_solutions |= aux_lv_solutions
+
+        return new_frontier, new_frontier_solutions
+
+    def generate_solutions(
+        self,
+        new_node: FeatureNode,
+        frontier: list[NodeLevel],
+        frontier_solutions: dict[tuple[int], tuple[float, np.ndarray]],
+        processed_feature_nodes: set[FeatureNode],
+        node_to_idx: dict[FeatureNode, int],
+        idx_to_node: dict[int, FeatureNode],
+        dag: nx.DiGraph,
+    ):
+        if config.set_btp_scale is None:
+            return self.generate_solutions_without_btp_scale(
+                new_node,
+                frontier,
+                frontier_solutions,
+                processed_feature_nodes,
+                node_to_idx,
+                idx_to_node,
+                dag,
+            )
+
+        leading_comp: ComputeNode = next(dag.predecessors(new_node))
+        predecessors: list[FeatureNode] = list(dag.predecessors(leading_comp))
+        pred_frontier = [f for f in frontier if idx_to_node[f.node_idx] in predecessors]
+        other_frontier = [f for f in frontier if idx_to_node[f.node_idx] not in predecessors]
+        frontier = pred_frontier + other_frontier
+
+        min_feature_level = get_min_feature_level()
+        btp_input_level = get_btp_input_level(dag, new_node)
+        is_leaf_node = len(list(dag.successors(new_node))) == 0
+        new_node_idx = node_to_idx[new_node]
+        new_frontier = frontier.copy()
+        new_frontier.append(NodeLevel(new_node_idx, min_feature_level))
+        processed_feature_nodes.add(new_node)
+        nodes_became_internal: list[int] = []
+        for node_max_lv in frontier:
+            internal_flag = True
+            for comp in dag.successors(idx_to_node[node_max_lv.node_idx]):
+                for succ in dag.successors(comp):
+                    if succ not in processed_feature_nodes:
+                        internal_flag = False
+            if internal_flag:
+                nodes_became_internal.append(node_max_lv.node_idx)
+                new_frontier.remove(node_max_lv)
+
+        new_frontier_solutions = dict()
+
+        def update_best_solution(key: tuple[NodeLevel, ...], score: float, graph_vec: np.ndarray):
+            if key not in new_frontier_solutions or score < new_frontier_solutions[key][0]:
+                new_frontier_solutions[key] = (score, graph_vec)
+
+        def add_solutions_for_terminal_level(terminal_lv: int, keep_normal_state: bool, allow_restore: bool):
+            frontier_lvs = []
+            dag.nodes[new_node]['level'] = terminal_lv
+            required_input_level = dag.nodes[leading_comp]['level_cost'] + terminal_lv
+            for node_max_lv in pred_frontier:
+                pred_feature = idx_to_node[node_max_lv.node_idx]
+                choices = list(range(required_input_level, node_max_lv.level + 1))
+                if get_btp_output_level(dag, pred_feature) >= required_input_level:
+                    choices.append(AUX_LV)
+                frontier_lvs.append(choices)
+            for node_max_lv in other_frontier:
+                frontier_lvs.append(list(range(min_feature_level, node_max_lv.level + 1)) + [AUX_LV])
+
+            if any(len(choices) == 0 for choices in frontier_lvs):
+                return
+
+            for lv_comb in product(*frontier_lvs):
+                frontier_key = []
+                retained_frontier_key = []
+                for node_max_lv, lv in zip(frontier, lv_comb):
+                    frontier_key.append(NodeLevel(node_max_lv.node_idx, lv))
+                    if node_max_lv.node_idx not in nodes_became_internal:
+                        retained_frontier_key.append(NodeLevel(node_max_lv.node_idx, lv))
+                frontier_key.sort(key=lambda x: x.node_idx)
+
+                frontier_key_tuple = tuple(frontier_key)
+                if frontier_key_tuple not in frontier_solutions:
+                    continue
+
+                initial_score, sol_graph_vec = frontier_solutions[frontier_key_tuple]
+
+                for node_max_lv, lv in zip(frontier, lv_comb):
+                    feature = idx_to_node[node_max_lv.node_idx]
+                    dag.nodes[feature]['level'] = feature_level_for_state(dag, feature, lv)
+
+                sol_cost = initial_score + get_compute_score(dag, leading_comp, self.param_dict)
+
+                if keep_normal_state:
+                    normal_key = retained_frontier_key + [NodeLevel(new_node_idx, terminal_lv)]
+                    normal_key.sort(key=lambda x: x.node_idx)
+                    normal_graph_vec = sol_graph_vec.copy()
+                    normal_graph_vec[new_node_idx] = terminal_lv
+                    update_best_solution(tuple(normal_key), sol_cost, normal_graph_vec)
+
+                if allow_restore:
+                    restore_key = retained_frontier_key + [NodeLevel(new_node_idx, AUX_LV)]
+                    restore_key.sort(key=lambda x: x.node_idx)
+                    restore_graph_vec = sol_graph_vec.copy()
+                    restore_graph_vec[new_node_idx] = AUX_LV
+                    restore_score = get_restoring_score(dag, leading_comp, self.param_dict)
+                    update_best_solution(tuple(restore_key), sol_cost + restore_score, restore_graph_vec)
+
+        if not is_leaf_node and btp_input_level < min_feature_level:
+            add_solutions_for_terminal_level(btp_input_level, keep_normal_state=False, allow_restore=True)
+
+        for terminal_lv in range(min_feature_level, config.fhe_param.max_level + 1):
+            add_solutions_for_terminal_level(
+                terminal_lv,
+                keep_normal_state=True,
+                allow_restore=(not is_leaf_node and terminal_lv == btp_input_level),
+            )
+
+            # leaf nodes only need the minimum output-level solution.
+            if is_leaf_node:
+                break
+
+            new_frontier[-1] = NodeLevel(new_node_idx, terminal_lv)
 
         return new_frontier, new_frontier_solutions
 
