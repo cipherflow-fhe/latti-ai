@@ -175,13 +175,28 @@ def _export_parcpmm(
 
     weight = _resolve_parcpmm_weight(weight_path, layer, features, onnx_weights)
     weight = _reshape_checked(weight, expected_shape, layer_key, weight_path)
-    _put(out, weight_path, weight, layer_key)
 
     bias_path = layer.get('bias_path', '')
+    bias = None
     if bias_path:
         expected_bias_shape = (expected_shape[1],)
         bias = _resolve_parcpmm_bias(bias_path, layer, features, onnx_weights)
         bias = _reshape_checked(bias, expected_bias_shape, layer_key, bias_path)
+
+    for fuse_gama_info in _fuse_gama_infos(layer, layer_key):
+        scale = _fuse_btp_scale(fuse_gama_info, layer_key)
+        direction = fuse_gama_info.get('direction')
+        if direction == 'before_parcpmm':
+            weight = weight * scale
+        elif direction == 'after_parcpmm':
+            weight = weight * scale
+            if bias is not None:
+                bias = bias * scale
+        else:
+            raise NotImplementedError(f'{layer_key}: unsupported parcpmm fuse_gama_info direction: {direction}')
+
+    _put(out, weight_path, weight, layer_key)
+    if bias_path:
         _put(out, bias_path, bias, layer_key)
 
 
@@ -248,6 +263,17 @@ def _export_pcmpoly(
             raise KeyError(f'{layer_key}: cannot resolve pcmpoly source for {dst_path}')
 
     coeffs = _reshape_checked(coeffs, expected_shape, layer_key, dst_path)
+    for fuse_gama_info in _fuse_gama_infos(layer, layer_key):
+        scale = _fuse_btp_scale(fuse_gama_info, layer_key)
+        direction = fuse_gama_info.get('direction')
+        if direction == 'before_pcmpoly':
+            powers = np.power(scale, np.arange(coeffs.shape[0], dtype='float64')).reshape(-1, 1)
+            coeffs = coeffs * powers
+        elif direction == 'after_pcmpoly':
+            coeffs = coeffs * scale
+        else:
+            raise NotImplementedError(f'{layer_key}: unsupported pcmpoly fuse_gama_info direction: {direction}')
+
     _put(out, dst_path, coeffs, layer_key)
 
 
@@ -360,16 +386,28 @@ def _coeff_matrix(
             raise KeyError(f'polynomial coeff not found in ONNX: {path}')
         coeff[idx] = float(np.asarray(onnx_weights[path]).reshape(-1)[0])
 
-    # Hermite basis → standard monomial basis:
-    #   He_2(x) = x² - 1       →  a2 contributes -a2 to c0
-    #   He_4(x) = x⁴ - 6x² + 3 →  a4 contributes +3a4 to c0, -6a4 to c2
-    if degree >= 2:
-        coeff[0] -= coeff[2]
-    if degree >= 4:
-        coeff[0] += 3 * coeff[4]
-        coeff[2] -= 6 * coeff[4]
+    if degree > 4:
+        raise NotImplementedError(f'pcmpoly coefficient export only supports degree <= 4, got degree={degree}')
 
-    return coeff.reshape(-1, 1) * scale.reshape(1, -1)
+    scale = np.asarray(scale, dtype='float64').reshape(-1)
+    out = np.zeros((degree + 1, scale.size), dtype='float64')
+
+    if degree >= 0:
+        out[0] = scale * coeff[0]
+    if degree >= 1:
+        out[1] = coeff[1]
+    if degree >= 2:
+        out[0] -= scale * coeff[2]
+        out[2] = coeff[2] / scale
+    if degree >= 3:
+        out[1] -= 3 * coeff[3]
+        out[3] = coeff[3] / (scale**2)
+    if degree >= 4:
+        out[0] += scale * 3 * coeff[4]
+        out[2] -= 6 * coeff[4] / scale
+        out[4] = coeff[4] / (scale**3)
+
+    return out
 
 
 def _coeff_index(path: str) -> int | None:
@@ -455,6 +493,27 @@ def _required_path(layer: dict[str, Any], key: str, layer_key: str) -> str:
     if not path:
         raise KeyError(f'{layer_key}: missing {key}')
     return path
+
+
+def _fuse_gama_infos(layer: dict[str, Any], layer_key: str) -> list[dict[str, Any]]:
+    fuse_gama_info = layer.get('fuse_gama_info')
+    if not fuse_gama_info:
+        return []
+    if isinstance(fuse_gama_info, dict):
+        return [fuse_gama_info]
+    if isinstance(fuse_gama_info, list):
+        for item in fuse_gama_info:
+            if not isinstance(item, dict):
+                raise TypeError(f'{layer_key}: fuse_gama_info entries must be dict, got {type(item).__name__}')
+        return fuse_gama_info
+    raise TypeError(f'{layer_key}: fuse_gama_info must be dict or list, got {type(fuse_gama_info).__name__}')
+
+
+def _fuse_btp_scale(fuse_gama_info: dict[str, Any], layer_key: str) -> float:
+    btp_scale = fuse_gama_info.get('btp_scale')
+    if btp_scale in (None, ''):
+        raise NotImplementedError(f'{layer_key}: fuse_gama_info currently only supports btp_scale')
+    return float(btp_scale)
 
 
 def _reshape_checked(data: np.ndarray, shape: tuple[int, ...], layer_key: str, path: str) -> np.ndarray:
