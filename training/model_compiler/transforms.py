@@ -1063,71 +1063,76 @@ def expand_multi_head_attention(graph: LayerAbstractGraph):
         def c_attrs(level_cost: int, name: str) -> dict:
             return {'name': name, 'level_cost': level_cost}
 
-        q = make_feature(f'{base_id}_q')
-        k = make_feature(f'{base_id}_k')
+        qk = make_feature(f'{base_id}_qk')
+        xt = make_feature(f'{base_id}_xt', [n // n_heads, m * n_heads])
         v = make_feature(f'{base_id}_v')
-        kt = make_feature(f'{base_id}_kt', [n // n_heads, m * n_heads])
         qkt = make_feature(f'{base_id}_qkt', [m, m * n_heads])
-        qkt_gamma = make_feature(f'{base_id}_qkt_gamma', [m, m * n_heads])
         qkt_poly = make_feature(f'{base_id}_qkt_polyact', [m, m * n_heads])
         qktv = make_feature(f'{base_id}_qktv', list(out.shape))
 
-        q_node = ComputeNode(f'{base_id}_q_layer', 'parcpmm', 1, 1)
-        q_node.path = getattr(vit_node, 'q_weight_path', f'{base_id}.q.weight')
-        q_node.bias_path = getattr(vit_node, 'q_bias_path', '')
-        q_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
-        k_node = ComputeNode(f'{base_id}_k_layer', 'parcpmm', 1, 1)
-        k_node.path = getattr(vit_node, 'k_weight_path', f'{base_id}.k.weight')
-        k_node.bias_path = getattr(vit_node, 'k_bias_path', '')
-        k_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
+        qk_weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
+        head_dim = getattr(config, 'head_dim', 0) or (n // n_heads)
+
+        qk_node = ComputeNode(f'{base_id}_qk_layer', 'parcpmm', 1, 1)
+        qk_node.path = getattr(vit_node, 'qk_weight_path', f'{base_id}.qk.weight')
+        qk_node.weight_shape = qk_weight_shape
+        qk_node.q_info = {
+            'weight_path': getattr(vit_node, 'q_weight_path', f'{base_id}.q.weight'),
+            'bias_path': getattr(vit_node, 'q_bias_path', ''),
+            'weight_shape': qk_weight_shape,
+            'scale_by_sqrt_head_dim': True,
+            'n_heads': n_heads,
+            'head_dim': head_dim,
+        }
+        qk_node.k_info = {
+            'weight_path': getattr(vit_node, 'k_weight_path', f'{base_id}.k.weight'),
+            'bias_path': getattr(vit_node, 'k_bias_path', ''),
+            'weight_shape': qk_weight_shape,
+            'n_heads': n_heads,
+            'head_dim': head_dim,
+        }
         v_node = ComputeNode(f'{base_id}_v_layer', 'parcpmm', 1, 1)
         v_node.path = getattr(vit_node, 'v_weight_path', f'{base_id}.v.weight')
         v_node.bias_path = getattr(vit_node, 'v_bias_path', '')
-        v_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
-        kt_node = ComputeNode(f'{base_id}_kt_layer', 'partranspose', 1, 1)
+        v_node.weight_shape = qk_weight_shape
+        xt_node = ComputeNode(f'{base_id}_xt_layer', 'partranspose', 1, 1)
         qkt_node = ComputeNode(f'{base_id}_qkt_layer', 'parccmm', 1, 1)
-        gamma_node = ComputeNode(f'{base_id}_gamma', 'pcmgamma', 1, 1)
-        gamma_node.path = getattr(vit_node, 'gamma_path', f'{base_id}.gamma')
         poly_node = ComputeNode(f'{base_id}_poly', 'pcmpoly', 1, 1)
         poly_node.path = getattr(vit_node, 'poly_weight_path', f'{base_id}.poly.weight')
+        poly_node.coeffs_path = poly_node.path
+        poly_node.gamma_path = getattr(vit_node, 'gamma_path', f'{base_id}.gamma')
         poly_node.order = getattr(vit_node, 'poly_order', 4)
         qktv_node = ComputeNode(f'{base_id}_qktv_layer', 'parccmm', 1, 1)
         out_node = ComputeNode(f'{base_id}_out', 'parcpmm', 1, 1)
-        out_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
+        out_node.weight_shape = qk_weight_shape
         out_node.path = getattr(vit_node, 'proj_weight_path', f'{base_id}.proj.weight')
         out_node.bias_path = getattr(vit_node, 'proj_bias_path', '')
 
         graph.dag.remove_node(vit_node)
 
-        for node in (q_node, k_node, v_node):
+        for node in (qk_node, v_node):
             graph.dag.add_node(node, **c_attrs(2, node.layer_id))
-        graph.dag.add_node(kt_node, **c_attrs(1, kt_node.layer_id))
+        graph.dag.add_node(xt_node, **c_attrs(1, xt_node.layer_id))
         graph.dag.add_node(qkt_node, **c_attrs(3, qkt_node.layer_id))
-        graph.dag.add_node(gamma_node, **c_attrs(1, gamma_node.layer_id))
         graph.dag.add_node(poly_node, **c_attrs(3, poly_node.layer_id))
         graph.dag.add_node(qktv_node, **c_attrs(3, qktv_node.layer_id))
         graph.dag.add_node(out_node, **c_attrs(2, out_node.layer_id))
 
-        for f in (q, k, v, kt, qkt, qkt_gamma, qkt_poly, qktv):
+        for f in (qk, xt, v, qkt, qkt_poly, qktv):
             graph.dag.add_node(f, **f_attrs(f))
 
-        graph.dag.add_edge(x_in, q_node)
-        graph.dag.add_edge(q_node, q)
-        graph.dag.add_edge(x_in, k_node)
-        graph.dag.add_edge(k_node, k)
+        graph.dag.add_edge(x_in, qk_node)
+        graph.dag.add_edge(qk_node, qk)
+        graph.dag.add_edge(x_in, xt_node)
+        graph.dag.add_edge(xt_node, xt)
         graph.dag.add_edge(x_in, v_node)
         graph.dag.add_edge(v_node, v)
 
-        graph.dag.add_edge(k, kt_node)
-        graph.dag.add_edge(kt_node, kt)
-
-        graph.dag.add_edge(q, qkt_node, input_index=0)
-        graph.dag.add_edge(kt, qkt_node, input_index=1)
+        graph.dag.add_edge(qk, qkt_node, input_index=0)
+        graph.dag.add_edge(xt, qkt_node, input_index=1)
         graph.dag.add_edge(qkt_node, qkt)
 
-        graph.dag.add_edge(qkt, gamma_node)
-        graph.dag.add_edge(gamma_node, qkt_gamma)
-        graph.dag.add_edge(qkt_gamma, poly_node)
+        graph.dag.add_edge(qkt, poly_node)
         graph.dag.add_edge(poly_node, qkt_poly)
 
         graph.dag.add_edge(qkt_poly, qktv_node, input_index=0)
@@ -1164,54 +1169,22 @@ def expand_poly_act_rn(graph: LayerAbstractGraph):
             coeffs_path = coeffs_path or f'{prefix}.weight'
         order = node.order
 
-        x_in_attrs = graph.dag.nodes[x_in]
-        skip = list(x_in_attrs.get('skip', [1] * x_in.dim))
-        level = x_in_attrs.get('level', 0)
-        pack_num = x_in_attrs.get('pack_num', 1)
+        input_edge_attrs = copy.deepcopy(graph.dag.edges[x_in, node])
+        output_edge_attrs = copy.deepcopy(graph.dag.edges[node, out])
 
-        def make_feature(name: str) -> FeatureNode:
-            f = FeatureNode(
-                key=name,
-                dim=x_in.dim,
-                channel=x_in.channel,
-                scale=x_in.scale,
-                ckks_parameter_id=x_in.ckks_parameter_id,
-                ckks_scale=x_in.ckks_scale,
-                shape=list(x_in.shape),
-            )
-            f.data_type = x_in.data_type
-            return f
-
-        def f_attrs(f: FeatureNode) -> dict:
-            return {'name': f.node_id, 'skip': list(skip), 'level': level, 'pack_num': pack_num}
-
-        def c_attrs(level_cost: int, name: str) -> dict:
-            return {'name': name, 'level_cost': level_cost}
-
-        mid = make_feature(f'{base_id}_gamma_out')
-
-        gamma_node = ComputeNode(f'{base_id}_gamma', 'pcmgamma', 1, 1)
-        gamma_node.path = running_max_path
-        gamma_node.running_max_path = running_max_path
-        if gamma_path:
-            gamma_node.gamma_path = gamma_path
-        poly_node = ComputeNode(f'{base_id}_poly', 'pcmpoly', 1, 1)
-        poly_node.path = running_max_path
+        poly_node = ComputeNode(base_id, 'pcmpoly', node.channel_input, node.channel_output)
+        poly_node.depth = node.depth
+        poly_node.path = coeffs_path or running_max_path
         poly_node.running_max_path = running_max_path
-        if coeffs_path:
-            poly_node.coeffs_path = coeffs_path
+        poly_node.gamma_path = gamma_path
+        poly_node.coeffs_path = coeffs_path
         poly_node.order = order
 
         graph.dag.remove_node(node)
 
-        graph.dag.add_node(gamma_node, **c_attrs(1, gamma_node.layer_id))
-        graph.dag.add_node(poly_node, **c_attrs(3 if order > 2 else 2, poly_node.layer_id))
-        graph.dag.add_node(mid, **f_attrs(mid))
-
-        graph.dag.add_edge(x_in, gamma_node)
-        graph.dag.add_edge(gamma_node, mid)
-        graph.dag.add_edge(mid, poly_node)
-        graph.dag.add_edge(poly_node, out)
+        graph.dag.add_node(poly_node, name=poly_node.layer_id)
+        graph.dag.add_edge(x_in, poly_node, **input_edge_attrs)
+        graph.dag.add_edge(poly_node, out, **output_edge_attrs)
 
 
 def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
@@ -1345,8 +1318,11 @@ def set_pcm_K(graph: LayerAbstractGraph):
         if node.layer_type == 'pcmgamma' and prev_compute is not None and prev_compute.layer_type == 'parccmm':
             node.K = 1
         elif node.layer_type == 'pcmpoly' and prev_compute is not None:
-            prev_preds = list(graph.dag.predecessors(prev_compute))
-            if prev_preds:
-                prev_prev_compute = get_prev_compute(prev_preds[0])
-                if prev_prev_compute is not None and prev_prev_compute.layer_type == 'parccmm':
-                    node.K = 1
+            if prev_compute.layer_type == 'parccmm':
+                node.K = 1
+            elif prev_compute.layer_type == 'pcmgamma':
+                prev_preds = list(graph.dag.predecessors(prev_compute))
+                if prev_preds:
+                    prev_prev_compute = get_prev_compute(prev_preds[0])
+                    if prev_prev_compute is not None and prev_prev_compute.layer_type == 'parccmm':
+                        node.K = 1

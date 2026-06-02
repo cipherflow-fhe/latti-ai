@@ -669,10 +669,11 @@ ParBlockColMajorLNAffine::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_
             for (uint32_t col = 0; col < d_; col++) {
                 uint32_t actual_col = bj * d_ + col;
                 for (uint32_t row = 0; row < d_; row++) {
+                    uint32_t actual_row = bi * d_ + row;
                     uint32_t base_slot = (row + d_ * col) * S_ + h_local;
                     for (uint32_t ci = 0; ci < num_chunks_; ci++) {
                         uint32_t slot = ci * chunk_size_ + base_slot;
-                        if (h < n_heads_ && actual_col < cols_per_head_) {
+                        if (actual_row < m_ && h < n_heads_ && actual_col < cols_per_head_) {
                             gamma_vec[slot] = inv_std_ * gamma_vals_.get(h * cols_per_head_ + actual_col);
                         }
                     }
@@ -709,12 +710,14 @@ ParBlockColMajorLNAffine::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_
 void ParBlockColMajorLNAffine::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
 
-    uint32_t n_gamma_vecs = num_block_cols_ * n_cts_per_block_idx_;
+    uint32_t n_gamma_vecs = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
     gamma_pt_.resize(n_gamma_vecs);
     for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
-        for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-            uint32_t idx = bj * n_cts_per_block_idx_ + g;
-            gamma_pt_[idx] = generate_pt(ctx, 0, 0, bj, g);
+        for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
+            for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
+                uint32_t idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
+                gamma_pt_[idx] = generate_pt(ctx, 0, bi, bj, g);
+            }
         }
     }
 
@@ -744,11 +747,9 @@ FeatureMatEncrypted ParBlockColMajorLNAffine::run(CkksContext& ctx,
 
     parallel_for(total_cts, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         uint32_t block_idx = ct_idx / n_cts_per_block_idx_;
-        uint32_t g = ct_idx % n_cts_per_block_idx_;
         uint32_t bi = block_idx % num_block_rows_;
-        uint32_t bj = block_idx / num_block_rows_;
 
-        uint32_t gamma_idx = bj * n_cts_per_block_idx_ + g;
+        uint32_t gamma_idx = ct_idx;
         auto gamma_mul = ctx_copy.ringt_to_mul(gamma_pt_[gamma_idx], y_level_);
         auto yw = ctx_copy.rescale(ctx_copy.mult_plain_mul(y_cts[bi], gamma_mul), param_.get_q(y_level_ - 1));
 

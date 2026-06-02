@@ -22,7 +22,17 @@ import networkx as nx
 import numpy as np
 
 import components
-from components import LayerAbstractGraph, config, PN13QP218, PN14QP438, PN15QP880, PN16QP1761, N16QP1546H192H32
+from components import (
+    ComputeNode,
+    FeatureNode,
+    LayerAbstractGraph,
+    config,
+    PN13QP218,
+    PN14QP438,
+    PN15QP880,
+    PN16QP1761,
+    N16QP1546H192H32,
+)
 import processor
 from processor import *
 from graph_partition_dp import *
@@ -299,205 +309,214 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         dag.add_edge(post_gamma, succ_feature)
 
 
-def _ensure_finite_scale(scale: np.float64, context: str) -> np.float64:
-    scale = np.float64(scale)
-    if not np.isfinite(scale):
-        raise ValueError(f'Non-finite ckks_scale while propagating {context}: {scale}')
-    return scale
+PCMGAMMA_ABSORB_TARGETS = {'pcmpoly', 'parcpmm'}
+PCMGAMMA_PASS_THROUGH_TYPES = {'pcmgamma'}
 
 
-def _default_ckks_scale() -> np.float64:
-    return _ensure_finite_scale(np.float64(2**config.fhe_param.log_default_scale), 'default_scale')
+def _pcmgamma_fuse_info(pcmgamma_node: ComputeNode, direction: str) -> dict:
+    def _value_or_empty(attr_name: str):
+        value = getattr(pcmgamma_node, attr_name, '')
+        return '' if value is None else value
+
+    return {
+        'weight_path': _value_or_empty('path'),
+        'K': _value_or_empty('K'),
+        'gamma_path': _value_or_empty('gamma_path'),
+        'running_max_path': _value_or_empty('running_max_path'),
+        'btp_scale': _value_or_empty('btp_scale'),
+        'direction': direction,
+    }
 
 
-def _q(level: int) -> np.float64:
-    if level < 0 or level >= len(config.fhe_param.q):
-        raise ValueError(f'Invalid CKKS q level {level}; q chain has {len(config.fhe_param.q)} levels')
-    return _ensure_finite_scale(np.float64(config.fhe_param.q[level]), f'q[{level}]')
+def _append_fuse_gama_info(node: ComputeNode, fuse_gama_info: dict):
+    existing_fuse_gama_info = getattr(node, 'fuse_gama_info', None)
+    if existing_fuse_gama_info is None:
+        node.fuse_gama_info = [fuse_gama_info]
+    elif isinstance(existing_fuse_gama_info, list):
+        existing_fuse_gama_info.append(fuse_gama_info)
+    else:
+        node.fuse_gama_info = [existing_fuse_gama_info, fuse_gama_info]
 
 
-def _mult(lhs_scale, rhs_scale) -> np.float64:
-    return _ensure_finite_scale(np.float64(lhs_scale) * np.float64(rhs_scale), 'mult')
+def _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node: ComputeNode, parcpmm_node: ComputeNode, direction: str):
+    _append_fuse_gama_info(parcpmm_node, _pcmgamma_fuse_info(pcmgamma_node, direction))
 
 
-def _rescale(product_scale, q_level) -> np.float64:
-    return _ensure_finite_scale(np.float64(product_scale) / np.float64(q_level), 'rescale')
+def _fuse_pcmgamma_attrs_into_pcmpoly(pcmgamma_node: ComputeNode, pcmpoly_node: ComputeNode, direction: str):
+    _append_fuse_gama_info(pcmpoly_node, _pcmgamma_fuse_info(pcmgamma_node, direction))
 
 
-def _scale_farthest_from_default(scales: list[np.float64], default_scale: np.float64) -> np.float64:
-    if not scales:
-        raise ValueError('Cannot choose ckks_scale from an empty scale list')
-    return _ensure_finite_scale(
-        max(scales, key=lambda scale: abs(np.float64(scale) - default_scale)), 'farthest_from_default'
-    )
+def _next_node_on_single_path(dag, node, search_direction: str):
+    if search_direction == 'up':
+        if dag.in_degree(node) != 1:
+            return None
+        return next(dag.predecessors(node))
+    if dag.out_degree(node) != 1:
+        return None
+    return next(dag.successors(node))
 
 
-def _ordered_feature_preds(graph: LayerAbstractGraph, node: ComputeNode) -> list[FeatureNode]:
-    preds = [pred for pred in graph.dag.predecessors(node) if isinstance(pred, FeatureNode)]
-    edge_indices = {pred: graph.dag.edges[pred, node].get('input_index') for pred in preds}
-    if preds and all(index is not None for index in edge_indices.values()):
-        return sorted(preds, key=lambda pred: edge_indices[pred])
-    return preds
+def _find_pcmgamma_absorb_target(dag, pcmgamma_node: ComputeNode, search_direction: str) -> ComputeNode | None:
+    node = pcmgamma_node
+    while True:
+        node = _next_node_on_single_path(dag, node, search_direction)
+        if node is None:
+            return None
 
+        if isinstance(node, FeatureNode):
+            if dag.in_degree(node) != 1 or dag.out_degree(node) != 1:
+                return None
+            continue
 
-def _feature_level(graph: LayerAbstractGraph, feature: FeatureNode) -> int:
-    return int(graph.dag.nodes[feature]['level'])
-
-
-def _node_input_level(graph: LayerAbstractGraph, preds: list[FeatureNode]) -> int:
-    if not preds:
-        raise ValueError('Cannot compute input level without predecessor features')
-    return max(_feature_level(graph, pred) for pred in preds)
-
-
-def _passthrough_scale(preds: list[FeatureNode], default_scale: np.float64) -> np.float64:
-    return _scale_farthest_from_default([np.float64(pred.ckks_scale) for pred in preds], default_scale)
-
-
-def _propagate_pcmpoly_scale(input_scale: np.float64, level: int, default_scale: np.float64, order: int) -> np.float64:
-    q_l = _q(level)
-    q_l1 = _q(level - 1)
-
-    x_sq = _rescale(_mult(input_scale, input_scale), q_l)
-    c2_scale = _mult(_rescale(q_l, default_scale), q_l1)
-    c2x2 = _rescale(_mult(x_sq, c2_scale), q_l1)
-    c1x = _rescale(_mult(input_scale, q_l), q_l)
-    low = _scale_farthest_from_default([c2x2, c1x], default_scale)
-
-    if order == 2:
-        return low
-    if order != 4:
-        raise ValueError(f'Unsupported pcmpoly order {order}; expected 2 or 4')
-
-    q_l2 = _q(level - 2)
-    c4_scale = _mult(
-        _mult(_rescale(q_l, default_scale), _rescale(q_l, default_scale)), _mult(_rescale(q_l1, default_scale), q_l2)
-    )
-    c3_scale = _mult(_mult(_rescale(q_l, default_scale), _rescale(q_l, default_scale)), q_l2)
-    c4x2 = _rescale(_mult(x_sq, c4_scale), q_l1)
-    c3x = _rescale(_mult(input_scale, c3_scale), q_l)
-    high = _scale_farthest_from_default([c4x2, c3x], default_scale)
-    final = _rescale(_mult(x_sq, high), q_l2)
-    return _scale_farthest_from_default([low, final], default_scale)
-
-
-def _propagate_layer_ckks_scale(
-    graph: LayerAbstractGraph, node: ComputeNode, preds: list[FeatureNode], default_scale: np.float64
-) -> np.float64:
-    layer_type = node.layer_type
-    level = _node_input_level(graph, preds)
-    input_scale = np.float64(preds[0].ckks_scale)
-
-    if layer_type == 'bootstrapping':
-        return default_scale
-
-    if layer_type in ('partranspose', 'pcmgamma'):
-        q_l = _q(level)
-        return _rescale(_mult(input_scale, q_l), q_l)
-
-    if layer_type == 'parcpmm':
-        q_l = _q(level)
-        q_l1 = _q(level - 1)
-        scale = _rescale(_mult(input_scale, q_l), q_l)
-        return _rescale(_mult(scale, q_l1), q_l1)
-
-    if layer_type == 'parccmm':
-        if len(preds) < 2:
-            raise ValueError(f'parccmm node {node.layer_id} requires two inputs')
-        q_l = _q(level)
-        q_l1 = _q(level - 1)
-        q_l2 = _q(level - 2)
-        a_scale = np.float64(preds[0].ckks_scale)
-        b_scale = np.float64(preds[1].ckks_scale)
-        a_sigma = _rescale(_mult(a_scale, q_l), q_l)
-        b_tau = _rescale(_mult(b_scale, q_l), q_l)
-        psi_pt_scale = _mult(_rescale(q_l2, default_scale), q_l1)
-        b_psi = _rescale(_mult(b_tau, psi_pt_scale), q_l1)
-        return _rescale(_mult(a_sigma, b_psi), q_l2)
-
-    if layer_type == 'pcmpoly':
-        return _propagate_pcmpoly_scale(input_scale, level, default_scale, getattr(node, 'order', 4))
-
-    if layer_type == 'pcmstats':
-        q_l = _q(level)
-        q_l1 = _q(level - 1)
-        q_l2 = _q(level - 2)
-        q_l3 = _q(level - 3)
-        x_sq = _rescale(_mult(input_scale, input_scale), q_l)
-        sum_x = _rescale(_mult(input_scale, q_l), q_l)
-        mean = _rescale(_mult(sum_x, q_l1), q_l1)
-        sum_x_sq = _rescale(_mult(x_sq, q_l), q_l1)
-        e_x_sq = _rescale(_mult(sum_x_sq, q_l1), q_l2)
-        mean_sq = _rescale(_mult(mean, mean), q_l2)
-        var = _scale_farthest_from_default([e_x_sq, mean_sq], default_scale)
-        iv_scale = _mult(_rescale(q_l2, default_scale), q_l3)
-        return _rescale(_mult(var, iv_scale), q_l3)
-
-    if layer_type == 'pcminit':
-        q_l = _q(level)
-        q_l1 = _q(level - 1)
-        a_sq = _rescale(_mult(input_scale, input_scale), q_l)
-        c2_scale = _mult(_rescale(q_l, default_scale), q_l1)
-        c2a2 = _rescale(_mult(a_sq, c2_scale), q_l1)
-        c1a = _rescale(_mult(input_scale, q_l), q_l)
-        return _scale_farthest_from_default([c2a2, c1a], default_scale)
-
-    if layer_type == 'pcmgs':
-        if len(preds) < 2:
-            raise ValueError(f'pcmgs node {node.layer_id} requires two inputs')
-        y_scale = np.float64(preds[0].ckks_scale)
-        a_scale = np.float64(preds[1].ckks_scale)
-        y_level = _feature_level(graph, preds[0])
-        q_l = _q(y_level)
-        q_l1 = _q(y_level - 1)
-        q_l2 = _q(y_level - 2)
-        ya = _rescale(_mult(y_scale, a_scale), q_l)
-        yy = _rescale(_mult(y_scale, y_scale), q_l)
-        ya_yy = _rescale(_mult(ya, yy), q_l1)
-        three_scale = _mult(_mult(_rescale(default_scale, q_l), _rescale(default_scale, q_l1)), default_scale)
-        three_y = _rescale(_mult(y_scale, three_scale), q_l)
-        diff = _scale_farthest_from_default([ya_yy, three_y], default_scale)
-        half_scale = _mult(
-            _mult(_rescale(q_l, default_scale), _rescale(q_l, default_scale)),
-            _mult(_rescale(q_l1, default_scale), q_l2),
-        )
-        return _rescale(_mult(diff, half_scale), q_l2)
-
-    if layer_type == 'pcmaffine':
-        if len(preds) < 2:
-            raise ValueError(f'pcmaffine node {node.layer_id} requires two inputs')
-        x_centered_scale = np.float64(preds[0].ckks_scale)
-        y_scale = np.float64(preds[1].ckks_scale)
-        y_level = _feature_level(graph, preds[1])
-        q_l = _q(y_level)
-        q_l1 = _q(y_level - 1)
-        yw_scale = _mult(_rescale(q_l, default_scale), q_l1)
-        yw = _rescale(_mult(y_scale, yw_scale), q_l)
-        return _rescale(_mult(x_centered_scale, yw), q_l1)
-
-    return _passthrough_scale(preds, default_scale)
-
-
-def propagate_ckks_scales(graph: LayerAbstractGraph):
-    if not nx.is_directed_acyclic_graph(graph.dag):
-        raise ValueError('Cycle exists in graph, cannot propagate ckks_scale')
-
-    default_scale = _default_ckks_scale()
-    for node in graph.dag.nodes:
-        if isinstance(node, FeatureNode) and graph.dag.in_degree(node) == 0:
-            node.ckks_scale = default_scale
-
-    for node in nx.topological_sort(graph.dag):
         if not isinstance(node, ComputeNode):
+            return None
+        if node.layer_type in PCMGAMMA_ABSORB_TARGETS:
+            return node
+        if node.layer_type not in PCMGAMMA_PASS_THROUGH_TYPES:
+            return None
+
+
+def _remove_pcmgamma_from_linear_path(dag, pcmgamma_node: ComputeNode, search_direction: str) -> bool:
+    preds = list(dag.predecessors(pcmgamma_node))
+    succs = list(dag.successors(pcmgamma_node))
+    if len(preds) != 1 or len(succs) != 1:
+        return False
+
+    input_feature = preds[0]
+    output_feature = succs[0]
+    if not isinstance(input_feature, FeatureNode) or not isinstance(output_feature, FeatureNode):
+        return False
+
+    if search_direction == 'up':
+        if dag.in_degree(input_feature) != 1 or dag.out_degree(input_feature) != 1:
+            return False
+        prev_compute = next(dag.predecessors(input_feature))
+        if not isinstance(prev_compute, ComputeNode):
+            return False
+        edge_attrs = copy.deepcopy(dag.edges[prev_compute, input_feature])
+        dag.remove_node(pcmgamma_node)
+        dag.remove_node(input_feature)
+        dag.add_edge(prev_compute, output_feature, **edge_attrs)
+    else:
+        if dag.in_degree(output_feature) != 1 or dag.out_degree(output_feature) != 1:
+            return False
+        next_compute = next(dag.successors(output_feature))
+        if not isinstance(next_compute, ComputeNode):
+            return False
+        edge_attrs = copy.deepcopy(dag.edges[output_feature, next_compute])
+        dag.remove_node(pcmgamma_node)
+        dag.remove_node(output_feature)
+        dag.add_edge(input_feature, next_compute, **edge_attrs)
+
+    return True
+
+
+def _absorb_pcmgamma_into_target(
+    dag, pcmgamma_node: ComputeNode, target_node: ComputeNode, search_direction: str
+) -> bool:
+    direction = f'after_{target_node.layer_type}' if search_direction == 'up' else f'before_{target_node.layer_type}'
+    if target_node.layer_type == 'parcpmm':
+        _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, target_node, direction)
+    elif target_node.layer_type == 'pcmpoly':
+        _fuse_pcmgamma_attrs_into_pcmpoly(pcmgamma_node, target_node, direction)
+    else:
+        return False
+    return _remove_pcmgamma_from_linear_path(dag, pcmgamma_node, search_direction)
+
+
+def _try_absorb_pcmgamma(dag, pcmgamma_node: ComputeNode) -> bool:
+    for search_direction in ('up', 'down'):
+        target_node = _find_pcmgamma_absorb_target(dag, pcmgamma_node, search_direction)
+        if target_node is not None:
+            return _absorb_pcmgamma_into_target(dag, pcmgamma_node, target_node, search_direction)
+    return False
+
+
+def absorb_pcmgamma_layers(graph: LayerAbstractGraph):
+    dag = graph.dag
+    changed = True
+    while changed:
+        changed = False
+        for node in list(dag.nodes):
+            if isinstance(node, ComputeNode) and node.layer_type == 'pcmgamma' and _try_absorb_pcmgamma(dag, node):
+                changed = True
+                break
+
+
+def fuse_pcmgamma_parcpmm_layers(graph: LayerAbstractGraph):
+    absorb_pcmgamma_layers(graph)
+
+
+def recompute_final_level(graph: LayerAbstractGraph):
+    dag = graph.dag
+    min_feature_level = get_min_feature_level()
+    reset_layer_types = {'bootstrapping', 'mpc_refresh'}
+    anchors: dict[FeatureNode, int] = {}
+
+    def set_anchor(feature: FeatureNode, level: int):
+        level = int(level)
+        existing_level = anchors.get(feature)
+        if existing_level is not None and existing_level != level:
+            raise ValueError(f'Conflicting fixed levels for feature {feature.node_id}: {existing_level} vs {level}')
+        anchors[feature] = level
+
+    for node in dag.nodes:
+        if not isinstance(node, ComputeNode) or node.layer_type not in reset_layer_types:
             continue
-        preds = _ordered_feature_preds(graph, node)
-        succs = [succ for succ in graph.dag.successors(node) if isinstance(succ, FeatureNode)]
-        if not preds or not succs:
+        preds = [pred for pred in dag.predecessors(node) if isinstance(pred, FeatureNode)]
+        succs = [succ for succ in dag.successors(node) if isinstance(succ, FeatureNode)]
+        for feature in preds + succs:
+            if 'level' not in dag.nodes[feature]:
+                raise ValueError(f'Feature {feature.node_id} missing level before final level recompute')
+            set_anchor(feature, dag.nodes[feature]['level'])
+
+    for node in dag.nodes:
+        if not isinstance(node, FeatureNode) or dag.out_degree(node) != 0 or node in anchors:
             continue
-        output_scale = _propagate_layer_ckks_scale(graph, node, preds, default_scale)
-        output_scale = _ensure_finite_scale(output_scale, node.layer_id)
-        for succ in succs:
-            succ.ckks_scale = output_scale
+        set_anchor(node, min_feature_level)
+
+    feature_levels: dict[FeatureNode, int] = {}
+    for node in reversed(list(nx.topological_sort(dag))):
+        if not isinstance(node, FeatureNode):
+            continue
+
+        regular_consumers = [
+            consumer
+            for consumer in dag.successors(node)
+            if isinstance(consumer, ComputeNode) and consumer.layer_type not in reset_layer_types
+        ]
+        downstream_req = min_feature_level if dag.out_degree(node) == 0 or regular_consumers else 0
+
+        for consumer in regular_consumers:
+            output_features = [succ for succ in dag.successors(consumer) if isinstance(succ, FeatureNode)]
+            if not output_features:
+                continue
+            missing_outputs = [feature.node_id for feature in output_features if feature not in feature_levels]
+            if missing_outputs:
+                raise ValueError(
+                    f'Cannot recompute level for {node.node_id}: outputs of {consumer.layer_id} not ready: '
+                    f'{missing_outputs}'
+                )
+            output_level = max(feature_levels[feature] for feature in output_features)
+            downstream_req = max(downstream_req, output_level + dag.nodes[consumer].get('level_cost', 0))
+
+        if node in anchors:
+            anchor_level = anchors[node]
+            if downstream_req > anchor_level:
+                raise ValueError(
+                    f'Fixed level of feature {node.node_id} is {anchor_level}, but downstream requires {downstream_req}'
+                )
+            feature_levels[node] = anchor_level
+        else:
+            feature_levels[node] = downstream_req
+
+    max_allowed_level = config.fhe_param.max_level + 1
+    for feature, level in feature_levels.items():
+        if level < 0 or level > max_allowed_level:
+            raise ValueError(
+                f'Final level of feature {feature.node_id} is out of range: {level}, max allowed {max_allowed_level}'
+            )
+        dag.nodes[feature]['level'] = int(level)
 
 
 def dump_graph(
@@ -516,7 +535,9 @@ def dump_graph(
 
     erg0_path = ergs_dir / 'nn_layers_ct_0.json'
     insert_btp_scale_gamma_layers(graph)
-    propagate_ckks_scales(graph)
+    absorb_pcmgamma_layers(graph)
+    recompute_final_level(graph)
+    transforms.insert_drop_level_layers(graph)
     graph.to_json(dict(), str(erg0_path), score=score)
 
     if use_btp:
