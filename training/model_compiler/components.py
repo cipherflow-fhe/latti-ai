@@ -794,6 +794,8 @@ class LayerAbstractGraph:
                 compute_node.bias_path = layer_json.get('bias_path', '')
                 compute_node.fuse_gama_info = layer_json.get('fuse_gama_info')
                 compute_node.to_expand = layer_json.get('to_expand', False)
+                compute_node.q_info = layer_json.get('q_info')
+                compute_node.k_info = layer_json.get('k_info')
 
             elif layer_type in ('add_pt', 'pcm_add_pt'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
@@ -1114,6 +1116,10 @@ class LayerAbstractGraph:
                     layers[layer_id]['fuse_gama_info'] = layer.fuse_gama_info
                 if getattr(layer, 'to_expand', False):
                     layers[layer_id]['to_expand'] = True
+                if getattr(layer, 'q_info', None) is not None:
+                    layers[layer_id]['q_info'] = layer.q_info
+                if getattr(layer, 'k_info', None) is not None:
+                    layers[layer_id]['k_info'] = layer.k_info
             if layer_type in ('add_pt', 'pcm_add_pt'):
                 path = getattr(layer, 'path', '') or layer.bias_path
                 layers[layer_id] = {
