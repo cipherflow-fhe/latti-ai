@@ -506,6 +506,144 @@ def corollary_3_9_packed(
 
 
 # ---------------------------------------------------------------------------
+# THOR Section 4.2.2 Algorithm 1 plaintext-ciphertext matrix multiplication
+# ---------------------------------------------------------------------------
+
+
+def generate_algorithm_1_plaintexts(A_plain: np.ndarray, n: int, n_slot: int, H: int) -> list[list[np.ndarray]]:
+    """Generate plaintext vectors pt.A_{i,j,ell,r} for Algorithm 1.
+
+    A_plain has shape (d, d), d = H * n, and is partitioned into n x n
+    blocks A_{row_block, col_block}. For every block-diagonal offset i,
+    Algorithm 1 uses the aligned block batch
+        A^(i) = (A_{i+k, k})_{k in [H]}
+    with block-row index i+k taken modulo H.
+
+    Return layout:
+        pt_A[i][((j * c + ell) * n_c + r)] == pt.A_{i,j,ell,r}
+
+    where c = n_slot / (H*n), n_c = n/c, i in [H], j,r in [n_c],
+    and ell in [c]. Each vector has length n_slot and matches the existing
+    H-way interlaced multi-diagonal batched encoding.
+    """
+
+    A = _as_matrix(A_plain, 'A_plain')
+    H = _validate_H(H)
+    assert n > 0, 'n must be positive'
+    d = H * n
+    assert A.shape == (d, d), f'A_plain must have shape {(d, d)}, got {A.shape}'
+    _, _, _, diag_len, c, segment_len = _packing_params((n, n), n_slot, H)
+    assert diag_len == n
+    assert segment_len == d
+    n_c = n // c
+
+    pt_A: list[list[np.ndarray]] = []
+    for i in range(H):
+        pt_i: list[np.ndarray] = []
+        blocks = [A[((i + k) % H) * n : ((i + k) % H + 1) * n, k * n : (k + 1) * n] for k in range(H)]
+        for j in range(n_c):
+            for ell in range(c):
+                for r in range(n_c):
+                    segments: list[np.ndarray] = []
+                    # Then use the equation of proposition 3.6: L_{out_diag_idx}(block0,block1)=\sum_{b_diag_idx in [n]} \rho^{out_diag_idx}(U_{b_diag_idx-out_diag_idx}(block0)) \odot
+                    # L_{b_diag_idx}(block1)
+                    for tau in range(c):
+                        b_diag_idx = c * j + (
+                            (tau + ell) % c
+                        )  # global input diag idx for the tau-th segment of the j-th input ciphertext ct.B_j
+                        # each segment has H interleaved diagonals, each segment has total length H * n = d, tau-th segmetn corresponds tau-th diagonal within the ciphertext
+                        out_diag_idx = (
+                            c * r + tau
+                        )  # global output diag idx for the tau-th segment of the r-th output ciphertext ct.C_r
+                        interlaced = _interlace_diagonal_batch(
+                            [upper_diagonal(block, (b_diag_idx - out_diag_idx) % n) for block in blocks],
+                            n,
+                            H,
+                        )
+                        segments.append(rotate(interlaced, out_diag_idx * H))
+                    plaintext = np.concatenate(segments)
+                    assert plaintext.shape == (n_slot,)
+                    pt_i.append(plaintext)
+        assert len(pt_i) == n_c * c * n_c
+        pt_A.append(pt_i)
+    return pt_A
+
+
+def algorithm_1_plaintext_ciphertext_matmul(
+    A_plain: np.ndarray,
+    packed_lower_B: list[np.ndarray],
+    n: int,
+    n_slot: int,
+    H: int,
+) -> list[np.ndarray]:
+    """Implement THOR Section 4.2.2 Algorithm 1.
+
+    This computes C = A * B where A is plaintext with shape (d, d), B is
+    encrypted/packed as H blocks B_k in R^{n x n}, d = H*n, and the output is
+    the packed lower-diagonal encoding of H output blocks C_k in R^{n x n}.
+
+    The implementation follows Algorithm 1 directly:
+    - lines 2-5: rotate input ciphertexts ct.B_j by d*ell;
+    - lines 6-10: compute block-diagonal partial products via Proposition 3.6
+      using the generated plaintext vectors pt.A_{i,j,ell,r};
+    - lines 11-16: internally rotate partial products into output-block order
+      and aggregate them into ct.C_r.
+    """
+
+    A = _as_matrix(A_plain, 'A_plain')
+    H = _validate_H(H)
+    assert n > 0, 'n must be positive'
+    d = H * n
+    assert A.shape == (d, d), f'A_plain must have shape {(d, d)}, got {A.shape}'
+    _, _, _, _, c, segment_len = _packing_params((n, n), n_slot, H)
+    assert segment_len == d
+    n_c = n // c
+    assert isinstance(packed_lower_B, list), 'packed_lower_B must be list[np.ndarray]'
+    assert len(packed_lower_B) == n_c, f'expected {n_c} input ciphertexts, got {len(packed_lower_B)}'
+    for idx, vector in enumerate(packed_lower_B):
+        slots = _as_vector(vector, f'packed_lower_B[{idx}]')
+        assert slots.shape == (n_slot,), f'packed_lower_B[{idx}] must have length {n_slot}'
+
+    pt_A = generate_algorithm_1_plaintexts(A, n, n_slot, H)
+
+    ct_Br: list[list[np.ndarray]] = []
+    for j in range(n_c):
+        rotations: list[np.ndarray] = []
+        for ell in range(c):
+            rotations.append(packed_lower_B[j].copy() if ell == 0 else rotate(packed_lower_B[j], d * ell))
+        ct_Br.append(rotations)
+
+    ct_ir: list[list[np.ndarray]] = []
+    for i in range(H):
+        row: list[np.ndarray] = []
+        for r in range(n_c):
+            acc = np.zeros(n_slot, dtype=np.result_type(A.dtype, *(vector.dtype for vector in packed_lower_B)))
+            for j in range(n_c):
+                for ell in range(c):
+                    pt_idx = (j * c + ell) * n_c + r
+                    acc = add(acc, multiply(ct_Br[j][ell], pt_A[i][pt_idx]))
+            row.append(acc)
+        ct_ir.append(row)
+
+    ct_C: list[np.ndarray] = []
+    for r in range(n_c):
+        acc = ct_ir[0][r].copy()
+        for i in range(1, H):
+            mask_wrap = np.zeros(n_slot, dtype=ct_ir[i][r].dtype)
+            for segment_start in range(0, n_slot, segment_len):
+                for t in range(n):
+                    group_start = segment_start + t * H
+                    mask_wrap[group_start + H - i : group_start + H] = 1
+            ct_i_r_R = multiply(ct_ir[i][r], mask_wrap)
+            ct_i_r_L = subtract(ct_ir[i][r], ct_i_r_R)
+            ct_i_r_prime = add(rotate(ct_i_r_R, H - i), rotate(ct_i_r_L, -i))
+            acc = add(acc, ct_i_r_prime)
+        ct_C.append(acc)
+
+    return ct_C
+
+
+# ---------------------------------------------------------------------------
 # Broad verification helpers
 # ---------------------------------------------------------------------------
 
@@ -646,10 +784,34 @@ def verify_corollaries_3_8_3_9() -> None:
         assert np.allclose(C, A @ B)
 
 
+def verify_algorithm_1() -> None:
+    """Verify Section 4.2.2 Algorithm 1 against NumPy plaintext matmul."""
+
+    H = 2
+    n = 4
+    d = H * n
+    n_slot = 16
+    A = (np.arange(d * d, dtype=np.float64).reshape(d, d) % 17) + 1
+    B = (np.arange(d * n, dtype=np.float64).reshape(d, n) % 13) + 1
+    B_blocks = [B[k * n : (k + 1) * n, :] for k in range(H)]
+
+    packed_C = algorithm_1_plaintext_ciphertext_matmul(
+        A,
+        pack_lower_diagonals(B_blocks, n_slot, H),
+        n,
+        n_slot,
+        H,
+    )
+    C_blocks = unpack_lower_diagonals(packed_C, (n, n), n_slot, H)
+    C = np.vstack(C_blocks)
+    assert np.allclose(C, A @ B)
+
+
 def verify_all() -> None:
     verify_pack_unpack()
     verify_propositions_3_6_3_7()
     verify_corollaries_3_8_3_9()
+    verify_algorithm_1()
     print('All THOR CKKS primitive verifications passed.')
 
 
