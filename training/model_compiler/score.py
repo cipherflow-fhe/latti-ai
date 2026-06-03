@@ -884,6 +884,7 @@ add_time = {
 }
 
 btp_time = {'8192': 7, '16384': 12, '65536': 24}
+btp_gpu_time = {'65536': 0.3}
 
 mpc_refresh_rate = 1 / 15
 ct_trans_rate = 1 / 10
@@ -896,7 +897,7 @@ class FheScoreParam:
         compute_node: ComputeNode,
         param: dict[str, FheParameter],
         level,
-        use_gpu: bool = False,
+        use_gpu: bool = True,
     ) -> None:
         preds: list[FeatureNode] = list(dag.predecessors(compute_node))
         succs: list[FeatureNode] = list(dag.successors(compute_node))
@@ -1552,14 +1553,54 @@ class MpcScoreParam:
 
 
 class BtpScoreParam:
-    def __init__(self, dag: nx.DiGraph, compute_node: ComputeNode, param: dict[str, FheParameter]) -> None:
+    def __init__(
+        self,
+        dag: nx.DiGraph,
+        compute_node: ComputeNode,
+        param: dict[str, FheParameter],
+        use_gpu: bool = True,
+    ) -> None:
         graph = LayerAbstractGraph()
         graph.dag = dag
         pred = list(graph.dag.predecessors(compute_node))[0]
         self.n = param[pred.ckks_parameter_id].poly_modulus_degree
-        pack_num = graph.dag.nodes[pred]['pack_num']
-        self.ct_num = math.ceil(compute_node.channel_input / pack_num)
+        self._btp_time_table = btp_gpu_time if use_gpu else btp_time
+        self.ct_num = self._get_input_ct_num(pred, graph.dag.nodes[pred], compute_node)
+
+    def _get_input_ct_num(self, pred: FeatureNode, pred_attrs: dict, compute_node: ComputeNode) -> int:
+        if getattr(pred, 'data_type', None) == 'feature_mat':
+            return self._get_feature_mat_ct_num(pred)
+        pack_num = pred_attrs['pack_num']
+        return math.ceil(compute_node.channel_input / pack_num)
+
+    def _get_feature_mat_ct_num(self, pred: FeatureNode) -> int:
+        m, total_cols = pred.shape
+        n_heads = max(1, config.n_heads)
+        if pred.head_shape is not None and len(pred.head_shape) >= 2:
+            cols_per_head = pred.head_shape[1]
+        else:
+            cols_per_head = math.ceil(total_cols / n_heads)
+        block_size = config.matmul_block_size or cols_per_head
+
+        n_slot = self.n // 2
+        n_heads_padded = 1 << (n_heads - 1).bit_length()
+        block_slot_size = block_size * block_size
+        if block_slot_size <= 0 or n_slot < block_slot_size:
+            raise ValueError(f'Invalid feature_mat packing: n_slot={n_slot}, block_size={block_size}')
+
+        if n_slot >= n_heads_padded * block_slot_size:
+            n_cts_per_block_idx = 1
+        else:
+            heads_per_ct = n_slot // block_slot_size
+            if heads_per_ct == 1:
+                n_heads_padded = n_heads
+            n_cts_per_block_idx = math.ceil(n_heads_padded / heads_per_ct)
+
+        k_col = math.ceil(total_cols / (cols_per_head * n_heads))
+        num_block_rows = math.ceil(m / block_size)
+        num_block_cols = math.ceil(cols_per_head / block_size)
+        return k_col * num_block_rows * num_block_cols * n_cts_per_block_idx
 
     def get_score(self):
-        score = self.ct_num * btp_time[str(self.n)] / get_multithread_rate_for_btp(self.ct_num)
+        score = self.ct_num * self._btp_time_table[str(self.n)] 
         return score

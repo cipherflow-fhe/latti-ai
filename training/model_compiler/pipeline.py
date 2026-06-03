@@ -572,6 +572,7 @@ def run_pipeline(
     head_dim: int | None = None,
     matmul_block_size: int | None = None,
     set_btp_scale: float | None = None,
+    use_gpu: bool = True,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -588,6 +589,7 @@ def run_pipeline(
         style: Computation style (STYLE)
         graph_type: Graph type (GRAPH_TYPE)
         set_btp_scale: if not None, wrap BTP with pcmgamma scales and enable special level handling
+        use_gpu: If True, use GPU primitive timing tables for FHE score; otherwise use CPU timing
     """
     if style is not None:
         config.style = style
@@ -600,10 +602,11 @@ def run_pipeline(
     if matmul_block_size is not None:
         config.matmul_block_size = matmul_block_size
     config.set_btp_scale = set_btp_scale
+    config.use_gpu = use_gpu
     print(
         f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
         f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
-        f'SET_BTP_SCALE={config.set_btp_scale}'
+        f'SET_BTP_SCALE={config.set_btp_scale}, BACKEND={"gpu" if config.use_gpu else "cpu"}'
     )
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
