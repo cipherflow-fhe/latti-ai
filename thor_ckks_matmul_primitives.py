@@ -506,6 +506,220 @@ def corollary_3_9_packed(
 
 
 # ---------------------------------------------------------------------------
+# THOR Appendix B.2 Algorithm 4 and Section 4.3.2 Algorithm 2 （非复数化版本）
+# ---------------------------------------------------------------------------
+
+
+def algorithm_4_replication(packed_lower_B: list[np.ndarray], B_shape: Shape, n_slot: int, H: int) -> list[np.ndarray]:
+    """Implement Appendix B.2 Algorithm 4 replication semantics.
+
+    Input ct.B_j is the multi-lower-diagonal batched encoding of H square
+    matrices B^(z) in R^{n x n}. Output ct.B'_ell for ell in [n], where each
+    ciphertext stores c replicated copies of the H-way interlaced lower
+    diagonal L_ell(B).
+    """
+
+    rows, cols = _normalize_shape(B_shape)
+    assert rows == cols, 'Algorithm 4 requires B shape (n, n)'
+    n = rows
+    _, _, _, _, c, segment_len = _packing_params(B_shape, n_slot, H)
+    assert segment_len == H * n
+    n_c = n // c
+    assert isinstance(packed_lower_B, list), 'packed_lower_B must be list[np.ndarray]'
+    assert len(packed_lower_B) == n_c, f'expected {n_c} input ciphertexts, got {len(packed_lower_B)}'
+
+    assert _is_power_of_two(c), 'Algorithm 4 rotate-and-sum replication requires c to be a power of two'
+
+    replicated: list[np.ndarray] = []
+    for ell in range(n):
+        j = ell // c
+        local = ell % c
+        slots = _as_vector(packed_lower_B[j], f'packed_lower_B[{j}]')
+        assert slots.shape == (n_slot,), f'packed_lower_B[{j}] must have length {n_slot}'
+
+        mask = np.zeros(n_slot, dtype=slots.dtype)
+        mask[local * segment_len : (local + 1) * segment_len] = 1
+        masked_diag = multiply(slots, mask)
+
+        repeated = masked_diag
+        for i in range(c.bit_length() - 1):
+            repeated = add(repeated, rotate(repeated, segment_len * (1 << i)))
+        assert repeated.shape == (n_slot,)
+        replicated.append(repeated)
+    return replicated
+
+
+def algorithm_2_ciphertext_ciphertext_matmul(
+    packed_lower_A: list[np.ndarray],
+    packed_lower_B: list[np.ndarray],
+    A_shape: Shape,
+    B_shape: Shape,
+    n_slot: int,
+    H: int,
+    B_is_replicated: bool = False,
+) -> list[np.ndarray]:
+    """Implement THOR Section 4.3.2 Algorithm 2.
+
+    A is encoded as multi-lower-diagonal batched ciphertexts ct.A_j for
+    A^(z) in R^{m x n}. B is either multi-lower-diagonal batched ciphertexts
+    or already replicated batched lower diagonal vectors ct.B_ell for
+    B^(z) in R^{n x n}. The output is multi-lower-diagonal batched ciphertexts
+    of C^(z) = A^(z) B^(z).
+
+    This NumPy reference keeps the Algorithm 2 public boundary and uses
+    Algorithm 4 when B is not replicated. The final packed result is computed
+    from the same lower-lower diagonal relation that Algorithm 2 optimizes.
+    """
+
+    m, n = _normalize_shape(A_shape)
+    b_rows, b_cols = _normalize_shape(B_shape)
+    assert n >= m, 'Algorithm 2 requires A shape (m, n) with n >= m'
+    assert (b_rows, b_cols) == (n, n), 'Algorithm 2 requires B shape (n, n)'
+    _, _, _, _, c, segment_len = _packing_params(A_shape, n_slot, H)
+    assert segment_len == H * n
+    m_c = m // c
+    assert isinstance(packed_lower_A, list), 'packed_lower_A must be list[np.ndarray]'
+    assert len(packed_lower_A) == m_c, f'expected {m_c} A ciphertexts, got {len(packed_lower_A)}'
+
+    if B_is_replicated:
+        replicated_B = packed_lower_B
+        assert len(replicated_B) == n, f'expected {n} replicated B ciphertexts, got {len(replicated_B)}'
+        for ell, vector in enumerate(replicated_B):
+            slots = _as_vector(vector, f'replicated_B[{ell}]')
+            assert slots.shape == (n_slot,), f'replicated_B[{ell}] must have length {n_slot}'
+    else:
+        replicated_B = algorithm_4_replication(packed_lower_B, B_shape, n_slot, H)
+
+    dtype = np.result_type(*(vector.dtype for vector in packed_lower_A + replicated_B))
+
+    def masks_for_ell(ell: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        ell_c = ell % c
+        split_segment = c - ell_c
+        first_len = n - ell
+        masks = [np.zeros(n_slot, dtype=dtype) for _ in range(4)]
+        for r in range(c):
+            high_segment = split_segment <= r < c
+            for t in range(n):
+                first_entries = t < first_len
+                if high_segment and first_entries:
+                    mask_idx = 0
+                elif not high_segment and first_entries:
+                    mask_idx = 1
+                elif high_segment and not first_entries:
+                    mask_idx = 2
+                else:
+                    mask_idx = 3
+                start = r * segment_len + t * H
+                masks[mask_idx][start : start + H] = 1
+        return masks[0], masks[1], masks[2], masks[3]
+
+    ct_C_j_ell: list[list[np.ndarray]] = []
+    for j in range(m_c):
+        partials: list[np.ndarray] = [multiply(packed_lower_A[j], replicated_B[0])]
+        for ell in range(1, n):
+            ell_m = ell % m
+            ell_c = ell_m % c
+            source_j = (j - ((ell_m - ell_c) // c)) % m_c
+            ct_rot = rotate(packed_lower_A[source_j], (-n * ell_c + ell) * H)
+            partials.append(multiply(ct_rot, replicated_B[ell]))
+        ct_C_j_ell.append(partials)
+
+    ct_C: list[np.ndarray] = []
+    for j in range(m_c):
+        ct_C_prime = np.zeros(n_slot, dtype=dtype)
+        ct_C_double_prime = np.zeros(n_slot, dtype=dtype)
+        for ell in range(1, n):
+            mu_ell_0, mu_ell_1, mu_ell_2, mu_ell_3 = masks_for_ell(ell)
+            prev_j = (j - 1) % m_c
+            ct_j_minus_1_ell_0 = multiply(ct_C_j_ell[prev_j][ell], mu_ell_0)
+            ct_j_ell_1 = multiply(ct_C_j_ell[j][ell], mu_ell_1)
+            ct_j_minus_1_ell_2 = multiply(ct_C_j_ell[prev_j][ell], rotate(mu_ell_2, segment_len))
+            ct_j_ell_3 = multiply(ct_C_j_ell[j][ell], rotate(mu_ell_3, segment_len))
+            ct_C_prime = add(ct_C_prime, add(ct_j_minus_1_ell_0, ct_j_ell_1))
+            ct_C_double_prime = add(ct_C_double_prime, add(ct_j_minus_1_ell_2, ct_j_ell_3))
+        ct = add(add(ct_C_j_ell[j][0], ct_C_prime), rotate(ct_C_double_prime, -segment_len))
+        assert ct.shape == (n_slot,)
+        ct_C.append(ct)
+    return ct_C
+
+
+# ---------------------------------------------------------------------------
+# THOR Appendix B.3 Algorithm 5 matrix transpose
+# ---------------------------------------------------------------------------
+
+
+def algorithm_5_matrix_transpose(
+    packed_upper_B: list[np.ndarray], B_shape: Shape, n_slot: int, H: int
+) -> list[np.ndarray]:
+    """Implement Appendix B.3 Algorithm 5 matrix transpose semantics.
+
+    Input ct.B_j is the multi-upper-diagonal batched encoding of H square
+    matrices B^(z) in R^{n x n}. The output ct.C_ell is the multi-lower-diagonal
+    batched encoding of the same B^(z). The transposition is between upper- and
+    lower-diagonal encodings, not a logical matrix transpose of B.
+    """
+
+    # Variable correspondence with Lemma 3.4 in the square case m = n:
+    # - Lemma 3.4's matrix A corresponds to this function's matrix B.
+    # - source_diag_idx is the upper-diagonal index in U_{source_diag_idx}(B).
+    # - out_diag_idx is the lower-diagonal index in L_{out_diag_idx}(B).
+    # - j and k locate source_diag_idx in the input ciphertext: source_diag_idx = c*j + k.
+    # - ell and out_local_idx locate out_diag_idx in the output ciphertext ct.C_ell.
+    # - ct_rot is the rotated packed source ciphertext before mu_0/mu_1 split the
+    #   non-wrapped and wrapped portions required by Algorithm 5.
+
+    rows, cols = _normalize_shape(B_shape)
+    assert rows == cols, 'Algorithm 5 requires B shape (n, n)'
+    n = rows
+    _, _, n_diag, diag_len, c, segment_len = _packing_params(B_shape, n_slot, H)
+    assert n_diag == n
+    assert diag_len == n
+    assert segment_len == H * n
+    expected_vectors = n // c
+    assert isinstance(packed_upper_B, list), 'packed_upper_B must be list[np.ndarray]'
+    assert len(packed_upper_B) == expected_vectors, (
+        f'expected {expected_vectors} input ciphertexts, got {len(packed_upper_B)}'
+    )
+
+    dtype = np.result_type(*(vector.dtype for vector in packed_upper_B))
+
+    def transpose_masks(out_diag_idx: int, out_local_idx: int) -> tuple[np.ndarray, np.ndarray]:
+        mu_0 = np.zeros(n_slot, dtype=dtype)
+        mu_1 = np.zeros(n_slot, dtype=dtype)
+        base = out_local_idx * segment_len
+        for t in range(n - out_diag_idx):
+            start = base + t * H
+            mu_0[start : start + H] = 1
+        for t in range(out_diag_idx):
+            start = (base + (t - out_diag_idx) * H) % n_slot
+            mu_1[start : start + H] = 1
+        return mu_0, mu_1
+
+    ct_ell_0 = [np.zeros(n_slot, dtype=dtype) for _ in range(expected_vectors)]
+    ct_ell_1 = [np.zeros(n_slot, dtype=dtype) for _ in range(expected_vectors)]
+
+    for j in range(expected_vectors):
+        slots = _as_vector(packed_upper_B[j], f'packed_upper_B[{j}]')
+        assert slots.shape == (n_slot,), f'packed_upper_B[{j}] must have length {n_slot}'
+        for k in range(c):
+            source_diag_idx = c * j + k
+            out_diag_idx = (-source_diag_idx) % n
+            ell = out_diag_idx // c
+            out_local_idx = out_diag_idx % c
+            ct_rot = rotate(slots, (k - out_local_idx) * segment_len + out_diag_idx * H)
+            mu_j_k_0, mu_j_k_1 = transpose_masks(out_diag_idx, out_local_idx)
+            ct_ell_0[ell] = add(ct_ell_0[ell], multiply(ct_rot, mu_j_k_0))
+            ct_ell_1[ell] = add(ct_ell_1[ell], multiply(ct_rot, mu_j_k_1))
+
+    ct_C: list[np.ndarray] = []
+    for ell in range(expected_vectors):
+        ct = add(ct_ell_0[ell], rotate(ct_ell_1[ell], -segment_len))
+        assert ct.shape == (n_slot,)
+        ct_C.append(ct)
+    return ct_C
+
+
+# ---------------------------------------------------------------------------
 # THOR Section 4.2.2 Algorithm 1 plaintext-ciphertext matrix multiplication
 # ---------------------------------------------------------------------------
 
@@ -807,11 +1021,78 @@ def verify_algorithm_1() -> None:
     assert np.allclose(C, A @ B)
 
 
+def verify_algorithm_2() -> None:
+    """Verify Section 4.3.2 Algorithm 2 and Algorithm 4 replication."""
+
+    H = 2
+    n_slot = 16
+    A = [
+        np.arange(8, dtype=np.float64).reshape(2, 4) + 1,
+        np.arange(8, dtype=np.float64).reshape(2, 4) + 31,
+    ]
+    B = [
+        np.arange(16, dtype=np.float64).reshape(4, 4) + 1,
+        np.arange(16, dtype=np.float64).reshape(4, 4) + 41,
+    ]
+
+    packed_A = pack_lower_diagonals(A, n_slot, H)
+    packed_B = pack_lower_diagonals(B, n_slot, H)
+    replicated_B = algorithm_4_replication(packed_B, B[0].shape, n_slot, H)
+
+    C_from_multi = unpack_lower_diagonals(
+        algorithm_2_ciphertext_ciphertext_matmul(packed_A, packed_B, A[0].shape, B[0].shape, n_slot, H),
+        (A[0].shape[0], B[0].shape[1]),
+        n_slot,
+        H,
+    )
+    C_from_replicated = unpack_lower_diagonals(
+        algorithm_2_ciphertext_ciphertext_matmul(
+            packed_A,
+            replicated_B,
+            A[0].shape,
+            B[0].shape,
+            n_slot,
+            H,
+            B_is_replicated=True,
+        ),
+        (A[0].shape[0], B[0].shape[1]),
+        n_slot,
+        H,
+    )
+    for A_i, B_i, C_i, C_rep_i in zip(A, B, C_from_multi, C_from_replicated):
+        expected = A_i @ B_i
+        assert np.allclose(C_i, expected)
+        assert np.allclose(C_rep_i, expected)
+
+
+def verify_algorithm_5() -> None:
+    """Verify Appendix B.3 Algorithm 5 matrix transpose."""
+
+    H = 2
+    n_slot = 16
+    B = [
+        np.arange(16, dtype=np.float64).reshape(4, 4) + 1,
+        np.arange(16, dtype=np.float64).reshape(4, 4) + 51,
+    ]
+
+    packed_upper_B = pack_upper_diagonals(B, n_slot, H)
+    packed_lower_B = algorithm_5_matrix_transpose(packed_upper_B, B[0].shape, n_slot, H)
+    expected_packed = pack_lower_diagonals(B, n_slot, H)
+    decoded = unpack_lower_diagonals(packed_lower_B, B[0].shape, n_slot, H)
+
+    for actual_vector, expected_vector in zip(packed_lower_B, expected_packed):
+        assert np.allclose(actual_vector, expected_vector)
+    for actual_matrix, source_matrix in zip(decoded, B):
+        assert np.allclose(actual_matrix, source_matrix)
+
+
 def verify_all() -> None:
     verify_pack_unpack()
     verify_propositions_3_6_3_7()
     verify_corollaries_3_8_3_9()
     verify_algorithm_1()
+    verify_algorithm_2()
+    verify_algorithm_5()
     print('All THOR CKKS primitive verifications passed.')
 
 
