@@ -884,7 +884,7 @@ add_time = {
 }
 
 btp_time = {'8192': 7, '16384': 12, '65536': 24}
-btp_gpu_time = {'65536': 0.3}
+btp_gpu_time = {'65536': 30000}
 
 mpc_refresh_rate = 1 / 15
 ct_trans_rate = 1 / 10

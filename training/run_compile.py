@@ -113,6 +113,14 @@ Examples:
         help='Wrap each bootstrapping layer with pcmgamma layers using this scale',
     )
 
+    parser.add_argument(
+        '--compilation_mode',
+        type=str,
+        choices=['dp', 'greedy'],
+        default='dp',
+        help='BTP compiler mode: dp or greedy (default: dp)',
+    )
+
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -169,7 +177,8 @@ Examples:
     print(f'[Compile] Output: {output_dir}')
     print(
         f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, '
-        f'COMPILE_CONFIG={args.config or "<none>"}, SET_BTP_SCALE={set_btp_scale}'
+        f'COMPILE_CONFIG={args.config or "<none>"}, SET_BTP_SCALE={set_btp_scale}, '
+        f'COMPILATION_MODE={args.compilation_mode}'
     )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
@@ -186,6 +195,7 @@ Examples:
             head_dim=compile_config.get('head_dim'),
             matmul_block_size=compile_config.get('matmul_block_size'),
             set_btp_scale=set_btp_scale,
+            compilation_mode=args.compilation_mode,
         )
 
         print(f'\n[Compile] Success! Output: {output_dir}')

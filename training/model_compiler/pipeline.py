@@ -33,6 +33,7 @@ from components import (
 import processor
 from processor import *
 from graph_partition_dp import *
+from greedy_btp import compile_model_btp_greedy
 
 
 def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
@@ -152,6 +153,7 @@ def try_btp(
     raw_graph: LayerAbstractGraph,
     temperature: float,
     num_workers: int,
+    compilation_mode: str = 'dp',
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
     btp_param_list = [N16QP1546H192H32]
     valid_results = []
@@ -163,7 +165,7 @@ def try_btp(
         pt_graph = prepare_graph(raw_graph)
 
         # (2) Process
-        graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
+        graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers, compilation_mode)
 
         # (3) Post-process
         if graph is not None:
@@ -182,6 +184,7 @@ def run_btp_compilation(
     pt_graph: LayerAbstractGraph,
     temperature: float,
     num_workers: int,
+    compilation_mode: str = 'dp',
 ) -> tuple[LayerAbstractGraph | None, float]:
     """
     Run BTP mode parallel compilation with prepared graph
@@ -195,6 +198,16 @@ def run_btp_compilation(
     Returns:
         (best_graph, best_score): best_graph is None if all runs failed
     """
+    if compilation_mode not in {'dp', 'greedy'}:
+        raise ValueError(f"Unsupported compilation_mode={compilation_mode!r}; expected 'dp' or 'greedy'")
+
+    if compilation_mode == 'greedy':
+        print('Step 4: Starting greedy BTP compilation of pt_graph')
+        score, graph = compile_model_btp_greedy(pt_graph)
+        print(f'\n=== Results ===')
+        print(f'Final BTP count: {score}')
+        return graph, float(score)
+
     print(f'Step 4: Starting DP compilation of pt_graph with temperature={temperature}')
 
     # Find the best result
@@ -573,6 +586,7 @@ def run_pipeline(
     matmul_block_size: int | None = None,
     set_btp_scale: float | None = None,
     use_gpu: bool = True,
+    compilation_mode: str = 'dp',
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -590,6 +604,7 @@ def run_pipeline(
         graph_type: Graph type (GRAPH_TYPE)
         set_btp_scale: if not None, wrap BTP with pcmgamma scales and enable special level handling
         use_gpu: If True, use GPU primitive timing tables for FHE score; otherwise use CPU timing
+        compilation_mode: BTP compiler mode, either 'dp' or 'greedy'
     """
     if style is not None:
         config.style = style
@@ -601,12 +616,15 @@ def run_pipeline(
         config.head_dim = head_dim
     if matmul_block_size is not None:
         config.matmul_block_size = matmul_block_size
+    if compilation_mode not in {'dp', 'greedy'}:
+        raise ValueError(f"Unsupported compilation_mode={compilation_mode!r}; expected 'dp' or 'greedy'")
     config.set_btp_scale = set_btp_scale
     config.use_gpu = use_gpu
     print(
         f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
         f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
-        f'SET_BTP_SCALE={config.set_btp_scale}, BACKEND={"gpu" if config.use_gpu else "cpu"}'
+        f'SET_BTP_SCALE={config.set_btp_scale}, BACKEND={"gpu" if config.use_gpu else "cpu"}, '
+        f'COMPILATION_MODE={compilation_mode}'
     )
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
@@ -616,12 +634,12 @@ def run_pipeline(
         succeeded, graph, score = try_no_btp(raw_graph)
         if not succeeded:
             use_btp = True
-            succeeded, graph, score = try_btp(num_experiments, raw_graph, temperature, num_workers)
+            succeeded, graph, score = try_btp(num_experiments, raw_graph, temperature, num_workers, compilation_mode)
             if not succeeded:
                 raise ValueError('Compilation failed.')
     else:
         use_btp = True
-        succeeded, graph, score = try_btp(num_experiments, raw_graph, temperature, num_workers)
+        succeeded, graph, score = try_btp(num_experiments, raw_graph, temperature, num_workers, compilation_mode)
         if not succeeded:
             raise ValueError('Compilation failed.')
     dump_graph(graph, output_dir, score, use_btp=use_btp)
