@@ -236,6 +236,42 @@ def pack_upper_diagonals(matrices: list[np.ndarray], n_slot: int, H: int) -> lis
     return _pack_batched_diagonal_vectors(batched_diags, shape, n_slot, H)
 
 
+def _repeat_vector_to_length(vector: np.ndarray, target_len: int) -> np.ndarray:
+    vec = _as_vector(vector, 'vector')
+    assert target_len > 0, 'target_len must be positive'
+    return vec[np.arange(target_len) % vec.shape[0]].copy()
+
+
+def pack_repeated_upper_diagonals(
+    matrices: list[np.ndarray], target_cols: int, n_slot: int, H: int
+) -> list[np.ndarray]:
+    """Pack U_i(A) repeated to length target_cols for A(m,m) @ B(m,n).
+
+    This differs from pack_upper_diagonals for square A blocks: each upper
+    diagonal of A has logical length m, but the rectangular block product needs
+    pointwise multiplication against lower diagonals of B with length n.
+    Therefore each U_i(A) is repeated periodically to length n before packing
+    with shape (m, n).
+    """
+
+    matrix_list = _as_matrix_list(matrices, H)
+    rows, cols = matrix_list[0].shape
+    assert rows == cols, 'repeated upper packing requires square matrices A in R^{m x m}'
+    m = rows
+    n = int(target_cols)
+    assert n >= m, 'target_cols n must satisfy n >= m'
+    assert n % m == 0, 'target_cols n must be divisible by m'
+    _, _, n_diag, diag_len, _, _ = _packing_params((m, n), n_slot, H)
+    assert n_diag == m
+    assert diag_len == n
+
+    batched_diags = []
+    for i in range(m):
+        repeated_diags = [_repeat_vector_to_length(upper_diagonal(matrix, i), n) for matrix in matrix_list]
+        batched_diags.append(_interlace_diagonal_batch(repeated_diags, n, H))
+    return _pack_batched_diagonal_vectors(batched_diags, (m, n), n_slot, H)
+
+
 def pack_lower_diagonals(matrices: list[np.ndarray], n_slot: int, H: int) -> list[np.ndarray]:
     """Pack batched lower diagonals using THOR's multi-diagonal format.
 
@@ -395,6 +431,50 @@ def prop_3_7_packed(
     return _pack_batched_diagonal_vectors(lower_C, (m, n), n_slot, H)
 
 
+def prop_3_8_rectangular_packed(
+    packed_upper_A: list[np.ndarray],
+    packed_lower_B: list[np.ndarray],
+    A_shape: Shape,
+    B_shape: Shape,
+    n_slot: int,
+    H: int,
+) -> list[np.ndarray]:
+    """Compute C = A @ B for A in R^{m x m}, B in R^{m x n}, m | n.
+
+    This is a derived rectangular block formula used by the new Algorithm 1
+    variant. It mirrors Proposition 3.6, but A is square m x m and each upper
+    diagonal U_i(A) is expected to be repeated to length n before packing.
+
+    Formula:
+        L_r(AB) = sum_{ell in [m]} rho^r(Urep_{ell-r}(A)) ⊙ L_ell(B), r in [m]
+
+    Here Urep_i(A)[t] = U_i(A)[t mod m] for t in [n].
+    """
+
+    a_rows, a_cols = _normalize_shape(A_shape)
+    b_rows, b_cols = _normalize_shape(B_shape)
+    assert a_rows == a_cols, 'Derived Proposition 3.8 requires A shape (m, m)'
+    m = a_rows
+    n = b_cols
+    assert b_rows == m, 'Derived Proposition 3.8 requires B shape (m, n)'
+    assert n >= m, 'Derived Proposition 3.8 requires n >= m'
+    assert n % m == 0, 'Derived Proposition 3.8 requires n divisible by m'
+
+    upper_A = _unpack_batched_diagonal_vectors(packed_upper_A, B_shape, n_slot, H)
+    lower_B = _unpack_batched_diagonal_vectors(packed_lower_B, B_shape, n_slot, H)
+    dtype = np.result_type(*(diag.dtype for diag in upper_A + lower_B))
+
+    lower_C: list[np.ndarray] = []
+    for r in range(m):
+        acc = np.zeros(H * n, dtype=dtype)
+        for ell in range(m):
+            u_idx = (ell - r) % m
+            acc = add(acc, multiply(rotate(upper_A[u_idx], r * H), lower_B[ell]))
+        lower_C.append(acc)
+
+    return _pack_batched_diagonal_vectors(lower_C, B_shape, n_slot, H)
+
+
 # ---------------------------------------------------------------------------
 # THOR Corollaries 3.8 and 3.9 on packed lower diagonal vectors
 # ---------------------------------------------------------------------------
@@ -549,6 +629,159 @@ def algorithm_4_replication(packed_lower_B: list[np.ndarray], B_shape: Shape, n_
     return replicated
 
 
+def algorithm_4_replication_rectangular(
+    packed_lower_B: list[np.ndarray], B_shape: Shape, n_slot: int, H: int
+) -> list[np.ndarray]:
+    """Replicate lower diagonals for B in R^{m x n}, with m dividing n."""
+
+    m, n = _normalize_shape(B_shape)
+    assert n > m, 'rectangular Algorithm 4 replication requires B shape (m, n) with n > m'
+    assert n % m == 0, 'rectangular Algorithm 4 replication requires m to divide n'
+    _, _, n_diag, diag_len, c, segment_len = _packing_params(B_shape, n_slot, H)
+    assert n_diag == m
+    assert diag_len == n
+    assert segment_len == H * n
+    m_c = m // c
+    assert isinstance(packed_lower_B, list), 'packed_lower_B must be list[np.ndarray]'
+    assert len(packed_lower_B) == m_c, f'expected {m_c} input ciphertexts, got {len(packed_lower_B)}'
+
+    assert _is_power_of_two(c), 'rectangular replication requires c to be a power of two'
+
+    replicated: list[np.ndarray] = []
+    for ell in range(m):
+        j = ell // c
+        local = ell % c
+        slots = _as_vector(packed_lower_B[j], f'packed_lower_B[{j}]')
+        assert slots.shape == (n_slot,), f'packed_lower_B[{j}] must have length {n_slot}'
+
+        mask = np.zeros(n_slot, dtype=slots.dtype)
+        mask[local * segment_len : (local + 1) * segment_len] = 1
+        masked_diag = multiply(slots, mask)
+
+        repeated = masked_diag
+        for i in range(c.bit_length() - 1):
+            repeated = add(repeated, rotate(repeated, segment_len * (1 << i)))
+        assert repeated.shape == (n_slot,)
+        replicated.append(repeated)
+    return replicated
+
+
+def algorithm_2_ciphertext_ciphertext_matmul_corollary_3_9(
+    packed_lower_A: list[np.ndarray],
+    packed_lower_B: list[np.ndarray],
+    A_shape: Shape,
+    B_shape: Shape,
+    n_slot: int,
+    H: int,
+    B_is_replicated: bool = False,
+) -> list[np.ndarray]:
+    """Implement rectangular Algorithm 2 using direct-base Corollary 3.9 BSGS.
+
+    A is encoded as base multi-lower-diagonal batched ciphertexts for matrices
+    A^(z) in R^{n x m}. This implementation does not materialize the extended
+    ct.A_p ciphertexts. For each conceptual source block p, it maps p to the original
+    base ciphertext u_p and folds the Corollary 3.9 extension rotation q_p*m into the
+    same segment rotation as the outer rho^ell term.
+    """
+
+    n, m = _normalize_shape(A_shape)
+    b_rows, b_cols = _normalize_shape(B_shape)
+    assert n > m, 'Corollary 3.9 Algorithm 2 requires A shape (n, m) with n > m'
+    assert n % m == 0, 'Corollary 3.9 Algorithm 2 requires m to divide n'
+    assert (b_rows, b_cols) == (m, n), 'Corollary 3.9 Algorithm 2 requires B shape (m, n)'
+
+    _, _, a_n_diag, a_diag_len, c, segment_len = _packing_params(A_shape, n_slot, H)
+    assert a_n_diag == m
+    assert a_diag_len == n
+    assert segment_len == H * n
+    m_c = m // c
+    n_c = n // c
+    assert isinstance(packed_lower_A, list), 'packed_lower_A must be list[np.ndarray]'
+    assert len(packed_lower_A) == m_c, f'expected {m_c} A ciphertexts, got {len(packed_lower_A)}'
+    for idx, vector in enumerate(packed_lower_A):
+        slots = _as_vector(vector, f'packed_lower_A[{idx}]')
+        assert slots.shape == (n_slot,), f'packed_lower_A[{idx}] must have length {n_slot}'
+
+    if B_is_replicated:
+        replicated_B = packed_lower_B
+        assert len(replicated_B) == m, f'expected {m} replicated B ciphertexts, got {len(replicated_B)}'
+        for ell, vector in enumerate(replicated_B):
+            slots = _as_vector(vector, f'replicated_B[{ell}]')
+            assert slots.shape == (n_slot,), f'replicated_B[{ell}] must have length {n_slot}'
+    else:
+        replicated_B = algorithm_4_replication_rectangular(packed_lower_B, B_shape, n_slot, H)
+
+    dtype = np.result_type(*(vector.dtype for vector in packed_lower_A + replicated_B))
+
+    def direct_base_masks(
+        b_ell: int,
+        R_prev: int,
+        R_curr: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        mu_prev_0 = np.zeros(n_slot, dtype=dtype)
+        mu_curr_1 = np.zeros(n_slot, dtype=dtype)
+        mu_prev_2 = np.zeros(n_slot, dtype=dtype)
+        mu_curr_3 = np.zeros(n_slot, dtype=dtype)
+        for r in range(c):
+            uses_prev = r < b_ell
+            split = n - R_prev if uses_prev else n - R_curr
+            first_mask = mu_prev_0 if uses_prev else mu_curr_1
+            wrap_mask = mu_prev_2 if uses_prev else mu_curr_3
+            base = r * segment_len
+            for t in range(n):
+                start = base + t * H
+                if t < split:
+                    first_mask[start : start + H] = 1
+                else:
+                    wrap_mask[start : start + H] = 1
+        return mu_prev_0, mu_curr_1, mu_prev_2, mu_curr_3
+
+    ct_C_p_ell: list[list[np.ndarray]] = []
+    for p in range(n_c):
+        q_p, u_p = divmod(p, m_c)
+        partials: list[np.ndarray] = []
+        for ell in range(m):
+            b_ell = ell % c
+            R_p_ell = q_p * m + ell
+            assert 0 <= R_p_ell < n
+            ctrot_p_ell = rotate(packed_lower_A[u_p], (R_p_ell - n * b_ell) * H)
+            partials.append(multiply(ctrot_p_ell, replicated_B[ell]))
+        ct_C_p_ell.append(partials)
+
+    ct_C: list[np.ndarray] = []
+    for j in range(n_c):
+        ct_C_prime = np.zeros(n_slot, dtype=dtype)
+        ct_C_double_prime = np.zeros(n_slot, dtype=dtype)
+        for ell in range(m):
+            a_ell = ell // c
+            b_ell = ell % c
+            p_prev = (j - 1 - a_ell) % n_c
+            p_curr = (j - a_ell) % n_c
+            q_prev, _ = divmod(p_prev, m_c)
+            q_curr, _ = divmod(p_curr, m_c)
+            R_prev = q_prev * m + ell
+            R_curr = q_curr * m + ell
+            mu_prev_0, mu_curr_1, mu_prev_2, mu_curr_3 = direct_base_masks(b_ell, R_prev, R_curr)
+            ct_C_prime = add(
+                ct_C_prime,
+                add(
+                    multiply(ct_C_p_ell[p_prev][ell], mu_prev_0),
+                    multiply(ct_C_p_ell[p_curr][ell], mu_curr_1),
+                ),
+            )
+            ct_C_double_prime = add(
+                ct_C_double_prime,
+                add(
+                    multiply(ct_C_p_ell[p_prev][ell], rotate(mu_prev_2, segment_len)),
+                    multiply(ct_C_p_ell[p_curr][ell], rotate(mu_curr_3, segment_len)),
+                ),
+            )
+        ct = add(ct_C_prime, rotate(ct_C_double_prime, -segment_len))
+        assert ct.shape == (n_slot,)
+        ct_C.append(ct)
+    return ct_C
+
+
 def algorithm_2_ciphertext_ciphertext_matmul(
     packed_lower_A: list[np.ndarray],
     packed_lower_B: list[np.ndarray],
@@ -594,18 +827,17 @@ def algorithm_2_ciphertext_ciphertext_matmul(
 
     def masks_for_ell(ell: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         ell_c = ell % c
-        split_segment = c - ell_c
         first_len = n - ell
         masks = [np.zeros(n_slot, dtype=dtype) for _ in range(4)]
         for r in range(c):
-            high_segment = split_segment <= r < c
+            uses_prev = r < ell_c
             for t in range(n):
                 first_entries = t < first_len
-                if high_segment and first_entries:
+                if uses_prev and first_entries:
                     mask_idx = 0
-                elif not high_segment and first_entries:
+                elif not uses_prev and first_entries:
                     mask_idx = 1
-                elif high_segment and not first_entries:
+                elif uses_prev and not first_entries:
                     mask_idx = 2
                 else:
                     mask_idx = 3
@@ -719,6 +951,68 @@ def algorithm_5_matrix_transpose(
     return ct_C
 
 
+def algorithm_5_matrix_transpose_rectangular(
+    packed_upper_B: list[np.ndarray], B_shape: Shape, n_slot: int, H: int
+) -> list[np.ndarray]:
+    """Convert rectangular upper-diagonal encoding to lower-diagonal encoding.
+
+    Input ct.B_j is the multi-upper-diagonal batched encoding of H matrices
+    B^(z) in R^{n x m}, with n > m and m dividing n. The output is the
+    multi-lower-diagonal batched encoding of the same B^(z), equivalent to
+    pack_lower_diagonals(B, n_slot, H). This is not a logical matrix transpose.
+    """
+
+    n, m = _normalize_shape(B_shape)
+    assert n > m, 'rectangular Algorithm 5 requires B shape (n, m) with n > m'
+    assert n % m == 0, 'rectangular Algorithm 5 requires m to divide n'
+    _, _, n_diag, diag_len, c, segment_len = _packing_params(B_shape, n_slot, H)
+    assert n_diag == m
+    assert diag_len == n
+    assert segment_len == H * n
+    expected_vectors = m // c
+    assert isinstance(packed_upper_B, list), 'packed_upper_B must be list[np.ndarray]'
+    assert len(packed_upper_B) == expected_vectors, (
+        f'expected {expected_vectors} input ciphertexts, got {len(packed_upper_B)}'
+    )
+
+    dtype = np.result_type(*(vector.dtype for vector in packed_upper_B))
+
+    def transpose_masks(out_diag_idx: int, out_local_idx: int) -> tuple[np.ndarray, np.ndarray]:
+        mu_0 = np.zeros(n_slot, dtype=dtype)
+        mu_1 = np.zeros(n_slot, dtype=dtype)
+        base = out_local_idx * segment_len
+        for t in range(n - out_diag_idx):
+            start = base + t * H
+            mu_0[start : start + H] = 1
+        for t in range(out_diag_idx):
+            start = (base + (t - out_diag_idx) * H) % n_slot
+            mu_1[start : start + H] = 1
+        return mu_0, mu_1
+
+    ct_ell_0 = [np.zeros(n_slot, dtype=dtype) for _ in range(expected_vectors)]
+    ct_ell_1 = [np.zeros(n_slot, dtype=dtype) for _ in range(expected_vectors)]
+
+    for j in range(expected_vectors):
+        slots = _as_vector(packed_upper_B[j], f'packed_upper_B[{j}]')
+        assert slots.shape == (n_slot,), f'packed_upper_B[{j}] must have length {n_slot}'
+        for k in range(c):
+            source_diag_idx = c * j + k
+            out_diag_idx = (-source_diag_idx) % m
+            ell = out_diag_idx // c
+            out_local_idx = out_diag_idx % c
+            ct_rot = rotate(slots, (k - out_local_idx) * segment_len + out_diag_idx * H)
+            mu_j_k_0, mu_j_k_1 = transpose_masks(out_diag_idx, out_local_idx)
+            ct_ell_0[ell] = add(ct_ell_0[ell], multiply(ct_rot, mu_j_k_0))
+            ct_ell_1[ell] = add(ct_ell_1[ell], multiply(ct_rot, mu_j_k_1))
+
+    ct_C: list[np.ndarray] = []
+    for ell in range(expected_vectors):
+        ct = add(ct_ell_0[ell], rotate(ct_ell_1[ell], -segment_len))
+        assert ct.shape == (n_slot,)
+        ct_C.append(ct)
+    return ct_C
+
+
 # ---------------------------------------------------------------------------
 # THOR Section 4.2.2 Algorithm 1 plaintext-ciphertext matrix multiplication
 # ---------------------------------------------------------------------------
@@ -783,6 +1077,68 @@ def generate_algorithm_1_plaintexts(A_plain: np.ndarray, n: int, n_slot: int, H:
     return pt_A
 
 
+def generate_algorithm_1_rectangular_plaintexts(
+    A_plain: np.ndarray,
+    m: int,
+    n: int,
+    n_slot: int,
+    H: int,
+) -> list[list[np.ndarray]]:
+    """Generate plaintext vectors for rectangular-block Algorithm 1.
+
+    Difference from generate_algorithm_1_plaintexts:
+    - Existing Algorithm 1 uses d = H*n and n x n blocks.
+    - This rectangular variant uses d = H*m, A blocks in R^{m x m}, and B/C
+      blocks in R^{m x n}, with m dividing n.
+    - Each m-length upper diagonal of an A block is repeated to length n before
+      applying the derived rectangular Proposition 3.8 formula.
+    """
+
+    A = _as_matrix(A_plain, 'A_plain')
+    H = _validate_H(H)
+    m = int(m)
+    n = int(n)
+    assert m > 0 and n > 0, 'm and n must be positive'
+    assert n >= m, 'rectangular Algorithm 1 requires n >= m'
+    assert n % m == 0, 'rectangular Algorithm 1 requires m to divide n'
+    d = H * m
+    assert A.shape == (d, d), f'A_plain must have shape {(d, d)}, got {A.shape}'
+    _, _, _, diag_len, c, segment_len = _packing_params((m, n), n_slot, H)
+    assert diag_len == n
+    assert segment_len == H * n
+    m_c = m // c
+
+    pt_A: list[list[np.ndarray]] = []
+    for i in range(H):
+        pt_i: list[np.ndarray] = []
+        blocks = [A[((i + k) % H) * m : ((i + k) % H + 1) * m, k * m : (k + 1) * m] for k in range(H)]
+        for j in range(m_c):
+            for ell in range(c):
+                for r in range(m_c):
+                    segments: list[np.ndarray] = []
+                    for tau in range(c):
+                        b_diag_idx = c * j + ((tau + ell) % c)
+                        out_diag_idx = c * r + tau
+                        interlaced = _interlace_diagonal_batch(
+                            [
+                                _repeat_vector_to_length(
+                                    upper_diagonal(block, (b_diag_idx - out_diag_idx) % m),
+                                    n,
+                                )
+                                for block in blocks
+                            ],
+                            n,
+                            H,
+                        )
+                        segments.append(rotate(interlaced, out_diag_idx * H))
+                    plaintext = np.concatenate(segments)
+                    assert plaintext.shape == (n_slot,)
+                    pt_i.append(plaintext)
+        assert len(pt_i) == m_c * c * m_c
+        pt_A.append(pt_i)
+    return pt_A
+
+
 def algorithm_1_plaintext_ciphertext_matmul(
     A_plain: np.ndarray,
     packed_lower_B: list[np.ndarray],
@@ -841,6 +1197,82 @@ def algorithm_1_plaintext_ciphertext_matmul(
 
     ct_C: list[np.ndarray] = []
     for r in range(n_c):
+        acc = ct_ir[0][r].copy()
+        for i in range(1, H):
+            mask_wrap = np.zeros(n_slot, dtype=ct_ir[i][r].dtype)
+            for segment_start in range(0, n_slot, segment_len):
+                for t in range(n):
+                    group_start = segment_start + t * H
+                    mask_wrap[group_start + H - i : group_start + H] = 1
+            ct_i_r_R = multiply(ct_ir[i][r], mask_wrap)
+            ct_i_r_L = subtract(ct_ir[i][r], ct_i_r_R)
+            ct_i_r_prime = add(rotate(ct_i_r_R, H - i), rotate(ct_i_r_L, -i))
+            acc = add(acc, ct_i_r_prime)
+        ct_C.append(acc)
+
+    return ct_C
+
+
+def algorithm_1_rectangular_plaintext_ciphertext_matmul(
+    A_plain: np.ndarray,
+    packed_lower_B: list[np.ndarray],
+    m: int,
+    n: int,
+    n_slot: int,
+    H: int,
+) -> list[np.ndarray]:
+    """Implement rectangular-block Algorithm 1 for A(d,d) @ B(d,n).
+
+    Difference from algorithm_1_plaintext_ciphertext_matmul:
+    - Existing interface uses d = H*n and splits A/B/C into n x n blocks.
+    - This interface uses d = H*m, splits A into m x m blocks, and splits B/C
+      into m x n blocks.
+    - Block products use derived prop_3_8_rectangular_packed semantics instead
+      of the original n x n Proposition 3.6 block product.
+    """
+
+    A = _as_matrix(A_plain, 'A_plain')
+    H = _validate_H(H)
+    m = int(m)
+    n = int(n)
+    assert m > 0 and n > 0, 'm and n must be positive'
+    assert n >= m, 'rectangular Algorithm 1 requires n >= m'
+    assert n % m == 0, 'rectangular Algorithm 1 requires m to divide n'
+    d = H * m
+    assert A.shape == (d, d), f'A_plain must have shape {(d, d)}, got {A.shape}'
+    _, _, _, _, c, segment_len = _packing_params((m, n), n_slot, H)
+    assert segment_len == H * n
+    m_c = m // c
+    assert isinstance(packed_lower_B, list), 'packed_lower_B must be list[np.ndarray]'
+    assert len(packed_lower_B) == m_c, f'expected {m_c} input ciphertexts, got {len(packed_lower_B)}'
+    for idx, vector in enumerate(packed_lower_B):
+        slots = _as_vector(vector, f'packed_lower_B[{idx}]')
+        assert slots.shape == (n_slot,), f'packed_lower_B[{idx}] must have length {n_slot}'
+
+    pt_A = generate_algorithm_1_rectangular_plaintexts(A, m, n, n_slot, H)
+    dtype = np.result_type(A.dtype, *(vector.dtype for vector in packed_lower_B))
+
+    ct_Br: list[list[np.ndarray]] = []
+    for j in range(m_c):
+        rotations: list[np.ndarray] = []
+        for ell in range(c):
+            rotations.append(packed_lower_B[j].copy() if ell == 0 else rotate(packed_lower_B[j], segment_len * ell))
+        ct_Br.append(rotations)
+
+    ct_ir: list[list[np.ndarray]] = []
+    for i in range(H):
+        row: list[np.ndarray] = []
+        for r in range(m_c):
+            acc = np.zeros(n_slot, dtype=dtype)
+            for j in range(m_c):
+                for ell in range(c):
+                    pt_idx = (j * c + ell) * m_c + r
+                    acc = add(acc, multiply(ct_Br[j][ell], pt_A[i][pt_idx]))
+            row.append(acc)
+        ct_ir.append(row)
+
+    ct_C: list[np.ndarray] = []
+    for r in range(m_c):
         acc = ct_ir[0][r].copy()
         for i in range(1, H):
             mask_wrap = np.zeros(n_slot, dtype=ct_ir[i][r].dtype)
@@ -943,6 +1375,39 @@ def verify_propositions_3_6_3_7() -> None:
         assert np.allclose(C, A @ B)
 
 
+def verify_prop_3_8_rectangular() -> None:
+    """Verify derived rectangular Proposition 3.8 for A(m,m) @ B(m,n)."""
+
+    H = 2
+    m = 2
+    n = 4
+    n_slot = 16
+    A = [
+        np.arange(m * m, dtype=np.float64).reshape(m, m) + 1,
+        np.arange(m * m, dtype=np.float64).reshape(m, m) + 11,
+    ]
+    B = [
+        np.arange(m * n, dtype=np.float64).reshape(m, n) + 1,
+        np.arange(m * n, dtype=np.float64).reshape(m, n) + 21,
+    ]
+
+    C = unpack_lower_diagonals(
+        prop_3_8_rectangular_packed(
+            pack_repeated_upper_diagonals(A, n, n_slot, H),
+            pack_lower_diagonals(B, n_slot, H),
+            A[0].shape,
+            B[0].shape,
+            n_slot,
+            H,
+        ),
+        B[0].shape,
+        n_slot,
+        H,
+    )
+    for A_i, B_i, C_i in zip(A, B, C):
+        assert np.allclose(C_i, A_i @ B_i)
+
+
 def verify_corollaries_3_8_3_9() -> None:
     """Verify Corollary 3.8 and 3.9 together using H=2 batched inputs."""
 
@@ -1021,32 +1486,59 @@ def verify_algorithm_1() -> None:
     assert np.allclose(C, A @ B)
 
 
-def verify_algorithm_2() -> None:
-    """Verify Section 4.3.2 Algorithm 2 and Algorithm 4 replication."""
+def verify_algorithm_1_rectangular() -> None:
+    """Verify rectangular-block Algorithm 1 against NumPy plaintext matmul."""
 
-    H = 2
-    n_slot = 16
-    A = [
-        np.arange(8, dtype=np.float64).reshape(2, 4) + 1,
-        np.arange(8, dtype=np.float64).reshape(2, 4) + 31,
-    ]
-    B = [
-        np.arange(16, dtype=np.float64).reshape(4, 4) + 1,
-        np.arange(16, dtype=np.float64).reshape(4, 4) + 41,
-    ]
+    H = 4
+    m = 4
+    n = 8
+    d = H * m
+    n_slot = 64
+    A = (np.arange(d * d, dtype=np.float64).reshape(d, d) % 17) + 1
+    B = (np.arange(d * n, dtype=np.float64).reshape(d, n) % 13) + 1
+    B_blocks = [B[k * m : (k + 1) * m, :] for k in range(H)]
 
-    packed_A = pack_lower_diagonals(A, n_slot, H)
-    packed_B = pack_lower_diagonals(B, n_slot, H)
-    replicated_B = algorithm_4_replication(packed_B, B[0].shape, n_slot, H)
-
-    C_from_multi = unpack_lower_diagonals(
-        algorithm_2_ciphertext_ciphertext_matmul(packed_A, packed_B, A[0].shape, B[0].shape, n_slot, H),
-        (A[0].shape[0], B[0].shape[1]),
+    packed_C = algorithm_1_rectangular_plaintext_ciphertext_matmul(
+        A,
+        pack_lower_diagonals(B_blocks, n_slot, H),
+        m,
+        n,
         n_slot,
         H,
     )
-    C_from_replicated = unpack_lower_diagonals(
-        algorithm_2_ciphertext_ciphertext_matmul(
+    C_blocks = unpack_lower_diagonals(packed_C, (m, n), n_slot, H)
+    C = np.vstack(C_blocks)
+    assert np.allclose(C, A @ B)
+
+
+def verify_algorithm_2() -> None:
+    """Verify Section 4.3.2 Algorithm 2 and Algorithm 4 replication."""
+
+    cases = [
+        (2, 2, 4, 16),  # c=2, catches ell_c != 0 mask split
+        (2, 4, 8, 32),  # c=2, m_c > 1 and n > m
+        (2, 8, 16, 64),  # c=2, larger n/m coverage
+        (2, 4, 8, 64),  # c=4, wider segment-block split
+    ]
+    for case_idx, (H, m, n, n_slot) in enumerate(cases):
+        rng = np.random.default_rng(20260605 + case_idx)
+        A = [rng.normal(size=(m, n)) for _ in range(H)]
+        B = [rng.normal(size=(n, n)) for _ in range(H)]
+
+        packed_A = pack_lower_diagonals(A, n_slot, H)
+        packed_B = pack_lower_diagonals(B, n_slot, H)
+        replicated_B = algorithm_4_replication(packed_B, B[0].shape, n_slot, H)
+        reference_packed = corollary_3_8_packed(packed_A, packed_B, A[0].shape, B[0].shape, n_slot, H)
+
+        packed_from_multi = algorithm_2_ciphertext_ciphertext_matmul(
+            packed_A,
+            packed_B,
+            A[0].shape,
+            B[0].shape,
+            n_slot,
+            H,
+        )
+        packed_from_replicated = algorithm_2_ciphertext_ciphertext_matmul(
             packed_A,
             replicated_B,
             A[0].shape,
@@ -1054,15 +1546,73 @@ def verify_algorithm_2() -> None:
             n_slot,
             H,
             B_is_replicated=True,
-        ),
-        (A[0].shape[0], B[0].shape[1]),
-        n_slot,
-        H,
-    )
-    for A_i, B_i, C_i, C_rep_i in zip(A, B, C_from_multi, C_from_replicated):
-        expected = A_i @ B_i
-        assert np.allclose(C_i, expected)
-        assert np.allclose(C_rep_i, expected)
+        )
+
+        for actual_vector, expected_vector in zip(packed_from_multi, reference_packed):
+            assert np.allclose(actual_vector, expected_vector)
+        for actual_vector, expected_vector in zip(packed_from_replicated, reference_packed):
+            assert np.allclose(actual_vector, expected_vector)
+
+        C_from_multi = unpack_lower_diagonals(packed_from_multi, (m, n), n_slot, H)
+        C_from_replicated = unpack_lower_diagonals(packed_from_replicated, (m, n), n_slot, H)
+        for A_i, B_i, C_i, C_rep_i in zip(A, B, C_from_multi, C_from_replicated):
+            expected = A_i @ B_i
+            assert np.allclose(C_i, expected)
+            assert np.allclose(C_rep_i, expected)
+
+
+def verify_algorithm_2_corollary_3_9() -> None:
+    """Verify rectangular Algorithm 2 based on Corollary 3.9."""
+
+    assert '_output_segment_mask' not in globals()
+    assert '_rotate_segment_to_output' not in globals()
+
+    cases = [
+        (1, 2, 8, 8),  # c=1, n/m > 2
+        (2, 2, 4, 16),  # c=2, m_c=1
+        (2, 4, 8, 32),  # c=2, m_c=2
+        (2, 4, 8, 64),  # c=4, m_c=1
+        (4, 4, 16, 64),  # H>2, c=1, n/m > 2
+    ]
+    for case_idx, (H, m, n, n_slot) in enumerate(cases):
+        rng = np.random.default_rng(20260605 + case_idx)
+        A = [rng.normal(size=(n, m)) for _ in range(H)]
+        B = [rng.normal(size=(m, n)) for _ in range(H)]
+
+        packed_A = pack_lower_diagonals(A, n_slot, H)
+        packed_B = pack_lower_diagonals(B, n_slot, H)
+        replicated_B = algorithm_4_replication_rectangular(packed_B, B[0].shape, n_slot, H)
+        reference_packed = corollary_3_9_packed(packed_A, packed_B, A[0].shape, B[0].shape, n_slot, H)
+
+        packed_from_multi = algorithm_2_ciphertext_ciphertext_matmul_corollary_3_9(
+            packed_A,
+            packed_B,
+            A[0].shape,
+            B[0].shape,
+            n_slot,
+            H,
+        )
+        packed_from_replicated = algorithm_2_ciphertext_ciphertext_matmul_corollary_3_9(
+            packed_A,
+            replicated_B,
+            A[0].shape,
+            B[0].shape,
+            n_slot,
+            H,
+            B_is_replicated=True,
+        )
+
+        for actual_vector, expected_vector in zip(packed_from_multi, reference_packed):
+            assert np.allclose(actual_vector, expected_vector)
+        for actual_vector, expected_vector in zip(packed_from_replicated, reference_packed):
+            assert np.allclose(actual_vector, expected_vector)
+
+        C_from_multi = unpack_lower_diagonals(packed_from_multi, (n, n), n_slot, H)
+        C_from_replicated = unpack_lower_diagonals(packed_from_replicated, (n, n), n_slot, H)
+        for A_i, B_i, C_i, C_rep_i in zip(A, B, C_from_multi, C_from_replicated):
+            expected = A_i @ B_i
+            assert np.allclose(C_i, expected)
+            assert np.allclose(C_rep_i, expected)
 
 
 def verify_algorithm_5() -> None:
@@ -1086,13 +1636,40 @@ def verify_algorithm_5() -> None:
         assert np.allclose(actual_matrix, source_matrix)
 
 
+def verify_algorithm_5_rectangular() -> None:
+    """Verify rectangular Algorithm 5 upper-to-lower diagonal conversion."""
+
+    H = 2
+    m = 2
+    n = 4
+    n_slot = 16
+    B = [
+        np.arange(n * m, dtype=np.float64).reshape(n, m) + 1,
+        np.arange(n * m, dtype=np.float64).reshape(n, m) + 51,
+    ]
+
+    packed_upper_B = pack_upper_diagonals(B, n_slot, H)
+    packed_lower_B = algorithm_5_matrix_transpose_rectangular(packed_upper_B, B[0].shape, n_slot, H)
+    expected_packed = pack_lower_diagonals(B, n_slot, H)
+    decoded = unpack_lower_diagonals(packed_lower_B, B[0].shape, n_slot, H)
+
+    for actual_vector, expected_vector in zip(packed_lower_B, expected_packed):
+        assert np.allclose(actual_vector, expected_vector)
+    for actual_matrix, source_matrix in zip(decoded, B):
+        assert np.allclose(actual_matrix, source_matrix)
+
+
 def verify_all() -> None:
     verify_pack_unpack()
     verify_propositions_3_6_3_7()
+    verify_prop_3_8_rectangular()
     verify_corollaries_3_8_3_9()
     verify_algorithm_1()
+    verify_algorithm_1_rectangular()
     verify_algorithm_2()
+    verify_algorithm_2_corollary_3_9()
     verify_algorithm_5()
+    verify_algorithm_5_rectangular()
     print('All THOR CKKS primitive verifications passed.')
 
 
