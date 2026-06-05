@@ -500,7 +500,7 @@ add_time = {
     8192: {0: 0.000081, 1: 0.000094, 2: 0.000176, 3: 0.000208, 4: 0.000224, 5: 0.000241},
 }
 
-btp_time = {'8192': 7, '16384': 12, '65536': 24}
+btp_time = {'8192': 7, '16384': 12, '65536': 24000}
 
 mpc_refresh_rate = 1 / 15
 ct_trans_rate = 1 / 10
@@ -1015,7 +1015,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(level_y, level_x)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type == 'parcpmm':
+        elif layer_type in {'parcpmm', 'parcpmm_h0_mask'}:
             m = preds[0].shape[0]
             n_total = preds[0].shape[1]
             n_per_head = n_total // config.n_heads
@@ -1030,7 +1030,8 @@ class FheScoreParam:
                     n_heads=config.n_heads,
                     n_slot=n_slot,
                 )
-                return layer.get_fhe_op_count(self.input_mult_level)
+                level = self.input_mult_level + 1 if layer_type == 'parcpmm_h0_mask' else self.input_mult_level
+                return layer.get_fhe_op_count(level)
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'partranspose':
@@ -1047,10 +1048,16 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type == 'parccmm':
-            m = preds[0].shape[0]
-            n_per_head = preds[0].shape[1] // config.n_heads
-            p_per_head = preds[1].shape[1] // config.n_heads
+        elif layer_type in {'parccmm', 'parccmm_psi_mul'}:
+            ordered_preds = sorted(
+                preds,
+                key=lambda p: self.dag.edges[p, node].get('input_index')
+                if self.dag.edges[p, node].get('input_index') is not None
+                else 0,
+            )
+            m = ordered_preds[0].shape[0]
+            n_per_head = ordered_preds[0].shape[1] // config.n_heads
+            p_per_head = ordered_preds[1].shape[1] // config.n_heads
             n_slot = n // 2
             try:
                 layer = ParBlockColMajorCCMM(
@@ -1060,7 +1067,8 @@ class FheScoreParam:
                     n_heads=config.n_heads,
                     n_slot=n_slot,
                 )
-                return layer.get_fhe_op_count(self.input_mult_level)
+                level = self.input_mult_level + 1 if layer_type == 'parccmm_psi_mul' else self.input_mult_level
+                return layer.get_fhe_op_count(level)
             except (AssertionError, ValueError):
                 return None
         # ── upsample_nearest ────────────────────────────────────────────────

@@ -269,16 +269,25 @@ def update_shape_for_btp(graph: LayerAbstractGraph):
         elif compute_node.layer_type == 'resize':
             for i in range(2):
                 succs[0].shape[i] = preds[0].shape[i] * compute_node.upsample_factor_in[i]
-        elif compute_node.layer_type == 'parcpmm':
+        elif compute_node.layer_type in {'parcpmm_block_headsum', 'parccmm_sigma', 'parccmm_tau'}:
+            for i in range(len(preds[0].shape)):
+                succs[0].shape[i] = preds[0].shape[i]
+        elif compute_node.layer_type in {'parcpmm', 'parcpmm_h0_mask'}:
             succs[0].shape[0] = preds[0].shape[0]
         elif compute_node.layer_type == 'partranspose':
             n_heads = max(1, config.n_heads)
             succs[0].shape[0] = preds[0].shape[1] // n_heads if len(preds[0].shape) > 1 else preds[0].shape[0]
             succs[0].shape[1] = preds[0].shape[0] * n_heads
-        elif compute_node.layer_type == 'parccmm':
-            succs[0].shape[0] = preds[0].shape[0]
-            if len(preds) > 1 and len(preds[1].shape) > 1:
-                succs[0].shape[1] = preds[1].shape[1]
+        elif compute_node.layer_type in {'parccmm', 'parccmm_psi_mul'}:
+            ordered_preds = sorted(
+                preds,
+                key=lambda p: graph.dag.edges[p, compute_node].get('input_index')
+                if graph.dag.edges[p, compute_node].get('input_index') is not None
+                else 0,
+            )
+            succs[0].shape[0] = ordered_preds[0].shape[0]
+            if len(ordered_preds) > 1 and len(ordered_preds[1].shape) > 1:
+                succs[0].shape[1] = ordered_preds[1].shape[1]
         else:
             for i in range(2):
                 succs[0].shape[i] = preds[0].shape[i]

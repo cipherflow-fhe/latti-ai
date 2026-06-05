@@ -506,6 +506,172 @@ def expand_parcpmm_add_pt(graph: LayerAbstractGraph):
         parcpmm_node.to_expand = False
 
 
+def split_parcpmm_layers(graph: LayerAbstractGraph):
+    used_ids = set()
+    for node in graph.dag.nodes:
+        if hasattr(node, 'node_id'):
+            used_ids.add(node.node_id)
+        if hasattr(node, 'layer_id'):
+            used_ids.add(node.layer_id)
+
+    def make_unique_id(base_id: str) -> str:
+        if base_id not in used_ids:
+            used_ids.add(base_id)
+            return base_id
+        idx = 1
+        while f'{base_id}_{idx}' in used_ids:
+            idx += 1
+        unique_id = f'{base_id}_{idx}'
+        used_ids.add(unique_id)
+        return unique_id
+
+    for parcpmm_node in list(graph.dag.nodes):
+        if not isinstance(parcpmm_node, ComputeNode) or parcpmm_node.layer_type != 'parcpmm':
+            continue
+
+        input_features = list(graph.dag.predecessors(parcpmm_node))
+        if len(input_features) != 1:
+            raise ValueError(
+                f'Expected exactly one input feature for parcpmm layer {parcpmm_node.layer_id}, '
+                f'got {len(input_features)}'
+            )
+        input_feature = input_features[0]
+
+        old_feature_list = list(graph.dag.successors(parcpmm_node))
+        if len(old_feature_list) != 1:
+            raise ValueError(
+                f'Expected exactly one output feature for parcpmm layer {parcpmm_node.layer_id}, '
+                f'got {len(old_feature_list)}'
+            )
+        old_feature = old_feature_list[0]
+
+        parcpmm_node.layer_type = 'parcpmm_block_headsum'
+        parcpmm_input_shape = list(input_feature.shape)
+        parcpmm_node.parcpmm_input_shape = parcpmm_input_shape
+        graph.dag.nodes[parcpmm_node]['level_cost'] = 1
+
+        h0_mask_input = FeatureNode(
+            key=make_unique_id(f'{parcpmm_node.layer_id}_h0_mask_input'),
+            dim=old_feature.dim,
+            channel=old_feature.channel,
+            scale=old_feature.scale,
+            ckks_parameter_id=old_feature.ckks_parameter_id,
+            ckks_scale=old_feature.ckks_scale,
+            shape=list(old_feature.shape),
+        )
+        h0_mask_input.invalid_fill = list(old_feature.invalid_fill)
+        h0_mask_input.sp_info = copy.deepcopy(old_feature.sp_info)
+        h0_mask_input.has_sp_info = old_feature.has_sp_info
+        h0_mask_input.data_type = old_feature.data_type
+        if old_feature.head_shape is not None:
+            h0_mask_input.head_shape = list(old_feature.head_shape)
+
+        h0_mask_id = make_unique_id(f'{parcpmm_node.layer_id}_h0_mask')
+        h0_mask_node = ComputeNode(h0_mask_id, 'parcpmm_h0_mask', parcpmm_node.channel_output, parcpmm_node.channel_output)
+        h0_mask_node.path = getattr(parcpmm_node, 'path', '')
+        h0_mask_node.weight_shape = list(getattr(parcpmm_node, 'weight_shape', []))
+        h0_mask_node.parcpmm_input_shape = parcpmm_input_shape
+        if getattr(parcpmm_node, 'fuse_gama_info', None) is not None:
+            h0_mask_node.fuse_gama_info = copy.deepcopy(parcpmm_node.fuse_gama_info)
+        if getattr(parcpmm_node, 'bias_path', ''):
+            h0_mask_node.bias_path = parcpmm_node.bias_path
+            parcpmm_node.bias_path = ''
+        h0_mask_node.to_expand = False
+
+        new_feature_args = copy.deepcopy(graph.dag.nodes[old_feature])
+        new_feature_args['name'] = h0_mask_input.node_id
+        _insert_layer_after_compute(
+            graph.dag,
+            parcpmm_node,
+            h0_mask_input,
+            h0_mask_node,
+            new_feature_args=new_feature_args,
+            new_compute_args={'name': h0_mask_id, 'level_cost': 1},
+        )
+
+
+def split_parccmm_layers(graph: LayerAbstractGraph):
+    used_ids = set()
+    for node in graph.dag.nodes:
+        if hasattr(node, 'node_id'):
+            used_ids.add(node.node_id)
+        if hasattr(node, 'layer_id'):
+            used_ids.add(node.layer_id)
+
+    def make_unique_id(base_id: str) -> str:
+        if base_id not in used_ids:
+            used_ids.add(base_id)
+            return base_id
+        idx = 1
+        while f'{base_id}_{idx}' in used_ids:
+            idx += 1
+        unique_id = f'{base_id}_{idx}'
+        used_ids.add(unique_id)
+        return unique_id
+
+    def clone_feature(feature: FeatureNode, node_id: str) -> FeatureNode:
+        cloned = copy.deepcopy(feature)
+        cloned.node_id = node_id
+        return cloned
+
+    for parccmm_node in list(graph.dag.nodes):
+        if not isinstance(parccmm_node, ComputeNode) or parccmm_node.layer_type != 'parccmm':
+            continue
+
+        input_features = list(graph.dag.predecessors(parccmm_node))
+        if len(input_features) != 2:
+            raise ValueError(
+                f'Expected exactly two input features for parccmm layer {parccmm_node.layer_id}, '
+                f'got {len(input_features)}'
+            )
+        edge_indices = {feature: graph.dag.edges[feature, parccmm_node].get('input_index') for feature in input_features}
+        if all(idx is not None for idx in edge_indices.values()):
+            input_features = sorted(input_features, key=lambda feature: edge_indices[feature])
+        x0, x1 = input_features
+
+        old_feature_list = list(graph.dag.successors(parccmm_node))
+        if len(old_feature_list) != 1:
+            raise ValueError(
+                f'Expected exactly one output feature for parccmm layer {parccmm_node.layer_id}, '
+                f'got {len(old_feature_list)}'
+            )
+
+        x0_edge_attrs = copy.deepcopy(graph.dag.edges[x0, parccmm_node])
+        x1_edge_attrs = copy.deepcopy(graph.dag.edges[x1, parccmm_node])
+        x0_edge_attrs['input_index'] = 0
+        x1_edge_attrs['input_index'] = 1
+
+        graph.dag.remove_edge(x0, parccmm_node)
+        graph.dag.remove_edge(x1, parccmm_node)
+
+        sigma_id = make_unique_id(f'{parccmm_node.layer_id}_sigma')
+        tau_id = make_unique_id(f'{parccmm_node.layer_id}_tau')
+        sigma_feature = clone_feature(x0, make_unique_id(f'{sigma_id}_output'))
+        tau_feature = clone_feature(x1, make_unique_id(f'{tau_id}_output'))
+        sigma_node = ComputeNode(sigma_id, 'parccmm_sigma', parccmm_node.channel_input, parccmm_node.channel_input)
+        tau_node = ComputeNode(tau_id, 'parccmm_tau', parccmm_node.channel_input, parccmm_node.channel_input)
+
+        sigma_feature_args = copy.deepcopy(graph.dag.nodes[x0])
+        sigma_feature_args['name'] = sigma_feature.node_id
+        tau_feature_args = copy.deepcopy(graph.dag.nodes[x1])
+        tau_feature_args['name'] = tau_feature.node_id
+
+        graph.dag.add_node(sigma_node, name=sigma_id, level_cost=1)
+        graph.dag.add_node(sigma_feature, **sigma_feature_args)
+        graph.dag.add_edge(x0, sigma_node)
+        graph.dag.add_edge(sigma_node, sigma_feature)
+        graph.dag.add_edge(sigma_feature, parccmm_node, **x0_edge_attrs)
+
+        graph.dag.add_node(tau_node, name=tau_id, level_cost=1)
+        graph.dag.add_node(tau_feature, **tau_feature_args)
+        graph.dag.add_edge(x1, tau_node)
+        graph.dag.add_edge(tau_node, tau_feature)
+        graph.dag.add_edge(tau_feature, parccmm_node, **x1_edge_attrs)
+
+        parccmm_node.layer_type = 'parccmm_psi_mul'
+        graph.dag.nodes[parccmm_node]['level_cost'] = 2
+
+
 def process_special_info(
     graph: LayerAbstractGraph, compute_node: ComputeNode, preds: list[FeatureNode], succ: FeatureNode
 ):
@@ -599,7 +765,13 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                     )
 
             else:
-                if compute_node.layer_type == 'parcpmm':
+                if compute_node.layer_type in {'parcpmm_block_headsum', 'parccmm_sigma', 'parccmm_tau'}:
+                    for i in range(preds[0].dim):
+                        succ.shape[i] = preds[0].shape[i]
+                        graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
+                    if preds[0].head_shape is not None:
+                        succ.head_shape = list(preds[0].head_shape)
+                elif compute_node.layer_type in {'parcpmm', 'parcpmm_h0_mask'}:
                     succ.shape[0] = preds[0].shape[0]
                     weight_shape = getattr(compute_node, 'weight_shape', [])
                     if len(weight_shape) >= 2:
@@ -614,13 +786,19 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                     else:
                         succ.shape[0] = preds[0].shape[1]
                         succ.shape[1] = preds[0].shape[0]
-                elif compute_node.layer_type == 'parccmm':
-                    succ.shape[0] = preds[0].shape[0]
-                    if preds[0].head_shape is not None and len(preds) > 1 and preds[1].head_shape is not None:
-                        succ.head_shape = [preds[0].head_shape[0], preds[1].head_shape[1]]
+                elif compute_node.layer_type in {'parccmm', 'parccmm_psi_mul'}:
+                    ordered_preds = sorted(
+                        preds,
+                        key=lambda p: graph.dag.edges[p, compute_node].get('input_index')
+                        if graph.dag.edges[p, compute_node].get('input_index') is not None
+                        else 0,
+                    )
+                    succ.shape[0] = ordered_preds[0].shape[0]
+                    if ordered_preds[0].head_shape is not None and len(ordered_preds) > 1 and ordered_preds[1].head_shape is not None:
+                        succ.head_shape = [ordered_preds[0].head_shape[0], ordered_preds[1].head_shape[1]]
                         succ.shape[1] = succ.head_shape[1] * n_heads
-                    elif len(preds) > 1 and len(preds[1].shape) > 1:
-                        succ.shape[1] = preds[1].shape[1]
+                    elif len(ordered_preds) > 1 and len(ordered_preds[1].shape) > 1:
+                        succ.shape[1] = ordered_preds[1].shape[1]
                 else:
                     for i in range(preds[0].dim):
                         succ.shape[i] = preds[0].shape[i]
@@ -741,12 +919,18 @@ def set_level_costs(graph: LayerAbstractGraph):
             graph.dag.nodes[compute_node]['level_cost'] = 1 if has_uneven else 0
         elif compute_node.layer_type == 'parcpmm':
             graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type in {'parcpmm_block_headsum', 'parcpmm_h0_mask'}:
+            graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type in {'add_pt', 'pcm_add_pt'}:
             graph.dag.nodes[compute_node]['level_cost'] = 0
         elif compute_node.layer_type == 'partranspose':
             graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type == 'parccmm':
             graph.dag.nodes[compute_node]['level_cost'] = 3
+        elif compute_node.layer_type in {'parccmm_sigma', 'parccmm_tau'}:
+            graph.dag.nodes[compute_node]['level_cost'] = 1
+        elif compute_node.layer_type == 'parccmm_psi_mul':
+            graph.dag.nodes[compute_node]['level_cost'] = 2
         elif compute_node.layer_type == 'pcmgamma':
             graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type == 'pcmpoly':

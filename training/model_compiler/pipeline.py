@@ -57,6 +57,8 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     transforms.expand_layer_norm(pt_graph)
     transforms.expand_poly_act_rn(pt_graph)
     transforms.expand_parcpmm_add_pt(pt_graph)
+    transforms.split_parcpmm_layers(pt_graph)
+    transforms.split_parccmm_layers(pt_graph)
     transforms.split_upsampling_layers(pt_graph)
     transforms.infer_shapes_skips_and_pack_num(pt_graph)
     transforms.set_pcm_K(pt_graph)
@@ -532,7 +534,7 @@ def dump_graph(
 
     erg0_path = ergs_dir / 'nn_layers_ct_0.json'
     insert_btp_scale_gamma_layers(graph)
-    absorb_pcmgamma_layers(graph)
+    # absorb_pcmgamma_layers(graph)
     recompute_final_level(graph)
     transforms.insert_drop_level_layers(graph)
     graph.to_json(dict(), str(erg0_path), score=score)

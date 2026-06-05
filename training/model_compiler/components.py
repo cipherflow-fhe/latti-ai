@@ -787,13 +787,14 @@ class LayerAbstractGraph:
                     upsample_factor=upsample_factor,
                 )
 
-            elif layer_type == 'parcpmm':
+            elif layer_type in ('parcpmm', 'parcpmm_block_headsum', 'parcpmm_h0_mask'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', '')
                 compute_node.weight_shape = layer_json.get('weight_shape', [])
                 compute_node.bias_path = layer_json.get('bias_path', '')
                 compute_node.fuse_gama_info = layer_json.get('fuse_gama_info')
                 compute_node.to_expand = layer_json.get('to_expand', False)
+                compute_node.parcpmm_input_shape = layer_json.get('parcpmm_input_shape')
 
             elif layer_type in ('add_pt', 'pcm_add_pt'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
@@ -807,7 +808,7 @@ class LayerAbstractGraph:
             elif layer_type == 'partranspose':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
 
-            elif layer_type == 'parccmm':
+            elif layer_type in ('parccmm', 'parccmm_sigma', 'parccmm_tau', 'parccmm_psi_mul'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
 
             elif layer_type == 'pcmgamma':
@@ -1100,7 +1101,7 @@ class LayerAbstractGraph:
                 if 'mpc_refresh' in layer_type:
                     layers[layer_id]['is_end'] = False
                     mpc_refresh_ids.append(layer_id)
-            if layer_type == 'parcpmm':
+            if layer_type in ('parcpmm', 'parcpmm_block_headsum', 'parcpmm_h0_mask'):
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
@@ -1108,6 +1109,8 @@ class LayerAbstractGraph:
                     'weight_path': layer.path,
                     'weight_shape': layer.weight_shape,
                 }
+                if getattr(layer, 'parcpmm_input_shape', None) is not None:
+                    layers[layer_id]['parcpmm_input_shape'] = layer.parcpmm_input_shape
                 if layer.bias_path:
                     layers[layer_id]['bias_path'] = layer.bias_path
                 if getattr(layer, 'fuse_gama_info', None) is not None:
@@ -1132,7 +1135,7 @@ class LayerAbstractGraph:
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                 }
-            if layer_type == 'parccmm':
+            if layer_type in ('parccmm', 'parccmm_sigma', 'parccmm_tau', 'parccmm_psi_mul'):
                 edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
                 if all(v is not None for v in edge_indices.values()):
                     input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: edge_indices[n])]
