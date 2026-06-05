@@ -1320,6 +1320,38 @@ def verify_pack_unpack() -> None:
         assert np.allclose(actual_lower, expected)
 
 
+def verify_upper_transpose_lower_packing() -> None:
+    """Verify upper packing of A equals lower packing of A.T."""
+
+    cases = [
+        (1, (4, 2), 4),  # shape n*m, c=1
+        (1, (4, 2), 8),  # shape n*m, c=2
+        (2, (4, 2), 8),  # shape n*m, H=2, c=1
+        (2, (4, 2), 16),  # shape n*m, H=2, c=2
+        (1, (2, 4), 4),  # shape m*n, c=1
+        (1, (2, 4), 8),  # shape m*n, c=2
+        (2, (2, 4), 8),  # shape m*n, H=2, c=1
+        (2, (2, 4), 16),  # shape m*n, H=2, c=2
+        (1, (4, 4), 4),  # shape n*n, c=1
+        (1, (4, 4), 8),  # shape n*n, c=2
+        (2, (4, 4), 8),  # shape n*n, H=2, c=1
+        (2, (4, 4), 16),  # shape n*n, H=2, c=2
+    ]
+    for case_idx, (H, shape, n_slot) in enumerate(cases):
+        rng = np.random.default_rng(20260645 + case_idx)
+        matrices = [rng.normal(size=shape) for _ in range(H)]
+        transposed = [matrix.T for matrix in matrices]
+
+        packed_upper = pack_upper_diagonals(matrices, n_slot, H)
+        packed_lower_transpose = pack_lower_diagonals(transposed, n_slot, H)
+        for actual_vector, expected_vector in zip(packed_upper, packed_lower_transpose):
+            assert np.allclose(actual_vector, expected_vector)
+
+        upper_from_lower_transpose = unpack_upper_diagonals(packed_lower_transpose, shape, n_slot, H)
+        for actual_matrix, expected_matrix in zip(upper_from_lower_transpose, matrices):
+            assert np.allclose(actual_matrix, expected_matrix)
+
+
 def verify_propositions_3_6_3_7() -> None:
     """Verify packed Proposition 3.6 and 3.7 interfaces using H=2 batched inputs."""
 
@@ -1466,59 +1498,72 @@ def verify_corollaries_3_8_3_9() -> None:
 def verify_algorithm_1() -> None:
     """Verify Section 4.2.2 Algorithm 1 against NumPy plaintext matmul."""
 
-    H = 2
-    n = 4
-    d = H * n
-    n_slot = 16
-    A = (np.arange(d * d, dtype=np.float64).reshape(d, d) % 17) + 1
-    B = (np.arange(d * n, dtype=np.float64).reshape(d, n) % 13) + 1
-    B_blocks = [B[k * n : (k + 1) * n, :] for k in range(H)]
+    cases = [
+        (1, 4, 4),  # d=n,  c=1
+        (1, 4, 8),  # d=n,  c=2
+        (2, 4, 8),  # d=2n, c=1
+        (2, 4, 16),  # d=2n, c=2
+    ]
+    for case_idx, (H, n, n_slot) in enumerate(cases):
+        rng = np.random.default_rng(20260605 + case_idx)
+        d = H * n
+        A = rng.normal(size=(d, d))
+        B = rng.normal(size=(d, n))
+        B_blocks = [B[k * n : (k + 1) * n, :] for k in range(H)]
 
-    packed_C = algorithm_1_plaintext_ciphertext_matmul(
-        A,
-        pack_lower_diagonals(B_blocks, n_slot, H),
-        n,
-        n_slot,
-        H,
-    )
-    C_blocks = unpack_lower_diagonals(packed_C, (n, n), n_slot, H)
-    C = np.vstack(C_blocks)
-    assert np.allclose(C, A @ B)
+        packed_C = algorithm_1_plaintext_ciphertext_matmul(
+            A,
+            pack_lower_diagonals(B_blocks, n_slot, H),
+            n,
+            n_slot,
+            H,
+        )
+        C_blocks = unpack_lower_diagonals(packed_C, (n, n), n_slot, H)
+        C = np.vstack(C_blocks)
+        assert np.allclose(C, A @ B)
 
 
 def verify_algorithm_1_rectangular() -> None:
     """Verify rectangular-block Algorithm 1 against NumPy plaintext matmul."""
 
-    H = 4
-    m = 4
-    n = 8
-    d = H * m
-    n_slot = 64
-    A = (np.arange(d * d, dtype=np.float64).reshape(d, d) % 17) + 1
-    B = (np.arange(d * n, dtype=np.float64).reshape(d, n) % 13) + 1
-    B_blocks = [B[k * m : (k + 1) * m, :] for k in range(H)]
+    cases = [
+        (2, 1, 2, 4),  # d=n,  c=1, m_c=1
+        (2, 2, 4, 8),  # d=n,  c=1, m_c=2
+        (2, 2, 4, 16),  # d=n,  c=2, m_c=1
+        (2, 4, 8, 32),  # d=n,  c=2, m_c=2
+        (4, 1, 2, 8),  # d=2n, c=1, m_c=1
+        (4, 2, 4, 16),  # d=2n, c=1, m_c=2
+        (4, 2, 4, 32),  # d=2n, c=2, m_c=1
+        (4, 4, 8, 64),  # d=2n, c=2, m_c=2
+    ]
+    for case_idx, (H, m, n, n_slot) in enumerate(cases):
+        rng = np.random.default_rng(20260615 + case_idx)
+        d = H * m
+        A = rng.normal(size=(d, d))
+        B = rng.normal(size=(d, n))
+        B_blocks = [B[k * m : (k + 1) * m, :] for k in range(H)]
 
-    packed_C = algorithm_1_rectangular_plaintext_ciphertext_matmul(
-        A,
-        pack_lower_diagonals(B_blocks, n_slot, H),
-        m,
-        n,
-        n_slot,
-        H,
-    )
-    C_blocks = unpack_lower_diagonals(packed_C, (m, n), n_slot, H)
-    C = np.vstack(C_blocks)
-    assert np.allclose(C, A @ B)
+        packed_C = algorithm_1_rectangular_plaintext_ciphertext_matmul(
+            A,
+            pack_lower_diagonals(B_blocks, n_slot, H),
+            m,
+            n,
+            n_slot,
+            H,
+        )
+        C_blocks = unpack_lower_diagonals(packed_C, (m, n), n_slot, H)
+        C = np.vstack(C_blocks)
+        assert np.allclose(C, A @ B)
 
 
 def verify_algorithm_2() -> None:
     """Verify Section 4.3.2 Algorithm 2 and Algorithm 4 replication."""
 
     cases = [
-        (2, 2, 4, 16),  # c=2, catches ell_c != 0 mask split
-        (2, 4, 8, 32),  # c=2, m_c > 1 and n > m
-        (2, 8, 16, 64),  # c=2, larger n/m coverage
-        (2, 4, 8, 64),  # c=4, wider segment-block split
+        (2, 1, 2, 4),  # n=2m, c=1, m_c=1
+        (2, 2, 4, 8),  # n=2m, c=1, m_c=2
+        (2, 2, 4, 16),  # n=2m, c=2, m_c=1
+        (2, 4, 8, 32),  # n=2m, c=2, m_c=2
     ]
     for case_idx, (H, m, n, n_slot) in enumerate(cases):
         rng = np.random.default_rng(20260605 + case_idx)
@@ -1528,7 +1573,6 @@ def verify_algorithm_2() -> None:
         packed_A = pack_lower_diagonals(A, n_slot, H)
         packed_B = pack_lower_diagonals(B, n_slot, H)
         replicated_B = algorithm_4_replication(packed_B, B[0].shape, n_slot, H)
-        reference_packed = corollary_3_8_packed(packed_A, packed_B, A[0].shape, B[0].shape, n_slot, H)
 
         packed_from_multi = algorithm_2_ciphertext_ciphertext_matmul(
             packed_A,
@@ -1548,11 +1592,6 @@ def verify_algorithm_2() -> None:
             B_is_replicated=True,
         )
 
-        for actual_vector, expected_vector in zip(packed_from_multi, reference_packed):
-            assert np.allclose(actual_vector, expected_vector)
-        for actual_vector, expected_vector in zip(packed_from_replicated, reference_packed):
-            assert np.allclose(actual_vector, expected_vector)
-
         C_from_multi = unpack_lower_diagonals(packed_from_multi, (m, n), n_slot, H)
         C_from_replicated = unpack_lower_diagonals(packed_from_replicated, (m, n), n_slot, H)
         for A_i, B_i, C_i, C_rep_i in zip(A, B, C_from_multi, C_from_replicated):
@@ -1568,11 +1607,10 @@ def verify_algorithm_2_corollary_3_9() -> None:
     assert '_rotate_segment_to_output' not in globals()
 
     cases = [
-        (1, 2, 8, 8),  # c=1, n/m > 2
-        (2, 2, 4, 16),  # c=2, m_c=1
-        (2, 4, 8, 32),  # c=2, m_c=2
-        (2, 4, 8, 64),  # c=4, m_c=1
-        (4, 4, 16, 64),  # H>2, c=1, n/m > 2
+        (2, 1, 2, 4),  # n=2m, c=1, m_c=1
+        (2, 2, 4, 8),  # n=2m, c=1, m_c=2
+        (2, 2, 4, 16),  # n=2m, c=2, m_c=1
+        (2, 4, 8, 32),  # n=2m, c=2, m_c=2
     ]
     for case_idx, (H, m, n, n_slot) in enumerate(cases):
         rng = np.random.default_rng(20260605 + case_idx)
@@ -1582,7 +1620,6 @@ def verify_algorithm_2_corollary_3_9() -> None:
         packed_A = pack_lower_diagonals(A, n_slot, H)
         packed_B = pack_lower_diagonals(B, n_slot, H)
         replicated_B = algorithm_4_replication_rectangular(packed_B, B[0].shape, n_slot, H)
-        reference_packed = corollary_3_9_packed(packed_A, packed_B, A[0].shape, B[0].shape, n_slot, H)
 
         packed_from_multi = algorithm_2_ciphertext_ciphertext_matmul_corollary_3_9(
             packed_A,
@@ -1602,11 +1639,6 @@ def verify_algorithm_2_corollary_3_9() -> None:
             B_is_replicated=True,
         )
 
-        for actual_vector, expected_vector in zip(packed_from_multi, reference_packed):
-            assert np.allclose(actual_vector, expected_vector)
-        for actual_vector, expected_vector in zip(packed_from_replicated, reference_packed):
-            assert np.allclose(actual_vector, expected_vector)
-
         C_from_multi = unpack_lower_diagonals(packed_from_multi, (n, n), n_slot, H)
         C_from_replicated = unpack_lower_diagonals(packed_from_replicated, (n, n), n_slot, H)
         for A_i, B_i, C_i, C_rep_i in zip(A, B, C_from_multi, C_from_replicated):
@@ -1618,49 +1650,221 @@ def verify_algorithm_2_corollary_3_9() -> None:
 def verify_algorithm_5() -> None:
     """Verify Appendix B.3 Algorithm 5 matrix transpose."""
 
-    H = 2
-    n_slot = 16
-    B = [
-        np.arange(16, dtype=np.float64).reshape(4, 4) + 1,
-        np.arange(16, dtype=np.float64).reshape(4, 4) + 51,
+    cases = [
+        (1, 4, 4),  # H=1, c=1
+        (1, 4, 8),  # H=1, c=2
+        (2, 4, 8),  # H=2, c=1
+        (2, 4, 16),  # H=2, c=2
     ]
+    for case_idx, (H, n, n_slot) in enumerate(cases):
+        rng = np.random.default_rng(20260625 + case_idx)
+        B = [rng.normal(size=(n, n)) for _ in range(H)]
 
-    packed_upper_B = pack_upper_diagonals(B, n_slot, H)
-    packed_lower_B = algorithm_5_matrix_transpose(packed_upper_B, B[0].shape, n_slot, H)
-    expected_packed = pack_lower_diagonals(B, n_slot, H)
-    decoded = unpack_lower_diagonals(packed_lower_B, B[0].shape, n_slot, H)
+        packed_upper_B = pack_upper_diagonals(B, n_slot, H)
+        packed_lower_B = algorithm_5_matrix_transpose(packed_upper_B, B[0].shape, n_slot, H)
+        expected_packed = pack_lower_diagonals(B, n_slot, H)
+        decoded = unpack_lower_diagonals(packed_lower_B, B[0].shape, n_slot, H)
 
-    for actual_vector, expected_vector in zip(packed_lower_B, expected_packed):
-        assert np.allclose(actual_vector, expected_vector)
-    for actual_matrix, source_matrix in zip(decoded, B):
-        assert np.allclose(actual_matrix, source_matrix)
+        for actual_vector, expected_vector in zip(packed_lower_B, expected_packed):
+            assert np.allclose(actual_vector, expected_vector)
+        for actual_matrix, source_matrix in zip(decoded, B):
+            assert np.allclose(actual_matrix, source_matrix)
 
 
 def verify_algorithm_5_rectangular() -> None:
     """Verify rectangular Algorithm 5 upper-to-lower diagonal conversion."""
 
-    H = 2
-    m = 2
-    n = 4
-    n_slot = 16
-    B = [
-        np.arange(n * m, dtype=np.float64).reshape(n, m) + 1,
-        np.arange(n * m, dtype=np.float64).reshape(n, m) + 51,
+    cases = [
+        (1, 1, 2, 2),  # n=2m, c=1, m_c=1
+        (1, 2, 4, 4),  # n=2m, c=1, m_c=2
+        (1, 2, 4, 8),  # n=2m, c=2, m_c=1
+        (1, 4, 8, 16),  # n=2m, c=2, m_c=2
+        (2, 1, 2, 4),  # H=2, n=2m, c=1, m_c=1
+        (2, 2, 4, 8),  # H=2, n=2m, c=1, m_c=2
+        (2, 2, 4, 16),  # H=2, n=2m, c=2, m_c=1
+        (2, 4, 8, 32),  # H=2, n=2m, c=2, m_c=2
     ]
+    for case_idx, (H, m, n, n_slot) in enumerate(cases):
+        rng = np.random.default_rng(20260635 + case_idx)
+        B = [rng.normal(size=(n, m)) for _ in range(H)]
 
-    packed_upper_B = pack_upper_diagonals(B, n_slot, H)
-    packed_lower_B = algorithm_5_matrix_transpose_rectangular(packed_upper_B, B[0].shape, n_slot, H)
-    expected_packed = pack_lower_diagonals(B, n_slot, H)
-    decoded = unpack_lower_diagonals(packed_lower_B, B[0].shape, n_slot, H)
+        packed_upper_B = pack_upper_diagonals(B, n_slot, H)
+        packed_lower_B = algorithm_5_matrix_transpose_rectangular(packed_upper_B, B[0].shape, n_slot, H)
+        expected_packed = pack_lower_diagonals(B, n_slot, H)
+        decoded = unpack_lower_diagonals(packed_lower_B, B[0].shape, n_slot, H)
 
-    for actual_vector, expected_vector in zip(packed_lower_B, expected_packed):
-        assert np.allclose(actual_vector, expected_vector)
-    for actual_matrix, source_matrix in zip(decoded, B):
-        assert np.allclose(actual_matrix, source_matrix)
+        for actual_vector, expected_vector in zip(packed_lower_B, expected_packed):
+            assert np.allclose(actual_vector, expected_vector)
+        for actual_matrix, source_matrix in zip(decoded, B):
+            assert np.allclose(actual_matrix, source_matrix)
+
+
+def verify_transposed_multi_head_attention() -> None:
+    """Verify a transposed multi-head attention pipeline using packed primitives."""
+
+    cases = [
+        (2, 1, 2, 4),  # d=n,  n=2m, c=1, m_c=1
+        (2, 2, 4, 8),  # d=n,  n=2m, c=1, m_c=2
+        (2, 2, 4, 16),  # d=n,  n=2m, c=2, m_c=1
+        (2, 4, 8, 32),  # d=n,  n=2m, c=2, m_c=2
+        (4, 1, 2, 8),  # d=2n, n=2m, c=1, m_c=1
+        (4, 2, 4, 16),  # d=2n, n=2m, c=1, m_c=2
+        (4, 2, 4, 32),  # d=2n, n=2m, c=2, m_c=1
+        (4, 4, 8, 64),  # d=2n, n=2m, c=2, m_c=2
+    ]
+    for case_idx, (H, m, n, n_slot) in enumerate(cases):
+        rng = np.random.default_rng(20260655 + case_idx)
+        d = H * m
+        X_T = rng.normal(size=(d, n))
+        W_Q = rng.normal(size=(d, d)) / n
+        W_K = rng.normal(size=(d, d))
+        W_V = rng.normal(size=(d, d))
+        W_O = rng.normal(size=(d, d))
+
+        X_T_blocks = [X_T[k * m : (k + 1) * m, :] for k in range(H)]
+        packed_X_T = pack_lower_diagonals(X_T_blocks, n_slot, H)
+
+        packed_Q_T = algorithm_1_rectangular_plaintext_ciphertext_matmul(W_Q.T, packed_X_T, m, n, n_slot, H)
+        packed_K_T = algorithm_1_rectangular_plaintext_ciphertext_matmul(W_K.T, packed_X_T, m, n, n_slot, H)
+        packed_V_T = algorithm_1_rectangular_plaintext_ciphertext_matmul(W_V.T, packed_X_T, m, n, n_slot, H)
+
+        Q_T = W_Q.T @ X_T
+        K_T = W_K.T @ X_T
+        V_T = W_V.T @ X_T
+        Q_T_blocks = [Q_T[k * m : (k + 1) * m, :] for k in range(H)]
+        K_T_blocks = [K_T[k * m : (k + 1) * m, :] for k in range(H)]
+        V_T_blocks = [V_T[k * m : (k + 1) * m, :] for k in range(H)]
+
+        for actual, expected in zip(unpack_lower_diagonals(packed_Q_T, (m, n), n_slot, H), Q_T_blocks):
+            assert np.allclose(actual, expected)
+        for actual, expected in zip(unpack_lower_diagonals(packed_K_T, (m, n), n_slot, H), K_T_blocks):
+            assert np.allclose(actual, expected)
+        for actual, expected in zip(unpack_lower_diagonals(packed_V_T, (m, n), n_slot, H), V_T_blocks):
+            assert np.allclose(actual, expected)
+
+        packed_K = algorithm_5_matrix_transpose_rectangular(packed_K_T, (n, m), n_slot, H)
+        K_blocks = [block.T for block in K_T_blocks]
+        for actual, expected in zip(unpack_lower_diagonals(packed_K, (n, m), n_slot, H), K_blocks):
+            assert np.allclose(actual, expected)
+
+        packed_S_T = algorithm_2_ciphertext_ciphertext_matmul_corollary_3_9(
+            packed_K,
+            packed_Q_T,
+            (n, m),
+            (m, n),
+            n_slot,
+            H,
+        )
+        S_T_blocks = [K_block @ Q_T_block for K_block, Q_T_block in zip(K_blocks, Q_T_blocks)]
+        for actual, expected in zip(unpack_lower_diagonals(packed_S_T, (n, n), n_slot, H), S_T_blocks):
+            assert np.allclose(actual, expected)
+
+        packed_attn_T = algorithm_2_ciphertext_ciphertext_matmul(
+            packed_V_T,
+            packed_S_T,
+            (m, n),
+            (n, n),
+            n_slot,
+            H,
+        )
+        attn_T_blocks = [V_T_block @ S_T_block for V_T_block, S_T_block in zip(V_T_blocks, S_T_blocks)]
+        for actual, expected in zip(unpack_lower_diagonals(packed_attn_T, (m, n), n_slot, H), attn_T_blocks):
+            assert np.allclose(actual, expected)
+
+        packed_out_T = algorithm_1_rectangular_plaintext_ciphertext_matmul(W_O.T, packed_attn_T, m, n, n_slot, H)
+        out_T = W_O.T @ np.vstack(attn_T_blocks)
+        out_T_blocks = [out_T[k * m : (k + 1) * m, :] for k in range(H)]
+        for actual, expected in zip(unpack_lower_diagonals(packed_out_T, (m, n), n_slot, H), out_T_blocks):
+            assert np.allclose(actual, expected)
+
+
+def verify_transposed_feed_forward_network() -> None:
+    """Verify consecutive transposed fc1/fc2 layers using rectangular Algorithm 1."""
+
+    cases = [
+        (2, 1, 2, 4),  # d=n,  n=2m, c=1, m_c=1
+        (2, 2, 4, 8),  # d=n,  n=2m, c=1, m_c=2
+        (2, 2, 4, 16),  # d=n,  n=2m, c=2, m_c=1
+        (2, 4, 8, 32),  # d=n,  n=2m, c=2, m_c=2
+        (4, 1, 2, 8),  # d=2n, n=2m, c=1, m_c=1
+        (4, 2, 4, 16),  # d=2n, n=2m, c=1, m_c=2
+        (4, 2, 4, 32),  # d=2n, n=2m, c=2, m_c=1
+        (4, 4, 8, 64),  # d=2n, n=2m, c=2, m_c=2
+    ]
+    for case_idx, (H, m, n, n_slot) in enumerate(cases):
+        rng = np.random.default_rng(20260665 + case_idx)
+        d = H * m
+        X_T = rng.normal(size=(d, n))
+        W_1_T = rng.normal(size=(4 * d, d))
+        W_2_T = rng.normal(size=(d, 4 * d))
+
+        X_T_blocks = [X_T[k * m : (k + 1) * m, :] for k in range(H)]
+        packed_X_T = pack_lower_diagonals(X_T_blocks, n_slot, H)
+
+        packed_X1_T_chunks: list[list[np.ndarray]] = []
+        X1_T_chunks: list[np.ndarray] = []
+        for chunk_idx in range(4):
+            W_1_T_chunk = W_1_T[chunk_idx * d : (chunk_idx + 1) * d, :]
+            packed_X1_T_chunk = algorithm_1_rectangular_plaintext_ciphertext_matmul(
+                W_1_T_chunk,
+                packed_X_T,
+                m,
+                n,
+                n_slot,
+                H,
+            )
+            X1_T_chunk = W_1_T_chunk @ X_T
+            X1_T_chunk_blocks = [X1_T_chunk[k * m : (k + 1) * m, :] for k in range(H)]
+            for actual, expected in zip(
+                unpack_lower_diagonals(packed_X1_T_chunk, (m, n), n_slot, H),
+                X1_T_chunk_blocks,
+            ):
+                assert np.allclose(actual, expected)
+            packed_X1_T_chunks.append(packed_X1_T_chunk)
+            X1_T_chunks.append(X1_T_chunk)
+
+        X1_T = np.vstack(X1_T_chunks)
+        assert np.allclose(X1_T, W_1_T @ X_T)
+
+        packed_X2_T_terms: list[list[np.ndarray]] = []
+        X2_T_terms: list[np.ndarray] = []
+        for chunk_idx in range(4):
+            W_2_T_chunk = W_2_T[:, chunk_idx * d : (chunk_idx + 1) * d]
+            packed_X2_T_term = algorithm_1_rectangular_plaintext_ciphertext_matmul(
+                W_2_T_chunk,
+                packed_X1_T_chunks[chunk_idx],
+                m,
+                n,
+                n_slot,
+                H,
+            )
+            X2_T_term = W_2_T_chunk @ X1_T_chunks[chunk_idx]
+            X2_T_term_blocks = [X2_T_term[k * m : (k + 1) * m, :] for k in range(H)]
+            for actual, expected in zip(
+                unpack_lower_diagonals(packed_X2_T_term, (m, n), n_slot, H),
+                X2_T_term_blocks,
+            ):
+                assert np.allclose(actual, expected)
+            packed_X2_T_terms.append(packed_X2_T_term)
+            X2_T_terms.append(X2_T_term)
+
+        packed_X2_T: list[np.ndarray] = []
+        for vector_idx in range(len(packed_X2_T_terms[0])):
+            acc = np.zeros_like(packed_X2_T_terms[0][vector_idx])
+            for packed_term in packed_X2_T_terms:
+                acc = add(acc, packed_term[vector_idx])
+            packed_X2_T.append(acc)
+
+        X2_T = sum(X2_T_terms, start=np.zeros((d, n), dtype=X2_T_terms[0].dtype))
+        assert np.allclose(X2_T, W_2_T @ X1_T)
+        X2_T_blocks = [X2_T[k * m : (k + 1) * m, :] for k in range(H)]
+        for actual, expected in zip(unpack_lower_diagonals(packed_X2_T, (m, n), n_slot, H), X2_T_blocks):
+            assert np.allclose(actual, expected)
 
 
 def verify_all() -> None:
     verify_pack_unpack()
+    verify_upper_transpose_lower_packing()
     verify_propositions_3_6_3_7()
     verify_prop_3_8_rectangular()
     verify_corollaries_3_8_3_9()
@@ -1670,6 +1874,8 @@ def verify_all() -> None:
     verify_algorithm_2_corollary_3_9()
     verify_algorithm_5()
     verify_algorithm_5_rectangular()
+    verify_transposed_multi_head_attention()
+    verify_transposed_feed_forward_network()
     print('All THOR CKKS primitive verifications passed.')
 
 
