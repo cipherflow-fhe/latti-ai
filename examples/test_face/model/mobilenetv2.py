@@ -1,85 +1,110 @@
-# Copyright (c) 2025-2026 CipherFlow (Shenzhen) Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# SPDX-License-Identifier: Apache-2.0
-"""
-MobileNetV2 copied from examples/test_imagenet/model/mobilenetv2.py so the
-face example uses the same backbone while staying self-contained.
-"""
+'''MobileNetV2 in PyTorch.
 
-import math
-
+See the paper "Inverted Residuals and Linear Bottlenecks:
+Mobile Networks for Classification, Detection and Segmentation" for more details.
+'''
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-__all__ = ['mobilenetv2']
-
-
-def _make_divisible(v, divisor, min_value=None):
-    if min_value is None:
-        min_value = divisor
-    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)
-    if new_v < 0.9 * v:
-        new_v += divisor
-    return new_v
+__all__ = ['Block', 'MBlock', 'MobileNetV2', 'Modified_MobileNetV2', 'mobilenetv2']
 
 
-def conv_3x3_bn(inp, oup, stride):
-    return nn.Sequential(nn.Conv2d(inp, oup, 3, stride, 1, bias=False), nn.BatchNorm2d(oup), nn.ReLU6(inplace=True))
+class MBlock(nn.Module):
+    '''expand + depthwise + pointwise'''
 
+    def __init__(self, in_planes, out_planes, expansion, stride, modified1, modified2):
+        super(MBlock, self).__init__()
+        self.stride = stride
+        self.modified1 = modified1
+        self.modified2 = modified2
+        self.in_planes, self.out_planes, self.expansion = in_planes, out_planes, expansion
 
-def conv_1x1_bn(inp, oup):
-    return nn.Sequential(nn.Conv2d(inp, oup, 1, 1, 0, bias=False), nn.BatchNorm2d(oup), nn.ReLU6(inplace=True))
+        planes = expansion * in_planes
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=1, stride=1, padding=0, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, groups=planes, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+        self.conv3 = nn.Conv2d(planes, out_planes, kernel_size=1, stride=1, padding=0, bias=False)
+        self.bn3 = nn.BatchNorm2d(out_planes)
 
-
-class InvertedResidual(nn.Module):
-    def __init__(self, inp, oup, stride, expand_ratio):
-        super(InvertedResidual, self).__init__()
-        assert stride in [1, 2]
-
-        hidden_dim = round(inp * expand_ratio)
-        self.identity = stride == 1 and inp == oup
-
-        if expand_ratio == 1:
-            self.conv = nn.Sequential(
-                nn.Conv2d(hidden_dim, hidden_dim, 3, stride, 1, groups=hidden_dim, bias=False),
-                nn.BatchNorm2d(hidden_dim),
-                nn.ReLU6(inplace=True),
-                nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),
-                nn.BatchNorm2d(oup),
+        self.shortcut = nn.Sequential()
+        if stride == 1 and in_planes != out_planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=1, padding=0, bias=False),
+                nn.BatchNorm2d(out_planes),
             )
-        else:
-            self.conv = nn.Sequential(
-                nn.Conv2d(inp, hidden_dim, 1, 1, 0, bias=False),
-                nn.BatchNorm2d(hidden_dim),
-                nn.ReLU6(inplace=True),
-                nn.Conv2d(hidden_dim, hidden_dim, 3, stride, 1, groups=hidden_dim, bias=False),
-                nn.BatchNorm2d(hidden_dim),
-                nn.ReLU6(inplace=True),
-                nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),
-                nn.BatchNorm2d(oup),
+
+    def square(self, x):
+        return x**2 * 0.0001
+
+    def forward(self, x):
+        out = self.bn1(self.conv1(x))
+        out = F.relu(self.bn2(self.conv2(out)))
+        out = self.bn3(self.conv3(out))
+        out = out + self.shortcut(x) if self.stride == 1 else out
+        out = F.relu(out)
+        return out
+
+
+class Block(nn.Module):
+    '''expand + depthwise + pointwise'''
+
+    def __init__(self, in_planes, out_planes, expansion, stride):
+        super(Block, self).__init__()
+        self.stride = stride
+
+        planes = expansion * in_planes
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=1, stride=1, padding=0, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, groups=planes, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+        self.conv3 = nn.Conv2d(planes, out_planes, kernel_size=1, stride=1, padding=0, bias=False)
+        self.bn3 = nn.BatchNorm2d(out_planes)
+
+        self.shortcut = nn.Sequential()
+        if stride == 1 and in_planes != out_planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=1, padding=0, bias=False),
+                nn.BatchNorm2d(out_planes),
             )
 
     def forward(self, x):
-        if self.identity:
-            return x + self.conv(x)
-        return self.conv(x)
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = F.relu(self.bn2(self.conv2(out)))
+        out = self.bn3(self.conv3(out))
+        out = out + self.shortcut(x) if self.stride == 1 else out
+        return out
 
 
 class MobileNetV2(nn.Module):
-    def __init__(self, num_classes=1000, width_mult=1.0):
-        super(MobileNetV2, self).__init__()
-        self.m_cfg = [(1,  16, 1, 1, 1, 0),
+    cfg = [
+        (1, 16, 1, 1),
+        (6, 24, 2, 1),
+        (6, 32, 3, 2),
+        (6, 64, 4, 2),
+        (6, 96, 3, 1),
+        (6, 160, 3, 2),
+        (6, 320, 1, 1),
+    ]
+
+    # m_cfg = [
+    #     (1, 16, 1, 1, 1, 0),
+    #     (6, 24, 1, 1, 1, 0),
+    #     (6, 32, 1, 2, 0, 0),
+    #     (6, 32, 1, 1, 1, 0),
+    #     (6, 64, 1, 2, 1, 0),
+    #     (6, 64, 1, 1, 1, 0),
+    #     (6, 160, 1, 2, 0, 0),
+    #     (6, 320, 1, 1, 0, 0),
+    # ]
+    # m_cfg = [(1,  16,  1, 1, 0, 0),
+    #   (6,  24,  1, 1, 0, 0),
+    #   (6,  32,  2, 2, 0, 0),
+    #   (6,  64,  2, 2, 0, 0),
+    #   (6, 160,  1, 2, 0, 0),
+    #   (6, 320,  1, 1, 0, 0),]
+    m_cfg = [(1,  16, 1, 1, 1, 0),
             #    (6,  24, 1, 1, 1, 0),  # NOTE: change stride 2 -> 1 for CIFAR10
             #    (6,  24, 1, 1, 0, 1),
                (6,  16, 1, 2, 0, 0),
@@ -97,49 +122,66 @@ class MobileNetV2(nn.Module):
             #    (4, 160, 1, 1, 1, 0),
                (6, 320, 1, 1, 0, 0)]
 
-        input_channel = _make_divisible(32 * width_mult, 4 if width_mult == 0.1 else 8)
-        layers = [conv_3x3_bn(3, input_channel, 2)]
-        block = InvertedResidual
-        for t, c, n, s,_,_ in self.m_cfg:
-            output_channel = _make_divisible(c * width_mult, 4 if width_mult == 0.1 else 8)
-            for i in range(n):
-                layers.append(block(input_channel, output_channel, s if i == 0 else 1, t))
-                input_channel = output_channel
-        self.features = nn.Sequential(*layers)
-        output_channel = _make_divisible(1280 * width_mult, 4 if width_mult == 0.1 else 8) if width_mult > 1.0 else 1280
-        self.conv = conv_1x1_bn(input_channel, output_channel)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.classifier = nn.Linear(output_channel, num_classes)
+    def __init__(self, num_classes=1000, width_mult=1.0):
+        super(MobileNetV2, self).__init__()
+        if width_mult != 1.0:
+            raise ValueError('data/new_mvbv2.py backbone only supports width_mult=1.0')
 
-        self._initialize_weights()
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
+        self.layers = self._make_modified_layers(in_planes=32)
+        self.conv2 = nn.Conv2d(320, 1280, kernel_size=1, stride=1, padding=0, bias=False)
+        self.bn2 = nn.BatchNorm2d(1280)
+        self.avgpool = nn.AvgPool2d(kernel_size=8, stride=8, padding=0)
+        self.linear = nn.Linear(1280, num_classes)
+        self.name = 'Modified_MobileNetV2'
+
+    @property
+    def classifier(self):
+        return self.linear
+
+    def _make_modified_layers(self, in_planes):
+        layers = []
+        for expansion, out_planes, num_blocks, stride, m1, m2 in self.m_cfg:
+            strides = [stride] + [1] * (num_blocks - 1)
+            for stride in strides:
+                layers.append(MBlock(in_planes, out_planes, expansion, stride, m1, m2))
+                in_planes = out_planes
+        return nn.Sequential(*layers)
+
+    def features(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.maxpool(out)
+        out = self.layers(out)
+        return out
+
+    def conv(self, x):
+        return F.relu(self.bn2(self.conv2(x)))
 
     def forward(self, x):
-        x = self.features(x)
-        x = self.conv(x)
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-        x = self.classifier(x)
-        return x
+        out = self.features(x)
+        out = self.conv(out)
+        out = self.avgpool(out)
+        out = out.view(out.size(0), -1)
+        out = self.linear(out)
+        return out
 
-    def _initialize_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, math.sqrt(2.0 / n))
-                if m.bias is not None:
-                    m.bias.data.zero_()
-            elif isinstance(m, nn.BatchNorm2d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
-            elif isinstance(m, nn.Linear):
-                m.weight.data.normal_(0, 0.01)
-                m.bias.data.zero_()
+
+Modified_MobileNetV2 = MobileNetV2
 
 
 def mobilenetv2(**kwargs):
     return MobileNetV2(**kwargs)
 
 
-if __name__ == '__main__':
+def test():
     net = MobileNetV2()
-    print(net)
+    print(net.name)
+    x = torch.randn(2, 3, 256, 256)
+    y = net(x)
+    print(y)
+
+
+if __name__ == '__main__':
+    test()
