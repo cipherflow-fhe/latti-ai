@@ -694,7 +694,7 @@ class TestSingleLayer(CompilerTestBase):
             n_heads=int(compile_config['n_heads']),
             head_dim=int(compile_config['head_dim']),
             matmul_block_size=int(compile_config['matmul_block_size']),
-            set_btp_scale=None,
+            set_btp_scale=None
         )
 
         server_dir = script_dir / 'task' / 'server'

@@ -137,7 +137,13 @@ def get_compute_score(
     if compute.layer_type in supported_fhe_score_layers:
         preds = list(enclosing_graph.predecessors(compute))
         level = min(enclosing_graph.nodes[p]['level'] for p in preds)
-        s_param = FheScoreParam(enclosing_graph, compute, param_dict, level)
+        s_param = FheScoreParam(
+            enclosing_graph,
+            compute,
+            param_dict,
+            level,
+            use_gpu=getattr(config, 'use_gpu', True),
+        )
         score = s_param.get_score()
         return score
     return 0.0
@@ -145,7 +151,12 @@ def get_compute_score(
 
 def get_restoring_score(dag, restore_node, param_dict):
     if not config.mpc_refresh:
-        s_param = BtpScoreParam(dag, restore_node, param_dict)
+        s_param = BtpScoreParam(
+            dag,
+            restore_node,
+            param_dict,
+            use_gpu=getattr(config, 'use_gpu', True),
+        )
     else:
         s_param = MpcScoreParam(dag, restore_node, param_dict)
     return s_param.get_score()
