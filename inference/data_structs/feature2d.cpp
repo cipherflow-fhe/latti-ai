@@ -503,20 +503,30 @@ static vector<CkksPlaintext> multi_pack_to_pt(const Array<double, 3>& feature_mg
                                               int level,
                                               double scale_in,
                                               PackType pack_type) {
+    CkksContext* old_context = f2d.context;
+    int old_level = f2d.level;
+    f2d.context = &context;
+    f2d.level = level;
+
+    vector<CkksPlaintext> pt_vec;
     if (pack_type == PackType::MultipleChannelPacking) {
-        return f2d.encode_multiple_channel(feature_mg, scale_in);
+        pt_vec = f2d.encode_multiple_channel(feature_mg, scale_in);
     } else if (pack_type == PackType::MultiplexedPacking) {
-        return f2d.encode_multiplexed(feature_mg, scale_in);
+        pt_vec = f2d.encode_multiplexed(feature_mg, scale_in);
     } else {
         Duo block_expansion = {(uint32_t)ceil(shape[0] / (double)BLOCK_SHAPE[0]),
                                (uint32_t)ceil(shape[1] / (double)BLOCK_SHAPE[1])};
-        return f2d.encode_interleaved(feature_mg, BLOCK_SHAPE, block_expansion, scale_in);
+        pt_vec = f2d.encode_interleaved(feature_mg, BLOCK_SHAPE, block_expansion, scale_in);
     }
+
+    f2d.context = old_context;
+    f2d.level = old_level;
+    return pt_vec;
 }
 
 void Feature2DEncrypted::split_to_shares_for_multi_channel_pack(Feature2DEncrypted* share0,
-                                                                Feature2DShare* share1) const {
-    assert(this->packing_type == PackType::MultipleChannelPacking);
+                                                                Feature2DShare* share1,
+                                                                PackType pack_type) const {
     int n_slot = context->get_parameter().get_n() / 2;
     double share_scale = DEFAULT_SCALE;
     int feature_bitlength = DEFAULT_SCALE_BIT + 1;
@@ -540,7 +550,7 @@ void Feature2DEncrypted::split_to_shares_for_multi_channel_pack(Feature2DEncrypt
     share0->data.clear();
     auto mask_d_array = Array<double, 1>::from_array_1d(mask_d).reshape<3>({n_channel, shape[0], shape[1]});
     auto mask_pt =
-        multi_pack_to_pt(mask_d_array, *share0, n_channel, shape, skip, *context, level, DEFAULT_SCALE, packing_type);
+        multi_pack_to_pt(mask_d_array, *share0, n_channel, shape, skip, *context, level, DEFAULT_SCALE, pack_type);
     for (int i = 0; i < data.size(); i++) {
         CkksCiphertext share0_ct = context->add_plain(data[i], mask_pt[i]);
         share0->data.push_back(move(share0_ct));
@@ -627,8 +637,8 @@ Feature2DEncrypted Feature2DEncrypted::combine_with_share_new_protocol(const Fea
 
 Feature2DEncrypted Feature2DEncrypted::combine_with_share_new_protocol_for_multi_pack(const Feature2DShare& share,
                                                                                       const Feature2DEncrypted& f2d,
-                                                                                      const Bytes& b1) const {
-    assert(this->packing_type == PackType::MultipleChannelPacking);
+                                                                                      const Bytes& b1,
+                                                                                      PackType pack_type) const {
     const int N_THREAD = 8;
     int n_slot = context->get_parameter().get_n() / 2;
     Feature2DEncrypted result(this->context, this->level);
@@ -651,16 +661,15 @@ Feature2DEncrypted Feature2DEncrypted::combine_with_share_new_protocol_for_multi
     auto f2d_copy = f2d.copy();
     Array<double, 3> mask_d_3d = mask_d.reshape<3>({this->n_channel, this->shape[0], this->shape[1]});
     auto mask_pt = multi_pack_to_pt(mask_d_3d, f2d_copy, this->n_channel, this->shape, this->skip, *context, level,
-                                    DEFAULT_SCALE, PackType::MultipleChannelPacking);
+                                    DEFAULT_SCALE, pack_type);
     Array<double, 1> b1_value({b1.size()});
     for (int i = 0; i < b1.size(); i++) {
         b1_value.set(i, 2 * b1[i] - 1);
     }
     Array<double, 3> b1_value_3d = b1_value.reshape<3>({this->n_channel, this->shape[0], this->shape[1]});
     CkksContext& extra_level_context = context->get_extra_level_context();
-    auto mask_b1 = multi_pack_to_pt(
-        b1_value_3d, f2d_copy, this->n_channel, this->shape, this->skip, extra_level_context, level + 1,
-        extra_level_context.get_parameter().get_q(level + 1), PackType::MultipleChannelPacking);
+    auto mask_b1 = multi_pack_to_pt(b1_value_3d, f2d_copy, this->n_channel, this->shape, this->skip, extra_level_context,
+                                    level + 1, extra_level_context.get_parameter().get_q(level + 1), pack_type);
     for (int i = 0; i < data.size(); i++) {
         auto f2d_mult = extra_level_context.mult_plain(f2d.data[i], mask_b1[i]);
         f2d_mult = extra_level_context.rescale(f2d_mult, encode_scale);

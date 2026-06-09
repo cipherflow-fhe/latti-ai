@@ -18,6 +18,8 @@
 
 #include "inference_process.h"
 #include "../lattisense/cxx_sdk_v2/cxx_fhe_task.h"
+#include "fhe_mpc.h"
+#include "fhe-mpc/mpc/SCI/src/globals.h"
 #include <cmath>
 #include <iostream>
 
@@ -25,6 +27,115 @@ using namespace std;
 using namespace lattisense;
 uint64_t fhe_time = 0;
 bool normal_output = false;
+int party __attribute__((weak)) = SERVER;
+int port __attribute__((weak)) = 12309;
+string address __attribute__((weak)) = "127.0.0.1";
+int num_threads __attribute__((weak)) = 1;
+
+PackType choose_pack_type(Duo shape, Duo block_shape) {
+    if (shape[0] > block_shape[0] || shape[1] > block_shape[1]) {
+        return PackType::InterleavedPacking;
+    }
+    return PackType::MultiplexedPacking;
+}
+
+Feature2DShare server_enc_to_share_multi_pack(CkksContext& context,
+                                              const Feature2DEncrypted& x_enc,
+                                              int scale_ord,
+                                              uint64_t ring_mod,
+                                              PackType pack_type) {
+    DataTransmission data_trans(io);
+
+    Feature2DEncrypted x_share1_enc(&context, x_enc.level, x_enc.skip, x_enc.invalid_fill, pack_type);
+    Feature2DShare x_share0(ring_mod, scale_ord);
+
+    x_enc.split_to_shares_for_multi_channel_pack(&x_share1_enc, &x_share0, pack_type);
+    data_trans.send_bytes(x_share1_enc.serialize());
+
+    return x_share0;
+}
+
+Feature2DEncrypted server_share_to_enc_multi_pack(CkksContext& context,
+                                                  Feature2DShare& y_share0,
+                                                  int scale_ord,
+                                                  uint64_t ring_mod,
+                                                  int level,
+                                                  PackType pack_type) {
+    DataTransmission data_trans(io);
+    for (int i = 0; i < y_share0.data.get_size(); i++) {
+        y_share0.data.set(i, (y_share0.data.get(i) * T_SCALE) % ring_mod);
+    }
+
+    MPC mpc(scale_ord, ring_mod, 128.0);
+    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, SERVER);
+
+    Feature2DEncrypted y_share1_enc(&context, level, {1, 1}, {1, 1}, pack_type);
+    y_share1_enc.deserialize(data_trans.receive_bytes());
+    y_share1_enc.packing_type = pack_type;
+    y_share1_enc.decompress();
+
+    CkksContext& extra_context = context.get_extra_level_context();
+    Feature2DEncrypted y_share2_enc(&extra_context, level + 1, y_share1_enc.skip, {1, 1}, pack_type);
+    y_share2_enc.deserialize(data_trans.receive_bytes());
+    y_share2_enc.packing_type = pack_type;
+
+    Feature2DEncrypted y_ct =
+        y_share1_enc.combine_with_share_new_protocol_for_multi_pack(y_share0, y_share2_enc, b1, pack_type);
+    y_ct.packing_type = pack_type;
+    return y_ct;
+}
+
+Feature2DShare
+server_enc_to_share(CkksContext& context, const Feature2DEncrypted& x_enc, int scale_ord, uint64_t ring_mod) {
+    DataTransmission data_trans(io);
+
+    Feature2DEncrypted x_share1_enc(&context, x_enc.level, x_enc.skip, x_enc.invalid_fill,
+                                    PackType::MultipleChannelPacking);
+    Feature2DShare x_share0(ring_mod, scale_ord);
+
+    x_enc.split_to_shares(&x_share1_enc, &x_share0);
+    data_trans.send_bytes(x_share1_enc.serialize());
+
+    return x_share0;
+}
+
+Feature0DShare
+server_enc_to_share(CkksContext& context, const Feature0DEncrypted& x_enc, int scale_ord, uint64_t ring_mod) {
+    DataTransmission data_trans(io);
+
+    Feature0DShare x_share0(ring_mod, scale_ord);
+    Feature0DEncrypted x_share1_enc(&context, x_enc.level);
+
+    x_enc.split_to_shares(&x_share1_enc, &x_share0);
+    data_trans.send_bytes(x_share1_enc.serialize());
+
+    return x_share0;
+}
+
+Feature0DEncrypted share_to_enc(Feature0DShare& y_share0,
+                                CkksContext& context,
+                                int scale_ord,
+                                uint64_t ring_mod,
+                                double pt_range,
+                                int level) {
+    DataTransmission data_trans(io);
+    for (int i = 0; i < y_share0.data.get_size(); i++) {
+        y_share0.data.set(i, (y_share0.data.get(i) * T_SCALE) % ring_mod);
+    }
+
+    MPC mpc(scale_ord, ring_mod, pt_range);
+    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, SERVER);
+
+    Feature0DEncrypted y_share1_enc(&context, level);
+    y_share1_enc.deserialize(data_trans.receive_bytes());
+    y_share1_enc.decompress();
+
+    CkksContext& extra_context = context.get_extra_level_context();
+    Feature0DEncrypted y_share2_enc(&extra_context, level + 1);
+    y_share2_enc.deserialize(data_trans.receive_bytes());
+
+    return y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
+}
 
 Node::Node() {}
 

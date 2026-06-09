@@ -251,3 +251,31 @@ private:
     std::unique_ptr<lattisense::FheTaskCpu> fhe_task_cpu_;
     std::unordered_map<std::string, ExecutorFunc> task_custom_executors_;
 };
+
+PackType choose_pack_type(Duo shape, Duo block_shape);
+
+Feature2DShare
+server_enc_to_share(ls::CkksContext& context, const Feature2DEncrypted& x_enc, int scale_ord, uint64_t ring_mod);
+
+Feature0DShare
+server_enc_to_share(ls::CkksContext& context, const Feature0DEncrypted& x_enc, int scale_ord, uint64_t ring_mod);
+
+Feature0DEncrypted share_to_enc(Feature0DShare& y_share0,
+                                ls::CkksContext& context,
+                                int scale_ord,
+                                uint64_t ring_mod,
+                                double pt_range,
+                                int level);
+
+Feature2DShare server_enc_to_share_multi_pack(ls::CkksContext& context,
+                                              const Feature2DEncrypted& x_enc,
+                                              int scale_ord,
+                                              uint64_t ring_mod,
+                                              PackType pack_type = PackType::MultiplexedPacking);
+
+Feature2DEncrypted server_share_to_enc_multi_pack(ls::CkksContext& context,
+                                                  Feature2DShare& y_share0,
+                                                  int scale_ord,
+                                                  uint64_t ring_mod,
+                                                  int level,
+                                                  PackType pack_type = PackType::MultiplexedPacking);

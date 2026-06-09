@@ -20,6 +20,7 @@ target_link_libraries(test_fhe_layers_hetero PUBLIC fhe_layers lattisense)
 
 set(MPC_TEST_LIBS
     -Wl,--start-group
+    inference_task
     mpc_layers
     fhe_layers
     log
@@ -52,11 +53,8 @@ add_executable(test_e2e_multiple_layer test_e2e_multiple_layer.cpp)
 target_link_libraries(test_e2e_multiple_layer PUBLIC
     -Wl,--start-group
     inference_interface
-    inference_task
-    fhe_layers
-    log
+    ${MPC_TEST_LIBS}
     -Wl,--end-group
-    lattisense
     ${HDF5_CXX_LIBRARIES}
 )
 
@@ -71,11 +69,8 @@ add_executable(test_e2e_single_layer test_e2e_single_layer.cpp)
 target_link_libraries(test_e2e_single_layer PUBLIC
     -Wl,--start-group
     inference_interface
-    inference_task
-    fhe_layers
-    log
+    ${MPC_TEST_LIBS}
     -Wl,--end-group
-    lattisense
     ${HDF5_CXX_LIBRARIES}
 )
 
