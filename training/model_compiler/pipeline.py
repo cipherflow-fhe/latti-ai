@@ -57,6 +57,8 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     transforms.expand_layer_norm(pt_graph)
     transforms.expand_poly_act_rn(pt_graph)
     transforms.expand_parcpmm_add_pt(pt_graph)
+    if config.graph_type != 'btp':
+        transforms.fold_layernorm_affine_into_linear(pt_graph)
     transforms.split_upsampling_layers(pt_graph)
     transforms.infer_shapes_skips_and_pack_num(pt_graph)
     transforms.set_pcm_K(pt_graph)
@@ -408,7 +410,9 @@ def _remove_pcmgamma_from_linear_path(dag, pcmgamma_node: ComputeNode, search_di
     return True
 
 
-def _absorb_pcmgamma_into_target(dag, pcmgamma_node: ComputeNode, target_node: ComputeNode, search_direction: str) -> bool:
+def _absorb_pcmgamma_into_target(
+    dag, pcmgamma_node: ComputeNode, target_node: ComputeNode, search_direction: str
+) -> bool:
     direction = f'after_{target_node.layer_type}' if search_direction == 'up' else f'before_{target_node.layer_type}'
     if target_node.layer_type == 'parcpmm':
         _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, target_node, direction)
@@ -452,9 +456,7 @@ def recompute_final_level(graph: LayerAbstractGraph):
         level = int(level)
         existing_level = anchors.get(feature)
         if existing_level is not None and existing_level != level:
-            raise ValueError(
-                f'Conflicting fixed levels for feature {feature.node_id}: {existing_level} vs {level}'
-            )
+            raise ValueError(f'Conflicting fixed levels for feature {feature.node_id}: {existing_level} vs {level}')
         anchors[feature] = level
 
     for node in dag.nodes:
@@ -516,6 +518,64 @@ def recompute_final_level(graph: LayerAbstractGraph):
         dag.nodes[feature]['level'] = int(level)
 
 
+def _remove_refresh_node(dag, refresh_node: ComputeNode) -> bool:
+    preds = [pred for pred in dag.predecessors(refresh_node) if isinstance(pred, FeatureNode)]
+    succs = [succ for succ in dag.successors(refresh_node) if isinstance(succ, FeatureNode)]
+    if len(preds) != 1 or len(succs) != 1:
+        return False
+
+    source_feature = preds[0]
+    refreshed_feature = succs[0]
+    if dag.in_degree(refreshed_feature) != 1 or dag.out_degree(refreshed_feature) == 0:
+        return False
+
+    outgoing_edges = list(dag.out_edges(refreshed_feature, data=True))
+    if any(dag.has_edge(source_feature, consumer) for _, consumer, _ in outgoing_edges):
+        return False
+
+    for _, consumer, attrs in outgoing_edges:
+        dag.add_edge(source_feature, consumer, **copy.deepcopy(attrs))
+
+    dag.remove_node(refresh_node)
+    dag.remove_node(refreshed_feature)
+    return True
+
+
+def _find_compute_by_layer_id(dag, layer_id: str) -> ComputeNode | None:
+    for node in dag.nodes:
+        if isinstance(node, ComputeNode) and node.layer_id == layer_id:
+            return node
+    return None
+
+
+def prune_redundant_bootstrapping_layers(graph: LayerAbstractGraph) -> int:
+    removed = 0
+    changed = True
+    while changed:
+        changed = False
+        for node in list(graph.dag.nodes):
+            if not isinstance(node, ComputeNode) or node.layer_type != 'bootstrapping':
+                continue
+
+            trial = LayerAbstractGraph()
+            trial.dag = copy.deepcopy(graph.dag)
+            trial_node = _find_compute_by_layer_id(trial.dag, node.layer_id)
+            if trial_node is None or not _remove_refresh_node(trial.dag, trial_node):
+                continue
+
+            transforms.fold_layernorm_affine_into_linear(trial)
+            try:
+                recompute_final_level(trial)
+            except ValueError:
+                continue
+
+            graph.dag = trial.dag
+            removed += 1
+            changed = True
+            break
+    return removed
+
+
 def dump_graph(
     graph: LayerAbstractGraph,
     output_dir: Path,
@@ -533,6 +593,11 @@ def dump_graph(
     erg0_path = ergs_dir / 'nn_layers_ct_0.json'
     insert_btp_scale_gamma_layers(graph)
     absorb_pcmgamma_layers(graph)
+    if use_btp:
+        transforms.fold_layernorm_affine_into_linear(graph)
+        removed_btp = prune_redundant_bootstrapping_layers(graph)
+        if removed_btp:
+            print(f'Removed redundant bootstrapping after LayerNorm affine fold: {removed_btp}')
     recompute_final_level(graph)
     transforms.insert_drop_level_layers(graph)
     graph.to_json(dict(), str(erg0_path), score=score)

@@ -22,7 +22,7 @@
 
 // ============================================================
 // ParBlockColMajorLNStats — Phase 1: compute scaled variance (a)
-// Levels consumed: 4 (L -> L-4)
+// Levels consumed: 3 (L -> L-3)
 // ============================================================
 class ParBlockColMajorLNStats : public Layer {
 public:
@@ -52,15 +52,14 @@ private:
 
     ls::CkksCiphertext intra_block_col_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
-    ls::CkksPlaintextRingt h0_mask_pt_;
-    ls::CkksPlaintextRingt inv_n_pt_;  // 1/N
-    ls::CkksPlaintextRingt iv_pt_;     // inv_var
+    ls::CkksPlaintextRingt h0_inv_n_mask_pt_;  // h0 mask fused with 1/N
+    ls::CkksPlaintextRingt iv_pt_;             // inv_var
     ls::CkksPlaintextRingt eps_add_pt_;
 };
 
 // ============================================================
 // ParBlockColMajorLNXCentered — compute x_centered = x - mean(x)
-// Levels consumed: 2 (L -> L-2)
+// Levels consumed: 1 (L -> L-1)
 // ============================================================
 class ParBlockColMajorLNXCentered : public Layer {
 public:
@@ -86,12 +85,11 @@ private:
 
     ls::CkksCiphertext intra_block_col_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
-    ls::CkksPlaintextRingt h0_mask_pt_;
-    ls::CkksPlaintextRingt inv_n_pt_;  // 1/N
+    ls::CkksPlaintextRingt h0_inv_n_mask_pt_;  // h0 mask fused with 1/N
 };
 
 // ============================================================
-// ParBlockColMajorLNMinimaxInit — Phase 2: y0 = c0 + c1*a + c2*a²
+// ParBlockColMajorLNMinimaxInit — Phase 2: y0 = c0 + c1*a + c2*a², input stores a/2
 // Levels consumed: 2
 // ============================================================
 class ParBlockColMajorLNMinimaxInit : public Layer {
@@ -121,8 +119,8 @@ private:
 
 // ============================================================
 // ParBlockColMajorLNGoldschmidt — Phase 3: one Goldschmidt iteration
-//   y_new = 0.5 * (3*y - (a*y)*(y²))
-// Levels consumed: 3 (L_y -> L_y-3)
+//   y_new = 1.5*y - (a_half*y)*(y²), where a_half = 0.5*a
+// Levels consumed: 2 (L_y -> L_y-2)
 // ============================================================
 class ParBlockColMajorLNGoldschmidt : public Layer {
 public:
@@ -140,8 +138,32 @@ public:
 private:
     uint32_t d_, n_slot_, chunk_size_;
 
-    ls::CkksPlaintextRingt three_pt_;      // 3.0, for pt*ct with y
-    ls::CkksPlaintextRingt half_norm_pt_;  // 0.5, normalizing scale
+    ls::CkksPlaintextRingt one5_pt_;  // 1.5, for pt*ct with y
+};
+
+// ============================================================
+// ParBlockColMajorLNMul — Phase 4 fast path: output = x_centered * y
+// Levels consumed: 1
+// ============================================================
+class ParBlockColMajorLNMul : public Layer {
+public:
+    ParBlockColMajorLNMul(const ls::CkksParameter& param,
+                          Duo shape,  // full matrix: {M, n_heads * cols_per_head}
+                          uint32_t block_size,
+                          uint32_t n_heads,
+                          uint32_t y_level);
+
+    FeatureMatEncrypted run(ls::CkksContext& ctx,
+                            const std::vector<ls::CkksCiphertext>& x_centered,
+                            const std::vector<ls::CkksCiphertext>& y_cts);
+    Array<double, 2> run_plaintext(const Array<double, 2>& x_centered, const Array<double, 2>& y) const;
+
+private:
+    uint32_t m_, cols_per_head_, d_, n_slot_;
+    uint32_t n_heads_, n_h_padded_, S_, n_cts_per_block_idx_;
+    uint32_t chunk_size_, num_chunks_;
+    uint32_t num_block_rows_, num_block_cols_;
+    uint32_t y_level_;
 };
 
 // ============================================================

@@ -1112,6 +1112,8 @@ class LayerAbstractGraph:
                     layers[layer_id]['bias_path'] = layer.bias_path
                 if getattr(layer, 'fuse_gama_info', None) is not None:
                     layers[layer_id]['fuse_gama_info'] = layer.fuse_gama_info
+                if getattr(layer, 'fuse_layernorm_affine_info', None) is not None:
+                    layers[layer_id]['fuse_layernorm_affine_info'] = layer.fuse_layernorm_affine_info
                 if getattr(layer, 'to_expand', False):
                     layers[layer_id]['to_expand'] = True
             if layer_type in ('add_pt', 'pcm_add_pt'):
@@ -1192,6 +1194,15 @@ class LayerAbstractGraph:
                     'feature_output': output_feature_ids,
                 }
             if layer_type == 'pcmgs':
+                edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
+                if all(v is not None for v in edge_indices.values()):
+                    input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: edge_indices[n])]
+                layers[layer_id] = {
+                    'type': layer_type,
+                    'feature_input': input_feature_ids,
+                    'feature_output': output_feature_ids,
+                }
+            if layer_type == 'pcmmul':
                 edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
                 if all(v is not None for v in edge_indices.values()):
                     input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: edge_indices[n])]

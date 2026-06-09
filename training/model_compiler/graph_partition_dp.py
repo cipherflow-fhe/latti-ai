@@ -128,6 +128,7 @@ def get_compute_score(
         'pcmcenter',
         'pcminit',
         'pcmgs',
+        'pcmmul',
         'pcmaffine',
         'upsample_nearest',
         'resize',
@@ -198,6 +199,17 @@ class NodeLevel(NamedTuple):
     level: int
 
 
+Cost = tuple[int, float]
+
+
+def add_runtime_cost(cost: Cost, score: float) -> Cost:
+    return cost[0], cost[1] + score
+
+
+def add_btp_cost(cost: Cost, score: float) -> Cost:
+    return cost[0] + 1, cost[1] + score
+
+
 # Auxiliary level used to indicate the node is refreshed to max level by a restore node,
 # and can be used for absorbing later nodes without generating new restore nodes.
 AUX_LV = 255
@@ -251,7 +263,7 @@ class GraphPartitioner:
         self,
         new_node: FeatureNode,
         frontier: list[NodeLevel],
-        frontier_solutions: dict[tuple[int], tuple[float, np.ndarray]],
+        frontier_solutions: dict[tuple[NodeLevel, ...], tuple[Cost, np.ndarray]],
         processed_feature_nodes: set[FeatureNode],
         node_to_idx: dict[FeatureNode, int],
         idx_to_node: dict[int, FeatureNode],
@@ -278,7 +290,7 @@ class GraphPartitioner:
                 nodes_became_internal.append(node_max_lv.node_idx)
                 new_frontier.remove(node_max_lv)
 
-        new_frontier_solutions = dict()
+        new_frontier_solutions: dict[tuple[NodeLevel, ...], tuple[Cost, np.ndarray]] = dict()
 
         for terminal_lv in range(min_feature_level, config.fhe_param.max_level + 1):
             if dag.nodes[leading_comp]['level_cost'] + terminal_lv > config.fhe_param.max_level:
@@ -309,14 +321,17 @@ class GraphPartitioner:
                 if tuple(frontier_key) not in frontier_solutions:
                     continue
 
-                initial_score, sol_graph_vec = frontier_solutions[tuple(frontier_key)]
+                initial_cost, sol_graph_vec = frontier_solutions[tuple(frontier_key)]
 
                 for node_max_lv, lv in zip(frontier, lv_comb):
                     dag.nodes[idx_to_node[node_max_lv.node_idx]]['level'] = (
                         lv if lv < AUX_LV else config.fhe_param.max_level
                     )
 
-                sol_cost = initial_score + get_compute_score(dag, leading_comp, self.param_dict)
+                sol_cost = add_runtime_cost(
+                    initial_cost,
+                    get_compute_score(dag, leading_comp, self.param_dict),
+                )
 
                 new_frontier_key_tuple = tuple(new_frontier_key)
                 if (
@@ -343,9 +358,9 @@ class GraphPartitioner:
 
                     sol_graph_vec_aux_lv = solution[1].copy()
                     sol_graph_vec_aux_lv[node_to_idx[new_node]] = AUX_LV
-                    sol_aux_lv_score = get_restoring_score(dag, leading_comp, self.param_dict)
+                    restore_score = get_restoring_score(dag, leading_comp, self.param_dict)
                     aux_lv_solutions[tuple(sol_key)] = (
-                        solution[0] + sol_aux_lv_score,
+                        add_btp_cost(solution[0], restore_score),
                         sol_graph_vec_aux_lv,
                     )
 
@@ -353,9 +368,9 @@ class GraphPartitioner:
 
         return new_frontier, new_frontier_solutions
 
-    def solve(self, H: nx.DiGraph) -> tuple[float, nx.DiGraph]:
+    def solve(self, H: nx.DiGraph) -> tuple[Cost, nx.DiGraph]:
         if len(H.nodes) == 0:
-            return 0.0, nx.DiGraph()
+            return (0, 0.0), nx.DiGraph()
 
         topo_nodes = list(nx.topological_sort(H))
         topo_rank = {node: idx for idx, node in enumerate(topo_nodes)}
@@ -423,7 +438,7 @@ class GraphPartitioner:
         # the frontier_solutions dict stores the best solution for each combination of levels (plus an auxiliary lv) of the frontier nodes,
         # e.g. {(node1_index, level2, node2_index, level3, node3_index, level1): (cost, graph_vec)},
         # where the nodes are sorted by their id to ensure unique representation of the frontier state.
-        frontier_solutions: dict[tuple, float] = {}
+        frontier_solutions: dict[tuple[NodeLevel, ...], tuple[Cost, np.ndarray]] = {}
         for node in source_feature_nodes:
             frontier.append(NodeLevel(node_to_idx[node], config.fhe_param.max_level))
             processed_feature_nodes.add(node)
@@ -438,7 +453,7 @@ class GraphPartitioner:
                 init_graph_vec[idx] = lv
 
             node_lv.sort(key=lambda x: x.node_idx)
-            frontier_solutions[tuple(node_lv)] = (0.0, init_graph_vec)
+            frontier_solutions[tuple(node_lv)] = ((0, 0.0), init_graph_vec)
 
         pbar = tqdm(
             desc=f'Traversing through graph',
@@ -475,18 +490,21 @@ class GraphPartitioner:
         """
 
         result = []
-        optimal_cost = 0.0
+        optimal_cost: Cost = (0, 0.0)
         for sub in nx.weakly_connected_components(self.entire_graph):
             sub = self.entire_graph.subgraph(sub).copy()
             cost, graph = self.solve(sub)
-            optimal_cost += cost
-            result.append(graph)
-
             if graph is None:
                 print('Failed to find valid graph partition (all attempts exceeded level limit)')
                 return None, None
 
-        print(f'Best cost: {optimal_cost}')
+            optimal_cost = (
+                optimal_cost[0] + cost[0],
+                optimal_cost[1] + cost[1],
+            )
+            result.append(graph)
+
+        print(f'Best btp_count: {optimal_cost[0]}, score: {optimal_cost[1]}')
         return optimal_cost, nx.compose_all(result)
 
 
@@ -510,12 +528,15 @@ def compile_graph(
     pt_graph: LayerAbstractGraph | None = None,
     temperature=1.0,
 ):
-    score, compiled_graph = optimize_task_segments(pt_graph, temperature=temperature)
+    cost, compiled_graph = optimize_task_segments(pt_graph, temperature=temperature)
 
     if compiled_graph is None:
         return None, None
 
-    return score, compiled_graph
+    compiled_graph.graph['btp_count_lower_bound'] = cost[0]
+    compiled_graph.graph['runtime_score'] = cost[1]
+
+    return cost[1], compiled_graph
 
 
 def reset_level_and_check_level(total_graph: LayerAbstractGraph):

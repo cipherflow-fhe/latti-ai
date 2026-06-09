@@ -49,6 +49,7 @@ from inference.model_generator.layers.par_block_col_major_layernorm import (
     ParBlockColMajorLNAffine,
     ParBlockColMajorLNGoldschmidt,
     ParBlockColMajorLNMinimaxInit,
+    ParBlockColMajorLNMul,
     ParBlockColMajorLNStats,
     ParBlockColMajorLNXCentered,
 )
@@ -241,7 +242,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             input_args.append(Argument(input_fid, x))
 
     _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose', 'pcm_add_pt'}
-    _PCM_LAYER_TYPES = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine', 'pcmgamma', 'pcmpoly'}
+    _PCM_LAYER_TYPES = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmmul', 'pcmaffine', 'pcmgamma', 'pcmpoly'}
     _FEATURE_MAT_LAYER_TYPES = _PAR_MATRIX_LAYER_TYPES | _PCM_LAYER_TYPES
     _UNSUPPORTED_MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose'}
 
@@ -1214,6 +1215,20 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             )
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             par_feature_shapes[layer_output_feature_ids[0]] = par_feature_shapes.get(layer_input_feature_ids[0])
+
+        elif layer_config['type'] == 'pcmmul':
+            n_heads = task_config_info.get('n_heads', 1)
+            feat_in = config_info['feature'][layer_input_feature_ids[0]]
+            shape = tuple(feat_in['shape'])
+            block_size = _matmul_block_size()
+            layer = ParBlockColMajorLNMul(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
+
+            layer_output_nodes = layer.call_custom_compute(
+                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                feature_id_to_nodes_map[layer_input_feature_ids[1]],
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], shape[1] // n_heads)
 
         elif layer_config['type'] == 'pcmaffine':
             n_heads = task_config_info.get('n_heads', 1)

@@ -3494,10 +3494,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         std::make_shared<ParBlockColMajorLNStats>(param, Duo{seq_len, total_dim}, d, n_heads, init_level, eps, inv_var);
     auto xcenter_layer =
         std::make_shared<ParBlockColMajorLNXCentered>(param, Duo{seq_len, total_dim}, d, n_heads, init_level);
-    auto minimax_layer = std::make_shared<ParBlockColMajorLNMinimaxInit>(param, d, init_level - 4, c0, c1, c2);
-    auto gold_layer = std::make_shared<ParBlockColMajorLNGoldschmidt>(param, d, init_level - 6);
+    auto minimax_layer = std::make_shared<ParBlockColMajorLNMinimaxInit>(param, d, init_level - 3, c0, c1, c2);
+    auto gold_layer = std::make_shared<ParBlockColMajorLNGoldschmidt>(param, d, init_level - 5);
     auto affine_layer = std::make_shared<ParBlockColMajorLNAffine>(param, Duo{seq_len, total_dim}, d, n_heads,
-                                                                   init_level - 9, inv_std, gamma.copy(), beta.copy());
+                                                                   init_level - 7, inv_std, gamma.copy(), beta.copy());
 
     FeatureMatEncrypted X_enc(&context, init_level);
     X_enc.shape = {seq_len, head_dim};
@@ -3526,7 +3526,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
     uint32_t n_out = num_block_rows * num_block_cols * G;
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(context.new_ciphertext(0, param.get_default_scale()));
+        out_cts.push_back(context.new_ciphertext(init_level - 9, param.get_default_scale()));
 
     vector<CxxVectorArgument> cxx_args = {
         {"input", &in_cts},

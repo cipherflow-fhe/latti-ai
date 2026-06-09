@@ -99,6 +99,8 @@ def export_feature_mat_h5_from_onnx(
             _export_pcmpoly(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
         elif ltype == 'pcmaffine':
             _export_pcmaffine(layer_key, layer, features, onnx_weights, out)
+        elif ltype == 'pcmmul':
+            continue
         elif ltype in ('add_pt', 'pcm_add_pt'):
             _export_add_pt(layer_key, layer, features, onnx_weights, out)
 
@@ -177,11 +179,18 @@ def _export_parcpmm(
     weight = _reshape_checked(weight, expected_shape, layer_key, weight_path)
 
     bias_path = layer.get('bias_path', '')
+    if not bias_path and _layernorm_affine_infos(layer, layer_key):
+        raise KeyError(f'{layer_key}: layernorm affine fold requires a bias_path for the folded bias')
     bias = None
     if bias_path:
         expected_bias_shape = (expected_shape[1],)
-        bias = _resolve_parcpmm_bias(bias_path, layer, features, onnx_weights)
-        bias = _reshape_checked(bias, expected_bias_shape, layer_key, bias_path)
+        if bias_path in onnx_weights or _qkv_source(bias_path, '.bias')[0] in onnx_weights:
+            bias = _resolve_parcpmm_bias(bias_path, layer, features, onnx_weights)
+            bias = _reshape_checked(bias, expected_bias_shape, layer_key, bias_path)
+        elif _layernorm_affine_infos(layer, layer_key):
+            bias = np.zeros(expected_bias_shape, dtype=np.float64)
+        else:
+            raise KeyError(f'{layer_key}: bias not found in ONNX: {bias_path}')
 
     for fuse_gama_info in _fuse_gama_infos(layer, layer_key):
         scale = _fuse_btp_scale(fuse_gama_info, layer_key)
@@ -194,6 +203,9 @@ def _export_parcpmm(
                 bias = bias * scale
         else:
             raise NotImplementedError(f'{layer_key}: unsupported parcpmm fuse_gama_info direction: {direction}')
+
+    for fold_info in _layernorm_affine_infos(layer, layer_key):
+        weight, bias = _apply_layernorm_affine_fold(weight, bias, fold_info, onnx_weights, layer_key)
 
     _put(out, weight_path, weight, layer_key)
     if bias_path:
@@ -514,6 +526,63 @@ def _fuse_btp_scale(fuse_gama_info: dict[str, Any], layer_key: str) -> float:
     if btp_scale in (None, ''):
         raise NotImplementedError(f'{layer_key}: fuse_gama_info currently only supports btp_scale')
     return float(btp_scale)
+
+
+def _layernorm_affine_infos(layer: dict[str, Any], layer_key: str) -> list[dict[str, Any]]:
+    fold_info = layer.get('fuse_layernorm_affine_info')
+    if not fold_info:
+        return []
+    if isinstance(fold_info, dict):
+        return [fold_info]
+    if isinstance(fold_info, list):
+        for item in fold_info:
+            if not isinstance(item, dict):
+                raise TypeError(
+                    f'{layer_key}: fuse_layernorm_affine_info entries must be dict, got {type(item).__name__}'
+                )
+        return fold_info
+    raise TypeError(f'{layer_key}: fuse_layernorm_affine_info must be dict or list, got {type(fold_info).__name__}')
+
+
+def _layernorm_inv_std(fold_info: dict[str, Any], layer_key: str) -> float:
+    inv_std = fold_info.get('inv_std')
+    if inv_std not in (None, ''):
+        return float(inv_std)
+    var_std_bound = fold_info.get('var_std_bound')
+    if var_std_bound not in (None, ''):
+        return 1.0 / float(var_std_bound)
+    raise KeyError(f'{layer_key}: layernorm affine fold requires inv_std or var_std_bound')
+
+
+def _apply_layernorm_affine_fold(
+    weight: np.ndarray,
+    bias: np.ndarray | None,
+    fold_info: dict[str, Any],
+    onnx_weights: dict[str, np.ndarray],
+    layer_key: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    direction = fold_info.get('direction')
+    if direction != 'before_parcpmm':
+        raise NotImplementedError(f'{layer_key}: unsupported layernorm affine fold direction: {direction}')
+
+    gamma_path = fold_info.get('gamma_path') or fold_info.get('weight_path')
+    beta_path = fold_info.get('beta_path') or fold_info.get('bias_path')
+    if not gamma_path or gamma_path not in onnx_weights:
+        raise KeyError(f'{layer_key}: layernorm gamma not found in ONNX: {gamma_path}')
+    if not beta_path or beta_path not in onnx_weights:
+        raise KeyError(f'{layer_key}: layernorm beta not found in ONNX: {beta_path}')
+
+    input_dim, output_dim = weight.shape
+    gamma = _reshape_checked(onnx_weights[gamma_path], (input_dim,), layer_key, gamma_path)
+    beta = _reshape_checked(onnx_weights[beta_path], (input_dim,), layer_key, beta_path)
+    alpha = _layernorm_inv_std(fold_info, layer_key) * gamma
+
+    weight_old = weight.copy()
+    folded_weight = alpha[:, None] * weight_old
+    if bias is None:
+        bias = np.zeros((output_dim,), dtype=np.float64)
+    folded_bias = bias + beta @ weight_old
+    return folded_weight, folded_bias
 
 
 def _reshape_checked(data: np.ndarray, shape: tuple[int, ...], layer_key: str, path: str) -> np.ndarray:

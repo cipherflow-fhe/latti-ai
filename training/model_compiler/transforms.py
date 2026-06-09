@@ -506,6 +506,154 @@ def expand_parcpmm_add_pt(graph: LayerAbstractGraph):
         parcpmm_node.to_expand = False
 
 
+def _collect_layernorm_affine_fold_consumers(dag: nx.DiGraph, start_feature: FeatureNode) -> list[ComputeNode]:
+    consumers: list[ComputeNode] = []
+    queue = [start_feature]
+    seen_features = set()
+
+    while queue:
+        feature = queue.pop(0)
+        if feature in seen_features:
+            continue
+        seen_features.add(feature)
+
+        next_layers = [succ for succ in dag.successors(feature) if isinstance(succ, ComputeNode)]
+        if not next_layers:
+            return []
+
+        for layer in next_layers:
+            if layer.layer_type == 'parcpmm':
+                if layer not in consumers:
+                    consumers.append(layer)
+                continue
+
+            if layer.layer_type == 'drop_level':
+                output_features = [succ for succ in dag.successors(layer) if isinstance(succ, FeatureNode)]
+                if len(output_features) != 1:
+                    return []
+                queue.append(output_features[0])
+                continue
+
+            return []
+
+    return consumers
+
+
+def fold_layernorm_affine_into_linear(graph: LayerAbstractGraph):
+    inv_std = 1.0 / float(config.layernorm_var_std_bound)
+
+    for pcmaffine_node in list(graph.dag.nodes):
+        if not isinstance(pcmaffine_node, ComputeNode) or pcmaffine_node.layer_type != 'pcmaffine':
+            continue
+
+        gamma_path = getattr(pcmaffine_node, 'weight_path', '') or getattr(pcmaffine_node, 'gamma_path', '')
+        beta_path = getattr(pcmaffine_node, 'bias_path', '') or getattr(pcmaffine_node, 'beta_path', '')
+        if not gamma_path or not beta_path:
+            continue
+
+        out_features = list(graph.dag.successors(pcmaffine_node))
+        if len(out_features) != 1:
+            continue
+
+        consumers = _collect_layernorm_affine_fold_consumers(graph.dag, out_features[0])
+        if not consumers:
+            continue
+
+        for consumer in consumers:
+            fold_info = {
+                'source_layer': pcmaffine_node.layer_id,
+                'gamma_path': gamma_path,
+                'beta_path': beta_path,
+                'inv_std': inv_std,
+                'direction': 'before_parcpmm',
+            }
+            existing_info = getattr(consumer, 'fuse_layernorm_affine_info', None)
+            if existing_info is None:
+                consumer.fuse_layernorm_affine_info = [fold_info]
+            else:
+                consumer.fuse_layernorm_affine_info = list(existing_info) + [fold_info]
+
+            if not getattr(consumer, 'bias_path', ''):
+                consumer.bias_path = f'{consumer.layer_id}.ln_affine_fold.bias'
+
+        pcmaffine_node.layer_type = 'pcmmul'
+        graph.dag.nodes[pcmaffine_node]['level_cost'] = 1
+
+
+def _layernorm_fold_infos(layer: ComputeNode):
+    fold_info = getattr(layer, 'fuse_layernorm_affine_info', None)
+    if fold_info is None:
+        return []
+    if isinstance(fold_info, dict):
+        return [fold_info]
+    return list(fold_info)
+
+
+def _path_has_refresh_before_target(dag: nx.DiGraph, source: ComputeNode, target: ComputeNode) -> bool:
+    queue = [(succ, False) for succ in dag.successors(source)]
+    seen = set()
+    while queue:
+        node, has_refresh = queue.pop(0)
+        state = (node, has_refresh)
+        if state in seen:
+            continue
+        seen.add(state)
+
+        if node is target:
+            if has_refresh:
+                return True
+            continue
+
+        next_has_refresh = has_refresh
+        if isinstance(node, ComputeNode) and node.layer_type in {'bootstrapping', 'mpc_refresh'}:
+            next_has_refresh = True
+
+        for succ in dag.successors(node):
+            queue.append((succ, next_has_refresh))
+    return False
+
+
+def disable_layernorm_affine_folds_across_refresh(graph: LayerAbstractGraph):
+    layer_by_id = {node.layer_id: node for node in graph.dag.nodes if isinstance(node, ComputeNode)}
+    unsafe_sources = set()
+
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode) or node.layer_type != 'parcpmm':
+            continue
+        for fold_info in _layernorm_fold_infos(node):
+            source_layer = fold_info.get('source_layer')
+            source = layer_by_id.get(source_layer)
+            if source is None:
+                unsafe_sources.add(source_layer)
+                continue
+            if _path_has_refresh_before_target(graph.dag, source, node):
+                unsafe_sources.add(source_layer)
+
+    if not unsafe_sources:
+        return
+
+    for source_layer in unsafe_sources:
+        source = layer_by_id.get(source_layer)
+        if source is not None and source.layer_type == 'pcmmul':
+            source.layer_type = 'pcmaffine'
+            graph.dag.nodes[source]['level_cost'] = 2
+
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode) or node.layer_type != 'parcpmm':
+            continue
+        infos = _layernorm_fold_infos(node)
+        if not infos:
+            continue
+        kept_infos = [info for info in infos if info.get('source_layer') not in unsafe_sources]
+        if kept_infos:
+            node.fuse_layernorm_affine_info = kept_infos
+        elif hasattr(node, 'fuse_layernorm_affine_info'):
+            delattr(node, 'fuse_layernorm_affine_info')
+            synthetic_bias_path = f'{node.layer_id}.ln_affine_fold.bias'
+            if getattr(node, 'bias_path', '') == synthetic_bias_path:
+                node.bias_path = ''
+
+
 def process_special_info(
     graph: LayerAbstractGraph, compute_node: ComputeNode, preds: list[FeatureNode], succ: FeatureNode
 ):
@@ -752,13 +900,15 @@ def set_level_costs(graph: LayerAbstractGraph):
         elif compute_node.layer_type == 'pcmpoly':
             graph.dag.nodes[compute_node]['level_cost'] = 2 if compute_node.order == 2 else 3
         elif compute_node.layer_type == 'pcmstats':
-            graph.dag.nodes[compute_node]['level_cost'] = 4
+            graph.dag.nodes[compute_node]['level_cost'] = 3
         elif compute_node.layer_type == 'pcmcenter':
-            graph.dag.nodes[compute_node]['level_cost'] = 2
+            graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type == 'pcminit':
             graph.dag.nodes[compute_node]['level_cost'] = 2
         elif compute_node.layer_type == 'pcmgs':
-            graph.dag.nodes[compute_node]['level_cost'] = 3
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type == 'pcmmul':
+            graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type == 'pcmaffine':
             graph.dag.nodes[compute_node]['level_cost'] = 2
         else:
@@ -1262,7 +1412,7 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
         # 3. [y_prev, a] → pcmgs_i → y_next  (repeated n_iter times)
         for i, (pcmgs_i, y_next) in enumerate(zip(pcmgs_nodes, y_nodes[1:])):
             y_prev = y_nodes[i]
-            graph.dag.add_node(pcmgs_i, **c_attrs(3, pcmgs_i.layer_id))
+            graph.dag.add_node(pcmgs_i, **c_attrs(2, pcmgs_i.layer_id))
             graph.dag.add_node(y_next, **f_attrs(y_next))
             graph.dag.add_edge(y_prev, pcmgs_i, input_index=0)
             graph.dag.add_edge(a, pcmgs_i, input_index=1)

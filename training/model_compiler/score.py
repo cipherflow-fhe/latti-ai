@@ -62,6 +62,7 @@ from inference.model_generator.layers.par_block_col_major_layernorm import (
     ParBlockColMajorLNAffine,
     ParBlockColMajorLNGoldschmidt,
     ParBlockColMajorLNMinimaxInit,
+    ParBlockColMajorLNMul,
     ParBlockColMajorLNStats,
     ParBlockColMajorLNXCentered,
 )
@@ -500,7 +501,7 @@ add_time = {
     8192: {0: 0.000081, 1: 0.000094, 2: 0.000176, 3: 0.000208, 4: 0.000224, 5: 0.000241},
 }
 
-btp_time = {'8192': 7, '16384': 12, '65536': 24}
+btp_time = {'8192': 7, '16384': 12, '65536': 500000}
 
 mpc_refresh_rate = 1 / 15
 ct_trans_rate = 1 / 10
@@ -991,6 +992,28 @@ class FheScoreParam:
             try:
                 layer = ParBlockColMajorLNGoldschmidt(block_size=block_size, n_slot=n_slot)
                 return layer.get_fhe_op_count(math.ceil(m / block_size), level_y, level_a)
+            except (AssertionError, ValueError):
+                return None
+        elif layer_type == 'pcmmul':
+            ordered_preds = sorted(
+                preds,
+                key=lambda p: self.dag.edges[p, node].get('input_index')
+                if self.dag.edges[p, node].get('input_index') is not None
+                else 0,
+            )
+            m = ordered_preds[0].shape[0]
+            n_cols = ordered_preds[0].shape[1]
+            n_slot = n // 2
+            level_x = self.dag.nodes[ordered_preds[0]]['level']
+            level_y = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else self.input_mult_level
+            try:
+                layer = ParBlockColMajorLNMul(
+                    shape=(m, n_cols),
+                    block_size=config.matmul_block_size,
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(level_y, level_x)
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pcmaffine':
