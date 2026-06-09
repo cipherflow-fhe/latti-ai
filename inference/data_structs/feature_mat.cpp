@@ -316,6 +316,7 @@ void FeatureMatEncrypted::par_lower_diagonal_pack(const Array<double, 2>& matrix
 
     shape = {n_prepad, total_cols};
     head_shape = {n_prepad, head_dim};
+    matmul_block_size = head_dim;
 
     uint32_t d_prepad = H_prepad * m;
     uint32_t n_mb = div_ceil(total_cols, d_prepad);
