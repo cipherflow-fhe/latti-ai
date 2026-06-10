@@ -428,6 +428,73 @@ FeatureMatEncrypted::par_lower_diagonal_unpack(uint32_t n_prepad, uint32_t n_hea
     return result;
 }
 
+void FeatureMatEncrypted::par_lower_diagonal_transpose_pack(const Array<double, 2>& matrix,
+                                                            uint32_t n_heads,
+                                                            uint32_t head_dim,
+                                                            bool is_symmetric,
+                                                            double scale_in) {
+    uint32_t n_prepad = matrix.get_shape()[0];
+    uint32_t total_cols = matrix.get_shape()[1];
+    uint32_t H_prepad = n_heads;
+    uint32_t m = head_dim;
+    assert(H_prepad > 0);
+    assert(m > 0 && (m & (m - 1)) == 0);
+    assert(total_cols == H_prepad * m);
+
+    shape = {n_prepad, total_cols};
+    head_shape = {n_prepad, m};
+    matmul_block_size = m;
+
+    uint32_t H = next_power_of_2(H_prepad);
+    uint32_t n = next_power_of_2(n_prepad);
+    assert(n >= m);
+    uint32_t n_slot = context->get_parameter().get_n() / 2;
+    assert(n_slot % (H * n) == 0);
+    uint32_t c = n_slot / (H * n);
+    assert(m % c == 0);
+    uint32_t cts_per_head_block = m / c;
+    const int N_THREAD = 4;
+
+    vector<vector<double>> packed_vecs(cts_per_head_block);
+
+    for (uint32_t ct_local = 0; ct_local < cts_per_head_block; ct_local++) {
+        vector<double> vec(n_slot, 0.0);
+        for (uint32_t local_diag = 0; local_diag < c; local_diag++) {
+            uint32_t diag_idx = ct_local * c + local_diag;
+            uint32_t segment_base = local_diag * H * n;
+            for (uint32_t t = 0; t < n; t++) {
+                for (uint32_t h = 0; h < H; h++) {
+                    double val = 0.0;
+                    uint32_t row = (diag_idx + t) % n;
+                    uint32_t col = t % m;
+                    if (h < H_prepad && row < n_prepad) {
+                        val = matrix.get(row, h * m + col);
+                    }
+                    vec[segment_base + t * H + h] = val;
+                }
+            }
+        }
+        packed_vecs[ct_local] = move(vec);
+    }
+
+    data.clear();
+    data_compress.clear();
+    if (is_symmetric) {
+        data_compress.resize(cts_per_head_block);
+    } else {
+        data.resize(cts_per_head_block);
+    }
+
+    parallel_for(cts_per_head_block, N_THREAD, *context, [&](CkksContext& ctx_copy, int idx) {
+        auto enc = ctx_copy.encode(packed_vecs[idx], level, scale_in);
+        if (is_symmetric) {
+            data_compress[idx] = ctx_copy.encrypt_symmetric_compressed(enc);
+        } else {
+            data[idx] = ctx_copy.encrypt_symmetric(enc);
+        }
+    });
+}
+
 Array<double, 2>
 FeatureMatEncrypted::par_lower_diagonal_transpose_unpack(uint32_t n_prepad, uint32_t n_heads, uint32_t head_dim) const {
     uint32_t H_prepad = n_heads;

@@ -33,6 +33,7 @@ public:
 
     void prepare_weight() override;
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A, const FeatureMatEncrypted& B);
+    Array<double, 2> run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const;
 
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx,
@@ -59,8 +60,7 @@ private:
                                         const ls::CkksCiphertext& product_level_l_minus_2,
                                         const ls::CkksPlaintextRingt& mask_pt) const;
 
-    Duo logical_to_full_shape(const Duo& logical_shape) const;
-    uint32_t expected_ct_count(const Duo& logical_shape) const;
+    uint32_t expected_ct_count_for_head_shape(const Duo& head_shape) const;
 
     Duo shape_A_ = {0, 0};
     Duo shape_B_ = {0, 0};
