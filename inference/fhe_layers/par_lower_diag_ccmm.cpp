@@ -86,15 +86,11 @@ ParLowerDiagCCMM::ParLowerDiagCCMM(const CkksParameter& param_in,
     }
 }
 
-Duo ParLowerDiagCCMM::logical_to_full_shape(const Duo& logical_shape) const {
-    return {logical_shape[1], H_prepad_ * logical_shape[0]};
-}
-
-uint32_t ParLowerDiagCCMM::expected_ct_count(const Duo& logical_shape) const {
-    if (logical_shape[0] == n_prepad_ && logical_shape[1] == n_prepad_) {
+uint32_t ParLowerDiagCCMM::expected_ct_count_for_head_shape(const Duo& head_shape) const {
+    if (head_shape[0] == n_prepad_ && head_shape[1] == n_prepad_) {
         return n_c_;
     }
-    assert(std::min(logical_shape[0], logical_shape[1]) == m_);
+    assert(std::min(head_shape[0], head_shape[1]) == m_);
     return m_c_;
 }
 
@@ -188,7 +184,7 @@ std::vector<double> ParLowerDiagCCMM::build_kqt_route_masks(uint32_t j, uint32_t
 void ParLowerDiagCCMM::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
     double replication_scale = param_.get_q(level_);
-    double route_scale = param_.get_q(level_ - 2);
+    double route_scale = param_.get_q(level_ - 2);  // to be fixed
 
     uint32_t replication_count = is_kqt_ ? m_ : n_;
     uint32_t replication_mask_count = std::min(c_, replication_count);
@@ -325,7 +321,7 @@ std::vector<CkksCiphertext> ParLowerDiagCCMM::run_core_ordinary(CkksContext& ctx
             }
         }
 
-        CkksCiphertext ct = ctx.drop_level(ct_C_j_ell[j][0]);
+        CkksCiphertext ct = ctx.drop_level(ct_C_j_ell[j][0]);  // scale to be fixed
         if (prime_init) {
             ct = ctx.add(ct, ct_C_prime);
         }
@@ -417,22 +413,68 @@ ParLowerDiagCCMM::run(CkksContext& ctx, const FeatureMatEncrypted& A, const Feat
     assert(A.level == level_);
     assert(B.level == level_);
 
-    Duo expected_A_shape = logical_to_full_shape(shape_A_);
-    Duo expected_B_shape = logical_to_full_shape(shape_B_);
-    assert(A.shape[0] == expected_A_shape[0] && A.shape[1] == expected_A_shape[1]);
-    assert(B.shape[0] == expected_B_shape[0] && B.shape[1] == expected_B_shape[1]);
-    assert(A.head_shape[0] == shape_A_[1] && A.head_shape[1] == shape_A_[0]);
-    assert(B.head_shape[0] == shape_B_[1] && B.head_shape[1] == shape_B_[0]);
+    assert(A.head_shape[0] == shape_A_[0] && A.head_shape[1] == shape_A_[1]);
+    assert(B.head_shape[0] == shape_B_[0] && B.head_shape[1] == shape_B_[1]);
+    auto matches_packed_shape = [this](const FeatureMatEncrypted& X) {
+        return (X.shape[0] == H_prepad_ * X.head_shape[0] && X.shape[1] == X.head_shape[1]) ||
+               (X.shape[0] == X.head_shape[0] && X.shape[1] == H_prepad_ * X.head_shape[1]);
+    };
+    assert(matches_packed_shape(A));
+    assert(matches_packed_shape(B));
     assert(A.matmul_block_size == m_);
     assert(B.matmul_block_size == m_);
-    assert(A.data.size() == expected_ct_count(shape_A_));
-    assert(B.data.size() == expected_ct_count(shape_B_));
+    assert(A.data.size() == expected_ct_count_for_head_shape(A.head_shape));
+    assert(B.data.size() == expected_ct_count_for_head_shape(B.head_shape));
 
     FeatureMatEncrypted result(&ctx, A.level);
+    Duo output_head_shape = output_shape_;
     result.level = A.level - 3;
-    result.shape = logical_to_full_shape(output_shape_);
-    result.head_shape = {output_shape_[1], output_shape_[0]};
+    result.shape = {H_prepad_ * output_head_shape[0], output_head_shape[1]};
+    result.head_shape = output_head_shape;
     result.matmul_block_size = m_;
     result.data = run_core(ctx, A.data, B.data);
     return result;
+}
+
+Array<double, 2> ParLowerDiagCCMM::run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const {
+    assert(shape_A_[1] == shape_B_[0]);
+
+    Array<double, 2> C({H_prepad_ * output_shape_[0], output_shape_[1]});
+
+    if (is_kqt_) {
+        assert(A.get_shape()[0] == shape_A_[0]);
+        assert(A.get_shape()[1] == H_prepad_ * shape_A_[1]);
+        assert(B.get_shape()[0] == H_prepad_ * shape_B_[0]);
+        assert(B.get_shape()[1] == shape_B_[1]);
+
+        for (uint32_t h = 0; h < H_prepad_; h++) {
+            for (uint32_t r = 0; r < output_shape_[0]; r++) {
+                for (uint32_t col = 0; col < output_shape_[1]; col++) {
+                    double acc = 0.0;
+                    for (uint32_t k = 0; k < shape_A_[1]; k++) {
+                        acc += A.get(r, h * shape_A_[1] + k) * B.get(h * shape_B_[0] + k, col);
+                    }
+                    C.set(r + h * output_shape_[0], col, acc);
+                }
+            }
+        }
+    } else {
+        assert(A.get_shape()[0] == H_prepad_ * shape_A_[0]);
+        assert(A.get_shape()[1] == shape_A_[1]);
+        assert(B.get_shape()[0] == H_prepad_ * shape_B_[0]);
+        assert(B.get_shape()[1] == shape_B_[1]);
+
+        for (uint32_t h = 0; h < H_prepad_; h++) {
+            for (uint32_t r = 0; r < output_shape_[0]; r++) {
+                for (uint32_t col = 0; col < output_shape_[1]; col++) {
+                    double acc = 0.0;
+                    for (uint32_t k = 0; k < shape_A_[1]; k++) {
+                        acc += A.get(h * shape_A_[0] + r, k) * B.get(h * shape_B_[0] + k, col);
+                    }
+                    C.set(r + h * output_shape_[0], col, acc);
+                }
+            }
+        }
+    }
+    return C;
 }
