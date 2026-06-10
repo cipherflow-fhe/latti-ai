@@ -247,7 +247,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         Array<double, 2> X_T = gen_random_array<2>({n_heads * head_dim, n_prepad}, 1.0);
 
         FeatureMatEncrypted input_enc(&this->context, init_level);
-        input_enc.par_lower_diagonal_pack(X_T, n_heads, head_dim, false, this->param.get_default_scale());
+        input_enc.par_lower_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
 
         ParLowerDiagTranspose layer(this->param, {head_dim, n_prepad}, n_heads, head_dim, init_level);
         layer.prepare_weight();
@@ -290,13 +290,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         Array<double, 1> bias = gen_random_array<1>({cfg.w_cols}, 0.1);
 
         FeatureMatEncrypted X_enc(&this->context, init_level);
-        X_enc.par_lower_diagonal_pack(X_T, n_heads, head_dim, false, this->param.get_default_scale());
+        X_enc.par_lower_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
 
         ParLowerDiagPCMM layer(this->param, {cfg.w_rows, n_prepad}, n_heads, head_dim, W, init_level, std::move(bias));
         layer.prepare_weight();
         FeatureMatEncrypted out_enc = layer.run(this->context, X_enc);
 
-        Array<double, 2> actual = out_enc.par_lower_diagonal_unpack(n_prepad, n_heads, head_dim);
+        Array<double, 2> actual = out_enc.par_lower_diagonal_unpack(n_heads, {head_dim, n_prepad});
         Array<double, 2> expected = layer.run_plaintext(X_T);
         auto comparison = compare(expected, actual);
         REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
@@ -319,13 +319,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     FeatureMatEncrypted A_enc(&this->context, ccmm_level);
     FeatureMatEncrypted B_enc(&this->context, ccmm_level);
     A_enc.par_lower_diagonal_transpose_pack(A, n_heads, head_dim, false, this->param.get_default_scale());
-    B_enc.par_lower_diagonal_pack(B, n_heads, head_dim, false, this->param.get_default_scale());
+    B_enc.par_lower_diagonal_pack(B, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
 
     ParLowerDiagCCMM layer(this->param, {n_prepad, head_dim}, {head_dim, n_prepad}, n_heads, head_dim, ccmm_level);
     layer.prepare_weight();
     FeatureMatEncrypted C_enc = layer.run(this->context, A_enc, B_enc);
 
-    Array<double, 2> actual = C_enc.par_lower_diagonal_unpack(n_prepad, n_heads, n_prepad);  // to be fixed
+    Array<double, 2> actual = C_enc.par_lower_diagonal_unpack(n_heads, {n_prepad, n_prepad});
     Array<double, 2> expected = layer.run_plaintext(A, B);
     auto comparison = compare(expected, actual);
     REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
@@ -346,14 +346,14 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     FeatureMatEncrypted A_enc(&this->context, init_level);
     FeatureMatEncrypted B_enc(&this->context, init_level);
-    A_enc.par_lower_diagonal_pack(A, n_heads, head_dim, false, this->param.get_default_scale());
-    B_enc.par_lower_diagonal_pack(B, n_heads, head_dim, false, this->param.get_default_scale());  // to be fixed
+    A_enc.par_lower_diagonal_pack(A, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
+    B_enc.par_lower_diagonal_pack(B, n_heads, {n_prepad, n_prepad}, false, this->param.get_default_scale());
 
     ParLowerDiagCCMM layer(this->param, {head_dim, n_prepad}, {n_prepad, n_prepad}, n_heads, head_dim, init_level);
     layer.prepare_weight();
     FeatureMatEncrypted C_enc = layer.run(this->context, A_enc, B_enc);
 
-    Array<double, 2> actual = C_enc.par_lower_diagonal_unpack(n_prepad, n_heads, head_dim);
+    Array<double, 2> actual = C_enc.par_lower_diagonal_unpack(n_heads, {head_dim, n_prepad});
     Array<double, 2> expected = layer.run_plaintext(A, B);
     auto comparison = compare(expected, actual);
     REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
