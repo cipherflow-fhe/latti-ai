@@ -421,8 +421,6 @@ ParLowerDiagCCMM::run(CkksContext& ctx, const FeatureMatEncrypted& A, const Feat
     };
     assert(matches_packed_shape(A));
     assert(matches_packed_shape(B));
-    assert(A.matmul_block_size == m_);
-    assert(B.matmul_block_size == m_);
     assert(A.data.size() == expected_ct_count_for_head_shape(A.head_shape));
     assert(B.data.size() == expected_ct_count_for_head_shape(B.head_shape));
 
@@ -431,7 +429,7 @@ ParLowerDiagCCMM::run(CkksContext& ctx, const FeatureMatEncrypted& A, const Feat
     result.level = A.level - 3;
     result.shape = {H_prepad_ * output_head_shape[0], output_head_shape[1]};
     result.head_shape = output_head_shape;
-    result.matmul_block_size = m_;
+    result.matmul_block_size = output_head_shape[0];
     result.data = run_core(ctx, A.data, B.data);
     return result;
 }

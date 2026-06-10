@@ -53,10 +53,10 @@ public:
 
     void par_lower_diagonal_pack(const Array<double, 2>& matrix,
                                  uint32_t n_heads,
-                                 uint32_t head_dim,
+                                 const Duo& head_shape,
                                  bool is_symmetric = false,
                                  double scale_in = DEFAULT_SCALE);
-    Array<double, 2> par_lower_diagonal_unpack(uint32_t n_prepad, uint32_t n_heads, uint32_t head_dim) const;
+    Array<double, 2> par_lower_diagonal_unpack(uint32_t n_heads, const Duo& head_shape) const;
     void par_lower_diagonal_transpose_pack(const Array<double, 2>& matrix,
                                            uint32_t n_heads,
                                            uint32_t head_dim,
