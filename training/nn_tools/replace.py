@@ -221,8 +221,13 @@ def replace_general_avgpool_with_depthwise_conv(
     has_lazy = any(isinstance(m, DepthwiseAvgPool2d) and m.conv is None for m in model.modules())
     if has_lazy:
         model.eval()
+        try:
+            param = next(model.parameters())
+            dummy_input = torch.randn(*input_size, device=param.device, dtype=param.dtype)
+        except StopIteration:
+            dummy_input = torch.randn(*input_size)
         with torch.no_grad():
-            model(torch.randn(*input_size))
+            model(dummy_input)
 
     return model
 

@@ -8,8 +8,9 @@ add_library(fhe_layers
   inverse_multiplexed_conv2d_layer_depthwise.cpp
   concat_layer.cpp
   conv2d_packed_layer.cpp 
-  activation_layer.cpp 
-  dense_packed_layer.cpp 
+  activation_layer.cpp
+  dense_packed_layer.cpp
+  compute_distance_layer.cpp
   reshape_layer.cpp
   add_layer.cpp
   conv2d_depthwise.cpp

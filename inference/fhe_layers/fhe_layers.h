@@ -30,6 +30,7 @@
 #include "fhe_layers/conv2d_depthwise.h"
 #include "fhe_layers/conv2d_layer.h"
 #include "fhe_layers/conv2d_packed_layer.h"
+#include "fhe_layers/compute_distance_layer.h"
 #include "fhe_layers/dense_packed_layer.h"
 #include "fhe_layers/inverse_multiplexed_conv2d_layer.h"
 #include "fhe_layers/inverse_multiplexed_conv2d_layer_depthwise.h"

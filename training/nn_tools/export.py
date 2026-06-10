@@ -427,8 +427,10 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
             i += 1
 
         elif isinstance(mod, nn.Linear):
-            fused[f'{name}.weight'] = get_np(f'{name}.weight')
-            fused[f'{name}.bias'] = get_np(f'{name}.bias')
+            lin_w = get_np(f'{name}.weight')
+            lin_b = get_np(f'{name}.bias') if mod.bias is not None else np.zeros(mod.out_features, dtype=lin_w.dtype)
+            fused[f'{name}.weight'] = lin_w
+            fused[f'{name}.bias'] = lin_b
             if verbose:
                 log.info('Linear:       %s', name)
             i += 1
