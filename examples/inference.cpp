@@ -27,6 +27,8 @@
 #include <string>
 #include <vector>
 
+#include <fhe_ops_lib/utils.h>
+
 #include "interface/inference_client.h"
 #include "interface/inference_server.h"
 
