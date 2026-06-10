@@ -31,6 +31,7 @@ public:
 
     void prepare_weight() override;
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& input);
+    Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
 
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx,
