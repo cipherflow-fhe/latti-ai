@@ -57,6 +57,7 @@ public:
                                  bool is_symmetric = false,
                                  double scale_in = DEFAULT_SCALE);
     Array<double, 2> par_lower_diagonal_unpack(uint32_t n_prepad, uint32_t n_heads, uint32_t head_dim) const;
+    Array<double, 2> par_lower_diagonal_transpose_unpack(uint32_t n_prepad, uint32_t n_heads, uint32_t head_dim) const;
 
     void par_upper_diagonal_pack(const Array<double, 2>& matrix,
                                  uint32_t n_heads,
