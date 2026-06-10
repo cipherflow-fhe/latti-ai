@@ -60,7 +60,7 @@ ParLowerDiagPCMM::ParLowerDiagPCMM(const CkksParameter& param_in,
     W_T_rows_ = W_mat.get_shape()[1];
     W_T_cols_ = W_mat.get_shape()[0];
     assert(in_rows_ == W_T_cols_);
-    out_cols_ = W_T_rows_;
+    out_rows_ = W_T_rows_;
 
     K_row_ = div_ceil(W_T_rows_, d_prepad_);
     K_col_ = div_ceil(W_T_cols_, d_prepad_);
@@ -96,7 +96,7 @@ ParLowerDiagPCMM::ParLowerDiagPCMM(const CkksParameter& param_in,
 
     if (bias.get_size() > 0) {
         has_bias_ = true;
-        assert(bias.get_size() == out_cols_);
+        assert(bias.get_size() == out_rows_);
         bias_vals_ = std::move(bias);
     }
 }
@@ -173,7 +173,7 @@ void ParLowerDiagPCMM::prepare_weight() {
                     for (uint32_t t = 0; t < n_; t++) {
                         for (uint32_t h = 0; h < H_; h++) {
                             uint32_t out_row = mb * d_prepad_ + h * m_ + ((diag_idx + t) % m_);
-                            if (h < H_prepad_ && out_row < out_cols_) {
+                            if (h < H_prepad_ && out_row < out_rows_) {
                                 bias_vec[segment_base + t * H_ + h] = bias_vals_.get(out_row);
                             }
                         }
@@ -259,17 +259,17 @@ std::vector<CkksCiphertext> ParLowerDiagPCMM::run_core(CkksContext& ctx,
 
 FeatureMatEncrypted ParLowerDiagPCMM::run(CkksContext& ctx, const FeatureMatEncrypted& X_T) {
     assert(X_T.level == level_);
-    assert(X_T.shape[0] == n_prepad_);
-    assert(X_T.shape[1] == in_rows_);
-    assert(X_T.head_shape[0] == n_prepad_);
-    assert(X_T.head_shape[1] == m_);
+    assert(X_T.shape[0] == in_rows_);
+    assert(X_T.shape[1] == n_prepad_);
+    assert(X_T.head_shape[0] == m_);
+    assert(X_T.head_shape[1] == n_prepad_);
     assert(X_T.matmul_block_size == m_);
     assert(X_T.data.size() == K_col_ * m_c_);
 
     FeatureMatEncrypted result(&ctx, X_T.level);
     result.level = X_T.level - 2;
-    result.shape = {n_prepad_, out_cols_};
-    result.head_shape = {n_prepad_, m_};
+    result.head_shape = X_T.head_shape;
+    result.shape = {out_rows_, result.head_shape[1]};
     result.matmul_block_size = m_;
 
     if (mode_ == Mode::EXPAND) {
@@ -298,4 +298,38 @@ FeatureMatEncrypted ParLowerDiagPCMM::run(CkksContext& ctx, const FeatureMatEncr
     }
 
     return result;
+}
+
+Array<double, 2> ParLowerDiagPCMM::run_plaintext(const Array<double, 2>& X_T) const {
+    assert(X_T.get_shape()[0] == in_rows_);
+    assert(X_T.get_shape()[1] == n_prepad_);
+
+    Array<double, 2> C({out_rows_, n_prepad_});
+    for (uint32_t out = 0; out < out_rows_; out++) {
+        for (uint32_t t = 0; t < n_prepad_; t++) {
+            double acc = 0.0;
+            for (uint32_t in = 0; in < in_rows_; in++) {
+                uint32_t mb = 0;
+                uint32_t weight_row = out;
+                uint32_t weight_col = in;
+
+                if (mode_ == Mode::EXPAND) {
+                    mb = out / d_prepad_;
+                    weight_row = out % d_prepad_;
+                    weight_col = in;
+                } else if (mode_ == Mode::REDUCE) {
+                    mb = in / d_prepad_;
+                    weight_row = out;
+                    weight_col = in % d_prepad_;
+                }
+
+                acc += W_padded_[mb].get(weight_row, weight_col) * X_T.get(in, t);
+            }
+            if (has_bias_) {
+                acc += bias_vals_.get(out);
+            }
+            C.set(out, t, acc);
+        }
+    }
+    return C;
 }

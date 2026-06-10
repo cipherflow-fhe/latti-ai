@@ -32,6 +32,7 @@ public:
 
     void prepare_weight() override;
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& X_T);
+    Array<double, 2> run_plaintext(const Array<double, 2>& X_T) const;
 
 private:
     enum class Mode { SQUARE, EXPAND, REDUCE };
@@ -57,7 +58,7 @@ private:
     uint32_t c_ = 0;
     uint32_t m_c_ = 0;
     uint32_t in_rows_ = 0;
-    uint32_t out_cols_ = 0;
+    uint32_t out_rows_ = 0;
     uint32_t W_T_rows_ = 0;
     uint32_t W_T_cols_ = 0;
 

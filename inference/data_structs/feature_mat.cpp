@@ -307,15 +307,15 @@ void FeatureMatEncrypted::par_lower_diagonal_pack(const Array<double, 2>& matrix
                                                   uint32_t head_dim,
                                                   bool is_symmetric,
                                                   double scale_in) {
-    uint32_t n_prepad = matrix.get_shape()[0];
-    uint32_t total_cols = matrix.get_shape()[1];
+    uint32_t total_cols = matrix.get_shape()[0];
+    uint32_t n_prepad = matrix.get_shape()[1];
     uint32_t H_prepad = n_heads;
     uint32_t m = head_dim;
     assert(H_prepad > 0);
     assert(m > 0 && (m & (m - 1)) == 0);
 
-    shape = {n_prepad, total_cols};
-    head_shape = {n_prepad, head_dim};
+    shape = {total_cols, n_prepad};
+    head_shape = {head_dim, n_prepad};
     matmul_block_size = head_dim;
 
     uint32_t d_prepad = H_prepad * m;
@@ -345,12 +345,10 @@ void FeatureMatEncrypted::par_lower_diagonal_pack(const Array<double, 2>& matrix
                         double val = 0.0;
                         uint32_t transposed_row = h * m + ((diag_idx + t) % m);
                         uint32_t transposed_col = t;
-                        uint32_t padded_row = transposed_col;
-                        uint32_t padded_col = transposed_row;
-                        if (h < H_prepad && padded_row < n_prepad) {
-                            uint32_t global_col = mb * d_prepad + padded_col;
-                            if (padded_col < d_prepad && global_col < total_cols) {
-                                val = matrix.get(padded_row, global_col);
+                        if (h < H_prepad && transposed_col < n_prepad) {
+                            uint32_t global_row = mb * d_prepad + transposed_row;
+                            if (transposed_row < d_prepad && global_row < total_cols) {
+                                val = matrix.get(global_row, transposed_col);
                             }
                         }
                         vec[segment_base + t * H + h] = val;
@@ -381,7 +379,8 @@ void FeatureMatEncrypted::par_lower_diagonal_pack(const Array<double, 2>& matrix
 
 Array<double, 2>
 FeatureMatEncrypted::par_lower_diagonal_unpack(uint32_t n_prepad, uint32_t n_heads, uint32_t head_dim) const {
-    uint32_t total_cols = shape[1];
+    assert(shape[1] == n_prepad);
+    uint32_t total_cols = shape[0];
     uint32_t H_prepad = n_heads;
     uint32_t m = head_dim;
     assert(H_prepad > 0);
@@ -400,7 +399,7 @@ FeatureMatEncrypted::par_lower_diagonal_unpack(uint32_t n_prepad, uint32_t n_hea
     assert(data.size() == n_mb * cts_per_mb);
     const int N_THREAD = 4;
 
-    Array<double, 2> result({(uint64_t)n_prepad, (uint64_t)total_cols});
+    Array<double, 2> result({(uint64_t)total_cols, (uint64_t)n_prepad});
 
     for (uint32_t mb = 0; mb < n_mb; mb++) {
         uint32_t ct_offset = mb * cts_per_mb;
@@ -414,12 +413,10 @@ FeatureMatEncrypted::par_lower_diagonal_unpack(uint32_t n_prepad, uint32_t n_hea
                     for (uint32_t h = 0; h < H_prepad; h++) {
                         uint32_t transposed_row = h * m + ((diag_idx + t) % m);
                         uint32_t transposed_col = t;
-                        uint32_t padded_row = transposed_col;
-                        uint32_t padded_col = transposed_row;
-                        if (padded_row < n_prepad && padded_col < d_prepad) {
-                            uint32_t global_col = mb * d_prepad + padded_col;
-                            if (global_col < total_cols) {
-                                result.set(padded_row, global_col, slots[segment_base + t * H + h]);
+                        if (transposed_col < n_prepad && transposed_row < d_prepad) {
+                            uint32_t global_row = mb * d_prepad + transposed_row;
+                            if (global_row < total_cols) {
+                                result.set(global_row, transposed_col, slots[segment_base + t * H + h]);
                             }
                         }
                     }
@@ -431,20 +428,65 @@ FeatureMatEncrypted::par_lower_diagonal_unpack(uint32_t n_prepad, uint32_t n_hea
     return result;
 }
 
+Array<double, 2>
+FeatureMatEncrypted::par_lower_diagonal_transpose_unpack(uint32_t n_prepad, uint32_t n_heads, uint32_t head_dim) const {
+    uint32_t H_prepad = n_heads;
+    uint32_t m = head_dim;
+    assert(H_prepad > 0);
+    assert(m > 0 && (m & (m - 1)) == 0);
+    assert(shape[0] == n_prepad);
+    assert(shape[1] == H_prepad * m);
+    assert(head_shape[0] == n_prepad);
+    assert(head_shape[1] == m);
+
+    uint32_t H = next_power_of_2(H_prepad);
+    uint32_t n = next_power_of_2(n_prepad);
+    assert(n >= m);
+    uint32_t n_slot = context->get_parameter().get_n() / 2;
+    assert(n_slot % (H * n) == 0);
+    uint32_t c = n_slot / (H * n);
+    assert(m % c == 0);
+    uint32_t cts_per_head_block = m / c;
+    assert(data.size() == cts_per_head_block);
+    const int N_THREAD = 4;
+
+    Array<double, 2> result({(uint64_t)n_prepad, (uint64_t)(H_prepad * m)});
+
+    parallel_for(cts_per_head_block, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_local) {
+        CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_local]);
+        Array1D slots = ctx_copy.decode(x_pt);
+        for (uint32_t local_diag = 0; local_diag < c; local_diag++) {
+            uint32_t diag_idx = ct_local * c + local_diag;
+            uint32_t segment_base = local_diag * H * n;
+            for (uint32_t t = 0; t < n; t++) {
+                for (uint32_t h = 0; h < H_prepad; h++) {
+                    uint32_t row = (diag_idx + t) % n;
+                    uint32_t col = t % m;
+                    if (row < n_prepad) {
+                        result.set(row, h * m + col, slots[segment_base + t * H + h]);
+                    }
+                }
+            }
+        }
+    });
+
+    return result;
+}
+
 void FeatureMatEncrypted::par_upper_diagonal_pack(const Array<double, 2>& matrix,
                                                   uint32_t n_heads,
                                                   uint32_t head_dim,
                                                   bool is_symmetric,
                                                   double scale_in) {
-    uint32_t n_prepad = matrix.get_shape()[0];
-    uint32_t total_cols = matrix.get_shape()[1];
+    uint32_t total_cols = matrix.get_shape()[0];
+    uint32_t n_prepad = matrix.get_shape()[1];
     uint32_t H_prepad = n_heads;
     uint32_t m = head_dim;
     assert(H_prepad > 0);
     assert(m > 0 && (m & (m - 1)) == 0);
 
-    shape = {n_prepad, total_cols};
-    head_shape = {n_prepad, head_dim};
+    shape = {total_cols, n_prepad};
+    head_shape = {head_dim, n_prepad};
     matmul_block_size = head_dim;
 
     uint32_t d_prepad = H_prepad * m;
@@ -473,12 +515,10 @@ void FeatureMatEncrypted::par_upper_diagonal_pack(const Array<double, 2>& matrix
                         double val = 0.0;
                         uint32_t transposed_row = h * m + (t % m);
                         uint32_t transposed_col = (diag_idx + t) % n;
-                        uint32_t padded_row = transposed_col;
-                        uint32_t padded_col = transposed_row;
-                        if (h < H_prepad && padded_row < n_prepad) {
-                            uint32_t global_col = mb * d_prepad + padded_col;
-                            if (padded_col < d_prepad && global_col < total_cols) {
-                                val = matrix.get(padded_row, global_col);
+                        if (h < H_prepad && transposed_col < n_prepad) {
+                            uint32_t global_row = mb * d_prepad + transposed_row;
+                            if (transposed_row < d_prepad && global_row < total_cols) {
+                                val = matrix.get(global_row, transposed_col);
                             }
                         }
                         vec[segment_base + t * H + h] = val;
@@ -509,7 +549,8 @@ void FeatureMatEncrypted::par_upper_diagonal_pack(const Array<double, 2>& matrix
 
 Array<double, 2>
 FeatureMatEncrypted::par_upper_diagonal_unpack(uint32_t n_prepad, uint32_t n_heads, uint32_t head_dim) const {
-    uint32_t total_cols = shape[1];
+    assert(shape[1] == n_prepad);
+    uint32_t total_cols = shape[0];
     uint32_t H_prepad = n_heads;
     uint32_t m = head_dim;
     assert(H_prepad > 0);
@@ -528,7 +569,7 @@ FeatureMatEncrypted::par_upper_diagonal_unpack(uint32_t n_prepad, uint32_t n_hea
     assert(data.size() == n_mb * cts_per_mb);
     const int N_THREAD = 4;
 
-    Array<double, 2> result({(uint64_t)n_prepad, (uint64_t)total_cols});
+    Array<double, 2> result({(uint64_t)total_cols, (uint64_t)n_prepad});
 
     for (uint32_t mb = 0; mb < n_mb; mb++) {
         uint32_t ct_offset = mb * cts_per_mb;
@@ -547,7 +588,7 @@ FeatureMatEncrypted::par_upper_diagonal_unpack(uint32_t n_prepad, uint32_t n_hea
                         if (padded_row < n_prepad && padded_col < d_prepad) {
                             uint32_t global_col = mb * d_prepad + padded_col;
                             if (global_col < total_cols) {
-                                result.set(padded_row, global_col, slots[segment_base + t * H + h]);
+                                result.set(global_col, padded_row, slots[segment_base + t * H + h]);
                             }
                         }
                     }
