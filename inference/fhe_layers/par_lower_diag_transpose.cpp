@@ -45,11 +45,11 @@ ParLowerDiagTranspose::ParLowerDiagTranspose(const CkksParameter& param_in,
     shape_ = shape;
     H_prepad_ = n_heads;
     m_ = head_dim;
-    n_prepad_ = shape_[0];
+    n_prepad_ = shape_[1];
 
     assert(H_prepad_ > 0);
     assert(m_ > 0 && is_power_of_two(m_));
-    assert(shape_[1] == m_);
+    assert(shape_[0] == m_);
     assert(n_prepad_ > 0);
 
     H_ = next_pow2(H_prepad_);
@@ -170,16 +170,32 @@ std::vector<CkksCiphertext> ParLowerDiagTranspose::run_core(CkksContext& ctx,
 
 FeatureMatEncrypted ParLowerDiagTranspose::run(CkksContext& ctx, const FeatureMatEncrypted& input) {
     assert(input.level == level_);
-    assert(input.shape[0] == n_prepad_ && input.shape[1] == H_prepad_ * m_);
-    assert(input.head_shape[0] == n_prepad_ && input.head_shape[1] == m_);
+    assert(input.head_shape[0] == m_ && input.head_shape[1] == n_prepad_);
+    assert(input.shape[0] == H_prepad_ * input.head_shape[0] && input.shape[1] == input.head_shape[1]);
     assert(input.matmul_block_size == m_);
     assert(input.data.size() == expected_ct_count());
 
     FeatureMatEncrypted result(&ctx, input.level);
+    Duo output_head_shape = {n_prepad_, m_};
     result.level = input.level - 1;
-    result.shape = {n_prepad_, H_prepad_ * m_};
-    result.head_shape = {n_prepad_, m_};
+    result.shape = {output_head_shape[0], H_prepad_ * output_head_shape[1]};
+    result.head_shape = output_head_shape;
     result.matmul_block_size = m_;
     result.data = run_core(ctx, input.data);
     return result;
+}
+
+Array<double, 2> ParLowerDiagTranspose::run_plaintext(const Array<double, 2>& A) const {
+    assert(A.get_shape()[0] == H_prepad_ * m_);
+    assert(A.get_shape()[1] == n_prepad_);
+
+    Array<double, 2> T({n_prepad_, H_prepad_ * m_});
+    for (uint32_t h = 0; h < H_prepad_; h++) {
+        for (uint32_t i = 0; i < m_; i++) {
+            for (uint32_t j = 0; j < n_prepad_; j++) {
+                T.set(j, h * m_ + i, A.get(h * m_ + i, j));
+            }
+        }
+    }
+    return T;
 }
