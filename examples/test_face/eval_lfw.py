@@ -271,7 +271,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='Evaluate output_poly MobileNetV2 FaceNet on LFW')
     parser.add_argument(
-        '--checkpoint', default='examples/test_face/output_poly/best.pth')
+        '--checkpoint', default='examples/test_face/output_poly/last.pth')
     parser.add_argument('--lfw-dir', default='/home/zhongy/lfw-aligned/')
     parser.add_argument(
         '--lfw-pairs-path', default='/home/zhongy/facenet-pytorch-change/model_data/lfw_pair.txt')
