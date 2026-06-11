@@ -146,8 +146,9 @@ void ParLowerDiagPCMM::prepare_weight() {
     }
 
     mask_wrap_pt_.clear();
-    mask_wrap_pt_.resize(H_);
-    for (uint32_t i = 1; i < H_; i++) {
+    mask_wrap_pt_.resize(H_ - 1);
+    for (uint32_t i_idx = 0; i_idx < H_ - 1; i_idx++) {
+        uint32_t i = i_idx + 1;
         vector<double> mask(n_slot_, 0.0);
         for (uint32_t segment_start = 0; segment_start < n_slot_; segment_start += segment_len_) {
             for (uint32_t t = 0; t < n_; t++) {
@@ -157,7 +158,7 @@ void ParLowerDiagPCMM::prepare_weight() {
                 }
             }
         }
-        mask_wrap_pt_[i] = ctx.encode_ringt(mask, mask_scale);
+        mask_wrap_pt_[i_idx] = ctx.encode_ringt(mask, mask_scale);
     }
 
     bias_pt_.clear();
@@ -224,16 +225,18 @@ std::vector<CkksCiphertext> ParLowerDiagPCMM::run_core(CkksContext& ctx,
                         }
                     }
                 }
-                ct_ir[i][r] = ctx.rescale(acc, default_scale);
+                ct_ir[i][r] = ctx.rescale(acc, default_scale);  // level L-1, scale D
             }
         }
 
         vector<CkksCiphertext> ct_C(m_c_);
         for (uint32_t r = 0; r < m_c_; r++) {
             CkksCiphertext acc = ctx.drop_level(ct_ir[0][r]);
-            for (uint32_t i = 1; i < H_; i++) {
-                auto mask_mul = ctx.ringt_to_mul(mask_wrap_pt_[i], level_ - 1);
-                auto ct_R = ctx.rescale(ctx.mult_plain_mul(ct_ir[i][r], mask_mul), default_scale);
+            for (uint32_t i_idx = 0; i_idx < H_ - 1; i_idx++) {
+                uint32_t i = i_idx + 1;
+                auto mask_mul = ctx.ringt_to_mul(mask_wrap_pt_[i_idx], level_ - 1);
+                auto ct_R = ctx.rescale(ctx.mult_plain_mul(ct_ir[i][r], mask_mul), default_scale);  // level L-2, scale
+                                                                                                    // D
                 auto ct_i_drop = ctx.drop_level(ct_ir[i][r]);
                 auto ct_L = ctx.sub(ct_i_drop, ct_R);
                 auto ct_R_rot = ctx.rotate(ct_R, (int)(H_ - i));
@@ -254,7 +257,7 @@ std::vector<CkksCiphertext> ParLowerDiagPCMM::run_core(CkksContext& ctx,
         }
     }
 
-    return reduced;
+    return reduced;  // level L-2, scale D
 }
 
 FeatureMatEncrypted ParLowerDiagPCMM::run(CkksContext& ctx, const FeatureMatEncrypted& X_T) {
