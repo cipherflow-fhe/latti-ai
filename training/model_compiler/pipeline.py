@@ -18,6 +18,9 @@
 from pathlib import Path
 import copy
 
+import networkx as nx
+import numpy as np
+
 import components
 from components import (
     ComputeNode,
@@ -408,7 +411,9 @@ def _remove_pcmgamma_from_linear_path(dag, pcmgamma_node: ComputeNode, search_di
     return True
 
 
-def _absorb_pcmgamma_into_target(dag, pcmgamma_node: ComputeNode, target_node: ComputeNode, search_direction: str) -> bool:
+def _absorb_pcmgamma_into_target(
+    dag, pcmgamma_node: ComputeNode, target_node: ComputeNode, search_direction: str
+) -> bool:
     direction = f'after_{target_node.layer_type}' if search_direction == 'up' else f'before_{target_node.layer_type}'
     if target_node.layer_type == 'parcpmm':
         _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, target_node, direction)
@@ -452,9 +457,7 @@ def recompute_final_level(graph: LayerAbstractGraph):
         level = int(level)
         existing_level = anchors.get(feature)
         if existing_level is not None and existing_level != level:
-            raise ValueError(
-                f'Conflicting fixed levels for feature {feature.node_id}: {existing_level} vs {level}'
-            )
+            raise ValueError(f'Conflicting fixed levels for feature {feature.node_id}: {existing_level} vs {level}')
         anchors[feature] = level
 
     for node in dag.nodes:
