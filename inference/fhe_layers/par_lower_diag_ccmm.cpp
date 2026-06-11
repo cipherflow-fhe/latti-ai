@@ -184,7 +184,9 @@ std::vector<double> ParLowerDiagCCMM::build_kqt_route_masks(uint32_t j, uint32_t
 void ParLowerDiagCCMM::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
     double replication_scale = param_.get_q(level_);
-    double route_scale = param_.get_q(level_ - 2);  // to be fixed
+    double default_scale = param_.get_default_scale();
+    double route_scale =
+        static_cast<double>(param_.get_q(level_ - 1)) / default_scale * static_cast<double>(param_.get_q(level_ - 2));
 
     uint32_t replication_count = is_kqt_ ? m_ : n_;
     uint32_t replication_mask_count = std::min(c_, replication_count);
@@ -271,7 +273,7 @@ std::vector<CkksCiphertext> ParLowerDiagCCMM::run_core_ordinary(CkksContext& ctx
     vector<CkksCiphertext> replicated_B;
     replicated_B.reserve(n_);
     for (uint32_t ell = 0; ell < n_; ell++) {
-        replicated_B.push_back(replicate_lower_diag(ctx, B_cts, ell));
+        replicated_B.push_back(replicate_lower_diag(ctx, B_cts, ell));  // level L-1, scale D
     }
 
     vector<vector<CkksCiphertext>> ct_C_j_ell(m_c_);
@@ -285,7 +287,7 @@ std::vector<CkksCiphertext> ParLowerDiagCCMM::run_core_ordinary(CkksContext& ctx
             uint32_t source_j = (j + m_c_ - source_shift) % m_c_;
             int rot = ((int)ell - (int)(n_ * ell_c)) * (int)H_;
             CkksCiphertext A_rot = (rot == 0) ? A_cts[source_j].copy() : ctx.rotate(A_cts[source_j], rot);
-            ct_C_j_ell[j].push_back(multiply_cts(ctx, A_rot, replicated_B[ell]));
+            ct_C_j_ell[j].push_back(multiply_cts(ctx, A_rot, replicated_B[ell]));  // level L-2, scale D/q_{L-1} * D
         }
     }
 
@@ -298,11 +300,13 @@ std::vector<CkksCiphertext> ParLowerDiagCCMM::run_core_ordinary(CkksContext& ctx
         bool double_prime_init = false;
         uint32_t prev_j = (j + m_c_ - 1) % m_c_;
 
-        for (uint32_t ell = 1; ell < n_; ell++) {
-            auto term0 = apply_route_mask(ctx, ct_C_j_ell[prev_j][ell], ordinary_route_pt_[ell][0]);
-            auto term1 = apply_route_mask(ctx, ct_C_j_ell[j][ell], ordinary_route_pt_[ell][1]);
-            auto term2 = apply_route_mask(ctx, ct_C_j_ell[prev_j][ell], ordinary_route_pt_[ell][2]);
-            auto term3 = apply_route_mask(ctx, ct_C_j_ell[j][ell], ordinary_route_pt_[ell][3]);
+        for (uint32_t ell = 0; ell < n_; ell++) {
+            auto term0 =
+                apply_route_mask(ctx, ct_C_j_ell[prev_j][ell], ordinary_route_pt_[ell][0]);      // level L-3, scale D
+            auto term1 = apply_route_mask(ctx, ct_C_j_ell[j][ell], ordinary_route_pt_[ell][1]);  // level L-3, scale D
+            auto term2 =
+                apply_route_mask(ctx, ct_C_j_ell[prev_j][ell], ordinary_route_pt_[ell][2]);      // level L-3, scale D
+            auto term3 = apply_route_mask(ctx, ct_C_j_ell[j][ell], ordinary_route_pt_[ell][3]);  // level L-3, scale D
 
             auto prime_term = ctx.add(term0, term1);
             if (!prime_init) {
@@ -321,16 +325,14 @@ std::vector<CkksCiphertext> ParLowerDiagCCMM::run_core_ordinary(CkksContext& ctx
             }
         }
 
-        CkksCiphertext ct = ctx.drop_level(ct_C_j_ell[j][0]);  // scale to be fixed
-        if (prime_init) {
-            ct = ctx.add(ct, ct_C_prime);
-        }
+        assert(prime_init);
+        CkksCiphertext ct = std::move(ct_C_prime);
         if (double_prime_init) {
             ct = ctx.add(ct, ctx.rotate(ct_C_double_prime, -(int)segment_len_));
         }
         C_cts.push_back(std::move(ct));
     }
-    return C_cts;
+    return C_cts;  // level L-3, scale D
 }
 
 std::vector<CkksCiphertext> ParLowerDiagCCMM::run_core_kqt(CkksContext& ctx,
@@ -358,7 +360,7 @@ std::vector<CkksCiphertext> ParLowerDiagCCMM::run_core_kqt(CkksContext& ctx,
             assert(R_p_ell < n_);
             int rot = ((int)R_p_ell - (int)(n_ * b_ell)) * (int)H_;
             CkksCiphertext A_rot = (rot == 0) ? A_cts[u_p].copy() : ctx.rotate(A_cts[u_p], rot);
-            ct_C_p_ell[p].push_back(multiply_cts(ctx, A_rot, replicated_B[ell]));
+            ct_C_p_ell[p].push_back(multiply_cts(ctx, A_rot, replicated_B[ell]));  // level L-2, scale D/q_{L-1} * D
         }
     }
 
@@ -376,10 +378,14 @@ std::vector<CkksCiphertext> ParLowerDiagCCMM::run_core_kqt(CkksContext& ctx,
             uint32_t p_prev = (j + n_c_ - 1 - a_ell) % n_c_;
             uint32_t p_curr = (j + n_c_ - a_ell) % n_c_;
 
-            auto term0 = apply_route_mask(ctx, ct_C_p_ell[p_prev][ell], kqt_route_pt_[j][ell][0]);
-            auto term1 = apply_route_mask(ctx, ct_C_p_ell[p_curr][ell], kqt_route_pt_[j][ell][1]);
-            auto term2 = apply_route_mask(ctx, ct_C_p_ell[p_prev][ell], kqt_route_pt_[j][ell][2]);
-            auto term3 = apply_route_mask(ctx, ct_C_p_ell[p_curr][ell], kqt_route_pt_[j][ell][3]);
+            auto term0 =
+                apply_route_mask(ctx, ct_C_p_ell[p_prev][ell], kqt_route_pt_[j][ell][0]);  // level L-3, scale D
+            auto term1 =
+                apply_route_mask(ctx, ct_C_p_ell[p_curr][ell], kqt_route_pt_[j][ell][1]);  // level L-3, scale D
+            auto term2 =
+                apply_route_mask(ctx, ct_C_p_ell[p_prev][ell], kqt_route_pt_[j][ell][2]);  // level L-3, scale D
+            auto term3 =
+                apply_route_mask(ctx, ct_C_p_ell[p_curr][ell], kqt_route_pt_[j][ell][3]);  // level L-3, scale D
 
             auto prime_term = ctx.add(term0, term1);
             if (!prime_init) {
@@ -405,7 +411,7 @@ std::vector<CkksCiphertext> ParLowerDiagCCMM::run_core_kqt(CkksContext& ctx,
         }
         C_cts.push_back(std::move(ct));
     }
-    return C_cts;
+    return C_cts;  // level L-3, scale D
 }
 
 FeatureMatEncrypted
