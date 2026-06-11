@@ -96,7 +96,7 @@ vector<double> single_slot(double value) {
     return {value};
 }
 
-vector<double> read_embedding_txt(const string& path) {
+vector<double> read_embedding_csv(const string& path) {
     ifstream file(path);
     REQUIRE(file.is_open());
     string text((istreambuf_iterator<char>(file)), istreambuf_iterator<char>());
@@ -227,7 +227,133 @@ CkksCiphertext inverse_sqrt_iterations(CkksBtpContext& ctx,
     return x_ct;
 }
 
+Feature0DEncrypted pack_feature0d_skip2(CkksContext& ctx,
+                                        const vector<double>& values,
+                                        int level,
+                                        double scale,
+                                        uint32_t skip) {
+    const uint32_t n_slots = ctx.get_parameter().get_n() / 2;
+    Feature0DEncrypted feature(&ctx, level);
+    feature.dim = 0;
+    feature.n_channel = values.size();
+    feature.n_channel_per_ct = 2;
+    feature.skip = skip;
+    for (size_t ct_idx = 0; ct_idx < (values.size() + 1) / 2; ++ct_idx) {
+        vector<double> slots(n_slots, 0.0);
+        const size_t ch0 = 2 * ct_idx;
+        const size_t ch1 = ch0 + 1;
+        slots[0] = values[ch0];
+        if (ch1 < values.size()) {
+            slots[skip] = values[ch1];
+        }
+        feature.data.push_back(encrypt_vector(ctx, slots, level, scale));
+    }
+    return feature;
+}
+
+Feature0DEncrypted repack_feature0d_to_single_ct(CkksContext& ctx, const Feature0DEncrypted& input, uint32_t dim) {
+    REQUIRE(!input.data.empty());
+    REQUIRE(input.n_channel >= dim);
+    REQUIRE(input.n_channel_per_ct > 0);
+    const uint32_t n_slots = ctx.get_parameter().get_n() / 2;
+    const double scale = ctx.get_parameter().get_default_scale();
+    CkksCiphertext acc;
+    bool has_acc = false;
+
+    for (uint32_t channel = 0; channel < dim; ++channel) {
+        const uint32_t ct_idx = channel / input.n_channel_per_ct;
+        const uint32_t offset = channel % input.n_channel_per_ct;
+        REQUIRE(ct_idx < input.data.size());
+        const uint32_t source_slot = offset * input.skip;
+        const uint32_t target_slot = channel;
+        REQUIRE(source_slot < n_slots);
+        REQUIRE(target_slot < n_slots);
+
+        vector<double> mask(n_slots, 0.0);
+        mask[source_slot] = 1.0;
+        auto mask_pt = ctx.encode(mask, input.data[ct_idx].get_level(), scale);
+        auto masked = ctx.mult_plain(input.data[ct_idx], mask_pt);
+        masked = ctx.rescale(masked, scale);
+        auto moved = ctx.rotate(masked, static_cast<int>(source_slot) - static_cast<int>(target_slot));
+
+        if (!has_acc) {
+            acc = std::move(moved);
+            has_acc = true;
+        } else {
+            acc = ctx.add(acc, moved);
+        }
+    }
+
+    Feature0DEncrypted output(&ctx, acc.get_level());
+    output.dim = 0;
+    output.n_channel = dim;
+    output.n_channel_per_ct = n_slots;
+    output.skip = 1;
+    output.data.push_back(std::move(acc));
+    output.level = output.data[0].get_level();
+    return output;
+}
+
 }  // namespace
+
+TEST_CASE("Feature0D skip-pack repack to single ciphertext", "[ckks][distance][fhe_layers][repack]") {
+    constexpr size_t dim = 128;
+    constexpr int nr_iterations = 3;
+
+    CkksBtpParameter btp_param = CkksBtpParameter::create_parameter();
+    auto& param = btp_param.get_ckks_parameter();
+    REQUIRE(param.get_n() == 65536);
+    CkksBtpContext ctx = CkksBtpContext::create_random_context(btp_param);
+    ctx.gen_rotation_keys();
+
+    const double scale = param.get_default_scale();
+    const int level = param.get_max_level();
+    const uint32_t skip = param.get_n() / 4;
+    const double norm2_min = 21.9;
+    const double norm2_max = 75.2;
+
+    const string query_path = string(SOURCE_PATH) + "/../examples/test_face/query_embedding.csv";
+    const string gallery_path = string(SOURCE_PATH) + "/../examples/test_face/gallery_embedding.csv";
+    const vector<double> query = read_embedding_csv(query_path);
+    const vector<double> gallery = read_embedding_csv(gallery_path);
+    REQUIRE(query.size() == dim);
+    REQUIRE(gallery.size() == dim);
+    const vector<double> gallery_normed = normalize_vector(gallery);
+
+    auto skip_packed_query = pack_feature0d_skip2(ctx, query, level, scale, skip);
+    REQUIRE(skip_packed_query.data.size() == 64);
+    REQUIRE(skip_packed_query.n_channel_per_ct == 2);
+    REQUIRE(skip_packed_query.skip == skip);
+
+    auto repacked_query = repack_feature0d_to_single_ct(ctx, skip_packed_query, dim);
+    REQUIRE(repacked_query.data.size() == 1);
+    REQUIRE(repacked_query.n_channel == dim);
+    REQUIRE(repacked_query.skip == 1);
+
+    auto repacked_plain = repacked_query.unpack().to_array_1d();
+    for (size_t i = 0; i < dim; ++i) {
+        if (i < 8) {
+            cout << "repacked[" << i << "]=" << repacked_plain[i] << " expected=" << query[i] << endl;
+        }
+        REQUIRE(abs(repacked_plain[i] - query[i]) < 1.0e-3);
+    }
+
+    ComputeDistanceLayer layer(param, dim, norm2_min, norm2_max, nr_iterations);
+    layer.prepare_weight(gallery_normed, repacked_query.level);
+    auto output = layer.run(ctx, repacked_query);
+
+    const double encrypted_dist2 = decrypt_first_slot(ctx, output.data[0]);
+    const double plaintext_dist2 = layer.run_plaintext(query, gallery_normed);
+    const double approx_dist2 = 2.0 - 2.0 * dot_product(query, gallery_normed) *
+                                         inverse_sqrt_newton_raphson(l2_norm_squared(query), norm2_min, norm2_max,
+                                                                     nr_iterations);
+    cout << "repack_query_norm2=" << l2_norm_squared(query) << endl;
+    cout << "repack_plaintext_dist2=" << plaintext_dist2 << endl;
+    cout << "repack_approx_dist2=" << approx_dist2 << endl;
+    cout << "repack_encrypted_dist2=" << encrypted_dist2 << endl;
+    REQUIRE(abs(encrypted_dist2 - approx_dist2) < 1.0e-2);
+    REQUIRE(abs(approx_dist2 - plaintext_dist2) < 1.0e-2);
+}
 
 TEST_CASE("direct CKKS normalized L2 distance with plaintext-normalized gallery", "[ckks][distance]") {
     constexpr size_t dim = 128;
@@ -244,10 +370,10 @@ TEST_CASE("direct CKKS normalized L2 distance with plaintext-normalized gallery"
     cout << "max_level=" << level << endl;
     REQUIRE(level >= 4 * nr_iterations - 1);
 
-    const string query_path = string(SOURCE_PATH) + "/../examples/test_face/query_embedding.txt";
-    const string gallery_path = string(SOURCE_PATH) + "/../examples/test_face/gallery_embedding.txt";
-    const vector<double> query = read_embedding_txt(query_path);
-    const vector<double> gallery = read_embedding_txt(gallery_path);
+    const string query_path = string(SOURCE_PATH) + "/../examples/test_face/query_embedding.csv";
+    const string gallery_path = string(SOURCE_PATH) + "/../examples/test_face/gallery_embedding.csv";
+    const vector<double> query = read_embedding_csv(query_path);
+    const vector<double> gallery = read_embedding_csv(gallery_path);
     REQUIRE(query.size() == dim);
     REQUIRE(gallery.size() == dim);
 
@@ -310,10 +436,10 @@ TEST_CASE("ComputeDistanceLayer CKKS normalized L2 distance", "[ckks][distance][
     const double norm2_min = 21.9;
     const double norm2_max = 75.2;
 
-    const string query_path = string(SOURCE_PATH) + "/../examples/test_face/query_embedding.txt";
-    const string gallery_path = string(SOURCE_PATH) + "/../examples/test_face/gallery_embedding.txt";
-    const vector<double> query = read_embedding_txt(query_path);
-    const vector<double> gallery = read_embedding_txt(gallery_path);
+    const string query_path = string(SOURCE_PATH) + "/../examples/test_face/query_embedding.csv";
+    const string gallery_path = string(SOURCE_PATH) + "/../examples/test_face/gallery_embedding.csv";
+    const vector<double> query = read_embedding_csv(query_path);
+    const vector<double> gallery = read_embedding_csv(gallery_path);
     REQUIRE(query.size() == dim);
     REQUIRE(gallery.size() == dim);
 
@@ -349,4 +475,77 @@ TEST_CASE("ComputeDistanceLayer CKKS normalized L2 distance", "[ckks][distance][
     cout << "layer_encrypted_dist2=" << encrypted_dist2 << endl;
     REQUIRE(abs(encrypted_dist2 - approx_dist2) < 1.0e-2);
     REQUIRE(abs(approx_dist2 - exact_dist2) < 1.0e-2);
+}
+
+TEST_CASE("ComputeDistanceLayer with decrypted inference query values", "[ckks][distance][fhe_layers][inference-output]") {
+    constexpr size_t dim = 128;
+    constexpr int nr_iterations = 3;
+
+    CkksBtpParameter btp_param = CkksBtpParameter::create_parameter();
+    auto& param = btp_param.get_ckks_parameter();
+    REQUIRE(param.get_n() == 65536);
+    CkksBtpContext ctx = CkksBtpContext::create_random_context(btp_param);
+    ctx.gen_rotation_keys();
+
+    const double scale = param.get_default_scale();
+    const int level = param.get_max_level();
+    const double norm2_min = 21.9;
+    const double norm2_max = 75.2;
+
+    const vector<double> query_from_encrypted_output = {
+        0.13797479, -0.18977105, -0.10352170, 0.77729363, -0.40641587, 0.08152293, -0.82816535,
+        -1.47389593, 0.53847700, 0.49182474, -0.95399116, 0.45841182, 0.20978452, 0.40214834,
+        -0.16685039, -0.23277155, 0.29363527, -1.34631548, 0.03735644, 1.23972564, 0.26979950,
+        0.02874217, 0.99468059, -0.19384108, 0.21778936, -0.61089646, 0.25501855, 0.57380513,
+        0.77537585, -0.69149272, 0.26424028, -1.39550012, 0.78011570, -0.19526482, 0.53239215,
+        -0.21544859, -0.08642147, -0.38670131, 0.36022051, -0.79983492, -0.02278264, 0.56371907,
+        0.00762453, 0.35590350, 0.10627298, 0.24311811, -0.20862135, -0.35663091, -0.58343270,
+        0.44806289, 0.12958376, 0.42966283, -0.32037672, 0.24998618, 1.20581342, -0.46701636,
+        -0.61522565, -0.15597586, 0.46305361, -0.30077677, 0.40097268, 0.12317782, -0.18204197,
+        0.54142702, 0.54555264, -0.38357595, 0.09758106, -0.19453109, 1.17016944, -0.23169244,
+        0.08216900, -0.07957825, 0.58868246, -0.30583075, -0.11403647, 0.24918400, -0.11879220,
+        -0.44635434, -0.50996777, -0.35730856, 0.25631323, 0.10490616, -0.13205583, 1.72897507,
+        0.38647772, -0.22583346, -0.20675991, 0.08307934, 0.22463643, -0.23043941, -0.33625971,
+        0.64380942, -3.27222134, -0.91022560, -0.11023758, 0.34058496, 1.02267749, 0.72790000,
+        -0.41765616, 0.67442951, 0.25962120, 0.39964710, 0.20166286, 0.09041513, 0.93364986,
+        -0.11597100, 0.05888126, 0.02070235, 0.21659227, -0.94049000, 0.10390402, 0.17940443,
+        0.93080060, -0.54183980, -0.11671463, -0.17459869, -0.76835527, -0.26161559, 0.10065285,
+        0.11208473, -0.12927761, -0.89160338, -1.32732100, -1.14083538, -1.03373124, 0.08715514,
+        -0.81140486, -0.10546542,
+    };
+    REQUIRE(query_from_encrypted_output.size() == dim);
+
+    const string gallery_path = string(SOURCE_PATH) + "/../examples/test_face/gallery_embedding.csv";
+    const vector<double> gallery = read_embedding_csv(gallery_path);
+    REQUIRE(gallery.size() == dim);
+    const vector<double> gallery_normed = normalize_vector(gallery);
+
+    auto query_ct = encrypt_vector(ctx, query_from_encrypted_output, level, scale);
+    query_ct = ctx.drop_level(query_ct, 15);
+
+    Feature0DEncrypted query_feature(&ctx, query_ct.get_level());
+    query_feature.data.push_back(std::move(query_ct));
+    query_feature.dim = 0;
+    query_feature.n_channel = dim;
+    query_feature.n_channel_per_ct = ctx.get_parameter().get_n() / 2;
+    query_feature.skip = 1;
+    query_feature.level = query_feature.data[0].get_level();
+
+    ComputeDistanceLayer layer(param, dim, norm2_min, norm2_max, nr_iterations);
+    layer.prepare_weight(gallery_normed, query_feature.level);
+    auto output = layer.run(ctx, query_feature);
+
+    const double encrypted_dist2 = decrypt_first_slot(ctx, output.data[0]);
+    const double plaintext_dist2 = layer.run_plaintext(query_from_encrypted_output, gallery_normed);
+    const double query_rsqrt = inverse_sqrt_newton_raphson(l2_norm_squared(query_from_encrypted_output), norm2_min,
+                                                           norm2_max, nr_iterations);
+    const double approx_dist2 = 2.0 - 2.0 * dot_product(query_from_encrypted_output, gallery_normed) * query_rsqrt;
+
+    cout << "inference_decrypted_query_norm2=" << l2_norm_squared(query_from_encrypted_output) << endl;
+    cout << "inference_decrypted_query_plaintext_dist2=" << plaintext_dist2 << endl;
+    cout << "inference_decrypted_query_approx_dist2=" << approx_dist2 << endl;
+    cout << "inference_decrypted_query_encrypted_dist2=" << encrypted_dist2 << endl;
+
+    REQUIRE(abs(encrypted_dist2 - approx_dist2) < 1.0e-2);
+    REQUIRE(abs(approx_dist2 - plaintext_dist2) < 1.0e-2);
 }

@@ -158,49 +158,60 @@ examples/test_face/task/server/model_parameters.h5
 examples/test_face/task/server/mega_ag.json
 ```
 
-## 4. Prepare inference input CSV
+## 4. Prepare query input CSV
 
-The unified example inference binary expects a CSV input file matching the compiled task input shape.
-
+The unified C++ inference binary expects a CSV input file matching the compiled task input shape.
 For this model, the input shape is normally:
 
 ```text
 3 x 256 x 256
 ```
 
-Place a normalized input CSV at:
-
-```text
-examples/test_face/task/client/img.csv
-```
-
-The normalization used by training is:
-
-```python
-transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-```
-
-So pixel values should be converted from `[0, 1]` to approximately `[-1, 1]` before writing the CSV.
-
-## 5. Optional encrypted/plaintext verification
-
-After building the C++ examples and preparing `task/client/img.csv`, run:
+Convert the query image to the normalized input CSV:
 
 ```bash
-./build/examples/inference \
-  --task-dir examples/test_face/task \
-  --input examples/test_face/task/client/img.csv \
-  --verify
+python examples/test_face/process_plaintext.py <query-image> \
+  --export-input-csv examples/test_face/task/client/img.csv
 ```
 
-GPU mode:
+This only performs image preprocessing:
+
+```text
+image -> resize/letterbox -> ToTensor -> Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) -> CSV
+```
+
+The resulting `img.csv` is the encrypted inference input.
+
+## 5. Prepare gallery embedding CSV
+
+Run plaintext model inference on the gallery image and export its raw embedding:
+
+```bash
+python examples/test_face/process_plaintext.py <gallery-image> \
+  --inference-output examples/test_face/gallery_embedding.csv
+```
+
+This writes:
+
+```text
+examples/test_face/gallery_embedding.csv
+```
+
+The gallery embedding is used as the plaintext reference vector for distance computation.
+
+## 6. Optional encrypted/plaintext verification
+
+After building the C++ examples and preparing `task/client/img.csv` and `gallery_embedding.csv`, run encrypted/plaintext verification and encrypted distance computation:
 
 ```bash
 ./build/examples/inference \
   --task-dir examples/test_face/task \
   --input examples/test_face/task/client/img.csv \
   --verify \
-  --gpu
+  --compute-distance \
+  --gallery examples/test_face/gallery_embedding.csv \
+  --normalize-gallery
 ```
 
-`examples/CMakeLists.txt` is not updated yet. Add `test_face` there only after `examples/test_face/task` and `task/client/img.csv` are generated and ready to be committed.
+`--normalize-gallery` is needed when `gallery_embedding.csv` is the raw embedding exported by `process_plaintext.py`. If the gallery embedding has already been L2-normalized before export, omit this flag.
+

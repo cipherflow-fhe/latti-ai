@@ -192,7 +192,7 @@ void ComputeDistanceLayer::prepare_weight(const vector<double>& gallery, uint32_
 
     CkksContext ctx = CkksContext::create_empty_context(param_);
     const double scale = param_.get_default_scale();
-    const auto scaled_gallery = scale_vector(gallery, 2.0);
+    const auto scaled_gallery = scale_vector(gallery, -2.0);
     gallery_pt_ = ctx.encode(scaled_gallery, level, scale);
     level_ = level;
     has_gallery_pt_ = true;
@@ -225,8 +225,7 @@ Feature0DEncrypted ComputeDistanceLayer::run(CkksBtpContext& ctx, const Feature0
     auto dot2_aligned_ct = drop_to_level(ctx, dot2_ct, rsqrt_ct.get_level());
     auto cos2_ct = multiply_and_rescale(ctx, dot2_aligned_ct, rsqrt_ct, scale);
 
-    auto dist2_ct = multiply_plain_and_rescale(ctx, cos2_ct, single_slot(-1.0), scale);
-    dist2_ct = add_plain_scalar(ctx, dist2_ct, 2.0, scale);
+    auto dist2_ct = add_plain_scalar(ctx, cos2_ct, 2.0, scale);
 
     Feature0DEncrypted result(&ctx, dist2_ct.get_level());
     result.data.push_back(move(dist2_ct));

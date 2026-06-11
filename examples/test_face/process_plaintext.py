@@ -42,8 +42,11 @@ from utils.dataloader import parse_annotation_lines
 
 DEFAULT_CHECKPOINT = TEST_FACE_DIR / 'output_poly' / 'last.pth'
 DEFAULT_INPUT_SHAPE = (3, 256, 256)
-DEFAULT_EMBEDDING_A_PATH = TEST_FACE_DIR / 'query_embedding.txt'
-DEFAULT_EMBEDDING_B_PATH = TEST_FACE_DIR / 'gallery_embedding.txt'
+DEFAULT_INPUT_CSV_PATH = TEST_FACE_DIR / 'task' / 'client' / 'img.csv'
+DEFAULT_QUERY_EMBEDDING_PATH = TEST_FACE_DIR / 'query_embedding.csv'
+DEFAULT_GALLERY_EMBEDDING_PATH = TEST_FACE_DIR / 'gallery_embedding.csv'
+DEFAULT_EMBEDDING_A_PATH = DEFAULT_QUERY_EMBEDDING_PATH
+DEFAULT_EMBEDDING_B_PATH = DEFAULT_GALLERY_EMBEDDING_PATH
 
 
 def resize_image(image, size, letterbox_image=True):
@@ -136,6 +139,18 @@ def read_input(path, input_shape=DEFAULT_INPUT_SHAPE):
     return read_image(path, input_shape)
 
 
+def write_input_csv(path, input_tensor):
+    values = input_tensor.squeeze(0).detach().cpu().numpy().reshape(-1)
+    with open(path, 'w') as file:
+        file.write(','.join(str(float(value)) for value in values))
+        file.write('\n')
+
+
+def export_input_csv(input_path, output_path=DEFAULT_INPUT_CSV_PATH, input_shape=DEFAULT_INPUT_SHAPE):
+    input_tensor = read_input(input_path, input_shape)
+    write_input_csv(output_path, input_tensor)
+
+
 class ImagePathDataset(Dataset):
     def __init__(self, image_paths, input_shape=DEFAULT_INPUT_SHAPE):
         self.image_paths = list(image_paths)
@@ -157,8 +172,17 @@ def compute_embedding(model, input_tensor, device):
 def write_embedding(path, embedding):
     values = embedding.detach().cpu().numpy().reshape(-1)
     with open(path, 'w') as file:
-        file.write('\n'.join(str(float(value)) for value in values))
+        file.write(','.join(str(float(value)) for value in values))
         file.write('\n')
+
+
+def compute_single_embedding(model, path, device, input_shape=DEFAULT_INPUT_SHAPE,
+                             embedding_output=DEFAULT_EMBEDDING_A_PATH):
+    input_tensor = read_input(path, input_shape)
+    embedding = compute_embedding(model, input_tensor, device)
+    write_embedding(embedding_output, embedding)
+    norm2 = torch.sum(embedding * embedding, dim=1).cpu().numpy()[0]
+    return float(norm2)
 
 
 def compute_distance(model, path_a, path_b, device, input_shape=DEFAULT_INPUT_SHAPE,
@@ -239,6 +263,21 @@ def stat_embedding_norm2_min_max(annotation_path, checkpoint=DEFAULT_CHECKPOINT,
     return norm2_min, norm2_max
 
 
+def run_single_plaintext(arg, checkpoint=DEFAULT_CHECKPOINT, gpu=-1, poly_model_convert=True,
+                         embedding_output=DEFAULT_EMBEDDING_A_PATH):
+    device = torch.device(
+        f'cuda:{gpu}') if gpu >= 0 and torch.cuda.is_available() else torch.device('cpu')
+    state_dict = load_checkpoint_state_dict(checkpoint)
+    model = build_model(
+        state_dict, poly_model_convert=poly_model_convert).to(device)
+    return compute_single_embedding(
+        model,
+        arg,
+        device,
+        embedding_output=embedding_output,
+    )
+
+
 def run_plaintext(arg1, arg2, checkpoint=DEFAULT_CHECKPOINT, gpu=-1, poly_model_convert=True,
                   embedding_output_a=DEFAULT_EMBEDDING_A_PATH,
                   embedding_output_b=DEFAULT_EMBEDDING_B_PATH):
@@ -259,13 +298,17 @@ def run_plaintext(arg1, arg2, checkpoint=DEFAULT_CHECKPOINT, gpu=-1, poly_model_
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='Compute plaintext face embedding distance.')
+        description='Run plaintext face preprocessing, embedding inference, or distance.')
     parser.add_argument('input_a', nargs='?')
     parser.add_argument('input_b', nargs='?')
     parser.add_argument('--checkpoint', default=str(DEFAULT_CHECKPOINT))
     parser.add_argument('--gpu', type=int, default=-1, help='-1 for CPU')
-    parser.add_argument('--embedding-output-a', default=str(DEFAULT_EMBEDDING_A_PATH))
-    parser.add_argument('--embedding-output-b', default=str(DEFAULT_EMBEDDING_B_PATH))
+    parser.add_argument('--export-input-csv')
+    parser.add_argument('--inference-output')
+    parser.add_argument('--query-output')
+    parser.add_argument('--gallery-output')
+    parser.add_argument('--embedding-output-a', default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--embedding-output-b', default=None, help=argparse.SUPPRESS)
     parser.add_argument('--no-poly-model-convert', action='store_true')
     parser.add_argument('--stat-norm2-min-max', action='store_true')
     parser.add_argument('--annotation-path')
@@ -293,16 +336,36 @@ def main():
         print(f'norm2_max={norm2_max}')
         return
 
-    if args.input_a is None or args.input_b is None:
-        raise ValueError('input_a and input_b are required unless --stat-norm2-min-max is set')
+    if args.input_a is None:
+        raise ValueError('input_a is required unless --stat-norm2-min-max is set')
+    if args.export_input_csv is not None:
+        export_input_csv(args.input_a, args.export_input_csv)
+        print(f'input_csv={args.export_input_csv}')
+        return
+
+    if args.input_b is None:
+        inference_output = args.inference_output or args.embedding_output_a or str(DEFAULT_QUERY_EMBEDDING_PATH)
+        norm2 = run_single_plaintext(
+            args.input_a,
+            checkpoint=args.checkpoint,
+            gpu=args.gpu,
+            poly_model_convert=not args.no_poly_model_convert,
+            embedding_output=inference_output,
+        )
+        print(f'inference_output={inference_output}')
+        print(f'norm2={norm2}')
+        return
+
+    query_output = args.query_output or args.embedding_output_a or str(DEFAULT_QUERY_EMBEDDING_PATH)
+    gallery_output = args.gallery_output or args.embedding_output_b or str(DEFAULT_GALLERY_EMBEDDING_PATH)
     distance = run_plaintext(
         args.input_a,
         args.input_b,
         checkpoint=args.checkpoint,
         gpu=args.gpu,
         poly_model_convert=not args.no_poly_model_convert,
-        embedding_output_a=args.embedding_output_a,
-        embedding_output_b=args.embedding_output_b,
+        embedding_output_a=query_output,
+        embedding_output_b=gallery_output,
     )
     print(distance)
 

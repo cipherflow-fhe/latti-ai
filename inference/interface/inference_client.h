@@ -105,6 +105,9 @@ public:
     /// Decrypt serialized encrypted outputs from the server.
     std::map<std::string, DecryptedOutput> decrypt(const std::map<std::string, Bytes>& encrypted_outputs) const;
 
+    /// Decrypt a serialized 0D scalar ciphertext outside task_config outputs.
+    double decrypt_0d_scalar(const Bytes& encrypted_output) const;
+
 private:
     std::filesystem::path client_dir_;
 

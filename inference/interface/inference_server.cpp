@@ -16,12 +16,120 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <algorithm>
+#include <cmath>
+#include <fstream>
 #include <iostream>
 #include <map>
+#include <sstream>
+#include <utility>
 
+#include "fhe_layers/compute_distance_layer.h"
 #include "interface/inference_server.h"
 
 using namespace lattisense;
+
+namespace {
+
+std::vector<double> read_embedding_csv(const std::string& path) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        throw std::runtime_error("cannot open embedding file: " + path);
+    }
+    std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    std::replace(text.begin(), text.end(), ',', ' ');
+
+    std::vector<double> values;
+    std::istringstream stream(text);
+    double value;
+    while (stream >> value) {
+        values.push_back(value);
+    }
+    if (values.empty()) {
+        throw std::runtime_error("empty embedding file: " + path);
+    }
+    return values;
+}
+
+void normalize_vector(std::vector<double>& values) {
+    double norm2 = 0.0;
+    for (double value : values) {
+        norm2 += value * value;
+    }
+    const double norm = std::sqrt(norm2);
+    if (norm <= 0.0) {
+        throw std::runtime_error("gallery norm must be positive");
+    }
+    for (double& value : values) {
+        value /= norm;
+    }
+}
+
+std::vector<double> read_gallery_embedding(const std::string& path, bool normalize_gallery) {
+    auto gallery = read_embedding_csv(path);
+    if (normalize_gallery) {
+        normalize_vector(gallery);
+    }
+    return gallery;
+}
+
+Feature0DEncrypted repack_feature0d_to_single_ct(CkksContext& ctx, const Feature0DEncrypted& input, uint32_t dim) {
+    if (input.data.empty()) {
+        throw std::runtime_error("query feature must contain at least one ciphertext");
+    }
+    if (input.n_channel < dim) {
+        throw std::runtime_error("query feature channel count must be at least dim");
+    }
+    if (input.n_channel_per_ct == 0) {
+        throw std::runtime_error("query feature n_channel_per_ct must be positive");
+    }
+    if (input.data.size() == 1 && input.skip == 1 && input.n_channel_per_ct >= dim) {
+        return input.copy();
+    }
+
+    const uint32_t n_slots = ctx.get_parameter().get_n() / 2;
+    const double scale = ctx.get_parameter().get_default_scale();
+    CkksCiphertext acc;
+    bool has_acc = false;
+
+    for (uint32_t channel = 0; channel < dim; ++channel) {
+        const uint32_t ct_idx = channel / input.n_channel_per_ct;
+        const uint32_t offset = channel % input.n_channel_per_ct;
+        if (ct_idx >= input.data.size()) {
+            throw std::runtime_error("query feature ciphertext count is inconsistent with packing");
+        }
+        const uint32_t source_slot = offset * input.skip;
+        const uint32_t target_slot = channel;
+        if (source_slot >= n_slots || target_slot >= n_slots) {
+            throw std::runtime_error("query feature slot index exceeds CKKS slot count");
+        }
+
+        std::vector<double> mask(n_slots, 0.0);
+        mask[source_slot] = 1.0;
+        auto mask_pt = ctx.encode(mask, input.data[ct_idx].get_level(), scale);
+        auto masked = ctx.mult_plain(input.data[ct_idx], mask_pt);
+        masked = ctx.rescale(masked, scale);
+        auto moved = ctx.rotate(masked, static_cast<int>(source_slot) - static_cast<int>(target_slot));
+
+        if (!has_acc) {
+            acc = std::move(moved);
+            has_acc = true;
+        } else {
+            acc = ctx.add(acc, moved);
+        }
+    }
+
+    Feature0DEncrypted output(&ctx, acc.get_level());
+    output.dim = 0;
+    output.n_channel = dim;
+    output.n_channel_per_ct = n_slots;
+    output.skip = 1;
+    output.data.push_back(std::move(acc));
+    output.level = output.data[0].get_level();
+    return output;
+}
+
+}  // namespace
 
 InferenceServer::InferenceServer(const std::string& server_dir, bool use_gpu, int gpu_device)
     : server_dir_(server_dir), use_gpu_(use_gpu), gpu_device_(gpu_device) {}
@@ -170,6 +278,72 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
         }
     }
     return encrypted_outputs;
+}
+
+Bytes InferenceServer::compute_distance(const std::string& feature_name,
+                                        const std::string& gallery_path,
+                                        bool normalize_gallery,
+                                        double norm2_min,
+                                        double norm2_max,
+                                        int nr_iterations) {
+    if (!needs_btp_) {
+        throw std::runtime_error("compute_distance requires a bootstrapping context");
+    }
+    auto out_it = output_params_.find(feature_name);
+    if (out_it == output_params_.end()) {
+        throw std::runtime_error("[Server] Unknown output feature name: " + feature_name);
+    }
+    if (out_it->second.dim != 0) {
+        throw std::runtime_error("compute_distance expects a 0D output feature");
+    }
+
+    auto gallery = read_gallery_embedding(gallery_path, normalize_gallery);
+    const uint32_t dim = out_it->second.channel;
+    if (gallery.size() != dim) {
+        throw std::runtime_error("gallery size must match output feature channel count");
+    }
+
+    auto query = fp_->get_ciphertext_output_feature<Feature0DEncrypted>(feature_name);
+    auto& btp_context = static_cast<CkksBtpContext&>(*context_ptr_);
+
+    Timer timer;
+    timer.start();
+    auto packed_query = repack_feature0d_to_single_ct(btp_context, query, dim);
+    ComputeDistanceLayer distance_layer(btp_context.get_parameter(), dim, norm2_min, norm2_max, nr_iterations);
+    distance_layer.prepare_weight(gallery, packed_query.level);
+    auto distance = distance_layer.run(btp_context, packed_query);
+    timer.stop();
+    timer.print("Encrypted distance time");
+    return distance.serialize();
+}
+
+double InferenceServer::compute_distance_plaintext(const std::string& feature_name,
+                                                  const std::string& gallery_path,
+                                                  bool normalize_gallery,
+                                                  double norm2_min,
+                                                  double norm2_max,
+                                                  int nr_iterations) {
+    auto out_it = output_params_.find(feature_name);
+    if (out_it == output_params_.end()) {
+        throw std::runtime_error("[Server] Unknown output feature name: " + feature_name);
+    }
+    if (out_it->second.dim != 0) {
+        throw std::runtime_error("compute_distance expects a 0D output feature");
+    }
+
+    auto gallery = read_gallery_embedding(gallery_path, normalize_gallery);
+    const uint32_t dim = out_it->second.channel;
+    if (gallery.size() != dim) {
+        throw std::runtime_error("gallery size must match output feature channel count");
+    }
+
+    auto query_it = fp_->p_feature0d_x.find(feature_name);
+    if (query_it == fp_->p_feature0d_x.end()) {
+        throw std::runtime_error("plaintext feature is not available: " + feature_name);
+    }
+
+    ComputeDistanceLayer distance_layer(context_ptr_->get_parameter(), dim, norm2_min, norm2_max, nr_iterations);
+    return distance_layer.run_plaintext(query_it->second, gallery);
 }
 
 std::map<std::string, std::vector<double>>

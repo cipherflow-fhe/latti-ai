@@ -20,6 +20,7 @@
 // Works for any task (MNIST, CIFAR-10, ImageNet, etc.) by specifying --task-dir.
 // Demonstrates the InferenceClient / InferenceServer separation.
 
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <iomanip>
@@ -38,6 +39,13 @@ int main(int argc, char* argv[]) {
     vector<string> input_args;
     bool use_gpu = false;
     bool verify = false;
+    bool compute_distance = false;
+    bool normalize_gallery = false;
+    string gallery_path;
+    string distance_feature;
+    double distance_norm2_min = 21.9;
+    double distance_norm2_max = 75.2;
+    int distance_iterations = 3;
     constexpr double tolerance = 0.1;
 
     for (int i = 1; i < argc; i++) {
@@ -49,11 +57,28 @@ int main(int argc, char* argv[]) {
             input_args.push_back(argv[++i]);
         } else if (strcmp(argv[i], "--verify") == 0) {
             verify = true;
+        } else if (strcmp(argv[i], "--compute-distance") == 0) {
+            compute_distance = true;
+        } else if (strcmp(argv[i], "--normalize-gallery") == 0) {
+            normalize_gallery = true;
+        } else if (strcmp(argv[i], "--gallery") == 0 && i + 1 < argc) {
+            gallery_path = argv[++i];
+        } else if (strcmp(argv[i], "--distance-feature") == 0 && i + 1 < argc) {
+            distance_feature = argv[++i];
+        } else if (strcmp(argv[i], "--distance-norm2-min") == 0 && i + 1 < argc) {
+            distance_norm2_min = stod(argv[++i]);
+        } else if (strcmp(argv[i], "--distance-norm2-max") == 0 && i + 1 < argc) {
+            distance_norm2_max = stod(argv[++i]);
+        } else if (strcmp(argv[i], "--distance-iterations") == 0 && i + 1 < argc) {
+            distance_iterations = stoi(argv[++i]);
         }
     }
 
-    if (task_dir.empty() || input_args.empty()) {
-        cerr << "Usage: " << argv[0] << " --task-dir <path> --input [name=]<path> [--input ...] [--gpu] [--verify]"
+    if (task_dir.empty() || input_args.empty() || (compute_distance && gallery_path.empty())) {
+        cerr << "Usage: " << argv[0]
+             << " --task-dir <path> --input [name=]<path> [--input ...] [--gpu] [--verify]"
+             << " [--compute-distance --gallery <path> [--normalize-gallery] [--distance-feature <name>]"
+             << " [--distance-norm2-min <value>] [--distance-norm2-max <value>] [--distance-iterations <n>]]"
              << endl;
         return 1;
     }
@@ -63,6 +88,15 @@ int main(int argc, char* argv[]) {
     vector<string> input_names;
     for (auto& [name, _] : task_config["task_input_param"].items()) {
         input_names.push_back(name);
+    }
+
+    if (compute_distance && distance_feature.empty()) {
+        auto output_items = task_config["task_output_param"].items();
+        if (output_items.begin() == output_items.end()) {
+            cerr << "No task output feature available for distance computation." << endl;
+            return 1;
+        }
+        distance_feature = output_items.begin().key();
     }
 
     // Build input CSV map: supports "name=path" or positional mapping
@@ -88,6 +122,14 @@ int main(int argc, char* argv[]) {
     if (verify) {
         cout << "Verify mode:    ON (tolerance = " << tolerance << ")" << endl;
     }
+    if (compute_distance) {
+        cout << "Distance mode:  ON" << endl;
+        cout << "Distance input: " << distance_feature << endl;
+        cout << "Gallery:        " << gallery_path << endl;
+        cout << "Gallery mode:   " << (normalize_gallery ? "normalize before distance" : "assume normalized") << endl;
+        cout << "Norm2 range:    [" << distance_norm2_min << ", " << distance_norm2_max << "]" << endl;
+        cout << "Iterations:     " << distance_iterations << endl;
+    }
     cout << endl;
 
     // --- Client side: generate keys and encrypt input ---
@@ -108,13 +150,29 @@ int main(int argc, char* argv[]) {
     server.load_model();
 
     cout << "[Step 4/5] Running encrypted inference..." << endl;
+    const auto encrypted_compute_start = chrono::high_resolution_clock::now();
     auto encrypted_outputs = server.evaluate(encrypted_inputs);
+    Bytes encrypted_distance;
+    if (compute_distance) {
+        cout << "[Step 4/5] Computing encrypted distance..." << endl;
+        encrypted_distance = server.compute_distance(distance_feature, gallery_path, normalize_gallery, distance_norm2_min,
+                                                     distance_norm2_max, distance_iterations);
+    }
+    const auto encrypted_compute_end = chrono::high_resolution_clock::now();
+    const auto encrypted_compute_ms =
+        chrono::duration_cast<chrono::milliseconds>(encrypted_compute_end - encrypted_compute_start).count();
+    cout << "Encrypted total compute time (inference"
+         << (compute_distance ? " + repack + distance" : "") << "): " << encrypted_compute_ms << " ms" << endl;
 
     // In actual scenarios, the server sends encrypted_outputs back to the client over the network.
 
     // --- Client side: decrypt result ---
     cout << "[Step 5/5] Decrypting result..." << endl;
     auto results = client.decrypt(encrypted_outputs);
+    double distance_result = 0.0;
+    if (compute_distance) {
+        distance_result = client.decrypt_0d_scalar(encrypted_distance);
+    }
     cout << endl;
 
     // --- Display results ---
@@ -123,9 +181,20 @@ int main(int argc, char* argv[]) {
         fhe_ops_lib::print_double_message(result.output.data(), ("Encrypted output [" + name + "]").c_str(), 1);
     }
 
+    if (compute_distance) {
+        cout << "Encrypted distance [" << distance_feature << "]: " << fixed << setprecision(8) << distance_result << endl;
+    }
+
     auto plaintext_outputs = server.evaluate_plaintext(input_csvs);
     for (auto& [name, plaintext_output] : plaintext_outputs) {
         fhe_ops_lib::print_double_message(plaintext_output.data(), ("Plaintext output [" + name + "]").c_str(), 1);
+    }
+    double plaintext_distance = 0.0;
+    if (compute_distance) {
+        plaintext_distance = server.compute_distance_plaintext(distance_feature, gallery_path, normalize_gallery,
+                                                              distance_norm2_min, distance_norm2_max, distance_iterations);
+        cout << "Plaintext distance [" << distance_feature << "]: " << fixed << setprecision(8) << plaintext_distance
+             << endl;
     }
 
     if (verify) {
@@ -175,6 +244,21 @@ int main(int argc, char* argv[]) {
             cout << endl;
 
             if (max_abs_err > tolerance) {
+                cout << "Result: FAIL" << endl;
+                return 1;
+            }
+            cout << "Result: PASS" << endl;
+        }
+        if (compute_distance) {
+            const double abs_err = fabs(distance_result - plaintext_distance);
+            cout << endl;
+            cout << "========== Distance Verification [" << distance_feature << "] ==========" << endl;
+            cout << fixed << setprecision(8);
+            cout << "Encrypted distance: " << distance_result << endl;
+            cout << "Plaintext distance: " << plaintext_distance << endl;
+            cout << "Abs error:          " << abs_err << endl;
+            cout << "Tolerance:          " << tolerance << endl;
+            if (abs_err > tolerance) {
                 cout << "Result: FAIL" << endl;
                 return 1;
             }

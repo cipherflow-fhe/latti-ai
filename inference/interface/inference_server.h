@@ -64,6 +64,22 @@ public:
     /// Run plaintext inference on CSV input files (for verification).
     std::map<std::string, std::vector<double>> evaluate_plaintext(const std::map<std::string, std::string>& input_csvs);
 
+    /// Compute encrypted normalized L2 distance from an existing 0D output feature to a gallery vector.
+    Bytes compute_distance(const std::string& feature_name,
+                           const std::string& gallery_path,
+                           bool normalize_gallery,
+                           double norm2_min,
+                           double norm2_max,
+                           int nr_iterations);
+
+    /// Compute plaintext normalized L2 distance from an existing plaintext 0D output feature to a gallery vector.
+    double compute_distance_plaintext(const std::string& feature_name,
+                                      const std::string& gallery_path,
+                                      bool normalize_gallery,
+                                      double norm2_min,
+                                      double norm2_max,
+                                      int nr_iterations);
+
 private:
     std::filesystem::path server_dir_;
     bool use_gpu_;

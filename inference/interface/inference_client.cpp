@@ -239,6 +239,18 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
     return result;
 }
 
+double InferenceClient::decrypt_0d_scalar(const Bytes& encrypted_output) const {
+    Feature0DEncrypted output_ct(context_ptr_, 0);
+    output_ct.deserialize(encrypted_output);
+    output_ct.skip = 1;
+    auto decrypted = output_ct.unpack();
+    auto dec_1d = decrypted.to_array_1d();
+    if (dec_1d.size() == 0) {
+        throw std::runtime_error("empty 0D scalar output");
+    }
+    return dec_1d.data()[0];
+}
+
 std::map<std::string, DecryptedOutput>
 InferenceClient::decrypt(const std::map<std::string, Bytes>& encrypted_outputs) const {
     std::map<std::string, DecryptedOutput> results;

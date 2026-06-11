@@ -2134,6 +2134,28 @@
                 1
             ]
         },
+        "_model_new_btp_refreshed": {
+            "dim": 2,
+            "channel": 1280,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                1,
+                1
+            ],
+            "skip": [
+                128,
+                128
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 9,
+            "depth": -1,
+            "pack_num": 32768,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
         "_model_Reshape_output_0": {
             "dim": 0,
             "channel": 1280,
@@ -2141,7 +2163,7 @@
             "ckks_scale": 1,
             "skip": 16384,
             "ckks_parameter_id": "param0",
-            "level": 1,
+            "level": 9,
             "depth": -1,
             "pack_num": 2,
             "special_info": {
@@ -2166,7 +2188,7 @@
             "ckks_scale": 1,
             "skip": 16384,
             "ckks_parameter_id": "param0",
-            "level": 0,
+            "level": 8,
             "depth": -1,
             "pack_num": 2
         }
@@ -4625,6 +4647,20 @@
                 1
             ]
         },
+        "_model_new_btp":{
+            "type": "bootstrapping",
+            "channel_input": 1280,
+            "channel_output": 1280,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_model_post_pool_activation_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_model_new_btp_refreshed"
+            ],
+            "level_cost": -9
+        },
         "_model_Reshape": {
             "type": "reshape",
             "channel_input": 1280,
@@ -4632,7 +4668,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_model_post_pool_activation_RangeNormPoly2d_output_0"
+                "_model_new_btp_refreshed"
             ],
             "feature_output": [
                 "_model_Reshape_output_0"
