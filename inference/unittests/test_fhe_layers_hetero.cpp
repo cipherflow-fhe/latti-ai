@@ -255,6 +255,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
         Array<double, 2> actual = out_enc.par_lower_diagonal_transpose_unpack(n_prepad, n_heads, head_dim);
         Array<double, 2> expected = layer.run_plaintext(X_T);
+        print_double_message(actual.to_array_1d().data(), "actual", 10);
+        print_double_message(expected.to_array_1d().data(), "expected", 10);
         auto comparison = compare(expected, actual);
         REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
         REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
@@ -298,6 +300,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
         Array<double, 2> actual = out_enc.par_lower_diagonal_unpack(n_heads, {head_dim, n_prepad});
         Array<double, 2> expected = layer.run_plaintext(X_T);
+        print_double_message(actual.to_array_1d().data(), "actual", 10);
+        print_double_message(expected.to_array_1d().data(), "expected", 10);
         auto comparison = compare(expected, actual);
         REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
         REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
@@ -327,6 +331,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     Array<double, 2> actual = C_enc.par_lower_diagonal_unpack(n_heads, {n_prepad, n_prepad});
     Array<double, 2> expected = layer.run_plaintext(A, B);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
     auto comparison = compare(expected, actual);
     REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
     REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
@@ -355,6 +361,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     Array<double, 2> actual = C_enc.par_lower_diagonal_unpack(n_heads, {head_dim, n_prepad});
     Array<double, 2> expected = layer.run_plaintext(A, B);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
     auto comparison = compare(expected, actual);
     REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
     REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
