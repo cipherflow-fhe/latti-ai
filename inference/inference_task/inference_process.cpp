@@ -2580,7 +2580,7 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             pt = layer->generate_weight_pt_for_bsgs(ckks_ctx, i, j);
         } else if (op_class == "PolyRelu2D") {
             auto* layer = static_cast<PolyRelu2D*>(layer_ptr);
-            pt = layer->generate_weight_pt_for_non_absorb_indices(ckks_ctx, i, j);
+            pt = layer->generate_weight_pt_for_bsgs(ckks_ctx, i, j);
         } else if (op_class == "UpsampleNearestLayer") {
             auto* layer = static_cast<UpsampleNearestLayer*>(layer_ptr);
             pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);
