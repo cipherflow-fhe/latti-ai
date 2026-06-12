@@ -139,7 +139,7 @@ def _index_onnx_sources(onnx_model: onnx.ModelProto) -> tuple[dict[str, Attentio
                 coeff_paths=coeff_paths,
                 gamma_path=gamma_path,
                 coeffs_path=coeffs_path,
-                upper_bound=float(attrs.get('upper_bound', 3.0)),
+                upper_bound=float(attrs.get('upper_bound', 1.25)),
                 eps=float(attrs.get('eps', 1e-3)),
             )
             attention_sources[gamma_path] = source
@@ -154,7 +154,7 @@ def _index_onnx_sources(onnx_model: onnx.ModelProto) -> tuple[dict[str, Attentio
                 running_max_path=running_max_path,
                 coeff_paths=tuple(node.input[2:]),
                 degree=int(attrs.get('degree', 4)),
-                upper_bound=float(attrs.get('upper_bound', 3.0)),
+                upper_bound=float(attrs.get('upper_bound', 1.25)),
                 eps=float(attrs.get('eps', 1e-3)),
             )
 
