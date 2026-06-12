@@ -16,420 +16,404 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "par_block_col_major_layernorm.h"
+#include "par_lower_diagonal_layernorm.h"
 #include <cassert>
 #include <cmath>
 #include <stdexcept>
+#include <utility>
 
 using namespace std;
 using namespace lattisense;
 
-static uint32_t next_power_of_2(uint32_t x) {
+namespace {
+
+uint32_t next_power_of_2(uint32_t x) {
     uint32_t p = 1;
     while (p < x)
-        p *= 2;
+        p <<= 1;
     return p;
 }
 
+bool is_power_of_two(uint32_t x) {
+    return x > 0 && (x & (x - 1)) == 0;
+}
+
+void validate_upper_diag_geometry(uint32_t total_rows,
+                                  uint32_t n_prepad,
+                                  uint32_t H_prepad,
+                                  uint32_t m,
+                                  uint32_t n_slot) {
+    assert(total_rows > 0);
+    assert(n_prepad > 0);
+    assert(H_prepad > 0);
+    assert(m > 0 && is_power_of_two(m));
+
+    uint32_t H = next_power_of_2(H_prepad);
+    uint32_t n = next_power_of_2(n_prepad);
+    assert(n >= m);
+    assert(n % m == 0);
+
+    uint32_t segment_len = H * n;
+    assert(segment_len > 0);
+    assert(n_slot % segment_len == 0);
+    uint32_t c = n_slot / segment_len;
+    assert(c > 0);
+    assert(m % c == 0);
+}
+
+}  // namespace
+
 // ============================================================
-// ParBlockColMajorLNStats
+// ParUpperDiagonalLNStats
 // ============================================================
 
-ParBlockColMajorLNStats::ParBlockColMajorLNStats(const CkksParameter& param,
+ParUpperDiagonalLNStats::ParUpperDiagonalLNStats(const CkksParameter& param,
                                                  Duo shape,
-                                                 uint32_t block_size,
                                                  uint32_t n_heads,
+                                                 uint32_t head_dim,
                                                  uint32_t init_level,
                                                  double eps,
                                                  double inv_var)
     : Layer(param), eps_(eps), inv_var_(inv_var) {
+    assert(init_level >= 4);
     level_ = init_level;
-    m_ = shape[0];
-    total_dim_ = shape[1];
-    d_ = block_size;
-    n_heads_ = n_heads;
-    cols_per_head_ = total_dim_ / n_heads_;
-    n_h_padded_ = next_power_of_2(n_heads);
+    total_rows_ = shape[0];
+    n_prepad_ = shape[1];
+    H_prepad_ = n_heads;
+    m_ = head_dim;
     n_slot_ = param_.get_n() / 2;
-    assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
-    assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
+    validate_upper_diag_geometry(total_rows_, n_prepad_, H_prepad_, m_, n_slot_);
 
-    if ((uint32_t)n_slot_ >= n_h_padded_ * d_ * d_) {
-        S_ = n_h_padded_;
-        chunk_size_ = n_h_padded_ * d_ * d_;
-        n_cts_per_block_idx_ = 1;
-    } else {
-        S_ = n_slot_ / (d_ * d_);
-        chunk_size_ = n_slot_;
-        if (S_ == 1) {
-            n_h_padded_ = n_heads_;
-        }
-        n_cts_per_block_idx_ = n_h_padded_ / S_;
-    }
-    num_chunks_ = n_slot_ / chunk_size_;
-    num_block_rows_ = div_ceil(m_, d_);
-    num_block_cols_ = div_ceil(cols_per_head_, d_);
+    H_ = next_power_of_2(H_prepad_);
+    n_ = next_power_of_2(n_prepad_);
+    d_prepad_ = H_prepad_ * m_;
+    segment_len_ = H_ * n_;
+    c_ = n_slot_ / segment_len_;
+    cts_per_mb_ = m_ / c_;
+    n_mb_ = div_ceil(total_rows_, d_prepad_);
+    row_cycle_len_ = c_ * (n_ / m_);
+    assert(is_power_of_two(row_cycle_len_));
 }
 
-CkksPlaintextRingt
-ParBlockColMajorLNStats::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t, uint32_t, uint32_t) const {
+uint32_t ParUpperDiagonalLNStats::ct_index(uint32_t mb, uint32_t ct_local) const {
+    return mb * cts_per_mb_ + ct_local;
+}
+
+uint32_t ParUpperDiagonalLNStats::total_cts() const {
+    return n_mb_ * cts_per_mb_;
+}
+
+vector<double> ParUpperDiagonalLNStats::build_valid_mask(uint32_t mb, uint32_t ct_local, double value) const {
+    assert(ct_local < cts_per_mb_);
+    vector<double> mask(n_slot_, 0.0);
+    for (uint32_t local_diag = 0; local_diag < c_; local_diag++) {
+        uint32_t diag_idx = ct_local * c_ + local_diag;
+        uint32_t segment_base = local_diag * segment_len_;
+        for (uint32_t t = 0; t < n_; t++) {
+            uint32_t col = (diag_idx + t) % n_;
+            uint32_t local_row = t % m_;
+            for (uint32_t h = 0; h < H_; h++) {
+                uint32_t global_row = mb * d_prepad_ + h * m_ + local_row;
+                if (h < H_prepad_ && global_row < total_rows_ && col < n_prepad_) {
+                    mask[segment_base + t * H_ + h] = value;
+                }
+            }
+        }
+    }
+    return mask;
+}
+
+CkksPlaintextRingt ParUpperDiagonalLNStats::generate_pt(CkksContext& ctx,
+                                                        uint32_t pt_idx,
+                                                        uint32_t mb,
+                                                        uint32_t ct_local,
+                                                        uint32_t) const {
     double D = param_.get_default_scale();
     double q_L = param_.get_q(level_);
     double q_L1 = param_.get_q(level_ - 1);
     double q_L2 = param_.get_q(level_ - 2);
     double q_L3 = param_.get_q(level_ - 3);
-    double norm_dim = static_cast<double>(total_dim_);
 
     if (pt_idx == 0) {
-        vector<double> h0_mask(n_slot_, 0.0);
-        for (uint32_t i = 0; i < (uint32_t)n_slot_; i++) {
-            uint32_t pos_in_chunk = i % chunk_size_;
-            uint32_t h_local = pos_in_chunk % S_;
-            if (h_local == 0)
-                h0_mask[i] = 1.0;
-        }
-        return ctx.encode_ringt(h0_mask, q_L);
+        vector<double> inv_n_vec(n_slot_, 1.0 / static_cast<double>(n_prepad_));
+        return ctx.encode_ringt(inv_n_vec, q_L);
     }
     if (pt_idx == 1) {
-        vector<double> inv_n_vec(n_slot_, 1.0 / norm_dim);
-        return ctx.encode_ringt(inv_n_vec, q_L1);
+        vector<double> iv_vec(n_slot_, inv_var_);
+        return ctx.encode_ringt(iv_vec, q_L1 / D * q_L2);
     }
     if (pt_idx == 2) {
-        vector<double> iv_vec(n_slot_, inv_var_);
-        return ctx.encode_ringt(iv_vec, q_L2 / D * q_L3);
-    }
-    if (pt_idx == 3) {
         vector<double> eps_vec(n_slot_, eps_ * inv_var_);
         return ctx.encode_ringt(eps_vec, D);
     }
-    throw runtime_error("ParBlockColMajorLNStats: unknown pt_idx " + to_string(pt_idx));
+    if (pt_idx == 3) {
+        return ctx.encode_ringt(build_valid_mask(mb, ct_local), q_L3);
+    }
+    throw runtime_error("ParUpperDiagonalLNStats: unknown pt_idx " + to_string(pt_idx));
 }
 
-void ParBlockColMajorLNStats::prepare_weight() {
+void ParUpperDiagonalLNStats::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
-    h0_mask_pt_ = generate_pt(ctx, 0);
-    inv_n_pt_ = generate_pt(ctx, 1);
-    iv_pt_ = generate_pt(ctx, 2);
-    eps_add_pt_ = generate_pt(ctx, 3);
+    inv_n_pt_ = generate_pt(ctx, 0);
+    iv_pt_ = generate_pt(ctx, 1);
+    eps_add_pt_ = generate_pt(ctx, 2);
+
+    valid_mask_pt_.resize(total_cts());
+    for (uint32_t mb = 0; mb < n_mb_; mb++) {
+        for (uint32_t ct_local = 0; ct_local < cts_per_mb_; ct_local++) {
+            valid_mask_pt_[ct_index(mb, ct_local)] = generate_pt(ctx, 3, mb, ct_local);
+        }
+    }
 }
 
-CkksCiphertext ParBlockColMajorLNStats::intra_block_col_sum(CkksContext& ctx, const CkksCiphertext& ct) const {
-    // Par format slot: (row + d*col)*S + h_local
-    // Column sum only — rotate by d*S, 2*d*S, ..., (d/2)*d*S
-    // output's each block have same value in each row, which is the column sum of the input's corresponding block
+CkksCiphertext ParUpperDiagonalLNStats::intra_row_sum(CkksContext& ctx, const CkksCiphertext& ct) const {
+    // par_upper_diagonal slot: local_diag segment, then (t, h).
+    // For fixed original row (h, t % m), slots form a cycle with stride m * H.
     CkksCiphertext result = ct.copy();
-    for (uint32_t step = 1; step < d_; step *= 2) {
-        int rot = step * d_ * S_;
-        auto rotated = ctx.rotate(result, rot);
-        result = ctx.add(result, rotated);
+    uint32_t stride = m_ * H_;
+    for (uint32_t step = 1; step < row_cycle_len_; step <<= 1) {
+        result = ctx.add(result, ctx.rotate(result, (int)(step * stride)));
     }
     return result;
 }
 
-vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
+vector<CkksCiphertext> ParUpperDiagonalLNStats::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
+    assert(x.level == level_);
+    assert(x.shape[0] == total_rows_ && x.shape[1] == n_prepad_);
+    assert(x.head_shape[0] == m_ && x.head_shape[1] == n_prepad_);
+    assert(x.matmul_block_size == m_);
+    assert(x.data.size() == total_cts());
+
     double D = param_.get_default_scale();
-    uint32_t total_cts = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
+    uint32_t n_ct = total_cts();
 
-    // Step 1: Column sum + x_sq for all ciphertexts
-    vector<CkksCiphertext> col_sum_per_block(total_cts);
-    vector<CkksCiphertext> x_sq(total_cts);
-
-    parallel_for(total_cts, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        col_sum_per_block[ct_idx] = intra_block_col_sum(ctx_copy, x.data[ct_idx]);
-        auto prod = ctx_copy.mult(x.data[ct_idx], x.data[ct_idx]);
-        auto relin = ctx_copy.relinearize(prod);
-        x_sq[ct_idx] = ctx_copy.rescale(relin, D / param_.get_q(level_) * D);
+    vector<CkksCiphertext> partial_sum_x(n_ct);
+    vector<CkksCiphertext> x_sq(n_ct);
+    parallel_for(n_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
+        partial_sum_x[idx] = intra_row_sum(ctx_copy, x.data[idx]);
+        auto prod = ctx_copy.mult(x.data[idx], x.data[idx]);
+        x_sq[idx] = ctx_copy.rescale(ctx_copy.relinearize(prod), D / param_.get_q(level_) * D);
     });
 
-    // Step 2: Cross-block-col and cross-group sums of column-summed data
-    vector<CkksCiphertext> col_sum_x(num_block_rows_);
-    for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
-        bool first = true;
-        for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
-            for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-                uint32_t ct_idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
-                if (first) {
-                    col_sum_x[bi] = col_sum_per_block[ct_idx].copy();
-                    first = false;
-                } else {
-                    col_sum_x[bi] = ctx.add(col_sum_x[bi], col_sum_per_block[ct_idx]);
-                }
-            }
+    vector<CkksCiphertext> sum_x(n_mb_);
+    for (uint32_t mb = 0; mb < n_mb_; mb++) {
+        sum_x[mb] = partial_sum_x[ct_index(mb, 0)].copy();
+        for (uint32_t ct_local = 1; ct_local < cts_per_mb_; ct_local++) {
+            sum_x[mb] = ctx.add(sum_x[mb], partial_sum_x[ct_index(mb, ct_local)]);
         }
     }
 
-    // Step 3: Cross-head sum + mask + replicate for sum_x
-    vector<CkksCiphertext> sum_x(num_block_rows_);
-    parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        CkksCiphertext summed = col_sum_x[bi].copy();
-        for (uint32_t step = 1; step < S_; step *= 2) {
-            auto rotated = ctx_copy.rotate(summed, (int)step);
-            summed = ctx_copy.add(summed, rotated);
-        }
-        auto mask_mul = ctx_copy.ringt_to_mul(h0_mask_pt_, summed.get_level());
-        auto masked = ctx_copy.mult_plain_mul(summed, mask_mul);
-        auto masked_rescaled = ctx_copy.rescale(masked, D);
-        CkksCiphertext replicated = masked_rescaled.copy();
-        for (uint32_t step = 1; step < S_; step *= 2) {
-            auto rotated = ctx_copy.rotate(replicated, -(int)step);
-            replicated = ctx_copy.add(replicated, rotated);
-        }
-        sum_x[bi] = move(replicated);
-    });
-    // sum_x at level L-1, scale D
+    vector<CkksCiphertext> partial_sum_x_sq(n_ct);
+    parallel_for(n_ct, th_nums, ctx,
+                 [&](CkksContext& ctx_copy, int idx) { partial_sum_x_sq[idx] = intra_row_sum(ctx_copy, x_sq[idx]); });
 
-    // Step 4: Column sum + cross-block/cross-group sum of x_sq
-    vector<CkksCiphertext> col_sum_x_sq_per_block(total_cts);
-    parallel_for(total_cts, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        col_sum_x_sq_per_block[ct_idx] = intra_block_col_sum(ctx_copy, x_sq[ct_idx]);
-    });
-
-    vector<CkksCiphertext> col_sum_x_sq(num_block_rows_);
-    for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
-        bool first = true;
-        for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
-            for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-                uint32_t ct_idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
-                if (first) {
-                    col_sum_x_sq[bi] = col_sum_x_sq_per_block[ct_idx].copy();
-                    first = false;
-                } else {
-                    col_sum_x_sq[bi] = ctx.add(col_sum_x_sq[bi], col_sum_x_sq_per_block[ct_idx]);
-                }
-            }
+    vector<CkksCiphertext> sum_x_sq(n_mb_);
+    for (uint32_t mb = 0; mb < n_mb_; mb++) {
+        sum_x_sq[mb] = partial_sum_x_sq[ct_index(mb, 0)].copy();
+        for (uint32_t ct_local = 1; ct_local < cts_per_mb_; ct_local++) {
+            sum_x_sq[mb] = ctx.add(sum_x_sq[mb], partial_sum_x_sq[ct_index(mb, ct_local)]);
         }
     }
 
-    // Step 5: Cross-head sum + mask + replicate for sum_x_sq
-    vector<CkksCiphertext> sum_x_sq_row(num_block_rows_);
-    parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        CkksCiphertext summed = col_sum_x_sq[bi].copy();
-        for (uint32_t step = 1; step < S_; step *= 2) {
-            auto rotated = ctx_copy.rotate(summed, (int)step);
-            summed = ctx_copy.add(summed, rotated);
-        }
-        auto mask_mul = ctx_copy.ringt_to_mul(h0_mask_pt_, summed.get_level());
-        auto masked = ctx_copy.mult_plain_mul(summed, mask_mul);
-        auto masked_rescaled = ctx_copy.rescale(masked, D / param_.get_q(level_ - 1) * D);
-        CkksCiphertext replicated = masked_rescaled.copy();
-        for (uint32_t step = 1; step < S_; step *= 2) {
-            auto rotated = ctx_copy.rotate(replicated, -(int)step);
-            replicated = ctx_copy.add(replicated, rotated);
-        }
-        sum_x_sq_row[bi] = move(replicated);
+    vector<CkksCiphertext> mean_cts(n_mb_);
+    parallel_for(n_mb_, th_nums, ctx, [&](CkksContext& ctx_copy, int mb) {
+        auto pt_inv_n = ctx_copy.ringt_to_mul(inv_n_pt_, level_);
+        mean_cts[mb] = ctx_copy.rescale(ctx_copy.mult_plain_mul(sum_x[mb], pt_inv_n), D);
     });
-    // sum_x_sq_row at level L-2, scale D^2/q_{L-1}
 
-    // Step 6: mean = sum_x * pt(1/norm_dim) -> L-2, exact D
-    vector<CkksCiphertext> mean_cts(num_block_rows_);
-    parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
+    vector<CkksCiphertext> E_x_sq(n_mb_);
+    vector<CkksCiphertext> mean_sq(n_mb_);
+    parallel_for(n_mb_, th_nums, ctx, [&](CkksContext& ctx_copy, int mb) {
+        auto mean_prod = ctx_copy.mult(mean_cts[mb], mean_cts[mb]);
+        mean_sq[mb] = ctx_copy.rescale(ctx_copy.relinearize(mean_prod), D / param_.get_q(level_ - 1) * D);
+
         auto pt_inv_n = ctx_copy.ringt_to_mul(inv_n_pt_, level_ - 1);
-        auto p = ctx_copy.mult_plain_mul(sum_x[bi], pt_inv_n);
-        mean_cts[bi] = ctx_copy.rescale(p, D);
-    });
-    // mean at L-2, scale D
-
-    // Step 7: mean_sq and E_x_sq -> L-3
-    vector<CkksCiphertext> E_x_sq(num_block_rows_);
-    vector<CkksCiphertext> mean_sq(num_block_rows_);
-    parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto prod = ctx_copy.mult(mean_cts[bi], mean_cts[bi]);
-        mean_sq[bi] = ctx_copy.rescale(ctx_copy.relinearize(prod), D / param_.get_q(level_ - 2) * D);
-
-        auto pt_inv_n = ctx_copy.ringt_to_mul(inv_n_pt_, level_ - 2);
-        auto p = ctx_copy.mult_plain_mul(sum_x_sq_row[bi], pt_inv_n);
-        E_x_sq[bi] = ctx_copy.rescale(p, D / param_.get_q(level_ - 2) * D);
+        auto ex_raw = ctx_copy.mult_plain_mul(sum_x_sq[mb], pt_inv_n);
+        E_x_sq[mb] = ctx_copy.rescale(ex_raw, D / param_.get_q(level_ - 1) * D);
     });
 
-    // Step 8: var = E_x_sq - mean_sq
-    vector<CkksCiphertext> var_cts(num_block_rows_);
-    for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
-        var_cts[bi] = ctx.sub(E_x_sq[bi], mean_sq[bi]);
+    vector<CkksCiphertext> var_cts(n_mb_);
+    for (uint32_t mb = 0; mb < n_mb_; mb++) {
+        var_cts[mb] = ctx.sub(E_x_sq[mb], mean_sq[mb]);
     }
 
-    // Step 9: a = var * inv_var + eps*inv_var
-    vector<CkksCiphertext> a_cts(num_block_rows_);
-    parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto pt_iv = ctx_copy.ringt_to_mul(iv_pt_, level_ - 3);
-        auto p = ctx_copy.mult_plain_mul(var_cts[bi], pt_iv);
-        a_cts[bi] = ctx_copy.rescale(p, D);
-        a_cts[bi] = ctx_copy.add_plain_ringt(a_cts[bi], eps_add_pt_);
+    vector<CkksCiphertext> a_base(n_mb_);
+    parallel_for(n_mb_, th_nums, ctx, [&](CkksContext& ctx_copy, int mb) {
+        auto pt_iv = ctx_copy.ringt_to_mul(iv_pt_, level_ - 2);
+        a_base[mb] = ctx_copy.rescale(ctx_copy.mult_plain_mul(var_cts[mb], pt_iv), D);
+        a_base[mb] = ctx_copy.add_plain_ringt(a_base[mb], eps_add_pt_);
     });
 
-    return move(a_cts);
+    vector<CkksCiphertext> a_cts(n_ct);
+    parallel_for(n_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
+        uint32_t mb = idx / cts_per_mb_;
+        auto mask_mul = ctx_copy.ringt_to_mul(valid_mask_pt_[idx], level_ - 3);
+        a_cts[idx] = ctx_copy.rescale(ctx_copy.mult_plain_mul(a_base[mb], mask_mul), D);
+    });
+
+    return a_cts;
 }
 
-Array<double, 2> ParBlockColMajorLNStats::run_plaintext(const Array<double, 2>& x) const {
-    Array<double, 2> result({m_, 1});
-    for (uint32_t i = 0; i < m_; i++) {
+Array<double, 2> ParUpperDiagonalLNStats::run_plaintext(const Array<double, 2>& x) const {
+    Array<double, 2> result({total_rows_, 1});
+    for (uint32_t i = 0; i < total_rows_; i++) {
         double sum_x = 0.0;
         double sum_x2 = 0.0;
-        for (uint32_t j = 0; j < total_dim_; j++) {
+        for (uint32_t j = 0; j < n_prepad_; j++) {
             double v = x.get(i, j);
             sum_x += v;
             sum_x2 += v * v;
         }
-        double mean = sum_x / total_dim_;
-        double var = sum_x2 / total_dim_ - mean * mean;
+        double mean = sum_x / static_cast<double>(n_prepad_);
+        double var = sum_x2 / static_cast<double>(n_prepad_) - mean * mean;
         result.set(i, 0, (var + eps_) * inv_var_);
     }
     return result;
 }
 
 // ============================================================
-// ParBlockColMajorLNXCentered
+// ParUpperDiagonalLNXCentered
 // ============================================================
 
-ParBlockColMajorLNXCentered::ParBlockColMajorLNXCentered(const CkksParameter& param,
+ParUpperDiagonalLNXCentered::ParUpperDiagonalLNXCentered(const CkksParameter& param,
                                                          Duo shape,
-                                                         uint32_t block_size,
                                                          uint32_t n_heads,
+                                                         uint32_t head_dim,
                                                          uint32_t init_level)
     : Layer(param) {
+    assert(init_level >= 2);
     level_ = init_level;
-    m_ = shape[0];
-    total_dim_ = shape[1];
-    d_ = block_size;
-    n_heads_ = n_heads;
-    cols_per_head_ = total_dim_ / n_heads_;
-    n_h_padded_ = next_power_of_2(n_heads);
+    total_rows_ = shape[0];
+    n_prepad_ = shape[1];
+    H_prepad_ = n_heads;
+    m_ = head_dim;
     n_slot_ = param_.get_n() / 2;
-    assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
-    assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
+    validate_upper_diag_geometry(total_rows_, n_prepad_, H_prepad_, m_, n_slot_);
 
-    if ((uint32_t)n_slot_ >= n_h_padded_ * d_ * d_) {
-        S_ = n_h_padded_;
-        chunk_size_ = n_h_padded_ * d_ * d_;
-        n_cts_per_block_idx_ = 1;
-    } else {
-        S_ = n_slot_ / (d_ * d_);
-        chunk_size_ = n_slot_;
-        if (S_ == 1) {
-            n_h_padded_ = n_heads_;
-        }
-        n_cts_per_block_idx_ = n_h_padded_ / S_;
-    }
-    num_chunks_ = n_slot_ / chunk_size_;
-    num_block_rows_ = div_ceil(m_, d_);
-    num_block_cols_ = div_ceil(cols_per_head_, d_);
+    H_ = next_power_of_2(H_prepad_);
+    n_ = next_power_of_2(n_prepad_);
+    d_prepad_ = H_prepad_ * m_;
+    segment_len_ = H_ * n_;
+    c_ = n_slot_ / segment_len_;
+    cts_per_mb_ = m_ / c_;
+    n_mb_ = div_ceil(total_rows_, d_prepad_);
+    row_cycle_len_ = c_ * (n_ / m_);
+    assert(is_power_of_two(row_cycle_len_));
 }
 
-CkksPlaintextRingt
-ParBlockColMajorLNXCentered::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t, uint32_t, uint32_t) const {
-    double q_L = param_.get_q(level_);
-    double q_L1 = param_.get_q(level_ - 1);
-    double norm_dim = static_cast<double>(total_dim_);
-
-    if (pt_idx == 0) {
-        vector<double> h0_mask(n_slot_, 0.0);
-        for (uint32_t i = 0; i < (uint32_t)n_slot_; i++) {
-            uint32_t pos_in_chunk = i % chunk_size_;
-            uint32_t h_local = pos_in_chunk % S_;
-            if (h_local == 0)
-                h0_mask[i] = 1.0;
-        }
-        return ctx.encode_ringt(h0_mask, q_L);
-    }
-    if (pt_idx == 1) {
-        vector<double> inv_n_vec(n_slot_, 1.0 / norm_dim);
-        return ctx.encode_ringt(inv_n_vec, q_L1);
-    }
-    throw runtime_error("ParBlockColMajorLNXCentered: unknown pt_idx " + to_string(pt_idx));
+uint32_t ParUpperDiagonalLNXCentered::ct_index(uint32_t mb, uint32_t ct_local) const {
+    return mb * cts_per_mb_ + ct_local;
 }
 
-void ParBlockColMajorLNXCentered::prepare_weight() {
-    CkksContext ctx = CkksContext::create_empty_context(param_);
-    h0_mask_pt_ = generate_pt(ctx, 0);
-    inv_n_pt_ = generate_pt(ctx, 1);
+uint32_t ParUpperDiagonalLNXCentered::total_cts() const {
+    return n_mb_ * cts_per_mb_;
 }
 
-CkksCiphertext ParBlockColMajorLNXCentered::intra_block_col_sum(CkksContext& ctx, const CkksCiphertext& ct) const {
-    CkksCiphertext result = ct.copy();
-    for (uint32_t step = 1; step < d_; step *= 2) {
-        int rot = step * d_ * S_;
-        auto rotated = ctx.rotate(result, rot);
-        result = ctx.add(result, rotated);
-    }
-    return result;
-}
-
-vector<CkksCiphertext> ParBlockColMajorLNXCentered::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
-    double D = param_.get_default_scale();
-    uint32_t total_cts = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
-
-    // Step 1: Column sum for all ciphertexts
-    vector<CkksCiphertext> col_sum_per_block(total_cts);
-    parallel_for(total_cts, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        col_sum_per_block[ct_idx] = intra_block_col_sum(ctx_copy, x.data[ct_idx]);
-    });
-
-    // Step 2: Cross-block-col and cross-group sums
-    vector<CkksCiphertext> col_sum_x(num_block_rows_);
-    for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
-        bool first = true;
-        for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
-            for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-                uint32_t ct_idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
-                if (first) {
-                    col_sum_x[bi] = col_sum_per_block[ct_idx].copy();
-                    first = false;
-                } else {
-                    col_sum_x[bi] = ctx.add(col_sum_x[bi], col_sum_per_block[ct_idx]);
+vector<double> ParUpperDiagonalLNXCentered::build_valid_mask(uint32_t mb, uint32_t ct_local, double value) const {
+    assert(ct_local < cts_per_mb_);
+    vector<double> mask(n_slot_, 0.0);
+    for (uint32_t local_diag = 0; local_diag < c_; local_diag++) {
+        uint32_t diag_idx = ct_local * c_ + local_diag;
+        uint32_t segment_base = local_diag * segment_len_;
+        for (uint32_t t = 0; t < n_; t++) {
+            uint32_t col = (diag_idx + t) % n_;
+            uint32_t local_row = t % m_;
+            for (uint32_t h = 0; h < H_; h++) {
+                uint32_t global_row = mb * d_prepad_ + h * m_ + local_row;
+                if (h < H_prepad_ && global_row < total_rows_ && col < n_prepad_) {
+                    mask[segment_base + t * H_ + h] = value;
                 }
             }
         }
     }
-
-    // Step 3: Cross-head sum + mask + replicate for sum_x
-    vector<CkksCiphertext> sum_x(num_block_rows_);
-    parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        CkksCiphertext summed = col_sum_x[bi].copy();
-        for (uint32_t step = 1; step < S_; step *= 2) {
-            auto rotated = ctx_copy.rotate(summed, (int)step);
-            summed = ctx_copy.add(summed, rotated);
-        }
-        auto mask_mul = ctx_copy.ringt_to_mul(h0_mask_pt_, summed.get_level());
-        auto masked = ctx_copy.mult_plain_mul(summed, mask_mul);
-        auto masked_rescaled = ctx_copy.rescale(masked, D);
-        CkksCiphertext replicated = masked_rescaled.copy();
-        for (uint32_t step = 1; step < S_; step *= 2) {
-            auto rotated = ctx_copy.rotate(replicated, -(int)step);
-            replicated = ctx_copy.add(replicated, rotated);
-        }
-        sum_x[bi] = move(replicated);
-    });
-    // sum_x at level L-1, scale D
-
-    // Step 4: mean = sum_x * pt(1/norm_dim) -> L-2, exact D
-    vector<CkksCiphertext> mean_cts(num_block_rows_);
-    parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto pt_inv_n = ctx_copy.ringt_to_mul(inv_n_pt_, level_ - 1);
-        auto p = ctx_copy.mult_plain_mul(sum_x[bi], pt_inv_n);
-        mean_cts[bi] = ctx_copy.rescale(p, D);
-    });
-    // mean at L-2, scale D
-
-    // Step 5: x_centered = drop(x,2) - mean, per ct -> L-2, scale D
-    vector<CkksCiphertext> x_centered(total_cts);
-    parallel_for(total_cts, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        uint32_t block_idx = ct_idx / n_cts_per_block_idx_;
-        uint32_t bi = block_idx % num_block_rows_;
-        auto x_drop = ctx_copy.drop_level(x.data[ct_idx], 2);
-        x_centered[ct_idx] = ctx_copy.sub(x_drop, mean_cts[bi]);
-    });
-
-    return move(x_centered);
+    return mask;
 }
 
-Array<double, 2> ParBlockColMajorLNXCentered::run_plaintext(const Array<double, 2>& x) const {
-    Array<double, 2> result({m_, total_dim_});
-    for (uint32_t i = 0; i < m_; i++) {
+CkksPlaintextRingt ParUpperDiagonalLNXCentered::generate_pt(CkksContext& ctx,
+                                                            uint32_t pt_idx,
+                                                            uint32_t mb,
+                                                            uint32_t ct_local,
+                                                            uint32_t) const {
+    if (pt_idx == 0) {
+        vector<double> inv_n_vec(n_slot_, 1.0 / static_cast<double>(n_prepad_));
+        return ctx.encode_ringt(inv_n_vec, param_.get_q(level_));
+    }
+    if (pt_idx == 1) {
+        return ctx.encode_ringt(build_valid_mask(mb, ct_local), param_.get_q(level_ - 1));
+    }
+    throw runtime_error("ParUpperDiagonalLNXCentered: unknown pt_idx " + to_string(pt_idx));
+}
+
+void ParUpperDiagonalLNXCentered::prepare_weight() {
+    CkksContext ctx = CkksContext::create_empty_context(param_);
+    inv_n_pt_ = generate_pt(ctx, 0);
+
+    valid_mask_pt_.resize(total_cts());
+    for (uint32_t mb = 0; mb < n_mb_; mb++) {
+        for (uint32_t ct_local = 0; ct_local < cts_per_mb_; ct_local++) {
+            valid_mask_pt_[ct_index(mb, ct_local)] = generate_pt(ctx, 1, mb, ct_local);
+        }
+    }
+}
+
+CkksCiphertext ParUpperDiagonalLNXCentered::intra_row_sum(CkksContext& ctx, const CkksCiphertext& ct) const {
+    CkksCiphertext result = ct.copy();
+    uint32_t stride = m_ * H_;
+    for (uint32_t step = 1; step < row_cycle_len_; step <<= 1) {
+        result = ctx.add(result, ctx.rotate(result, (int)(step * stride)));
+    }
+    return result;
+}
+
+vector<CkksCiphertext> ParUpperDiagonalLNXCentered::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
+    assert(x.level == level_);
+    assert(x.shape[0] == total_rows_ && x.shape[1] == n_prepad_);
+    assert(x.head_shape[0] == m_ && x.head_shape[1] == n_prepad_);
+    assert(x.matmul_block_size == m_);
+    assert(x.data.size() == total_cts());
+
+    double D = param_.get_default_scale();
+    uint32_t n_ct = total_cts();
+
+    vector<CkksCiphertext> partial_sum_x(n_ct);
+    parallel_for(n_ct, th_nums, ctx,
+                 [&](CkksContext& ctx_copy, int idx) { partial_sum_x[idx] = intra_row_sum(ctx_copy, x.data[idx]); });
+
+    vector<CkksCiphertext> sum_x(n_mb_);
+    for (uint32_t mb = 0; mb < n_mb_; mb++) {
+        sum_x[mb] = partial_sum_x[ct_index(mb, 0)].copy();
+        for (uint32_t ct_local = 1; ct_local < cts_per_mb_; ct_local++) {
+            sum_x[mb] = ctx.add(sum_x[mb], partial_sum_x[ct_index(mb, ct_local)]);
+        }
+    }
+
+    vector<CkksCiphertext> mean_cts(n_mb_);
+    parallel_for(n_mb_, th_nums, ctx, [&](CkksContext& ctx_copy, int mb) {
+        auto pt_inv_n = ctx_copy.ringt_to_mul(inv_n_pt_, level_);
+        mean_cts[mb] = ctx_copy.rescale(ctx_copy.mult_plain_mul(sum_x[mb], pt_inv_n), D);
+    });
+
+    vector<CkksCiphertext> x_centered(n_ct);
+    parallel_for(n_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
+        uint32_t mb = idx / cts_per_mb_;
+        auto x_drop = ctx_copy.drop_level(x.data[idx]);
+        auto centered = ctx_copy.sub(x_drop, mean_cts[mb]);
+        auto mask_mul = ctx_copy.ringt_to_mul(valid_mask_pt_[idx], level_ - 1);
+        x_centered[idx] = ctx_copy.rescale(ctx_copy.mult_plain_mul(centered, mask_mul), D);
+    });
+
+    return x_centered;
+}
+
+Array<double, 2> ParUpperDiagonalLNXCentered::run_plaintext(const Array<double, 2>& x) const {
+    Array<double, 2> result({total_rows_, n_prepad_});
+    for (uint32_t i = 0; i < total_rows_; i++) {
         double sum_x = 0.0;
-        for (uint32_t j = 0; j < total_dim_; j++) {
+        for (uint32_t j = 0; j < n_prepad_; j++) {
             sum_x += x.get(i, j);
         }
-        double mean = sum_x / total_dim_;
-        for (uint32_t j = 0; j < total_dim_; j++) {
+        double mean = sum_x / static_cast<double>(n_prepad_);
+        for (uint32_t j = 0; j < n_prepad_; j++) {
             result.set(i, j, x.get(i, j) - mean);
         }
     }
@@ -437,77 +421,122 @@ Array<double, 2> ParBlockColMajorLNXCentered::run_plaintext(const Array<double, 
 }
 
 // ============================================================
-// ParBlockColMajorLNMinimaxInit (same logic as block version)
+// ParUpperDiagonalLNMinimaxInit
 // ============================================================
 
-ParBlockColMajorLNMinimaxInit::ParBlockColMajorLNMinimaxInit(const CkksParameter& param,
-                                                             uint32_t block_size,
+ParUpperDiagonalLNMinimaxInit::ParUpperDiagonalLNMinimaxInit(const CkksParameter& param,
+                                                             Duo shape,
+                                                             uint32_t n_heads,
+                                                             uint32_t head_dim,
                                                              uint32_t input_level,
                                                              double c0,
                                                              double c1,
                                                              double c2)
     : Layer(param), c0_(c0), c1_(c1), c2_(c2) {
+    assert(input_level >= 2);
     level_ = input_level;
-    d_ = block_size;
+    total_rows_ = shape[0];
+    n_prepad_ = shape[1];
+    H_prepad_ = n_heads;
+    m_ = head_dim;
     n_slot_ = param_.get_n() / 2;
-    chunk_size_ = d_ * d_;
+    validate_upper_diag_geometry(total_rows_, n_prepad_, H_prepad_, m_, n_slot_);
+
+    H_ = next_power_of_2(H_prepad_);
+    n_ = next_power_of_2(n_prepad_);
+    d_prepad_ = H_prepad_ * m_;
+    segment_len_ = H_ * n_;
+    c_ = n_slot_ / segment_len_;
+    cts_per_mb_ = m_ / c_;
+    n_mb_ = div_ceil(total_rows_, d_prepad_);
 }
 
-CkksPlaintextRingt
-ParBlockColMajorLNMinimaxInit::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t, uint32_t, uint32_t) const {
+uint32_t ParUpperDiagonalLNMinimaxInit::ct_index(uint32_t mb, uint32_t ct_local) const {
+    return mb * cts_per_mb_ + ct_local;
+}
+
+uint32_t ParUpperDiagonalLNMinimaxInit::total_cts() const {
+    return n_mb_ * cts_per_mb_;
+}
+
+vector<double> ParUpperDiagonalLNMinimaxInit::build_valid_mask(uint32_t mb, uint32_t ct_local, double value) const {
+    assert(ct_local < cts_per_mb_);
+    vector<double> mask(n_slot_, 0.0);
+    for (uint32_t local_diag = 0; local_diag < c_; local_diag++) {
+        uint32_t diag_idx = ct_local * c_ + local_diag;
+        uint32_t segment_base = local_diag * segment_len_;
+        for (uint32_t t = 0; t < n_; t++) {
+            uint32_t col = (diag_idx + t) % n_;
+            uint32_t local_row = t % m_;
+            for (uint32_t h = 0; h < H_; h++) {
+                uint32_t global_row = mb * d_prepad_ + h * m_ + local_row;
+                if (h < H_prepad_ && global_row < total_rows_ && col < n_prepad_) {
+                    mask[segment_base + t * H_ + h] = value;
+                }
+            }
+        }
+    }
+    return mask;
+}
+
+CkksPlaintextRingt ParUpperDiagonalLNMinimaxInit::generate_pt(CkksContext& ctx,
+                                                              uint32_t pt_idx,
+                                                              uint32_t mb,
+                                                              uint32_t ct_local,
+                                                              uint32_t) const {
     double D = param_.get_default_scale();
     double q_L = param_.get_q(level_);
-
     if (pt_idx == 0) {
-        vector<double> c0_vec(n_slot_, c0_);
-        return ctx.encode_ringt(c0_vec, D);
+        return ctx.encode_ringt(build_valid_mask(mb, ct_local, c0_), D);
     }
     if (pt_idx == 1) {
-        vector<double> c1_vec(n_slot_, c1_);
-        return ctx.encode_ringt(c1_vec, q_L);
+        return ctx.encode_ringt(build_valid_mask(mb, ct_local, c1_), q_L);
     }
     if (pt_idx == 2) {
-        double q_L1 = param_.get_q(level_ - 1);
-        vector<double> c2_vec(n_slot_, c2_);
-        return ctx.encode_ringt(c2_vec, q_L / D * q_L1);
+        return ctx.encode_ringt(build_valid_mask(mb, ct_local, c2_), q_L / D * param_.get_q(level_ - 1));
     }
-    throw runtime_error("ParBlockColMajorLNMinimaxInit: unknown pt_idx " + to_string(pt_idx));
+    throw runtime_error("ParUpperDiagonalLNMinimaxInit: unknown pt_idx " + to_string(pt_idx));
 }
 
-void ParBlockColMajorLNMinimaxInit::prepare_weight() {
+void ParUpperDiagonalLNMinimaxInit::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
-    c0_add_pt_ = generate_pt(ctx, 0);
-    c1_pt_ = generate_pt(ctx, 1);
-    c2_norm_pt_ = generate_pt(ctx, 2);
+    c0_add_pt_.resize(total_cts());
+    c1_pt_.resize(total_cts());
+    c2_norm_pt_.resize(total_cts());
+    for (uint32_t mb = 0; mb < n_mb_; mb++) {
+        for (uint32_t ct_local = 0; ct_local < cts_per_mb_; ct_local++) {
+            uint32_t idx = ct_index(mb, ct_local);
+            c0_add_pt_[idx] = generate_pt(ctx, 0, mb, ct_local);
+            c1_pt_[idx] = generate_pt(ctx, 1, mb, ct_local);
+            c2_norm_pt_[idx] = generate_pt(ctx, 2, mb, ct_local);
+        }
+    }
 }
 
-vector<CkksCiphertext> ParBlockColMajorLNMinimaxInit::run(CkksContext& ctx, const vector<CkksCiphertext>& a_cts) {
+vector<CkksCiphertext> ParUpperDiagonalLNMinimaxInit::run(CkksContext& ctx, const vector<CkksCiphertext>& a_cts) {
+    assert(a_cts.size() == total_cts());
     double D = param_.get_default_scale();
-    uint32_t n_rows = a_cts.size();
-    vector<CkksCiphertext> y_cts(n_rows);
+    vector<CkksCiphertext> y_cts(a_cts.size());
 
-    parallel_for(n_rows, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto a_sq_raw = ctx_copy.mult(a_cts[bi], a_cts[bi]);
+    parallel_for(a_cts.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
+        auto a_sq_raw = ctx_copy.mult(a_cts[idx], a_cts[idx]);
         auto a_sq = ctx_copy.rescale(ctx_copy.relinearize(a_sq_raw), D / param_.get_q(level_) * D);
 
-        auto c2_mul = ctx_copy.ringt_to_mul(c2_norm_pt_, level_ - 1);
+        auto c2_mul = ctx_copy.ringt_to_mul(c2_norm_pt_[idx], level_ - 1);
         auto c2a2 = ctx_copy.rescale(ctx_copy.mult_plain_mul(a_sq, c2_mul), D);
 
-        auto c1_mul = ctx_copy.ringt_to_mul(c1_pt_, level_);
-        auto c1a = ctx_copy.rescale(ctx_copy.mult_plain_mul(a_cts[bi], c1_mul), D);
+        auto c1_mul = ctx_copy.ringt_to_mul(c1_pt_[idx], level_);
+        auto c1a = ctx_copy.rescale(ctx_copy.mult_plain_mul(a_cts[idx], c1_mul), D);
 
-        auto c1a_drop = ctx_copy.drop_level(c1a);
-
-        auto y0 = ctx_copy.add(c1a_drop, c2a2);
-        y0 = ctx_copy.add_plain_ringt(y0, c0_add_pt_);
-
-        y_cts[bi] = move(y0);
+        auto y0 = ctx_copy.add(ctx_copy.drop_level(c1a), c2a2);
+        y0 = ctx_copy.add_plain_ringt(y0, c0_add_pt_[idx]);
+        y_cts[idx] = move(y0);
     });
 
     return y_cts;
 }
 
-Array<double, 2> ParBlockColMajorLNMinimaxInit::run_plaintext(const Array<double, 2>& a) const {
+Array<double, 2> ParUpperDiagonalLNMinimaxInit::run_plaintext(const Array<double, 2>& a) const {
     auto shape = a.get_shape();
     Array<double, 2> result(shape);
     for (uint64_t i = 0; i < shape[0]; i++) {
@@ -520,21 +549,18 @@ Array<double, 2> ParBlockColMajorLNMinimaxInit::run_plaintext(const Array<double
 }
 
 // ============================================================
-// ParBlockColMajorLNGoldschmidt (same logic as block version)
+// ParUpperDiagonalLNGoldschmidt
 // ============================================================
 
-ParBlockColMajorLNGoldschmidt::ParBlockColMajorLNGoldschmidt(const CkksParameter& param,
-                                                             uint32_t block_size,
-                                                             uint32_t input_level)
+ParUpperDiagonalLNGoldschmidt::ParUpperDiagonalLNGoldschmidt(const CkksParameter& param, uint32_t input_level)
     : Layer(param) {
+    assert(input_level >= 3);
     level_ = input_level;
-    d_ = block_size;
     n_slot_ = param_.get_n() / 2;
-    chunk_size_ = d_ * d_;
 }
 
 CkksPlaintextRingt
-ParBlockColMajorLNGoldschmidt::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t, uint32_t, uint32_t) const {
+ParUpperDiagonalLNGoldschmidt::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t, uint32_t, uint32_t) const {
     double D = param_.get_default_scale();
     double q_L = param_.get_q(level_);
     double q_L1 = param_.get_q(level_ - 1);
@@ -548,61 +574,48 @@ ParBlockColMajorLNGoldschmidt::generate_pt(CkksContext& ctx, uint32_t pt_idx, ui
         vector<double> half_vec(n_slot_, 0.5);
         return ctx.encode_ringt(half_vec, q_L / D * q_L / D * q_L1 / D * q_L2);
     }
-    throw runtime_error("ParBlockColMajorLNGoldschmidt: unknown pt_idx " + to_string(pt_idx));
+    throw runtime_error("ParUpperDiagonalLNGoldschmidt: unknown pt_idx " + to_string(pt_idx));
 }
 
-void ParBlockColMajorLNGoldschmidt::prepare_weight() {
+void ParUpperDiagonalLNGoldschmidt::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
     three_pt_ = generate_pt(ctx, 0);
     half_norm_pt_ = generate_pt(ctx, 1);
 }
 
-vector<CkksCiphertext> ParBlockColMajorLNGoldschmidt::run(CkksContext& ctx,
+vector<CkksCiphertext> ParUpperDiagonalLNGoldschmidt::run(CkksContext& ctx,
                                                           const vector<CkksCiphertext>& y_cts,
                                                           const vector<CkksCiphertext>& a_cts) {
+    assert(y_cts.size() == a_cts.size());
     double D = param_.get_default_scale();
-    uint32_t n_rows = y_cts.size();
-    vector<CkksCiphertext> y_new(n_rows);
+    vector<CkksCiphertext> y_new(y_cts.size());
 
-    parallel_for(n_rows, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        // Drop a to level_ to match y
-        auto a_drop = a_cts[bi].copy();
+    parallel_for(y_cts.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
+        auto a_drop = a_cts[idx].copy();
         if (a_drop.get_level() > (int)level_) {
             a_drop = ctx_copy.drop_level(a_drop, a_drop.get_level() - (int)level_);
         }
 
-        // Step 1 (parallel): y*a and y*y -> level_-1, scale S1 = D²/q_{L_y}
-        auto ya_raw = ctx_copy.mult(y_cts[bi], a_drop);
-        auto ya = ctx_copy.rescale(ctx_copy.relinearize(ya_raw), D / param_.get_q(level_) * D);
+        auto ya =
+            ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(y_cts[idx], a_drop)), D / param_.get_q(level_) * D);
+        auto yy =
+            ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(y_cts[idx], y_cts[idx])), D / param_.get_q(level_) * D);
 
-        auto yy_raw = ctx_copy.mult(y_cts[bi], y_cts[bi]);
-        auto yy = ctx_copy.rescale(ctx_copy.relinearize(yy_raw), D / param_.get_q(level_) * D);
-
-        // Step 2: (y*a)*(y*y) -> level_-2, scale S_prod = D⁴/(q_L²·q_{L-1})
-        auto ya_yy_raw = ctx_copy.mult(ya, yy);
         double S_prod = D / param_.get_q(level_) * D / param_.get_q(level_) * D / param_.get_q(level_ - 1) * D;
-        auto ya_yy = ctx_copy.rescale(ctx_copy.relinearize(ya_yy_raw), S_prod);
+        auto ya_yy = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(ya, yy)), S_prod);
 
-        // Step 3: 3*y (pt*ct) -> level_-1, scale S_prod
         auto three_mul = ctx_copy.ringt_to_mul(three_pt_, level_);
-        auto three_y_raw = ctx_copy.mult_plain_mul(y_cts[bi], three_mul);
-        auto three_y = ctx_copy.rescale(three_y_raw, S_prod);
-        // Drop 3*y from level_-1 to level_-2 to match (y*a)*(y*y)
-        auto three_y_drop = ctx_copy.drop_level(three_y);
+        auto three_y = ctx_copy.rescale(ctx_copy.mult_plain_mul(y_cts[idx], three_mul), S_prod);
+        auto diff = ctx_copy.sub(ctx_copy.drop_level(three_y), ya_yy);
 
-        // Step 4: 3*y - (y*a)*(y*y) -> level_-2, scale S_prod
-        auto diff = ctx_copy.sub(three_y_drop, ya_yy);
-
-        // Step 5: 0.5 * diff (normalizing pt*ct -> exact D at level_-3)
         auto half_mul = ctx_copy.ringt_to_mul(half_norm_pt_, level_ - 2);
-        auto half_raw = ctx_copy.mult_plain_mul(diff, half_mul);
-        y_new[bi] = ctx_copy.rescale(half_raw, D);
+        y_new[idx] = ctx_copy.rescale(ctx_copy.mult_plain_mul(diff, half_mul), D);
     });
 
     return y_new;
 }
 
-Array<double, 2> ParBlockColMajorLNGoldschmidt::run_plaintext(const Array<double, 2>& y,
+Array<double, 2> ParUpperDiagonalLNGoldschmidt::run_plaintext(const Array<double, 2>& y,
                                                               const Array<double, 2>& a) const {
     auto shape = y.get_shape();
     Array<double, 2> result(shape);
@@ -617,164 +630,136 @@ Array<double, 2> ParBlockColMajorLNGoldschmidt::run_plaintext(const Array<double
 }
 
 // ============================================================
-// ParBlockColMajorLNAffine
+// ParUpperDiagonalLNAffine
 // ============================================================
 
-ParBlockColMajorLNAffine::ParBlockColMajorLNAffine(const CkksParameter& param,
+ParUpperDiagonalLNAffine::ParUpperDiagonalLNAffine(const CkksParameter& param,
                                                    Duo shape,
-                                                   uint32_t block_size,
                                                    uint32_t n_heads,
+                                                   uint32_t head_dim,
                                                    uint32_t y_level,
                                                    double inv_std,
                                                    Array<double, 1>&& gamma,
                                                    Array<double, 1>&& beta)
     : Layer(param), y_level_(y_level), inv_std_(inv_std), gamma_vals_(move(gamma)), beta_vals_(move(beta)) {
+    assert(y_level >= 2);
     level_ = y_level;
-    m_ = shape[0];
-    d_ = block_size;
-    n_heads_ = n_heads;
-    cols_per_head_ = shape[1] / n_heads_;
-    n_h_padded_ = next_power_of_2(n_heads);
+    total_rows_ = shape[0];
+    n_prepad_ = shape[1];
+    H_prepad_ = n_heads;
+    m_ = head_dim;
     n_slot_ = param_.get_n() / 2;
-    assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
-    assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
+    assert(gamma_vals_.get_size() == n_prepad_);
+    assert(beta_vals_.get_size() == n_prepad_);
+    validate_upper_diag_geometry(total_rows_, n_prepad_, H_prepad_, m_, n_slot_);
 
-    if ((uint32_t)n_slot_ >= n_h_padded_ * d_ * d_) {
-        S_ = n_h_padded_;
-        chunk_size_ = n_h_padded_ * d_ * d_;
-        n_cts_per_block_idx_ = 1;
-    } else {
-        S_ = n_slot_ / (d_ * d_);
-        chunk_size_ = n_slot_;
-        if (S_ == 1) {
-            n_h_padded_ = n_heads_;
-        }
-        n_cts_per_block_idx_ = n_h_padded_ / S_;
-    }
-    num_chunks_ = n_slot_ / chunk_size_;
-    num_block_rows_ = div_ceil(m_, d_);
-    num_block_cols_ = div_ceil(cols_per_head_, d_);
+    H_ = next_power_of_2(H_prepad_);
+    n_ = next_power_of_2(n_prepad_);
+    d_prepad_ = H_prepad_ * m_;
+    segment_len_ = H_ * n_;
+    c_ = n_slot_ / segment_len_;
+    cts_per_mb_ = m_ / c_;
+    n_mb_ = div_ceil(total_rows_, d_prepad_);
 }
 
-CkksPlaintextRingt
-ParBlockColMajorLNAffine::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t bi, uint32_t bj, uint32_t g) const {
+uint32_t ParUpperDiagonalLNAffine::ct_index(uint32_t mb, uint32_t ct_local) const {
+    return mb * cts_per_mb_ + ct_local;
+}
+
+uint32_t ParUpperDiagonalLNAffine::total_cts() const {
+    return n_mb_ * cts_per_mb_;
+}
+
+vector<double> ParUpperDiagonalLNAffine::build_valid_weight(uint32_t mb,
+                                                            uint32_t ct_local,
+                                                            const Array<double, 1>& values,
+                                                            double factor) const {
+    assert(ct_local < cts_per_mb_);
+    vector<double> weight(n_slot_, 0.0);
+    for (uint32_t local_diag = 0; local_diag < c_; local_diag++) {
+        uint32_t diag_idx = ct_local * c_ + local_diag;
+        uint32_t segment_base = local_diag * segment_len_;
+        for (uint32_t t = 0; t < n_; t++) {
+            uint32_t col = (diag_idx + t) % n_;
+            uint32_t local_row = t % m_;
+            for (uint32_t h = 0; h < H_; h++) {
+                uint32_t global_row = mb * d_prepad_ + h * m_ + local_row;
+                if (h < H_prepad_ && global_row < total_rows_ && col < n_prepad_) {
+                    weight[segment_base + t * H_ + h] = factor * values.get(col);
+                }
+            }
+        }
+    }
+    return weight;
+}
+
+CkksPlaintextRingt ParUpperDiagonalLNAffine::generate_pt(CkksContext& ctx,
+                                                         uint32_t pt_idx,
+                                                         uint32_t mb,
+                                                         uint32_t ct_local,
+                                                         uint32_t) const {
     double D = param_.get_default_scale();
-
     if (pt_idx == 0) {
-        double q_L = param_.get_q(y_level_);
-        double q_L1 = param_.get_q(y_level_ - 1);
-        vector<double> gamma_vec(n_slot_, 0.0);
-        for (uint32_t h_local = 0; h_local < S_; h_local++) {
-            uint32_t h = g * S_ + h_local;
-            for (uint32_t col = 0; col < d_; col++) {
-                uint32_t actual_col = bj * d_ + col;
-                for (uint32_t row = 0; row < d_; row++) {
-                    uint32_t actual_row = bi * d_ + row;
-                    uint32_t base_slot = (row + d_ * col) * S_ + h_local;
-                    for (uint32_t ci = 0; ci < num_chunks_; ci++) {
-                        uint32_t slot = ci * chunk_size_ + base_slot;
-                        if (actual_row < m_ && h < n_heads_ && actual_col < cols_per_head_) {
-                            gamma_vec[slot] = inv_std_ * gamma_vals_.get(h * cols_per_head_ + actual_col);
-                        }
-                    }
-                }
-            }
-        }
-        return ctx.encode_ringt(gamma_vec, q_L / D * q_L1);
+        return ctx.encode_ringt(build_valid_weight(mb, ct_local, gamma_vals_, inv_std_),
+                                param_.get_q(y_level_) / D * param_.get_q(y_level_ - 1));
     }
-
     if (pt_idx == 1) {
-        vector<double> beta_vec(n_slot_, 0.0);
-        for (uint32_t h_local = 0; h_local < S_; h_local++) {
-            uint32_t h = g * S_ + h_local;
-            for (uint32_t col = 0; col < d_; col++) {
-                uint32_t actual_col = bj * d_ + col;
-                for (uint32_t row = 0; row < d_; row++) {
-                    uint32_t actual_row = bi * d_ + row;
-                    uint32_t base_slot = (row + d_ * col) * S_ + h_local;
-                    for (uint32_t ci = 0; ci < num_chunks_; ci++) {
-                        uint32_t slot = ci * chunk_size_ + base_slot;
-                        if (actual_row < m_ && h < n_heads_ && actual_col < cols_per_head_) {
-                            beta_vec[slot] = beta_vals_.get(h * cols_per_head_ + actual_col);
-                        }
-                    }
-                }
-            }
-        }
-        return ctx.encode_ringt(beta_vec, D);
+        return ctx.encode_ringt(build_valid_weight(mb, ct_local, beta_vals_, 1.0), D);
     }
-
-    throw runtime_error("ParBlockColMajorLNAffine: unknown pt_idx " + to_string(pt_idx));
+    throw runtime_error("ParUpperDiagonalLNAffine: unknown pt_idx " + to_string(pt_idx));
 }
 
-void ParBlockColMajorLNAffine::prepare_weight() {
+void ParUpperDiagonalLNAffine::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
-
-    uint32_t n_gamma_vecs = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
-    gamma_pt_.resize(n_gamma_vecs);
-    for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
-        for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
-            for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-                uint32_t idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
-                gamma_pt_[idx] = generate_pt(ctx, 0, bi, bj, g);
-            }
-        }
-    }
-
-    uint32_t total_beta = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
-    beta_add_pt_.resize(total_beta);
-    for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
-        for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
-            for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-                uint32_t idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
-                beta_add_pt_[idx] = generate_pt(ctx, 1, bi, bj, g);
-            }
+    gamma_pt_.resize(total_cts());
+    beta_add_pt_.resize(total_cts());
+    for (uint32_t mb = 0; mb < n_mb_; mb++) {
+        for (uint32_t ct_local = 0; ct_local < cts_per_mb_; ct_local++) {
+            uint32_t idx = ct_index(mb, ct_local);
+            gamma_pt_[idx] = generate_pt(ctx, 0, mb, ct_local);
+            beta_add_pt_[idx] = generate_pt(ctx, 1, mb, ct_local);
         }
     }
 }
 
-FeatureMatEncrypted ParBlockColMajorLNAffine::run(CkksContext& ctx,
+FeatureMatEncrypted ParUpperDiagonalLNAffine::run(CkksContext& ctx,
                                                   const vector<CkksCiphertext>& x_centered,
                                                   const vector<CkksCiphertext>& y_cts) {
+    assert(x_centered.size() == total_cts());
+    assert(y_cts.size() == total_cts());
+
     double D = param_.get_default_scale();
-    uint32_t total_cts = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
-
     FeatureMatEncrypted result(&ctx, y_level_ - 2);
-    result.head_shape = {m_, cols_per_head_};
-    result.shape = {m_, n_heads_ * cols_per_head_};
-    result.matmul_block_size = d_;
-    result.data.resize(total_cts);
+    result.shape = {total_rows_, n_prepad_};
+    result.head_shape = {m_, n_prepad_};
+    result.matmul_block_size = m_;
+    result.data.resize(total_cts());
 
-    parallel_for(total_cts, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        uint32_t block_idx = ct_idx / n_cts_per_block_idx_;
-        uint32_t bi = block_idx % num_block_rows_;
+    parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
+        auto gamma_mul = ctx_copy.ringt_to_mul(gamma_pt_[idx], y_level_);
+        auto yw = ctx_copy.rescale(ctx_copy.mult_plain_mul(y_cts[idx], gamma_mul), param_.get_q(y_level_ - 1));
 
-        uint32_t gamma_idx = ct_idx;
-        auto gamma_mul = ctx_copy.ringt_to_mul(gamma_pt_[gamma_idx], y_level_);
-        auto yw = ctx_copy.rescale(ctx_copy.mult_plain_mul(y_cts[bi], gamma_mul), param_.get_q(y_level_ - 1));
-
-        auto xc = x_centered[ct_idx].copy();
+        auto xc = x_centered[idx].copy();
         if (xc.get_level() > (int)(y_level_ - 1)) {
             xc = ctx_copy.drop_level(xc, xc.get_level() - (int)(y_level_ - 1));
         }
 
         auto out = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(xc, yw)), D);
-
-        result.data[ct_idx] = ctx_copy.add_plain_ringt(out, beta_add_pt_[ct_idx]);
+        result.data[idx] = ctx_copy.add_plain_ringt(out, beta_add_pt_[idx]);
     });
 
     result.level = y_level_ - 2;
     return result;
 }
 
-Array<double, 2> ParBlockColMajorLNAffine::run_plaintext(const Array<double, 2>& x_centered,
+Array<double, 2> ParUpperDiagonalLNAffine::run_plaintext(const Array<double, 2>& x_centered,
                                                          const Array<double, 2>& y) const {
-    uint32_t total_dim = n_heads_ * cols_per_head_;
-    Array<double, 2> result({m_, total_dim});
-    for (uint32_t i = 0; i < m_; i++) {
-        double yi = y.get(i, 0);
-        for (uint32_t j = 0; j < total_dim; j++) {
-            double out = x_centered.get(i, j) * yi * inv_std_ * gamma_vals_.get(j) + beta_vals_.get(j);
+    Array<double, 2> result({total_rows_, n_prepad_});
+    uint64_t y_cols = y.get_shape()[1];
+    for (uint32_t i = 0; i < total_rows_; i++) {
+        for (uint32_t j = 0; j < n_prepad_; j++) {
+            double yv = y.get(i, y_cols == 1 ? 0 : j);
+            double out = x_centered.get(i, j) * yv * inv_std_ * gamma_vals_.get(j) + beta_vals_.get(j);
             result.set(i, j, out);
         }
     }
