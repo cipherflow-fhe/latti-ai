@@ -33,6 +33,7 @@ add_library(fhe_layers
   par_block_col_major_add_pt.cpp
   block_col_major_layernorm.cpp
   par_block_col_major_layernorm.cpp
+  par_lower_diagonal_layernorm.cpp
   block_col_major_polyactrn.cpp
   par_block_col_major_polyactrn.cpp
   ../data_structs/feature.cpp

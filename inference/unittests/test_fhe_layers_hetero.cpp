@@ -61,6 +61,7 @@
 #include "fhe_layers/upsample_nearest_layer.h"
 #include "fhe_layers/block_col_major_layernorm.h"
 #include "fhe_layers/par_block_col_major_layernorm.h"
+#include "fhe_layers/par_lower_diagonal_layernorm.h"
 #include "fhe_layers/block_col_major_polyactrn.h"
 #include "fhe_layers/par_block_col_major_polyactrn.h"
 #include "data_structs/feature_mat.h"
@@ -366,6 +367,175 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto comparison = compare(expected, actual);
     REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
     REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEST_CASE("par_upper_diagonal_layernorm_cpp_roundtrip", "[fhe_layers][par_upper_diagonal_layernorm]") {
+    const int N = 32768;
+    CkksParameter param = CkksParameter::create_parameter(N);
+    CkksContext context = CkksContext::create_random_context(param);
+    context.gen_rotation_keys();
+
+    const uint32_t seq_len = 53;
+    const uint32_t n_heads = 3;
+    const uint32_t head_dim = 16;
+    const uint32_t n_prepad = 197;
+    const int init_level = 11;
+    const double eps = 1e-5;
+    const double var_std_bound = 4.0;
+    const double inv_var = 1.0 / (var_std_bound * var_std_bound);
+    const double inv_std = 1.0 / var_std_bound;
+    const double c0 = 6.19067182;
+    const double c1 = -16.15885111;
+    const double c2 = 11.52830778;
+
+    auto X_mat = gen_random_array<2>({seq_len, n_prepad}, 0.5);
+    auto gamma = gen_random_array<1>({n_prepad}, 0.5);
+    auto beta = gen_random_array<1>({n_prepad}, 0.1);
+
+    Array<double, 2> expected_a({seq_len, n_prepad});
+    Array<double, 2> expected_x_centered({seq_len, n_prepad});
+    Array<double, 2> expected_y0({seq_len, n_prepad});
+    Array<double, 2> expected_y1({seq_len, n_prepad});
+    Array<double, 2> expected_out({seq_len, n_prepad});
+
+    for (uint32_t i = 0; i < seq_len; i++) {
+        double sum_x = 0.0;
+        double sum_x2 = 0.0;
+        for (uint32_t j = 0; j < n_prepad; j++) {
+            double v = X_mat.get(i, j);
+            sum_x += v;
+            sum_x2 += v * v;
+        }
+
+        double mean = sum_x / static_cast<double>(n_prepad);
+        double var = sum_x2 / static_cast<double>(n_prepad) - mean * mean;
+        double a = (var + eps) * inv_var;
+        double y0 = c0 + c1 * a + c2 * a * a;
+        double y1 = 0.5 * y0 * (3.0 - a * y0 * y0);
+
+        for (uint32_t j = 0; j < n_prepad; j++) {
+            double xc = X_mat.get(i, j) - mean;
+            expected_a.set(i, j, a);
+            expected_x_centered.set(i, j, xc);
+            expected_y0.set(i, j, y0);
+            expected_y1.set(i, j, y1);
+            expected_out.set(i, j, xc * y1 * inv_std * gamma.get(j) + beta.get(j));
+        }
+    }
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_upper_diagonal_pack(X_mat, n_heads, head_dim, false, param.get_default_scale());
+
+    auto make_upper_feature = [&](std::vector<CkksCiphertext>& cts, int level) {
+        FeatureMatEncrypted feat(&context, level);
+        feat.shape = {seq_len, n_prepad};
+        feat.head_shape = {head_dim, n_prepad};
+        feat.matmul_block_size = head_dim;
+        feat.data.reserve(cts.size());
+        for (auto& ct : cts) {
+            feat.data.push_back(ct.copy());
+        }
+        return feat;
+    };
+
+    uint32_t H = 1;
+    while (H < n_heads)
+        H <<= 1;
+    uint32_t n = 1;
+    while (n < n_prepad)
+        n <<= 1;
+    uint32_t segment_len = H * n;
+    uint32_t n_slot = param.get_n() / 2;
+    uint32_t c = n_slot / segment_len;
+    uint32_t cts_per_mb = head_dim / c;
+    uint32_t d_prepad = n_heads * head_dim;
+
+    auto check_padding_slots_zero = [&](std::vector<CkksCiphertext>& cts, const std::string& stage) {
+        double max_padding_abs = 0.0;
+        uint32_t max_ct = 0;
+        uint32_t max_slot = 0;
+
+        for (uint32_t ct_idx = 0; ct_idx < cts.size(); ct_idx++) {
+            uint32_t mb = ct_idx / cts_per_mb;
+            uint32_t ct_local = ct_idx % cts_per_mb;
+            CkksPlaintext pt = context.decrypt(cts[ct_idx]);
+            Array1D slots = context.decode(pt);
+
+            for (uint32_t slot = 0; slot < n_slot; slot++) {
+                uint32_t local_diag = slot / segment_len;
+                uint32_t slot_in_segment = slot % segment_len;
+                uint32_t t = slot_in_segment / H;
+                uint32_t h = slot_in_segment % H;
+                uint32_t diag_idx = ct_local * c + local_diag;
+                uint32_t col = (diag_idx + t) % n;
+                uint32_t local_row = t % head_dim;
+                uint32_t global_row = mb * d_prepad + h * head_dim + local_row;
+
+                bool valid = local_diag < c && h < n_heads && global_row < seq_len && col < n_prepad;
+                if (!valid) {
+                    double v = std::fabs(slots[slot]);
+                    if (v > max_padding_abs) {
+                        max_padding_abs = v;
+                        max_ct = ct_idx;
+                        max_slot = slot;
+                    }
+                }
+            }
+        }
+
+        INFO(stage);
+        CAPTURE(max_ct, max_slot, max_padding_abs);
+        REQUIRE(max_padding_abs < 2.0e-2);
+    };
+
+    auto compare_matrix = [](const Array<double, 2>& expected, const Array<double, 2>& actual, const char* stage) {
+        INFO(stage);
+        auto comparison = compare(expected, actual);
+        CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+        REQUIRE(comparison.max_error < 2.0e-2 + 5.0e-2 * comparison.max_abs);
+        REQUIRE(comparison.rmse < 5.0e-3 + 1.0e-2 * comparison.rms);
+    };
+
+    ParUpperDiagonalLNStats stats(param, Duo{seq_len, n_prepad}, n_heads, head_dim, init_level, eps, inv_var);
+    stats.prepare_weight();
+    auto a_cts = stats.run(context, X_enc);
+    REQUIRE(a_cts.front().get_level() == init_level - 4);
+    auto a_enc = make_upper_feature(a_cts, init_level - 4);
+    compare_matrix(expected_a, a_enc.par_upper_diagonal_unpack(n_prepad, n_heads, head_dim), "stats/a");
+    check_padding_slots_zero(a_cts, "stats/a padding");
+
+    ParUpperDiagonalLNXCentered xcenter(param, Duo{seq_len, n_prepad}, n_heads, head_dim, init_level);
+    xcenter.prepare_weight();
+    auto x_centered = xcenter.run(context, X_enc);
+    REQUIRE(x_centered.front().get_level() == init_level - 2);
+    auto x_centered_enc = make_upper_feature(x_centered, init_level - 2);
+    compare_matrix(expected_x_centered, x_centered_enc.par_upper_diagonal_unpack(n_prepad, n_heads, head_dim),
+                   "x_centered");
+    check_padding_slots_zero(x_centered, "x_centered padding");
+
+    ParUpperDiagonalLNMinimaxInit minimax(param, Duo{seq_len, n_prepad}, n_heads, head_dim, init_level - 4, c0, c1, c2);
+    minimax.prepare_weight();
+    auto y0_cts = minimax.run(context, a_cts);
+    REQUIRE(y0_cts.front().get_level() == init_level - 6);
+    auto y0_enc = make_upper_feature(y0_cts, init_level - 6);
+    compare_matrix(expected_y0, y0_enc.par_upper_diagonal_unpack(n_prepad, n_heads, head_dim), "minimax/y0");
+    check_padding_slots_zero(y0_cts, "minimax/y0 padding");
+
+    ParUpperDiagonalLNGoldschmidt gold(param, init_level - 6);
+    gold.prepare_weight();
+    auto y1_cts = gold.run(context, y0_cts, a_cts);
+    REQUIRE(y1_cts.front().get_level() == init_level - 9);
+    auto y1_enc = make_upper_feature(y1_cts, init_level - 9);
+    compare_matrix(expected_y1, y1_enc.par_upper_diagonal_unpack(n_prepad, n_heads, head_dim), "goldschmidt/y1");
+    check_padding_slots_zero(y1_cts, "goldschmidt/y1 padding");
+
+    ParUpperDiagonalLNAffine affine(param, Duo{seq_len, n_prepad}, n_heads, head_dim, init_level - 9, inv_std,
+                                    gamma.copy(), beta.copy());
+    affine.prepare_weight();
+    FeatureMatEncrypted out_enc = affine.run(context, x_centered, y1_cts);
+    REQUIRE(out_enc.level == init_level - 11);
+    compare_matrix(expected_out, out_enc.par_upper_diagonal_unpack(n_prepad, n_heads, head_dim), "affine/output");
+    check_padding_slots_zero(out_enc.data, "affine/output padding");
 }
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "sq", "", HeteroProcessors) {

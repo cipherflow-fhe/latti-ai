@@ -45,6 +45,7 @@
 #include "fhe_layers/par_block_col_major_layernorm.h"
 #include "fhe_layers/par_block_col_major_polyactrn.h"
 #include "fhe_layers/par_block_col_major_transpose.h"
+#include "fhe_layers/par_lower_diagonal_layernorm.h"
 #include "fhe_layers/poly_relu2d.h"
 #include "fhe_layers/poly_relu_base.h"
 #include "fhe_layers/poly_relu1d.h"
