@@ -27,7 +27,9 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+repo_root = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(repo_root))
+sys.path.insert(0, str(repo_root / 'inference' / 'lattisense'))
 from inference.lattisense.frontend.custom_task import *  # noqa: E402
 
 # from inference.model_generator.deploy_cmds import gen_custom_task  # noqa: E402

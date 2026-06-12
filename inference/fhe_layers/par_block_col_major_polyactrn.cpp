@@ -67,8 +67,11 @@ ParBlockColMajorPolyActRNGamma::ParBlockColMajorPolyActRNGamma(const CkksParamet
     num_block_cols_ = div_ceil(cols_per_head_, d_);
 }
 
-CkksPlaintextRingt
-ParBlockColMajorPolyActRNGamma::generate_gamma_pt(CkksContext& ctx, uint32_t mb, uint32_t bj, uint32_t g) const {
+CkksPlaintextRingt ParBlockColMajorPolyActRNGamma::generate_gamma_pt(CkksContext& ctx,
+                                                                     uint32_t mb,
+                                                                     uint32_t bi,
+                                                                     uint32_t bj,
+                                                                     uint32_t g) const {
     double q_L = param_.get_q(level_);
     vector<double> gamma_vec(n_slot_, 0.0);
     for (uint32_t h_local = 0; h_local < S_; h_local++) {
@@ -76,10 +79,11 @@ ParBlockColMajorPolyActRNGamma::generate_gamma_pt(CkksContext& ctx, uint32_t mb,
         for (uint32_t col = 0; col < d_; col++) {
             uint32_t actual_col = bj * d_ + col;
             for (uint32_t row = 0; row < d_; row++) {
+                uint32_t actual_row = bi * d_ + row;
                 uint32_t base_slot = (row + d_ * col) * S_ + h_local;
                 for (uint32_t ci = 0; ci < num_chunks_; ci++) {
                     uint32_t slot = ci * chunk_size_ + base_slot;
-                    if (h < n_heads_ && actual_col < cols_per_head_) {
+                    if (actual_row < m_ && h < n_heads_ && actual_col < cols_per_head_) {
                         uint32_t global_col = mb * n_heads_ * cols_per_head_ + h * cols_per_head_ + actual_col;
                         gamma_vec[slot] = gamma_vals_.get(global_col);
                     }
@@ -93,14 +97,18 @@ ParBlockColMajorPolyActRNGamma::generate_gamma_pt(CkksContext& ctx, uint32_t mb,
 void ParBlockColMajorPolyActRNGamma::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
 
-    uint32_t n_gamma_vecs = K_ * num_block_cols_ * n_cts_per_block_idx_;
+    uint32_t cts_per_mb = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
+    uint32_t n_gamma_vecs = K_ * cts_per_mb;
     gamma_pt_.resize(n_gamma_vecs);
 
     for (uint32_t mb = 0; mb < K_; mb++) {
         for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
-            for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
-                uint32_t idx = (mb * num_block_cols_ + bj) * n_cts_per_block_idx_ + g;
-                gamma_pt_[idx] = generate_gamma_pt(ctx, mb, bj, g);
+            for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
+                for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
+                    uint32_t local_ct_idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
+                    uint32_t idx = mb * cts_per_mb + local_ct_idx;
+                    gamma_pt_[idx] = generate_gamma_pt(ctx, mb, bi, bj, g);
+                }
             }
         }
     }
@@ -119,12 +127,7 @@ FeatureMatEncrypted ParBlockColMajorPolyActRNGamma::run(CkksContext& ctx, const 
     result.data.resize(total_cts);
 
     parallel_for(total_cts, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        uint32_t mb = ct_idx / cts_per_mb;
-        uint32_t local_ct_idx = ct_idx % cts_per_mb;
-        uint32_t block_idx = local_ct_idx / n_cts_per_block_idx_;
-        uint32_t g = local_ct_idx % n_cts_per_block_idx_;
-        uint32_t bj = block_idx / num_block_rows_;
-        uint32_t gamma_idx = (mb * num_block_cols_ + bj) * n_cts_per_block_idx_ + g;
+        uint32_t gamma_idx = static_cast<uint32_t>(ct_idx);
 
         auto gamma_mul = ctx_copy.ringt_to_mul(gamma_pt_[gamma_idx], level_);
         auto product = ctx_copy.mult_plain_mul(x.data[ct_idx], gamma_mul);

@@ -43,6 +43,9 @@
 #include "fhe_layers/par_block_col_major_transpose.h"
 #include "fhe_layers/par_block_col_major_ccmm.h"
 #include "fhe_layers/par_block_col_major_cpmm.h"
+#include "fhe_layers/par_lower_diag_pcmm.h"
+#include "fhe_layers/par_lower_diag_ccmm.h"
+#include "fhe_layers/par_lower_diag_transpose.h"
 #include "fhe_layers/par_block_col_major_add_pt.h"
 #include "fhe_layers/conv1d_packed_layer.h"
 #include "fhe_layers/multiplexed_conv1d_pack_layer.h"
@@ -62,6 +65,7 @@
 #include "fhe_layers/par_block_col_major_polyactrn.h"
 #include "data_structs/feature_mat.h"
 #include "ut_util.h"
+#include <fhe_ops_lib/utils.h>
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include <cxx_sdk_v2/cxx_argument.h>
 #include <lattisense/lib/nlohmann/json.hpp>
@@ -230,6 +234,140 @@ using HeteroProcessors = tuple<ProcessorCpu>;
         } else                                                                                                         \
             SECTION(section_name)
 
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_lower_diag_transpose_roundtrip",
+                               "[fhe_layers][par_lower_diag_transpose]",
+                               HeteroProcessors) {
+    int init_level = 2;
+    uint32_t n_heads = 3;
+    uint32_t head_dim = 64;
+    vector<uint32_t> n_prepads = {65, 128};
+
+    FOR_EACH_SECTION(uint32_t n_prepad, n_prepads, "n_prepad=" + to_string(n_prepad)) {
+        Array<double, 2> X_T = gen_random_array<2>({n_heads * head_dim, n_prepad}, 1.0);
+
+        FeatureMatEncrypted input_enc(&this->context, init_level);
+        input_enc.par_lower_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
+
+        ParLowerDiagTranspose layer(this->param, {head_dim, n_prepad}, n_heads, head_dim, init_level);
+        layer.prepare_weight();
+        FeatureMatEncrypted out_enc = layer.run(this->context, input_enc);
+
+        Array<double, 2> actual = out_enc.par_lower_diagonal_transpose_unpack(n_prepad, n_heads, head_dim);
+        Array<double, 2> expected = layer.run_plaintext(X_T);
+        print_double_message(actual.to_array_1d().data(), "actual", 10);
+        print_double_message(expected.to_array_1d().data(), "expected", 10);
+        auto comparison = compare(expected, actual);
+        REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+        REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_lower_diag_pcmm_roundtrip",
+                               "[fhe_layers][par_lower_diag_pcmm]",
+                               HeteroProcessors) {
+    int init_level = 3;
+    uint32_t n_prepad = 65;
+    uint32_t n_heads = 3;
+    uint32_t head_dim = 64;
+    uint32_t d_prepad = n_heads * head_dim;
+
+    struct Case {
+        uint32_t w_rows;
+        uint32_t w_cols;
+        const char* mode;
+    };
+
+    vector<Case> cases = {
+        {d_prepad, d_prepad, "SQUARE"},
+        {d_prepad, 4 * d_prepad, "EXPAND"},
+        {4 * d_prepad, d_prepad, "REDUCE"},
+    };
+
+    for (const auto& cfg : cases) {
+        INFO(cfg.mode);
+        Array<double, 2> X_T = gen_random_array<2>({cfg.w_rows, n_prepad}, 1.0);
+        Array<double, 2> W = gen_random_array<2>({cfg.w_rows, cfg.w_cols}, 0.1);
+        Array<double, 1> bias = gen_random_array<1>({cfg.w_cols}, 0.1);
+
+        FeatureMatEncrypted X_enc(&this->context, init_level);
+        X_enc.par_lower_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
+
+        ParLowerDiagPCMM layer(this->param, {cfg.w_rows, n_prepad}, n_heads, head_dim, W, init_level, std::move(bias));
+        layer.prepare_weight();
+        FeatureMatEncrypted out_enc = layer.run(this->context, X_enc);
+
+        Array<double, 2> actual = out_enc.par_lower_diagonal_unpack(n_heads, {head_dim, n_prepad});
+        Array<double, 2> expected = layer.run_plaintext(X_T);
+        print_double_message(actual.to_array_1d().data(), "actual", 10);
+        print_double_message(expected.to_array_1d().data(), "expected", 10);
+        auto comparison = compare(expected, actual);
+        REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+        REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_lower_diag_ccmm_kqt_roundtrip",
+                               "[fhe_layers][par_lower_diag_ccmm][kqt]",
+                               HeteroProcessors) {
+    int ccmm_level = 3;
+    uint32_t n_heads = 3;
+    uint32_t head_dim = 64;
+    uint32_t n_prepad = 97;
+
+    Array<double, 2> A = gen_random_array<2>({n_prepad, n_heads * head_dim}, 0.5);
+    Array<double, 2> B = gen_random_array<2>({n_heads * head_dim, n_prepad}, 0.5);
+
+    FeatureMatEncrypted A_enc(&this->context, ccmm_level);
+    FeatureMatEncrypted B_enc(&this->context, ccmm_level);
+    A_enc.par_lower_diagonal_transpose_pack(A, n_heads, head_dim, false, this->param.get_default_scale());
+    B_enc.par_lower_diagonal_pack(B, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
+
+    ParLowerDiagCCMM layer(this->param, {n_prepad, head_dim}, {head_dim, n_prepad}, n_heads, head_dim, ccmm_level);
+    layer.prepare_weight();
+    FeatureMatEncrypted C_enc = layer.run(this->context, A_enc, B_enc);
+
+    Array<double, 2> actual = C_enc.par_lower_diagonal_unpack(n_heads, {n_prepad, n_prepad});
+    Array<double, 2> expected = layer.run_plaintext(A, B);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_lower_diag_ccmm_ordinary_roundtrip",
+                               "[fhe_layers][par_lower_diag_ccmm][ordinary]",
+                               HeteroProcessors) {
+    int init_level = 3;
+    uint32_t n_heads = 3;
+    uint32_t head_dim = 64;
+    uint32_t n_prepad = 97;
+
+    Array<double, 2> A = gen_random_array<2>({n_heads * head_dim, n_prepad}, 0.5);
+    Array<double, 2> B = gen_random_array<2>({n_heads * n_prepad, n_prepad}, 0.5);
+
+    FeatureMatEncrypted A_enc(&this->context, init_level);
+    FeatureMatEncrypted B_enc(&this->context, init_level);
+    A_enc.par_lower_diagonal_pack(A, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
+    B_enc.par_lower_diagonal_pack(B, n_heads, {n_prepad, n_prepad}, false, this->param.get_default_scale());
+
+    ParLowerDiagCCMM layer(this->param, {head_dim, n_prepad}, {n_prepad, n_prepad}, n_heads, head_dim, init_level);
+    layer.prepare_weight();
+    FeatureMatEncrypted C_enc = layer.run(this->context, A_enc, B_enc);
+
+    Array<double, 2> actual = C_enc.par_lower_diagonal_unpack(n_heads, {head_dim, n_prepad});
+    Array<double, 2> expected = layer.run_plaintext(A, B);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "sq", "", HeteroProcessors) {
     int init_level = 2;
     vector<Duo> input_shapes = {{16, 16}, {32, 32}, {64, 64}};
@@ -267,8 +405,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "sq", "", HeteroProcessors) {
         SquareLayer square_layer(this->param);
         auto plain_output = square_layer.run_plaintext(input_array);
 
-        print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
-        print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
+        // print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+        // print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
 
         auto compare_result = compare(plain_output, output_mg);
         REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
@@ -1584,8 +1722,8 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
             }
             if (op_class == "ParBlockColMajorPolyActRNGamma") {
                 auto* layer = static_cast<ParBlockColMajorPolyActRNGamma*>(layer_ptr);
-                return layer->generate_gamma_pt(*ctx_ptr, attrs.value("mb", 0), attrs.value("bj", 0),
-                                                attrs.value("g", 0));
+                return layer->generate_gamma_pt(*ctx_ptr, attrs.value("mb", 0), attrs.value("bi", 0),
+                                                attrs.value("bj", 0), attrs.value("g", 0));
             }
             if (op_class == "ParBlockColMajorPolyActRNPoly") {
                 auto* layer = static_cast<ParBlockColMajorPolyActRNPoly*>(layer_ptr);

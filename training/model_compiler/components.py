@@ -792,6 +792,7 @@ class LayerAbstractGraph:
                 compute_node.path = layer_json.get('weight_path', '')
                 compute_node.weight_shape = layer_json.get('weight_shape', [])
                 compute_node.bias_path = layer_json.get('bias_path', '')
+                compute_node.fuse_gama_info = layer_json.get('fuse_gama_info')
                 compute_node.to_expand = layer_json.get('to_expand', False)
 
             elif layer_type in ('add_pt', 'pcm_add_pt'):
@@ -829,6 +830,8 @@ class LayerAbstractGraph:
                 compute_node.path = layer_json.get('weight_path', '')
                 compute_node.coeffs_path = layer_json.get('coeffs_path', '')
                 compute_node.running_max_path = layer_json.get('running_max_path', '')
+                compute_node.gamma_path = layer_json.get('gamma_path', '')
+                compute_node.fuse_gama_info = layer_json.get('fuse_gama_info')
                 compute_node.order = layer_json.get('order', 4)
 
             elif layer_type == 'CustomMultiHeadAttention':
@@ -1107,6 +1110,8 @@ class LayerAbstractGraph:
                 }
                 if layer.bias_path:
                     layers[layer_id]['bias_path'] = layer.bias_path
+                if getattr(layer, 'fuse_gama_info', None) is not None:
+                    layers[layer_id]['fuse_gama_info'] = layer.fuse_gama_info
                 if getattr(layer, 'to_expand', False):
                     layers[layer_id]['to_expand'] = True
             if layer_type in ('add_pt', 'pcm_add_pt'):
@@ -1163,6 +1168,10 @@ class LayerAbstractGraph:
                     layers[layer_id]['coeffs_path'] = layer.coeffs_path
                 if getattr(layer, 'running_max_path', ''):
                     layers[layer_id]['running_max_path'] = layer.running_max_path
+                if getattr(layer, 'gamma_path', ''):
+                    layers[layer_id]['gamma_path'] = layer.gamma_path
+                if getattr(layer, 'fuse_gama_info', None) is not None:
+                    layers[layer_id]['fuse_gama_info'] = layer.fuse_gama_info
             if layer_type == 'pcmstats':
                 layers[layer_id] = {
                     'type': layer_type,

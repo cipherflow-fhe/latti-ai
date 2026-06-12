@@ -88,7 +88,13 @@ def set_param(param_name):
     if param_name == 'N16QP1546H192H32':
         param = CkksBtpParam.create_default_param()
     else:
-        param = Param.create_ckks_custom_param(n=fhe.poly_modulus_degree, p=fhe.p, q=fhe.q)
+        param = CkksParam.create_custom_param(
+            n=fhe.poly_modulus_degree,
+            q=fhe.q,
+            p=fhe.p,
+            slots=fhe.n_slots,
+            scale=1 << fhe.log_default_scale,
+        )
     set_fhe_param(param)
 
 
