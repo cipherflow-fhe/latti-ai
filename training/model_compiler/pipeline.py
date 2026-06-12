@@ -18,6 +18,9 @@
 from pathlib import Path
 import copy
 
+import networkx as nx
+import numpy as np
+
 import components
 from components import (
     ComputeNode,
@@ -408,7 +411,9 @@ def _remove_pcmgamma_from_linear_path(dag, pcmgamma_node: ComputeNode, search_di
     return True
 
 
-def _absorb_pcmgamma_into_target(dag, pcmgamma_node: ComputeNode, target_node: ComputeNode, search_direction: str) -> bool:
+def _absorb_pcmgamma_into_target(
+    dag, pcmgamma_node: ComputeNode, target_node: ComputeNode, search_direction: str
+) -> bool:
     direction = f'after_{target_node.layer_type}' if search_direction == 'up' else f'before_{target_node.layer_type}'
     if target_node.layer_type == 'parcpmm':
         _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, target_node, direction)
@@ -452,9 +457,7 @@ def recompute_final_level(graph: LayerAbstractGraph):
         level = int(level)
         existing_level = anchors.get(feature)
         if existing_level is not None and existing_level != level:
-            raise ValueError(
-                f'Conflicting fixed levels for feature {feature.node_id}: {existing_level} vs {level}'
-            )
+            raise ValueError(f'Conflicting fixed levels for feature {feature.node_id}: {existing_level} vs {level}')
         anchors[feature] = level
 
     for node in dag.nodes:
@@ -572,6 +575,7 @@ def run_pipeline(
     head_dim: int | None = None,
     matmul_block_size: int | None = None,
     set_btp_scale: float | None = None,
+    use_gpu: bool = True,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -588,6 +592,7 @@ def run_pipeline(
         style: Computation style (STYLE)
         graph_type: Graph type (GRAPH_TYPE)
         set_btp_scale: if not None, wrap BTP with pcmgamma scales and enable special level handling
+        use_gpu: If True, use GPU primitive timing tables for FHE score; otherwise use CPU timing
     """
     if style is not None:
         config.style = style
@@ -600,10 +605,11 @@ def run_pipeline(
     if matmul_block_size is not None:
         config.matmul_block_size = matmul_block_size
     config.set_btp_scale = set_btp_scale
+    config.use_gpu = use_gpu
     print(
         f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
         f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
-        f'SET_BTP_SCALE={config.set_btp_scale}'
+        f'SET_BTP_SCALE={config.set_btp_scale}, BACKEND={"gpu" if config.use_gpu else "cpu"}'
     )
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
