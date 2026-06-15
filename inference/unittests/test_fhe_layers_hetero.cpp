@@ -248,13 +248,14 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         Array<double, 2> X_T = gen_random_array<2>({n_heads * head_dim, n_prepad}, 1.0);
 
         FeatureMatEncrypted input_enc(&this->context, init_level);
-        input_enc.par_lower_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
+        input_enc.par_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, true, true, false,
+                                    this->param.get_default_scale());
 
         ParLowerDiagTranspose layer(this->param, {head_dim, n_prepad}, n_heads, head_dim, init_level);
         layer.prepare_weight();
         FeatureMatEncrypted out_enc = layer.run(this->context, input_enc);
 
-        Array<double, 2> actual = out_enc.par_lower_diagonal_transpose_unpack(n_prepad, n_heads, head_dim);
+        Array<double, 2> actual = out_enc.par_diagonal_unpack(n_heads, {n_prepad, head_dim}, true, false);
         Array<double, 2> expected = layer.run_plaintext(X_T);
         print_double_message(actual.to_array_1d().data(), "actual", 10);
         print_double_message(expected.to_array_1d().data(), "expected", 10);
@@ -293,13 +294,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         Array<double, 1> bias = gen_random_array<1>({cfg.w_cols}, 0.1);
 
         FeatureMatEncrypted X_enc(&this->context, init_level);
-        X_enc.par_lower_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
+        X_enc.par_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
 
         ParLowerDiagPCMM layer(this->param, {cfg.w_rows, n_prepad}, n_heads, head_dim, W, init_level, std::move(bias));
         layer.prepare_weight();
         FeatureMatEncrypted out_enc = layer.run(this->context, X_enc);
 
-        Array<double, 2> actual = out_enc.par_lower_diagonal_unpack(n_heads, {head_dim, n_prepad});
+        Array<double, 2> actual = out_enc.par_diagonal_unpack(n_heads, {head_dim, n_prepad}, true, true);
         Array<double, 2> expected = layer.run_plaintext(X_T);
         print_double_message(actual.to_array_1d().data(), "actual", 10);
         print_double_message(expected.to_array_1d().data(), "expected", 10);
@@ -323,14 +324,14 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     FeatureMatEncrypted A_enc(&this->context, ccmm_level);
     FeatureMatEncrypted B_enc(&this->context, ccmm_level);
-    A_enc.par_lower_diagonal_transpose_pack(A, n_heads, head_dim, false, this->param.get_default_scale());
-    B_enc.par_lower_diagonal_pack(B, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
+    A_enc.par_diagonal_pack(A, n_heads, {n_prepad, head_dim}, true, false, false, this->param.get_default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
 
     ParLowerDiagCCMM layer(this->param, {n_prepad, head_dim}, {head_dim, n_prepad}, n_heads, head_dim, ccmm_level);
     layer.prepare_weight();
     FeatureMatEncrypted C_enc = layer.run(this->context, A_enc, B_enc);
 
-    Array<double, 2> actual = C_enc.par_lower_diagonal_unpack(n_heads, {n_prepad, n_prepad});
+    Array<double, 2> actual = C_enc.par_diagonal_unpack(n_heads, {n_prepad, n_prepad}, true, true);
     Array<double, 2> expected = layer.run_plaintext(A, B);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
@@ -353,14 +354,14 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     FeatureMatEncrypted A_enc(&this->context, init_level);
     FeatureMatEncrypted B_enc(&this->context, init_level);
-    A_enc.par_lower_diagonal_pack(A, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
-    B_enc.par_lower_diagonal_pack(B, n_heads, {n_prepad, n_prepad}, false, this->param.get_default_scale());
+    A_enc.par_diagonal_pack(A, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, {n_prepad, n_prepad}, true, true, false, this->param.get_default_scale());
 
     ParLowerDiagCCMM layer(this->param, {head_dim, n_prepad}, {n_prepad, n_prepad}, n_heads, head_dim, init_level);
     layer.prepare_weight();
     FeatureMatEncrypted C_enc = layer.run(this->context, A_enc, B_enc);
 
-    Array<double, 2> actual = C_enc.par_lower_diagonal_unpack(n_heads, {head_dim, n_prepad});
+    Array<double, 2> actual = C_enc.par_diagonal_unpack(n_heads, {head_dim, n_prepad}, true, true);
     Array<double, 2> expected = layer.run_plaintext(A, B);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
@@ -424,7 +425,7 @@ TEST_CASE("par_upper_diagonal_layernorm_cpp_roundtrip", "[fhe_layers][par_upper_
     }
 
     FeatureMatEncrypted X_enc(&context, init_level);
-    X_enc.par_upper_diagonal_pack(X_mat, n_heads, head_dim, false, param.get_default_scale());
+    X_enc.par_diagonal_pack(X_mat, n_heads, {head_dim, n_prepad}, false, true, false, param.get_default_scale());
 
     auto make_upper_feature = [&](std::vector<CkksCiphertext>& cts, int level) {
         FeatureMatEncrypted feat(&context, level);
@@ -501,7 +502,7 @@ TEST_CASE("par_upper_diagonal_layernorm_cpp_roundtrip", "[fhe_layers][par_upper_
     auto a_cts = stats.run(context, X_enc);
     REQUIRE(a_cts.front().get_level() == init_level - 4);
     auto a_enc = make_upper_feature(a_cts, init_level - 4);
-    compare_matrix(expected_a, a_enc.par_upper_diagonal_unpack(n_prepad, n_heads, head_dim), "stats/a");
+    compare_matrix(expected_a, a_enc.par_diagonal_unpack(n_heads, {head_dim, n_prepad}, false, true), "stats/a");
     check_padding_slots_zero(a_cts, "stats/a padding");
 
     ParUpperDiagonalLNXCentered xcenter(param, Duo{seq_len, n_prepad}, n_heads, head_dim, init_level);
@@ -509,7 +510,7 @@ TEST_CASE("par_upper_diagonal_layernorm_cpp_roundtrip", "[fhe_layers][par_upper_
     auto x_centered = xcenter.run(context, X_enc);
     REQUIRE(x_centered.front().get_level() == init_level - 2);
     auto x_centered_enc = make_upper_feature(x_centered, init_level - 2);
-    compare_matrix(expected_x_centered, x_centered_enc.par_upper_diagonal_unpack(n_prepad, n_heads, head_dim),
+    compare_matrix(expected_x_centered, x_centered_enc.par_diagonal_unpack(n_heads, {head_dim, n_prepad}, false, true),
                    "x_centered");
     check_padding_slots_zero(x_centered, "x_centered padding");
 
@@ -518,7 +519,7 @@ TEST_CASE("par_upper_diagonal_layernorm_cpp_roundtrip", "[fhe_layers][par_upper_
     auto y0_cts = minimax.run(context, a_cts);
     REQUIRE(y0_cts.front().get_level() == init_level - 6);
     auto y0_enc = make_upper_feature(y0_cts, init_level - 6);
-    compare_matrix(expected_y0, y0_enc.par_upper_diagonal_unpack(n_prepad, n_heads, head_dim), "minimax/y0");
+    compare_matrix(expected_y0, y0_enc.par_diagonal_unpack(n_heads, {head_dim, n_prepad}, false, true), "minimax/y0");
     check_padding_slots_zero(y0_cts, "minimax/y0 padding");
 
     ParUpperDiagonalLNGoldschmidt gold(param, init_level - 6);
@@ -526,7 +527,8 @@ TEST_CASE("par_upper_diagonal_layernorm_cpp_roundtrip", "[fhe_layers][par_upper_
     auto y1_cts = gold.run(context, y0_cts, a_cts);
     REQUIRE(y1_cts.front().get_level() == init_level - 9);
     auto y1_enc = make_upper_feature(y1_cts, init_level - 9);
-    compare_matrix(expected_y1, y1_enc.par_upper_diagonal_unpack(n_prepad, n_heads, head_dim), "goldschmidt/y1");
+    compare_matrix(expected_y1, y1_enc.par_diagonal_unpack(n_heads, {head_dim, n_prepad}, false, true),
+                   "goldschmidt/y1");
     check_padding_slots_zero(y1_cts, "goldschmidt/y1 padding");
 
     ParUpperDiagonalLNAffine affine(param, Duo{seq_len, n_prepad}, n_heads, head_dim, init_level - 9, inv_std,
@@ -534,7 +536,8 @@ TEST_CASE("par_upper_diagonal_layernorm_cpp_roundtrip", "[fhe_layers][par_upper_
     affine.prepare_weight();
     FeatureMatEncrypted out_enc = affine.run(context, x_centered, y1_cts);
     REQUIRE(out_enc.level == init_level - 11);
-    compare_matrix(expected_out, out_enc.par_upper_diagonal_unpack(n_prepad, n_heads, head_dim), "affine/output");
+    compare_matrix(expected_out, out_enc.par_diagonal_unpack(n_heads, {head_dim, n_prepad}, false, true),
+                   "affine/output");
     check_padding_slots_zero(out_enc.data, "affine/output padding");
 }
 
