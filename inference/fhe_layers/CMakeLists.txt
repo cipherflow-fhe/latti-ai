@@ -31,11 +31,13 @@ add_library(fhe_layers
   par_lower_diag_ccmm.cpp
   par_lower_diag_transpose.cpp
   par_block_col_major_add_pt.cpp
+  par_lower_diagonal_add_pt.cpp
   block_col_major_layernorm.cpp
   par_block_col_major_layernorm.cpp
-  par_lower_diagonal_layernorm.cpp
+  par_upper_diagonal_layernorm.cpp
   block_col_major_polyactrn.cpp
   par_block_col_major_polyactrn.cpp
+  par_upper_diagonal_polyact.cpp
   ../data_structs/feature.cpp
   ../data_structs/feature1d.cpp
   ../data_structs/feature2d.cpp
