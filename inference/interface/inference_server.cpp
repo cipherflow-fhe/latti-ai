@@ -125,6 +125,7 @@ void InferenceServer::load_model() {
     init_->load_model_prepare();
 
     fp_ = std::make_unique<InferenceProcess>(init_.get());
+    fp_->available_keys.reserve(input_keys_.size());
     for (auto& key : input_keys_) {
         fp_->available_keys.push_back(key);
     }

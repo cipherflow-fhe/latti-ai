@@ -2457,6 +2457,7 @@ void InferenceProcess::prepare_task() {
 #endif
 
 void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorFunc>& executors) {
+    executors.reserve(1);
     auto* fp_ptr = this->fp;
 
     executors["encode_pt"] = [fp_ptr](ExecutionContext& exec_ctx, const unordered_map<NodeIndex, any>& inputs,
