@@ -18,6 +18,7 @@ import sys
 import os
 from components import *
 from score import FheScoreParam, MpcScoreParam, BtpScoreParam
+from inference.model_generator.layers.poly_relu_base import PolyReluBase
 import copy
 from itertools import product
 import math
@@ -324,7 +325,7 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                     compute_node.is_adaptive_avgpool = False
         elif compute_node.layer_type == config.approx_poly_type:
-            graph.dag.nodes[compute_node]['level_cost'] = math.ceil(math.log2(compute_node.order)) + 1
+            graph.dag.nodes[compute_node]['level_cost'] = PolyReluBase.compute_bsgs_level_cost(compute_node.order)
             if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
                 compute_node.is_big_size = True
 
