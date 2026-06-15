@@ -22,6 +22,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -40,6 +41,7 @@ int main(int argc, char* argv[]) {
     vector<string> input_args;
     bool use_gpu = false;
     bool verify = false;
+    bool debug_mode = false;
     constexpr double tolerance = 0.1;
 
     for (int i = 1; i < argc; i++) {
@@ -51,6 +53,8 @@ int main(int argc, char* argv[]) {
             input_args.push_back(argv[++i]);
         } else if (strcmp(argv[i], "--verify") == 0) {
             verify = true;
+        } else if (strcmp(argv[i], "--debug") == 0) {
+            debug_mode = true;
         }
     }
 
@@ -86,9 +90,16 @@ int main(int argc, char* argv[]) {
     for (auto& [name, path] : input_csvs) {
         cout << "Input [" << name << "]: " << path << endl;
     }
+    if (filesystem::exists(task_dir + "/server/debug_config.json")) {
+        debug_mode = true;
+    }
+
     cout << "Device:         " << (use_gpu ? "GPU" : "CPU") << endl;
     if (verify) {
         cout << "Verify mode:    ON (tolerance = " << tolerance << ")" << endl;
+    }
+    if (debug_mode) {
+        cout << "Debug mode:     ON" << endl;
     }
     cout << endl;
 
@@ -96,7 +107,7 @@ int main(int argc, char* argv[]) {
     cout << "[Step 1/5] Setting up client (key generation)..." << endl;
     InferenceClient client(task_dir + "/client");
     client.setup();
-    auto eval_ctx = client.export_eval_context();
+    auto eval_ctx = client.export_eval_context(debug_mode);
 
     cout << "[Step 2/5] Encrypting input..." << endl;
     auto encrypted_inputs = client.encrypt(input_csvs);
