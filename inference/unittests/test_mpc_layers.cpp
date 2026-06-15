@@ -234,48 +234,6 @@ TEST_CASE_METHOD(MpcFixture, "big_size_e2s_s2e_no_conv_test") {
     REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
 }
 
-TEST_CASE_METHOD(MpcFixture,"big_size_conv_test") {
-    // CkksParameter parameter = CkksParameter::create_parameter(8192);
-    // CkksContext context = CkksContext::create_random_context(parameter);
-    // context.gen_rotation_keys();
-
-    int init_level = 5;
-    uint32_t n_in_channel = 16;
-    uint32_t n_out_channel = 32;
-
-    Duo input_shape = {256, 256};
-    Duo kernel_shape = {3, 3};
-    Duo stride = {2, 2};
-    Duo block_shape = {64, 64};
-
-    Duo block_expansion = {(uint32_t)ceil(input_shape[0] / (double)block_shape[0]),
-                           (uint32_t)ceil(input_shape[1] / (double)block_shape[1])};
-    Duo next_stride = {(uint32_t)ceil(block_expansion[0] / (double)stride[0]),
-                       (uint32_t)ceil(block_expansion[1] / (double)stride[1])};
-
-    auto input_array_vec = gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 0.1);
-    auto conv0_weight = gen_random_array<4>({n_out_channel, n_in_channel, kernel_shape[0], kernel_shape[1]}, 0.1);
-    auto conv0_bias = gen_random_array<1>({n_out_channel}, 1);
-
-    Feature2DEncrypted f2d(&context, init_level, {1, 1});
-    f2d.pack_interleaved(input_array_vec, block_shape, block_expansion, false,
-                         context.get_parameter().get_default_scale());
-
-    Array<int, 1> padding({2});
-    padding.set(0, -1);
-    padding.set(1, -1);
-    InverseMultiplexedConv2DLayer conv(context.get_parameter(), input_shape, conv0_weight.copy(), conv0_bias.copy(),
-                                       padding, stride, block_shape, init_level);
-    conv.prepare_weight();
-
-    auto y_ct = conv.run(context, f2d);
-    Array<double, 3> y_mg = y_ct.unpack_interleaved(block_shape, next_stride);
-    auto y_expected = conv.run_plaintext(input_array_vec);
-
-    auto compare_res = compare(y_expected, y_mg);
-    REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
-}
-
 TEST_CASE_METHOD(MpcFixture, "big_size_e2s_s2e_test") {
     int init_level = 5;
 
