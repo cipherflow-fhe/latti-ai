@@ -48,7 +48,7 @@ const double DEFAULT_SCALE = pow(2, DEFAULT_SCALE_BIT);
 const int RING_MOD_BIT = 44;
 const uint64_t RING_MOD = 1ULL << RING_MOD_BIT;
 
-const int T_SCALE_BIT = 6;
+const int T_SCALE_BIT = 4;
 const uint64_t T_SCALE = 1ULL << T_SCALE_BIT;
 
 const Duo BLOCK_SHAPE = {64, 64};

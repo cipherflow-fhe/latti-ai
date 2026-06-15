@@ -37,9 +37,9 @@ constexpr int kLevel = 5;
 constexpr uint32_t kNChannel = 4;
 const Duo kShape = {16, 16};
 
-int get_test_port(int argc, char** argv) {
-    if (argc > 1) {
-        return atoi(argv[1]);
+int get_test_port(int argc, char** argv, int arg_idx = 1) {
+    if (argc > arg_idx) {
+        return atoi(argv[arg_idx]);
     }
     if (const char* env_port = getenv("MPC_TEST_PORT")) {
         return atoi(env_port);

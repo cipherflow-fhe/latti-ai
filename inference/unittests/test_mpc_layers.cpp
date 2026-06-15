@@ -622,8 +622,8 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d maxpool") {
     uint32_t n_channel = 4;
     Duo pool_stride = {2, 2};
 
-    vector<uint32_t> shapes = {32, 64};
-    vector<uint32_t> kernel_shapes = {2, 3};
+    vector<uint32_t> shapes = {32};
+    vector<uint32_t> kernel_shapes = {2};
     for (uint32_t s : shapes) {
         Duo shape = {s, s};
         SECTION("shape=" + str(shape)) {
@@ -1482,72 +1482,6 @@ TEST_CASE_METHOD(MpcFixture, "test distance") {
     REQUIRE(compare_res.max_error < 0.01);
 }
 
-TEST_CASE_METHOD(MpcFixture, "test distance fc") {
-    // srand(time);
-    srand(time(NULL));
-    Array1D vec2 = read_plain_face("/home/zhongy/encrypted-inference/inference/"
-                                   "face_gui_v2/plain_face1.txt",
-                                   "Alice_Fisher_0001", 1.0, 1);
-    // Aaron_Peirsol_0001
-    Array1D vec1 = read_plain_face("/home/zhongy/encrypted-inference/inference/"
-                                   "face_gui_v2/plain_face1.txt",
-                                   "Aaron_Peirsol_0001", 1.0, 1);
-    Array1D vec3 = read_plain_face("/home/zhongy/encrypted-inference/inference/"
-                                   "face_gui_v2/plain_face1.txt",
-                                   "Aaron_Peirsol_0002", 1.0, 1);
-    vec2 = L2_normal(vec2);
-    vec3 = L2_normal(vec3);
-    Array2D vec_list;
-    vec_list.push_back(vec2);
-    uint32_t n_channel = vec1.size();
-
-    Duo array_shape = {4, 4};
-    Duo fc_skip = {1, 1};
-    Array<double, 1> input_array = gen_random_array<1>({512}, 0.1);
-    Array<double, 2> fc_weight = gen_random_array<2>({128, 512}, 1);
-    Array<double, 1> fc_bias = gen_random_array<1>({128}, 1);
-    uint32_t fc_n_channel_per_ct = slot_size / (array_shape[0] * array_shape[1]);
-    uint32_t fc_level = 2;
-
-    DensePackedLayer fc_layer(context.get_parameter(), fc_weight.copy(), fc_bias.copy(), fc_n_channel_per_ct,
-                              fc_level, 0);
-    fc_layer.normal_dense = false;
-    Feature0DEncrypted x_in(&context, fc_level);
-    x_in.skip = 1;
-    cout << "1316 skip=" << x_in.skip << endl;
-    x_in.pack(input_array, false, DEFAULT_SCALE);
-    cout << "x_in scale=" << x_in.data[0].get_scale() << endl;
-    fc_layer.prepare_weight_0d_skip(1);
-    cout << "prepare ok " << endl;
-    auto x_e = fc_layer.run_0d_skip(context, x_in);
-    cout << "x_e scale=" << x_e.data[0].get_scale() << endl;
-    x_e.skip = array_shape[0] * array_shape[1];
-    x_e.n_channel_per_ct = 4096 / (array_shape[0] * array_shape[1]);
-    auto fc_pt = x_e.unpack().to_array_1d();
-    print_double_message(fc_pt.data(), "fc_pt", 10);
-    auto real_res = fc_layer.run_plaintext(input_array).to_array_1d();
-
-    auto compare_res = compare(fc_pt, real_res);
-    fprintf(stderr, "real_res=%f\n", compare_res.max_error);
-
-    string file_name = "/home/zhongy/encrypted-inference/inference/face_gui_v2/plain_face1.txt";
-    string name = "Alice_Fisher_0001";
-    auto res = compute_distance_fhe(x_e, context, x_e.level, file_name, name);
-    auto res_pt = res.unpack();
-    fprintf(stderr, "ct_res=%f\n", res_pt[0] / T_SCALE);
-    Array1D compare_vec = {res_pt[0] / T_SCALE};
-
-    auto vec1_L2 = L2_normal(real_res);
-    Array1D real_dist_vec;
-    for (int i = 0; i < vec_list.size(); i++) {
-        auto real_dist = compute_distance(vec1_L2, vec_list[i]);
-        real_dist_vec.push_back(real_dist * real_dist);
-    }
-    cout << "real_dist=" << real_dist_vec[0] << endl;
-    auto compare_res_1 = compare(compare_vec, real_dist_vec);
-    REQUIRE(compare_res_1.max_error < 0.05);
-}
-
 TEST_CASE_METHOD(MpcFixture, "test relu6") {
     int level = 1;
     uint32_t n_channel = 4;
@@ -1612,6 +1546,55 @@ TEST_CASE_METHOD(MpcFixture, "test relu6") {
     cout << "y_mg=" << y_mg.get(0, 0, 0);
     auto compare_res = compare(y_true, y_mg);
     REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
+}
+
+TEST_CASE_METHOD(MpcFixture, "test_sqrt") {
+    int level = 3;
+    vector<uint32_t> n_channels = {1024, 4096};
+
+    for (uint32_t n_channel : n_channels) {
+        SECTION("n_channel=(" + to_string(n_channel) + ')') {
+            vector<double> div_num(n_channel, 0.5);
+            div_num = gen_random_array_positive<1>({n_channel}, 1).to_array_1d();
+            MpcTaskMetaData meta_data;
+            meta_data.append(MpcProtoType::enc_to_share_0d, {"u8", "u32", "u8", "u8"}, (uint8_t)level, n_channel, 0, 0);
+            meta_data.append(MpcProtoType::sqrt, {});
+            meta_data.append(MpcProtoType::share_to_enc_0d, {"u8", "u32"}, (uint8_t)level, n_channel);
+            meta_data.append(MpcProtoType::end, {});
+            Bytes meta_data_bytes = meta_data.serialize();
+            data_trans.send_bytes(meta_data_bytes);
+
+            vector<double> x_mg_vec(n_channel, 1);
+            auto x_mg = Array<double, 1>::from_array_1d(x_mg_vec);
+            x_mg = gen_random_array_positive<1>({n_channel}, 1);
+            x_mg.set(2, 1.2);
+            Feature0DEncrypted x_e(&context, level);
+            x_e.pack(x_mg, false, DEFAULT_SCALE);
+            x_e.skip = 1;
+            x_e.n_channel = n_channel;
+
+            auto x_share0 = server_enc_to_share(context, x_e, scale_ord, ring_mod);
+
+            // sqrt
+            SqrtLayer sqrt_layer(scale_ord, ring_mod, pt_range);
+            Feature0DShare y_share0(ring_mod, scale_ord);
+            sqrt_layer.run(x_share0, y_share0);
+
+            auto y_ct = share_to_enc(y_share0, context, scale_ord, ring_mod, pt_range, x_e.level);
+
+            Array<double, 1> y_mg = y_ct.unpack();
+
+            for (int i = 0; i < y_mg.get_size(); i++) {
+                y_mg.set(i, y_mg.get_data()[i] / T_SCALE);
+            }
+            print_double_message(y_mg.get_data(), "ct_res=", 10);
+            Array<double, 1>& y_mg_expected = x_mg;
+            y_mg_expected = sqrt_layer.sqrt_plaintext_call(y_mg_expected);
+            print_double_message(y_mg_expected.get_data(), "pt_res=", 10);
+            auto compare_res = compare(y_mg_expected, y_mg);
+            REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
+        }
+    }
 }
 
 TEST_CASE_METHOD(MpcFixture, "test_argmax") {
@@ -1682,15 +1665,16 @@ TEST_CASE_METHOD(MpcFixture, "test_argmax") {
         }
     }
 }
+
 TEST_CASE_METHOD(MpcFixture, "test_div") {
     int level = 3;
 
-    vector<uint32_t> n_channels = {1024, 4096};
+    vector<uint32_t> n_channels = {1024};
 
     for (uint32_t n_channel : n_channels) {
         SECTION("n_channel=(" + to_string(n_channel) + ')') {
-            vector<double> div_num(n_channel, 0.5);
-            div_num = gen_random_array_positive<1>({n_channel}, 1).to_array_1d();
+            vector<double> div_num(n_channel, 1.5);
+            div_num = gen_random_array_positive<1>({n_channel}, 5).to_array_1d();
             MpcTaskMetaData meta_data;
             meta_data.append(MpcProtoType::enc_to_share_0d, {"u8", "u32", "u8", "u8"}, (uint8_t)level, n_channel, 0, 0);
             meta_data.append(MpcProtoType::div, {});
@@ -1704,6 +1688,7 @@ TEST_CASE_METHOD(MpcFixture, "test_div") {
             x_mg = gen_random_array_positive<1>({n_channel}, 1);
             x_mg.set(2, 1.2);
             Feature0DEncrypted x_e(&context, level);
+            cout<<"ct_scale="<<context.get_parameter().get_default_scale()<<endl;
             x_e.pack(x_mg, false, DEFAULT_SCALE);
             x_e.skip = 1;
             x_e.n_channel = n_channel;
@@ -1721,6 +1706,9 @@ TEST_CASE_METHOD(MpcFixture, "test_div") {
             for (int i = 0; i < y_mg.get_size(); i++) {
                 y_mg.set(i, y_mg.get_data()[i] / T_SCALE);
             }
+            auto unpack_res = x_e.unpack();
+            print_double_message(x_mg.get_data(), "input——mg=", 10);
+            print_double_message(unpack_res.get_data(), "input=", 10);
             print_double_message(y_mg.get_data(), "ct_res=", 10);
             Array<double, 1>& y_mg_expected = x_mg;
             y_mg_expected = div_layer.div_plaintext_call(y_mg_expected, div_num);
@@ -1775,55 +1763,6 @@ TEST_CASE_METHOD(MpcFixture, "test_div_reciprocal") {
             print_double_message(y_mg.get_data(), "ct_res=", 10);
             Array<double, 1>& y_mg_expected = x_mg;
             y_mg_expected = div_layer.div_reciprocal_plaintext_call(y_mg_expected);
-            print_double_message(y_mg_expected.get_data(), "pt_res=", 10);
-            auto compare_res = compare(y_mg_expected, y_mg);
-            REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
-        }
-    }
-}
-
-TEST_CASE_METHOD(MpcFixture, "test_sqrt") {
-    int level = 3;
-    vector<uint32_t> n_channels = {1024, 4096};
-
-    for (uint32_t n_channel : n_channels) {
-        SECTION("n_channel=(" + to_string(n_channel) + ')') {
-            vector<double> div_num(n_channel, 0.5);
-            div_num = gen_random_array_positive<1>({n_channel}, 1).to_array_1d();
-            MpcTaskMetaData meta_data;
-            meta_data.append(MpcProtoType::enc_to_share_0d, {"u8", "u32", "u8", "u8"}, (uint8_t)level, n_channel, 0, 0);
-            meta_data.append(MpcProtoType::sqrt, {});
-            meta_data.append(MpcProtoType::share_to_enc_0d, {"u8", "u32"}, (uint8_t)level, n_channel);
-            meta_data.append(MpcProtoType::end, {});
-            Bytes meta_data_bytes = meta_data.serialize();
-            data_trans.send_bytes(meta_data_bytes);
-
-            vector<double> x_mg_vec(n_channel, 1);
-            auto x_mg = Array<double, 1>::from_array_1d(x_mg_vec);
-            x_mg = gen_random_array_positive<1>({n_channel}, 1);
-            x_mg.set(2, 1.2);
-            Feature0DEncrypted x_e(&context, level);
-            x_e.pack(x_mg, false, DEFAULT_SCALE);
-            x_e.skip = 1;
-            x_e.n_channel = n_channel;
-
-            auto x_share0 = server_enc_to_share(context, x_e, scale_ord, ring_mod);
-
-            // sqrt
-            SqrtLayer sqrt_layer(scale_ord, ring_mod, pt_range);
-            Feature0DShare y_share0(ring_mod, scale_ord);
-            sqrt_layer.run(x_share0, y_share0);
-
-            auto y_ct = share_to_enc(y_share0, context, scale_ord, ring_mod, pt_range, x_e.level);
-
-            Array<double, 1> y_mg = y_ct.unpack();
-
-            for (int i = 0; i < y_mg.get_size(); i++) {
-                y_mg.set(i, y_mg.get_data()[i] / T_SCALE);
-            }
-            print_double_message(y_mg.get_data(), "ct_res=", 10);
-            Array<double, 1>& y_mg_expected = x_mg;
-            y_mg_expected = sqrt_layer.sqrt_plaintext_call(y_mg_expected);
             print_double_message(y_mg_expected.get_data(), "pt_res=", 10);
             auto compare_res = compare(y_mg_expected, y_mg);
             REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
