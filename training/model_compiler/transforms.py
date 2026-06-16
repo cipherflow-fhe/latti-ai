@@ -753,15 +753,17 @@ def set_level_costs(graph: LayerAbstractGraph):
         elif compute_node.layer_type == 'pcmpoly':
             graph.dag.nodes[compute_node]['level_cost'] = 2 if compute_node.order == 2 else 3
         elif compute_node.layer_type == 'pcmstats':
-            graph.dag.nodes[compute_node]['level_cost'] = 4
+            graph.dag.nodes[compute_node]['level_cost'] = 3
         elif compute_node.layer_type == 'pcmcenter':
-            graph.dag.nodes[compute_node]['level_cost'] = 2
+            graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type == 'pcminit':
             graph.dag.nodes[compute_node]['level_cost'] = 2
         elif compute_node.layer_type == 'pcmgs':
             graph.dag.nodes[compute_node]['level_cost'] = 3
         elif compute_node.layer_type == 'pcmaffine':
             graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type == 'pcmmul':
+            graph.dag.nodes[compute_node]['level_cost'] = 1
         else:
             graph.dag.nodes[compute_node]['level_cost'] = 0
 
