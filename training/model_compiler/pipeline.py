@@ -585,7 +585,7 @@ def run_pipeline(
     matmul_block_size: int | None = None,
     set_btp_scale: float | None = None,
     use_gpu: bool = True,
-    enable_score_cache: bool = False,
+    enable_score_cache: bool = True,
 ):
     """
     Run multiple compilations in parallel and select the best result
