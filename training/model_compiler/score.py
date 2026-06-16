@@ -877,7 +877,7 @@ class FheScoreParam:
             input_shape = self.input_shape
             skip = self.input_skip
             layer = PolyRelu2D(input_shape, order, skip, pack)
-            return layer.get_fhe_op_count_call(n_packed_in, self.input_mult_level)
+            return layer.get_fhe_op_count_bsgs_feature2d(n_packed_in, self.input_mult_level)
 
         # ── mult_scalar ──────────────────────────────────────────────────────
         elif layer_type == 'mult_scalar':
