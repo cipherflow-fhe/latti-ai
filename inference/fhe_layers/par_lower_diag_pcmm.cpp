@@ -29,7 +29,7 @@ ParLowerDiagPCMM::ParLowerDiagPCMM(const CkksParameter& param_in,
                                    const Duo& shape_X_T,
                                    uint32_t n_heads,
                                    uint32_t head_dim,
-                                   const Array<double, 2>& W_mat,
+                                   const Array<double, 2>& W_T_mat,
                                    uint32_t level_X,
                                    Array<double, 1>&& bias)
     : Layer(param_in) {
@@ -57,8 +57,8 @@ ParLowerDiagPCMM::ParLowerDiagPCMM(const CkksParameter& param_in,
     assert(m_ % c_ == 0);
     m_c_ = m_ / c_;
 
-    W_T_rows_ = W_mat.get_shape()[1];
-    W_T_cols_ = W_mat.get_shape()[0];
+    W_T_rows_ = W_T_mat.get_shape()[0];
+    W_T_cols_ = W_T_mat.get_shape()[1];
     assert(in_rows_ == W_T_cols_);
     out_rows_ = W_T_rows_;
 
@@ -76,7 +76,7 @@ ParLowerDiagPCMM::ParLowerDiagPCMM(const CkksParameter& param_in,
     }
     K_ = std::max(K_row_, K_col_);
 
-    // weight matrix is tranposed here
+    // W_T_mat is already transposed: rows are output features, columns are input features.
     W_padded_.resize(K_);
     for (uint32_t mb = 0; mb < K_; mb++) {
         Array<double, 2> W_sub({d_, d_});
@@ -86,7 +86,7 @@ ParLowerDiagPCMM::ParLowerDiagPCMM(const CkksParameter& param_in,
                 uint32_t src_col = (mode_ == Mode::REDUCE) ? mb * d_prepad_ + col : col;
                 double val = 0.0;
                 if (src_row < W_T_rows_ && src_col < W_T_cols_) {
-                    val = W_mat.get(src_col, src_row);
+                    val = W_T_mat.get(src_row, src_col);
                 }
                 W_sub.set(row, col, val);
             }

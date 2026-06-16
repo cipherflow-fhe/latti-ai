@@ -26,7 +26,7 @@ public:
                      const Duo& shape_X_T,
                      uint32_t n_heads,
                      uint32_t head_dim,
-                     const Array<double, 2>& W_mat,
+                     const Array<double, 2>& W_T_mat,
                      uint32_t level_X,
                      Array<double, 1>&& bias = Array<double, 1>());
 

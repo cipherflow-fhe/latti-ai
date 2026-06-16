@@ -293,13 +293,14 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     for (const auto& cfg : cases) {
         INFO(cfg.mode);
         Array<double, 2> X_T = gen_random_array<2>({cfg.w_rows, n_prepad}, 1.0);
-        Array<double, 2> W = gen_random_array<2>({cfg.w_rows, cfg.w_cols}, 0.1);
+        Array<double, 2> W_T = gen_random_array<2>({cfg.w_cols, cfg.w_rows}, 0.1);
         Array<double, 1> bias = gen_random_array<1>({cfg.w_cols}, 0.1);
 
         FeatureMatEncrypted X_enc(&this->context, init_level);
         X_enc.par_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
 
-        ParLowerDiagPCMM layer(this->param, {cfg.w_rows, n_prepad}, n_heads, head_dim, W, init_level, std::move(bias));
+        ParLowerDiagPCMM layer(this->param, {cfg.w_rows, n_prepad}, n_heads, head_dim, W_T, init_level,
+                               std::move(bias));
         layer.prepare_weight();
         FeatureMatEncrypted out_enc = layer.run(this->context, X_enc);
 
