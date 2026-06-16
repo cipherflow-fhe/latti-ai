@@ -120,11 +120,16 @@ private:
 // ============================================================
 // ParBlockColMajorLNGoldschmidt — Phase 3: one Goldschmidt iteration
 //   y_new = 1.5*y - (a_half*y)*(y²)
-// Levels consumed: 3 (L_y -> L_y-3), including final scale normalization
+// Levels consumed: 2 (L_y -> L_y-2)
 // ============================================================
 class ParBlockColMajorLNGoldschmidt : public Layer {
 public:
-    ParBlockColMajorLNGoldschmidt(const ls::CkksParameter& param, uint32_t block_size, uint32_t input_level);
+    ParBlockColMajorLNGoldschmidt(const ls::CkksParameter& param,
+                                  uint32_t block_size,
+                                  uint32_t input_level,
+                                  double y_ckks_scale = 1.0,
+                                  double a_ckks_scale = 1.0,
+                                  bool normalize_output = false);
     void prepare_weight();
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx,
@@ -137,9 +142,11 @@ public:
 
 private:
     uint32_t d_, n_slot_, chunk_size_;
+    double y_ckks_scale_, a_ckks_scale_;
+    bool normalize_output_;
 
     ls::CkksPlaintextRingt one5_pt_;      // 1.5, for pt*ct with y
-    ls::CkksPlaintextRingt one_norm_pt_;  // 1.0, for final scale normalization
+    ls::CkksPlaintextRingt one_norm_pt_;  // 1.0, optional output normalization
 };
 
 // ============================================================
@@ -178,6 +185,7 @@ public:
                              uint32_t block_size,
                              uint32_t n_heads,
                              uint32_t y_level,
+                             double y_ckks_scale,
                              double inv_std,
                              Array<double, 1>&& gamma,
                              Array<double, 1>&& beta);
@@ -197,6 +205,7 @@ private:
     uint32_t chunk_size_, num_chunks_;
     uint32_t num_block_rows_, num_block_cols_;
     uint32_t y_level_;
+    double y_ckks_scale_;
     double inv_std_;
     Array<double, 1> gamma_vals_, beta_vals_;
 

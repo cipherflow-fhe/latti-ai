@@ -1216,7 +1216,11 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             n_heads = task_config_info.get('n_heads', 1)
             feat_in = config_info['feature'][layer_input_feature_ids[0]]
             block_size = _matmul_block_size()
-            layer = ParBlockColMajorLNGoldschmidt(block_size=block_size, n_slot=n // 2)
+            layer = ParBlockColMajorLNGoldschmidt(
+                block_size=block_size,
+                n_slot=n // 2,
+                normalize_output=bool(layer_config.get('normalize_output', False)),
+            )
 
             data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
             input_args.append(Argument(f'{layer_id}', [data_source]))

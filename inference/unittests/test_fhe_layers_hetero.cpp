@@ -3633,8 +3633,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         std::make_shared<ParBlockColMajorLNXCentered>(param, Duo{seq_len, total_dim}, d, n_heads, init_level);
     auto minimax_layer = std::make_shared<ParBlockColMajorLNMinimaxInit>(param, d, init_level - 3, c0, c1, c2);
     auto gold_layer = std::make_shared<ParBlockColMajorLNGoldschmidt>(param, d, init_level - 5);
-    auto affine_layer = std::make_shared<ParBlockColMajorLNAffine>(param, Duo{seq_len, total_dim}, d, n_heads,
-                                                                   init_level - 8, inv_std, gamma.copy(), beta.copy());
+    auto affine_layer = std::make_shared<ParBlockColMajorLNAffine>(
+        param, Duo{seq_len, total_dim}, d, n_heads, init_level - 7, 1.0, inv_std, gamma.copy(), beta.copy());
 
     FeatureMatEncrypted X_enc(&context, init_level);
     X_enc.shape = {seq_len, head_dim};

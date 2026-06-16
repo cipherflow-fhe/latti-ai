@@ -1194,12 +1194,19 @@ class LayerAbstractGraph:
             if layer_type == 'pcmgs':
                 edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
                 if all(v is not None for v in edge_indices.values()):
-                    input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: edge_indices[n])]
+                    ordered_preds = sorted(preds, key=lambda n: edge_indices[n])
+                    input_feature_ids = [n.node_id for n in ordered_preds]
+                else:
+                    ordered_preds = preds
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
+                    'y_ckks_scale': ordered_preds[0].ckks_scale if len(ordered_preds) > 0 else 1.0,
+                    'a_ckks_scale': ordered_preds[1].ckks_scale if len(ordered_preds) > 1 else 1.0,
                 }
+                if getattr(layer, 'normalize_output', False):
+                    layers[layer_id]['normalize_output'] = True
             if layer_type == 'pcmmul':
                 edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
                 if all(v is not None for v in edge_indices.values()):
@@ -1212,13 +1219,17 @@ class LayerAbstractGraph:
             if layer_type == 'pcmaffine':
                 edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
                 if all(v is not None for v in edge_indices.values()):
-                    input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: edge_indices[n])]
+                    ordered_preds = sorted(preds, key=lambda n: edge_indices[n])
+                    input_feature_ids = [n.node_id for n in ordered_preds]
+                else:
+                    ordered_preds = preds
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                     'weight_path': layer.weight_path,
                     'bias_path': layer.bias_path,
+                    'y_ckks_scale': ordered_preds[1].ckks_scale if len(ordered_preds) > 1 else 1.0,
                 }
             if 'fc' in layer_type:
                 absorb_type = list()

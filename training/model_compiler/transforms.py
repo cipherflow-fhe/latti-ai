@@ -759,7 +759,7 @@ def set_level_costs(graph: LayerAbstractGraph):
         elif compute_node.layer_type == 'pcminit':
             graph.dag.nodes[compute_node]['level_cost'] = 2
         elif compute_node.layer_type == 'pcmgs':
-            graph.dag.nodes[compute_node]['level_cost'] = 3
+            graph.dag.nodes[compute_node]['level_cost'] = 3 if getattr(compute_node, 'normalize_output', False) else 2
         elif compute_node.layer_type == 'pcmaffine':
             graph.dag.nodes[compute_node]['level_cost'] = 2
         elif compute_node.layer_type == 'pcmmul':
@@ -792,6 +792,68 @@ def insert_drop_level_layers(graph: LayerAbstractGraph):
                 graph.dag.nodes[drop_level_layer]['level_cost'] = pred_level - succ_level - level_cost
                 succ_sub = next(graph.dag.successors(drop_level_layer))
                 graph.dag.nodes[succ_sub]['level'] = pred_level - graph.dag.nodes[drop_level_layer]['level_cost']
+
+
+def _pcmgs_output_ckks_scale(y_scale: float, a_scale: float, level: int) -> float:
+    D = 2**config.fhe_param.log_default_scale
+    q_l = config.fhe_param.q[level]
+    q_l1 = config.fhe_param.q[level - 1]
+    return y_scale**3 * a_scale * D**3 / (q_l * q_l * q_l1)
+
+
+def propagate_ckks_scale(graph: LayerAbstractGraph, btp_tolerance: float = 1e-3):
+    """Propagate CKKS scale ratios for feature_mat LayerNorm scale-sensitive ops.
+
+    ckks_scale is represented as a ratio to the default CKKS scale. Most ops in
+    this compiler normalize back to 1.0, but the 2-level pcmgs path intentionally
+    leaves a small non-default scale that downstream plaintext encodings must
+    compensate.
+    """
+    for node in nx.topological_sort(graph.dag):
+        if not isinstance(node, ComputeNode):
+            continue
+        preds = [p for p in graph.dag.predecessors(node) if isinstance(p, FeatureNode)]
+        succs = [s for s in graph.dag.successors(node) if isinstance(s, FeatureNode)]
+        if not succs:
+            continue
+
+        for pred in preds:
+            if not hasattr(pred, 'ckks_scale') or pred.ckks_scale in (None, 0):
+                pred.ckks_scale = 1.0
+
+        if node.layer_type == 'pcmgs':
+            if getattr(node, 'normalize_output', False):
+                out_scale = 1.0
+            else:
+                ordered_preds = sorted(
+                    preds,
+                    key=lambda p: graph.dag.edges[p, node].get('input_index')
+                    if graph.dag.edges[p, node].get('input_index') is not None
+                    else 0,
+                )
+                if len(ordered_preds) >= 2:
+                    y, a = ordered_preds[0], ordered_preds[1]
+                    level = graph.dag.nodes[y]['level']
+                    out_scale = _pcmgs_output_ckks_scale(y.ckks_scale, a.ckks_scale, level)
+                else:
+                    out_scale = 1.0
+        elif node.layer_type in {'bootstrapping', 'mpc_refresh'}:
+            if preds:
+                in_scale = preds[0].ckks_scale
+                node.input_ckks_scale = in_scale
+                if abs(in_scale - 1.0) > btp_tolerance:
+                    print(
+                        f'Warning: {node.layer_type} input {preds[0].node_id} has ckks_scale={in_scale:.12g}, '
+                        f'outside tolerance {btp_tolerance}'
+                    )
+            out_scale = 1.0
+        elif node.layer_type == 'drop_level':
+            out_scale = preds[0].ckks_scale if preds else 1.0
+        else:
+            out_scale = 1.0
+
+        for succ in succs:
+            succ.ckks_scale = out_scale
 
 
 def split_graph_to_linear_subgraph(dag: nx.DiGraph) -> list[nx.DiGraph]:
@@ -1265,7 +1327,8 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
         # 3. [y_prev, a] → pcmgs_i → y_next  (repeated n_iter times)
         for i, (pcmgs_i, y_next) in enumerate(zip(pcmgs_nodes, y_nodes[1:])):
             y_prev = y_nodes[i]
-            graph.dag.add_node(pcmgs_i, **c_attrs(3, pcmgs_i.layer_id))
+            pcmgs_level_cost = 3 if getattr(pcmgs_i, 'normalize_output', False) else 2
+            graph.dag.add_node(pcmgs_i, **c_attrs(pcmgs_level_cost, pcmgs_i.layer_id))
             graph.dag.add_node(y_next, **f_attrs(y_next))
             graph.dag.add_edge(y_prev, pcmgs_i, input_index=0)
             graph.dag.add_edge(a, pcmgs_i, input_index=1)

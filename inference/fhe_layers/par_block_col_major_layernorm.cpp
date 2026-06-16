@@ -490,8 +490,11 @@ Array<double, 2> ParBlockColMajorLNMinimaxInit::run_plaintext(const Array<double
 
 ParBlockColMajorLNGoldschmidt::ParBlockColMajorLNGoldschmidt(const CkksParameter& param,
                                                              uint32_t block_size,
-                                                             uint32_t input_level)
-    : Layer(param) {
+                                                             uint32_t input_level,
+                                                             double y_ckks_scale,
+                                                             double a_ckks_scale,
+                                                             bool normalize_output)
+    : Layer(param), y_ckks_scale_(y_ckks_scale), a_ckks_scale_(a_ckks_scale), normalize_output_(normalize_output) {
     level_ = input_level;
     d_ = block_size;
     n_slot_ = param_.get_n() / 2;
@@ -506,7 +509,7 @@ ParBlockColMajorLNGoldschmidt::generate_pt(CkksContext& ctx, uint32_t pt_idx, ui
 
     if (pt_idx == 0) {
         vector<double> one5_vec(n_slot_, 1.5);
-        return ctx.encode_ringt(one5_vec, D / q_L * D / q_L1 * D);
+        return ctx.encode_ringt(one5_vec, y_ckks_scale_ * y_ckks_scale_ * a_ckks_scale_ * D / q_L * D / q_L1 * D);
     }
     if (pt_idx == 1) {
         double q_L2 = param_.get_q(level_ - 2);
@@ -519,7 +522,9 @@ ParBlockColMajorLNGoldschmidt::generate_pt(CkksContext& ctx, uint32_t pt_idx, ui
 void ParBlockColMajorLNGoldschmidt::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
     one5_pt_ = generate_pt(ctx, 0);
-    one_norm_pt_ = generate_pt(ctx, 1);
+    if (normalize_output_) {
+        one_norm_pt_ = generate_pt(ctx, 1);
+    }
 }
 
 vector<CkksCiphertext> ParBlockColMajorLNGoldschmidt::run(CkksContext& ctx,
@@ -556,11 +561,13 @@ vector<CkksCiphertext> ParBlockColMajorLNGoldschmidt::run(CkksContext& ctx,
 
         // Step 4: 1.5*y - a_half*y^3 -> level_-2, scale S_prod
         auto diff = ctx_copy.sub(one5_y_drop, ya_yy);
-
-        // Step 5: normalize scale back to D -> level_-3
-        auto norm_mul = ctx_copy.ringt_to_mul(one_norm_pt_, level_ - 2);
-        auto norm_raw = ctx_copy.mult_plain_mul(diff, norm_mul);
-        y_new[bi] = ctx_copy.rescale(norm_raw, D);
+        if (normalize_output_) {
+            auto one_mul = ctx_copy.ringt_to_mul(one_norm_pt_, level_ - 2);
+            auto norm_raw = ctx_copy.mult_plain_mul(diff, one_mul);
+            y_new[bi] = ctx_copy.rescale(norm_raw, D);
+        } else {
+            y_new[bi] = move(diff);
+        }
     });
 
     return y_new;
@@ -670,10 +677,12 @@ ParBlockColMajorLNAffine::ParBlockColMajorLNAffine(const CkksParameter& param,
                                                    uint32_t block_size,
                                                    uint32_t n_heads,
                                                    uint32_t y_level,
+                                                   double y_ckks_scale,
                                                    double inv_std,
                                                    Array<double, 1>&& gamma,
                                                    Array<double, 1>&& beta)
-    : Layer(param), y_level_(y_level), inv_std_(inv_std), gamma_vals_(move(gamma)), beta_vals_(move(beta)) {
+    : Layer(param), y_level_(y_level), y_ckks_scale_(y_ckks_scale), inv_std_(inv_std), gamma_vals_(move(gamma)),
+      beta_vals_(move(beta)) {
     level_ = y_level;
     m_ = shape[0];
     d_ = block_size;
@@ -725,7 +734,7 @@ ParBlockColMajorLNAffine::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_
                 }
             }
         }
-        return ctx.encode_ringt(gamma_vec, q_L / D * q_L1);
+        return ctx.encode_ringt(gamma_vec, q_L / D * q_L1 / y_ckks_scale_);
     }
 
     if (pt_idx == 1) {

@@ -57,7 +57,8 @@ FeatureNode::FeatureNode(const json& json_data)
       ckks_parameter_id(json_data["ckks_parameter_id"]),
       pack_channel_per_ciphertext(
           json_data.value("data_type", string("")) == "feature_mat" ? 0 : json_data["pack_num"].get<int>()),
-      level(json_data["level"]), ckks_scale(0.0), is_mat(json_data.value("data_type", string("")) == "feature_mat") {
+      level(json_data["level"]), ckks_scale(json_data.value("ckks_scale", 1.0)),
+      is_mat(json_data.value("data_type", string("")) == "feature_mat") {
     if (dim == 2 && is_mat) {
         shape = {json_data["shape"][0], json_data["shape"][1]};
         if (json_data.contains("head_shape"))
@@ -407,11 +408,17 @@ void InitInferenceProcess::_init_pcminit_layer(const string& key, const json& la
 
 void InitInferenceProcess::_init_pcmgs_layer(const string& key, const json& layer) {
     const string feat_y_id = layer["feature_input"][0].get<string>();
+    const string feat_a_id = layer["feature_input"][1].get<string>();
     FeatureNode feat_y(json_features[feat_y_id]);
+    FeatureNode feat_a(json_features[feat_a_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_y.ckks_parameter_id);
     uint32_t block_size = get_config_matmul_block_size(matmul_block_size);
+    double y_ckks_scale = layer.value("y_ckks_scale", feat_y.ckks_scale);
+    double a_ckks_scale = layer.value("a_ckks_scale", feat_a.ckks_scale);
+    bool normalize_output = layer.value("normalize_output", false);
 
-    auto pcmgs = MakeU<ParBlockColMajorLNGoldschmidt>(param, block_size, feat_y.level);
+    auto pcmgs = MakeU<ParBlockColMajorLNGoldschmidt>(param, block_size, feat_y.level, y_ckks_scale, a_ckks_scale,
+                                                      normalize_output);
     _prepare_layer(
         key, move(pcmgs), [](ParBlockColMajorLNGoldschmidt&) {},
         [](ParBlockColMajorLNGoldschmidt& l) { l.prepare_weight(); });
@@ -450,8 +457,9 @@ void InitInferenceProcess::_init_pcmaffine_layer(const string& key, const json& 
     auto gamma = load_h5_tensor_any<1>(layer, h5_file, {"gamma", "weight"}, {feat_xc.shape[1]});
     auto beta = load_h5_tensor_any<1>(layer, h5_file, {"beta", "bias"}, {feat_xc.shape[1]});
 
+    double y_ckks_scale = layer.value("y_ckks_scale", feat_y.ckks_scale);
     auto pcmaffine = MakeU<ParBlockColMajorLNAffine>(param, feat_xc.shape, block_size, get_config_n_heads(n_heads),
-                                                     feat_y.level, inv_std, move(gamma), move(beta));
+                                                     feat_y.level, y_ckks_scale, inv_std, move(gamma), move(beta));
     _prepare_layer(
         key, move(pcmaffine), [](ParBlockColMajorLNAffine&) {},
         [](ParBlockColMajorLNAffine& l) { l.prepare_weight(); });

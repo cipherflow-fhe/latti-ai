@@ -296,10 +296,11 @@ class ParBlockColMajorLNMinimaxInit:
 class ParBlockColMajorLNGoldschmidt:
     op_class = 'ParBlockColMajorLNGoldschmidt'
 
-    def __init__(self, block_size: int, n_slot: int):
+    def __init__(self, block_size: int, n_slot: int, normalize_output: bool = False):
         self.d = block_size
         self.n_slot = n_slot
         self.chunk_size = block_size * block_size
+        self.normalize_output = normalize_output
 
     def _make_pt(self, data_source, pt_idx: int):
         node = CkksPlaintextRingtNode(f'encode_pt_{self.op_class}_{pt_idx}')
@@ -311,7 +312,7 @@ class ParBlockColMajorLNGoldschmidt:
         )
         return node
 
-    def call(self, y_cts: list, a_cts: list, one5_pt, one_norm_pt) -> list:
+    def call(self, y_cts: list, a_cts: list, one5_pt, one_norm_pt=None) -> list:
         result = [None] * len(y_cts)
         for bi, y in enumerate(y_cts):
             a = a_cts[bi]
@@ -325,12 +326,17 @@ class ParBlockColMajorLNGoldschmidt:
             one5_y = rescale(mult(y, one5_pt))
             one5_y_drop = drop_level(one5_y)
             diff = sub(one5_y_drop, ya_yy)
-            result[bi] = rescale(mult(diff, one_norm_pt))
+            if self.normalize_output:
+                if one_norm_pt is None:
+                    raise ValueError('normalize_output requires one_norm_pt')
+                result[bi] = rescale(mult(diff, one_norm_pt))
+            else:
+                result[bi] = diff
         return result
 
     def call_custom_compute(self, y_cts: list, a_cts: list, data_source) -> list:
         one5_pt = self._make_pt(data_source, 0)
-        one_norm_pt = self._make_pt(data_source, 1)
+        one_norm_pt = self._make_pt(data_source, 1) if self.normalize_output else None
         return self.call(y_cts, a_cts, one5_pt, one_norm_pt)
 
     def get_fhe_op_count(self, n_ct: int, level: int, a_level: int | None = None) -> dict:
@@ -349,8 +355,9 @@ class ParBlockColMajorLNGoldschmidt:
         ops[level - 1]['drop_level'] += n_ct
 
         ops[level - 2]['add'] += n_ct
-        ops[level - 2]['mult_plain'] += n_ct
-        ops[level - 2]['rescale'] += n_ct
+        if self.normalize_output:
+            ops[level - 2]['mult_plain'] += n_ct
+            ops[level - 2]['rescale'] += n_ct
         return dict(ops)
 
 
