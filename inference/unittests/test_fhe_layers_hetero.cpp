@@ -47,6 +47,7 @@
 #include "fhe_layers/par_lower_diag_ccmm.h"
 #include "fhe_layers/par_lower_diag_transpose.h"
 #include "fhe_layers/par_block_col_major_add_pt.h"
+#include "fhe_layers/par_lower_diagonal_add_pt.h"
 #include "fhe_layers/conv1d_packed_layer.h"
 #include "fhe_layers/multiplexed_conv1d_pack_layer.h"
 #include "fhe_layers/multiplexed_conv1d_depthwise_pack_layer.h"
@@ -61,8 +62,10 @@
 #include "fhe_layers/upsample_nearest_layer.h"
 #include "fhe_layers/block_col_major_layernorm.h"
 #include "fhe_layers/par_block_col_major_layernorm.h"
+#include "fhe_layers/par_upper_diagonal_layernorm.h"
 #include "fhe_layers/block_col_major_polyactrn.h"
 #include "fhe_layers/par_block_col_major_polyactrn.h"
+#include "fhe_layers/par_upper_diagonal_polyact.h"
 #include "data_structs/feature_mat.h"
 #include "ut_util.h"
 #include <fhe_ops_lib/utils.h>
@@ -70,6 +73,7 @@
 #include <cxx_sdk_v2/cxx_argument.h>
 #include <lattisense/lib/nlohmann/json.hpp>
 #include <any>
+#include <algorithm>
 #include <unordered_map>
 
 using namespace std;
@@ -247,13 +251,14 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         Array<double, 2> X_T = gen_random_array<2>({n_heads * head_dim, n_prepad}, 1.0);
 
         FeatureMatEncrypted input_enc(&this->context, init_level);
-        input_enc.par_lower_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
+        input_enc.par_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, true, true, false,
+                                    this->param.get_default_scale());
 
         ParLowerDiagTranspose layer(this->param, {head_dim, n_prepad}, n_heads, head_dim, init_level);
         layer.prepare_weight();
         FeatureMatEncrypted out_enc = layer.run(this->context, input_enc);
 
-        Array<double, 2> actual = out_enc.par_lower_diagonal_transpose_unpack(n_prepad, n_heads, head_dim);
+        Array<double, 2> actual = out_enc.par_diagonal_unpack(n_heads, {n_prepad, head_dim}, true, false);
         Array<double, 2> expected = layer.run_plaintext(X_T);
         print_double_message(actual.to_array_1d().data(), "actual", 10);
         print_double_message(expected.to_array_1d().data(), "expected", 10);
@@ -292,13 +297,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         Array<double, 1> bias = gen_random_array<1>({cfg.w_cols}, 0.1);
 
         FeatureMatEncrypted X_enc(&this->context, init_level);
-        X_enc.par_lower_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
+        X_enc.par_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
 
         ParLowerDiagPCMM layer(this->param, {cfg.w_rows, n_prepad}, n_heads, head_dim, W, init_level, std::move(bias));
         layer.prepare_weight();
         FeatureMatEncrypted out_enc = layer.run(this->context, X_enc);
 
-        Array<double, 2> actual = out_enc.par_lower_diagonal_unpack(n_heads, {head_dim, n_prepad});
+        Array<double, 2> actual = out_enc.par_diagonal_unpack(n_heads, {head_dim, n_prepad}, true, true);
         Array<double, 2> expected = layer.run_plaintext(X_T);
         print_double_message(actual.to_array_1d().data(), "actual", 10);
         print_double_message(expected.to_array_1d().data(), "expected", 10);
@@ -322,14 +327,14 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     FeatureMatEncrypted A_enc(&this->context, ccmm_level);
     FeatureMatEncrypted B_enc(&this->context, ccmm_level);
-    A_enc.par_lower_diagonal_transpose_pack(A, n_heads, head_dim, false, this->param.get_default_scale());
-    B_enc.par_lower_diagonal_pack(B, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
+    A_enc.par_diagonal_pack(A, n_heads, {n_prepad, head_dim}, true, false, false, this->param.get_default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
 
     ParLowerDiagCCMM layer(this->param, {n_prepad, head_dim}, {head_dim, n_prepad}, n_heads, head_dim, ccmm_level);
     layer.prepare_weight();
     FeatureMatEncrypted C_enc = layer.run(this->context, A_enc, B_enc);
 
-    Array<double, 2> actual = C_enc.par_lower_diagonal_unpack(n_heads, {n_prepad, n_prepad});
+    Array<double, 2> actual = C_enc.par_diagonal_unpack(n_heads, {n_prepad, n_prepad}, true, true);
     Array<double, 2> expected = layer.run_plaintext(A, B);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
@@ -352,18 +357,326 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     FeatureMatEncrypted A_enc(&this->context, init_level);
     FeatureMatEncrypted B_enc(&this->context, init_level);
-    A_enc.par_lower_diagonal_pack(A, n_heads, {head_dim, n_prepad}, false, this->param.get_default_scale());
-    B_enc.par_lower_diagonal_pack(B, n_heads, {n_prepad, n_prepad}, false, this->param.get_default_scale());
+    A_enc.par_diagonal_pack(A, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, {n_prepad, n_prepad}, true, true, false, this->param.get_default_scale());
 
     ParLowerDiagCCMM layer(this->param, {head_dim, n_prepad}, {n_prepad, n_prepad}, n_heads, head_dim, init_level);
     layer.prepare_weight();
     FeatureMatEncrypted C_enc = layer.run(this->context, A_enc, B_enc);
 
-    Array<double, 2> actual = C_enc.par_lower_diagonal_unpack(n_heads, {head_dim, n_prepad});
+    Array<double, 2> actual = C_enc.par_diagonal_unpack(n_heads, {head_dim, n_prepad}, true, true);
     Array<double, 2> expected = layer.run_plaintext(A, B);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
     auto comparison = compare(expected, actual);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_lower_diagonal_add_pt_cpp_roundtrip",
+                               "[fhe_layers][par_lower_diagonal_add_pt]",
+                               HeteroProcessors) {
+    const uint32_t total_rows = 137;
+    const uint32_t n_prepad = 197;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const uint32_t init_level = 2;
+    Duo shape = {total_rows, n_prepad};
+    Duo head_shape = {m_prepad, n_prepad};
+
+    auto A = gen_random_array<2>({total_rows, n_prepad}, 0.5);
+    auto B = gen_random_array<2>({total_rows, n_prepad}, 0.5);
+
+    FeatureMatEncrypted A_enc(&this->context, init_level);
+    A_enc.par_diagonal_pack(A, n_heads, head_shape, true, true, false, this->param.get_default_scale());
+
+    ParLowerDiagonalAddPt layer(this->param, shape, head_shape, n_heads, init_level, B.copy());
+    layer.precompute_pts();
+    FeatureMatEncrypted out_enc = layer.run(this->context, A_enc);
+    REQUIRE(out_enc.level == init_level);
+
+    Array<double, 2> expected = layer.run_plaintext(A);
+    Array<double, 2> actual = out_enc.par_diagonal_unpack(n_heads, head_shape, true, true);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_ln_stats_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_layernorm][stats]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const int init_level = 4;
+    const double eps = 1e-5;
+    const double var_std_bound = 4.0;
+    const double inv_var = 1.0 / (var_std_bound * var_std_bound);
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    uint32_t m = 1;
+    while (m < m_prepad)
+        m <<= 1;
+
+    auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
+    FeatureMatEncrypted X_enc(&this->context, init_level);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalLNStats stats(this->param, shape, head_shape, n_heads, init_level, eps, inv_var);
+    stats.prepare_weight();
+    auto a_cts = stats.run(this->context, X_enc);
+    REQUIRE(a_cts.front().get_level() == init_level - 4);
+    FeatureMatEncrypted a_enc(&this->context, init_level - 4);
+    a_enc.shape = shape;
+    a_enc.head_shape = head_shape;
+    a_enc.matmul_block_size = m;
+    a_enc.data.reserve(a_cts.size());
+    for (auto& ct : a_cts) {
+        a_enc.data.push_back(ct.copy());
+    }
+    Array<double, 2> actual = a_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
+    Array<double, 2> expected = stats.run_plaintext(X_mat);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_ln_xcentered_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_layernorm][xcentered]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const int init_level = 2;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    uint32_t m = 1;
+    while (m < m_prepad)
+        m <<= 1;
+
+    auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
+    FeatureMatEncrypted X_enc(&this->context, init_level);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalLNXCentered xcenter(this->param, shape, head_shape, n_heads, init_level);
+    xcenter.prepare_weight();
+    auto x_centered = xcenter.run(this->context, X_enc);
+    REQUIRE(x_centered.front().get_level() == init_level - 2);
+    FeatureMatEncrypted x_centered_enc(&this->context, init_level - 2);
+    x_centered_enc.shape = shape;
+    x_centered_enc.head_shape = head_shape;
+    x_centered_enc.matmul_block_size = m;
+    x_centered_enc.data.reserve(x_centered.size());
+    for (auto& ct : x_centered) {
+        x_centered_enc.data.push_back(ct.copy());
+    }
+    Array<double, 2> actual = x_centered_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
+    Array<double, 2> expected = xcenter.run_plaintext(X_mat);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_ln_minimax_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_layernorm][minimax]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const int input_level = 2;
+    const double c0 = 6.19067182;
+    const double c1 = -16.15885111;
+    const double c2 = 11.52830778;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    uint32_t m = 1;
+    while (m < m_prepad)
+        m <<= 1;
+
+    auto a_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
+    FeatureMatEncrypted a_input(&this->context, input_level);
+    a_input.par_diagonal_pack(a_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalLNMinimaxInit minimax(this->param, shape, head_shape, n_heads, input_level, c0, c1, c2);
+    minimax.prepare_weight();
+    auto y0_cts = minimax.run(this->context, a_input.data);
+    REQUIRE(y0_cts.front().get_level() == input_level - 2);
+    FeatureMatEncrypted y0_enc(&this->context, input_level - 2);
+    y0_enc.shape = shape;
+    y0_enc.head_shape = head_shape;
+    y0_enc.matmul_block_size = m;
+    y0_enc.data.reserve(y0_cts.size());
+    for (auto& ct : y0_cts) {
+        y0_enc.data.push_back(ct.copy());
+    }
+    Array<double, 2> actual = y0_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
+    Array<double, 2> expected = minimax.run_plaintext(a_mat);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_ln_goldschmidt_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_layernorm][goldschmidt]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const int input_level = 3;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    uint32_t m = 1;
+    while (m < m_prepad)
+        m <<= 1;
+
+    auto y_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
+    auto a_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
+    FeatureMatEncrypted y_input(&this->context, input_level);
+    FeatureMatEncrypted a_input(&this->context, input_level);
+    y_input.par_diagonal_pack(y_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+    a_input.par_diagonal_pack(a_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalLNGoldschmidt gold(this->param, shape, head_shape, n_heads, input_level);
+    gold.prepare_weight();
+    auto y1_cts = gold.run(this->context, y_input.data, a_input.data);
+    REQUIRE(y1_cts.front().get_level() == input_level - 3);
+    FeatureMatEncrypted y1_enc(&this->context, input_level - 3);
+    y1_enc.shape = shape;
+    y1_enc.head_shape = head_shape;
+    y1_enc.matmul_block_size = m;
+    y1_enc.data.reserve(y1_cts.size());
+    for (auto& ct : y1_cts) {
+        y1_enc.data.push_back(ct.copy());
+    }
+    Array<double, 2> actual = y1_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
+    Array<double, 2> expected = gold.run_plaintext(y_mat, a_mat);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_ln_affine_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_layernorm][affine]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const int y_level = 2;
+    const double inv_std = 0.25;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+
+    auto x_centered_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
+    auto y_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
+    auto gamma = gen_random_array<1>({total_cols}, 0.5);
+    auto beta = gen_random_array<1>({total_cols}, 0.1);
+    FeatureMatEncrypted x_centered_input(&this->context, y_level - 1);
+    FeatureMatEncrypted y_input(&this->context, y_level);
+    x_centered_input.par_diagonal_pack(x_centered_mat, n_heads, head_shape, false, false, false,
+                                       this->param.get_default_scale());
+    y_input.par_diagonal_pack(y_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalLNAffine affine(this->param, shape, head_shape, n_heads, y_level, inv_std, gamma.copy(),
+                                    beta.copy());
+    affine.prepare_weight();
+    FeatureMatEncrypted out_enc = affine.run(this->context, x_centered_input.data, y_input.data);
+    REQUIRE(out_enc.level == y_level - 2);
+    Array<double, 2> actual = out_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
+    Array<double, 2> expected = affine.run_plaintext(x_centered_mat, y_mat);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_polyact_gamma_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_polyact][gamma]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const uint32_t init_level = 1;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+
+    auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
+    auto gamma_vals = gen_random_array<1>({total_cols}, 0.5);
+    FeatureMatEncrypted X_enc(&this->context, init_level);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalPolyActRNGamma gamma_layer(this->param, shape, head_shape, n_heads, init_level, gamma_vals.copy());
+    gamma_layer.prepare_weight();
+    FeatureMatEncrypted gamma_enc = gamma_layer.run(this->context, X_enc);
+    REQUIRE(gamma_enc.level == init_level - 1);
+    Array<double, 2> actual = gamma_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
+    Array<double, 2> expected = gamma_layer.run_plaintext(X_mat);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_polyact_poly_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_polyact][poly]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const uint32_t init_level = 3;
+    const uint32_t degree = 4;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+
+    auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
+    auto coeffs = gen_random_array<2>({degree + 1, total_cols}, 0.2);
+    FeatureMatEncrypted X_enc(&this->context, init_level);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalPolyActRNPoly poly_layer(this->param, shape, head_shape, n_heads, init_level, coeffs.copy(),
+                                             degree);
+    poly_layer.prepare_weight();
+    FeatureMatEncrypted poly_enc = poly_layer.run(this->context, X_enc);
+    REQUIRE(poly_enc.level == init_level - 3);
+    Array<double, 2> actual = poly_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
+    Array<double, 2> expected = poly_layer.run_plaintext(X_mat);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
     REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
     REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
 }

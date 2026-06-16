@@ -51,25 +51,15 @@ public:
     // total_cols is taken from shape[1].
     Array<double, 2> par_block_col_major_unpack(uint32_t m, uint32_t n_per_head, uint32_t d, uint32_t n_heads) const;
 
-    void par_lower_diagonal_pack(const Array<double, 2>& matrix,
-                                 uint32_t n_heads,
-                                 const Duo& head_shape,
-                                 bool is_symmetric = false,
-                                 double scale_in = DEFAULT_SCALE);
-    Array<double, 2> par_lower_diagonal_unpack(uint32_t n_heads, const Duo& head_shape) const;
-    void par_lower_diagonal_transpose_pack(const Array<double, 2>& matrix,
-                                           uint32_t n_heads,
-                                           uint32_t head_dim,
-                                           bool is_symmetric = false,
-                                           double scale_in = DEFAULT_SCALE);
-    Array<double, 2> par_lower_diagonal_transpose_unpack(uint32_t n_prepad, uint32_t n_heads, uint32_t head_dim) const;
-
-    void par_upper_diagonal_pack(const Array<double, 2>& matrix,
-                                 uint32_t n_heads,
-                                 uint32_t head_dim,
-                                 bool is_symmetric = false,
-                                 double scale_in = DEFAULT_SCALE);
-    Array<double, 2> par_upper_diagonal_unpack(uint32_t n_prepad, uint32_t n_heads, uint32_t head_dim) const;
+    void par_diagonal_pack(const Array<double, 2>& matrix,
+                           uint32_t n_heads,
+                           const Duo& head_shape,
+                           bool is_lower = true,
+                           bool is_transposed = true,
+                           bool is_symmetric = false,
+                           double scale_in = DEFAULT_SCALE);
+    Array<double, 2>
+    par_diagonal_unpack(uint32_t n_heads, const Duo& head_shape, bool is_lower = true, bool is_transposed = true) const;
 
     void decompress();
 
