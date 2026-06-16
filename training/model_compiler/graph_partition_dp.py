@@ -215,13 +215,30 @@ AUX_LV = 255
 
 
 class GraphPartitioner:
-    def __init__(self, entire_graph: nx.DiGraph, temperature: float = 1.0):
+    def __init__(self, entire_graph: nx.DiGraph, temperature: float = 1.0, enable_score_cache: bool = True):
         self.entire_graph = entire_graph
         self.param_dict = generate_param_dict_for_graph()
+        self.enable_score_cache = enable_score_cache
+        self.compute_score_cache: dict[tuple[ComputeNode, tuple[int, ...], tuple[int, ...]], float] = {}
 
         if temperature < 0:
             raise ValueError('Temperature must be non-negative. If set to 0, a greedy algorithm will be used.')
         self.temperature = temperature
+
+    def get_compute_score_cached(self, enclosing_graph: nx.DiGraph, compute: ComputeNode) -> float:
+        if not self.enable_score_cache:
+            return get_compute_score(enclosing_graph, compute, self.param_dict)
+
+        preds = tuple(enclosing_graph.predecessors(compute))
+        succs = tuple(enclosing_graph.successors(compute))
+        pred_levels = tuple(int(enclosing_graph.nodes[p]['level']) for p in preds)
+        succ_levels = tuple(int(enclosing_graph.nodes[s]['level']) for s in succs)
+        cache_key = (compute, pred_levels, succ_levels)
+
+        if cache_key not in self.compute_score_cache:
+            self.compute_score_cache[cache_key] = get_compute_score(enclosing_graph, compute, self.param_dict)
+
+        return self.compute_score_cache[cache_key]
 
     def inspect_level_backward(self, subgraph: nx.DiGraph):
         max_level = -1
@@ -327,7 +344,7 @@ class GraphPartitioner:
                         lv if lv < AUX_LV else config.fhe_param.max_level
                     )
 
-                sol_cost = initial_score + get_compute_score(dag, leading_comp, self.param_dict)
+                sol_cost = initial_score + self.get_compute_score_cached(dag, leading_comp)
 
                 new_frontier_key_tuple = tuple(new_frontier_key)
                 if (
@@ -504,12 +521,12 @@ class GraphPartitioner:
         return optimal_cost, nx.compose_all(result)
 
 
-def optimize_task_segments(pt_graph, temperature):
+def optimize_task_segments(pt_graph, temperature, enable_score_cache: bool = True):
     """
     Split a task graph into segments with the given capacity and fixed cost.
     Returns (segments, min_cost).
     """
-    graph_partitioner = GraphPartitioner(pt_graph.dag, temperature=temperature)
+    graph_partitioner = GraphPartitioner(pt_graph.dag, temperature=temperature, enable_score_cache=enable_score_cache)
     return graph_partitioner.run()
 
 
@@ -523,8 +540,11 @@ def restore_node_attributes(G: nx.DiGraph):
 def compile_graph(
     pt_graph: LayerAbstractGraph | None = None,
     temperature=1.0,
+    enable_score_cache: bool = True,
 ):
-    score, compiled_graph = optimize_task_segments(pt_graph, temperature=temperature)
+    score, compiled_graph = optimize_task_segments(
+        pt_graph, temperature=temperature, enable_score_cache=enable_score_cache
+    )
 
     if compiled_graph is None:
         return None, None
@@ -548,6 +568,7 @@ def compile_model_btp(
     pt_graph_prepared: LayerAbstractGraph | None = None,
     temperature=1.0,
     stdout=False,
+    enable_score_cache: bool = True,
 ) -> tuple[float, LayerAbstractGraph]:
     """
     Compile model with bootstrapping
@@ -563,6 +584,7 @@ def compile_model_btp(
     score, compiled_graph = compile_graph(
         pt_graph=pt_graph_prepared,
         temperature=temperature,
+        enable_score_cache=enable_score_cache,
     )
 
     if compiled_graph is None:
@@ -578,8 +600,11 @@ def compile_model_btp(
 
 def run_single_compile(args):
     """Wrapper function for multiprocessing - runs a single compilation"""
-    pt_graph_prepared, temperature = args
-    score, graph = compile_model_btp(pt_graph_prepared, temperature, stdout=True)
+    pt_graph_prepared, temperature, *rest = args
+    enable_score_cache = rest[0] if rest else True
+    score, graph = compile_model_btp(
+        pt_graph_prepared, temperature, stdout=True, enable_score_cache=enable_score_cache
+    )
     return score, graph
 
 

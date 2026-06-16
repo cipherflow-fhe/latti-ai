@@ -17,6 +17,7 @@
 
 from pathlib import Path
 import copy
+import time
 
 import networkx as nx
 import numpy as np
@@ -155,6 +156,7 @@ def try_btp(
     raw_graph: LayerAbstractGraph,
     temperature: float,
     num_workers: int,
+    enable_score_cache: bool = True,
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
     btp_param_list = [N16QP1546H192H32]
     valid_results = []
@@ -166,7 +168,9 @@ def try_btp(
         pt_graph = prepare_graph(raw_graph)
 
         # (2) Process
-        graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
+        graph, score = run_btp_compilation(
+            num_experiments, pt_graph, temperature, num_workers, enable_score_cache=enable_score_cache
+        )
 
         # (3) Post-process
         if graph is not None:
@@ -185,6 +189,7 @@ def run_btp_compilation(
     pt_graph: LayerAbstractGraph,
     temperature: float,
     num_workers: int,
+    enable_score_cache: bool = True,
 ) -> tuple[LayerAbstractGraph | None, float]:
     """
     Run BTP mode parallel compilation with prepared graph
@@ -194,15 +199,19 @@ def run_btp_compilation(
         temperature: Temperature parameter for randomization
         pt_graph: Prepared graph for BTP compilation
         num_workers: Number of parallel worker processes
+        enable_score_cache: If True, cache per-compute score in DP compilation
 
     Returns:
         (best_graph, best_score): best_graph is None if all runs failed
     """
     print(f'Step 4: Starting DP compilation of pt_graph with temperature={temperature}')
+    dp_start_time = time.perf_counter()
 
     # Find the best result
-    score, graph = run_single_compile((pt_graph, temperature))
+    score, graph = run_single_compile((pt_graph, temperature, enable_score_cache))
 
+    dp_elapsed_time = time.perf_counter() - dp_start_time
+    print(f'DP compilation time: {dp_elapsed_time:.3f}s')
     print(f'\n=== Results ===')
     print(f'Final score: {score}')
     return graph, score
@@ -576,6 +585,7 @@ def run_pipeline(
     matmul_block_size: int | None = None,
     set_btp_scale: float | None = None,
     use_gpu: bool = True,
+    enable_score_cache: bool = True,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -593,7 +603,10 @@ def run_pipeline(
         graph_type: Graph type (GRAPH_TYPE)
         set_btp_scale: if not None, wrap BTP with pcmgamma scales and enable special level handling
         use_gpu: If True, use GPU primitive timing tables for FHE score; otherwise use CPU timing
+        enable_score_cache: If True, cache per-compute score in DP compilation
     """
+    compile_start_time = time.perf_counter()
+
     if style is not None:
         config.style = style
     if graph_type is not None:
@@ -609,7 +622,8 @@ def run_pipeline(
     print(
         f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
         f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
-        f'SET_BTP_SCALE={config.set_btp_scale}, BACKEND={"gpu" if config.use_gpu else "cpu"}'
+        f'SET_BTP_SCALE={config.set_btp_scale}, BACKEND={"gpu" if config.use_gpu else "cpu"}, '
+        f'SCORE_CACHE={enable_score_cache}'
     )
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
@@ -619,14 +633,21 @@ def run_pipeline(
         succeeded, graph, score = try_no_btp(raw_graph)
         if not succeeded:
             use_btp = True
-            succeeded, graph, score = try_btp(num_experiments, raw_graph, temperature, num_workers)
+            succeeded, graph, score = try_btp(
+                num_experiments, raw_graph, temperature, num_workers, enable_score_cache=enable_score_cache
+            )
             if not succeeded:
                 raise ValueError('Compilation failed.')
     else:
         use_btp = True
-        succeeded, graph, score = try_btp(num_experiments, raw_graph, temperature, num_workers)
+        succeeded, graph, score = try_btp(
+            num_experiments, raw_graph, temperature, num_workers, enable_score_cache=enable_score_cache
+        )
         if not succeeded:
             raise ValueError('Compilation failed.')
     dump_graph(graph, output_dir, score, use_btp=use_btp)
+
+    compile_elapsed_time = time.perf_counter() - compile_start_time
+    print(f'Total compilation time: {compile_elapsed_time:.3f}s')
 
     return graph, score
