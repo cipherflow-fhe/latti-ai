@@ -22,6 +22,7 @@ from enum import Enum
 import networkx as nx
 
 from components import *
+from inference.model_generator.layers.poly_relu_base import PolyReluBase
 
 
 class Direction(Enum):
@@ -611,7 +612,7 @@ def set_level_costs(graph: LayerAbstractGraph):
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                     compute_node.is_adaptive_avgpool = False
         elif compute_node.layer_type == config.approx_poly_type:
-            graph.dag.nodes[compute_node]['level_cost'] = math.ceil(math.log2(compute_node.order)) + 1
+            graph.dag.nodes[compute_node]['level_cost'] = PolyReluBase.compute_bsgs_level_cost(compute_node.order)
             if any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
                 compute_node.is_big_size = True
         elif isinstance(compute_node, UpsampleComputeNode):
