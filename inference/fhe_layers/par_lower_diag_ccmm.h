@@ -32,6 +32,9 @@ public:
                      uint32_t level);
 
     void prepare_weight() override;
+    std::vector<ls::CkksPlaintextRingt> replication_mask_pt_;
+    std::vector<std::vector<ls::CkksPlaintextRingt>> ordinary_route_pt_;
+    std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> kqt_route_pt_;
     ls::CkksPlaintextRingt generate_replication_mask_pt(ls::CkksContext& ctx, uint32_t ell) const;
     ls::CkksPlaintextRingt generate_ordinary_route_pt(ls::CkksContext& ctx, uint32_t ell, uint32_t mask_idx) const;
     ls::CkksPlaintextRingt
@@ -81,8 +84,4 @@ private:
     uint32_t c_ = 0;
     uint32_t m_c_ = 0;
     uint32_t n_c_ = 0;
-
-    std::vector<ls::CkksPlaintextRingt> replication_mask_pt_;
-    std::vector<std::vector<ls::CkksPlaintextRingt>> ordinary_route_pt_;
-    std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> kqt_route_pt_;
 };

@@ -105,15 +105,15 @@ class ParUpperDiagonalPolyActRNPoly(_ParUpperDiagonalPolyBase):
     def call(
         self,
         input_cts: list,
-        c2_pt: list,
-        c1_pt: list,
         c0_add_pt: list,
-        c4_pt: list | None = None,
+        c1_pt: list,
+        c2_pt: list,
         c3_pt: list | None = None,
+        c4_pt: list | None = None,
     ) -> list:
         assert len(input_cts) == self.total_cts
         if self.degree == 4:
-            assert c4_pt is not None and c3_pt is not None
+            assert c3_pt is not None and c4_pt is not None
 
         result = [None] * self.total_cts
         for idx, x in enumerate(input_cts):
@@ -159,16 +159,16 @@ class ParUpperDiagonalPolyActRNPoly(_ParUpperDiagonalPolyBase):
         return pts
 
     def call_custom_compute(self, input_cts: list, data_source) -> list:
-        c2_pt = self._make_coeff_pts(data_source, 2)
-        c1_pt = self._make_coeff_pts(data_source, 1)
         c0_add_pt = self._make_coeff_pts(data_source, 0)
+        c1_pt = self._make_coeff_pts(data_source, 1)
+        c2_pt = self._make_coeff_pts(data_source, 2)
         if self.degree == 4:
-            c4_pt = self._make_coeff_pts(data_source, 4)
             c3_pt = self._make_coeff_pts(data_source, 3)
+            c4_pt = self._make_coeff_pts(data_source, 4)
         else:
-            c4_pt = None
             c3_pt = None
-        return self.call(input_cts, c2_pt, c1_pt, c0_add_pt, c4_pt, c3_pt)
+            c4_pt = None
+        return self.call(input_cts, c0_add_pt, c1_pt, c2_pt, c3_pt, c4_pt)
 
 
 ParUpperDiagonalPolyActGamma = ParUpperDiagonalPolyActRNGamma
