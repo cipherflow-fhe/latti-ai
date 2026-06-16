@@ -344,7 +344,10 @@ class GraphPartitioner:
 
             new_frontier[-1] = NodeLevel(node_to_idx[new_node], terminal_lv)
 
-            if terminal_lv == min_feature_level:
+            if terminal_lv == min_feature_level and not (
+                leading_comp.layer_type in {'avgpool1d', 'avgpool2d'}
+                and getattr(leading_comp, 'is_adaptive_avgpool', False)
+            ):
                 aux_lv_solutions = {}
                 for k, solution in new_frontier_solutions.items():
                     new_node_lv_idx = k.index(NodeLevel(node_to_idx[new_node], terminal_lv))
