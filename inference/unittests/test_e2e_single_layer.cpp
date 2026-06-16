@@ -65,7 +65,7 @@ TEST_CASE("cpu/all", "[batch][cpu][e2e]") {
 }
 
 #ifdef INFERENCE_SDK_ENABLE_GPU
-TEST_CASE("gpu/all", "[batch][gpu][e2e]") {
+TEST_CASE("gpu/all", "[batch][gpu]") {
     REQUIRE_FALSE(single_layer_test_names.empty());
     for (const auto& name : single_layer_test_names) {
         SECTION(name) {
