@@ -474,6 +474,7 @@ def export_h5_from_onnx(
     h5_path: str,
     verbose: bool = True,
     feature_mat: bool = False,
+    upper_bound: float | None = 3.0,
 ) -> str:
     """Export FHE-ready H5 weights from ONNX + JSON, without a PyTorch model.
 
@@ -491,6 +492,7 @@ def export_h5_from_onnx(
         h5_path:   Output H5 file path.
         verbose:   Log progress information.
         feature_mat: Use the feature_mat CT-layer-driven exporter.
+        upper_bound: Override RangeNorm upper_bound used by H5 export.
 
     Returns:
         Path to the saved H5 file.
@@ -503,6 +505,7 @@ def export_h5_from_onnx(
             json_path=json_path,
             h5_path=h5_path,
             verbose=verbose,
+            upper_bound=upper_bound,
         )
 
     import json as _json
@@ -518,6 +521,7 @@ def export_h5_from_onnx(
     # ------------------------------------------------------------------ #
     onnx_model = onnx.load(onnx_path)
     onnx_weights = {init.name: numpy_helper.to_array(init).astype('float64') for init in onnx_model.graph.initializer}
+    upper_bound_override = float(upper_bound) if upper_bound is not None else None
 
     # ------------------------------------------------------------------ #
     # 2. Parse RangeNormPoly2d node attributes                           #
@@ -531,9 +535,12 @@ def export_h5_from_onnx(
         if rm_key is None:
             continue
         attr = {a.name: a for a in node.attribute}
+        node_upper_bound = upper_bound_override
+        if node_upper_bound is None:
+            node_upper_bound = attr['upper_bound'].f if 'upper_bound' in attr else 3.0
         poly_node_attrs[rm_key] = {
             'degree': attr['degree_i'].i if 'degree_i' in attr else 4,
-            'upper_bound': attr['upper_bound'].f if 'upper_bound' in attr else 3.0,
+            'upper_bound': node_upper_bound,
             'eps': attr['eps_f'].f if 'eps_f' in attr else 1e-3,
             'activation_name': attr['activation_s'].s.decode() if 'activation_s' in attr else 'relu',
         }
@@ -585,7 +592,15 @@ def export_h5_from_onnx(
             log.warning('polyact running_max not found in ONNX: %s (key: %s)', layer_key, rk)
             continue
         running_max = onnx_weights[rk].flatten()
-        info = poly_node_attrs.get(rk, {'degree': 4, 'upper_bound': 3.0, 'eps': 1e-3, 'activation_name': 'relu'})
+        info = poly_node_attrs.get(
+            rk,
+            {
+                'degree': 4,
+                'upper_bound': upper_bound_override if upper_bound_override is not None else 3.0,
+                'eps': 1e-3,
+                'activation_name': 'relu',
+            },
+        )
         polyact_info[layer_key] = {
             'running_max': running_max,
             'activation_cls': _resolve_activation_cls(info['activation_name']),

@@ -113,6 +113,13 @@ Examples:
         help='Wrap each bootstrapping layer with pcmgamma layers using this scale',
     )
 
+    parser.add_argument(
+        '--upper_bound',
+        type=float,
+        default=3.0,
+        help='upper_bound used for H5 export (default: 3.0)',
+    )
+
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -141,6 +148,7 @@ Examples:
     compile_config = read_compile_config(args.config)
     is_feature_mat = bool(compile_config.get('is_feature_mat', False))
     set_btp_scale = args.set_btp_scale
+    upper_bound = args.upper_bound
     onnx_path = input_path if is_onnx else None
 
     if is_onnx:
@@ -169,7 +177,8 @@ Examples:
     print(f'[Compile] Output: {output_dir}')
     print(
         f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, '
-        f'COMPILE_CONFIG={args.config or "<none>"}, SET_BTP_SCALE={set_btp_scale}'
+        f'COMPILE_CONFIG={args.config or "<none>"}, SET_BTP_SCALE={set_btp_scale}, '
+        f'H5_UPPER_BOUND={upper_bound if upper_bound is not None else "<onnx>"}'
     )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
@@ -209,6 +218,7 @@ Examples:
                         json_path=str(json_path),
                         h5_path=str(h5_path),
                         feature_mat=is_feature_mat,
+                        upper_bound=upper_bound,
                     )
                     print(f'[H5 Export] Done: {h5_path}')
                 except Exception as e:
