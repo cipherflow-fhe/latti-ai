@@ -3616,10 +3616,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         }
         double mean = sum_x / total_dim;
         double var = sum_x2 / total_dim - mean * mean;
-        double a = (var + eps) * inv_var;
-        double y = c0 + c1 * a + c2 * a * a;
+        double a_half = 0.5 * (var + eps) * inv_var;
+        double y = c0 + (2.0 * c1) * a_half + (4.0 * c2) * a_half * a_half;
         for (uint32_t k = 0; k < num_iters; k++) {
-            y = 0.5 * y * (3.0 - a * y * y);
+            y = 1.5 * y - a_half * y * y * y;
         }
         for (uint32_t j = 0; j < total_dim; j++) {
             double x_norm = (X_mat.get(i, j) - mean) * inv_std * y;
@@ -3631,10 +3631,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         std::make_shared<ParBlockColMajorLNStats>(param, Duo{seq_len, total_dim}, d, n_heads, init_level, eps, inv_var);
     auto xcenter_layer =
         std::make_shared<ParBlockColMajorLNXCentered>(param, Duo{seq_len, total_dim}, d, n_heads, init_level);
-    auto minimax_layer = std::make_shared<ParBlockColMajorLNMinimaxInit>(param, d, init_level - 4, c0, c1, c2);
-    auto gold_layer = std::make_shared<ParBlockColMajorLNGoldschmidt>(param, d, init_level - 6);
-    auto affine_layer = std::make_shared<ParBlockColMajorLNAffine>(param, Duo{seq_len, total_dim}, d, n_heads,
-                                                                   init_level - 9, inv_std, gamma.copy(), beta.copy());
+    auto minimax_layer = std::make_shared<ParBlockColMajorLNMinimaxInit>(param, d, init_level - 3, c0, c1, c2);
+    auto gold_layer = std::make_shared<ParBlockColMajorLNGoldschmidt>(param, d, init_level - 5);
+    auto affine_layer = std::make_shared<ParBlockColMajorLNAffine>(
+        param, Duo{seq_len, total_dim}, d, n_heads, init_level - 7, 1.0, inv_std, gamma.copy(), beta.copy());
 
     FeatureMatEncrypted X_enc(&context, init_level);
     X_enc.shape = {seq_len, head_dim};

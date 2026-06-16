@@ -87,6 +87,7 @@ def export_feature_mat_h5_from_onnx(
 
     features: dict[str, dict[str, Any]] = graph['feature']
     layers: dict[str, dict[str, Any]] = graph['layer']
+    standalone_gamma_paths = _standalone_pcmgamma_paths(layers)
     out: dict[str, np.ndarray] = {}
 
     for layer_key, layer in layers.items():
@@ -96,7 +97,16 @@ def export_feature_mat_h5_from_onnx(
         elif ltype == 'pcmgamma':
             _export_pcmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
         elif ltype == 'pcmpoly':
-            _export_pcmpoly(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
+            _export_pcmpoly(
+                layer_key,
+                layer,
+                features,
+                onnx_weights,
+                attention_sources,
+                polyact_sources,
+                standalone_gamma_paths,
+                out,
+            )
         elif ltype == 'pcmaffine':
             _export_pcmaffine(layer_key, layer, features, onnx_weights, out)
         elif ltype in ('add_pt', 'pcm_add_pt'):
@@ -159,6 +169,17 @@ def _index_onnx_sources(onnx_model: onnx.ModelProto) -> tuple[dict[str, Attentio
             )
 
     return attention_sources, polyact_sources
+
+
+def _standalone_pcmgamma_paths(layers: dict[str, dict[str, Any]]) -> set[str]:
+    paths = set()
+    for layer in layers.values():
+        if layer.get('type') != 'pcmgamma':
+            continue
+        path = layer.get('gamma_path') or layer.get('weight_path')
+        if path:
+            paths.add(path)
+    return paths
 
 
 def _export_parcpmm(
@@ -239,6 +260,7 @@ def _export_pcmpoly(
     onnx_weights: dict[str, np.ndarray],
     attention_sources: dict[str, AttentionSource],
     polyact_sources: dict[str, PolyActRNSource],
+    standalone_gamma_paths: set[str],
     out: dict[str, np.ndarray],
 ) -> None:
     dst_path = layer.get('coeffs_path') or _required_path(layer, 'weight_path', layer_key)
@@ -249,14 +271,28 @@ def _export_pcmpoly(
     if dst_path in attention_sources:
         source = attention_sources[dst_path]
         scale = _scale_factor(source.running_max_path, source.upper_bound, source.eps, onnx_weights)
-        coeffs = _coeff_matrix(source.coeff_paths, degree, scale, onnx_weights)
+        gamma_path = layer.get('gamma_path') or source.gamma_path
+        coeffs = _coeff_matrix(
+            source.coeff_paths,
+            degree,
+            scale,
+            onnx_weights,
+            absorb_input_gamma=gamma_path not in standalone_gamma_paths,
+        )
         coeffs = coeffs / _sequence_length(fin, layer_key)
     else:
         source_path = layer.get('running_max_path') or dst_path
         if source_path in polyact_sources:
             source = polyact_sources[source_path]
             scale = _scale_factor(source.running_max_path, source.upper_bound, source.eps, onnx_weights)
-            coeffs = _coeff_matrix(source.coeff_paths, degree, scale, onnx_weights)
+            gamma_path = layer.get('gamma_path') or _polyact_gamma_path(source.running_max_path)
+            coeffs = _coeff_matrix(
+                source.coeff_paths,
+                degree,
+                scale,
+                onnx_weights,
+                absorb_input_gamma=gamma_path not in standalone_gamma_paths,
+            )
         elif dst_path in onnx_weights:
             coeffs = onnx_weights[dst_path].copy()
         else:
@@ -376,6 +412,8 @@ def _coeff_matrix(
     degree: int,
     scale: np.ndarray,
     onnx_weights: dict[str, np.ndarray],
+    *,
+    absorb_input_gamma: bool = False,
 ) -> np.ndarray:
     coeff = np.zeros(degree + 1, dtype='float64')
     for path in coeff_paths:
@@ -390,24 +428,26 @@ def _coeff_matrix(
         raise NotImplementedError(f'pcmpoly coefficient export only supports degree <= 4, got degree={degree}')
 
     scale = np.asarray(scale, dtype='float64').reshape(-1)
-    out = np.zeros((degree + 1, scale.size), dtype='float64')
+    monomial_coeff = coeff.copy()
 
-    if degree >= 0:
-        out[0] = scale * coeff[0]
-    if degree >= 1:
-        out[1] = coeff[1]
+    # Hermite basis -> standard monomial basis:
+    #   He_2(x) = x^2 - 1
+    #   He_3(x) = x^3 - 3x
+    #   He_4(x) = x^4 - 6x^2 + 3
     if degree >= 2:
-        out[0] -= scale * coeff[2]
-        out[2] = coeff[2] / scale
+        monomial_coeff[0] -= coeff[2]
     if degree >= 3:
-        out[1] -= 3 * coeff[3]
-        out[3] = coeff[3] / (scale**2)
+        monomial_coeff[1] -= 3 * coeff[3]
     if degree >= 4:
-        out[0] += scale * 3 * coeff[4]
-        out[2] -= 6 * coeff[4] / scale
-        out[4] = coeff[4] / (scale**3)
+        monomial_coeff[0] += 3 * coeff[4]
+        monomial_coeff[2] -= 6 * coeff[4]
 
-    return out
+    if absorb_input_gamma:
+        exponents = 1 - np.arange(degree + 1, dtype='float64').reshape(-1, 1)
+        scale_factor = np.power(scale.reshape(1, -1), exponents)
+    else:
+        scale_factor = scale.reshape(1, -1)
+    return monomial_coeff.reshape(-1, 1) * scale_factor
 
 
 def _coeff_index(path: str) -> int | None:
@@ -435,6 +475,13 @@ def _attention_gamma_path(running_max_path: str, node_name: str) -> str:
     if running_max_path.endswith('.running_max_concat'):
         return running_max_path[: -len('.running_max_concat')] + '.gamma'
     return _format_id(node_name) + '.gamma'
+
+
+def _polyact_gamma_path(running_max_path: str) -> str:
+    suffix = '.rangenorm.running_max'
+    if running_max_path.endswith(suffix):
+        return running_max_path[: -len(suffix)] + '.gamma'
+    return ''
 
 
 def _attention_coeffs_path(coeff_paths: tuple[str, ...], running_max_path: str, node_name: str) -> str:

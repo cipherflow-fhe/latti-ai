@@ -17,6 +17,7 @@
 
 from pathlib import Path
 import copy
+import math
 
 import networkx as nx
 import numpy as np
@@ -309,6 +310,82 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         dag.add_edge(post_gamma, succ_feature)
 
 
+def insert_btp_ckks_scale_compensation_layers(graph: LayerAbstractGraph, tolerance: float = 1e-12):
+    dag = graph.dag
+    for btp_node in list(dag.nodes):
+        if not isinstance(btp_node, ComputeNode) or btp_node.layer_type != 'bootstrapping':
+            continue
+
+        input_ckks_scale = float(getattr(btp_node, 'input_ckks_scale', 1.0) or 1.0)
+        if abs(input_ckks_scale - 1.0) <= tolerance:
+            continue
+
+        preds = [pred for pred in dag.predecessors(btp_node) if isinstance(pred, FeatureNode)]
+        succs = [succ for succ in dag.successors(btp_node) if isinstance(succ, FeatureNode)]
+        if len(preds) != 1 or len(succs) != 1:
+            raise ValueError(f'Expected bootstrapping node {btp_node.layer_id} to have one input and one output')
+
+        pred_feature = preds[0]
+        succ_feature = succs[0]
+        if getattr(pred_feature, 'data_type', '') != 'feature_mat':
+            print(
+                f'Warning: skip CKKS scale compensation for {btp_node.layer_id}: '
+                f'unsupported feature data_type={getattr(pred_feature, "data_type", "")!r}'
+            )
+            continue
+
+        downstream = [node for node in dag.successors(succ_feature) if isinstance(node, ComputeNode)]
+        if len(downstream) == 1 and getattr(downstream[0], 'ckks_scale_compensation', False):
+            continue
+
+        gamma_id = _unique_graph_node_id(graph, f'{btp_node.layer_id}_ckks_scale_pcmgamma', 'layer_id')
+        gamma_input_id = _unique_graph_node_id(graph, f'{gamma_id}_input', 'node_id')
+
+        gamma_node = ComputeNode(gamma_id, 'pcmgamma', btp_node.channel_output, btp_node.channel_output)
+        gamma_node.path = f'{gamma_id}.weight'
+        gamma_node.btp_scale = 1.0 / input_ckks_scale
+        gamma_node.ckks_scale_compensation = True
+        base_feat_dim = config.n_heads * config.matmul_block_size
+        gamma_node.K = math.ceil(succ_feature.shape[1] / base_feat_dim) if base_feat_dim > 0 else 1
+
+        gamma_input = _clone_feature_node(succ_feature, gamma_input_id)
+        gamma_input.ckks_scale = input_ckks_scale
+        succ_feature.ckks_scale = 1.0
+
+        btp_to_succ_attrs = copy.deepcopy(dag.edges[btp_node, succ_feature])
+        succ_feature_attrs = copy.deepcopy(dag.nodes[succ_feature])
+        gamma_input_attrs = copy.deepcopy(succ_feature_attrs)
+        gamma_input_attrs['name'] = gamma_input.node_id
+
+        dag.remove_edge(btp_node, succ_feature)
+        dag.add_node(gamma_input, **gamma_input_attrs)
+        dag.add_node(gamma_node, name=gamma_id, level_cost=1)
+        dag.add_edge(btp_node, gamma_input, **btp_to_succ_attrs)
+        dag.add_edge(gamma_input, gamma_node)
+        dag.add_edge(gamma_node, succ_feature)
+
+
+def normalize_pcmgs_outputs_before_btp(graph: LayerAbstractGraph):
+    dag = graph.dag
+    for pcmgs_node in list(dag.nodes):
+        if not isinstance(pcmgs_node, ComputeNode) or pcmgs_node.layer_type != 'pcmgs':
+            continue
+
+        output_features = [succ for succ in dag.successors(pcmgs_node) if isinstance(succ, FeatureNode)]
+        if not output_features:
+            continue
+        directly_feeds_btp = any(
+            isinstance(consumer, ComputeNode) and consumer.layer_type == 'bootstrapping'
+            for feature in output_features
+            for consumer in dag.successors(feature)
+        )
+        if not directly_feeds_btp:
+            continue
+
+        pcmgs_node.normalize_output = True
+        dag.nodes[pcmgs_node]['level_cost'] = 3
+
+
 PCMGAMMA_ABSORB_TARGETS = {'pcmpoly', 'parcpmm'}
 PCMGAMMA_PASS_THROUGH_TYPES = {'pcmgamma'}
 
@@ -536,8 +613,11 @@ def dump_graph(
     erg0_path = ergs_dir / 'nn_layers_ct_0.json'
     insert_btp_scale_gamma_layers(graph)
     absorb_pcmgamma_layers(graph)
+    transforms.propagate_ckks_scale(graph)
+    insert_btp_ckks_scale_compensation_layers(graph)
     recompute_final_level(graph)
     transforms.insert_drop_level_layers(graph)
+    transforms.propagate_ckks_scale(graph)
     graph.to_json(dict(), str(erg0_path), score=score)
 
     if use_btp:

@@ -1395,7 +1395,11 @@ class FheScoreParam:
             level_y = self.dag.nodes[ordered_preds[0]]['level']
             level_a = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else None
             try:
-                layer = ParBlockColMajorLNGoldschmidt(block_size=block_size, n_slot=n_slot)
+                layer = ParBlockColMajorLNGoldschmidt(
+                    block_size=block_size,
+                    n_slot=n_slot,
+                    normalize_output=getattr(node, 'normalize_output', False),
+                )
                 return layer.get_fhe_op_count(math.ceil(m / block_size), level_y, level_a)
             except (AssertionError, ValueError):
                 return None

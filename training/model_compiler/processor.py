@@ -151,7 +151,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 if node.data_type == 'feature_mat' and node.head_shape is not None:
                     param_dict[node.node_id]['head_shape'] = [int(x) for x in node.head_shape]
 
-    layernorm_stage_types = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine'}
+    layernorm_stage_types = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine', 'pcmmul'}
     has_layernorm = any(
         isinstance(node, ComputeNode) and node.layer_type in layernorm_stage_types for node in graph.dag.nodes
     )

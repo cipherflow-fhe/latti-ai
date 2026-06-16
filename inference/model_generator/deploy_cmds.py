@@ -49,6 +49,7 @@ from inference.model_generator.layers.par_block_col_major_layernorm import (
     ParBlockColMajorLNAffine,
     ParBlockColMajorLNGoldschmidt,
     ParBlockColMajorLNMinimaxInit,
+    ParBlockColMajorLNMul,
     ParBlockColMajorLNStats,
     ParBlockColMajorLNXCentered,
 )
@@ -214,7 +215,19 @@ def gen_custom_task(
                         raise ValueError(f"parcpmm input '{input_fid}' per-head width exceeds matmul_block_size")
                     G = _par_group_count(block_size, n_heads, n // 2)
                     n_packed = math.ceil(shape_per_head[0] / block_size) * G
-                elif consumer_type in {'pcmstats', 'pcmcenter', 'pcmgamma', 'pcmpoly', 'add', 'add2d', 'pcm_add_pt'}:
+                elif consumer_type in {
+                    'pcmstats',
+                    'pcmcenter',
+                    'pcminit',
+                    'pcmgs',
+                    'pcmaffine',
+                    'pcmmul',
+                    'pcmgamma',
+                    'pcmpoly',
+                    'add',
+                    'add2d',
+                    'pcm_add_pt',
+                }:
                     shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n // 2, feature_id=input_fid)
                     par_feature_shapes[input_fid] = shape_per_head
                 else:
@@ -249,7 +262,7 @@ def gen_custom_task(
             input_args.append(Argument(input_fid, x))
 
     _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose', 'pcm_add_pt'}
-    _PCM_LAYER_TYPES = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine', 'pcmgamma', 'pcmpoly'}
+    _PCM_LAYER_TYPES = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine', 'pcmmul', 'pcmgamma', 'pcmpoly'}
     _FEATURE_MAT_LAYER_TYPES = _PAR_MATRIX_LAYER_TYPES | _PCM_LAYER_TYPES
     _UNSUPPORTED_MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose'}
 
@@ -1211,7 +1224,11 @@ def gen_custom_task(
             n_heads = task_config_info.get('n_heads', 1)
             feat_in = config_info['feature'][layer_input_feature_ids[0]]
             block_size = _matmul_block_size()
-            layer = ParBlockColMajorLNGoldschmidt(block_size=block_size, n_slot=n // 2)
+            layer = ParBlockColMajorLNGoldschmidt(
+                block_size=block_size,
+                n_slot=n // 2,
+                normalize_output=bool(layer_config.get('normalize_output', False)),
+            )
 
             data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
             input_args.append(Argument(f'{layer_id}', [data_source]))
@@ -1236,6 +1253,38 @@ def gen_custom_task(
                 feature_id_to_nodes_map[layer_input_feature_ids[0]],
                 feature_id_to_nodes_map[layer_input_feature_ids[1]],
                 data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], shape[1] // n_heads)
+
+        elif layer_config['type'] == 'pcmmul':
+            n_heads = task_config_info.get('n_heads', 1)
+            input_fid = layer_input_feature_ids[0]
+            y_fid = layer_input_feature_ids[1]
+            feat_in = config_info['feature'][input_fid]
+            shape = tuple(feat_in['shape'])
+            block_size = _matmul_block_size()
+            layer = ParBlockColMajorLNMul(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
+
+            if input_fid not in feature_id_to_nodes_map:
+                x = [
+                    CkksCiphertextNode(input_fid + f'input{j}', level=int(feat_in['level']))
+                    for j in range(layer.total_cts)
+                ]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+            if y_fid not in feature_id_to_nodes_map:
+                feat_y = config_info['feature'][y_fid]
+                y = [
+                    CkksCiphertextNode(y_fid + f'input{j}', level=int(feat_y['level']))
+                    for j in range(layer.num_block_rows)
+                ]
+                feature_id_to_nodes_map[y_fid] = y
+                input_args.append(Argument(y_fid, y))
+
+            layer_output_nodes = layer.call_custom_compute(
+                feature_id_to_nodes_map[input_fid],
+                feature_id_to_nodes_map[y_fid],
             )
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], shape[1] // n_heads)
