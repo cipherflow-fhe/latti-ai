@@ -31,6 +31,10 @@ public:
                      Array<double, 1>&& bias = Array<double, 1>());
 
     void prepare_weight() override;
+    ls::CkksPlaintextRingt
+    generate_pt_A(ls::CkksContext& ctx, uint32_t mb, uint32_t i, uint32_t j, uint32_t ell, uint32_t r) const;
+    ls::CkksPlaintextRingt generate_mask_wrap_pt(ls::CkksContext& ctx, uint32_t i_idx) const;
+    ls::CkksPlaintextRingt generate_bias_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t r) const;
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& X_T);
     Array<double, 2> run_plaintext(const Array<double, 2>& X_T) const;
 

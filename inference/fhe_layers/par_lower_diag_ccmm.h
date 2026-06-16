@@ -32,6 +32,10 @@ public:
                      uint32_t level);
 
     void prepare_weight() override;
+    ls::CkksPlaintextRingt generate_replication_mask_pt(ls::CkksContext& ctx, uint32_t ell) const;
+    ls::CkksPlaintextRingt generate_ordinary_route_pt(ls::CkksContext& ctx, uint32_t ell, uint32_t mask_idx) const;
+    ls::CkksPlaintextRingt
+    generate_kqt_route_pt(ls::CkksContext& ctx, uint32_t j, uint32_t ell, uint32_t mask_idx) const;
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A, const FeatureMatEncrypted& B);
     Array<double, 2> run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const;
 
