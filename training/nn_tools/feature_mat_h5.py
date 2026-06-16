@@ -66,6 +66,7 @@ def export_feature_mat_h5_from_onnx(
     json_path: str,
     h5_path: str,
     verbose: bool = True,
+    upper_bound: float | None = 3.0,
 ) -> str:
     """Export H5 parameters for a compiled feature_mat CT graph.
 
@@ -74,13 +75,14 @@ def export_feature_mat_h5_from_onnx(
         json_path: Final compiled ``nn_layers_ct_*.json`` path.
         h5_path: Output H5 path.
         verbose: Log exported tensor information.
+        upper_bound: Override RangeNorm upper_bound used by H5 export.
 
     Returns:
         The output H5 path.
     """
     onnx_model = onnx.load(onnx_path)
     onnx_weights = {init.name: numpy_helper.to_array(init).astype('float64') for init in onnx_model.graph.initializer}
-    attention_sources, polyact_sources = _index_onnx_sources(onnx_model)
+    attention_sources, polyact_sources = _index_onnx_sources(onnx_model, upper_bound)
 
     with open(json_path, 'r', encoding='utf-8') as f:
         graph = json.load(f)
@@ -127,9 +129,13 @@ def export_feature_mat_h5_from_onnx(
     return h5_path
 
 
-def _index_onnx_sources(onnx_model: onnx.ModelProto) -> tuple[dict[str, AttentionSource], dict[str, PolyActRNSource]]:
+def _index_onnx_sources(
+    onnx_model: onnx.ModelProto,
+    upper_bound: float | None,
+) -> tuple[dict[str, AttentionSource], dict[str, PolyActRNSource]]:
     attention_sources: dict[str, AttentionSource] = {}
     polyact_sources: dict[str, PolyActRNSource] = {}
+    upper_bound_override = float(upper_bound) if upper_bound is not None else None
 
     for node in onnx_model.graph.node:
         attrs = _attrs(node)
@@ -140,6 +146,9 @@ def _index_onnx_sources(onnx_model: onnx.ModelProto) -> tuple[dict[str, Attentio
             coeff_paths = tuple(node.input[6:])
             gamma_path = _attention_gamma_path(running_max_path, node.name)
             coeffs_path = _attention_coeffs_path(coeff_paths, running_max_path, node.name)
+            node_upper_bound = upper_bound_override
+            if node_upper_bound is None:
+                node_upper_bound = float(attrs.get('upper_bound', 3.0))
             source = AttentionSource(
                 qkv_weight_path=qkv_weight_path,
                 qkv_bias_path=qkv_bias_path,
@@ -149,7 +158,7 @@ def _index_onnx_sources(onnx_model: onnx.ModelProto) -> tuple[dict[str, Attentio
                 coeff_paths=coeff_paths,
                 gamma_path=gamma_path,
                 coeffs_path=coeffs_path,
-                upper_bound=float(attrs.get('upper_bound', 1.25)),
+                upper_bound=node_upper_bound,
                 eps=float(attrs.get('eps', 1e-3)),
             )
             attention_sources[gamma_path] = source
@@ -160,11 +169,14 @@ def _index_onnx_sources(onnx_model: onnx.ModelProto) -> tuple[dict[str, Attentio
             if not running_max_path:
                 continue
             attrs = _attrs(node)
+            node_upper_bound = upper_bound_override
+            if node_upper_bound is None:
+                node_upper_bound = float(attrs.get('upper_bound', 3.0))
             polyact_sources[running_max_path] = PolyActRNSource(
                 running_max_path=running_max_path,
                 coeff_paths=tuple(node.input[2:]),
                 degree=int(attrs.get('degree', 4)),
-                upper_bound=float(attrs.get('upper_bound', 1.25)),
+                upper_bound=node_upper_bound,
                 eps=float(attrs.get('eps', 1e-3)),
             )
 
