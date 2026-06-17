@@ -16,6 +16,7 @@
 
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -114,3 +115,34 @@ class ParLowerDiagTranspose:
                 row.append(node)
             transpose_mask_pt.append(row)
         return self.call(input_cts, transpose_mask_pt)
+
+    def get_fhe_op_count(self, level: int) -> dict:
+        """Count FHE primitive operations grouped by level."""
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+
+        seen_per_ell = [0] * self.m_c
+        for j in range(self.m_c):
+            for k in range(self.c):
+                source_diag_idx = self.c * j + k
+                out_diag_idx = (self.m - (source_diag_idx % self.m)) % self.m
+                ell = out_diag_idx // self.c
+                out_local_idx = out_diag_idx % self.c
+                rot = (k - out_local_idx) * self.segment_len + out_diag_idx * self.H
+                if rot != 0:
+                    ops[lv]['rotate'] += 1
+
+                # Two masks are applied for each source diagonal.
+                ops[lv]['mult_plain'] += 2
+                ops[lv]['rescale'] += 2
+
+                # Accumulation into ct_ell_0/ct_ell_1 after the first term for each ell.
+                if seen_per_ell[ell] > 0:
+                    ops[lv - 1]['add'] += 2
+                seen_per_ell[ell] += 1
+
+        # Combine the two ell streams; ct_ell_1 is always present for each ell.
+        ops[lv - 1]['rotate'] += self.m_c
+        ops[lv - 1]['add'] += self.m_c
+
+        return dict(ops)

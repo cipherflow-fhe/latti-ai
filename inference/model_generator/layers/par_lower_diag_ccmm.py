@@ -16,6 +16,7 @@
 
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -270,3 +271,73 @@ class ParLowerDiagCCMM:
                 route_ell.append(node)
             ordinary_route_pt.append(route_ell)
         return self.call(A_cts, B_cts, replication_mask_pt, ordinary_route_pt=ordinary_route_pt)
+
+    def get_fhe_op_count(self, level: int) -> dict:
+        """Count FHE primitive operations grouped by level."""
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+
+        replication_count = self.m if self.is_kqt else self.n
+        replicate_steps = 0
+        step = 1
+        while step < self.c:
+            replicate_steps += 1
+            step <<= 1
+
+        # Replicate lower-diagonal B ciphertexts.
+        ops[lv]['mult_plain'] += replication_count
+        ops[lv]['rescale'] += replication_count
+        ops[lv]['rotate'] += replication_count * replicate_steps
+        ops[lv]['add'] += replication_count * replicate_steps
+
+        if self.is_kqt:
+            self._add_kqt_op_count(ops, lv)
+        else:
+            self._add_ordinary_op_count(ops, lv)
+
+        return dict(ops)
+
+    def _add_ordinary_op_count(self, ops, lv: int) -> None:
+        # Build ct_C_j_ell.
+        n_products = self.m_c * self.n
+        for j in range(self.m_c):
+            for ell in range(1, self.n):
+                ell_m = ell % self.m
+                ell_c = ell_m % self.c
+                rot = (ell - self.n * ell_c) * self.H
+                if rot != 0:
+                    ops[lv]['rotate'] += 1
+        ops[lv - 1]['mult'] += n_products
+        ops[lv - 1]['rescale'] += n_products
+
+        # Apply ordinary route masks and accumulate routed terms.
+        route_terms = self.m_c * self.n
+        ops[lv - 2]['mult_plain'] += route_terms * 4
+        ops[lv - 2]['rescale'] += route_terms * 4
+        ops[lv - 3]['add'] += route_terms * 2
+        ops[lv - 3]['add'] += self.m_c * max(0, self.n - 1) * 2
+        ops[lv - 3]['rotate'] += self.m_c
+        ops[lv - 3]['add'] += self.m_c
+
+    def _add_kqt_op_count(self, ops, lv: int) -> None:
+        # Build ct_C_p_ell.
+        n_products = self.n_c * self.m
+        for p in range(self.n_c):
+            q_p = p // self.m_c
+            for ell in range(self.m):
+                b_ell = ell % self.c
+                R_p_ell = q_p * self.m + ell
+                rot = (R_p_ell - self.n * b_ell) * self.H
+                if rot != 0:
+                    ops[lv]['rotate'] += 1
+        ops[lv - 1]['mult'] += n_products
+        ops[lv - 1]['rescale'] += n_products
+
+        # Apply KQT route masks and accumulate routed terms.
+        route_terms = self.n_c * self.m
+        ops[lv - 2]['mult_plain'] += route_terms * 4
+        ops[lv - 2]['rescale'] += route_terms * 4
+        ops[lv - 3]['add'] += route_terms * 2
+        ops[lv - 3]['add'] += self.n_c * max(0, self.m - 1) * 2
+        ops[lv - 3]['rotate'] += self.n_c
+        ops[lv - 3]['add'] += self.n_c

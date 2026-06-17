@@ -84,6 +84,8 @@ class MatMulComputeNode(ComputeNode):
             weight_path = x.input[1]
             if weight_shapes and x.input[1] in weight_shapes:
                 weight_shape = list(weight_shapes[x.input[1]])
+                if is_diagonal_pack and len(weight_shape) == 2:
+                    weight_shape = [weight_shape[1], weight_shape[0]]
         feature_output = [features_nodes[format_id(x.output[0])]]
         attrs = ComputeNode.get_attr_value_dict(x)
         log.debug('%s', attrs)

@@ -17,6 +17,7 @@
 import math
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -203,3 +204,41 @@ class ParLowerDiagPCMM:
                     bias_pt.append(node)
 
         return self.call(input_cts, pt_A, mask_wrap_pt, bias_pt)
+
+    def get_fhe_op_count(self, level: int) -> dict:
+        """Count FHE primitive operations grouped by level.
+
+        The count follows ``_run_core``: input replication rotations and
+        plaintext matrix products happen at the input level; wrap masking
+        consumes one more level; rotations/additions that route wrapped pieces
+        are counted at the post-mask level.
+        """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+
+        n_processed_mbs = self.K
+        n_core_calls = self.K if self.mode == 'EXPAND' else 1
+        lv = level
+
+        # Build ct_Br and ct_ir for each processed weight megablock.
+        ops[lv]['rotate'] += n_processed_mbs * self.m_c * max(0, self.c - 1)
+        ops[lv]['mult_plain'] += n_processed_mbs * self.H * self.m_c * self.m
+        ops[lv]['add'] += n_processed_mbs * self.H * self.m_c * max(0, self.m - 1)
+        ops[lv]['rescale'] += n_processed_mbs * self.H * self.m_c
+
+        # Apply wrap masks to nonzero head offsets.
+        wrap_terms = n_processed_mbs * self.m_c * max(0, self.H - 1)
+        ops[lv - 1]['mult_plain'] += wrap_terms
+        ops[lv - 1]['rescale'] += wrap_terms
+
+        # Route wrapped pieces and accumulate within each output ciphertext.
+        ops[lv - 2]['rotate'] += wrap_terms * 2
+        ops[lv - 2]['add'] += wrap_terms * 3
+
+        # REDUCE mode combines multiple processed megablocks in one core call.
+        if self.mode != 'EXPAND':
+            ops[lv - 2]['add'] += max(0, self.K - 1) * self.m_c
+
+        if self.has_bias:
+            ops[lv - 2]['add'] += n_core_calls * self.m_c
+
+        return dict(ops)

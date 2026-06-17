@@ -52,6 +52,15 @@ def _pack_pcm_type(layer_type: str) -> str:
     return layer_type
 
 
+def sort_preds_by_input_index(dag: nx.DiGraph, node, preds: list[FeatureNode]) -> list[FeatureNode]:
+    if len(preds) <= 1:
+        return preds
+    edge_indices = {pred: dag.edges[pred, node].get('input_index') for pred in preds}
+    if all(idx is not None for idx in edge_indices.values()):
+        return sorted(preds, key=lambda pred: edge_indices[pred])
+    return preds
+
+
 def _calc_pack_num(dag: nx.DiGraph, feature_node, slot_num: int, use_skip: bool = True) -> int:
     attrs = dag.nodes[feature_node]
     if feature_node.dim == 0:
@@ -595,10 +604,19 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
             if node.data_type == 'feature_mat' and node.head_shape is None and n_heads > 1:
                 if head_dim <= 0:
                     raise ValueError('HEAD_DIM must be set when N_HEADS > 1 for feature_mat inputs')
-                node.head_shape = [node.shape[0], head_dim]
+                if _is_diagonal_mat_pack():
+                    if len(node.shape) < 2:
+                        raise ValueError(f'feature_mat input {node.node_id} must be rank-2 for par_diagonal_pack')
+                    seq_len, total_dim = node.shape[0], node.shape[1]
+                    node.shape[0] = total_dim
+                    node.shape[1] = seq_len
+                    node.head_shape = [head_dim, seq_len]
+                else:
+                    node.head_shape = [node.shape[0], head_dim]
 
     for compute_node in sorted_compute_nodes:
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
+        preds = sort_preds_by_input_index(graph.dag, compute_node, preds)
         succ: FeatureNode = next(graph.dag.successors(compute_node))
         # init skip,
         if succ.dim != 0:

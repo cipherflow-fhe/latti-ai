@@ -17,6 +17,7 @@
 import math
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -82,3 +83,9 @@ class ParLowerDiagonalAddPt:
                 )
                 pt_nodes.append(node)
         return self.call(A_cts, pt_nodes)
+
+    def get_fhe_op_count(self, level: int | None = None) -> dict:
+        """Count the plaintext additions performed by ``call``."""
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        ops[level if level is not None else 0]['add'] = self.total_cts
+        return dict(ops) if level is not None else dict(ops[0])
