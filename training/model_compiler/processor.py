@@ -151,7 +151,18 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 if node.data_type == 'feature_mat' and node.head_shape is not None:
                     param_dict[node.node_id]['head_shape'] = [int(x) for x in node.head_shape]
 
-    layernorm_stage_types = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine'}
+    layernorm_stage_types = {
+        'pcmstats',
+        'pcmcenter',
+        'pcminit',
+        'pcmgs',
+        'pcmaffine',
+        'pdmstats',
+        'pdmcenter',
+        'pdminit',
+        'pdmgs',
+        'pdmaffine',
+    }
     has_layernorm = any(
         isinstance(node, ComputeNode) and node.layer_type in layernorm_stage_types for node in graph.dag.nodes
     )
@@ -162,9 +173,11 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
         'server_start_id': 0,
         'server_end_id': 0,
         'block_shape': config.block_shape,
+        'mat_pack_style': config.mat_pack_style,
         'is_absorb_polyrelu': False,
         'pack_style': config.style,
         'n_heads': config.n_heads,
+        'head_dim': config.head_dim,
         'matmul_block_size': config.matmul_block_size,
         'task_input_id': [str(n.node_id) for n in input_roots],
         'task_output_id': [str(n.node_id) for n in output_roots],
@@ -272,14 +285,36 @@ def update_shape_for_btp(graph: LayerAbstractGraph):
                 succs[0].shape[i] = preds[0].shape[i] * compute_node.upsample_factor_in[i]
         elif compute_node.layer_type == 'parcpmm':
             succs[0].shape[0] = preds[0].shape[0]
+        elif compute_node.layer_type == 'pdmpcmm':
+            weight_shape = getattr(compute_node, 'weight_shape', [])
+            succs[0].shape[0] = weight_shape[0] if len(weight_shape) >= 1 else preds[0].shape[0]
+            if len(preds[0].shape) > 1:
+                succs[0].shape[1] = preds[0].shape[1]
         elif compute_node.layer_type == 'partranspose':
             n_heads = max(1, config.n_heads)
             succs[0].shape[0] = preds[0].shape[1] // n_heads if len(preds[0].shape) > 1 else preds[0].shape[0]
             succs[0].shape[1] = preds[0].shape[0] * n_heads
+        elif compute_node.layer_type == 'pdmtranspose':
+            n_heads = max(1, config.n_heads)
+            if preds[0].head_shape is not None:
+                succs[0].shape[0] = preds[0].head_shape[1]
+                succs[0].shape[1] = preds[0].head_shape[0] * n_heads
+            else:
+                succs[0].shape[0] = preds[0].shape[1] // n_heads if len(preds[0].shape) > 1 else preds[0].shape[0]
+                succs[0].shape[1] = preds[0].shape[0] * n_heads
         elif compute_node.layer_type == 'parccmm':
             succs[0].shape[0] = preds[0].shape[0]
             if len(preds) > 1 and len(preds[1].shape) > 1:
                 succs[0].shape[1] = preds[1].shape[1]
+        elif compute_node.layer_type == 'pdmccmm':
+            n_heads = max(1, config.n_heads)
+            if preds[0].head_shape is not None and len(preds) > 1 and preds[1].head_shape is not None:
+                succs[0].shape[0] = preds[0].head_shape[0] * n_heads
+                succs[0].shape[1] = preds[1].head_shape[1]
+            else:
+                succs[0].shape[0] = preds[0].shape[0]
+                if len(preds) > 1 and len(preds[1].shape) > 1:
+                    succs[0].shape[1] = preds[1].shape[1]
         else:
             for i in range(2):
                 succs[0].shape[i] = preds[0].shape[i]
