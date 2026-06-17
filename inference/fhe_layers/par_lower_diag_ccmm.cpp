@@ -183,17 +183,13 @@ std::vector<double> ParLowerDiagCCMM::build_kqt_route_masks(uint32_t j, uint32_t
 
 void ParLowerDiagCCMM::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
-    double replication_scale = param_.get_q(level_);
-    double default_scale = param_.get_default_scale();
-    double route_scale =
-        static_cast<double>(param_.get_q(level_ - 1)) / default_scale * static_cast<double>(param_.get_q(level_ - 2));
 
     uint32_t replication_count = is_kqt_ ? m_ : n_;
     uint32_t replication_mask_count = std::min(c_, replication_count);
     replication_mask_pt_.clear();
     replication_mask_pt_.reserve(replication_mask_count);
     for (uint32_t ell = 0; ell < replication_mask_count; ell++) {
-        replication_mask_pt_.push_back(ctx.encode_ringt(build_replication_mask(ell), replication_scale));
+        replication_mask_pt_.push_back(generate_replication_mask_pt(ctx, ell));
     }
 
     ordinary_route_pt_.clear();
@@ -205,8 +201,7 @@ void ParLowerDiagCCMM::prepare_weight() {
             for (uint32_t ell = 0; ell < m_; ell++) {
                 kqt_route_pt_[j][ell].resize(4);
                 for (uint32_t mask_idx = 0; mask_idx < 4; mask_idx++) {
-                    kqt_route_pt_[j][ell][mask_idx] =
-                        ctx.encode_ringt(build_kqt_route_masks(j, ell, mask_idx), route_scale);
+                    kqt_route_pt_[j][ell][mask_idx] = generate_kqt_route_pt(ctx, j, ell, mask_idx);
                 }
             }
         }
@@ -215,11 +210,30 @@ void ParLowerDiagCCMM::prepare_weight() {
         for (uint32_t ell = 0; ell < n_; ell++) {
             ordinary_route_pt_[ell].resize(4);
             for (uint32_t mask_idx = 0; mask_idx < 4; mask_idx++) {
-                ordinary_route_pt_[ell][mask_idx] =
-                    ctx.encode_ringt(build_ordinary_route_masks(ell, mask_idx), route_scale);
+                ordinary_route_pt_[ell][mask_idx] = generate_ordinary_route_pt(ctx, ell, mask_idx);
             }
         }
     }
+}
+
+CkksPlaintextRingt ParLowerDiagCCMM::generate_replication_mask_pt(CkksContext& ctx, uint32_t ell) const {
+    return ctx.encode_ringt(build_replication_mask(ell), param_.get_q(level_));
+}
+
+CkksPlaintextRingt
+ParLowerDiagCCMM::generate_ordinary_route_pt(CkksContext& ctx, uint32_t ell, uint32_t mask_idx) const {
+    double default_scale = param_.get_default_scale();
+    double route_scale =
+        static_cast<double>(param_.get_q(level_ - 1)) / default_scale * static_cast<double>(param_.get_q(level_ - 2));
+    return ctx.encode_ringt(build_ordinary_route_masks(ell, mask_idx), route_scale);
+}
+
+CkksPlaintextRingt
+ParLowerDiagCCMM::generate_kqt_route_pt(CkksContext& ctx, uint32_t j, uint32_t ell, uint32_t mask_idx) const {
+    double default_scale = param_.get_default_scale();
+    double route_scale =
+        static_cast<double>(param_.get_q(level_ - 1)) / default_scale * static_cast<double>(param_.get_q(level_ - 2));
+    return ctx.encode_ringt(build_kqt_route_masks(j, ell, mask_idx), route_scale);
 }
 
 CkksCiphertext
