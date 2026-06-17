@@ -1626,9 +1626,13 @@ class FheScoreParam:
         elif layer_type == 'pdmccmm':
             n_slot = n // 2
             try:
+                edge_indices = {pred: self.dag.edges[pred, node].get('input_index') for pred in preds}
+                ordered_preds = sorted(preds, key=lambda p: edge_indices[p]) if all(
+                    idx is not None for idx in edge_indices.values()
+                ) else preds
                 layer = ParLowerDiagCCMM(
-                    shape_A=tuple(preds[0].head_shape),
-                    shape_B=tuple(preds[1].head_shape),
+                    shape_A=tuple(ordered_preds[0].head_shape),
+                    shape_B=tuple(ordered_preds[1].head_shape),
                     n_heads=config.n_heads,
                     head_dim=config.head_dim,
                     n_slot=n_slot,
@@ -1741,6 +1745,9 @@ class BtpScoreParam:
         return math.ceil(compute_node.channel_input / pack_num)
 
     def _get_feature_mat_ct_num(self, pred: FeatureNode) -> int:
+        if getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack':
+            return self._get_par_diagonal_feature_mat_ct_num(pred)
+
         m, total_cols = pred.shape
         n_heads = max(1, config.n_heads)
         if pred.head_shape is not None and len(pred.head_shape) >= 2:
@@ -1767,6 +1774,44 @@ class BtpScoreParam:
         num_block_rows = math.ceil(m / block_size)
         num_block_cols = math.ceil(cols_per_head / block_size)
         return k_col * num_block_rows * num_block_cols * n_cts_per_block_idx
+
+    def _get_par_diagonal_feature_mat_ct_num(self, pred: FeatureNode) -> int:
+        if pred.head_shape is None or len(pred.head_shape) < 2:
+            raise ValueError(f'Missing head_shape for par_diagonal_pack feature_mat: {pred.node_id}')
+
+        shape_rows, shape_cols = pred.shape
+        head_rows, head_cols = pred.head_shape
+        n_heads = max(1, config.n_heads)
+
+        if shape_cols == head_cols:
+            is_transposed = True
+        elif shape_rows == head_rows:
+            is_transposed = False
+        else:
+            raise ValueError(
+                f'Invalid par_diagonal_pack feature shape/head_shape for {pred.node_id}: '
+                f'shape={pred.shape}, head_shape={pred.head_shape}'
+            )
+
+        n_prepad = head_cols if is_transposed else head_rows
+        m_prepad = head_rows if is_transposed else head_cols
+        H = 1 << (n_heads - 1).bit_length()
+        m = 1 << (m_prepad - 1).bit_length()
+        n = 1 << (n_prepad - 1).bit_length()
+        segment_len = H * n
+        n_slot = self.n // 2
+        if segment_len <= 0 or n_slot % segment_len != 0:
+            raise ValueError(
+                f'Invalid par_diagonal_pack segment for {pred.node_id}: '
+                f'n_slot={n_slot}, segment_len={segment_len}, shape={pred.shape}, head_shape={pred.head_shape}'
+            )
+        c = n_slot // segment_len
+        if c <= 0 or m % c != 0:
+            raise ValueError(f'Invalid par_diagonal_pack c for {pred.node_id}: m={m}, c={c}')
+
+        packed_extent = n_heads * m_prepad
+        packed_total = shape_rows if is_transposed else shape_cols
+        return math.ceil(packed_total / packed_extent) * (m // c)
 
     def get_score(self):
         score = self.ct_num * self._btp_time_table[str(self.n)]

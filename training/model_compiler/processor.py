@@ -247,6 +247,7 @@ def update_shape_for_btp(graph: LayerAbstractGraph):
     compute_nodes_in_topo_sort = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)]
     for compute_node in compute_nodes_in_topo_sort:
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
+        preds = transforms.sort_preds_by_input_index(graph.dag, compute_node, preds)
         succs: list[FeatureNode] = list(graph.dag.successors(compute_node))
         if isinstance(compute_node, ConvComputeNode):
             if check_conv_upsample_factor(graph, compute_node):
