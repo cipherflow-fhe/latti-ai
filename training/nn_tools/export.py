@@ -281,7 +281,7 @@ def _fuse_conv_bn(conv_weight, conv_bias, bn_weight, bn_bias, bn_mean, bn_var, e
 
 
 def _compute_poly_coeffs(running_max, upper_bound, eps, hermite_coeffs):
-    """Absorb RangeNormPoly2d scale into standard polynomial coefficients.
+    """Absorb RangeNormPoly scale into standard polynomial coefficients.
 
     Given::
 
@@ -307,27 +307,19 @@ def _compute_poly_coeffs(running_max, upper_bound, eps, hermite_coeffs):
     C = len(s)
     degree = len(hermite_coeffs) - 1
 
-    _a0 = hermite_coeffs[0]
-    _a1 = hermite_coeffs[1]
-    _a2 = hermite_coeffs[2]
+    hermite_basis: list[np.ndarray] = [np.array([1.0])]
+    if degree >= 1:
+        hermite_basis.append(np.array([0.0, 1.0]))
+    for n in range(2, degree + 1):
+        z_he_prev = np.pad(hermite_basis[n - 1], (1, 0))
+        n_he_prev2 = np.pad((n - 1) * hermite_basis[n - 2], (0, len(z_he_prev) - len(hermite_basis[n - 2])))
+        hermite_basis.append(z_he_prev - n_he_prev2)
 
-    if degree == 2:
-        c0 = s * (_a0 - _a2)
-        c1 = np.full(C, _a1)
-        c2 = _a2 / s
-        return np.array([c0, c1, c2])  # [3, C]
+    power_coeffs = np.zeros(degree + 1)
+    for n, coeff in enumerate(hermite_coeffs):
+        power_coeffs[: len(hermite_basis[n])] += float(coeff) * hermite_basis[n]
 
-    elif degree == 4:
-        _a4 = hermite_coeffs[4]
-        c0 = s * (_a0 - _a2 + 3 * _a4)
-        c1 = np.full(C, _a1)
-        c2 = (_a2 - 6 * _a4) / s
-        c3 = np.zeros(C)
-        c4 = _a4 / (s**3)
-        return np.array([c0, c1, c2, c3, c4])  # [5, C]
-
-    else:
-        raise ValueError(f'Unsupported degree: {degree}. Use 2 or 4.')
+    return np.array([np.full(C, coeff) * (s ** (1 - power)) for power, coeff in enumerate(power_coeffs)])
 
 
 def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verbose=True):
@@ -519,23 +511,30 @@ def export_h5_from_onnx(
     onnx_model = onnx.load(onnx_path)
     onnx_weights = {init.name: numpy_helper.to_array(init).astype('float64') for init in onnx_model.graph.initializer}
 
+    def _attr_value(attr: dict[str, onnx.AttributeProto], *names: str, default=None):
+        for name in names:
+            if name in attr:
+                value = onnx.helper.get_attribute_value(attr[name])
+                return value.decode() if isinstance(value, bytes) else value
+        return default
+
     # ------------------------------------------------------------------ #
-    # 2. Parse RangeNormPoly2d node attributes                           #
+    # 2. Parse RangeNormPoly node attributes                             #
     #    key: running_max initializer name -> {degree, upper_bound, eps} #
     # ------------------------------------------------------------------ #
     poly_node_attrs = {}
     for node in onnx_model.graph.node:
-        if node.op_type != 'RangeNormPoly2d':
+        if node.op_type not in ('RangeNormPoly1d', 'RangeNormPoly2d'):
             continue
         rm_key = next((inp for inp in node.input if inp.endswith('rangenorm.running_max')), None)
         if rm_key is None:
             continue
         attr = {a.name: a for a in node.attribute}
         poly_node_attrs[rm_key] = {
-            'degree': attr['degree_i'].i if 'degree_i' in attr else 4,
-            'upper_bound': attr['upper_bound'].f if 'upper_bound' in attr else 3.0,
-            'eps': attr['eps_f'].f if 'eps_f' in attr else 1e-3,
-            'activation_name': attr['activation_s'].s.decode() if 'activation_s' in attr else 'relu',
+            'degree': int(_attr_value(attr, 'degree', 'degree_i', default=4)),
+            'upper_bound': float(_attr_value(attr, 'upper_bound', 'upper_bound_f', default=3.0)),
+            'eps': float(_attr_value(attr, 'eps', 'eps_f', default=1e-3)),
+            'activation_name': str(_attr_value(attr, 'activation', 'activation_s', default='relu')),
         }
 
     # ------------------------------------------------------------------ #
@@ -551,11 +550,9 @@ def export_h5_from_onnx(
         if node.op_type != 'PolyActRNPoly':
             continue
         attr = {a.name: a for a in node.attribute}
-        degree_attr = attr.get('degree') or attr.get('degree_i')
-        activation_attr = attr.get('activation') or attr.get('activation_s')
         pcmpoly_node_attrs[_format_id(node.name)] = {
-            'degree': degree_attr.i if degree_attr is not None else 4,
-            'activation_name': activation_attr.s.decode() if activation_attr is not None else 'gelu',
+            'degree': int(_attr_value(attr, 'degree', 'degree_i', default=4)),
+            'activation_name': str(_attr_value(attr, 'activation', 'activation_s', default='gelu')),
         }
 
     # ------------------------------------------------------------------ #
@@ -588,7 +585,7 @@ def export_h5_from_onnx(
         info = poly_node_attrs.get(
             rk,
             {
-                'degree': 4,
+                'degree': int(layer.get('order', 4)),
                 'upper_bound': 3.0,
                 'eps': 1e-3,
                 'activation_name': 'relu',
