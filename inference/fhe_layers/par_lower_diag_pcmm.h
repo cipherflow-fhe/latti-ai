@@ -26,11 +26,18 @@ public:
                      const Duo& shape_X_T,
                      uint32_t n_heads,
                      uint32_t head_dim,
-                     const Array<double, 2>& W_mat,
+                     const Array<double, 2>& W_T_mat,
                      uint32_t level_X,
                      Array<double, 1>&& bias = Array<double, 1>());
 
     void prepare_weight() override;
+    std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> pt_A_;
+    std::vector<ls::CkksPlaintextRingt> mask_wrap_pt_;
+    std::vector<ls::CkksPlaintextRingt> bias_pt_;
+    ls::CkksPlaintextRingt
+    generate_pt_A(ls::CkksContext& ctx, uint32_t mb, uint32_t i, uint32_t j, uint32_t ell, uint32_t r) const;
+    ls::CkksPlaintextRingt generate_mask_wrap_pt(ls::CkksContext& ctx, uint32_t i_idx) const;
+    ls::CkksPlaintextRingt generate_bias_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t r) const;
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& X_T);
     Array<double, 2> run_plaintext(const Array<double, 2>& X_T) const;
 
@@ -63,10 +70,7 @@ private:
     uint32_t W_T_cols_ = 0;
 
     std::vector<Array<double, 2>> W_padded_;
-    std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> pt_A_;
-    std::vector<ls::CkksPlaintextRingt> mask_wrap_pt_;
 
     bool has_bias_ = false;
     Array<double, 1> bias_vals_;
-    std::vector<ls::CkksPlaintextRingt> bias_pt_;
 };

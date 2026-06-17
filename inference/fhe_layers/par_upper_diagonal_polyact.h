@@ -34,6 +34,7 @@ public:
                                    uint32_t init_level,
                                    Array<double, 1>&& gamma);
     void prepare_weight() override;
+    std::vector<ls::CkksPlaintextRingt> gamma_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
@@ -50,8 +51,6 @@ private:
     uint32_t ct_index(uint32_t mb, uint32_t ct_local) const;
     uint32_t total_cts() const;
     std::vector<double> build_gamma_vec(uint32_t mb, uint32_t ct_local) const;
-
-    std::vector<ls::CkksPlaintextRingt> gamma_pt_;
 };
 
 class ParUpperDiagonalPolyActRNPoly : public Layer {
@@ -64,6 +63,11 @@ public:
                                   Array<double, 2>&& coeffs,
                                   uint32_t degree);
     void prepare_weight() override;
+    std::vector<ls::CkksPlaintextRingt> c2_pt_;
+    std::vector<ls::CkksPlaintextRingt> c1_pt_;
+    std::vector<ls::CkksPlaintextRingt> c0_add_pt_;
+    std::vector<ls::CkksPlaintextRingt> c4_pt_;
+    std::vector<ls::CkksPlaintextRingt> c3_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
@@ -81,12 +85,6 @@ private:
     uint32_t ct_index(uint32_t mb, uint32_t ct_local) const;
     uint32_t total_cts() const;
     std::vector<double> build_coeff_vec(uint32_t coeff_idx, uint32_t mb, uint32_t ct_local) const;
-
-    std::vector<ls::CkksPlaintextRingt> c2_pt_;
-    std::vector<ls::CkksPlaintextRingt> c1_pt_;
-    std::vector<ls::CkksPlaintextRingt> c0_add_pt_;
-    std::vector<ls::CkksPlaintextRingt> c4_pt_;
-    std::vector<ls::CkksPlaintextRingt> c3_pt_;
 };
 
 using ParUpperDiagonalPolyActGamma = ParUpperDiagonalPolyActRNGamma;

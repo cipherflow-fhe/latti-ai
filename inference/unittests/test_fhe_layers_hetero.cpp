@@ -238,6 +238,45 @@ using HeteroProcessors = tuple<ProcessorCpu>;
         } else                                                                                                         \
             SECTION(section_name)
 
+static uint32_t next_pow2_u32(uint32_t x) {
+    uint32_t p = 1;
+    while (p < x)
+        p <<= 1;
+    return p;
+}
+
+static uint32_t
+par_diagonal_total_cts(const CkksParameter& param, Duo shape, Duo head_shape, uint32_t n_heads, bool is_transposed) {
+    uint32_t n_prepad = is_transposed ? head_shape[1] : head_shape[0];
+    uint32_t m_prepad = is_transposed ? head_shape[0] : head_shape[1];
+    uint32_t H = next_pow2_u32(n_heads);
+    uint32_t m = next_pow2_u32(m_prepad);
+    uint32_t n = next_pow2_u32(n_prepad);
+    uint32_t segment_len = H * n;
+    uint32_t c = (param.get_n() / 2) / segment_len;
+    uint32_t cts_per_mb = m / c;
+    uint32_t packed_extent = n_heads * m_prepad;
+    uint32_t packed_total = is_transposed ? shape[0] : shape[1];
+    return div_ceil(packed_total, packed_extent) * cts_per_mb;
+}
+
+static Array<double, 2> unpack_par_diagonal_output(CkksContext& context,
+                                                   int level,
+                                                   const vector<CkksCiphertext>& out_cts,
+                                                   Duo shape,
+                                                   Duo head_shape,
+                                                   uint32_t n_heads,
+                                                   bool is_lower,
+                                                   bool is_transposed) {
+    FeatureMatEncrypted out_enc(&context, level);
+    out_enc.shape = shape;
+    out_enc.head_shape = head_shape;
+    out_enc.matmul_block_size = next_pow2_u32(is_transposed ? head_shape[0] : head_shape[1]);
+    for (const auto& ct : out_cts)
+        out_enc.data.push_back(ct.copy());
+    return out_enc.par_diagonal_unpack(n_heads, head_shape, is_lower, is_transposed);
+}
+
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
                                "par_lower_diag_transpose_roundtrip",
                                "[fhe_layers][par_lower_diag_transpose]",
@@ -248,18 +287,44 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     vector<uint32_t> n_prepads = {65, 128};
 
     FOR_EACH_SECTION(uint32_t n_prepad, n_prepads, "n_prepad=" + to_string(n_prepad)) {
+        fs::path project_path = base_path / "CKKS_par_lower_diag_transpose" / ("n_prepad_" + to_string(n_prepad)) /
+                                ("level_" + to_string(init_level)) / "server";
+        if (!fs::exists(project_path / "mega_ag.json"))
+            return;
+
         Array<double, 2> X_T = gen_random_array<2>({n_heads * head_dim, n_prepad}, 1.0);
 
         FeatureMatEncrypted input_enc(&this->context, init_level);
         input_enc.par_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, true, true, false,
                                     this->param.get_default_scale());
 
-        ParLowerDiagTranspose layer(this->param, {head_dim, n_prepad}, n_heads, head_dim, init_level);
+        ParLowerDiagTranspose layer(this->param, Duo{head_dim, n_prepad}, n_heads, head_dim, init_level);
         layer.prepare_weight();
-        FeatureMatEncrypted out_enc = layer.run(this->context, input_enc);
-
-        Array<double, 2> actual = out_enc.par_diagonal_unpack(n_heads, {n_prepad, head_dim}, true, false);
         Array<double, 2> expected = layer.run_plaintext(X_T);
+
+        vector<CkksCiphertext> in_cts, out_cts;
+        for (auto& ct : input_enc.data)
+            in_cts.push_back(ct.copy());
+        uint32_t n_out =
+            par_diagonal_total_cts(this->param, {n_prepad, n_heads * head_dim}, {n_prepad, head_dim}, n_heads, false);
+        for (uint32_t i = 0; i < n_out; i++)
+            out_cts.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input")
+                cxx_args.push_back({name, &in_cts});
+            else if (name == "transpose_mask_pt")
+                cxx_args.push_back({name, &layer.transpose_mask_pt_});
+            else if (name == "output")
+                cxx_args.push_back({name, &out_cts});
+        }
+        this->run(project_path, cxx_args);
+
+        Array<double, 2> actual =
+            unpack_par_diagonal_output(this->context, init_level - 1, out_cts, {n_prepad, n_heads * head_dim},
+                                       {n_prepad, head_dim}, n_heads, true, false);
         print_double_message(actual.to_array_1d().data(), "actual", 10);
         print_double_message(expected.to_array_1d().data(), "expected", 10);
         auto comparison = compare(expected, actual);
@@ -292,19 +357,51 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     for (const auto& cfg : cases) {
         INFO(cfg.mode);
+        std::string mode_dir = cfg.mode == std::string("SQUARE") ? "square" :
+                               cfg.mode == std::string("EXPAND") ? "expand" :
+                                                                   "reduce";
+        fs::path project_path =
+            base_path / "CKKS_par_lower_diag_pcmm" / mode_dir / ("level_" + to_string(init_level)) / "server";
+        if (!fs::exists(project_path / "mega_ag.json"))
+            return;
+
         Array<double, 2> X_T = gen_random_array<2>({cfg.w_rows, n_prepad}, 1.0);
-        Array<double, 2> W = gen_random_array<2>({cfg.w_rows, cfg.w_cols}, 0.1);
+        Array<double, 2> W_T = gen_random_array<2>({cfg.w_cols, cfg.w_rows}, 0.1);
         Array<double, 1> bias = gen_random_array<1>({cfg.w_cols}, 0.1);
 
         FeatureMatEncrypted X_enc(&this->context, init_level);
         X_enc.par_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
 
-        ParLowerDiagPCMM layer(this->param, {cfg.w_rows, n_prepad}, n_heads, head_dim, W, init_level, std::move(bias));
+        ParLowerDiagPCMM layer(this->param, Duo{cfg.w_rows, n_prepad}, n_heads, head_dim, W_T, init_level, bias.copy());
         layer.prepare_weight();
-        FeatureMatEncrypted out_enc = layer.run(this->context, X_enc);
-
-        Array<double, 2> actual = out_enc.par_diagonal_unpack(n_heads, {head_dim, n_prepad}, true, true);
         Array<double, 2> expected = layer.run_plaintext(X_T);
+
+        vector<CkksCiphertext> in_cts, out_cts;
+        for (auto& ct : X_enc.data)
+            in_cts.push_back(ct.copy());
+        uint32_t n_out =
+            par_diagonal_total_cts(this->param, {cfg.w_cols, n_prepad}, {head_dim, n_prepad}, n_heads, true);
+        for (uint32_t i = 0; i < n_out; i++)
+            out_cts.push_back(this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
+
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input")
+                cxx_args.push_back({name, &in_cts});
+            else if (name == "pt_A")
+                cxx_args.push_back({name, &layer.pt_A_});
+            else if (name == "mask_wrap_pt")
+                cxx_args.push_back({name, &layer.mask_wrap_pt_});
+            else if (name == "bias_pt")
+                cxx_args.push_back({name, &layer.bias_pt_});
+            else if (name == "output")
+                cxx_args.push_back({name, &out_cts});
+        }
+        this->run(project_path, cxx_args);
+
+        Array<double, 2> actual = unpack_par_diagonal_output(
+            this->context, init_level - 2, out_cts, {cfg.w_cols, n_prepad}, {head_dim, n_prepad}, n_heads, true, true);
         print_double_message(actual.to_array_1d().data(), "actual", 10);
         print_double_message(expected.to_array_1d().data(), "expected", 10);
         auto comparison = compare(expected, actual);
@@ -321,6 +418,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_heads = 3;
     uint32_t head_dim = 64;
     uint32_t n_prepad = 97;
+    fs::path project_path =
+        base_path / "CKKS_par_lower_diag_ccmm" / "kqt" / ("level_" + to_string(ccmm_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
 
     Array<double, 2> A = gen_random_array<2>({n_prepad, n_heads * head_dim}, 0.5);
     Array<double, 2> B = gen_random_array<2>({n_heads * head_dim, n_prepad}, 0.5);
@@ -330,12 +431,40 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     A_enc.par_diagonal_pack(A, n_heads, {n_prepad, head_dim}, true, false, false, this->param.get_default_scale());
     B_enc.par_diagonal_pack(B, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
 
-    ParLowerDiagCCMM layer(this->param, {n_prepad, head_dim}, {head_dim, n_prepad}, n_heads, head_dim, ccmm_level);
+    ParLowerDiagCCMM layer(this->param, Duo{n_prepad, head_dim}, Duo{head_dim, n_prepad}, n_heads, head_dim,
+                           ccmm_level);
     layer.prepare_weight();
-    FeatureMatEncrypted C_enc = layer.run(this->context, A_enc, B_enc);
-
-    Array<double, 2> actual = C_enc.par_diagonal_unpack(n_heads, {n_prepad, n_prepad}, true, true);
     Array<double, 2> expected = layer.run_plaintext(A, B);
+
+    vector<CkksCiphertext> A_cts, B_cts, out_cts;
+    for (auto& ct : A_enc.data)
+        A_cts.push_back(ct.copy());
+    for (auto& ct : B_enc.data)
+        B_cts.push_back(ct.copy());
+    uint32_t n_out =
+        par_diagonal_total_cts(this->param, {n_heads * n_prepad, n_prepad}, {n_prepad, n_prepad}, n_heads, true);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(ccmm_level - 3, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "A_input")
+            cxx_args.push_back({name, &A_cts});
+        else if (name == "B_input")
+            cxx_args.push_back({name, &B_cts});
+        else if (name == "replication_mask_pt")
+            cxx_args.push_back({name, &layer.replication_mask_pt_});
+        else if (name == "kqt_route_pt")
+            cxx_args.push_back({name, &layer.kqt_route_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, ccmm_level - 3, out_cts, {n_heads * n_prepad, n_prepad},
+                                   {n_prepad, n_prepad}, n_heads, true, true);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
     auto comparison = compare(expected, actual);
@@ -351,6 +480,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_heads = 3;
     uint32_t head_dim = 64;
     uint32_t n_prepad = 97;
+    fs::path project_path =
+        base_path / "CKKS_par_lower_diag_ccmm" / "ordinary" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
 
     Array<double, 2> A = gen_random_array<2>({n_heads * head_dim, n_prepad}, 0.5);
     Array<double, 2> B = gen_random_array<2>({n_heads * n_prepad, n_prepad}, 0.5);
@@ -360,12 +493,40 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     A_enc.par_diagonal_pack(A, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
     B_enc.par_diagonal_pack(B, n_heads, {n_prepad, n_prepad}, true, true, false, this->param.get_default_scale());
 
-    ParLowerDiagCCMM layer(this->param, {head_dim, n_prepad}, {n_prepad, n_prepad}, n_heads, head_dim, init_level);
+    ParLowerDiagCCMM layer(this->param, Duo{head_dim, n_prepad}, Duo{n_prepad, n_prepad}, n_heads, head_dim,
+                           init_level);
     layer.prepare_weight();
-    FeatureMatEncrypted C_enc = layer.run(this->context, A_enc, B_enc);
-
-    Array<double, 2> actual = C_enc.par_diagonal_unpack(n_heads, {head_dim, n_prepad}, true, true);
     Array<double, 2> expected = layer.run_plaintext(A, B);
+
+    vector<CkksCiphertext> A_cts, B_cts, out_cts;
+    for (auto& ct : A_enc.data)
+        A_cts.push_back(ct.copy());
+    for (auto& ct : B_enc.data)
+        B_cts.push_back(ct.copy());
+    uint32_t n_out =
+        par_diagonal_total_cts(this->param, {n_heads * head_dim, n_prepad}, {head_dim, n_prepad}, n_heads, true);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(init_level - 3, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "A_input")
+            cxx_args.push_back({name, &A_cts});
+        else if (name == "B_input")
+            cxx_args.push_back({name, &B_cts});
+        else if (name == "replication_mask_pt")
+            cxx_args.push_back({name, &layer.replication_mask_pt_});
+        else if (name == "ordinary_route_pt")
+            cxx_args.push_back({name, &layer.ordinary_route_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, init_level - 3, out_cts, {n_heads * head_dim, n_prepad},
+                                   {head_dim, n_prepad}, n_heads, true, true);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
     auto comparison = compare(expected, actual);
@@ -384,6 +545,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const uint32_t init_level = 2;
     Duo shape = {total_rows, n_prepad};
     Duo head_shape = {m_prepad, n_prepad};
+    fs::path project_path =
+        base_path / "CKKS_par_lower_diagonal_add_pt" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
 
     auto A = gen_random_array<2>({total_rows, n_prepad}, 0.5);
     auto B = gen_random_array<2>({total_rows, n_prepad}, 0.5);
@@ -393,11 +558,29 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     ParLowerDiagonalAddPt layer(this->param, shape, head_shape, n_heads, init_level, B.copy());
     layer.precompute_pts();
-    FeatureMatEncrypted out_enc = layer.run(this->context, A_enc);
-    REQUIRE(out_enc.level == init_level);
-
     Array<double, 2> expected = layer.run_plaintext(A);
-    Array<double, 2> actual = out_enc.par_diagonal_unpack(n_heads, head_shape, true, true);
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    for (auto& ct : A_enc.data)
+        in_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, true);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(init_level, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "input")
+            cxx_args.push_back({name, &in_cts});
+        else if (name == "add_pt")
+            cxx_args.push_back({name, &layer.pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, init_level, out_cts, shape, head_shape, n_heads, true, true);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
     auto comparison = compare(expected, actual);
@@ -420,28 +603,45 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const double inv_var = 1.0 / (var_std_bound * var_std_bound);
     Duo shape = {n_prepad, total_cols};
     Duo head_shape = {n_prepad, m_prepad};
-    uint32_t m = 1;
-    while (m < m_prepad)
-        m <<= 1;
-
+    fs::path project_path =
+        base_path / "CKKS_par_upper_diagonal_layernorm" / "stats" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
     auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
     FeatureMatEncrypted X_enc(&this->context, init_level);
     X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
 
-    ParUpperDiagonalLNStats stats(this->param, shape, head_shape, n_heads, init_level, eps, inv_var);
-    stats.prepare_weight();
-    auto a_cts = stats.run(this->context, X_enc);
-    REQUIRE(a_cts.front().get_level() == init_level - 4);
-    FeatureMatEncrypted a_enc(&this->context, init_level - 4);
-    a_enc.shape = shape;
-    a_enc.head_shape = head_shape;
-    a_enc.matmul_block_size = m;
-    a_enc.data.reserve(a_cts.size());
-    for (auto& ct : a_cts) {
-        a_enc.data.push_back(ct.copy());
+    ParUpperDiagonalLNStats layer(this->param, shape, head_shape, n_heads, init_level, eps, inv_var);
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(X_mat);
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(init_level - 4, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "input")
+            cxx_args.push_back({name, &in_cts});
+        else if (name == "h0_mask_pt")
+            cxx_args.push_back({name, &layer.h0_mask_pt_});
+        else if (name == "inv_n_pt")
+            cxx_args.push_back({name, &layer.inv_n_pt_});
+        else if (name == "iv_pt")
+            cxx_args.push_back({name, &layer.iv_pt_});
+        else if (name == "eps_add_pt")
+            cxx_args.push_back({name, &layer.eps_add_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
     }
-    Array<double, 2> actual = a_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
-    Array<double, 2> expected = stats.run_plaintext(X_mat);
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, init_level - 4, out_cts, shape, head_shape, n_heads, false, false);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
     auto comparison = compare(expected, actual);
@@ -461,28 +661,41 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const int init_level = 2;
     Duo shape = {n_prepad, total_cols};
     Duo head_shape = {n_prepad, m_prepad};
-    uint32_t m = 1;
-    while (m < m_prepad)
-        m <<= 1;
-
+    fs::path project_path =
+        base_path / "CKKS_par_upper_diagonal_layernorm" / "xcentered" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
     auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
     FeatureMatEncrypted X_enc(&this->context, init_level);
     X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
 
-    ParUpperDiagonalLNXCentered xcenter(this->param, shape, head_shape, n_heads, init_level);
-    xcenter.prepare_weight();
-    auto x_centered = xcenter.run(this->context, X_enc);
-    REQUIRE(x_centered.front().get_level() == init_level - 2);
-    FeatureMatEncrypted x_centered_enc(&this->context, init_level - 2);
-    x_centered_enc.shape = shape;
-    x_centered_enc.head_shape = head_shape;
-    x_centered_enc.matmul_block_size = m;
-    x_centered_enc.data.reserve(x_centered.size());
-    for (auto& ct : x_centered) {
-        x_centered_enc.data.push_back(ct.copy());
+    ParUpperDiagonalLNXCentered layer(this->param, shape, head_shape, n_heads, init_level);
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(X_mat);
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "input")
+            cxx_args.push_back({name, &in_cts});
+        else if (name == "h0_mask_pt")
+            cxx_args.push_back({name, &layer.h0_mask_pt_});
+        else if (name == "inv_n_pt")
+            cxx_args.push_back({name, &layer.inv_n_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
     }
-    Array<double, 2> actual = x_centered_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
-    Array<double, 2> expected = xcenter.run_plaintext(X_mat);
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, init_level - 2, out_cts, shape, head_shape, n_heads, false, false);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
     auto comparison = compare(expected, actual);
@@ -505,28 +718,43 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const double c2 = 11.52830778;
     Duo shape = {n_prepad, total_cols};
     Duo head_shape = {n_prepad, m_prepad};
-    uint32_t m = 1;
-    while (m < m_prepad)
-        m <<= 1;
-
+    fs::path project_path =
+        base_path / "CKKS_par_upper_diagonal_layernorm" / "minimax" / ("level_" + to_string(input_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
     auto a_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
     FeatureMatEncrypted a_input(&this->context, input_level);
     a_input.par_diagonal_pack(a_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
 
-    ParUpperDiagonalLNMinimaxInit minimax(this->param, shape, head_shape, n_heads, input_level, c0, c1, c2);
-    minimax.prepare_weight();
-    auto y0_cts = minimax.run(this->context, a_input.data);
-    REQUIRE(y0_cts.front().get_level() == input_level - 2);
-    FeatureMatEncrypted y0_enc(&this->context, input_level - 2);
-    y0_enc.shape = shape;
-    y0_enc.head_shape = head_shape;
-    y0_enc.matmul_block_size = m;
-    y0_enc.data.reserve(y0_cts.size());
-    for (auto& ct : y0_cts) {
-        y0_enc.data.push_back(ct.copy());
+    ParUpperDiagonalLNMinimaxInit layer(this->param, shape, head_shape, n_heads, input_level, c0, c1, c2);
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(a_mat);
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    for (auto& ct : a_input.data)
+        in_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(input_level - 2, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "input")
+            cxx_args.push_back({name, &in_cts});
+        else if (name == "c0_add_pt")
+            cxx_args.push_back({name, &layer.c0_add_pt_});
+        else if (name == "c1_pt")
+            cxx_args.push_back({name, &layer.c1_pt_});
+        else if (name == "c2_norm_pt")
+            cxx_args.push_back({name, &layer.c2_norm_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
     }
-    Array<double, 2> actual = y0_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
-    Array<double, 2> expected = minimax.run_plaintext(a_mat);
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, input_level - 2, out_cts, shape, head_shape, n_heads, false, false);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
     auto comparison = compare(expected, actual);
@@ -546,10 +774,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const int input_level = 3;
     Duo shape = {n_prepad, total_cols};
     Duo head_shape = {n_prepad, m_prepad};
-    uint32_t m = 1;
-    while (m < m_prepad)
-        m <<= 1;
-
+    fs::path project_path = base_path / "CKKS_par_upper_diagonal_layernorm" / "goldschmidt" /
+                            ("level_" + to_string(input_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
     auto y_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
     auto a_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
     FeatureMatEncrypted y_input(&this->context, input_level);
@@ -557,20 +785,37 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     y_input.par_diagonal_pack(y_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
     a_input.par_diagonal_pack(a_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
 
-    ParUpperDiagonalLNGoldschmidt gold(this->param, shape, head_shape, n_heads, input_level);
-    gold.prepare_weight();
-    auto y1_cts = gold.run(this->context, y_input.data, a_input.data);
-    REQUIRE(y1_cts.front().get_level() == input_level - 3);
-    FeatureMatEncrypted y1_enc(&this->context, input_level - 3);
-    y1_enc.shape = shape;
-    y1_enc.head_shape = head_shape;
-    y1_enc.matmul_block_size = m;
-    y1_enc.data.reserve(y1_cts.size());
-    for (auto& ct : y1_cts) {
-        y1_enc.data.push_back(ct.copy());
+    ParUpperDiagonalLNGoldschmidt layer(this->param, shape, head_shape, n_heads, input_level);
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(y_mat, a_mat);
+
+    vector<CkksCiphertext> y_cts, a_cts, out_cts;
+    for (auto& ct : y_input.data)
+        y_cts.push_back(ct.copy());
+    for (auto& ct : a_input.data)
+        a_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(input_level - 3, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "y_input")
+            cxx_args.push_back({name, &y_cts});
+        else if (name == "a_input")
+            cxx_args.push_back({name, &a_cts});
+        else if (name == "three_pt")
+            cxx_args.push_back({name, &layer.three_pt_});
+        else if (name == "half_norm_pt")
+            cxx_args.push_back({name, &layer.half_norm_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
     }
-    Array<double, 2> actual = y1_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
-    Array<double, 2> expected = gold.run_plaintext(y_mat, a_mat);
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, input_level - 3, out_cts, shape, head_shape, n_heads, false, false);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
     auto comparison = compare(expected, actual);
@@ -591,6 +836,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const double inv_std = 0.25;
     Duo shape = {n_prepad, total_cols};
     Duo head_shape = {n_prepad, m_prepad};
+    fs::path project_path =
+        base_path / "CKKS_par_upper_diagonal_layernorm" / "affine" / ("level_" + to_string(y_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
 
     auto x_centered_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
     auto y_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
@@ -602,13 +851,38 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
                                        this->param.get_default_scale());
     y_input.par_diagonal_pack(y_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
 
-    ParUpperDiagonalLNAffine affine(this->param, shape, head_shape, n_heads, y_level, inv_std, gamma.copy(),
-                                    beta.copy());
-    affine.prepare_weight();
-    FeatureMatEncrypted out_enc = affine.run(this->context, x_centered_input.data, y_input.data);
-    REQUIRE(out_enc.level == y_level - 2);
-    Array<double, 2> actual = out_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
-    Array<double, 2> expected = affine.run_plaintext(x_centered_mat, y_mat);
+    ParUpperDiagonalLNAffine layer(this->param, shape, head_shape, n_heads, y_level, inv_std, gamma.copy(),
+                                   beta.copy());
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(x_centered_mat, y_mat);
+
+    vector<CkksCiphertext> x_cts, y_cts, out_cts;
+    for (auto& ct : x_centered_input.data)
+        x_cts.push_back(ct.copy());
+    for (auto& ct : y_input.data)
+        y_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(y_level - 2, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "x_centered")
+            cxx_args.push_back({name, &x_cts});
+        else if (name == "y_input")
+            cxx_args.push_back({name, &y_cts});
+        else if (name == "gamma_pt")
+            cxx_args.push_back({name, &layer.gamma_pt_});
+        else if (name == "beta_add_pt")
+            cxx_args.push_back({name, &layer.beta_add_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, y_level - 2, out_cts, shape, head_shape, n_heads, false, false);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
     auto comparison = compare(expected, actual);
@@ -628,18 +902,41 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const uint32_t init_level = 1;
     Duo shape = {n_prepad, total_cols};
     Duo head_shape = {n_prepad, m_prepad};
+    fs::path project_path =
+        base_path / "CKKS_par_upper_diagonal_polyact" / "gamma" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
 
     auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
     auto gamma_vals = gen_random_array<1>({total_cols}, 0.5);
     FeatureMatEncrypted X_enc(&this->context, init_level);
     X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
 
-    ParUpperDiagonalPolyActRNGamma gamma_layer(this->param, shape, head_shape, n_heads, init_level, gamma_vals.copy());
-    gamma_layer.prepare_weight();
-    FeatureMatEncrypted gamma_enc = gamma_layer.run(this->context, X_enc);
-    REQUIRE(gamma_enc.level == init_level - 1);
-    Array<double, 2> actual = gamma_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
-    Array<double, 2> expected = gamma_layer.run_plaintext(X_mat);
+    ParUpperDiagonalPolyActRNGamma layer(this->param, shape, head_shape, n_heads, init_level, gamma_vals.copy());
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(X_mat);
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "input")
+            cxx_args.push_back({name, &in_cts});
+        else if (name == "gamma_pt")
+            cxx_args.push_back({name, &layer.gamma_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, init_level - 1, out_cts, shape, head_shape, n_heads, false, false);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
     auto comparison = compare(expected, actual);
@@ -660,19 +957,49 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const uint32_t degree = 4;
     Duo shape = {n_prepad, total_cols};
     Duo head_shape = {n_prepad, m_prepad};
+    fs::path project_path = base_path / "CKKS_par_upper_diagonal_polyact" / "poly" / ("degree_" + to_string(degree)) /
+                            ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
 
     auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
     auto coeffs = gen_random_array<2>({degree + 1, total_cols}, 0.2);
     FeatureMatEncrypted X_enc(&this->context, init_level);
     X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
 
-    ParUpperDiagonalPolyActRNPoly poly_layer(this->param, shape, head_shape, n_heads, init_level, coeffs.copy(),
-                                             degree);
-    poly_layer.prepare_weight();
-    FeatureMatEncrypted poly_enc = poly_layer.run(this->context, X_enc);
-    REQUIRE(poly_enc.level == init_level - 3);
-    Array<double, 2> actual = poly_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
-    Array<double, 2> expected = poly_layer.run_plaintext(X_mat);
+    ParUpperDiagonalPolyActRNPoly layer(this->param, shape, head_shape, n_heads, init_level, coeffs.copy(), degree);
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(X_mat);
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(init_level - 3, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "input")
+            cxx_args.push_back({name, &in_cts});
+        else if (name == "c0_add_pt")
+            cxx_args.push_back({name, &layer.c0_add_pt_});
+        else if (name == "c1_pt")
+            cxx_args.push_back({name, &layer.c1_pt_});
+        else if (name == "c2_pt")
+            cxx_args.push_back({name, &layer.c2_pt_});
+        else if (name == "c3_pt")
+            cxx_args.push_back({name, &layer.c3_pt_});
+        else if (name == "c4_pt")
+            cxx_args.push_back({name, &layer.c4_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, init_level - 3, out_cts, shape, head_shape, n_heads, false, false);
     print_double_message(actual.to_array_1d().data(), "actual", 10);
     print_double_message(expected.to_array_1d().data(), "expected", 10);
     auto comparison = compare(expected, actual);

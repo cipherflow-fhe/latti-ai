@@ -97,17 +97,20 @@ std::vector<double> ParLowerDiagTranspose::build_transpose_mask(uint32_t out_dia
 
 void ParLowerDiagTranspose::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
-    double mask_scale = param_.get_q(level_);
 
     transpose_mask_pt_.clear();
     transpose_mask_pt_.resize(m_);
     for (uint32_t out_diag_idx = 0; out_diag_idx < m_; out_diag_idx++) {
         transpose_mask_pt_[out_diag_idx].resize(2);
         for (uint32_t mask_idx = 0; mask_idx < 2; mask_idx++) {
-            transpose_mask_pt_[out_diag_idx][mask_idx] =
-                ctx.encode_ringt(build_transpose_mask(out_diag_idx, mask_idx), mask_scale);
+            transpose_mask_pt_[out_diag_idx][mask_idx] = generate_transpose_mask_pt(ctx, out_diag_idx, mask_idx);
         }
     }
+}
+
+CkksPlaintextRingt
+ParLowerDiagTranspose::generate_transpose_mask_pt(CkksContext& ctx, uint32_t out_diag_idx, uint32_t mask_idx) const {
+    return ctx.encode_ringt(build_transpose_mask(out_diag_idx, mask_idx), param_.get_q(level_));
 }
 
 CkksCiphertext ParLowerDiagTranspose::apply_mask(CkksContext& ctx,

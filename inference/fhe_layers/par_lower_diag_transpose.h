@@ -30,6 +30,9 @@ public:
                           uint32_t level);
 
     void prepare_weight() override;
+    std::vector<std::vector<ls::CkksPlaintextRingt>> transpose_mask_pt_;
+    ls::CkksPlaintextRingt
+    generate_transpose_mask_pt(ls::CkksContext& ctx, uint32_t out_diag_idx, uint32_t mask_idx) const;
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& input);
     Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
 
@@ -54,6 +57,4 @@ private:
     uint32_t segment_len_ = 0;
     uint32_t c_ = 0;
     uint32_t m_c_ = 0;
-
-    std::vector<std::vector<ls::CkksPlaintextRingt>> transpose_mask_pt_;
 };

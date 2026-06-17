@@ -29,7 +29,7 @@ ParLowerDiagPCMM::ParLowerDiagPCMM(const CkksParameter& param_in,
                                    const Duo& shape_X_T,
                                    uint32_t n_heads,
                                    uint32_t head_dim,
-                                   const Array<double, 2>& W_mat,
+                                   const Array<double, 2>& W_T_mat,
                                    uint32_t level_X,
                                    Array<double, 1>&& bias)
     : Layer(param_in) {
@@ -57,8 +57,8 @@ ParLowerDiagPCMM::ParLowerDiagPCMM(const CkksParameter& param_in,
     assert(m_ % c_ == 0);
     m_c_ = m_ / c_;
 
-    W_T_rows_ = W_mat.get_shape()[1];
-    W_T_cols_ = W_mat.get_shape()[0];
+    W_T_rows_ = W_T_mat.get_shape()[0];
+    W_T_cols_ = W_T_mat.get_shape()[1];
     assert(in_rows_ == W_T_cols_);
     out_rows_ = W_T_rows_;
 
@@ -76,7 +76,7 @@ ParLowerDiagPCMM::ParLowerDiagPCMM(const CkksParameter& param_in,
     }
     K_ = std::max(K_row_, K_col_);
 
-    // weight matrix is tranposed here
+    // W_T_mat is already transposed: rows are output features, columns are input features.
     W_padded_.resize(K_);
     for (uint32_t mb = 0; mb < K_; mb++) {
         Array<double, 2> W_sub({d_, d_});
@@ -86,7 +86,7 @@ ParLowerDiagPCMM::ParLowerDiagPCMM(const CkksParameter& param_in,
                 uint32_t src_col = (mode_ == Mode::REDUCE) ? mb * d_prepad_ + col : col;
                 double val = 0.0;
                 if (src_row < W_T_rows_ && src_col < W_T_cols_) {
-                    val = W_mat.get(src_col, src_row);
+                    val = W_T_mat.get(src_row, src_col);
                 }
                 W_sub.set(row, col, val);
             }
@@ -103,9 +103,6 @@ ParLowerDiagPCMM::ParLowerDiagPCMM(const CkksParameter& param_in,
 
 void ParLowerDiagPCMM::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
-    double pt_scale = param_.get_q(level_);
-    double mask_scale = param_.get_q(level_ - 1);
-    double bias_scale = param_.get_default_scale();
 
     pt_A_.clear();
     pt_A_.resize(K_);
@@ -116,29 +113,7 @@ void ParLowerDiagPCMM::prepare_weight() {
             for (uint32_t j = 0; j < m_c_; j++) {
                 for (uint32_t ell = 0; ell < c_; ell++) {
                     for (uint32_t r = 0; r < m_c_; r++) {
-                        vector<double> plaintext(n_slot_, 0.0);
-                        for (uint32_t tau = 0; tau < c_; tau++) {
-                            uint32_t b_diag_idx = c_ * j + ((tau + ell) % c_);
-                            uint32_t out_diag_idx = c_ * r + tau;
-                            uint32_t segment_base = tau * segment_len_;
-                            uint32_t rotate_step = (out_diag_idx * H_) % segment_len_;
-                            uint32_t diag_idx = (b_diag_idx + m_ - (out_diag_idx % m_)) % m_;
-                            for (uint32_t t = 0; t < n_; t++) {
-                                for (uint32_t h = 0; h < H_; h++) {
-                                    uint32_t block_row_base = ((i + h) % H_) * m_;
-                                    uint32_t block_col_base = h * m_;
-                                    uint32_t row = t % m_;
-                                    uint32_t col = (diag_idx + row) % m_;
-                                    uint32_t src_row = block_row_base + row;
-                                    uint32_t src_col = block_col_base + col;
-                                    uint32_t slot_in_segment = t * H_ + h;
-                                    uint32_t rotated_slot =
-                                        (slot_in_segment + segment_len_ - rotate_step) % segment_len_;
-                                    plaintext[segment_base + rotated_slot] = W_padded_[mb].get(src_row, src_col);
-                                }
-                            }
-                        }
-                        pt_A_[mb][i].push_back(ctx.encode_ringt(plaintext, pt_scale));
+                        pt_A_[mb][i].push_back(generate_pt_A(ctx, mb, i, j, ell, r));
                     }
                 }
             }
@@ -148,17 +123,7 @@ void ParLowerDiagPCMM::prepare_weight() {
     mask_wrap_pt_.clear();
     mask_wrap_pt_.resize(H_ - 1);
     for (uint32_t i_idx = 0; i_idx < H_ - 1; i_idx++) {
-        uint32_t i = i_idx + 1;
-        vector<double> mask(n_slot_, 0.0);
-        for (uint32_t segment_start = 0; segment_start < n_slot_; segment_start += segment_len_) {
-            for (uint32_t t = 0; t < n_; t++) {
-                uint32_t group_start = segment_start + t * H_;
-                for (uint32_t h = H_ - i; h < H_; h++) {
-                    mask[group_start + h] = 1.0;
-                }
-            }
-        }
-        mask_wrap_pt_[i_idx] = ctx.encode_ringt(mask, mask_scale);
+        mask_wrap_pt_[i_idx] = generate_mask_wrap_pt(ctx, i_idx);
     }
 
     bias_pt_.clear();
@@ -167,23 +132,79 @@ void ParLowerDiagPCMM::prepare_weight() {
         bias_pt_.resize(output_mbs * m_c_);
         for (uint32_t mb = 0; mb < output_mbs; mb++) {
             for (uint32_t r = 0; r < m_c_; r++) {
-                vector<double> bias_vec(n_slot_, 0.0);
-                for (uint32_t local_diag = 0; local_diag < c_; local_diag++) {
-                    uint32_t diag_idx = r * c_ + local_diag;
-                    uint32_t segment_base = local_diag * segment_len_;
-                    for (uint32_t t = 0; t < n_; t++) {
-                        for (uint32_t h = 0; h < H_; h++) {
-                            uint32_t out_row = mb * d_prepad_ + h * m_ + ((diag_idx + t) % m_);
-                            if (h < H_prepad_ && out_row < out_rows_) {
-                                bias_vec[segment_base + t * H_ + h] = bias_vals_.get(out_row);
-                            }
-                        }
-                    }
-                }
-                bias_pt_[mb * m_c_ + r] = ctx.encode_ringt(bias_vec, bias_scale);
+                bias_pt_[mb * m_c_ + r] = generate_bias_pt(ctx, mb, r);
             }
         }
     }
+}
+
+CkksPlaintextRingt
+ParLowerDiagPCMM::generate_pt_A(CkksContext& ctx, uint32_t mb, uint32_t i, uint32_t j, uint32_t ell, uint32_t r) const {
+    assert(mb < K_);
+    assert(i < H_);
+    assert(j < m_c_);
+    assert(ell < c_);
+    assert(r < m_c_);
+
+    vector<double> plaintext(n_slot_, 0.0);
+    for (uint32_t tau = 0; tau < c_; tau++) {
+        uint32_t b_diag_idx = c_ * j + ((tau + ell) % c_);
+        uint32_t out_diag_idx = c_ * r + tau;
+        uint32_t segment_base = tau * segment_len_;
+        uint32_t rotate_step = (out_diag_idx * H_) % segment_len_;
+        uint32_t diag_idx = (b_diag_idx + m_ - (out_diag_idx % m_)) % m_;
+        for (uint32_t t = 0; t < n_; t++) {
+            for (uint32_t h = 0; h < H_; h++) {
+                uint32_t block_row_base = ((i + h) % H_) * m_;
+                uint32_t block_col_base = h * m_;
+                uint32_t row = t % m_;
+                uint32_t col = (diag_idx + row) % m_;
+                uint32_t src_row = block_row_base + row;
+                uint32_t src_col = block_col_base + col;
+                uint32_t slot_in_segment = t * H_ + h;
+                uint32_t rotated_slot = (slot_in_segment + segment_len_ - rotate_step) % segment_len_;
+                plaintext[segment_base + rotated_slot] = W_padded_[mb].get(src_row, src_col);
+            }
+        }
+    }
+    return ctx.encode_ringt(plaintext, param_.get_q(level_));
+}
+
+CkksPlaintextRingt ParLowerDiagPCMM::generate_mask_wrap_pt(CkksContext& ctx, uint32_t i_idx) const {
+    assert(i_idx < H_ - 1);
+    uint32_t i = i_idx + 1;
+    vector<double> mask(n_slot_, 0.0);
+    for (uint32_t segment_start = 0; segment_start < n_slot_; segment_start += segment_len_) {
+        for (uint32_t t = 0; t < n_; t++) {
+            uint32_t group_start = segment_start + t * H_;
+            for (uint32_t h = H_ - i; h < H_; h++) {
+                mask[group_start + h] = 1.0;
+            }
+        }
+    }
+    return ctx.encode_ringt(mask, param_.get_q(level_ - 1));
+}
+
+CkksPlaintextRingt ParLowerDiagPCMM::generate_bias_pt(CkksContext& ctx, uint32_t mb, uint32_t r) const {
+    assert(has_bias_);
+    assert(r < m_c_);
+    uint32_t output_mbs = (mode_ == Mode::EXPAND) ? K_ : 1;
+    assert(mb < output_mbs);
+
+    vector<double> bias_vec(n_slot_, 0.0);
+    for (uint32_t local_diag = 0; local_diag < c_; local_diag++) {
+        uint32_t diag_idx = r * c_ + local_diag;
+        uint32_t segment_base = local_diag * segment_len_;
+        for (uint32_t t = 0; t < n_; t++) {
+            for (uint32_t h = 0; h < H_; h++) {
+                uint32_t out_row = mb * d_prepad_ + h * m_ + ((diag_idx + t) % m_);
+                if (h < H_prepad_ && out_row < out_rows_) {
+                    bias_vec[segment_base + t * H_ + h] = bias_vals_.get(out_row);
+                }
+            }
+        }
+    }
+    return ctx.encode_ringt(bias_vec, param_.get_default_scale());
 }
 
 std::vector<CkksCiphertext> ParLowerDiagPCMM::run_core(CkksContext& ctx,
