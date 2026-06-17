@@ -39,16 +39,22 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 log = logging.getLogger(__name__)
 
 
-def read_compile_config(config_path: str) -> dict[str, int | bool]:
+MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
+
+
+def read_compile_config(config_path: str) -> dict[str, int | str]:
     if not config_path:
         return {}
     with open(config_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
+    mat_pack_style = data.get('mat_pack_style', '')
+    if mat_pack_style not in MAT_PACK_STYLES:
+        raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
     return {
         'n_heads': int(data['n_heads']),
         'head_dim': int(data['head_dim']),
         'matmul_block_size': int(data['matmul_block_size']),
-        'is_feature_mat': bool(data.get('is_feature_mat', False)),
+        'mat_pack_style': mat_pack_style,
     }
 
 
@@ -103,7 +109,7 @@ Examples:
         '--config',
         type=str,
         default='',
-        help='Compile config JSON path containing n_heads, head_dim, matmul_block_size',
+        help='Compile config JSON path containing n_heads, head_dim, matmul_block_size, mat_pack_style',
     )
 
     parser.add_argument(
@@ -139,7 +145,8 @@ Examples:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     compile_config = read_compile_config(args.config)
-    is_feature_mat = bool(compile_config.get('is_feature_mat', False))
+    mat_pack_style = compile_config.get('mat_pack_style', '')
+    feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
     set_btp_scale = args.set_btp_scale
     onnx_path = input_path if is_onnx else None
 
@@ -152,7 +159,7 @@ Examples:
         print(f'[ONNX→JSON] Style: {onnx_style}')
 
         try:
-            onnx_to_json(str(input_path), str(pt_json_path), onnx_style, feature_mat=is_feature_mat)
+            onnx_to_json(str(input_path), str(pt_json_path), onnx_style, mat_pack_style=mat_pack_style)
             log.info('[ONNX→JSON] Done: %s → %s (style=%s)', input_path, pt_json_path, onnx_style)
         except Exception as e:
             print(f'\n[Error] ONNX to JSON conversion failed: {e}')
@@ -169,7 +176,7 @@ Examples:
     print(f'[Compile] Output: {output_dir}')
     print(
         f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, '
-        f'COMPILE_CONFIG={args.config or "<none>"}, SET_BTP_SCALE={set_btp_scale}'
+        f'COMPILE_CONFIG={args.config or "<none>"}, MAT_PACK_STYLE={mat_pack_style}, SET_BTP_SCALE={set_btp_scale}'
     )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
@@ -185,6 +192,7 @@ Examples:
             n_heads=compile_config.get('n_heads'),
             head_dim=compile_config.get('head_dim'),
             matmul_block_size=compile_config.get('matmul_block_size'),
+            mat_pack_style=mat_pack_style,
             set_btp_scale=set_btp_scale,
         )
 
@@ -204,12 +212,13 @@ Examples:
                 print(f'[H5 Export] JSON: {json_path}')
                 print(f'[H5 Export] H5:   {h5_path}')
                 try:
-                    export_h5_from_onnx(
-                        onnx_path=str(onnx_path),
-                        json_path=str(json_path),
-                        h5_path=str(h5_path),
-                        feature_mat=is_feature_mat,
-                    )
+                    # TO_DO:to fix
+                    # export_h5_from_onnx(
+                    #     onnx_path=str(onnx_path),
+                    #     json_path=str(json_path),
+                    #     h5_path=str(h5_path),
+                    #     feature_mat=feature_mat,
+                    # )
                     print(f'[H5 Export] Done: {h5_path}')
                 except Exception as e:
                     print(f'\n[H5 Export] Failed: {e}')

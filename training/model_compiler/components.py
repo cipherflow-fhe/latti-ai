@@ -289,6 +289,7 @@ class GlobalConfig:
             cls._instance.n_heads = 1
             cls._instance.head_dim = 0
             cls._instance.matmul_block_size = 0
+            cls._instance.mat_pack_style = ''
             cls._instance.base_feat_dim = 0
             cls._instance.layernorm_var_std_bound = config_dict.get('LAYERNORM_VAR_STD_BOUND', 4.0)
             cls._instance.layernorm_minimax_init_coeffs = config_dict.get(
@@ -787,7 +788,7 @@ class LayerAbstractGraph:
                     upsample_factor=upsample_factor,
                 )
 
-            elif layer_type == 'parcpmm':
+            elif layer_type in ('parcpmm', 'pdmpcmm'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', '')
                 compute_node.weight_shape = layer_json.get('weight_shape', [])
@@ -795,22 +796,18 @@ class LayerAbstractGraph:
                 compute_node.fuse_gama_info = layer_json.get('fuse_gama_info')
                 compute_node.to_expand = layer_json.get('to_expand', False)
 
-            elif layer_type in ('add_pt', 'pcm_add_pt'):
+            elif layer_type in ('add_pt', 'pcm_add_pt', 'pdm_add_pt'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', layer_json.get('bias_path', ''))
                 compute_node.bias_path = layer_json.get('bias_path', '')
 
-            elif layer_type == 'pcm_add_pt':
-                compute_node = ComputeNode(key, layer_type, 1, 1)
-                compute_node.path = layer_json.get('weight_path', '')
-
-            elif layer_type == 'partranspose':
+            elif layer_type in ('partranspose', 'pdmtranspose'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
 
-            elif layer_type == 'parccmm':
+            elif layer_type in ('parccmm', 'pdmccmm'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
 
-            elif layer_type == 'pcmgamma':
+            elif layer_type in ('pcmgamma', 'pdmgamma'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', '')
                 compute_node.gamma_path = layer_json.get('gamma_path', '')
@@ -825,7 +822,7 @@ class LayerAbstractGraph:
                 compute_node.coeffs_path = layer_json.get('coeffs_path', '')
                 compute_node.order = layer_json.get('order', 4)
 
-            elif layer_type == 'pcmpoly':
+            elif layer_type in ('pcmpoly', 'pdmpoly'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', '')
                 compute_node.coeffs_path = layer_json.get('coeffs_path', '')
@@ -833,6 +830,18 @@ class LayerAbstractGraph:
                 compute_node.gamma_path = layer_json.get('gamma_path', '')
                 compute_node.fuse_gama_info = layer_json.get('fuse_gama_info')
                 compute_node.order = layer_json.get('order', 4)
+
+            elif layer_type in ('pcmstats', 'pdmstats'):
+                compute_node = ComputeNode(key, layer_type, 1, 1)
+                compute_node.epsilon = layer_json.get('epsilon', 1e-5)
+
+            elif layer_type in ('pcmcenter', 'pdmcenter', 'pcminit', 'pdminit', 'pcmgs', 'pdmgs'):
+                compute_node = ComputeNode(key, layer_type, 1, 1)
+
+            elif layer_type in ('pcmaffine', 'pdmaffine'):
+                compute_node = ComputeNode(key, layer_type, 1, 1)
+                compute_node.weight_path = layer_json.get('weight_path', '')
+                compute_node.bias_path = layer_json.get('bias_path', '')
 
             elif layer_type == 'CustomMultiHeadAttention':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
@@ -1100,7 +1109,7 @@ class LayerAbstractGraph:
                 if 'mpc_refresh' in layer_type:
                     layers[layer_id]['is_end'] = False
                     mpc_refresh_ids.append(layer_id)
-            if layer_type == 'parcpmm':
+            if layer_type in ('parcpmm', 'pdmpcmm'):
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
@@ -1114,25 +1123,25 @@ class LayerAbstractGraph:
                     layers[layer_id]['fuse_gama_info'] = layer.fuse_gama_info
                 if getattr(layer, 'to_expand', False):
                     layers[layer_id]['to_expand'] = True
-            if layer_type in ('add_pt', 'pcm_add_pt'):
+            if layer_type in ('add_pt', 'pcm_add_pt', 'pdm_add_pt'):
                 path = getattr(layer, 'path', '') or layer.bias_path
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                 }
-                if layer_type == 'pcm_add_pt':
+                if layer_type in ('pcm_add_pt', 'pdm_add_pt'):
                     layers[layer_id]['weight_path'] = path
                 else:
                     layers[layer_id]['bias_path'] = path
 
-            if layer_type == 'partranspose':
+            if layer_type in ('partranspose', 'pdmtranspose'):
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                 }
-            if layer_type == 'parccmm':
+            if layer_type in ('parccmm', 'pdmccmm'):
                 edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
                 if all(v is not None for v in edge_indices.values()):
                     input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: edge_indices[n])]
@@ -1141,7 +1150,7 @@ class LayerAbstractGraph:
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                 }
-            if layer_type == 'pcmgamma':
+            if layer_type in ('pcmgamma', 'pdmgamma'):
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
@@ -1155,7 +1164,7 @@ class LayerAbstractGraph:
                     layers[layer_id]['running_max_path'] = layer.running_max_path
                 if getattr(layer, 'btp_scale', None) is not None:
                     layers[layer_id]['btp_scale'] = layer.btp_scale
-            if layer_type == 'pcmpoly':
+            if layer_type in ('pcmpoly', 'pdmpoly'):
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
@@ -1172,26 +1181,26 @@ class LayerAbstractGraph:
                     layers[layer_id]['gamma_path'] = layer.gamma_path
                 if getattr(layer, 'fuse_gama_info', None) is not None:
                     layers[layer_id]['fuse_gama_info'] = layer.fuse_gama_info
-            if layer_type == 'pcmstats':
+            if layer_type in ('pcmstats', 'pdmstats'):
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                     'epsilon': layer.epsilon,
                 }
-            if layer_type == 'pcmcenter':
+            if layer_type in ('pcmcenter', 'pdmcenter'):
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                 }
-            if layer_type == 'pcminit':
+            if layer_type in ('pcminit', 'pdminit'):
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                 }
-            if layer_type == 'pcmgs':
+            if layer_type in ('pcmgs', 'pdmgs'):
                 edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
                 if all(v is not None for v in edge_indices.values()):
                     input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: edge_indices[n])]
@@ -1200,7 +1209,7 @@ class LayerAbstractGraph:
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                 }
-            if layer_type == 'pcmaffine':
+            if layer_type in ('pcmaffine', 'pdmaffine'):
                 edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
                 if all(v is not None for v in edge_indices.values()):
                     input_feature_ids = [n.node_id for n in sorted(preds, key=lambda n: edge_indices[n])]

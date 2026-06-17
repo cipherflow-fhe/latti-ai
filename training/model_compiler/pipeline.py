@@ -38,6 +38,17 @@ import processor
 from processor import *
 from graph_partition_dp import *
 
+MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
+PCM_TO_PDM_TYPES = {
+    'pcmgamma': 'pdmgamma',
+}
+
+
+def _pack_pcm_type(layer_type: str) -> str:
+    if getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack':
+        return PCM_TO_PDM_TYPES.get(layer_type, layer_type)
+    return layer_type
+
 
 def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     """
@@ -273,17 +284,18 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         pred_feature = preds[0]
         succ_feature = succs[0]
 
-        pre_gamma_id = _unique_graph_node_id(graph, f'{btp_node.layer_id}_pre_pcmgamma', 'layer_id')
-        post_gamma_id = _unique_graph_node_id(graph, f'{btp_node.layer_id}_post_pcmgamma', 'layer_id')
+        gamma_type = _pack_pcm_type('pcmgamma')
+        pre_gamma_id = _unique_graph_node_id(graph, f'{btp_node.layer_id}_pre_{gamma_type}', 'layer_id')
+        post_gamma_id = _unique_graph_node_id(graph, f'{btp_node.layer_id}_post_{gamma_type}', 'layer_id')
         pre_feature_id = _unique_graph_node_id(graph, f'{pre_gamma_id}_output', 'node_id')
         post_gamma_input_feature_id = _unique_graph_node_id(graph, f'{post_gamma_id}_input', 'node_id')
 
-        pre_gamma = ComputeNode(pre_gamma_id, 'pcmgamma', btp_node.channel_input, btp_node.channel_input)
+        pre_gamma = ComputeNode(pre_gamma_id, gamma_type, btp_node.channel_input, btp_node.channel_input)
         pre_gamma.depth = btp_node.depth
         pre_gamma.path = f'{pre_gamma_id}.weight'
         pre_gamma.btp_scale = btp_scale
 
-        post_gamma = ComputeNode(post_gamma_id, 'pcmgamma', btp_node.channel_output, btp_node.channel_output)
+        post_gamma = ComputeNode(post_gamma_id, gamma_type, btp_node.channel_output, btp_node.channel_output)
         post_gamma.depth = btp_node.depth
         post_gamma.path = f'{post_gamma_id}.weight'
         post_gamma.btp_scale = 1 / btp_scale
@@ -318,8 +330,8 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         dag.add_edge(post_gamma, succ_feature)
 
 
-PCMGAMMA_ABSORB_TARGETS = {'pcmpoly', 'parcpmm'}
-PCMGAMMA_PASS_THROUGH_TYPES = {'pcmgamma'}
+PCMGAMMA_ABSORB_TARGETS = {'pcmpoly', 'pdmpoly', 'parcpmm', 'pdmpcmm'}
+PCMGAMMA_PASS_THROUGH_TYPES = {'pcmgamma', 'pdmgamma'}
 
 
 def _pcmgamma_fuse_info(pcmgamma_node: ComputeNode, direction: str) -> dict:
@@ -424,9 +436,9 @@ def _absorb_pcmgamma_into_target(
     dag, pcmgamma_node: ComputeNode, target_node: ComputeNode, search_direction: str
 ) -> bool:
     direction = f'after_{target_node.layer_type}' if search_direction == 'up' else f'before_{target_node.layer_type}'
-    if target_node.layer_type == 'parcpmm':
+    if target_node.layer_type in ('parcpmm', 'pdmpcmm'):
         _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, target_node, direction)
-    elif target_node.layer_type == 'pcmpoly':
+    elif target_node.layer_type in ('pcmpoly', 'pdmpoly'):
         _fuse_pcmgamma_attrs_into_pcmpoly(pcmgamma_node, target_node, direction)
     else:
         return False
@@ -447,7 +459,11 @@ def absorb_pcmgamma_layers(graph: LayerAbstractGraph):
     while changed:
         changed = False
         for node in list(dag.nodes):
-            if isinstance(node, ComputeNode) and node.layer_type == 'pcmgamma' and _try_absorb_pcmgamma(dag, node):
+            if (
+                isinstance(node, ComputeNode)
+                and node.layer_type in PCMGAMMA_PASS_THROUGH_TYPES
+                and _try_absorb_pcmgamma(dag, node)
+            ):
                 changed = True
                 break
 
@@ -583,6 +599,7 @@ def run_pipeline(
     n_heads: int | None = None,
     head_dim: int | None = None,
     matmul_block_size: int | None = None,
+    mat_pack_style: str = '',
     set_btp_scale: float | None = None,
     use_gpu: bool = True,
     enable_score_cache: bool = True,
@@ -607,6 +624,8 @@ def run_pipeline(
     """
     compile_start_time = time.perf_counter()
 
+    if mat_pack_style not in MAT_PACK_STYLES:
+        raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
     if style is not None:
         config.style = style
     if graph_type is not None:
@@ -617,12 +636,14 @@ def run_pipeline(
         config.head_dim = head_dim
     if matmul_block_size is not None:
         config.matmul_block_size = matmul_block_size
+    config.mat_pack_style = mat_pack_style
     config.set_btp_scale = set_btp_scale
     config.use_gpu = use_gpu
     print(
         f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
         f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
-        f'SET_BTP_SCALE={config.set_btp_scale}, BACKEND={"gpu" if config.use_gpu else "cpu"}, '
+        f'MAT_PACK_STYLE={config.mat_pack_style}, SET_BTP_SCALE={config.set_btp_scale}, '
+        f'BACKEND={"gpu" if config.use_gpu else "cpu"}, '
         f'SCORE_CACHE={enable_score_cache}'
     )
 

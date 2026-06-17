@@ -92,11 +92,11 @@ def export_feature_mat_h5_from_onnx(
 
     for layer_key, layer in layers.items():
         ltype = layer.get('type')
-        if ltype == 'parcpmm':
+        if ltype in ('parcpmm', 'pdmpcmm'):
             _export_parcpmm(layer_key, layer, features, onnx_weights, out)
-        elif ltype == 'pcmgamma':
+        elif ltype in ('pcmgamma', 'pdmgamma'):
             _export_pcmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
-        elif ltype == 'pcmpoly':
+        elif ltype in ('pcmpoly', 'pdmpoly'):
             _export_pcmpoly(
                 layer_key,
                 layer,
@@ -107,9 +107,9 @@ def export_feature_mat_h5_from_onnx(
                 standalone_gamma_paths,
                 out,
             )
-        elif ltype == 'pcmaffine':
+        elif ltype in ('pcmaffine', 'pdmaffine'):
             _export_pcmaffine(layer_key, layer, features, onnx_weights, out)
-        elif ltype in ('add_pt', 'pcm_add_pt'):
+        elif ltype in ('add_pt', 'pcm_add_pt', 'pdm_add_pt'):
             _export_add_pt(layer_key, layer, features, onnx_weights, out)
 
     h5_dir = os.path.dirname(h5_path)
@@ -174,7 +174,7 @@ def _index_onnx_sources(onnx_model: onnx.ModelProto) -> tuple[dict[str, Attentio
 def _standalone_pcmgamma_paths(layers: dict[str, dict[str, Any]]) -> set[str]:
     paths = set()
     for layer in layers.values():
-        if layer.get('type') != 'pcmgamma':
+        if layer.get('type') not in ('pcmgamma', 'pdmgamma'):
             continue
         path = layer.get('gamma_path') or layer.get('weight_path')
         if path:
@@ -192,7 +192,12 @@ def _export_parcpmm(
     weight_path = _required_path(layer, 'weight_path', layer_key)
     fin = _feature(features, layer['feature_input'][0], layer_key)
     fout = _feature(features, layer['feature_output'][0], layer_key)
-    expected_shape = (int(fin['shape'][1]), int(fout['shape'][1]))
+    if layer.get('type') == 'pdmpcmm' and layer.get('weight_shape'):
+        expected_shape = tuple(int(x) for x in layer['weight_shape'])
+    elif layer.get('type') == 'pdmpcmm':
+        expected_shape = (int(fout['shape'][0]), int(fin['shape'][0]))
+    else:
+        expected_shape = (int(fin['shape'][1]), int(fout['shape'][1]))
 
     weight = _resolve_parcpmm_weight(weight_path, layer, features, onnx_weights)
     weight = _reshape_checked(weight, expected_shape, layer_key, weight_path)
@@ -200,7 +205,7 @@ def _export_parcpmm(
 
     bias_path = layer.get('bias_path', '')
     if bias_path:
-        expected_bias_shape = (expected_shape[1],)
+        expected_bias_shape = (expected_shape[0] if layer.get('type') == 'pdmpcmm' else expected_shape[1],)
         bias = _resolve_parcpmm_bias(bias_path, layer, features, onnx_weights)
         bias = _reshape_checked(bias, expected_bias_shape, layer_key, bias_path)
         _put(out, bias_path, bias, layer_key)
@@ -315,7 +320,7 @@ def _export_add_pt(
 ) -> None:
     path = layer.get('weight_path') or layer.get('bias_path')
     if not path:
-        raise KeyError(f'{layer_key}: add_pt/pcm_add_pt requires weight_path or bias_path')
+        raise KeyError(f'{layer_key}: add_pt/pcm_add_pt/pdm_add_pt requires weight_path or bias_path')
     if path not in onnx_weights:
         raise KeyError(f'{layer_key}: add_pt source not found in ONNX: {path}')
     fin = _feature(features, layer['feature_input'][0], layer_key)

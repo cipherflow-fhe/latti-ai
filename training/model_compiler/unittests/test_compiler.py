@@ -307,7 +307,7 @@ class CompilerTestBase(unittest.TestCase):
         style='ordinary',
         graph_type='btp',
         replace=True,
-        feature_mat=False,
+        mat_pack_style='',
         n_heads=0,
         head_dim=0,
         matmul_block_size=0,
@@ -326,7 +326,7 @@ class CompilerTestBase(unittest.TestCase):
             save_h5=False,
             **export_kwargs,
         )
-        onnx_to_json(self.temp_onnx_path, self.temp_json_path, style, feature_mat=feature_mat)
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, style, mat_pack_style=mat_pack_style)
         graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
@@ -338,6 +338,7 @@ class CompilerTestBase(unittest.TestCase):
             n_heads=n_heads if n_heads else None,
             head_dim=head_dim if head_dim else None,
             matmul_block_size=matmul_block_size if matmul_block_size else None,
+            mat_pack_style=mat_pack_style,
         )
         return graph, score
 
@@ -348,7 +349,7 @@ class CompilerTestBase(unittest.TestCase):
         test_name,
         style='ordinary',
         replace=True,
-        feature_mat=False,
+        mat_pack_style='',
         n_heads=0,
         head_dim=0,
         matmul_block_size=0,
@@ -383,7 +384,7 @@ class CompilerTestBase(unittest.TestCase):
         )
 
         # Step 2: ONNX → JSON
-        onnx_to_json(temp_onnx, temp_json, style, feature_mat=feature_mat)
+        onnx_to_json(temp_onnx, temp_json, style, mat_pack_style=mat_pack_style)
 
         # Step 3: Compile (produces task/server/ and task/client/)
         if n_heads:
@@ -402,6 +403,7 @@ class CompilerTestBase(unittest.TestCase):
             n_heads=n_heads if n_heads else None,
             head_dim=head_dim if head_dim else None,
             matmul_block_size=matmul_block_size if matmul_block_size else None,
+            mat_pack_style=mat_pack_style,
         )
 
         server_dir = output_dir / 'task' / 'server'
@@ -415,7 +417,7 @@ class CompilerTestBase(unittest.TestCase):
             json_path=str(json_path),
             h5_path=str(h5_path),
             verbose=False,
-            feature_mat=feature_mat,
+            feature_mat=mat_pack_style != '',
         )
 
         # Step 6: Read pack_style and param_name from configs
@@ -564,7 +566,7 @@ class TestSingleLayer(CompilerTestBase):
             model,
             (1, 197, 192),
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=int(compile_config['n_heads']),
             head_dim=int(compile_config['head_dim']),
             matmul_block_size=int(compile_config['matmul_block_size']),
@@ -578,7 +580,7 @@ class TestSingleLayer(CompilerTestBase):
             model,
             (1, 32, 64),
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=int(compile_config['n_heads']),
             head_dim=int(compile_config['head_dim']),
             matmul_block_size=int(compile_config['matmul_block_size']),
@@ -592,7 +594,7 @@ class TestSingleLayer(CompilerTestBase):
             model,
             [(32, 64), (64, 64)],
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=int(compile_config['n_heads']),
             head_dim=int(compile_config['head_dim']),
             matmul_block_size=int(compile_config['matmul_block_size']),
@@ -606,7 +608,7 @@ class TestSingleLayer(CompilerTestBase):
             model,
             (1, 197, 192),
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=int(compile_config['n_heads']),
             head_dim=int(compile_config['head_dim']),
             matmul_block_size=int(compile_config['matmul_block_size']),
@@ -620,7 +622,7 @@ class TestSingleLayer(CompilerTestBase):
             model,
             (1, 197, 192),
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=int(compile_config['n_heads']),
             head_dim=int(compile_config['head_dim']),
             matmul_block_size=int(compile_config['matmul_block_size']),
@@ -635,7 +637,7 @@ class TestSingleLayer(CompilerTestBase):
             model,
             (1, 197, 192),
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=int(compile_config['n_heads']),
             head_dim=int(compile_config['head_dim']),
             matmul_block_size=int(compile_config['matmul_block_size']),
@@ -658,6 +660,7 @@ class TestSingleLayer(CompilerTestBase):
             n_heads=int(compile_config['n_heads']),
             head_dim=int(compile_config['head_dim']),
             matmul_block_size=int(compile_config['matmul_block_size']),
+            mat_pack_style=compile_config['mat_pack_style'],
         )
         return graph, score
 
@@ -669,7 +672,7 @@ class TestSingleLayer(CompilerTestBase):
             model,
             (197, 192),
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=int(compile_config['n_heads']),
             head_dim=int(compile_config['head_dim']),
             matmul_block_size=int(compile_config['matmul_block_size']),
@@ -678,7 +681,7 @@ class TestSingleLayer(CompilerTestBase):
     def test_vit_from_onnx(self):
         self.temp_onnx_path = 'runs/poly_deit_tiny_patch16_224.onnx'
         # self.temp_onnx_path = 'runs/deit_tiny_patch16_224_until_block0_after_mlp_add.onnx'
-        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed', feature_mat=True)
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed', mat_pack_style='par_block_col_major')
         with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
             compile_config = json.load(f)
 
@@ -703,7 +706,7 @@ class TestSingleLayer(CompilerTestBase):
         #     json_path=str(server_dir / 'nn_layers_ct_0.json'),
         #     h5_path=str(server_dir / 'model_parameters.h5'),
         #     verbose=False,
-        #     feature_mat=compile_config['is_feature_mat'],
+        #     feature_mat=compile_config['mat_pack_style'] != '',
         # )
         return graph, score
 
@@ -1349,7 +1352,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             (1, 32, 96),
             'par_block_col_major_transpose',
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=3,
             head_dim=32,
             matmul_block_size=32,
@@ -1363,7 +1366,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             [(1, 32, 64), (1, 32, 64)],
             'par_block_col_major_add',
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=2,
             head_dim=32,
             matmul_block_size=32,
@@ -1379,7 +1382,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             (1, 32, 96),
             'par_block_col_major_add_pt',
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=3,
             head_dim=32,
             matmul_block_size=32,
@@ -1404,7 +1407,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             [(32, 96), (32, 96)],
             'par_block_col_major_ccmm',
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=3,
             head_dim=32,
             matmul_block_size=32,
@@ -1419,7 +1422,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             (1, 32, 64),
             'par_block_col_major_layernorm',
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=2,
             head_dim=32,
             matmul_block_size=32,
@@ -1433,7 +1436,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             (1, 32, 64),
             'par_block_col_major_gelu',
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=2,
             head_dim=32,
             matmul_block_size=32,
@@ -1448,7 +1451,7 @@ class TestE2ESingleLayer(CompilerTestBase):
             (1, 32, 96),
             'par_block_col_major_cpmm',
             style='multiplexed',
-            feature_mat=True,
+            mat_pack_style='par_block_col_major',
             n_heads=3,
             head_dim=32,
             matmul_block_size=32,

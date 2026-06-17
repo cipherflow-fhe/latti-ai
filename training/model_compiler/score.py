@@ -1310,10 +1310,10 @@ class FheScoreParam:
         elif layer_type in ('add', 'add2d'):
             layer = AddLayer()
             return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
-        elif layer_type in ('add_pt', 'pcm_add_pt'):
+        elif layer_type in ('add_pt', 'pcm_add_pt', 'pdm_add_pt'):
             n_cts = self.dag.nodes[preds[0]]['pack_num']
             return {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': n_cts, 'rescale': 0}
-        elif layer_type == 'pcmgamma':
+        elif layer_type in ('pcmgamma', 'pdmgamma'):
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
             n_slot = n // 2
@@ -1329,7 +1329,7 @@ class FheScoreParam:
                 return {'rotate': 0, 'mult_plain': n_cts, 'mult': 0, 'add': 0, 'rescale': n_cts}
             except (AssertionError, ValueError):
                 return None
-        elif layer_type == 'pcmpoly':
+        elif layer_type in ('pcmpoly', 'pdmpoly'):
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
             n_slot = n // 2
@@ -1345,7 +1345,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type == 'pcmstats':
+        elif layer_type in ('pcmstats', 'pdmstats'):
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
             n_slot = n // 2
@@ -1359,7 +1359,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type == 'pcmcenter':
+        elif layer_type in ('pcmcenter', 'pdmcenter'):
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
             n_slot = n // 2
@@ -1373,7 +1373,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type == 'pcminit':
+        elif layer_type in ('pcminit', 'pdminit'):
             m = preds[0].shape[0]
             block_size = config.matmul_block_size
             n_slot = n // 2
@@ -1382,7 +1382,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(math.ceil(m / block_size), self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type == 'pcmgs':
+        elif layer_type in ('pcmgs', 'pdmgs'):
             ordered_preds = sorted(
                 preds,
                 key=lambda p: self.dag.edges[p, node].get('input_index')
@@ -1399,7 +1399,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(math.ceil(m / block_size), level_y, level_a)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type == 'pcmaffine':
+        elif layer_type in ('pcmaffine', 'pdmaffine'):
             ordered_preds = sorted(
                 preds,
                 key=lambda p: self.dag.edges[p, node].get('input_index')
@@ -1421,7 +1421,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(level_y, level_x)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type == 'parcpmm':
+        elif layer_type in ('parcpmm', 'pdmpcmm'):
             m = preds[0].shape[0]
             n_total = preds[0].shape[1]
             n_per_head = n_total // config.n_heads
@@ -1439,7 +1439,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type == 'partranspose':
+        elif layer_type in ('partranspose', 'pdmtranspose'):
             m = preds[0].shape[0]
             n_per_head = preds[0].shape[1] // config.n_heads
             n_slot = n // 2
@@ -1453,7 +1453,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type == 'parccmm':
+        elif layer_type in ('parccmm', 'pdmccmm'):
             m = preds[0].shape[0]
             n_per_head = preds[0].shape[1] // config.n_heads
             p_per_head = preds[1].shape[1] // config.n_heads
