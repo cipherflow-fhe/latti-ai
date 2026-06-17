@@ -65,6 +65,21 @@ from inference.model_generator.layers.par_block_col_major_layernorm import (
     ParBlockColMajorLNStats,
     ParBlockColMajorLNXCentered,
 )
+from inference.model_generator.layers.par_lower_diagonal_add_pt import ParLowerDiagonalAddPt
+from inference.model_generator.layers.par_lower_diag_ccmm import ParLowerDiagCCMM
+from inference.model_generator.layers.par_lower_diag_pcmm import ParLowerDiagPCMM
+from inference.model_generator.layers.par_lower_diag_transpose import ParLowerDiagTranspose
+from inference.model_generator.layers.par_upper_diagonal_layernorm import (
+    ParUpperDiagonalLNAffine,
+    ParUpperDiagonalLNGoldschmidt,
+    ParUpperDiagonalLNMinimaxInit,
+    ParUpperDiagonalLNStats,
+    ParUpperDiagonalLNXCentered,
+)
+from inference.model_generator.layers.par_upper_diagonal_polyact import (
+    ParUpperDiagonalPolyActRNGamma,
+    ParUpperDiagonalPolyActRNPoly,
+)
 from inference.model_generator.layers.upsample_layer import UpsampleNearestLayer
 
 
@@ -1310,10 +1325,22 @@ class FheScoreParam:
         elif layer_type in ('add', 'add2d'):
             layer = AddLayer()
             return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
-        elif layer_type in ('add_pt', 'pcm_add_pt', 'pdm_add_pt'):
+        elif layer_type in ('add_pt', 'pcm_add_pt'):
             n_cts = self.dag.nodes[preds[0]]['pack_num']
             return {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': n_cts, 'rescale': 0}
-        elif layer_type in ('pcmgamma', 'pdmgamma'):
+        elif layer_type == 'pdm_add_pt':
+            n_slot = n // 2
+            try:
+                layer = ParLowerDiagonalAddPt(
+                    shape=tuple(preds[0].shape),
+                    head_shape=tuple(preds[0].head_shape),
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pcmgamma':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
             n_slot = n // 2
@@ -1329,7 +1356,19 @@ class FheScoreParam:
                 return {'rotate': 0, 'mult_plain': n_cts, 'mult': 0, 'add': 0, 'rescale': n_cts}
             except (AssertionError, ValueError):
                 return None
-        elif layer_type in ('pcmpoly', 'pdmpoly'):
+        elif layer_type == 'pdmgamma':
+            n_slot = n // 2
+            try:
+                layer = ParUpperDiagonalPolyActRNGamma(
+                    shape=tuple(preds[0].shape),
+                    head_shape=tuple(preds[0].head_shape),
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pcmpoly':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
             n_slot = n // 2
@@ -1345,7 +1384,20 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type in ('pcmstats', 'pdmstats'):
+        elif layer_type == 'pdmpoly':
+            n_slot = n // 2
+            try:
+                layer = ParUpperDiagonalPolyActRNPoly(
+                    shape=tuple(preds[0].shape),
+                    head_shape=tuple(preds[0].head_shape),
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                    degree=getattr(node, 'order', 4),
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pcmstats':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
             n_slot = n // 2
@@ -1359,7 +1411,19 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type in ('pcmcenter', 'pdmcenter'):
+        elif layer_type == 'pdmstats':
+            n_slot = n // 2
+            try:
+                layer = ParUpperDiagonalLNStats(
+                    shape=tuple(preds[0].shape),
+                    head_shape=tuple(preds[0].head_shape),
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pcmcenter':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
             n_slot = n // 2
@@ -1373,7 +1437,19 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type in ('pcminit', 'pdminit'):
+        elif layer_type == 'pdmcenter':
+            n_slot = n // 2
+            try:
+                layer = ParUpperDiagonalLNXCentered(
+                    shape=tuple(preds[0].shape),
+                    head_shape=tuple(preds[0].head_shape),
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pcminit':
             m = preds[0].shape[0]
             block_size = config.matmul_block_size
             n_slot = n // 2
@@ -1382,7 +1458,19 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(math.ceil(m / block_size), self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type in ('pcmgs', 'pdmgs'):
+        elif layer_type == 'pdminit':
+            n_slot = n // 2
+            try:
+                layer = ParUpperDiagonalLNMinimaxInit(
+                    shape=tuple(preds[0].shape),
+                    head_shape=tuple(preds[0].head_shape),
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pcmgs':
             ordered_preds = sorted(
                 preds,
                 key=lambda p: self.dag.edges[p, node].get('input_index')
@@ -1399,7 +1487,27 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(math.ceil(m / block_size), level_y, level_a)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type in ('pcmaffine', 'pdmaffine'):
+        elif layer_type == 'pdmgs':
+            ordered_preds = sorted(
+                preds,
+                key=lambda p: self.dag.edges[p, node].get('input_index')
+                if self.dag.edges[p, node].get('input_index') is not None
+                else 0,
+            )
+            n_slot = n // 2
+            level_y = self.dag.nodes[ordered_preds[0]]['level']
+            level_a = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else None
+            try:
+                layer = ParUpperDiagonalLNGoldschmidt(
+                    shape=tuple(ordered_preds[0].shape),
+                    head_shape=tuple(ordered_preds[0].head_shape),
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(level_y, level_a)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pcmaffine':
             ordered_preds = sorted(
                 preds,
                 key=lambda p: self.dag.edges[p, node].get('input_index')
@@ -1421,7 +1529,27 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(level_y, level_x)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type in ('parcpmm', 'pdmpcmm'):
+        elif layer_type == 'pdmaffine':
+            ordered_preds = sorted(
+                preds,
+                key=lambda p: self.dag.edges[p, node].get('input_index')
+                if self.dag.edges[p, node].get('input_index') is not None
+                else 0,
+            )
+            n_slot = n // 2
+            level_x = self.dag.nodes[ordered_preds[0]]['level']
+            level_y = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else self.input_mult_level
+            try:
+                layer = ParUpperDiagonalLNAffine(
+                    shape=tuple(ordered_preds[0].shape),
+                    head_shape=tuple(ordered_preds[0].head_shape),
+                    n_heads=config.n_heads,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(level_y, level_x)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'parcpmm':
             m = preds[0].shape[0]
             n_total = preds[0].shape[1]
             n_per_head = n_total // config.n_heads
@@ -1439,7 +1567,21 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type in ('partranspose', 'pdmtranspose'):
+        elif layer_type == 'pdmpcmm':
+            n_slot = n // 2
+            try:
+                layer = ParLowerDiagPCMM(
+                    shape_X_T=tuple(preds[0].shape),
+                    W_T_shape=tuple(getattr(node, 'weight_shape', [])),
+                    n_heads=config.n_heads,
+                    head_dim=config.head_dim,
+                    n_slot=n_slot,
+                    has_bias=bool(getattr(node, 'bias_path', '')),
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'partranspose':
             m = preds[0].shape[0]
             n_per_head = preds[0].shape[1] // config.n_heads
             n_slot = n // 2
@@ -1453,7 +1595,19 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
-        elif layer_type in ('parccmm', 'pdmccmm'):
+        elif layer_type == 'pdmtranspose':
+            n_slot = n // 2
+            try:
+                layer = ParLowerDiagTranspose(
+                    shape=tuple(preds[0].head_shape),
+                    n_heads=config.n_heads,
+                    head_dim=config.head_dim,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'parccmm':
             m = preds[0].shape[0]
             n_per_head = preds[0].shape[1] // config.n_heads
             p_per_head = preds[1].shape[1] // config.n_heads
@@ -1468,6 +1622,19 @@ class FheScoreParam:
                 )
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError):
+                return None
+        elif layer_type == 'pdmccmm':
+            n_slot = n // 2
+            try:
+                layer = ParLowerDiagCCMM(
+                    shape_A=tuple(preds[0].head_shape),
+                    shape_B=tuple(preds[1].head_shape),
+                    n_heads=config.n_heads,
+                    head_dim=config.head_dim,
+                    n_slot=n_slot,
+                )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
                 return None
         # ── upsample_nearest ────────────────────────────────────────────────
         elif layer_type in ('upsample_nearest', 'resize'):

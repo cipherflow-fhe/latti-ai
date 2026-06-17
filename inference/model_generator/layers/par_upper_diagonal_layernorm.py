@@ -17,6 +17,7 @@
 import math
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -102,6 +103,15 @@ class _ParUpperDiagonalBase:
             step <<= 1
         return replicated
 
+    def _empty_op_count(self):
+        return defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+
+    def _reduce_cols_op_count_per_ct(self) -> dict[str, int]:
+        log_c = int(math.log2(self.c)) if self.c > 1 else 0
+        log_h = int(math.log2(self.H)) if self.H > 1 else 0
+        reduce_steps = log_c + 2 * log_h
+        return {'rotate': reduce_steps, 'mult_plain': 1, 'mult': 0, 'add': reduce_steps, 'rescale': 1}
+
 
 class ParUpperDiagonalLNStats(_ParUpperDiagonalBase):
     op_class = 'ParUpperDiagonalLNStats'
@@ -142,6 +152,21 @@ class ParUpperDiagonalLNStats(_ParUpperDiagonalBase):
         eps_add_pt = self._make_pt_per_ct(data_source, 3)
         return self.call(input_cts, h0_mask_pt, inv_n_pt, iv_pt, eps_add_pt)
 
+    def get_fhe_op_count(self, level: int) -> dict:
+        ops = self._empty_op_count()
+        T = self.total_cts
+        reduce_ops = self._reduce_cols_op_count_per_ct()
+        ops[level]['rotate'] += 2 * T * reduce_ops['rotate']
+        ops[level]['mult_plain'] += 2 * T * reduce_ops['mult_plain']
+        ops[level]['add'] += 2 * T * reduce_ops['add'] + 2 * max(0, T - 1)
+        ops[level]['rescale'] += 2 * T * reduce_ops['rescale']
+
+        ops[level]['mult'] += 2 * T
+        ops[level]['mult_plain'] += 3 * T
+        ops[level]['add'] += 2 * T
+        ops[level]['rescale'] += 5 * T
+        return dict(ops)
+
 
 class ParUpperDiagonalLNXCentered(_ParUpperDiagonalBase):
     op_class = 'ParUpperDiagonalLNXCentered'
@@ -164,6 +189,20 @@ class ParUpperDiagonalLNXCentered(_ParUpperDiagonalBase):
         h0_mask_pt = self._make_pt(data_source, 0)
         inv_n_pt = self._make_pt_per_ct(data_source, 1)
         return self.call(input_cts, h0_mask_pt, inv_n_pt)
+
+    def get_fhe_op_count(self, level: int) -> dict:
+        ops = self._empty_op_count()
+        T = self.total_cts
+        reduce_ops = self._reduce_cols_op_count_per_ct()
+        ops[level]['rotate'] += T * reduce_ops['rotate']
+        ops[level]['mult_plain'] += T * reduce_ops['mult_plain']
+        ops[level]['add'] += T * reduce_ops['add'] + max(0, T - 1)
+        ops[level]['rescale'] += T * reduce_ops['rescale']
+
+        ops[level]['mult_plain'] += T
+        ops[level]['add'] += T
+        ops[level]['rescale'] += T
+        return dict(ops)
 
 
 class ParUpperDiagonalLNMinimaxInit(_ParUpperDiagonalBase):
@@ -188,6 +227,15 @@ class ParUpperDiagonalLNMinimaxInit(_ParUpperDiagonalBase):
         c1_pt = self._make_pt_per_ct(data_source, 1)
         c2_norm_pt = self._make_pt_per_ct(data_source, 2)
         return self.call(a_cts, c0_add_pt, c1_pt, c2_norm_pt)
+
+    def get_fhe_op_count(self, level: int) -> dict:
+        ops = self._empty_op_count()
+        T = self.total_cts
+        ops[level]['mult'] = T
+        ops[level]['mult_plain'] = 2 * T
+        ops[level]['add'] = 2 * T
+        ops[level]['rescale'] = 3 * T
+        return dict(ops)
 
 
 class ParUpperDiagonalLNGoldschmidt(_ParUpperDiagonalBase):
@@ -219,6 +267,15 @@ class ParUpperDiagonalLNGoldschmidt(_ParUpperDiagonalBase):
         half_norm_pt = self._make_pt_per_ct(data_source, 1)
         return self.call(y_cts, a_cts, three_pt, half_norm_pt)
 
+    def get_fhe_op_count(self, level: int, a_level: int | None = None) -> dict:
+        ops = self._empty_op_count()
+        T = self.total_cts
+        ops[level]['mult'] = 3 * T
+        ops[level]['mult_plain'] = 2 * T
+        ops[level]['add'] = T
+        ops[level]['rescale'] = 5 * T
+        return dict(ops)
+
 
 class ParUpperDiagonalLNAffine(_ParUpperDiagonalBase):
     op_class = 'ParUpperDiagonalLNAffine'
@@ -243,3 +300,12 @@ class ParUpperDiagonalLNAffine(_ParUpperDiagonalBase):
         gamma_pt = self._make_pt_per_ct(data_source, 0)
         beta_add_pt = self._make_pt_per_ct(data_source, 1)
         return self.call(x_centered, y_cts, gamma_pt, beta_add_pt)
+
+    def get_fhe_op_count(self, level: int, x_centered_level: int | None = None) -> dict:
+        ops = self._empty_op_count()
+        T = self.total_cts
+        ops[level]['mult'] = T
+        ops[level]['mult_plain'] = T
+        ops[level]['add'] = T
+        ops[level]['rescale'] = 2 * T
+        return dict(ops)

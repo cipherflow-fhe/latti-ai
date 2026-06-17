@@ -194,6 +194,7 @@ Examples:
             matmul_block_size=compile_config.get('matmul_block_size'),
             mat_pack_style=mat_pack_style,
             set_btp_scale=set_btp_scale,
+            # enable_score_cache=False
         )
 
         print(f'\n[Compile] Success! Output: {output_dir}')

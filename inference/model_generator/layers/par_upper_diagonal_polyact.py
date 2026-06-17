@@ -17,6 +17,7 @@
 import math
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -92,6 +93,12 @@ class ParUpperDiagonalPolyActRNGamma(_ParUpperDiagonalPolyBase):
                 )
                 gamma_pt[idx] = node
         return self.call(input_cts, gamma_pt)
+
+    def get_fhe_op_count(self, level: int) -> dict:
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        ops[level]['mult_plain'] = self.total_cts
+        ops[level]['rescale'] = self.total_cts
+        return dict(ops)
 
 
 class ParUpperDiagonalPolyActRNPoly(_ParUpperDiagonalPolyBase):
@@ -169,6 +176,21 @@ class ParUpperDiagonalPolyActRNPoly(_ParUpperDiagonalPolyBase):
             c3_pt = None
             c4_pt = None
         return self.call(input_cts, c0_add_pt, c1_pt, c2_pt, c3_pt, c4_pt)
+
+    def get_fhe_op_count(self, level: int) -> dict:
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        T = self.total_cts
+        if self.degree == 2:
+            ops[level]['mult'] = T
+            ops[level]['mult_plain'] = 2 * T
+            ops[level]['add'] = 2 * T
+            ops[level]['rescale'] = 3 * T
+        else:
+            ops[level]['mult'] = 2 * T
+            ops[level]['mult_plain'] = 4 * T
+            ops[level]['add'] = 4 * T
+            ops[level]['rescale'] = 6 * T
+        return dict(ops)
 
 
 ParUpperDiagonalPolyActGamma = ParUpperDiagonalPolyActRNGamma
