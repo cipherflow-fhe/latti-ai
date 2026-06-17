@@ -147,21 +147,25 @@ def get_compute_score(
     return 0.0
 
 
+def is_mpc_flow() -> bool:
+    return config.mpc_refresh or config.graph_type == 'mpc'
+
+
 def get_restoring_score(dag, restore_node, param_dict):
-    if not config.mpc_refresh:
+    if is_mpc_flow():
+        s_param = MpcScoreParam(dag, restore_node, param_dict)
+    else:
         s_param = BtpScoreParam(
             dag,
             restore_node,
             param_dict,
             use_gpu=getattr(config, 'use_gpu', True),
         )
-    else:
-        s_param = MpcScoreParam(dag, restore_node, param_dict)
     return s_param.get_score()
 
 
 def get_min_feature_level() -> int:
-    return 1 if config.mpc_refresh or config.graph_type == 'mpc' or config.set_btp_scale is not None else 0
+    return 1 if is_mpc_flow() or config.set_btp_scale is not None else 0
 
 
 def restore_level_at(new_graph: nx.DiGraph, node: FeatureNode, param_dict):

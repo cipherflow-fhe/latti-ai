@@ -894,7 +894,7 @@ class LayerAbstractGraph:
                 compute_node = MultCoeffComputeNode(key, layer_type, layer_json['coeff'], channel_input, channel_output)
 
             elif layer_type in ('polyact', 'relu2d', 'square', 'sigmoid'):
-                if layer_type == 'relu2d' and not config.mpc_refresh:
+                if layer_type == 'relu2d' and not (config.mpc_refresh or config.graph_type == 'mpc'):
                     raise ValueError('Relu2d is not supported in current mode')
                 compute_node = ActivationComputeNode(key, layer_type, channel_input, channel_output)
                 if layer_type in ('polyact', 'relu2d'):

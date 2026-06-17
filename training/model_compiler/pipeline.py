@@ -170,6 +170,8 @@ def try_btp(
 
         # (3) Post-process
         if graph is not None:
+            if is_mpc_flow():
+                run_mpc_post_dp_passes(graph)
             graph = post_process(graph)
             valid_results.append((score, graph))
 
@@ -206,6 +208,19 @@ def run_btp_compilation(
     print(f'\n=== Results ===')
     print(f'Final score: {score}')
     return graph, score
+
+
+def run_mpc_metadata_pass(graph: LayerAbstractGraph):
+    transforms.infer_shapes_skips_and_pack_num(graph)
+    transforms.set_level_costs(graph)
+
+
+def run_mpc_post_dp_passes(graph: LayerAbstractGraph):
+    update_btp_to_mpc_refresh(graph)
+    run_mpc_metadata_pass(graph)
+    processor.change_skip_for_graph(graph)
+    update_btp_to_mpc_refresh(graph)
+    run_mpc_metadata_pass(graph)
 
 
 def post_process(graph: LayerAbstractGraph):

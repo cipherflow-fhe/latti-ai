@@ -1533,7 +1533,7 @@ class MpcScoreParam:
 
     def get_score(self) -> float:
         if 'relu2d' in self.compute_node.layer_type or 'pool' in self.compute_node.layer_type:
-            if 'relu2d' == self.compute_node.layer_type or config.mpc_refresh:
+            if 'relu2d' == self.compute_node.layer_type or (config.mpc_refresh or config.graph_type == 'mpc'):
                 kernel_scale = 1
             elif 'pool' in self.compute_node.layer_type:
                 kernel_scale = self.compute_node.kernel_shape[0] * self.compute_node.kernel_shape[1]
@@ -1543,13 +1543,10 @@ class MpcScoreParam:
                 self.n_packed_in * self.input_ct_score + self.n_packed_out * self.output_ct_score
             ) * ct_trans_rate
             return n_relu_score + n_ct_score
-        if 'bootstrapping' in self.compute_node.layer_type and config.mpc_refresh:
-            shape = self.preds[0].shape
-            n_ct_score = (
-                self.n_packed_in * self.input_ct_score + self.n_packed_out * self.output_ct_score
-            ) * ct_trans_rate
-            n_mpc_refresh = self.input_channel * shape[0] * shape[1] * self.relu_score * mpc_refresh_rate
-            return n_ct_score + n_mpc_refresh
+        shape = self.preds[0].shape
+        n_ct_score = (self.n_packed_in * self.input_ct_score + self.n_packed_out * self.output_ct_score) * ct_trans_rate
+        n_mpc_refresh = self.input_channel * shape[0] * shape[1] * self.relu_score * mpc_refresh_rate
+        return n_ct_score + n_mpc_refresh
 
 
 class BtpScoreParam:

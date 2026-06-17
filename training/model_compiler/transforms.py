@@ -580,6 +580,23 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
         if succ.dim != 0:
             graph.dag.nodes[succ]['skip'] = [1] * succ.dim
 
+        if compute_node.layer_type == 'mpc_refresh':
+            if succ.dim > 0:
+                for i in range(succ.dim):
+                    succ.shape[i] = preds[0].shape[i]
+                target_skip = [1] * succ.dim
+                if compute_node.change_skip_to != 0:
+                    target_skip = [compute_node.change_skip_to] * succ.dim
+                graph.dag.nodes[succ]['skip'] = target_skip
+                succ.invalid_fill = [1] * succ.dim
+                succ.has_sp_info = False
+            else:
+                graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip'].copy()
+                succ.has_sp_info = preds[0].has_sp_info
+                succ.sp_info = copy.deepcopy(preds[0].sp_info)
+            populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)
+            continue
+
         if process_special_info(graph, compute_node, preds, succ):
             populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)
             continue

@@ -87,7 +87,9 @@ Examples:
         help='Computation style: ordinary or multiplexed (default: multiplexed)',
     )
 
-    parser.add_argument('--graph_type', type=str, choices=['btp'], default='btp', help='Graph type: btp (default: btp)')
+    parser.add_argument(
+        '--graph_type', type=str, choices=['btp', 'mpc'], default='btp', help='Graph type: btp or mpc (default: btp)'
+    )
 
     parser.add_argument(
         '--num_experiments', type=int, default=128, help='Number of parallel compilation experiments (default: 128)'

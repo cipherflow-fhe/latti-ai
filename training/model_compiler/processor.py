@@ -31,6 +31,10 @@ import json
 import transforms
 
 
+def _is_mpc_flow() -> bool:
+    return config.mpc_refresh or config.graph_type == 'mpc'
+
+
 def process_levels(graph: LayerAbstractGraph):
     if config.set_max_level:
         for node in graph.dag.nodes:
@@ -393,14 +397,16 @@ def update_skip_for_btp(graph: LayerAbstractGraph, print_flag=False):
             or 'drop_level' in compute_node.layer_type
             or 'mult_scalar' in compute_node.layer_type
             or 'bootstrapping' in compute_node.layer_type
+            or compute_node.layer_type == 'mpc_refresh'
             or config.approx_poly_type == compute_node.layer_type
             or 'relu2d' == compute_node.layer_type
             or 'identity' == compute_node.layer_type
         ):
             graph.dag.nodes[succs[0]]['skip'] = graph.dag.nodes[preds[0]]['skip']
-            if config.mpc_refresh and 'bootstrapping' in compute_node.layer_type:
+            is_refresh_node = compute_node.layer_type == 'mpc_refresh' or 'bootstrapping' in compute_node.layer_type
+            if _is_mpc_flow() and is_refresh_node:
                 graph.dag.nodes[succs[0]]['skip'] = [1, 1]
-            if 'bootstrapping' in compute_node.layer_type and compute_node.change_skip_to != 0:
+            if is_refresh_node and compute_node.change_skip_to != 0:
                 graph.dag.nodes[succs[0]]['skip'] = [compute_node.change_skip_to, compute_node.change_skip_to]
 
         if 'add' in compute_node.layer_type or 'concat2d' == compute_node.layer_type:
@@ -437,22 +443,29 @@ def add_mpc_refresh_mult_scalar(graph: LayerAbstractGraph, node: ComputeNode):
     preds = list(graph.dag.predecessors(node))
     input = preds[0]
     level = 0
-    if (
-        graph.dag.nodes[input]['skip'][0] < node.upsample_factor_in[0]
-        or graph.dag.nodes[input]['skip'][1] < node.upsample_factor_in[1]
-    ) or node.layer_type != 'resize':
+    if node.layer_type == 'resize':
+        target_skip = node.upsample_factor_in
+        should_insert_refresh = (
+            graph.dag.nodes[input]['skip'][0] < target_skip[0] or graph.dag.nodes[input]['skip'][1] < target_skip[1]
+        )
+    else:
+        target_skip = [1, 1]
+        should_insert_refresh = True
+
+    if should_insert_refresh:
         add_mult_scalar_layer = transforms.add_layer(graph, node, 0, 0, 'mult_scalar', preds, None)
         preds = list(graph.dag.predecessors(add_mult_scalar_layer))
-        add_mpc_refresh = transforms.add_layer(graph, add_mult_scalar_layer, 0, 0, 'bootstrapping', preds, None)
+        refresh_layer_type = 'mpc_refresh' if _is_mpc_flow() else 'bootstrapping'
+        add_mpc_refresh = transforms.add_layer(graph, add_mult_scalar_layer, 0, 0, refresh_layer_type, preds, None)
 
         nodes_to_process = [add_mpc_refresh, add_mult_scalar_layer]
-        upsample_factors = node.upsample_factor_in
-        add_mpc_refresh.change_skip_to = upsample_factors[0]
+        if node.layer_type == 'resize':
+            add_mpc_refresh.change_skip_to = target_skip[0]
         for node_id in nodes_to_process:
             succ_node = list(graph.dag.successors(node_id))[0]
-            graph.dag.nodes[succ_node]['skip'][:2] = upsample_factors
+            graph.dag.nodes[succ_node]['skip'][:2] = target_skip
             if node_id.layer_type == 'mpc_refresh' or node_id.layer_type == 'bootstrapping':
-                graph.dag.nodes[succ_node]['level'] = level + 1
+                graph.dag.nodes[succ_node]['level'] = config.fhe_param.max_level
             else:
                 graph.dag.nodes[succ_node]['level'] = level
 
