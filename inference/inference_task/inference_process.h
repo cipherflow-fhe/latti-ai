@@ -65,6 +65,7 @@ public:
     int level = 0;
     double ckks_scale = 0.0;
     bool is_mat = false;  // true when data_type == "feature_mat"
+    bool is_transposed = true;
 
     FeatureNode(const json& json_data);
 

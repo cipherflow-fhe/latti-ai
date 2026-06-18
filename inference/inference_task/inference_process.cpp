@@ -58,7 +58,8 @@ FeatureNode::FeatureNode(const json& json_data)
       ckks_parameter_id(json_data["ckks_parameter_id"]),
       pack_channel_per_ciphertext(
           json_data.value("data_type", string("")) == "feature_mat" ? 0 : json_data["pack_num"].get<int>()),
-      level(json_data["level"]), ckks_scale(0.0), is_mat(json_data.value("data_type", string("")) == "feature_mat") {
+      level(json_data["level"]), ckks_scale(0.0), is_mat(json_data.value("data_type", string("")) == "feature_mat"),
+      is_transposed(json_data.value("is_transposed", true)) {
     if (dim == 2 && is_mat) {
         shape = {json_data["shape"][0], json_data["shape"][1]};
         if (json_data.contains("head_shape"))
@@ -182,13 +183,11 @@ static uint32_t next_pow2_u32(uint32_t x) {
     return p;
 }
 
-static bool is_par_diagonal_transposed_shape(const Duo& shape, const Duo& head_shape) {
-    return shape[1] == head_shape[1];
-}
-
-static uint32_t
-par_diagonal_ct_count(const CkksParameter& param, const Duo& shape, const Duo& head_shape, uint32_t n_heads) {
-    const bool is_transposed = is_par_diagonal_transposed_shape(shape, head_shape);
+static uint32_t par_diagonal_ct_count(const CkksParameter& param,
+                                      const Duo& shape,
+                                      const Duo& head_shape,
+                                      uint32_t n_heads,
+                                      bool is_transposed) {
     const uint32_t n_prepad = is_transposed ? head_shape[1] : head_shape[0];
     const uint32_t m_prepad = is_transposed ? head_shape[0] : head_shape[1];
     if (n_heads == 0 || n_prepad == 0 || m_prepad == 0) {
@@ -226,21 +225,6 @@ static bool is_pdm_layer_type(const string& layer_type) {
            layer_type == "pdmaffine";
 }
 
-static Duo normalize_pdm_head_shape(const Duo& head_shape, uint32_t head_dim, const string& mat_pack_style) {
-    if (mat_pack_style == "par_diagonal_pack" && head_dim > 0 && head_shape[0] == head_dim &&
-        head_shape[1] != head_dim) {
-        return {head_shape[1], head_shape[0]};
-    }
-    return head_shape;
-}
-
-static Duo get_pdm_head_shape(const FeatureNode& feature,
-                              const string& feature_id,
-                              uint32_t head_dim,
-                              const string& mat_pack_style) {
-    return normalize_pdm_head_shape(get_feature_mat_head_shape(feature, feature_id), head_dim, mat_pack_style);
-}
-
 static Duo pdm_upper_shape(const FeatureNode& feature, const Duo& head_shape) {
     return {head_shape[0], feature.shape[0]};
 }
@@ -251,45 +235,6 @@ static Duo pdm_lower_shape(const FeatureNode& feature, const Duo& head_shape) {
 
 static Duo pdm_lower_head_shape(const Duo& head_shape) {
     return {head_shape[1], head_shape[0]};
-}
-
-struct PdmCcmmSpec {
-    string fid_A;
-    string fid_B;
-    Duo shape_A = {0, 0};
-    Duo shape_B = {0, 0};
-};
-
-static bool is_supported_pdmccmm_shape(const Duo& shape_A, const Duo& shape_B, uint32_t head_dim) {
-    const uint32_t n_prepad = shape_B[1];
-    const bool matches_kqt =
-        shape_A[0] == n_prepad && shape_A[1] == head_dim && shape_B[0] == head_dim && shape_B[1] == n_prepad;
-    const bool matches_ordinary =
-        shape_A[0] == head_dim && shape_A[1] == n_prepad && shape_B[0] == n_prepad && shape_B[1] == n_prepad;
-    return matches_kqt || matches_ordinary;
-}
-
-static PdmCcmmSpec make_pdmccmm_spec(const string& fid0,
-                                     const FeatureNode& feat0,
-                                     const string& fid1,
-                                     const FeatureNode& feat1,
-                                     uint32_t head_dim,
-                                     const string& mat_pack_style) {
-    const Duo head0 = get_pdm_head_shape(feat0, fid0, head_dim, mat_pack_style);
-    const Duo head1 = get_pdm_head_shape(feat1, fid1, head_dim, mat_pack_style);
-    const Duo lower0 = pdm_lower_head_shape(head0);
-    const Duo lower1 = pdm_lower_head_shape(head1);
-    const vector<PdmCcmmSpec> candidates = {{fid0, fid1, head0, head1},   {fid1, fid0, head1, head0},
-                                            {fid0, fid1, lower0, head1},  {fid1, fid0, lower1, head0},
-                                            {fid0, fid1, head0, lower1},  {fid1, fid0, head1, lower0},
-                                            {fid0, fid1, lower0, lower1}, {fid1, fid0, lower1, lower0}};
-
-    for (const auto& spec : candidates) {
-        if (is_supported_pdmccmm_shape(spec.shape_A, spec.shape_B, head_dim)) {
-            return spec;
-        }
-    }
-    throw runtime_error("pdmccmm has unsupported input head shapes");
 }
 
 void InitInferenceProcess::init_parameters(bool is_bootstrapping) {
@@ -573,7 +518,10 @@ void InitInferenceProcess::_init_pdmpcmm_layer(const string& key, const json& la
     FeatureNode feat_out(json_features[feat_out_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
 
-    const Duo head_shape = get_pdm_head_shape(feat_in, feat_in_id, head_dim, mat_pack_style);
+    Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
+    if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
+        head_shape = pdm_lower_head_shape(head_shape);
+    }
     const uint32_t pdm_head_dim = get_config_head_dim(head_dim);
     Duo W_T_shape = {feat_out.shape[0], feat_in.shape[0]};
     if (layer.contains("weight_shape")) {
@@ -598,12 +546,11 @@ void InitInferenceProcess::_init_pdmccmm_layer(const string& key, const json& la
     FeatureNode feat0(json_features[fid0]);
     FeatureNode feat1(json_features[fid1]);
     const uint32_t pdm_head_dim = get_config_head_dim(head_dim);
-    const auto spec = make_pdmccmm_spec(fid0, feat0, fid1, feat1, pdm_head_dim, mat_pack_style);
-    CkksParameter& param = *ckks_parameters_.at(json_features[spec.fid_A]["ckks_parameter_id"].get<string>());
-    FeatureNode feat_A(json_features[spec.fid_A]);
+    const Duo head0 = get_feature_mat_head_shape(feat0, fid0);
+    const Duo head1 = get_feature_mat_head_shape(feat1, fid1);
+    CkksParameter& param = *ckks_parameters_.at(feat0.ckks_parameter_id);
 
-    auto pdmccmm = MakeU<ParLowerDiagCCMM>(param, spec.shape_A, spec.shape_B, get_config_n_heads(n_heads), pdm_head_dim,
-                                           feat_A.level);
+    auto pdmccmm = MakeU<ParLowerDiagCCMM>(param, head0, head1, get_config_n_heads(n_heads), pdm_head_dim, feat0.level);
     _prepare_layer(key, move(pdmccmm), [](ParLowerDiagCCMM&) {}, [](ParLowerDiagCCMM& l) { l.prepare_weight(); });
 }
 
@@ -611,7 +558,10 @@ void InitInferenceProcess::_init_pdmtranspose_layer(const string& key, const jso
     const string feat_in_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_in(json_features[feat_in_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-    const Duo head_shape = get_pdm_head_shape(feat_in, feat_in_id, head_dim, mat_pack_style);
+    Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
+    if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
+        head_shape = pdm_lower_head_shape(head_shape);
+    }
     const uint32_t pdm_head_dim = get_config_head_dim(head_dim);
 
     auto pdmtranspose = MakeU<ParLowerDiagTranspose>(param, pdm_lower_head_shape(head_shape),
@@ -624,7 +574,10 @@ void InitInferenceProcess::_init_pdm_add_pt_layer(const string& key, const json&
     const string feat_in_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_in(json_features[feat_in_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-    const Duo head_shape = get_pdm_head_shape(feat_in, feat_in_id, head_dim, mat_pack_style);
+    Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
+    if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
+        head_shape = pdm_lower_head_shape(head_shape);
+    }
     const Duo shape = pdm_lower_shape(feat_in, head_shape);
     const Duo lower_head_shape = pdm_lower_head_shape(head_shape);
     auto B = _load_h5_tensor<2>(layer, h5_file, "weight", {(uint64_t)shape[0], (uint64_t)shape[1]});
@@ -639,7 +592,10 @@ void InitInferenceProcess::_init_pdmgamma_layer(const string& key, const json& l
     const string feat_in_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_in(json_features[feat_in_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-    const Duo head_shape = get_pdm_head_shape(feat_in, feat_in_id, head_dim, mat_pack_style);
+    Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
+    if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
+        head_shape = pdm_lower_head_shape(head_shape);
+    }
     const Duo shape = pdm_upper_shape(feat_in, head_shape);
     auto gamma = load_h5_tensor_any<1>(layer, h5_file, {"gamma", "weight"}, {shape[1]});
 
@@ -654,7 +610,10 @@ void InitInferenceProcess::_init_pdmpoly_layer(const string& key, const json& la
     const string feat_in_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_in(json_features[feat_in_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-    const Duo head_shape = get_pdm_head_shape(feat_in, feat_in_id, head_dim, mat_pack_style);
+    Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
+    if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
+        head_shape = pdm_lower_head_shape(head_shape);
+    }
     const Duo shape = pdm_upper_shape(feat_in, head_shape);
     uint32_t degree = layer.contains("degree") ? layer["degree"].get<uint32_t>() : layer.at("order").get<uint32_t>();
     auto coeffs = load_h5_tensor_any<2>(layer, h5_file, {"coeffs", "coeff", "weight"}, {degree + 1, shape[1]});
@@ -670,7 +629,10 @@ void InitInferenceProcess::_init_pdmstats_layer(const string& key, const json& l
     const string feat_in_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_in(json_features[feat_in_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-    const Duo head_shape = get_pdm_head_shape(feat_in, feat_in_id, head_dim, mat_pack_style);
+    Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
+    if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
+        head_shape = pdm_lower_head_shape(head_shape);
+    }
     const Duo shape = pdm_upper_shape(feat_in, head_shape);
     double eps = layer.contains("eps") || layer.contains("epsilon") ?
                      get_json_value_any<double>(layer, {"eps", "epsilon"}) :
@@ -697,7 +659,10 @@ void InitInferenceProcess::_init_pdmcenter_layer(const string& key, const json& 
     const string feat_in_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_in(json_features[feat_in_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-    const Duo head_shape = get_pdm_head_shape(feat_in, feat_in_id, head_dim, mat_pack_style);
+    Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
+    if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
+        head_shape = pdm_lower_head_shape(head_shape);
+    }
     const Duo shape = pdm_upper_shape(feat_in, head_shape);
 
     auto pdmcenter =
@@ -711,7 +676,10 @@ void InitInferenceProcess::_init_pdminit_layer(const string& key, const json& la
     const string feat_in_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_in(json_features[feat_in_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
-    const Duo head_shape = get_pdm_head_shape(feat_in, feat_in_id, head_dim, mat_pack_style);
+    Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
+    if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
+        head_shape = pdm_lower_head_shape(head_shape);
+    }
     const Duo shape = pdm_upper_shape(feat_in, head_shape);
     double c0, c1, c2;
     if (layer.contains("coeffs")) {
@@ -739,7 +707,10 @@ void InitInferenceProcess::_init_pdmgs_layer(const string& key, const json& laye
     const string feat_y_id = layer["feature_input"][0].get<string>();
     FeatureNode feat_y(json_features[feat_y_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_y.ckks_parameter_id);
-    const Duo head_shape = get_pdm_head_shape(feat_y, feat_y_id, head_dim, mat_pack_style);
+    Duo head_shape = get_feature_mat_head_shape(feat_y, feat_y_id);
+    if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
+        head_shape = pdm_lower_head_shape(head_shape);
+    }
     const Duo shape = pdm_upper_shape(feat_y, head_shape);
 
     auto pdmgs =
@@ -755,7 +726,10 @@ void InitInferenceProcess::_init_pdmaffine_layer(const string& key, const json& 
     FeatureNode feat_xc(json_features[feat_xc_id]);
     FeatureNode feat_y(json_features[feat_y_id]);
     CkksParameter& param = *ckks_parameters_.at(feat_xc.ckks_parameter_id);
-    const Duo head_shape = get_pdm_head_shape(feat_xc, feat_xc_id, head_dim, mat_pack_style);
+    Duo head_shape = get_feature_mat_head_shape(feat_xc, feat_xc_id);
+    if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
+        head_shape = pdm_lower_head_shape(head_shape);
+    }
     const Duo shape = pdm_upper_shape(feat_xc, head_shape);
     double inv_std;
     if (layer.contains("inv_std")) {
@@ -1729,14 +1703,10 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 fhe_timer.stop();
             } else if (layer_type == "pdmccmm") {
                 fhe_timer.start();
-                const string fid0 = feature_input[0];
-                const string fid1 = feature_input[1];
-                FeatureNode feat0(json_features[fid0]);
-                FeatureNode feat1(json_features[fid1]);
-                const auto spec =
-                    make_pdmccmm_spec(fid0, feat0, fid1, feat1, get_config_head_dim(fp->head_dim), fp->mat_pack_style);
-                const FeatureMatEncrypted& inputA = dynamic_cast<const FeatureMatEncrypted&>(_get_feature(spec.fid_A));
-                const FeatureMatEncrypted& inputB = dynamic_cast<const FeatureMatEncrypted&>(_get_feature(spec.fid_B));
+                const FeatureMatEncrypted& inputA =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
+                const FeatureMatEncrypted& inputB =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[1]));
                 result = MakeU<FeatureMatEncrypted>(fp->get_layer<ParLowerDiagCCMM>(key).run(context, inputA, inputB));
                 fhe_timer.stop();
             } else if (layer_type == "pdmtranspose") {
@@ -2172,7 +2142,7 @@ void InferenceProcess::run_task(bool is_mpc) {
             if (fp->mat_pack_style == "par_diagonal_pack") {
                 auto* output_context = ckks_contexts.at(feature_output.ckks_parameter_id).get();
                 n_out_num = par_diagonal_ct_count(output_context->get_parameter(), feature_output.shape,
-                                                  output_head_shape, fp->n_heads);
+                                                  output_head_shape, fp->n_heads, feature_output.is_transposed);
             } else {
                 uint32_t d = par_d;
                 n_out_num = div_ceil(output_head_shape[0], d) * div_ceil(output_head_shape[1], d) * par_G;
@@ -2187,12 +2157,10 @@ void InferenceProcess::run_task(bool is_mpc) {
             auto output = MakeU<FeatureMatEncrypted>(output_context, feature_output.level);
             output->shape = feature_output.shape;
             output->head_shape = feature_output.head_shape;
-            output->matmul_block_size =
-                fp->mat_pack_style == "par_diagonal_pack" ?
-                    next_pow2_u32(is_par_diagonal_transposed_shape(feature_output.shape, feature_output.head_shape) ?
-                                      feature_output.head_shape[0] :
-                                      feature_output.head_shape[1]) :
-                    par_d;
+            output->matmul_block_size = fp->mat_pack_style == "par_diagonal_pack" ?
+                                            next_pow2_u32(feature_output.is_transposed ? feature_output.head_shape[0] :
+                                                                                         feature_output.head_shape[1]) :
+                                            par_d;
             for (int i = 0; i < n_out_num; i++) {
                 output->data.push_back(output_context->new_ciphertext(feature_output.level, encode_scale));
             }
@@ -2527,14 +2495,8 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 result_mat = fp->get_layer<ParLowerDiagPCMM>(key).run_plaintext(input0);
             }
             if (layer_type == "pdmccmm") {
-                const string fid0 = feature_input[0];
-                const string fid1 = feature_input[1];
-                FeatureNode feat0(json_features[fid0]);
-                FeatureNode feat1(json_features[fid1]);
-                const auto spec =
-                    make_pdmccmm_spec(fid0, feat0, fid1, feat1, get_config_head_dim(fp->head_dim), fp->mat_pack_style);
-                auto& input0 = p_feature_mat_x[spec.fid_A];
-                auto& input1 = p_feature_mat_x[spec.fid_B];
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                auto& input1 = p_feature_mat_x[feature_input[1]];
                 result_mat = fp->get_layer<ParLowerDiagCCMM>(key).run_plaintext(input0, input1);
             }
             if (layer_type == "pdmtranspose") {
@@ -2761,10 +2723,9 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
             if (fp->mat_pack_style == "par_diagonal_pack") {
                 auto* output_context = ckks_contexts.at(feature_output.ckks_parameter_id).get();
                 n_out_num = par_diagonal_ct_count(output_context->get_parameter(), feature_output.shape,
-                                                  output_head_shape, fp->n_heads);
-                output_mat_block_sizes[out_idx] = next_pow2_u32(
-                    is_par_diagonal_transposed_shape(feature_output.shape, output_head_shape) ? output_head_shape[0] :
-                                                                                                output_head_shape[1]);
+                                                  output_head_shape, fp->n_heads, feature_output.is_transposed);
+                output_mat_block_sizes[out_idx] =
+                    next_pow2_u32(feature_output.is_transposed ? output_head_shape[0] : output_head_shape[1]);
             } else {
                 uint32_t d = par_d;
                 n_out_num = div_ceil(output_head_shape[0], d) * div_ceil(output_head_shape[1], d) * par_G;

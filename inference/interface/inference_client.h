@@ -44,6 +44,7 @@ struct OutputParam {
     Duo head_shape = {0, 0};
     uint32_t matmul_block_size = 0;
     uint32_t n_heads = 0;
+    bool is_transposed = true;
 };
 
 /// Per-input parameters read from task_config.json.
@@ -60,6 +61,7 @@ struct InputParam {
     Duo head_shape = {0, 0};
     uint32_t matmul_block_size = 0;
     uint32_t n_heads = 0;
+    bool is_transposed = true;
 };
 
 /// Client-side encrypted inference interface.

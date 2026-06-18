@@ -58,6 +58,7 @@ void InferenceClient::read_configuration() {
         op.dim = param["dim"];
         op.channel = param.value("channel", 1);
         op.is_mat = param.value("data_type", std::string("")) == "feature_mat";
+        op.is_transposed = param.value("is_transposed", true);
         if (op.is_mat) {
             op.height = param["shape"][0];
             op.width = param["shape"][1];
@@ -118,6 +119,7 @@ void InferenceClient::read_configuration() {
         if (!ip.is_mat) {
             ip.pack_num = param.value("pack_num", 0);
         }
+        ip.is_transposed = param.value("is_transposed", true);
         input_params_[name] = ip;
     }
 
@@ -218,7 +220,8 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
                 if (param.head_shape[0] == 0 || param.head_shape[1] == 0) {
                     throw std::runtime_error("[Client] par_diagonal_pack input is missing head_shape: " + name);
                 }
-                input_ct.par_diagonal_pack(input_array, param.n_heads, param.head_shape, true, true, false, scale);
+                input_ct.par_diagonal_pack(input_array, param.n_heads, param.head_shape, true, param.is_transposed,
+                                           false, scale);
             } else {
                 if (param.width % param.n_heads != 0) {
                     throw std::runtime_error("[Client] feature_mat width must be divisible by n_heads: " + name);
@@ -294,7 +297,7 @@ InferenceClient::decrypt(const std::map<std::string, Bytes>& encrypted_outputs) 
                 }
                 output_ct.shape = {static_cast<uint32_t>(param.height), static_cast<uint32_t>(param.width)};
                 output_ct.head_shape = param.head_shape;
-                decrypted = output_ct.par_diagonal_unpack(param.n_heads, param.head_shape, true, true);
+                decrypted = output_ct.par_diagonal_unpack(param.n_heads, param.head_shape, true, param.is_transposed);
                 decrypted = transpose_2d_array(decrypted);
             } else {
                 uint32_t d = output_ct.matmul_block_size != 0 ? output_ct.matmul_block_size : par_block_size_;
