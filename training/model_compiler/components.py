@@ -292,10 +292,18 @@ class GlobalConfig:
             cls._instance.mat_pack_style = ''
             cls._instance.base_feat_dim = 0
             cls._instance.layernorm_var_std_bound = config_dict.get('LAYERNORM_VAR_STD_BOUND', 4.0)
-            cls._instance.layernorm_minimax_init_coeffs = config_dict.get(
+            layernorm_minimax_init_coeffs = config_dict.get(
                 'LAYERNORM_MINIMAX_INIT_COEFFS',
                 [6.19067182, -16.15885111, 11.52830778],
             )
+            cls._instance.layernorm_minimax_init_coeffs = layernorm_minimax_init_coeffs
+            cls._instance.layernorm_eps = config_dict.get('LAYERNORM_EPS', 1e-5)
+            cls._instance.layernorm_inv_std_scale = config_dict.get('LAYERNORM_INV_STD_SCALE', 1.0)
+            cls._instance.layernorm_inv_var_scale = config_dict.get('LAYERNORM_INV_VAR_SCALE', 1.0)
+            cls._instance.layernorm_c0 = config_dict.get('LAYERNORM_C0', layernorm_minimax_init_coeffs[0])
+            cls._instance.layernorm_c1 = config_dict.get('LAYERNORM_C1', layernorm_minimax_init_coeffs[1])
+            cls._instance.layernorm_c2 = config_dict.get('LAYERNORM_C2', layernorm_minimax_init_coeffs[2])
+            cls._instance.layernorm_num_iters = int(config_dict.get('LAYERNORM_NUM_ITERS', 2))
 
         return cls._instance
 
@@ -639,8 +647,8 @@ class ActivationComputeNode(ComputeNode):
 class LayerNormComputeNode(ComputeNode):
     """Represents a LayerNorm operator before compiler expansion.
 
-    Holds the epsilon, weight_path, and bias_path needed by the downstream
-    expand_layer_norm pass to wire the LN subgraph correctly.
+    Holds the parameters needed by the downstream expand_layer_norm pass to
+    wire the LN subgraph and task_config correctly.
     """
 
     def __init__(
@@ -649,11 +657,23 @@ class LayerNormComputeNode(ComputeNode):
         epsilon: float = 1e-5,
         weight_path: str = '',
         bias_path: str = '',
+        inv_std_scale: float = 1.0,
+        inv_var_scale: float = 1.0,
+        c0: float = 6.19067182,
+        c1: float = -16.15885111,
+        c2: float = 11.52830778,
+        num_iters: int = 2,
     ):
         super().__init__(layer_id, 'layernorm', 1, 1)
         self.epsilon = epsilon
         self.weight_path = weight_path
         self.bias_path = bias_path
+        self.inv_std_scale = inv_std_scale
+        self.inv_var_scale = inv_var_scale
+        self.c0 = c0
+        self.c1 = c1
+        self.c2 = c2
+        self.num_iters = num_iters
 
 
 class LayerAbstractGraph:
@@ -913,9 +933,15 @@ class LayerAbstractGraph:
             elif layer_type == 'layernorm':
                 compute_node = LayerNormComputeNode(
                     key,
-                    epsilon=layer_json.get('epsilon', 1e-5),
+                    epsilon=layer_json.get('eps', layer_json.get('epsilon', 1e-5)),
                     weight_path=layer_json.get('weight_path', ''),
                     bias_path=layer_json.get('bias_path', ''),
+                    inv_std_scale=layer_json.get('inv_std_scale', 1.0),
+                    inv_var_scale=layer_json.get('inv_var_scale', 1.0),
+                    c0=layer_json.get('c0', 6.19067182),
+                    c1=layer_json.get('c1', -16.15885111),
+                    c2=layer_json.get('c2', 11.52830778),
+                    num_iters=layer_json.get('num_iters', 2),
                 )
 
             else:

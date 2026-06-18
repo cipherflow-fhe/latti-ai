@@ -65,6 +65,7 @@ private:
     std::filesystem::path server_dir_;
     bool use_gpu_;
     bool needs_btp_ = false;
+    std::string mat_pack_style_;
 
     std::vector<std::string> input_keys_;
     std::map<std::string, InputParam> input_params_;

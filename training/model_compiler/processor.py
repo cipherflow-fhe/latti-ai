@@ -187,10 +187,27 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
         'use_btp': use_btp,
     }
     if has_layernorm:
-        task_config['layernorm_param'] = {
+        layernorm_param = {
             'var_std_bound': config.layernorm_var_std_bound,
             'minimax_init_coeffs': list(config.layernorm_minimax_init_coeffs),
+            'eps': config.layernorm_eps,
+            'inv_std_scale': config.layernorm_inv_std_scale,
+            'inv_var_scale': config.layernorm_inv_var_scale,
+            'c0': config.layernorm_c0,
+            'c1': config.layernorm_c1,
+            'c2': config.layernorm_c2,
+            'num_iters': config.layernorm_num_iters,
         }
+        for node in graph.dag.nodes:
+            if not (isinstance(node, ComputeNode) and node.layer_type in layernorm_stage_types):
+                continue
+            if hasattr(node, 'epsilon'):
+                layernorm_param['eps'] = node.epsilon
+            for key in ('inv_std_scale', 'inv_var_scale', 'c0', 'c1', 'c2', 'num_iters'):
+                if hasattr(node, key):
+                    layernorm_param[key] = getattr(node, key)
+            break
+        task_config['layernorm_param'] = layernorm_param
     os.makedirs(file_path, exist_ok=True)
     with open(os.path.join(file_path, 'task_config.json'), 'w') as f:
         json.dump(task_config, f, indent=4, ensure_ascii=False)

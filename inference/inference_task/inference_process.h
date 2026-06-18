@@ -94,8 +94,10 @@ public:
 
     std::filesystem::path project_path;
     std::string pack_style;
+    std::string mat_pack_style;
     Duo block_shape;
     uint32_t n_heads = 1;
+    uint32_t head_dim = 0;
     uint32_t matmul_block_size = 0;
     bool is_absorb_polyrelu;
     json json_data;
@@ -175,6 +177,17 @@ private:
     void _init_parcpmm_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_parccmm_layer(const std::string& key, const json& layer);
     void _init_partranspose_layer(const std::string& key, const json& layer);
+    void _init_pdmpcmm_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pdmccmm_layer(const std::string& key, const json& layer);
+    void _init_pdmtranspose_layer(const std::string& key, const json& layer);
+    void _init_pdm_add_pt_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pdmgamma_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pdmpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pdmstats_layer(const std::string& key, const json& layer);
+    void _init_pdmcenter_layer(const std::string& key, const json& layer);
+    void _init_pdminit_layer(const std::string& key, const json& layer);
+    void _init_pdmgs_layer(const std::string& key, const json& layer);
+    void _init_pdmaffine_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_pcmgamma_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_pcmpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_pcmstats_layer(const std::string& key, const json& layer);

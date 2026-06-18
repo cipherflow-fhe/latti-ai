@@ -110,6 +110,7 @@ private:
     uint32_t par_block_size_ = 0;  // block_size d for par_block_col_major (from first input)
     nlohmann::ordered_json task_config_;
     std::map<std::string, InputParam> input_params_;
+    std::string mat_pack_style_;
 
     std::unique_ptr<ls::CkksParameter> ckks_param_;
     std::unique_ptr<ls::CkksBtpParameter> btp_param_;

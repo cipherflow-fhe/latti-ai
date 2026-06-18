@@ -24,6 +24,14 @@
 
 using namespace lattisense;
 
+namespace {
+
+bool is_par_diagonal_pack(const std::string& mat_pack_style) {
+    return mat_pack_style == "par_diagonal_pack";
+}
+
+}  // namespace
+
 InferenceServer::InferenceServer(const std::string& server_dir, bool use_gpu)
     : server_dir_(server_dir), use_gpu_(use_gpu) {}
 
@@ -37,6 +45,7 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
     std::string ckks_param_id = input_param["ckks_parameter_id"];
     int poly_modulus_degree = ckks_config[ckks_param_id]["poly_modulus_degree"].get<int>();
     needs_btp_ = task_config.value("use_btp", false);
+    mat_pack_style_ = task_config.value<std::string>("mat_pack_style", "");
 
     // Store all input keys and per-input parameters
     uint32_t global_n_heads = task_config.value("n_heads", 0u);
@@ -159,6 +168,11 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
         if (param.is_mat) {
             auto input_ct = std::make_unique<FeatureMatEncrypted>(context_ptr_, 0);
             input_ct->deserialize(bytes);
+            input_ct->shape = {static_cast<uint32_t>(param.height), static_cast<uint32_t>(param.width)};
+            input_ct->head_shape = param.head_shape;
+            if (input_ct->matmul_block_size == 0) {
+                input_ct->matmul_block_size = param.matmul_block_size;
+            }
             fp_->set_feature(name, std::move(input_ct));
         } else if (param.dim == 0) {
             auto input_ct = std::make_unique<Feature0DEncrypted>(context_ptr_, 0);
@@ -236,7 +250,8 @@ InferenceServer::evaluate_plaintext(const std::map<std::string, std::string>& in
     for (auto& [name, param] : output_params_) {
         if (param.is_mat) {
             auto& arr = fp_->p_feature_mat_x[name];
-            auto arr_1d = arr.to_array_1d();
+            auto arr_1d =
+                is_par_diagonal_pack(mat_pack_style_) ? transpose_2d_array(arr).to_array_1d() : arr.to_array_1d();
             results[name] = std::vector<double>(arr_1d.data(), arr_1d.data() + arr_1d.size());
         } else if (param.dim == 0) {
             results[name] = fp_->p_feature0d_x[name];
