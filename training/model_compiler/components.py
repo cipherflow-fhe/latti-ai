@@ -1383,6 +1383,7 @@ class LayerAbstractGraph:
 
         features = dict()
         all_nodes_in_topo_sort = list(nx.topological_sort(self.dag))
+        is_transposed = getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack'
         for feature in all_nodes_in_topo_sort:
             if isinstance(feature, FeatureNode):
                 key = feature.node_id
@@ -1409,6 +1410,7 @@ class LayerAbstractGraph:
                         'level': level,
                         'depth': depth,
                         'pack_num': pack_num,
+                        'is_transposed': is_transposed,
                     }
                     # pred_compute = next(self.dag.predecessors(feature), None)
                     if feature.has_sp_info:
@@ -1426,6 +1428,7 @@ class LayerAbstractGraph:
                             'ckks_parameter_id': ckks_parameter_id,
                             'level': level,
                             'data_type': feature.data_type,
+                            'is_transposed': is_transposed,
                         }
                         if feature.head_shape is not None:
                             feature_dict['head_shape'] = [int(x) for x in feature.head_shape]
@@ -1442,6 +1445,7 @@ class LayerAbstractGraph:
                             'depth': depth,
                             'pack_num': pack_num,
                             'invalid_fill': feature.invalid_fill,
+                            'is_transposed': is_transposed,
                         }
                     features[key] = feature_dict
                 else:
