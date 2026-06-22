@@ -44,6 +44,7 @@ struct OutputParam {
     Duo head_shape = {0, 0};
     uint32_t matmul_block_size = 0;
     uint32_t n_heads = 0;
+    bool is_transposed = true;
 };
 
 /// Per-input parameters read from task_config.json.
@@ -60,6 +61,7 @@ struct InputParam {
     Duo head_shape = {0, 0};
     uint32_t matmul_block_size = 0;
     uint32_t n_heads = 0;
+    bool is_transposed = true;
 };
 
 /// Client-side encrypted inference interface.
@@ -110,6 +112,7 @@ private:
     uint32_t par_block_size_ = 0;  // block_size d for par_block_col_major (from first input)
     nlohmann::ordered_json task_config_;
     std::map<std::string, InputParam> input_params_;
+    std::string mat_pack_style_;
 
     std::unique_ptr<ls::CkksParameter> ckks_param_;
     std::unique_ptr<ls::CkksBtpParameter> btp_param_;

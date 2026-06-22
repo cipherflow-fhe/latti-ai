@@ -697,7 +697,7 @@ class TestSingleLayer(CompilerTestBase):
             n_heads=int(compile_config['n_heads']),
             head_dim=int(compile_config['head_dim']),
             matmul_block_size=int(compile_config['matmul_block_size']),
-            set_btp_scale=None
+            set_btp_scale=None,
         )
 
         server_dir = script_dir / 'task' / 'server'
@@ -1063,6 +1063,9 @@ class TestE2ESingleLayer(CompilerTestBase):
         manifest_path = cls.e2e_base_path / 'ut_names.json'
         with open(manifest_path, 'w') as f:
             json.dump([], f)
+
+    def _assert_has_layer_type(self, graph: LayerAbstractGraph, layer_type: str):
+        self.assertTrue(any(node.layer_type == layer_type for node in graph.dag.nodes if isinstance(node, ComputeNode)))
 
     # ── Conv2d big_size (3 scenarios: output > / == / < block_shape) ──
 
@@ -1456,6 +1459,51 @@ class TestE2ESingleLayer(CompilerTestBase):
             head_dim=32,
             matmul_block_size=32,
         )
+
+    # ── Matrix operations (ParDiagonalPack) ──
+
+    def test_par_diagonal_pack_transpose(self):
+        """ParDiagonalPack transpose E2E: n_heads=3."""
+        model = nn_modules.TransposeTest()
+        graph, _ = self._export_compile_and_deploy(
+            model,
+            (1, 32, 96),
+            'par_diagonal_pack_transpose',
+            style='multiplexed',
+            mat_pack_style='par_diagonal_pack',
+            n_heads=3,
+            head_dim=32,
+            matmul_block_size=32,
+        )
+        self._assert_has_layer_type(graph, 'pdmtranspose')
+
+    def test_par_diagonal_pack_add_pt(self):
+        """ParDiagonalPack add plaintext matrix E2E."""
+        graph, _ = self._export_compile_and_deploy(
+            nn_modules.SingleAddPt(rows=32, cols=96),
+            (1, 32, 96),
+            'par_diagonal_pack_add_pt',
+            style='multiplexed',
+            mat_pack_style='par_diagonal_pack',
+            n_heads=3,
+            head_dim=32,
+            matmul_block_size=32,
+        )
+        self._assert_has_layer_type(graph, 'pdm_add_pt')
+
+    def test_par_diagonal_pack_cpmm(self):
+        """ParDiagonalPack PCMM E2E: x @ W (SQUARE), n_heads=3."""
+        graph, _ = self._export_compile_and_deploy(
+            nn_modules.CPMMSquareTest(dim=96),
+            (1, 32, 96),
+            'par_diagonal_pack_cpmm',
+            style='multiplexed',
+            mat_pack_style='par_diagonal_pack',
+            n_heads=3,
+            head_dim=32,
+            matmul_block_size=32,
+        )
+        self._assert_has_layer_type(graph, 'pdmpcmm')
 
 
 class TestE2EMultipleLayer(CompilerTestBase):

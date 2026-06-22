@@ -340,6 +340,20 @@ TEST_CASE("cpu/par_block_col_major_cpmm", "[e2e][cpu]") {
     run_e2e_test(single_layer_base_path / "par_block_col_major_cpmm", false);
 }
 
+// ── ParDiagonalPack matrix operations ──
+
+TEST_CASE("cpu/par_diagonal_pack_transpose", "[e2e][cpu]") {
+    run_e2e_test(single_layer_base_path / "par_diagonal_pack_transpose", false);
+}
+
+TEST_CASE("cpu/par_diagonal_pack_add_pt", "[e2e][cpu]") {
+    run_e2e_test(single_layer_base_path / "par_diagonal_pack_add_pt", false);
+}
+
+TEST_CASE("cpu/par_diagonal_pack_cpmm", "[e2e][cpu]") {
+    run_e2e_test(single_layer_base_path / "par_diagonal_pack_cpmm", false);
+}
+
 // == GPU individual tests =====================================================
 
 #ifdef INFERENCE_SDK_ENABLE_GPU
@@ -558,6 +572,18 @@ TEST_CASE("gpu/par_block_col_major_gelu", "[e2e][gpu]") {
 
 TEST_CASE("gpu/par_block_col_major_cpmm", "[e2e][gpu]") {
     run_e2e_test(single_layer_base_path / "par_block_col_major_cpmm", true);
+}
+
+TEST_CASE("gpu/par_diagonal_pack_transpose", "[e2e][gpu]") {
+    run_e2e_test(single_layer_base_path / "par_diagonal_pack_transpose", true);
+}
+
+TEST_CASE("gpu/par_diagonal_pack_add_pt", "[e2e][gpu]") {
+    run_e2e_test(single_layer_base_path / "par_diagonal_pack_add_pt", true);
+}
+
+TEST_CASE("gpu/par_diagonal_pack_cpmm", "[e2e][gpu]") {
+    run_e2e_test(single_layer_base_path / "par_diagonal_pack_cpmm", true);
 }
 
 #endif

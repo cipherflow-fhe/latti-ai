@@ -494,7 +494,9 @@ def expand_parcpmm_add_pt(graph: LayerAbstractGraph):
 
         bias_path = getattr(parcpmm_node, 'bias_path', '')
         if not bias_path:
-            raise ValueError(f'{parcpmm_node.layer_type} layer {parcpmm_node.layer_id} has to_expand=True but no bias_path')
+            raise ValueError(
+                f'{parcpmm_node.layer_type} layer {parcpmm_node.layer_id} has to_expand=True but no bias_path'
+            )
 
         old_feature_list = list(graph.dag.successors(parcpmm_node))
         if len(old_feature_list) != 1:
@@ -1277,6 +1279,16 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
         epsilon = ln_node.epsilon
         weight_path = ln_node.weight_path
         bias_path = ln_node.bias_path
+        node_n_iter = int(getattr(ln_node, 'num_iters', n_iter))
+        layernorm_param_attrs = {
+            'epsilon': epsilon,
+            'inv_std_scale': getattr(ln_node, 'inv_std_scale', config.layernorm_inv_std_scale),
+            'inv_var_scale': getattr(ln_node, 'inv_var_scale', config.layernorm_inv_var_scale),
+            'c0': getattr(ln_node, 'c0', config.layernorm_c0),
+            'c1': getattr(ln_node, 'c1', config.layernorm_c1),
+            'c2': getattr(ln_node, 'c2', config.layernorm_c2),
+            'num_iters': node_n_iter,
+        }
 
         x_in_attrs = graph.dag.nodes[x_in]
         skip = list(x_in_attrs.get('skip', [1] * x_in.dim))
@@ -1306,7 +1318,7 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
         a = make_feature(f'{base_id}_a')
         x_c = make_feature(f'{base_id}_x_c')
         y0 = make_feature(f'{base_id}_y0')
-        y_nodes = [y0] + [make_feature(f'{base_id}_y{i + 1}') for i in range(n_iter)]
+        y_nodes = [y0] + [make_feature(f'{base_id}_y{i + 1}') for i in range(node_n_iter)]
 
         # Sub-compute nodes
         stats_type = _pack_pcm_type('pcmstats')
@@ -1319,10 +1331,13 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
         pcmstats.epsilon = epsilon
         pcmcenter = ComputeNode(f'{base_id}_{center_type}', center_type, 1, 1)
         pcminit = ComputeNode(f'{base_id}_{init_type}', init_type, 1, 1)
-        pcmgs_nodes = [ComputeNode(f'{base_id}_{gs_type}_{i}', gs_type, 1, 1) for i in range(n_iter)]
+        pcmgs_nodes = [ComputeNode(f'{base_id}_{gs_type}_{i}', gs_type, 1, 1) for i in range(node_n_iter)]
         pcmaffine = ComputeNode(f'{base_id}_{affine_type}', affine_type, 1, 1)
         pcmaffine.weight_path = weight_path
         pcmaffine.bias_path = bias_path
+        for stage_node in (pcmstats, pcmcenter, pcminit, *pcmgs_nodes, pcmaffine):
+            for attr_key, attr_value in layernorm_param_attrs.items():
+                setattr(stage_node, attr_key, attr_value)
 
         # Remove the original layernorm node (keeps x_in and out in the graph)
         graph.dag.remove_node(ln_node)

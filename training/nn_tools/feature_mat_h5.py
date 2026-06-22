@@ -92,11 +92,15 @@ def export_feature_mat_h5_from_onnx(
 
     for layer_key, layer in layers.items():
         ltype = layer.get('type')
-        if ltype in ('parcpmm', 'pdmpcmm'):
+        if ltype == 'parcpmm':
             _export_parcpmm(layer_key, layer, features, onnx_weights, out)
-        elif ltype in ('pcmgamma', 'pdmgamma'):
+        elif ltype == 'pdmpcmm':
+            _export_pdmpcmm(layer_key, layer, features, onnx_weights, out)
+        elif ltype == 'pcmgamma':
             _export_pcmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
-        elif ltype in ('pcmpoly', 'pdmpoly'):
+        elif ltype == 'pdmgamma':
+            _export_pdmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
+        elif ltype == 'pcmpoly':
             _export_pcmpoly(
                 layer_key,
                 layer,
@@ -107,10 +111,25 @@ def export_feature_mat_h5_from_onnx(
                 standalone_gamma_paths,
                 out,
             )
-        elif ltype in ('pcmaffine', 'pdmaffine'):
+        elif ltype == 'pdmpoly':
+            _export_pdmpoly(
+                layer_key,
+                layer,
+                features,
+                onnx_weights,
+                attention_sources,
+                polyact_sources,
+                standalone_gamma_paths,
+                out,
+            )
+        elif ltype == 'pcmaffine':
             _export_pcmaffine(layer_key, layer, features, onnx_weights, out)
-        elif ltype in ('add_pt', 'pcm_add_pt', 'pdm_add_pt'):
+        elif ltype == 'pdmaffine':
+            _export_pdmaffine(layer_key, layer, features, onnx_weights, out)
+        elif ltype in ('add_pt', 'pcm_add_pt'):
             _export_add_pt(layer_key, layer, features, onnx_weights, out)
+        elif ltype == 'pdm_add_pt':
+            _export_pdm_add_pt(layer_key, layer, features, onnx_weights, out)
 
     h5_dir = os.path.dirname(h5_path)
     if h5_dir:
@@ -209,6 +228,171 @@ def _export_parcpmm(
         bias = _resolve_parcpmm_bias(bias_path, layer, features, onnx_weights)
         bias = _reshape_checked(bias, expected_bias_shape, layer_key, bias_path)
         _put(out, bias_path, bias, layer_key)
+
+
+def _export_pdmpcmm(
+    layer_key: str,
+    layer: dict[str, Any],
+    features: dict[str, dict[str, Any]],
+    onnx_weights: dict[str, np.ndarray],
+    out: dict[str, np.ndarray],
+) -> None:
+    weight_path = _required_path(layer, 'weight_path', layer_key)
+    fout = _feature(features, layer['feature_output'][0], layer_key)
+
+    weight = _resolve_parcpmm_weight(weight_path, layer, features, onnx_weights)
+    logical_shape = _pdmpcmm_logical_weight_shape(weight, layer, layer_key, weight_path)
+    weight = _pdmpcmm_weight_matrix(weight, logical_shape, layer_key, weight_path)
+    _put(out, weight_path, weight, layer_key)
+
+    bias_path = layer.get('bias_path', '')
+    if not bias_path:
+        return
+
+    bias = _resolve_parcpmm_bias(bias_path, layer, features, onnx_weights)
+    bias = np.asarray(bias, dtype='float64')
+    output_rows = logical_shape[0]
+    output_shape = (output_rows, int(fout['shape'][1]))
+    if bias.size == output_rows:
+        _put(out, bias_path, bias.reshape(output_rows), layer_key)
+    elif bias.size == output_shape[0] * output_shape[1]:
+        zero_bias = np.zeros(output_rows, dtype=np.float64)
+        _put(out, bias_path, zero_bias, layer_key)
+    else:
+        raise ValueError(
+            f'{layer_key}: {bias_path} size {bias.size} does not match pdmpcmm vector bias '
+            f'({output_rows},) or fused matrix bias {output_shape}'
+        )
+
+
+def _export_pdmgamma(
+    layer_key: str,
+    layer: dict[str, Any],
+    features: dict[str, dict[str, Any]],
+    onnx_weights: dict[str, np.ndarray],
+    attention_sources: dict[str, AttentionSource],
+    polyact_sources: dict[str, PolyActRNSource],
+    out: dict[str, np.ndarray],
+) -> None:
+    dst_path = layer.get('gamma_path') or _required_path(layer, 'weight_path', layer_key)
+    fin = _feature(features, layer['feature_input'][0], layer_key)
+    expected_shape = (int(fin['shape'][0]),)
+
+    if 'btp_scale' in layer:
+        gamma = np.full(expected_shape, float(layer['btp_scale']), dtype=np.float64)
+    elif dst_path in attention_sources:
+        source = attention_sources[dst_path]
+        gamma = 1.0 / _scale_factor(source.running_max_path, source.upper_bound, source.eps, onnx_weights)
+    else:
+        source_path = layer.get('running_max_path') or dst_path
+        if source_path in polyact_sources:
+            source = polyact_sources[source_path]
+            gamma = 1.0 / _scale_factor(source.running_max_path, source.upper_bound, source.eps, onnx_weights)
+        elif dst_path in onnx_weights:
+            gamma = onnx_weights[dst_path].copy().reshape(-1)
+        else:
+            raise KeyError(f'{layer_key}: cannot resolve pdmgamma source for {dst_path}')
+
+    gamma = _reshape_checked(gamma, expected_shape, layer_key, dst_path)
+    _put(out, dst_path, gamma, layer_key)
+
+
+def _export_pdmpoly(
+    layer_key: str,
+    layer: dict[str, Any],
+    features: dict[str, dict[str, Any]],
+    onnx_weights: dict[str, np.ndarray],
+    attention_sources: dict[str, AttentionSource],
+    polyact_sources: dict[str, PolyActRNSource],
+    standalone_gamma_paths: set[str],
+    out: dict[str, np.ndarray],
+) -> None:
+    dst_path = layer.get('coeffs_path') or _required_path(layer, 'weight_path', layer_key)
+    fin = _feature(features, layer['feature_input'][0], layer_key)
+    degree = int(layer.get('degree', layer.get('order', 4)))
+    expected_shape = (degree + 1, int(fin['shape'][0]))
+
+    if dst_path in attention_sources:
+        source = attention_sources[dst_path]
+        scale = _scale_factor(source.running_max_path, source.upper_bound, source.eps, onnx_weights)
+        gamma_path = layer.get('gamma_path') or source.gamma_path
+        coeffs = _coeff_matrix(
+            source.coeff_paths,
+            degree,
+            scale,
+            onnx_weights,
+            absorb_input_gamma=gamma_path not in standalone_gamma_paths,
+        )
+        coeffs = coeffs / _sequence_length(fin, layer_key)
+    else:
+        source_path = layer.get('running_max_path') or dst_path
+        if source_path in polyact_sources:
+            source = polyact_sources[source_path]
+            scale = _scale_factor(source.running_max_path, source.upper_bound, source.eps, onnx_weights)
+            gamma_path = layer.get('gamma_path') or _polyact_gamma_path(source.running_max_path)
+            coeffs = _coeff_matrix(
+                source.coeff_paths,
+                degree,
+                scale,
+                onnx_weights,
+                absorb_input_gamma=gamma_path not in standalone_gamma_paths,
+            )
+        elif dst_path in onnx_weights:
+            coeffs = onnx_weights[dst_path].copy()
+        else:
+            raise KeyError(f'{layer_key}: cannot resolve pdmpoly source for {dst_path}')
+
+    coeffs = _reshape_checked(coeffs, expected_shape, layer_key, dst_path)
+    _put(out, dst_path, coeffs, layer_key)
+
+
+def _export_pdmaffine(
+    layer_key: str,
+    layer: dict[str, Any],
+    features: dict[str, dict[str, Any]],
+    onnx_weights: dict[str, np.ndarray],
+    out: dict[str, np.ndarray],
+) -> None:
+    fin = _feature(features, layer['feature_input'][0], layer_key)
+    expected_shape = (int(fin['shape'][0]),)
+    for path_key in ('weight_path', 'bias_path', 'gamma_path', 'beta_path'):
+        path = layer.get(path_key, '')
+        if not path:
+            continue
+        if path not in onnx_weights:
+            raise KeyError(f'{layer_key}: {path_key} not found in ONNX: {path}')
+        data = _reshape_checked(onnx_weights[path], expected_shape, layer_key, path)
+        _put(out, path, data, layer_key)
+
+
+def _export_pdm_add_pt(
+    layer_key: str,
+    layer: dict[str, Any],
+    features: dict[str, dict[str, Any]],
+    onnx_weights: dict[str, np.ndarray],
+    out: dict[str, np.ndarray],
+) -> None:
+    path = layer.get('weight_path') or layer.get('bias_path')
+    if not path:
+        raise KeyError(f'{layer_key}: pdm_add_pt requires weight_path or bias_path')
+    if path not in onnx_weights:
+        raise KeyError(f'{layer_key}: pdm_add_pt source not found in ONNX: {path}')
+    fin = _feature(features, layer['feature_input'][0], layer_key)
+    expected_shape = (int(fin['shape'][0]), int(fin['shape'][1]))
+    data = np.asarray(onnx_weights[path], dtype='float64')
+    if data.ndim == 3 and data.shape[0] == 1:
+        data = data.reshape(data.shape[1], data.shape[2])
+    if data.ndim == 2 and tuple(data.T.shape) == expected_shape:
+        data = data.T.copy()
+    elif data.ndim == 2 and tuple(data.shape) == expected_shape:
+        data = data.copy()
+    elif data.size == expected_shape[0] * expected_shape[1]:
+        data = data.reshape(expected_shape)
+    else:
+        raise ValueError(
+            f'{layer_key}: {path} size {data.size} does not match pdm_add_pt matrix shape {expected_shape}'
+        )
+    _put(out, path, data, layer_key)
 
 
 def _export_pcmgamma(
@@ -331,6 +515,38 @@ def _export_add_pt(
     else:
         data = _reshape_checked(data, expected_shape, layer_key, path)
     _put(out, path, data, layer_key)
+
+
+def _pdmpcmm_logical_weight_shape(
+    weight: np.ndarray,
+    layer: dict[str, Any],
+    layer_key: str,
+    weight_path: str,
+) -> tuple[int, int]:
+    if layer.get('weight_shape'):
+        shape = tuple(int(x) for x in layer['weight_shape'])
+        if len(shape) != 2:
+            raise ValueError(f'{layer_key}: {weight_path} expects 2D weight_shape, got {shape}')
+        return shape
+
+    weight = np.asarray(weight)
+    if weight.ndim != 2:
+        raise ValueError(f'{layer_key}: {weight_path} requires 2D weight or explicit weight_shape')
+    return int(weight.shape[0]), int(weight.shape[1])
+
+
+def _pdmpcmm_weight_matrix(
+    weight: np.ndarray,
+    logical_shape: tuple[int, int],
+    layer_key: str,
+    weight_path: str,
+) -> np.ndarray:
+    weight = np.asarray(weight, dtype='float64')
+    if weight.ndim == 2 and tuple(weight.T.shape) == logical_shape:
+        return weight.T.copy()
+    if weight.ndim == 2 and tuple(weight.shape) == logical_shape:
+        return weight.copy()
+    return _reshape_checked(weight, logical_shape, layer_key, weight_path)
 
 
 def _resolve_parcpmm_weight(
@@ -490,9 +706,12 @@ def _layer_head_dim(layer: dict[str, Any], features: dict[str, dict[str, Any]]) 
     feature_id = layer['feature_output'][0]
     feature = _feature(features, feature_id, layer.get('type', 'parcpmm'))
     head_shape = feature.get('head_shape')
-    if not head_shape or len(head_shape) < 2 or int(head_shape[1]) <= 0:
-        raise ValueError(f'missing head_shape[1] for feature_mat output: {feature_id}')
-    return int(head_shape[1])
+    if not head_shape or len(head_shape) < 2:
+        raise ValueError(f'missing head_shape for feature_mat output: {feature_id}')
+    dims = [int(x) for x in head_shape[:2] if int(x) > 0]
+    if not dims:
+        raise ValueError(f'invalid head_shape for feature_mat output: {feature_id}')
+    return min(dims)
 
 
 def _sequence_length(feature: dict[str, Any], layer_key: str) -> int:
