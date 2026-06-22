@@ -214,15 +214,17 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
                 throw std::runtime_error("[Client] feature_mat input only supports par matrix ops with n_heads > 1: " +
                                          name);
             }
-            auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.height, (uint64_t)param.width});
             FeatureMatEncrypted input_ct(context_ptr_, param.level);
             if (is_par_diagonal_pack(mat_pack_style_)) {
                 if (param.head_shape[0] == 0 || param.head_shape[1] == 0) {
                     throw std::runtime_error("[Client] par_diagonal_pack input is missing head_shape: " + name);
                 }
+                auto csv_array = csv_to_array<2>(csv_path, {(uint64_t)param.width, (uint64_t)param.height});
+                auto input_array = transpose_2d_array(csv_array);
                 input_ct.par_diagonal_pack(input_array, param.n_heads, param.head_shape, true, param.is_transposed,
                                            false, scale);
             } else {
+                auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.height, (uint64_t)param.width});
                 if (param.width % param.n_heads != 0) {
                     throw std::runtime_error("[Client] feature_mat width must be divisible by n_heads: " + name);
                 }
