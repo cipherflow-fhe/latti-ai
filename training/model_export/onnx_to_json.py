@@ -35,7 +35,7 @@ from .operations.MaxPool import MaxPoolComputeNode
 from .operations.Sigmoid import SigmoidComputeNode
 from .operations.PolyRelu import PolyReluComputeNode
 from .operations.ConvTranspose import ConvTransposeComputeNode
-from .operations.PolyAct import PolyActComputeNode
+from .operations.Simple_Polyrelu import Simple_PolyreluComputeNode
 from .onnx_model_manipulations import simplify_onnx_model
 
 log = logging.getLogger(__name__)
@@ -160,11 +160,11 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
             case 'ConvTranspose':
                 compute_node = ConvTransposeComputeNode.from_onnx_node(n, features_nodes)
             case 'RangeNormPoly2d':
-                compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
+                compute_node = Simple_PolyreluComputeNode.from_onnx_node(n, features_nodes)
             case 'RangeNormPoly1d':
-                compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
-            case 'PolyAct':
-                compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
+                compute_node = Simple_PolyreluComputeNode.from_onnx_node(n, features_nodes)
+            case 'Simple_Polyrelu':
+                compute_node = Simple_PolyreluComputeNode.from_onnx_node(n, features_nodes)
             case _:
                 kwargs = {}
                 if 'Add' in n.op_type:
@@ -182,6 +182,11 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
     input_feature_ids = [format_id(i.name) for i in graph.input if format_id(i.name) in features_nodes]
     output_feature_ids = [format_id(o.name) for o in graph.output if format_id(o.name) in features_nodes]
 
+    # 确保 features 存在并补全形状
+    features = locals().get("features", {})
+    features = _fill_feature_shapes(features, onnx_model)
+    features = locals().get("features", {})
+    features = _fill_feature_shapes(features, onnx_model)
     with open(output_filename, 'w') as f:
         json.dump(
             {
@@ -194,3 +199,19 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
             indent=4,
             ensure_ascii=False,
         )
+
+
+def _fill_feature_shapes(features, onnx_model):
+    from onnx import shape_inference
+    inferred = shape_inference.infer_shapes(onnx_model)
+    shapes = {}
+    for vi in inferred.graph.value_info:
+        shapes[vi.name] = [d.dim_value if d.dim_value > 0 else 1 for d in vi.type.tensor_type.shape.dim]
+    for inp in inferred.graph.input:
+        shapes[inp.name] = [d.dim_value if d.dim_value > 0 else 1 for d in inp.type.tensor_type.shape.dim]
+    for out in inferred.graph.output:
+        shapes[out.name] = [d.dim_value if d.dim_value > 0 else 1 for d in out.type.tensor_type.shape.dim]
+    for feat_id, feat in features.items():
+        if feat.get("name") in shapes:
+            feat["shape"] = shapes[feat["name"]]
+    return features

@@ -41,6 +41,7 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from model import resnet20
+from model.squeezenet_cifar10 import SqueezeNetCIFAR10
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 log = logging.getLogger(__name__)
@@ -121,10 +122,12 @@ def main():
     parser.add_argument('--gpu', type=int, default=0, help='-1 for CPU')
     parser.add_argument('--lr-milestones', type=int, nargs='+', default=[100, 150])
     parser.add_argument('--lr-gamma', type=float, default=0.1)
+    parser.add_argument('--arch', type=str, default='resnet20', choices=['resnet20', 'squeezenet'],
+                    help='Model architecture to use')
 
     # Poly-ReLU options
     parser.add_argument('--poly_model_convert', action='store_true', help='replace ReLU with RangeNormPoly2d')
-    parser.add_argument('--poly-module', default='RangeNormPoly2d', help='choose RangeNormPoly2d or PolyAct')
+    parser.add_argument('--poly-module', default='RangeNormPoly2d', help='choose RangeNormPoly2d or Simple_Polyrelu')
     parser.add_argument('--upper-bound', type=float, default=3.0, help='normalization upper bound for RangeNormPoly2d')
     parser.add_argument('--degree', type=int, default=4, choices=[2, 4, 8])
     parser.add_argument(
@@ -149,7 +152,13 @@ def main():
     train_loader, test_loader = get_cifar10_loaders(args.data_dir, args.batch_size, args.num_workers, args.input_shape)
 
     # Build model
-    model = resnet20()
+    if args.arch == 'resnet20':
+        model = resnet20()
+    elif args.arch == 'squeezenet':
+        model = SqueezeNetCIFAR10()
+    else:
+        raise ValueError(f'Unknown architecture: {args.arch}')
+
     if args.pretrained:
         log.info(f'Loading pretrained: {args.pretrained}')
         ckpt = torch.load(args.pretrained, map_location='cpu')
@@ -166,7 +175,7 @@ def main():
             replace_maxpool_with_avgpool,
             replace_general_avgpool_with_depthwise_conv,
         )
-        from training.nn_tools.activations import RangeNormPoly2d, PolyAct
+        from training.nn_tools.activations import RangeNormPoly2d, Simple_Polyrelu
         from training.nn_tools.replace import count_activations
 
         n_maxpool = count_activations(model, nn.MaxPool2d)
@@ -183,15 +192,15 @@ def main():
                 degree=args.degree,
             )
             n_poly = count_activations(model, RangeNormPoly2d)
-        elif args.poly_module == 'PolyAct':
+        elif args.poly_module == 'Simple_Polyrelu':
             replace_activation_with_poly(
                 model,
                 old_cls=nn.ReLU,
-                new_module_factory=PolyAct,
+                new_module_factory=Simple_Polyrelu,
                 upper_bound=args.upper_bound,
                 degree=args.degree,
             )
-            n_poly = count_activations(model, PolyAct)
+            n_poly = count_activations(model, Simple_Polyrelu)
         log.info(f'Device: {device}  |  ReLU {n_relu} -> Poly {n_poly} (ub={args.upper_bound}, deg={args.degree})')
     else:
         n_params = sum(p.numel() for p in model.parameters())
@@ -248,6 +257,10 @@ def main():
             dynamic_batch=False,
         )
         log.info(f'ONNX saved: {onnx_path}')
+
+        h5_path = os.path.join(export_dir, 'model_parameters.h5')
+        fuse_and_export_h5(model, h5_path=h5_path, upper_bound=args.upper_bound, degree=args.degree, eps=1e-3)
+        log.info(f'Fused H5 saved: {h5_path}')
 
 
 if __name__ == '__main__':
