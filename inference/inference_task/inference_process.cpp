@@ -225,18 +225,6 @@ static bool is_pdm_layer_type(const string& layer_type) {
            layer_type == "pdmaffine";
 }
 
-static Duo pdm_upper_shape(const FeatureNode& feature, const Duo& head_shape) {
-    return {head_shape[0], feature.shape[0]};
-}
-
-static Duo pdm_lower_shape(const FeatureNode& feature, const Duo& head_shape) {
-    return {feature.shape[0], head_shape[0]};
-}
-
-static Duo pdm_lower_head_shape(const Duo& head_shape) {
-    return {head_shape[1], head_shape[0]};
-}
-
 void InitInferenceProcess::init_parameters(bool is_bootstrapping) {
     auto json_params = read_json(project_path / "ckks_parameter.json");
     if (is_bootstrapping) {
@@ -520,7 +508,7 @@ void InitInferenceProcess::_init_pdmpcmm_layer(const string& key, const json& la
 
     Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
     if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
-        head_shape = pdm_lower_head_shape(head_shape);
+        std::swap(head_shape[0], head_shape[1]);
     }
     const uint32_t pdm_head_dim = get_config_head_dim(head_dim);
     Duo W_T_shape = {feat_out.shape[0], feat_in.shape[0]};
@@ -560,12 +548,13 @@ void InitInferenceProcess::_init_pdmtranspose_layer(const string& key, const jso
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
     Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
     if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
-        head_shape = pdm_lower_head_shape(head_shape);
+        std::swap(head_shape[0], head_shape[1]);
     }
     const uint32_t pdm_head_dim = get_config_head_dim(head_dim);
+    const Duo transpose_shape = {head_shape[1], head_shape[0]};
 
-    auto pdmtranspose = MakeU<ParLowerDiagTranspose>(param, pdm_lower_head_shape(head_shape),
-                                                     get_config_n_heads(n_heads), pdm_head_dim, feat_in.level);
+    auto pdmtranspose =
+        MakeU<ParLowerDiagTranspose>(param, transpose_shape, get_config_n_heads(n_heads), pdm_head_dim, feat_in.level);
     _prepare_layer(
         key, move(pdmtranspose), [](ParLowerDiagTranspose&) {}, [](ParLowerDiagTranspose& l) { l.prepare_weight(); });
 }
@@ -576,10 +565,10 @@ void InitInferenceProcess::_init_pdm_add_pt_layer(const string& key, const json&
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
     Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
     if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
-        head_shape = pdm_lower_head_shape(head_shape);
+        std::swap(head_shape[0], head_shape[1]);
     }
-    const Duo shape = pdm_lower_shape(feat_in, head_shape);
-    const Duo lower_head_shape = pdm_lower_head_shape(head_shape);
+    const Duo shape = {feat_in.shape[0], head_shape[0]};
+    const Duo lower_head_shape = {head_shape[1], head_shape[0]};
     auto B = _load_h5_tensor<2>(layer, h5_file, "weight", {(uint64_t)shape[0], (uint64_t)shape[1]});
 
     auto add_pt = MakeU<ParLowerDiagonalAddPt>(param, shape, lower_head_shape, get_config_n_heads(n_heads),
@@ -594,9 +583,9 @@ void InitInferenceProcess::_init_pdmgamma_layer(const string& key, const json& l
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
     Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
     if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
-        head_shape = pdm_lower_head_shape(head_shape);
+        std::swap(head_shape[0], head_shape[1]);
     }
-    const Duo shape = pdm_upper_shape(feat_in, head_shape);
+    const Duo shape = {head_shape[0], feat_in.shape[0]};
     auto gamma = load_h5_tensor_any<1>(layer, h5_file, {"gamma", "weight"}, {shape[1]});
 
     auto pdmgamma = MakeU<ParUpperDiagonalPolyActRNGamma>(param, shape, head_shape, get_config_n_heads(n_heads),
@@ -612,9 +601,9 @@ void InitInferenceProcess::_init_pdmpoly_layer(const string& key, const json& la
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
     Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
     if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
-        head_shape = pdm_lower_head_shape(head_shape);
+        std::swap(head_shape[0], head_shape[1]);
     }
-    const Duo shape = pdm_upper_shape(feat_in, head_shape);
+    const Duo shape = {head_shape[0], feat_in.shape[0]};
     uint32_t degree = layer.contains("degree") ? layer["degree"].get<uint32_t>() : layer.at("order").get<uint32_t>();
     auto coeffs = load_h5_tensor_any<2>(layer, h5_file, {"coeffs", "coeff", "weight"}, {degree + 1, shape[1]});
 
@@ -631,9 +620,9 @@ void InitInferenceProcess::_init_pdmstats_layer(const string& key, const json& l
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
     Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
     if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
-        head_shape = pdm_lower_head_shape(head_shape);
+        std::swap(head_shape[0], head_shape[1]);
     }
-    const Duo shape = pdm_upper_shape(feat_in, head_shape);
+    const Duo shape = {head_shape[0], feat_in.shape[0]};
     double eps = layer.contains("eps") || layer.contains("epsilon") ?
                      get_json_value_any<double>(layer, {"eps", "epsilon"}) :
                      get_json_value_any<double>(layernorm_param, {"eps", "epsilon"});
@@ -661,9 +650,9 @@ void InitInferenceProcess::_init_pdmcenter_layer(const string& key, const json& 
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
     Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
     if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
-        head_shape = pdm_lower_head_shape(head_shape);
+        std::swap(head_shape[0], head_shape[1]);
     }
-    const Duo shape = pdm_upper_shape(feat_in, head_shape);
+    const Duo shape = {head_shape[0], feat_in.shape[0]};
 
     auto pdmcenter =
         MakeU<ParUpperDiagonalLNXCentered>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level);
@@ -678,9 +667,9 @@ void InitInferenceProcess::_init_pdminit_layer(const string& key, const json& la
     CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
     Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
     if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
-        head_shape = pdm_lower_head_shape(head_shape);
+        std::swap(head_shape[0], head_shape[1]);
     }
-    const Duo shape = pdm_upper_shape(feat_in, head_shape);
+    const Duo shape = {head_shape[0], feat_in.shape[0]};
     double c0, c1, c2;
     if (layer.contains("coeffs")) {
         c0 = layer.at("coeffs")[0].get<double>();
@@ -709,9 +698,9 @@ void InitInferenceProcess::_init_pdmgs_layer(const string& key, const json& laye
     CkksParameter& param = *ckks_parameters_.at(feat_y.ckks_parameter_id);
     Duo head_shape = get_feature_mat_head_shape(feat_y, feat_y_id);
     if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
-        head_shape = pdm_lower_head_shape(head_shape);
+        std::swap(head_shape[0], head_shape[1]);
     }
-    const Duo shape = pdm_upper_shape(feat_y, head_shape);
+    const Duo shape = {head_shape[0], feat_y.shape[0]};
 
     auto pdmgs =
         MakeU<ParUpperDiagonalLNGoldschmidt>(param, shape, head_shape, get_config_n_heads(n_heads), feat_y.level);
@@ -728,9 +717,9 @@ void InitInferenceProcess::_init_pdmaffine_layer(const string& key, const json& 
     CkksParameter& param = *ckks_parameters_.at(feat_xc.ckks_parameter_id);
     Duo head_shape = get_feature_mat_head_shape(feat_xc, feat_xc_id);
     if (head_dim > 0 && head_shape[0] == head_dim && head_shape[1] != head_dim) {
-        head_shape = pdm_lower_head_shape(head_shape);
+        std::swap(head_shape[0], head_shape[1]);
     }
-    const Duo shape = pdm_upper_shape(feat_xc, head_shape);
+    const Duo shape = {head_shape[0], feat_xc.shape[0]};
     double inv_std;
     if (layer.contains("inv_std")) {
         inv_std = layer.at("inv_std").get<double>();
