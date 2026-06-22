@@ -7,6 +7,10 @@
 #include "ut_util.h"
 
 #include <iomanip>
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <random>
 #include <signal.h>
 #include <stdexcept>
 #include <sys/prctl.h>
@@ -129,7 +133,7 @@ private:
 
 class MpcFixture {
 public:
-    MpcFixture() : parameter{CkksParameter::create_parameter(8192)} {
+    MpcFixture() {
         srand(time(NULL));
         party = SERVER;
         port = 12309;
@@ -139,6 +143,8 @@ public:
         StartComputation();
         data_trans.io_in = io;
         context = data_trans.recv_public_context();
+        parameter = context.get_parameter().copy();
+        slot_size = parameter.get_n() / 2;
     }
 
 protected:
@@ -147,7 +153,7 @@ protected:
     DataTransmission data_trans;
     CkksContext context;
 
-    int slot_size = 4096;
+    int slot_size = 0;
     int scale_ord = DEFAULT_SCALE_BIT;
     double pt_range = 128.0;
     uint64_t ring_mod = RING_MOD;
@@ -192,6 +198,33 @@ TEST_CASE_METHOD(MpcFixture, "multi_channel_mpc_refresh_test") {
             REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
         }
     }
+}
+
+TEST_CASE_METHOD(MpcFixture, "multi_channel_mpc_refresh_simple_test") {
+    int level = 5;
+    uint32_t n_channel = 4;
+    Duo shape = {16, 16};
+    Duo skip = {1, 1};
+    PackType pack_type = PackType::MultiplexedPacking;
+
+    MpcTaskMetaData meta_data;
+    meta_data.append(MpcProtoType::enc_to_share_for_multi_channel_pack_simple, {"u8", "u8", "u8", "u8"},
+                     (uint8_t)level, 0, 0, (uint8_t)pack_type);
+    meta_data.append(MpcProtoType::share_to_enc_for_multi_channel_pack_simple, {"u8", "u32", "duo", "u8"},
+                     (uint8_t)level, n_channel, skip, (uint8_t)pack_type);
+    meta_data.append(MpcProtoType::end, {});
+    data_trans.send_bytes(meta_data.serialize());
+
+    Array<double, 3> x_mg = gen_random_array<3>({n_channel, shape[0], shape[1]}, 1.0);
+    Feature2DEncrypted x_e(&context, level, skip);
+    x_e.pack_multiplexed(x_mg, false, DEFAULT_SCALE);
+
+    auto x_share0 = server_enc_to_share_multi_pack_simple(context, x_e, scale_ord, ring_mod, pack_type);
+    auto y_ct = server_share_to_enc_multi_pack_simple(context, x_share0, scale_ord, ring_mod, level, pack_type);
+
+    Array<double, 3> y_mg = y_ct.unpack_multiplexed();
+    auto compare_res = compare(x_mg, y_mg);
+    REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
 }
 
 TEST_CASE_METHOD(MpcFixture, "big_size_e2s_s2e_no_conv_test") {
@@ -301,6 +334,62 @@ TEST_CASE_METHOD(MpcFixture, "big_size_e2s_s2e_test") {
     // }
 }
 
+TEST_CASE_METHOD(MpcFixture, "big_size_e2s_s2e_simple_test") {
+    int init_level = 5;
+
+    uint32_t n_in_channel = 16;
+    uint32_t n_out_channel = 32;
+
+    Duo input_shape = {256, 256};
+    Duo kernel_shape = {3, 3};
+    Duo stride = {2, 2};
+
+    Duo block_shape = {64, 64};
+    Duo block_expansion = {(uint32_t)ceil(input_shape[0] / (double)block_shape[0]),
+                           (uint32_t)ceil(input_shape[1] / (double)block_shape[1])};
+    Duo next_stride = {(uint32_t)ceil(block_expansion[0] / (double)stride[0]),
+                       (uint32_t)ceil(block_expansion[1] / (double)stride[1])};
+    PackType pack_type = PackType::InterleavedPacking;
+
+    auto input_array_vec = gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 0.1);
+    auto conv0_weight = gen_random_array<4>({n_out_channel, n_in_channel, kernel_shape[0], kernel_shape[1]}, 0.1);
+    auto conv0_bias = gen_random_array<1>({n_out_channel}, 1);
+
+    Feature2DEncrypted f2d(&context, init_level, {1, 1});
+    f2d.pack_interleaved(input_array_vec, block_shape, block_expansion, false,
+                         context.get_parameter().get_default_scale());
+    cout << "run-------" << endl;
+
+    Array<int, 1> padding({2});
+    padding.set(0, -1);
+    padding.set(1, -1);
+    InverseMultiplexedConv2DLayer conv(context.get_parameter(), input_shape, conv0_weight.copy(), conv0_bias.copy(),
+                                       padding, stride, block_shape, init_level);
+    conv.prepare_weight();
+
+    auto x_e = conv.run(context, f2d);
+
+    MpcTaskMetaData meta_data;
+    meta_data.append(MpcProtoType::enc_to_share_for_multi_channel_pack_simple, {"u8", "u8", "u8", "u8"},
+                     (uint8_t)x_e.level, 0, 0, (uint8_t)pack_type);
+    meta_data.append(MpcProtoType::share_to_enc_for_multi_channel_pack_simple, {"u8", "u32", "duo", "u8"},
+                     (uint8_t)x_e.level, x_e.n_channel, x_e.skip, (uint8_t)pack_type);
+    meta_data.append(MpcProtoType::end, {});
+    data_trans.send_bytes(meta_data.serialize());
+
+    auto x_share0 = server_enc_to_share_multi_pack_simple(context, x_e, scale_ord, ring_mod, pack_type);
+    auto y_ct = server_share_to_enc_multi_pack_simple(context, x_share0, scale_ord, ring_mod, x_e.level, pack_type);
+
+    Array<double, 3> y_mg = y_ct.unpack_interleaved(block_shape, next_stride);
+    auto x_mg = conv.run_plaintext(input_array_vec);
+    for (int i = 0; i < 20; i++) {
+        cout << "y_mg=" << y_mg.get_data()[i] << "x_mg=" << x_mg.get_data()[i] << endl;
+    }
+
+    auto compare_res = compare(x_mg, y_mg);
+    REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
+}
+
 TEST_CASE_METHOD(MpcFixture, "Feature2DEncrypted to shares and back") {
     int level = 3;
     uint32_t n_channel = 4;
@@ -350,6 +439,29 @@ TEST_CASE_METHOD(MpcFixture, "Feature2DEncrypted to shares and back") {
             REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
         }
     }
+}
+
+TEST_CASE_METHOD(MpcFixture, "Feature2DEncrypted simple E2S to shares and back") {
+    int level = 3;
+    uint32_t n_channel = 4;
+    Duo shape = {16, 16};
+
+    MpcTaskMetaData meta_data;
+    meta_data.append(MpcProtoType::enc_to_share_simple, {"u8", "u8", "u8"}, (uint8_t)level, 0, 0);
+    meta_data.append(MpcProtoType::share_to_enc_simple, {"u8", "u32"}, (uint8_t)level, n_channel);
+    meta_data.append(MpcProtoType::end, {});
+    data_trans.send_bytes(meta_data.serialize());
+
+    Array<double, 3> x_mg = gen_random_array<3>({n_channel, shape[0], shape[1]}, 1.0);
+    Feature2DEncrypted x_e(&context, level);
+    x_e.pack_multiple_channel(x_mg);
+
+    Feature2DShare x_share0 = server_enc_to_share_simple(context, x_e, scale_ord, ring_mod);
+    Feature2DEncrypted y_ct = server_share_to_enc_simple(context, x_share0, scale_ord, ring_mod, x_e.level);
+
+    Array<double, 3> y_mg = y_ct.unpack_multiple_channel();
+    auto compare_res = compare(x_mg, y_mg);
+    REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
 }
 
 TEST_CASE_METHOD(MpcFixture, "Feature0DEncrypted to shares relu0d and back") {
@@ -1775,3 +1887,68 @@ TEST_CASE_METHOD(MpcFixture, "test_softmax") {
         }
     }
 }
+namespace {
+
+int get_refresh_test_port() {
+    if (const char* env_port = getenv("MPC_TEST_PORT")) {
+        return atoi(env_port);
+    }
+    return port;
+}
+
+}  // namespace
+
+void test_new_mpc_refresh_server() {
+    party = SERVER;
+    port = get_refresh_test_port();
+    address = "127.0.0.1";
+    num_threads = 1;
+    bitlength = RING_MOD_BIT;
+    StartComputation();
+
+    DataTransmission dt(io);
+    CkksContext context = CkksContext::deserialize(dt.receive_bytes());
+    const CkksParameter& param = context.get_parameter();
+    int N = param.get_n();
+
+    vector<double> test_msg(N / 2, 0.0);
+    test_msg[0] = 3.23454;
+    test_msg[1] = -58.6;
+
+    int level = 1;
+    double scale = context.get_parameter().get_default_scale();
+    CkksPlaintext test_pt = context.encode(test_msg, level, scale);
+    CkksCiphertext input_ct = context.encrypt_symmetric(test_pt);
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<double> dis(-pow(2, 40), pow(2, 40));
+
+    vector<double> R(N / 2);
+    R[0] = dis(gen);
+    R[1] = dis(gen);
+    CkksPlaintext R_pt = context.encode(R, 3, scale);
+
+    CkksCiphertext send_ct = context.sub_plain(input_ct, R_pt);
+    dt.send_bytes(send_ct.serialize(param));
+
+    Bytes recv_ct_bytes = dt.receive_bytes();
+    CkksCiphertext recv_ct = CkksCiphertext::deserialize(recv_ct_bytes);
+
+    CkksCiphertext res_ct = context.add_plain(recv_ct, R_pt);
+    cout<<"scale="<<res_ct.get_scale()<<",level="<<res_ct.get_level()<<endl;
+    CkksPlaintext res_pt = context.decrypt(res_ct);
+    vector<double> res_mg = context.decode(res_pt);
+
+    double max_error = 0.0;
+    for (int i = 0; i < min(32, (int)res_mg.size()); i++) {
+        max_error = max(max_error, fabs(res_mg[i] - test_msg[i]));
+    }
+    cout << "refresh first slot=" << res_mg[0] << ", expected=" << test_msg[0]
+         << ", max_error(first 32)=" << max_error << endl;
+    REQUIRE(max_error < 1.0e-2);
+}
+
+// TEST_CASE("test_new_mpc_refresh_server", "[mpc][refresh]") {
+//     test_new_mpc_refresh_server();
+// }

@@ -15,7 +15,7 @@ int main() {
     bitlength = RING_MOD_BIT;
     StartComputation();
     int N = 8192;
-    CkksParameter param = CkksParameter::create_parameter(8192);
+    CkksParameter param = CkksParameter::create_parameter(N);
     CkksContext context = CkksContext::create_random_context(param);
 
     context.gen_rotation_keys();

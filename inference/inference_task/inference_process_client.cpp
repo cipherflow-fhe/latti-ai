@@ -30,6 +30,31 @@ Feature2DShare client_enc_to_share(map<string, unique_ptr<CkksContext>>& ckks_co
     return y;
 }
 
+Feature2DShare client_enc_to_share_simple(map<string, unique_ptr<CkksContext>>& ckks_contexts,
+                                          const Bytes& meta_data_bytes,
+                                          CkksContext*& context_in,
+                                          CkksContext*& context_out) {
+    DataTransmission data_trans(io);
+
+    uint8_t level;
+    uint8_t param_id_in;
+    uint8_t param_id_out;
+    bytes_to_va(meta_data_bytes, {"u8", "u8", "u8"}, &level, &param_id_in, &param_id_out);
+
+    string param_in = param_to_string(param_id_in);
+    string param_out = param_to_string(param_id_out);
+    context_in = ckks_contexts[param_in].get();
+    context_out = ckks_contexts[param_out].get();
+
+    Bytes x_e_bytes = data_trans.receive_bytes();
+    Feature2DEncrypted x_e(context_in, level);
+    x_e.deserialize(x_e_bytes);
+    Feature2DShare y = Feature2DShare(RING_MOD, DEFAULT_SCALE_BIT);
+    x_e.decrypt_to_share_simple(&y, PackType::MultipleChannelPacking);
+
+    return y;
+}
+
 Feature2DShare client_enc_to_share_for_multi_channel_pack(map<string, unique_ptr<CkksContext>>& ckks_contexts,
                                                           const Bytes& meta_data_bytes,
                                                           CkksContext*& context_in,
@@ -52,6 +77,32 @@ Feature2DShare client_enc_to_share_for_multi_channel_pack(map<string, unique_ptr
     x_e.deserialize(x_e_bytes);
     Feature2DShare y = Feature2DShare(RING_MOD, DEFAULT_SCALE_BIT);
     x_e.decrypt_to_share(&y, pack_type);
+
+    return y;
+}
+
+Feature2DShare client_enc_to_share_for_multi_channel_pack_simple(map<string, unique_ptr<CkksContext>>& ckks_contexts,
+                                                                 const Bytes& meta_data_bytes,
+                                                                 CkksContext*& context_in,
+                                                                 CkksContext*& context_out) {
+    DataTransmission data_trans(io);
+    uint8_t level;
+    uint8_t param_id_in;
+    uint8_t param_id_out;
+    uint8_t temp_int = 0;
+    bytes_to_va(meta_data_bytes, {"u8", "u8", "u8", "u8"}, &level, &param_id_in, &param_id_out, &temp_int);
+    PackType pack_type = (PackType)temp_int;
+
+    string param_in = param_to_string(param_id_in);
+    string param_out = param_to_string(param_id_out);
+    context_in = ckks_contexts[param_in].get();
+    context_out = ckks_contexts[param_out].get();
+
+    Bytes x_e_bytes = data_trans.receive_bytes();
+    Feature2DEncrypted x_e(context_in, level);
+    x_e.deserialize(x_e_bytes);
+    Feature2DShare y = Feature2DShare(RING_MOD, DEFAULT_SCALE_BIT);
+    x_e.decrypt_to_share_simple(&y, pack_type);
 
     return y;
 }
@@ -95,12 +146,20 @@ Array1DUint process(map<string, unique_ptr<CkksContext>>* ckks_contexts) {
                     return temp;
                 }
                 return im_0d->data.to_array_1d();
-            } else if (type == MpcProtoType::enc_to_share) {
-                im_2d = make_unique<Feature2DShare>(
-                    client_enc_to_share(*ckks_contexts, meta_data.data[i], context_in, context_out));
+            } else if (type == MpcProtoType::enc_to_share || type == MpcProtoType::enc_to_share_simple) {
+                if (type == MpcProtoType::enc_to_share_simple) {
+                    im_2d = make_unique<Feature2DShare>(
+                        client_enc_to_share_simple(*ckks_contexts, meta_data.data[i], context_in, context_out));
+                } else {
+                    im_2d = make_unique<Feature2DShare>(
+                        client_enc_to_share(*ckks_contexts, meta_data.data[i], context_in, context_out));
+                }
 
             } else if (type == MpcProtoType::enc_to_share_for_multi_channel_pack) {
                 im_2d = make_unique<Feature2DShare>(client_enc_to_share_for_multi_channel_pack(
+                    *ckks_contexts, meta_data.data[i], context_in, context_out));
+            } else if (type == MpcProtoType::enc_to_share_for_multi_channel_pack_simple) {
+                im_2d = make_unique<Feature2DShare>(client_enc_to_share_for_multi_channel_pack_simple(
                     *ckks_contexts, meta_data.data[i], context_in, context_out));
             } else if (type == MpcProtoType::enc_to_share_0d) {
                 uint8_t level;
@@ -154,6 +213,16 @@ Array1DUint process(map<string, unique_ptr<CkksContext>>* ckks_contexts) {
                 data_trans.send_bytes(b);
                 Bytes send_bytes = send_ct.serialize();
                 data_trans.send_bytes(send_bytes);
+            } else if (type == MpcProtoType::share_to_enc_simple) {
+                uint8_t level;
+                uint32_t n_channel;
+                bytes_to_va(meta_data.data[i], {"u8", "u32"}, &level, &n_channel);
+
+                Feature2DEncrypted x_e(context_out, level, {1, 1}, {1, 1}, PackType::MultipleChannelPacking);
+                x_e.encrypt_from_share_simple(*im_2d, n_channel, im_2d->shape);
+
+                Bytes b = x_e.serialize();
+                data_trans.send_bytes(b);
             } else if (type == MpcProtoType::share_to_enc_for_multi_channel_pack) {
                 uint8_t level;
                 uint32_t n_channel;
@@ -194,6 +263,19 @@ Array1DUint process(map<string, unique_ptr<CkksContext>>* ckks_contexts) {
                 data_trans.send_bytes(b);
                 Bytes send_bytes = send_ct.serialize();
                 data_trans.send_bytes(send_bytes);
+            } else if (type == MpcProtoType::share_to_enc_for_multi_channel_pack_simple) {
+                uint8_t level;
+                uint32_t n_channel;
+                Duo skip;
+
+                uint8_t temp_int = 0;
+                bytes_to_va(meta_data.data[i], {"u8", "u32", "duo", "u8"}, &level, &n_channel, &skip, &temp_int);
+                PackType pack_type = (PackType)temp_int;
+                Feature2DEncrypted x_e(context_out, level, skip, {1, 1}, pack_type);
+                x_e.encrypt_from_share_simple(*im_2d, n_channel, im_2d->shape, pack_type);
+
+                Bytes b = x_e.serialize();
+                data_trans.send_bytes(b);
             } else if (type == MpcProtoType::share_2d_to_0d) {
                 im_0d = make_unique<Feature0DShare>(ring_mod, scale_ord);
                 im_0d->data = std::move(im_2d->data);

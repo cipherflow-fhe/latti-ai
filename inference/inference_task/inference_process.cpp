@@ -55,6 +55,22 @@ Feature2DShare server_enc_to_share_multi_pack(CkksContext& context,
     return x_share0;
 }
 
+Feature2DShare server_enc_to_share_multi_pack_simple(CkksContext& context,
+                                                     const Feature2DEncrypted& x_enc,
+                                                     int scale_ord,
+                                                     uint64_t ring_mod,
+                                                     PackType pack_type) {
+    DataTransmission data_trans(io);
+
+    Feature2DEncrypted x_share1_enc(&context, x_enc.level, x_enc.skip, x_enc.invalid_fill, pack_type);
+    Feature2DShare x_share0(ring_mod, scale_ord);
+
+    x_enc.split_to_shares_for_multi_channel_pack_simple(&x_share1_enc, &x_share0, pack_type);
+    data_trans.send_bytes(x_share1_enc.serialize());
+
+    return x_share0;
+}
+
 Feature2DEncrypted server_share_to_enc_multi_pack(CkksContext& context,
                                                   Feature2DShare& y_share0,
                                                   int scale_ord,
@@ -85,6 +101,39 @@ Feature2DEncrypted server_share_to_enc_multi_pack(CkksContext& context,
     return y_ct;
 }
 
+Feature2DEncrypted server_share_to_enc_multi_pack_simple(CkksContext& context,
+                                                         Feature2DShare& y_share0,
+                                                         int scale_ord,
+                                                         uint64_t ring_mod,
+                                                         int level,
+                                                         PackType pack_type) {
+    DataTransmission data_trans(io);
+    Feature2DEncrypted y_share1_enc(&context, level, {1, 1}, {1, 1}, pack_type);
+    y_share1_enc.deserialize(data_trans.receive_bytes());
+    y_share1_enc.packing_type = pack_type;
+    y_share1_enc.decompress();
+
+    Feature2DEncrypted y_ct = y_share1_enc.combine_with_share_simple_for_multi_pack(y_share0, pack_type);
+    y_ct.packing_type = pack_type;
+    return y_ct;
+}
+
+Feature2DEncrypted server_share_to_enc_simple(CkksContext& context,
+                                              Feature2DShare& y_share0,
+                                              int scale_ord,
+                                              uint64_t ring_mod,
+                                              int level) {
+    DataTransmission data_trans(io);
+    Feature2DEncrypted y_share1_enc(&context, level, {1, 1}, {1, 1}, PackType::MultipleChannelPacking);
+    y_share1_enc.deserialize(data_trans.receive_bytes());
+    y_share1_enc.packing_type = PackType::MultipleChannelPacking;
+    y_share1_enc.decompress();
+
+    Feature2DEncrypted y_ct = y_share1_enc.combine_with_share_simple(y_share0);
+    y_ct.packing_type = PackType::MultipleChannelPacking;
+    return y_ct;
+}
+
 Feature2DShare
 server_enc_to_share(CkksContext& context, const Feature2DEncrypted& x_enc, int scale_ord, uint64_t ring_mod) {
     DataTransmission data_trans(io);
@@ -94,6 +143,20 @@ server_enc_to_share(CkksContext& context, const Feature2DEncrypted& x_enc, int s
     Feature2DShare x_share0(ring_mod, scale_ord);
 
     x_enc.split_to_shares(&x_share1_enc, &x_share0);
+    data_trans.send_bytes(x_share1_enc.serialize());
+
+    return x_share0;
+}
+
+Feature2DShare
+server_enc_to_share_simple(CkksContext& context, const Feature2DEncrypted& x_enc, int scale_ord, uint64_t ring_mod) {
+    DataTransmission data_trans(io);
+
+    Feature2DEncrypted x_share1_enc(&context, x_enc.level, x_enc.skip, x_enc.invalid_fill,
+                                    PackType::MultipleChannelPacking);
+    Feature2DShare x_share0(ring_mod, scale_ord);
+
+    x_enc.split_to_shares_simple(&x_share1_enc, &x_share0);
     data_trans.send_bytes(x_share1_enc.serialize());
 
     return x_share0;

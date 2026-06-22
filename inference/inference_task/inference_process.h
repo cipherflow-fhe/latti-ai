@@ -257,6 +257,11 @@ PackType choose_pack_type(Duo shape, Duo block_shape);
 Feature2DShare
 server_enc_to_share(ls::CkksContext& context, const Feature2DEncrypted& x_enc, int scale_ord, uint64_t ring_mod);
 
+Feature2DShare server_enc_to_share_simple(ls::CkksContext& context,
+                                          const Feature2DEncrypted& x_enc,
+                                          int scale_ord,
+                                          uint64_t ring_mod);
+
 Feature0DShare
 server_enc_to_share(ls::CkksContext& context, const Feature0DEncrypted& x_enc, int scale_ord, uint64_t ring_mod);
 
@@ -273,9 +278,28 @@ Feature2DShare server_enc_to_share_multi_pack(ls::CkksContext& context,
                                               uint64_t ring_mod,
                                               PackType pack_type = PackType::MultiplexedPacking);
 
+Feature2DShare server_enc_to_share_multi_pack_simple(ls::CkksContext& context,
+                                                     const Feature2DEncrypted& x_enc,
+                                                     int scale_ord,
+                                                     uint64_t ring_mod,
+                                                     PackType pack_type = PackType::MultiplexedPacking);
+
 Feature2DEncrypted server_share_to_enc_multi_pack(ls::CkksContext& context,
                                                   Feature2DShare& y_share0,
                                                   int scale_ord,
                                                   uint64_t ring_mod,
                                                   int level,
                                                   PackType pack_type = PackType::MultiplexedPacking);
+
+Feature2DEncrypted server_share_to_enc_multi_pack_simple(ls::CkksContext& context,
+                                                         Feature2DShare& y_share0,
+                                                         int scale_ord,
+                                                         uint64_t ring_mod,
+                                                         int level,
+                                                         PackType pack_type = PackType::MultiplexedPacking);
+
+Feature2DEncrypted server_share_to_enc_simple(ls::CkksContext& context,
+                                              Feature2DShare& y_share0,
+                                              int scale_ord,
+                                              uint64_t ring_mod,
+                                              int level);

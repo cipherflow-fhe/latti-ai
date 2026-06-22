@@ -17,7 +17,18 @@ Feature2DShare client_enc_to_share(std::map<std::string, std::unique_ptr<CkksCon
                                    CkksContext*& context_in,
                                    CkksContext*& context_out);
 
+Feature2DShare client_enc_to_share_simple(std::map<std::string, std::unique_ptr<CkksContext>>& ckks_contexts,
+                                          const Bytes& meta_data_bytes,
+                                          CkksContext*& context_in,
+                                          CkksContext*& context_out);
+
 Feature2DShare client_enc_to_share_for_multi_channel_pack(
+    std::map<std::string, std::unique_ptr<CkksContext>>& ckks_contexts,
+    const Bytes& meta_data_bytes,
+    CkksContext*& context_in,
+    CkksContext*& context_out);
+
+Feature2DShare client_enc_to_share_for_multi_channel_pack_simple(
     std::map<std::string, std::unique_ptr<CkksContext>>& ckks_contexts,
     const Bytes& meta_data_bytes,
     CkksContext*& context_in,

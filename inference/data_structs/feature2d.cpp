@@ -16,6 +16,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <cmath>
+#include <random>
 #include <sstream>
 #include "feature2d.h"
 #include "util.h"
@@ -494,6 +496,55 @@ void Feature2DEncrypted::split_to_shares(Feature2DEncrypted* share0, Feature2DSh
     }
 }
 
+void Feature2DEncrypted::split_to_shares_simple(Feature2DEncrypted* share0, Feature2DShare* share1) const {
+    int n_slot = context->get_parameter().get_n() / 2;
+    double share_scale = DEFAULT_SCALE;
+    int sigma = SIGMA;
+
+    Duo pre_skip_shape = shape * skip;
+    size_t n_share_feature = n_channel * shape[0] * shape[1];
+    size_t n_mask = n_channel * pre_skip_shape[0] * pre_skip_shape[1];
+
+    vector<double> mask_d(n_mask);
+    vector<double> r(n_mask);
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<double> dis(-pow(2, 8 + sigma), pow(2, 8 + sigma));
+    for (int i = 0; i < n_mask; i++) {
+        r[i] = dis(gen);
+        mask_d[i] = -r[i];
+    }
+
+    share0->n_channel = n_channel;
+    share0->n_channel_per_ct = n_channel_per_ct;
+    share0->shape = shape;
+    share0->skip = skip;
+    share0->level = level;
+    share0->data.clear();
+    vector<double> mask_d_span(mask_d);
+    for (int i = 0; i < data.size(); i++) {
+        size_t start = i * n_slot;
+        size_t length = i == data.size() - 1 ? (mask_d_span.size() - start) : n_slot;
+        std::vector<double> mask_mg_vec(mask_d_span.begin() + start, mask_d_span.begin() + start + length);
+        CkksPlaintext mask_pt = context->encode(mask_mg_vec, level, DEFAULT_SCALE);
+        CkksCiphertext share0_ct = context->add_plain(data[i], mask_pt);
+        share0->data.push_back(move(share0_ct));
+    }
+
+    share1->shape = shape;
+    share1->data_double.resize({n_share_feature});
+    for (int i = 0; i < n_channel; i++) {
+        for (int j = 0; j < shape[0]; j++) {
+            for (int k = 0; k < shape[1]; k++) {
+                int skipped_index = i * shape[0] * shape[1] + j * shape[1] + k;
+                int pre_skip_index =
+                    i * pre_skip_shape[0] * pre_skip_shape[1] + j * pre_skip_shape[1] * skip[0] + k * skip[1];
+                share1->data_double[skipped_index] = r[pre_skip_index];
+            }
+        }
+    }
+}
+
 static vector<CkksPlaintext> multi_pack_to_pt(const Array<double, 3>& feature_mg,
                                               Feature2DEncrypted& f2d,
                                               int n_channel,
@@ -564,6 +615,45 @@ void Feature2DEncrypted::split_to_shares_for_multi_channel_pack(Feature2DEncrypt
     }
 }
 
+void Feature2DEncrypted::split_to_shares_for_multi_channel_pack_simple(Feature2DEncrypted* share0,
+                                                                       Feature2DShare* share1,
+                                                                       PackType pack_type) const {
+    int sigma = SIGMA;
+    size_t n_share_feature = n_channel * shape[0] * shape[1];
+
+    vector<double> mask_d(n_share_feature);
+    vector<double> r(n_share_feature);
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<double> dis(-pow(2, 8 + sigma), pow(2, 8 + sigma));
+    for (int i = 0; i < n_share_feature; i++) {
+        r[i] = dis(gen);
+        mask_d[i] = -r[i];
+    }
+
+    share0->n_channel = n_channel;
+    share0->n_channel_per_ct = n_channel_per_ct;
+    share0->shape = shape;
+    share0->skip = skip;
+    share0->level = level;
+    share0->data.clear();
+    share0->packing_type = pack_type;
+
+    auto mask_d_array = Array<double, 1>::from_array_1d(mask_d).reshape<3>({n_channel, shape[0], shape[1]});
+    auto mask_pt =
+        multi_pack_to_pt(mask_d_array, *share0, n_channel, shape, skip, *context, level, DEFAULT_SCALE, pack_type);
+    for (int i = 0; i < data.size(); i++) {
+        CkksCiphertext share0_ct = context->add_plain(data[i], mask_pt[i]);
+        share0->data.push_back(move(share0_ct));
+    }
+
+    share1->shape = shape;
+    share1->data_double.resize({n_share_feature});
+    for (int i = 0; i < n_share_feature; i++) {
+        share1->data_double[i] = r[i];
+    }
+}
+
 Feature2DEncrypted Feature2DEncrypted::combine_with_share(const Feature2DShare& share) const {
     const int N_THREAD = 4;
     int n_slot = context->get_parameter().get_n() / 2;
@@ -591,6 +681,54 @@ Feature2DEncrypted Feature2DEncrypted::combine_with_share(const Feature2DShare& 
         CkksPlaintext mask_pt = ctx_copy.encode(mask_d, level, ctx_copy.get_parameter().get_default_scale());
         result.data[i] = ctx_copy.add_plain(data[i], mask_pt);
     });
+    return result;
+}
+
+Feature2DEncrypted Feature2DEncrypted::combine_with_share_simple(const Feature2DShare& share) const {
+    const int N_THREAD = 4;
+    int n_slot = context->get_parameter().get_n() / 2;
+    Feature2DEncrypted result(this->context, this->level);
+    result.n_channel = this->n_channel;
+    result.n_channel_per_ct = this->n_channel_per_ct;
+    result.shape = this->shape;
+    result.skip = this->skip;
+    int n_ct = this->data.size();
+
+    result.data.clear();
+    result.data.resize(n_ct);
+    parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int i) {
+        vector<double> mask_d(n_slot);
+        for (int j = 0; j < n_slot; j++) {
+            int share_idx = (i * n_slot + j) % share.data_double.get_size();
+            mask_d[j] = share.data_double.get(share_idx);
+        }
+        CkksPlaintext mask_pt = ctx_copy.encode(mask_d, level, ctx_copy.get_parameter().get_default_scale());
+        result.data[i] = ctx_copy.add_plain(data[i], mask_pt);
+    });
+    return result;
+}
+
+Feature2DEncrypted Feature2DEncrypted::combine_with_share_simple_for_multi_pack(const Feature2DShare& share,
+                                                                                PackType pack_type) const {
+    Feature2DEncrypted result(this->context, this->level, this->skip, this->invalid_fill, pack_type);
+    result.n_channel = this->n_channel;
+    result.n_channel_per_ct = this->n_channel_per_ct;
+    result.shape = this->shape;
+    result.skip = this->skip;
+    result.packing_type = pack_type;
+
+    Array<double, 1> share_mg = share.data_double.copy();
+    Array<double, 3> share_mg_3d = share_mg.reshape<3>({this->n_channel, this->shape[0], this->shape[1]});
+    auto result_copy = result.copy();
+    auto mask_pt = multi_pack_to_pt(share_mg_3d, result_copy, this->n_channel, this->shape, this->skip, *context, level,
+                                    context->get_parameter().get_default_scale(), pack_type);
+
+    int n_ct = this->data.size();
+    result.data.clear();
+    result.data.resize(n_ct);
+    for (int i = 0; i < n_ct; i++) {
+        result.data[i] = context->add_plain(data[i], mask_pt[i]);
+    }
     return result;
 }
 
@@ -697,6 +835,25 @@ void Feature2DEncrypted::decrypt_to_share(Feature2DShare* share, PackType pack_t
     share->data = array_double_to_uint64(x_double_matrix, share->scale_ord, share->ring_mod).reshape<1>({0});
 }
 
+void Feature2DEncrypted::decrypt_to_share_simple(Feature2DShare* share, PackType pack_type) const {
+    share->shape = shape;
+    Array<double, 3> x_double_matrix;
+    if (pack_type == PackType::MultiplexedPacking) {
+        x_double_matrix = this->unpack_multiplexed();
+    } else if (pack_type == PackType::MultipleChannelPacking) {
+        x_double_matrix = this->unpack_multiple_channel();
+    } else if (pack_type == PackType::InterleavedPacking) {
+        Duo block_expansion = {(uint32_t)ceil(shape[0] / (double)BLOCK_SHAPE[0]),
+                               (uint32_t)ceil(shape[1] / (double)BLOCK_SHAPE[1])};
+        x_double_matrix = this->unpack_interleaved(BLOCK_SHAPE, block_expansion);
+    }
+
+    share->data_double.resize({x_double_matrix.get_size()});
+    for (int i = 0; i < x_double_matrix.get_size(); i++) {
+        share->data_double.set(i, x_double_matrix.get_data()[i]);
+    }
+}
+
 Array<uint64_t, 1> Feature2DEncrypted::encrypt_from_share(const Feature2DShare& share,
                                                           int n_channel,
                                                           const Duo& input_shape,
@@ -726,6 +883,25 @@ Array<uint64_t, 1> Feature2DEncrypted::encrypt_from_share(const Feature2DShare& 
     }
 
     return y0_add_mod;
+}
+
+void Feature2DEncrypted::encrypt_from_share_simple(const Feature2DShare& share,
+                                                   int n_channel,
+                                                   const Duo& input_shape,
+                                                   PackType pack_type) {
+    this->shape = input_shape;
+    Array<double, 1> share_mg = share.data_double.copy();
+
+    Array<double, 3> y3 = share_mg.reshape<3>({uint64_t(n_channel), input_shape[0], input_shape[1]});
+    if (pack_type == PackType::MultipleChannelPacking) {
+        this->pack_multiple_channel(y3, true, DEFAULT_SCALE);
+    } else if (pack_type == PackType::MultiplexedPacking) {
+        this->pack_multiplexed(y3, true, DEFAULT_SCALE);
+    } else if (pack_type == PackType::InterleavedPacking) {
+        Duo block_expansion = {(uint32_t)ceil(input_shape[0] / (double)BLOCK_SHAPE[0]),
+                               (uint32_t)ceil(input_shape[1] / (double)BLOCK_SHAPE[1])};
+        this->pack_interleaved(y3, BLOCK_SHAPE, block_expansion, true, DEFAULT_SCALE);
+    }
 }
 
 void Feature2DEncrypted::decompress() {

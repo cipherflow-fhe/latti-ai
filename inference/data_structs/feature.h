@@ -56,6 +56,7 @@ public:
     uint64_t ring_mod;
     int scale_ord;
     Array<uint64_t, 1> data;
+    Array<double, 1> data_double;
 };
 
 int64_t gen_random_for_share(int r_bitlength);

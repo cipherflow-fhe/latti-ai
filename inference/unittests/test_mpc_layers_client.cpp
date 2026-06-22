@@ -20,6 +20,7 @@
 #include "SCI/src/globals.h"
 #include "data_structs/feature.h"
 
+#include <cstring>
 #include <cstdlib>
 
 using namespace std;
@@ -37,9 +38,27 @@ constexpr int kLevel = 5;
 constexpr uint32_t kNChannel = 4;
 const Duo kShape = {16, 16};
 
-int get_test_port(int argc, char** argv, int arg_idx = 1) {
-    if (argc > arg_idx) {
-        return atoi(argv[arg_idx]);
+bool is_integer_arg(const char* value) {
+    if (value == nullptr || *value == '\0') {
+        return false;
+    }
+    if (*value == '-' || *value == '+') {
+        value++;
+    }
+    while (*value != '\0') {
+        if (*value < '0' || *value > '9') {
+            return false;
+        }
+        value++;
+    }
+    return true;
+}
+
+int get_test_port(int argc, char** argv) {
+    for (int i = 1; i < argc; i++) {
+        if (is_integer_arg(argv[i])) {
+            return atoi(argv[i]);
+        }
     }
     if (const char* env_port = getenv("MPC_TEST_PORT")) {
         return atoi(env_port);
@@ -107,9 +126,44 @@ void run_relu_client(int port_in) {
     dt.io_in->flush();
 }
 
+void test_new_mpc_refresh_client(int port_in) {
+    init_mpc_party(port_in);
+    cout << "refresh client: RecodeBigComplex path" << endl;
+
+    int N = 16384;
+    CkksParameter param = CkksParameter::create_parameter(N);
+    CkksContext context = CkksContext::create_random_context(param, MAX_LEVEL, true);
+    context.gen_rotation_keys();
+
+    DataTransmission dt(io);
+    dt.send_bytes(context.serialize());
+
+    Bytes recv_ct_bytes = dt.receive_bytes();
+    CkksCiphertext recv_ct = CkksCiphertext::deserialize(recv_ct_bytes);
+
+    CkksPlaintext recv_pt = context.decrypt(recv_ct);
+
+    constexpr int refreshed_level = 3;
+    double scale = context.get_parameter().get_default_scale();
+    // CkksPlaintext recode_pt = context.recode_big_complex(recv_pt, refreshed_level, scale);
+
+    // CkksCiphertext send_ct = context.encrypt_symmetric(recode_pt);
+    CkksPlaintext recode_pt = context.encode(context.decode(recv_pt),refreshed_level,scale);
+    CkksCiphertext send_ct = context.encrypt_symmetric(recode_pt);
+    dt.send_bytes(send_ct.serialize(context.get_parameter()));
+    dt.io_in->flush();
+}
+
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    run_relu_client(get_test_port(argc, argv));
+    int port_in = get_test_port(argc, argv);
+    if (argc > 1 && strcmp(argv[1], "refresh") == 0) {
+        test_new_mpc_refresh_client(port_in);
+        return 0;
+    }
+
+    run_relu_client(port_in);
     return 0;
 }

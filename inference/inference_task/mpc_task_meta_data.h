@@ -8,10 +8,12 @@
 enum class MpcProtoType {
     end,
     enc_to_share,
+    enc_to_share_simple,
     enc_to_share_for_multi_channel_pack,
     share_to_enc_for_multi_channel_pack,
     enc_to_share_0d,
     share_to_enc,
+    share_to_enc_simple,
     share_to_enc_0d,
     share_2d_to_0d,
     relu,
@@ -26,7 +28,9 @@ enum class MpcProtoType {
     reciprocal,
     sqrt,
     softmax,
-    simple_poly_relu
+    simple_poly_relu,
+    enc_to_share_for_multi_channel_pack_simple,
+    share_to_enc_for_multi_channel_pack_simple
 };
 
 class MpcTaskMetaData {
