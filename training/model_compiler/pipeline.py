@@ -150,17 +150,25 @@ def process_with_no_btp(graph: LayerAbstractGraph):
     return reset_level_and_check_level(graph)
 
 
+def get_restore_param_candidates():
+    if is_mpc_flow():
+        # return [PN13QP218]
+        return [PN14QP438]
+    return [N16QP1546H192H32]
+
+
 def try_btp(
     num_experiments: int,
     raw_graph: LayerAbstractGraph,
     temperature: float,
     num_workers: int,
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
-    btp_param_list = [N16QP1546H192H32]
+    btp_param_list = get_restore_param_candidates()
     valid_results = []
     for params in btp_param_list:
         set_fhe_param(params)
         set_block_shape(config.fhe_param, raw_graph)
+        print(f'Trying FheParam {config.fhe_param.name}')
 
         # (1) Pre-process
         pt_graph = prepare_graph(raw_graph)
@@ -219,8 +227,6 @@ def run_mpc_post_dp_passes(graph: LayerAbstractGraph):
     update_btp_to_mpc_refresh(graph)
     run_mpc_metadata_pass(graph)
     processor.change_skip_for_graph(graph)
-    update_btp_to_mpc_refresh(graph)
-    run_mpc_metadata_pass(graph)
 
 
 def post_process(graph: LayerAbstractGraph):

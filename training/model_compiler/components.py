@@ -280,7 +280,6 @@ class GlobalConfig:
             cls._instance.block_shape = [1, 1]
             cls._instance.graph_type = config_dict.get('GRAPH_TYPE', 'btp')
             cls._instance.style = config_dict.get('STYLE', 'multiplexed')
-            cls._instance.mpc_refresh = config_dict.get('MPC_REFRESH', False)
             cls._instance.approx_poly_type = config_dict.get('APPROX_POLY_TYPE', 'polyact')
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
             cls._instance.set_btp_scale = None
@@ -894,7 +893,7 @@ class LayerAbstractGraph:
                 compute_node = MultCoeffComputeNode(key, layer_type, layer_json['coeff'], channel_input, channel_output)
 
             elif layer_type in ('polyact', 'relu2d', 'square', 'sigmoid'):
-                if layer_type == 'relu2d' and not (config.mpc_refresh or config.graph_type == 'mpc'):
+                if layer_type == 'relu2d' and config.graph_type != 'mpc':
                     raise ValueError('Relu2d is not supported in current mode')
                 compute_node = ActivationComputeNode(key, layer_type, channel_input, channel_output)
                 if layer_type in ('polyact', 'relu2d'):

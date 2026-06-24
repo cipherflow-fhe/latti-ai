@@ -148,7 +148,7 @@ def get_compute_score(
 
 
 def is_mpc_flow() -> bool:
-    return config.mpc_refresh or config.graph_type == 'mpc'
+    return config.graph_type == 'mpc'
 
 
 def get_restoring_score(dag, restore_node, param_dict):

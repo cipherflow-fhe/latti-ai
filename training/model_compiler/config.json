@@ -1,7 +1,6 @@
 {
   "GRAPH_TYPE": "mpc",
   "STYLE": "multiplexed",
-  "MPC_REFRESH": true,
   "APPROX_POLY_TYPE": "polyact",
   "SET_LEVEL_MAX": true,
   "SINGLE_THREAD": false

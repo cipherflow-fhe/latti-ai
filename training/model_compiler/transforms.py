@@ -307,7 +307,7 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
         raise ValueError(f'refreshed nodes with same node id {new_id}. Something is wrong!')
 
     refreshed_feature.node_id = new_id
-    if config.mpc_refresh:
+    if config.graph_type == 'mpc':
         skip = [1] * upstream_feature.dim
     else:
         skip = dag.nodes[upstream_feature]['skip']
@@ -642,7 +642,11 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                 else:
                     for i in range(preds[0].dim):
                         succ.shape[i] = preds[0].shape[i]
-                        graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
+                    pred_skips = [graph.dag.nodes[pred]['skip'][: succ.dim] for pred in preds]
+                    if len(pred_skips) > 1 and any(skip != pred_skips[0] for skip in pred_skips[1:]):
+                        graph.dag.nodes[succ]['skip'] = [1] * succ.dim
+                    else:
+                        graph.dag.nodes[succ]['skip'] = pred_skips[0].copy()
                 # Propagate head_shape for feature_mat pass-through layers
                 if succ.head_shape is None and preds[0].head_shape is not None:
                     succ.head_shape = list(preds[0].head_shape)
@@ -825,10 +829,10 @@ def split_graph_to_linear_subgraph(dag: nx.DiGraph) -> list[nx.DiGraph]:
     return [dag_of_linear_subgraphs.subgraph(component).copy() for component in components if len(component) > 1]
 
 
-def handle_valid_poly_subgraph(subgraph: nx.DiGraph, use_mpc_refresh: bool = False):
+def handle_valid_poly_subgraph(subgraph: nx.DiGraph, use_mpc_flow: bool = False):
     """Handle poly nodes that can be absorbed in the current subgraph"""
 
-    if not use_mpc_refresh:
+    if not use_mpc_flow:
         for node in subgraph.nodes:
             if isinstance(node, ComputeNode):
                 if node.layer_type == 'polyact' or node.layer_type == 'relu2d':
@@ -902,10 +906,10 @@ def handle_valid_poly_subgraph(subgraph: nx.DiGraph, use_mpc_refresh: bool = Fal
                 btp_node.up_scale_str.append(target.layer_id)
 
 
-def set_graph_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
+def set_graph_scale(graph: LayerAbstractGraph, use_mpc_flow: bool = False):
     subgraphs = split_graph_to_linear_subgraph(graph.dag)
     for sub in subgraphs:
-        handle_valid_poly_subgraph(sub, use_mpc_refresh)
+        handle_valid_poly_subgraph(sub, use_mpc_flow)
 
     set_feature_scales(graph)
 
@@ -952,9 +956,9 @@ def set_feature_scales(graph: LayerAbstractGraph):
             node_out = set_scale_for_node(graph, compute, scale)
 
 
-def linear_subgraph_can_absorb_scale(subgraph: nx.DiGraph, use_mpc_refresh: bool = False):
+def linear_subgraph_can_absorb_scale(subgraph: nx.DiGraph, use_mpc_flow: bool = False):
     """Check if nodes in the linear subgraph can be absorbed"""
-    if use_mpc_refresh:
+    if use_mpc_flow:
         layers_to_absorb = ['bootstrapping']
     else:
         layers_to_absorb = ['avgpool1d', 'avgpool2d', 'mult_coeff']
@@ -983,12 +987,12 @@ def insert_mult_scalar_in_linear_subgraph(graph, subgraph: nx.DiGraph):
     add_mult_scalar_behind_node(graph, first_compute_node)
 
 
-def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
+def absorb_scale(graph: LayerAbstractGraph, use_mpc_flow: bool = False):
     subgraphs = split_graph_to_linear_subgraph(graph.dag)
 
     unchangable_subgraphs = list()
     for subgraph in subgraphs:
-        if not linear_subgraph_can_absorb_scale(subgraph, use_mpc_refresh):
+        if not linear_subgraph_can_absorb_scale(subgraph, use_mpc_flow):
             unchangable_subgraphs.append(subgraph)
 
     for subgraph in unchangable_subgraphs:
