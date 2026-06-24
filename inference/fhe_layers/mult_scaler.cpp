@@ -116,11 +116,20 @@ void MultScalarLayer::prepare_weight() {
 
 std::vector<CkksCiphertext> MultScalarLayer::run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
     vector<CkksCiphertext> res(x.size());
-    parallel_for(x.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int x_idx) {
-        auto w_pt = ctx_copy.ringt_to_mul(weight_pt[x_idx], x[x_idx].get_level());
-        res[x_idx] =
-            ctx_copy.rescale(ctx_copy.mult_plain_mul(x[x_idx], w_pt), ctx_copy.get_parameter().get_default_scale());
-    });
+    if (weight_pt.empty()) {
+        parallel_for(x.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int x_idx) {
+            auto weight_pt_for_index = generate_weight_pt_for_index(ctx_copy, x_idx);
+            auto w_pt = ctx_copy.ringt_to_mul(weight_pt_for_index, x[x_idx].get_level());
+            res[x_idx] =
+                ctx_copy.rescale(ctx_copy.mult_plain_mul(x[x_idx], w_pt), ctx_copy.get_parameter().get_default_scale());
+        });
+    } else {
+        parallel_for(x.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int x_idx) {
+            auto w_pt = ctx_copy.ringt_to_mul(weight_pt[x_idx], x[x_idx].get_level());
+            res[x_idx] =
+                ctx_copy.rescale(ctx_copy.mult_plain_mul(x[x_idx], w_pt), ctx_copy.get_parameter().get_default_scale());
+        });
+    }
     return res;
 }
 

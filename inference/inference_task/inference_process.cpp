@@ -20,6 +20,7 @@
 #include "../lattisense/cxx_sdk_v2/cxx_fhe_task.h"
 #include "fhe_mpc.h"
 #include "fhe-mpc/mpc/SCI/src/globals.h"
+#include "mpc_task_meta_data.h"
 #include <cmath>
 #include <iostream>
 
@@ -31,6 +32,16 @@ int party __attribute__((weak)) = SERVER;
 int port __attribute__((weak)) = 12309;
 string address __attribute__((weak)) = "127.0.0.1";
 int num_threads __attribute__((weak)) = 1;
+
+const vector<MpcProtoType> REFRESH_MPC = {MpcProtoType::enc_to_share_for_multi_channel_pack_simple,
+                                          MpcProtoType::share_to_enc_for_multi_channel_pack_simple};
+
+static uint8_t ckks_parameter_id_to_u8(const string& param_id) {
+    if (param_id.rfind("param", 0) == 0) {
+        return static_cast<uint8_t>(stoi(param_id.substr(5)));
+    }
+    return static_cast<uint8_t>(stoi(param_id));
+}
 
 PackType choose_pack_type(Duo shape, Duo block_shape) {
     if (shape[0] > block_shape[0] || shape[1] > block_shape[1]) {
@@ -463,6 +474,42 @@ void InitInferenceProcess::_init_drop_level_layer(const string& key, const json&
     _prepare_layer(key, move(drop_level));
 }
 
+void InitInferenceProcess::_init_mpc_layer(const vector<MpcProtoType>& operations,
+                                           const json& layer,
+                                           MpcTaskMetaData& meta_data) {
+    FeatureNode feature_input0(json_features[layer["feature_input"][0].get<string>()]);
+    FeatureNode feature_output0(json_features[layer["feature_output"][0].get<string>()]);
+    PackType pack_type = PackType::MultipleChannelPacking;
+    if (pack_style == "multiplexed") {
+        pack_type = choose_pack_type(feature_input0.shape, block_shape);
+    }
+
+    uint8_t param_id_in = ckks_parameter_id_to_u8(feature_input0.ckks_parameter_id);
+    uint8_t param_id_out = ckks_parameter_id_to_u8(feature_output0.ckks_parameter_id);
+
+    for (MpcProtoType operation : operations) {
+        if (operation == MpcProtoType::enc_to_share_for_multi_channel_pack ||
+            operation == MpcProtoType::enc_to_share_for_multi_channel_pack_simple) {
+            meta_data.append(operation, {"u8", "u8", "u8", "u8"}, (uint8_t)feature_input0.level, param_id_in,
+                             param_id_out, (uint8_t)pack_type);
+        } else if (operation == MpcProtoType::share_to_enc_for_multi_channel_pack ||
+                   operation == MpcProtoType::share_to_enc_for_multi_channel_pack_simple) {
+            meta_data.append(operation, {"u8", "u32", "duo", "u8"}, (uint8_t)feature_output0.level,
+                             feature_output0.channel, feature_output0.skip, (uint8_t)pack_type);
+        } else {
+            throw runtime_error("unsupported mpc operation for InitInferenceProcess::_init_mpc_layer");
+        }
+    }
+
+}
+
+void InitInferenceProcess::_init_mpc_refresh_layer(const string& key, const json& layer) {
+    MpcTaskMetaData meta_data;
+    _init_mpc_layer(REFRESH_MPC, layer, meta_data);
+    meta_data_map_[key] = MakeU<MpcTaskMetaData>(move(meta_data));
+    ckks_mpc_refresh_[key] = MakeU<MpcRefreshLayerServer>(DEFAULT_SCALE_BIT, RING_MOD, 128.0);
+}
+
 void InitInferenceProcess::_init_reshape_layer(const string& key, const json& layer) {
     FeatureNode feature_input0(json_features[layer["feature_input"][0].get<string>()]);
 
@@ -791,6 +838,8 @@ void InitInferenceProcess::load_model_prepare() {
             _init_reshape_layer(key, value);
         } else if (layer_type == "drop_level") {
             _init_drop_level_layer(key, value);
+        } else if (layer_type == "mpc_refresh") {
+            _init_mpc_refresh_layer(key, value);
         } else if (layer_type == "concat2d") {
             _init_concat_layer(key, value);
         } else if (layer_type == "upsample") {
@@ -812,6 +861,36 @@ void InitInferenceProcess::load_model_prepare() {
         }
     }
     H5Fclose(h5_file);
+}
+
+Feature2DEncrypted InferenceProcess::calculate_mpc_refresh(const string& key,
+                                                           const json& layer,
+                                                           int scale_ord,
+                                                           double pt_range,
+                                                           uint64_t ring_mod) {
+    FeatureNode feature_input(fp->json_features[layer["feature_input"][0].get<string>()]);
+    FeatureNode feature_output(fp->json_features[layer["feature_output"][0].get<string>()]);
+    const FeatureEncrypted& feature_node = _get_feature(layer["feature_input"][0].get<string>());
+    if (feature_node.dim != 2) {
+        throw runtime_error("mpc_refresh currently expects Feature2DEncrypted input");
+    }
+
+    const Feature2DEncrypted& x_enc = dynamic_cast<const Feature2DEncrypted&>(feature_node);
+    CkksContext& context_in = *ckks_contexts.at(feature_input.ckks_parameter_id);
+    CkksContext& context_out = *ckks_contexts.at(feature_output.ckks_parameter_id);
+    PackType pack_type = PackType::MultipleChannelPacking;
+    if (fp->pack_style == "multiplexed") {
+        pack_type = choose_pack_type(feature_input.shape, fp->block_shape);
+    }
+
+    Feature2DShare x_share0 = server_enc_to_share_multi_pack_simple(context_in, x_enc, scale_ord, ring_mod, pack_type);
+    Feature2DShare y_share0(ring_mod, scale_ord);
+    fp->ckks_mpc_refresh_.at(key)->run(x_share0, y_share0);
+
+    Feature2DEncrypted y_ct = server_share_to_enc_multi_pack_simple(context_out, y_share0, scale_ord, ring_mod,
+                                                                    feature_output.level, pack_type);
+    y_ct.packing_type = pack_type;
+    return y_ct;
 }
 
 void InferenceProcess::run_task_sdk(bool enable_mpc) {
@@ -914,6 +993,18 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted or Feature0DEncrypted");
                 }
+            } else if (layer_type == "mpc_refresh") {
+                if (!enable_mpc) {
+                    throw runtime_error("mpc_refresh requires enable_mpc=true and an active MPC client");
+                }
+                mpc_timer.start();
+                DataTransmission data_trans(io);
+                cout << "[Server][MPC] Sending refresh metadata for layer " << key << endl;
+                data_trans.send_bytes(fp->meta_data_map_.at(key)->serialize());
+                auto refresh_result = calculate_mpc_refresh(key, layer.value(), DEFAULT_SCALE_BIT, 128.0, RING_MOD);
+                cout << "[Server][MPC] Finished refresh layer " << key << endl;
+                result = MakeU<Feature2DEncrypted>(move(refresh_result));
+                mpc_timer.stop();
             } else if (layer_type == "batchnorm" || layer_type == "batchnorm2d" || layer_type == "dropout" ||
                        layer_type == "mul" || layer_type == "identity") {
                 const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
@@ -1159,6 +1250,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
         }
     }
     fp->total_fhe_time += fhe_timer.get_duration().count();
+    fp->total_fpga_time += mpc_timer.get_duration().count();
 }
 
 void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
@@ -1517,8 +1609,8 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                     }
                 }
             }
-            if (layer_type == "bootstrapping" or layer_type == "drop_level" or layer_type == "batchnorm" or
-                layer_type == "batchnorm2d" or layer_type == "identity") {
+            if (layer_type == "bootstrapping" or layer_type == "mpc_refresh" or layer_type == "drop_level" or
+                layer_type == "batchnorm" or layer_type == "batchnorm2d" or layer_type == "identity") {
                 FeatureNode feature_input0(json_features[feature_input[0]]);
                 if (feature_input0.dim == 2) {
                     auto& input0 = p_feature2d_x[feature_input[0]];
@@ -1618,10 +1710,10 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 FeatureNode feature_input0(json_features[feature_input[0]]);
                 if (feature_input0.dim == 1) {
                     auto& input0 = p_feature1d_x[feature_input[0]];
-                    result0d = input0.reshape<1>({0}).to_array_1d();
+                    result0d = input0.copy().reshape<1>({0}).to_array_1d();
                 } else {
                     auto& input0 = p_feature2d_x[feature_input[0]];
-                    result0d = input0.reshape<1>({0}).to_array_1d();
+                    result0d = input0.copy().reshape<1>({0}).to_array_1d();
                 }
             }
             if (layer_type == "avgpool2d") {
@@ -1668,12 +1760,27 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 }
             }
             if (result.get_size() != 0) {
+                if (p_feature2d_x.find(feature_output_id) == p_feature2d_x.end() &&
+                    p_feature1d_x.find(feature_output_id) == p_feature1d_x.end() &&
+                    p_feature0d_x.find(feature_output_id) == p_feature0d_x.end()) {
+                    plaintext_feature_order_.push_back(feature_output_id);
+                }
                 p_feature2d_x[feature_output_id] = move(result);
             }
             if (result1d.get_size() != 0) {
+                if (p_feature2d_x.find(feature_output_id) == p_feature2d_x.end() &&
+                    p_feature1d_x.find(feature_output_id) == p_feature1d_x.end() &&
+                    p_feature0d_x.find(feature_output_id) == p_feature0d_x.end()) {
+                    plaintext_feature_order_.push_back(feature_output_id);
+                }
                 p_feature1d_x[feature_output_id] = move(result1d);
             }
             if (result0d.size() != 0) {
+                if (p_feature2d_x.find(feature_output_id) == p_feature2d_x.end() &&
+                    p_feature1d_x.find(feature_output_id) == p_feature1d_x.end() &&
+                    p_feature0d_x.find(feature_output_id) == p_feature0d_x.end()) {
+                    plaintext_feature_order_.push_back(feature_output_id);
+                }
                 p_feature0d_x[feature_output_id] = move(result0d);
             }
             available_keys.push_back(feature_output_id);
@@ -2095,6 +2202,9 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
 }
 
 void InferenceProcess::set_feature(const string& feature_id, unique_ptr<FeatureEncrypted> feature) {
+    if (intermediate_result_.find(feature_id) == intermediate_result_.end()) {
+        encrypted_feature_order_.push_back(feature_id);
+    }
     intermediate_result_[feature_id] = move(feature);
 }
 

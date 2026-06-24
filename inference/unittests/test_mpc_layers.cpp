@@ -1910,23 +1910,40 @@ void test_new_mpc_refresh_server() {
     CkksContext context = CkksContext::deserialize(dt.receive_bytes());
     const CkksParameter& param = context.get_parameter();
     int N = param.get_n();
-
-    vector<double> test_msg(N / 2, 0.0);
-    test_msg[0] = 3.23454;
-    test_msg[1] = -58.6;
-
-    int level = 1;
-    double scale = context.get_parameter().get_default_scale();
-    CkksPlaintext test_pt = context.encode(test_msg, level, scale);
-    CkksCiphertext input_ct = context.encrypt_symmetric(test_pt);
+    auto bit_length = [](uint64_t value) {
+        int bits = 0;
+        while (value != 0) {
+            ++bits;
+            value >>= 1;
+        }
+        return bits;
+    };
+    uint64_t q0 = param.get_q(0);
+    uint64_t q1 = param.get_q(1);
+    cout << "q0=" << q0 << ", bits=" << bit_length(q0)
+         << "; q1=" << q1 << ", bits=" << bit_length(q1) << endl;
 
     std::random_device rd;
     std::mt19937 gen(rd());
+    std::uniform_real_distribution<double> msg_dis(-2.0, 2.0);
+
+    vector<double> test_msg(N / 2);
+    for (int i = 0; i < test_msg.size(); i++) {
+        test_msg[i] = msg_dis(gen);
+    }
+
+    int level = 1;
+    // double scale = context.get_parameter().get_default_scale();
+    double scale = DEFAULT_SCALE;
+    CkksPlaintext test_pt = context.encode(test_msg, level, scale);
+    CkksCiphertext input_ct = context.encrypt_symmetric(test_pt);
+
     std::uniform_real_distribution<double> dis(-pow(2, 40), pow(2, 40));
 
     vector<double> R(N / 2);
-    R[0] = dis(gen);
-    R[1] = dis(gen);
+    for (int i = 0; i < R.size(); i++) {
+        R[i] = dis(gen);
+    }
     CkksPlaintext R_pt = context.encode(R, 3, scale);
 
     CkksCiphertext send_ct = context.sub_plain(input_ct, R_pt);
@@ -1941,7 +1958,7 @@ void test_new_mpc_refresh_server() {
     vector<double> res_mg = context.decode(res_pt);
 
     double max_error = 0.0;
-    for (int i = 0; i < min(32, (int)res_mg.size()); i++) {
+    for (int i = 0; i < (int)res_mg.size(); i++) {
         max_error = max(max_error, fabs(res_mg[i] - test_msg[i]));
     }
     cout << "refresh first slot=" << res_mg[0] << ", expected=" << test_msg[0]
@@ -1949,6 +1966,6 @@ void test_new_mpc_refresh_server() {
     REQUIRE(max_error < 1.0e-2);
 }
 
-// TEST_CASE("test_new_mpc_refresh_server", "[mpc][refresh]") {
-//     test_new_mpc_refresh_server();
-// }
+TEST_CASE("test_new_mpc_refresh_server", "[mpc][refresh]") {
+    test_new_mpc_refresh_server();
+}

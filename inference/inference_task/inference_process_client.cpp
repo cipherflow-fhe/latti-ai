@@ -219,7 +219,8 @@ Array1DUint process(map<string, unique_ptr<CkksContext>>* ckks_contexts) {
                 bytes_to_va(meta_data.data[i], {"u8", "u32"}, &level, &n_channel);
 
                 Feature2DEncrypted x_e(context_out, level, {1, 1}, {1, 1}, PackType::MultipleChannelPacking);
-                x_e.encrypt_from_share_simple(*im_2d, n_channel, im_2d->shape);
+                x_e.encrypt_from_share_simple(*im_2d, n_channel, im_2d->shape, PackType::MultipleChannelPacking,
+                                             MPC_REFRESH_USE_RECODE);
 
                 Bytes b = x_e.serialize();
                 data_trans.send_bytes(b);
@@ -272,7 +273,7 @@ Array1DUint process(map<string, unique_ptr<CkksContext>>* ckks_contexts) {
                 bytes_to_va(meta_data.data[i], {"u8", "u32", "duo", "u8"}, &level, &n_channel, &skip, &temp_int);
                 PackType pack_type = (PackType)temp_int;
                 Feature2DEncrypted x_e(context_out, level, skip, {1, 1}, pack_type);
-                x_e.encrypt_from_share_simple(*im_2d, n_channel, im_2d->shape, pack_type);
+                x_e.encrypt_from_share_simple(*im_2d, n_channel, im_2d->shape, pack_type, MPC_REFRESH_USE_RECODE);
 
                 Bytes b = x_e.serialize();
                 data_trans.send_bytes(b);

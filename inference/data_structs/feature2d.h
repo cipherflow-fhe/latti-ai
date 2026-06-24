@@ -134,13 +134,16 @@ public:
                        PackType packing_type_in = PackType::MultiplexedPacking);
 
     virtual std::vector<ls::CkksPlaintext> encode_multiple_channel(const Array<double, 3>& feature_mg,
-                                                                   double scale_in = DEFAULT_SCALE);
+                                                                   double scale_in = DEFAULT_SCALE,
+                                                                   bool use_recode = false);
     virtual std::vector<ls::CkksPlaintext> encode_interleaved(const Array<double, 3>& feature_mg,
                                                               const Duo& block_shape,
                                                               const Duo& stride,
-                                                              double scale_in = DEFAULT_SCALE);
+                                                              double scale_in = DEFAULT_SCALE,
+                                                              bool use_recode = false);
     virtual std::vector<ls::CkksPlaintext> encode_multiplexed(const Array<double, 3>& feature_mg,
-                                                              double scale_in = DEFAULT_SCALE);
+                                                              double scale_in = DEFAULT_SCALE,
+                                                              bool use_recode = false);
 
     virtual void
     column_pack(const Array<double, 2>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
@@ -148,14 +151,19 @@ public:
     row_pack(const Array<double, 2>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
     virtual void pack_multiple_channel(const Array<double, 3>& feature_mg,
                                        bool is_symmetric = false,
-                                       double scale_in = DEFAULT_SCALE);
+                                       double scale_in = DEFAULT_SCALE,
+                                       bool use_recode = false);
     virtual void
-    pack_multiplexed(const Array<double, 3>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
+    pack_multiplexed(const Array<double, 3>& feature_mg,
+                     bool is_symmetric = false,
+                     double scale_in = DEFAULT_SCALE,
+                     bool use_recode = false);
     virtual void pack_interleaved(const Array<double, 3>& feature_mg,
                                   const Duo& block_shape,
                                   const Duo& stride,
                                   bool is_symmetric = false,
-                                  double scale_in = DEFAULT_SCALE);
+                                  double scale_in = DEFAULT_SCALE,
+                                  bool use_recode = false);
 
     virtual Array<double, 3> unpack_multiplexed() const;
     virtual Array<double, 3> unpack_interleaved(const Duo& block_shape, const Duo& stride) const;
@@ -193,7 +201,8 @@ public:
     void encrypt_from_share_simple(const Feature2DShare& share,
                                    int n_channel,
                                    const Duo& input_shape,
-                                   PackType pack_type = PackType::MultipleChannelPacking);
+                                   PackType pack_type = PackType::MultipleChannelPacking,
+                                   bool use_recode = false);
     void decompress();
 
     Bytes serialize() const override;

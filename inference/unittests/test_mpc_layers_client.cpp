@@ -130,7 +130,7 @@ void test_new_mpc_refresh_client(int port_in) {
     init_mpc_party(port_in);
     cout << "refresh client: RecodeBigComplex path" << endl;
 
-    int N = 16384;
+    int N = 8192;
     CkksParameter param = CkksParameter::create_parameter(N);
     CkksContext context = CkksContext::create_random_context(param, MAX_LEVEL, true);
     context.gen_rotation_keys();
@@ -145,11 +145,11 @@ void test_new_mpc_refresh_client(int port_in) {
 
     constexpr int refreshed_level = 3;
     double scale = context.get_parameter().get_default_scale();
-    // CkksPlaintext recode_pt = context.recode_big_complex(recv_pt, refreshed_level, scale);
+    CkksPlaintext recode_pt = context.recode_big_complex(recv_pt, refreshed_level, scale);
 
-    // CkksCiphertext send_ct = context.encrypt_symmetric(recode_pt);
-    CkksPlaintext recode_pt = context.encode(context.decode(recv_pt),refreshed_level,scale);
     CkksCiphertext send_ct = context.encrypt_symmetric(recode_pt);
+    // CkksPlaintext recode_pt = context.encode(context.decode(recv_pt),refreshed_level,scale);
+    // CkksCiphertext send_ct = context.encrypt_symmetric(recode_pt);
     dt.send_bytes(send_ct.serialize(context.get_parameter()));
     dt.io_in->flush();
 }

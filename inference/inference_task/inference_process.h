@@ -24,6 +24,8 @@
 
 #include "util.h"
 #include "fhe_layers/fhe_layers.h"
+#include "../fhe-mpc/mpc_refresh_layer.h"
+#include "mpc_task_meta_data.h"
 
 namespace lattisense {
 class FheTaskGpu;
@@ -33,6 +35,8 @@ class FheTaskCpu;
 namespace ls = lattisense;
 
 enum class ComputeDevice { CPU, GPU, FPGA };
+
+class InferenceProcess;
 
 class Node {
 public:
@@ -85,6 +89,8 @@ Array<double, dim> h5_to_array(const hid_t& h5_file,
 }
 
 class InitInferenceProcess {
+    friend class InferenceProcess;
+
 public:
     InitInferenceProcess() {}
     InitInferenceProcess(const std::string& project_path_in, bool is_fpga = true);
@@ -144,6 +150,10 @@ private:
                                          const hid_t& h5_file,
                                          const Duo& block_shape = {128, 256});
     virtual void _init_drop_level_layer(const std::string& key, const json& layer);
+    virtual void _init_mpc_refresh_layer(const std::string& key, const json& layer);
+    virtual void _init_mpc_layer(const std::vector<MpcProtoType>& operations,
+                                 const json& layer,
+                                 MpcTaskMetaData& meta_data);
     virtual void _init_fhe_avgpool_layer(const std::string& key,
                                          const json& layer,
                                          const bool& is_adaptive = true,
@@ -201,6 +211,8 @@ private:
 
     std::map<std::string, UPtr<ls::CkksParameter>> ckks_parameters_;
     std::map<std::string, UPtr<Layer>> ckks_layers_;
+    std::map<std::string, UPtr<MpcTaskMetaData>> meta_data_map_;
+    std::map<std::string, UPtr<MpcRefreshLayerServer>> ckks_mpc_refresh_;
 };
 
 class InferenceServer;  // forward declaration for friend
@@ -221,6 +233,8 @@ public:
     std::map<std::string, Array<double, 2>> p_feature1d_x;
     std::vector<std::string> available_keys;
     std::map<std::string, Array1D> p_feature0d_x;
+    std::vector<std::string> encrypted_feature_order_;
+    std::vector<std::string> plaintext_feature_order_;
 
     void run_task(bool is_mpc = false, ls::ProgressCallback progress_cb = nullptr);
     void run_task_sdk(bool is_mpc = false);
@@ -236,6 +250,11 @@ private:
 
     // Register the encode_pt custom executor
     void register_custom_executors(std::unordered_map<std::string, ExecutorFunc>& executors);
+    Feature2DEncrypted calculate_mpc_refresh(const std::string& key,
+                                             const json& layer,
+                                             int scale_ord,
+                                             double pt_range,
+                                             uint64_t ring_mod);
     void set_feature(const std::string& feature_id, UPtr<FeatureEncrypted> feature);
     template <typename T> T get_ciphertext_output_feature(const std::string& feature_id) {
         return dynamic_cast<const T&>(_get_feature(feature_id)).copy();

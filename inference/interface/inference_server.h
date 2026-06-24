@@ -51,8 +51,14 @@ public:
     /// Import evaluation context (public keys only) from serialized bytes.
     void import_eval_context(const Bytes& eval_context);
 
+    /// Import evaluation context as a regular CKKS context even if task_config.json has use_btp=true.
+    void import_eval_context_ckks(const Bytes& eval_context);
+
     /// Load model weights and computation graph.
     void load_model();
+
+    /// Load model for the hand-written SDK/MPC executor without task_signature.json.
+    void load_model_for_mpc_sdk();
 
     /// Run encrypted inference on serialized ciphertext inputs.
     /// @param encrypted_inputs  Map of input name -> serialized ciphertext bytes.
@@ -60,6 +66,21 @@ public:
     /// Returns map of output name -> serialized ciphertext bytes.
     std::map<std::string, Bytes> evaluate(const std::map<std::string, Bytes>& encrypted_inputs,
                                           ls::ProgressCallback progress_cb = nullptr);
+
+    /// Run encrypted inference through the SDK executor with MPC refresh enabled.
+    /// Requires an active MPC client connected through the global SCI channel.
+    std::map<std::string, Bytes> evaluate_mpc_sdk(const std::map<std::string, Bytes>& encrypted_inputs);
+
+    /// Last SDK MPC refresh time in milliseconds.
+    double get_last_mpc_time_ms() const;
+
+    /// Dump all encrypted intermediate features as plaintext for local debugging.
+    /// Requires a full CKKS context with the secret key.
+    void dump_intermediate_plaintexts(const std::string& output_path) const;
+
+    /// Run plaintext inference and dump all plaintext intermediate features.
+    void dump_plaintext_intermediates(const std::map<std::string, std::string>& input_csvs,
+                                      const std::string& output_path);
 
     /// Run plaintext inference on CSV input files (for verification).
     std::map<std::string, std::vector<double>> evaluate_plaintext(const std::map<std::string, std::string>& input_csvs);

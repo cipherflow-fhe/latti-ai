@@ -23,6 +23,32 @@ target_link_libraries(inference PUBLIC
     ${HDF5_CXX_LIBRARIES}
 )
 
+function(add_mpc_inference_example target source)
+    add_executable(${target} ${source})
+    target_compile_definitions(${target} PRIVATE LATTIAI_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(${target} PUBLIC
+        -Wl,--start-group
+        inference_interface
+        inference_task
+        mpc_layers
+        fhe_layers
+        log
+        SCI-Cheetah
+        Cheetah-Linear
+        gemini
+        SCI-Cheetah-BuildingBlocks
+        SCI-Math
+        SCI-LinearOT
+        SCI-BuildingBlocks
+        -Wl,--end-group
+        lattisense
+        ${HDF5_CXX_LIBRARIES}
+    )
+endfunction()
+
+add_mpc_inference_example(mpc_inference_sdk_server mpc_inference_sdk_server.cpp)
+add_mpc_inference_example(mpc_inference_sdk_client mpc_inference_sdk_client.cpp)
+
 # --- Example verification tests ---
 set(EXAMPLES_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 

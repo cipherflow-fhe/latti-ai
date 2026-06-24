@@ -36,7 +36,9 @@ Feature2DEncrypted::Feature2DEncrypted(CkksContext* context_in,
     level = ct_level;
 }
 
-vector<CkksPlaintext> Feature2DEncrypted::encode_multiple_channel(const Array<double, 3>& feature_mg, double scale_in) {
+vector<CkksPlaintext> Feature2DEncrypted::encode_multiple_channel(const Array<double, 3>& feature_mg,
+                                                                  double scale_in,
+                                                                  bool use_recode) {
     int n_slot = context->get_parameter().get_n() / 2;
     const int N_THREAD = 4;
 
@@ -66,12 +68,18 @@ vector<CkksPlaintext> Feature2DEncrypted::encode_multiple_channel(const Array<do
                 }
             }
         }
-        pt_vec[ct_idx] = ctx_copy.encode(image_flat, level, scale_in);
+        CkksPlaintext pt = ctx_copy.encode(image_flat, level, scale_in);
+        if (use_recode) {
+            pt = ctx_copy.recode_big_complex(pt, level, scale_in);
+        }
+        pt_vec[ct_idx] = move(pt);
     });
     return pt_vec;
 }
 
-vector<CkksPlaintext> Feature2DEncrypted::encode_multiplexed(const Array<double, 3>& feature_mg, double scale_in) {
+vector<CkksPlaintext> Feature2DEncrypted::encode_multiplexed(const Array<double, 3>& feature_mg,
+                                                             double scale_in,
+                                                             bool use_recode) {
     int n_slot = context->get_parameter().get_n() / 2;
     const int N_THREAD = 4;
 
@@ -109,7 +117,11 @@ vector<CkksPlaintext> Feature2DEncrypted::encode_multiplexed(const Array<double,
                 }
             }
         }
-        pt_vec[ct_idx] = ctx_copy.encode(feature_pack, level, scale_in);
+        CkksPlaintext pt = ctx_copy.encode(feature_pack, level, scale_in);
+        if (use_recode) {
+            pt = ctx_copy.recode_big_complex(pt, level, scale_in);
+        }
+        pt_vec[ct_idx] = move(pt);
     });
     return pt_vec;
 }
@@ -117,7 +129,8 @@ vector<CkksPlaintext> Feature2DEncrypted::encode_multiplexed(const Array<double,
 vector<CkksPlaintext> Feature2DEncrypted::encode_interleaved(const Array<double, 3>& feature_mg,
                                                              const Duo& block_shape,
                                                              const Duo& stride,
-                                                             double scale_in) {
+                                                             double scale_in,
+                                                             bool use_recode) {
     const int N_THREAD = 4;
 
     auto input_shape = feature_mg.get_shape();
@@ -143,14 +156,21 @@ vector<CkksPlaintext> Feature2DEncrypted::encode_interleaved(const Array<double,
                 }
             }
         }
-        pt_vec[i] = ctx_copy.encode(slots, level, scale_in);
+        CkksPlaintext pt = ctx_copy.encode(slots, level, scale_in);
+        if (use_recode) {
+            pt = ctx_copy.recode_big_complex(pt, level, scale_in);
+        }
+        pt_vec[i] = move(pt);
     });
     return pt_vec;
 }
 
-void Feature2DEncrypted::pack_multiple_channel(const Array<double, 3>& feature_mg, bool is_symmetric, double scale_in) {
+void Feature2DEncrypted::pack_multiple_channel(const Array<double, 3>& feature_mg,
+                                               bool is_symmetric,
+                                               double scale_in,
+                                               bool use_recode) {
     packing_type = PackType::MultipleChannelPacking;
-    vector<CkksPlaintext> pt_vec = encode_multiple_channel(feature_mg, scale_in);
+    vector<CkksPlaintext> pt_vec = encode_multiple_channel(feature_mg, scale_in, use_recode);
     uint32_t n_ct = pt_vec.size();
     const int N_THREAD = 4;
 
@@ -175,9 +195,10 @@ void Feature2DEncrypted::pack_interleaved(const Array<double, 3>& feature_mg,
                                           const Duo& block_shape,
                                           const Duo& stride,
                                           bool is_symmetric,
-                                          double scale_in) {
+                                          double scale_in,
+                                          bool use_recode) {
     packing_type = PackType::InterleavedPacking;
-    vector<CkksPlaintext> pt_vec = encode_interleaved(feature_mg, block_shape, stride, scale_in);
+    vector<CkksPlaintext> pt_vec = encode_interleaved(feature_mg, block_shape, stride, scale_in, use_recode);
 
     const int N_THREAD = 4;
     data.clear();
@@ -196,9 +217,12 @@ void Feature2DEncrypted::pack_interleaved(const Array<double, 3>& feature_mg,
     });
 }
 
-void Feature2DEncrypted::pack_multiplexed(const Array<double, 3>& feature_mg, bool is_symmetric, double scale_in) {
+void Feature2DEncrypted::pack_multiplexed(const Array<double, 3>& feature_mg,
+                                          bool is_symmetric,
+                                          double scale_in,
+                                          bool use_recode) {
     packing_type = PackType::MultiplexedPacking;
-    vector<CkksPlaintext> pt_vec = encode_multiplexed(feature_mg, scale_in);
+    vector<CkksPlaintext> pt_vec = encode_multiplexed(feature_mg, scale_in, use_recode);
 
     const int N_THREAD = 4;
     data.clear();
@@ -509,7 +533,7 @@ void Feature2DEncrypted::split_to_shares_simple(Feature2DEncrypted* share0, Feat
     vector<double> r(n_mask);
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_real_distribution<double> dis(-pow(2, 8 + sigma), pow(2, 8 + sigma));
+    std::uniform_real_distribution<double> dis(-pow(2, DATA_BIT + sigma), pow(2, DATA_BIT + sigma));
     for (int i = 0; i < n_mask; i++) {
         r[i] = dis(gen);
         mask_d[i] = -r[i];
@@ -625,7 +649,7 @@ void Feature2DEncrypted::split_to_shares_for_multi_channel_pack_simple(Feature2D
     vector<double> r(n_share_feature);
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_real_distribution<double> dis(-pow(2, 8 + sigma), pow(2, 8 + sigma));
+    std::uniform_real_distribution<double> dis(-pow(2, DATA_BIT + sigma), pow(2, DATA_BIT + sigma));
     for (int i = 0; i < n_share_feature; i++) {
         r[i] = dis(gen);
         mask_d[i] = -r[i];
@@ -888,19 +912,20 @@ Array<uint64_t, 1> Feature2DEncrypted::encrypt_from_share(const Feature2DShare& 
 void Feature2DEncrypted::encrypt_from_share_simple(const Feature2DShare& share,
                                                    int n_channel,
                                                    const Duo& input_shape,
-                                                   PackType pack_type) {
+                                                   PackType pack_type,
+                                                   bool use_recode) {
     this->shape = input_shape;
     Array<double, 1> share_mg = share.data_double.copy();
 
     Array<double, 3> y3 = share_mg.reshape<3>({uint64_t(n_channel), input_shape[0], input_shape[1]});
     if (pack_type == PackType::MultipleChannelPacking) {
-        this->pack_multiple_channel(y3, true, DEFAULT_SCALE);
+        this->pack_multiple_channel(y3, true, DEFAULT_SCALE, use_recode);
     } else if (pack_type == PackType::MultiplexedPacking) {
-        this->pack_multiplexed(y3, true, DEFAULT_SCALE);
+        this->pack_multiplexed(y3, true, DEFAULT_SCALE, use_recode);
     } else if (pack_type == PackType::InterleavedPacking) {
         Duo block_expansion = {(uint32_t)ceil(input_shape[0] / (double)BLOCK_SHAPE[0]),
                                (uint32_t)ceil(input_shape[1] / (double)BLOCK_SHAPE[1])};
-        this->pack_interleaved(y3, BLOCK_SHAPE, block_expansion, true, DEFAULT_SCALE);
+        this->pack_interleaved(y3, BLOCK_SHAPE, block_expansion, true, DEFAULT_SCALE, use_recode);
     }
 }
 
