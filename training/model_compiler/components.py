@@ -929,6 +929,7 @@ class LayerAbstractGraph:
                 if layer_type in ('polyact', 'relu2d'):
                     compute_node.path = layer_json.get('weight_path', '')
                     compute_node.order = layer_json.get('order', 0)
+                    compute_node.weight_scale_list = layer_json.get('weight_scale_list', [1] * (compute_node.order + 1))
 
             elif layer_type == 'layernorm':
                 compute_node = LayerNormComputeNode(
@@ -1391,6 +1392,8 @@ class LayerAbstractGraph:
                     layer.bias_scale = layer.scale_up
 
                 layers[layer_id]['weight_scale'] = layer.weight_scale
+                if len(layer.weight_scale_list) != layer.order + 1:
+                    layer.weight_scale_list = [1] * (layer.order + 1)
                 layers[layer_id]['weight_scale_list'] = layer.weight_scale_list
             if 'conv' in layer_type or 'fc' in layer_type:
                 if hasattr(layer, 'is_conv_transpose') and layer.is_conv_transpose:

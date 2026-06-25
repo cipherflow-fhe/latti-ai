@@ -67,8 +67,9 @@ class PolyActComputeNode(ComputeNode):
                 module_path = '.'.join(parts[:-1])
             else:
                 module_path = layer_id
+        degree = 4
         for attr in x.attribute:
-            if attr.name == 'degree':
+            if attr.name in ('degree', 'degree_i'):
                 degree = attr.i
 
         return PolyActComputeNode(layer_id, layer_type, feature_input, feature_output, module_path, degree)
@@ -139,7 +140,7 @@ class PolyActRNPolyComputeNode(ComputeNode):
         prefix = PolyActRNPolyComputeNode._path_prefix(weight_path, layer_id)
         degree = 4
         for attr in x.attribute:
-            if attr.name == 'degree':
+            if attr.name in ('degree', 'degree_i'):
                 degree = attr.i
         return PolyActRNPolyComputeNode(
             layer_id,

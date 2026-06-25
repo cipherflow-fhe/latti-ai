@@ -303,31 +303,27 @@ def _compute_poly_coeffs(running_max, upper_bound, eps, hermite_coeffs):
     """
     import numpy as np
 
-    s = running_max / upper_bound + eps
+    s = np.asarray(running_max, dtype='float64').reshape(-1) / upper_bound + eps
     C = len(s)
     degree = len(hermite_coeffs) - 1
 
-    _a0 = hermite_coeffs[0]
-    _a1 = hermite_coeffs[1]
-    _a2 = hermite_coeffs[2]
+    # Probabilists' Hermite polynomials in ascending powers of x:
+    #   He_0 = 1, He_1 = x, He_n = x*He_{n-1} - (n-1)*He_{n-2}.
+    hermite_power = [np.array([1.0], dtype='float64')]
+    if degree >= 1:
+        hermite_power.append(np.array([0.0, 1.0], dtype='float64'))
+    for n in range(2, degree + 1):
+        x_he_prev = np.concatenate(([0.0], hermite_power[n - 1]))
+        he_prev2 = np.pad(hermite_power[n - 2], (0, len(x_he_prev) - len(hermite_power[n - 2])))
+        hermite_power.append(x_he_prev - (n - 1) * he_prev2)
 
-    if degree == 2:
-        c0 = s * (_a0 - _a2)
-        c1 = np.full(C, _a1)
-        c2 = _a2 / s
-        return np.array([c0, c1, c2])  # [3, C]
-
-    elif degree == 4:
-        _a4 = hermite_coeffs[4]
-        c0 = s * (_a0 - _a2 + 3 * _a4)
-        c1 = np.full(C, _a1)
-        c2 = (_a2 - 6 * _a4) / s
-        c3 = np.zeros(C)
-        c4 = _a4 / (s**3)
-        return np.array([c0, c1, c2, c3, c4])  # [5, C]
-
-    else:
-        raise ValueError(f'Unsupported degree: {degree}. Use 2 or 4.')
+    coeffs = np.zeros((degree + 1, C), dtype='float64')
+    for n, a_n in enumerate(hermite_coeffs):
+        for power, he_coeff in enumerate(hermite_power[n]):
+            if he_coeff == 0:
+                continue
+            coeffs[power] += float(a_n) * float(he_coeff) * np.power(s, 1 - power)
+    return coeffs
 
 
 def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verbose=True):
@@ -520,22 +516,42 @@ def export_h5_from_onnx(
     onnx_weights = {init.name: numpy_helper.to_array(init).astype('float64') for init in onnx_model.graph.initializer}
 
     # ------------------------------------------------------------------ #
-    # 2. Parse RangeNormPoly2d node attributes                           #
+    # 2. Parse RangeNormPoly node attributes                             #
     #    key: running_max initializer name -> {degree, upper_bound, eps} #
     # ------------------------------------------------------------------ #
+    def _attr_int(attrs, *names, default=0):
+        for name in names:
+            if name in attrs:
+                return int(attrs[name].i)
+        return default
+
+    def _attr_float(attrs, *names, default=0.0):
+        for name in names:
+            if name in attrs:
+                return float(attrs[name].f)
+        return default
+
+    def _attr_str(attrs, *names, default=''):
+        for name in names:
+            if name not in attrs:
+                continue
+            value = attrs[name].s
+            return value.decode() if isinstance(value, bytes) else str(value)
+        return default
+
     poly_node_attrs = {}
     for node in onnx_model.graph.node:
-        if node.op_type != 'RangeNormPoly2d':
+        if node.op_type not in ('RangeNormPoly2d', 'RangeNormPoly1d'):
             continue
         rm_key = next((inp for inp in node.input if inp.endswith('rangenorm.running_max')), None)
         if rm_key is None:
             continue
         attr = {a.name: a for a in node.attribute}
         poly_node_attrs[rm_key] = {
-            'degree': attr['degree_i'].i if 'degree_i' in attr else 4,
-            'upper_bound': attr['upper_bound'].f if 'upper_bound' in attr else 3.0,
-            'eps': attr['eps_f'].f if 'eps_f' in attr else 1e-3,
-            'activation_name': attr['activation_s'].s.decode() if 'activation_s' in attr else 'relu',
+            'degree': _attr_int(attr, 'degree', 'degree_i', default=4),
+            'upper_bound': _attr_float(attr, 'upper_bound', 'upper_bound_f', default=3.0),
+            'eps': _attr_float(attr, 'eps', 'eps_f', default=1e-3),
+            'activation_name': _attr_str(attr, 'activation', 'activation_s', default='relu'),
         }
 
     # ------------------------------------------------------------------ #
