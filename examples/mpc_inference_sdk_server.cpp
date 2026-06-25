@@ -99,8 +99,8 @@ int main(int argc, char* argv[]) {
 
         DataTransmission data_trans(io);
         unsigned char dump_flag = g_dump_intermediate_plaintexts ? 1 : 0;
-        data_trans.io_in->send_data(&dump_flag, sizeof(dump_flag));
-        data_trans.io_in->flush();
+        data_trans.send_data(&dump_flag, sizeof(dump_flag));
+        data_trans.flush();
 
         cout << "[Server] Receiving client " << (g_dump_intermediate_plaintexts ? "full" : "public")
              << " context and encrypted inputs..." << endl;
@@ -131,7 +131,7 @@ int main(int argc, char* argv[]) {
 
         if (verify) {
             auto plaintext_outputs = server.evaluate_plaintext(input_csvs);
-            send_plaintext_map(data_trans.io_in, plaintext_outputs);
+            send_plaintext_map(data_trans, plaintext_outputs);
         }
     } catch (const exception& e) {
         cerr << "[Server][Error] " << e.what() << endl;

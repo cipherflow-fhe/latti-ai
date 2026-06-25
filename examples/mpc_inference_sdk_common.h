@@ -9,8 +9,8 @@
 #include <string>
 #include <vector>
 
-#include "fhe-mpc/fhe_mpc.h"
-#include "fhe-mpc/mpc/SCI/src/globals.h"
+#include "fhe_mpc.h"
+#include "SCI/src/globals.h"
 #include "fhe_ops_lib/utils.h"
 #include "interface/inference_client.h"
 
@@ -38,72 +38,72 @@ inline void init_mpc_party(int party_id, int port_in) {
     StartComputation();
 }
 
-inline void send_string(sci::NetIO* io_in, const std::string& value) {
+inline void send_string(DataTransmission& data_trans, const std::string& value) {
     size_t size = value.size();
-    io_in->send_data(&size, sizeof(size));
+    data_trans.send_data(&size, sizeof(size));
     if (size > 0) {
-        io_in->send_data(value.data(), size);
+        data_trans.send_data(value.data(), size);
     }
 }
 
-inline std::string receive_string(sci::NetIO* io_in) {
+inline std::string receive_string(DataTransmission& data_trans) {
     size_t size = 0;
-    io_in->recv_data(&size, sizeof(size));
+    data_trans.recv_data(&size, sizeof(size));
     std::string value(size, '\0');
     if (size > 0) {
-        io_in->recv_data(value.data(), size);
+        data_trans.recv_data(value.data(), size);
     }
     return value;
 }
 
 inline void send_encrypted_map(DataTransmission& data_trans, const EncryptedBytesMap& values) {
     size_t size = values.size();
-    data_trans.io_in->send_data(&size, sizeof(size));
+    data_trans.send_data(&size, sizeof(size));
     for (const auto& [name, bytes] : values) {
         std::cout << "[Transport] Sending ciphertext [" << name << "], bytes=" << bytes.size() << std::endl;
-        send_string(data_trans.io_in, name);
+        send_string(data_trans, name);
         data_trans.send_bytes(bytes);
     }
-    data_trans.io_in->flush();
+    data_trans.flush();
 }
 
 inline EncryptedBytesMap receive_encrypted_map(DataTransmission& data_trans) {
     size_t size = 0;
-    data_trans.io_in->recv_data(&size, sizeof(size));
+    data_trans.recv_data(&size, sizeof(size));
     EncryptedBytesMap values;
     for (size_t i = 0; i < size; i++) {
-        std::string name = receive_string(data_trans.io_in);
+        std::string name = receive_string(data_trans);
         values[name] = data_trans.receive_bytes();
         std::cout << "[Transport] Received ciphertext [" << name << "], bytes=" << values[name].size() << std::endl;
     }
     return values;
 }
 
-inline void send_plaintext_map(sci::NetIO* io_in, const PlaintextMap& values) {
+inline void send_plaintext_map(DataTransmission& data_trans, const PlaintextMap& values) {
     size_t size = values.size();
-    io_in->send_data(&size, sizeof(size));
+    data_trans.send_data(&size, sizeof(size));
     for (const auto& [name, data] : values) {
-        send_string(io_in, name);
+        send_string(data_trans, name);
         size_t data_size = data.size();
-        io_in->send_data(&data_size, sizeof(data_size));
+        data_trans.send_data(&data_size, sizeof(data_size));
         if (data_size > 0) {
-            io_in->send_data(data.data(), data_size * sizeof(double));
+            data_trans.send_data(data.data(), data_size * sizeof(double));
         }
     }
-    io_in->flush();
+    data_trans.flush();
 }
 
-inline PlaintextMap receive_plaintext_map(sci::NetIO* io_in) {
+inline PlaintextMap receive_plaintext_map(DataTransmission& data_trans) {
     size_t size = 0;
-    io_in->recv_data(&size, sizeof(size));
+    data_trans.recv_data(&size, sizeof(size));
     PlaintextMap values;
     for (size_t i = 0; i < size; i++) {
-        std::string name = receive_string(io_in);
+        std::string name = receive_string(data_trans);
         size_t data_size = 0;
-        io_in->recv_data(&data_size, sizeof(data_size));
+        data_trans.recv_data(&data_size, sizeof(data_size));
         std::vector<double> data(data_size);
         if (data_size > 0) {
-            io_in->recv_data(data.data(), data_size * sizeof(double));
+            data_trans.recv_data(data.data(), data_size * sizeof(double));
         }
         values[name] = std::move(data);
     }

@@ -1,4 +1,5 @@
 #include "inference_process_client.h"
+#include "mpc_data_transmission.h"
 
 using namespace std;
 
@@ -21,7 +22,7 @@ int main() {
     context.gen_rotation_keys();
 
     DataTransmission dt(io);
-    dt.send_public_context(context);
+    send_public_context(dt, context);
     cout << "send_public_context ok" << endl;
     map<string, unique_ptr<CkksContext>> ckks_contexts;
     ckks_contexts["param0"] = make_unique<CkksContext>(move(context));

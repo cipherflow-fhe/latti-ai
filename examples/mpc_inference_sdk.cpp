@@ -32,7 +32,7 @@
 #include <unistd.h>
 #include <vector>
 
-#include "fhe-mpc/mpc/SCI/src/globals.h"
+#include "SCI/src/globals.h"
 #include "fhe_ops_lib/utils.h"
 #include "inference_task/inference_process_client.h"
 #include "interface/inference_client.h"

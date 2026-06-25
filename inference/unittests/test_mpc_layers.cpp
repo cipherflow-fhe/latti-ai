@@ -1,6 +1,7 @@
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
 #include "fhe_mpc.h"
+#include "inference_task/mpc_data_transmission.h"
 #include "SCI/src/globals.h"
 #include "inference_task/inference_process.h"
 #include "inference_task/mpc_task_meta_data.h"
@@ -142,7 +143,7 @@ public:
         bitlength = RING_MOD_BIT;
         StartComputation();
         data_trans.io_in = io;
-        context = data_trans.recv_public_context();
+        context = recv_public_context(data_trans);
         parameter = context.get_parameter().copy();
         slot_size = parameter.get_n() / 2;
     }
@@ -421,7 +422,7 @@ TEST_CASE_METHOD(MpcFixture, "Feature2DEncrypted to shares and back") {
                 x_share0.data.set(i, temp);
             }
             MPC mpc(scale_ord, ring_mod, pt_range);
-            Bytes b1 = mpc.wrap_protocol(x_share0.data.to_array_1d(), data_trans.io_in, otpack, party);
+            Bytes b1 = mpc.wrap_protocol(x_share0.data.to_array_1d(), party);
             Bytes y_share1_bytes = data_trans.receive_bytes();
             Feature2DEncrypted y_share1_enc(&context, x_e.level);
             y_share1_enc.deserialize(y_share1_bytes);
@@ -504,7 +505,7 @@ TEST_CASE_METHOD(MpcFixture, "Feature0DEncrypted to shares relu0d and back") {
                 y_share0.data.set(i, temp);
             }
 
-            auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, party);
+            auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
             data_trans.io_in->flush();
 
             Bytes y_share1_bytes = data_trans.receive_bytes();
@@ -582,7 +583,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d relu: change shape and skip") {
                     }
 
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, party);
+                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share1_enc(&context, x_e.level);
@@ -657,7 +658,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d relu: change n_channel") {
                 y_share0.data[i] = (y_share0.data[i] * T_SCALE) % RING_MOD;
             }
             MPC mpc(scale_ord, ring_mod, pt_range);
-            Bytes b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, party);
+            Bytes b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
             Bytes y_share1_bytes = data_trans.receive_bytes();
             Feature2DEncrypted y_share1_enc(&context, x_e.level);
             y_share1_enc.deserialize(y_share1_bytes);
@@ -728,7 +729,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d maxpool") {
                         y_share0.data.set(i, temp);
                     }
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, party);
+                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share1_enc(&context, x_e.level);
@@ -806,7 +807,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d avgpool") {
                         y_share0.data.set(i, temp);
                     }
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, party);
+                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share1_enc(&context, x_e.level);
@@ -886,7 +887,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d maxpool relu") {
                     }
 
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share1.data.to_array_1d(), data_trans.io_in, otpack, party);
+                    auto b1 = mpc.wrap_protocol(y_share1.data.to_array_1d(), party);
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share1_enc(&context, x_e.level);
@@ -970,7 +971,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d avgpool relu") {
                     }
 
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share1.data.to_array_1d(), data_trans.io_in, otpack, party);
+                    auto b1 = mpc.wrap_protocol(y_share1.data.to_array_1d(), party);
                     printf("b1=%lu\n", b1[0]);
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
@@ -1076,7 +1077,7 @@ TEST_CASE_METHOD(MpcFixture, "conv relu") {
                     }
 
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, party);
+                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
                     printf("b1=%lu\n", b1[0]);
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
@@ -1144,7 +1145,7 @@ TEST_CASE_METHOD(MpcFixture, "f2d to share and f0d back") {
                 x_share0_0d.data.set(i, temp);
             }
 
-            auto b1 = mpc.wrap_protocol(x_share0_0d.data.to_array_1d(), data_trans.io_in, otpack, party);
+            auto b1 = mpc.wrap_protocol(x_share0_0d.data.to_array_1d(), party);
             data_trans.io_in->flush();
 
             Bytes y_share1_bytes = data_trans.receive_bytes();
@@ -1260,7 +1261,7 @@ TEST_CASE_METHOD(MpcFixture, "conv maxpool conv") {
                     }
 
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, party);
+                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
                     printf("b1=%lu\n", b1[0]);
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
@@ -1384,7 +1385,7 @@ TEST_CASE_METHOD(MpcFixture, "conv avgpool conv") {
                     }
 
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, party);
+                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
                     printf("b1=%lu\n", b1[0]);
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
@@ -1464,7 +1465,7 @@ compute_distance_fhe(Feature0DEncrypted& x_e, CkksContext& context, int level, s
 
     MPC mpc(scale_ord, ring_mod, pt_range);
     data_trans.io_in->flush();
-    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, party);
+    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
     data_trans.io_in->flush();
 
     Bytes y_share1_bytes = data_trans.receive_bytes();
@@ -1593,7 +1594,7 @@ TEST_CASE_METHOD(MpcFixture, "test relu6") {
     }
 
     MPC mpc(scale_ord, ring_mod, pt_range);
-    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, party);
+    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
     printf("b1=%lu\n", b1[0]);
 
     Bytes y_share1_bytes = data_trans.receive_bytes();
@@ -1709,7 +1710,7 @@ TEST_CASE_METHOD(MpcFixture, "test_argmax") {
                 y_share0.data.set(i, temp);
             }
 
-            auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, party);
+            auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
             data_trans.io_in->flush();
 
             Bytes y_share1_bytes = data_trans.receive_bytes();

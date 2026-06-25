@@ -8,16 +8,9 @@ target_link_libraries(inference PUBLIC
     -Wl,--start-group
     inference_interface
     inference_task
-    mpc_layers
+    mpc
     fhe_layers
     log
-    SCI-Cheetah
-    Cheetah-Linear
-    gemini
-    SCI-Cheetah-BuildingBlocks
-    SCI-Math
-    SCI-LinearOT
-    SCI-BuildingBlocks
     -Wl,--end-group
     lattisense
     ${HDF5_CXX_LIBRARIES}
@@ -30,16 +23,9 @@ function(add_mpc_inference_example target source)
         -Wl,--start-group
         inference_interface
         inference_task
-        mpc_layers
+        mpc
         fhe_layers
         log
-        SCI-Cheetah
-        Cheetah-Linear
-        gemini
-        SCI-Cheetah-BuildingBlocks
-        SCI-Math
-        SCI-LinearOT
-        SCI-BuildingBlocks
         -Wl,--end-group
         lattisense
         ${HDF5_CXX_LIBRARIES}

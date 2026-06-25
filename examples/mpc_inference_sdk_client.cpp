@@ -283,13 +283,13 @@ int main(int argc, char* argv[]) {
 
         DataTransmission data_trans(io);
         unsigned char dump_flag = 0;
-        data_trans.io_in->recv_data(&dump_flag, sizeof(dump_flag));
+        data_trans.recv_data(&dump_flag, sizeof(dump_flag));
         bool server_needs_full_context = dump_flag != 0;
         auto server_ctx = server_needs_full_context ? client.export_full_context() : client.export_eval_context();
         cout << "[Client] Sending " << (server_needs_full_context ? "full" : "public")
              << " context, bytes=" << server_ctx.size() << endl;
         data_trans.send_bytes(server_ctx);
-        data_trans.io_in->flush();
+        data_trans.flush();
         cout << "[Client] Sending encrypted inputs..." << endl;
         send_encrypted_map(data_trans, encrypted_inputs);
         cout << "[Client] Initial payload sent; entering MPC process loop." << endl;
@@ -304,7 +304,7 @@ int main(int argc, char* argv[]) {
         print_outputs(results);
 
         if (verify) {
-            auto plaintext_outputs = receive_plaintext_map(data_trans.io_in);
+            auto plaintext_outputs = receive_plaintext_map(data_trans);
             for (auto& [name, plaintext_output] : plaintext_outputs) {
                 fhe_ops_lib::print_double_message(plaintext_output.data(), ("Plaintext output [" + name + "]").c_str(),
                                                   1);

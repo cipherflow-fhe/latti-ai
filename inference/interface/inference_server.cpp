@@ -22,8 +22,8 @@
 #include <map>
 #include <type_traits>
 
-#include "fhe-mpc/fhe_mpc.h"
-#include "fhe-mpc/mpc/SCI/src/globals.h"
+#include "fhe_mpc.h"
+#include "SCI/src/globals.h"
 #include "interface/inference_server.h"
 #include "inference_task/mpc_task_meta_data.h"
 

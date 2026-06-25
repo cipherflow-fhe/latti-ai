@@ -6,6 +6,7 @@ Testing/
 # Dependencies
 node_modules/
 deps/
+inference/mpc/
 
 # Python artifacts
 __pycache__/

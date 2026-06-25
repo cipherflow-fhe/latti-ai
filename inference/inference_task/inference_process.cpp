@@ -19,7 +19,7 @@
 #include "inference_process.h"
 #include "../lattisense/cxx_sdk_v2/cxx_fhe_task.h"
 #include "fhe_mpc.h"
-#include "fhe-mpc/mpc/SCI/src/globals.h"
+#include "SCI/src/globals.h"
 #include "mpc_task_meta_data.h"
 #include <cmath>
 #include <iostream>
@@ -94,7 +94,7 @@ Feature2DEncrypted server_share_to_enc_multi_pack(CkksContext& context,
     }
 
     MPC mpc(scale_ord, ring_mod, 128.0);
-    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, SERVER);
+    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), SERVER);
 
     Feature2DEncrypted y_share1_enc(&context, level, {1, 1}, {1, 1}, pack_type);
     y_share1_enc.deserialize(data_trans.receive_bytes());
@@ -198,7 +198,7 @@ Feature0DEncrypted share_to_enc(Feature0DShare& y_share0,
     }
 
     MPC mpc(scale_ord, ring_mod, pt_range);
-    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), data_trans.io_in, otpack, SERVER);
+    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), SERVER);
 
     Feature0DEncrypted y_share1_enc(&context, level);
     y_share1_enc.deserialize(data_trans.receive_bytes());

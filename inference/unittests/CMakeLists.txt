@@ -21,16 +21,9 @@ target_link_libraries(test_fhe_layers_hetero PUBLIC fhe_layers lattisense)
 set(MPC_TEST_LIBS
     -Wl,--start-group
     inference_task
-    mpc_layers
+    mpc
     fhe_layers
     log
-    SCI-Cheetah
-    Cheetah-Linear
-    gemini
-    SCI-Cheetah-BuildingBlocks
-    SCI-Math
-    SCI-LinearOT
-    SCI-BuildingBlocks
     -Wl,--end-group
     lattisense
 )

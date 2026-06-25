@@ -1,5 +1,5 @@
 #include "inference_process_client.h"
-#include "fhe-mpc/mpc/SCI/src/globals.h"
+#include "SCI/src/globals.h"
 
 using namespace std;
 
@@ -195,7 +195,7 @@ Array1DUint process(map<string, unique_ptr<CkksContext>>* ckks_contexts) {
                     x_e.encrypt_from_share(*im_2d, n_channel, im_2d->shape, PackType::MultipleChannelPacking);
 
                 MPC mpc(scale_ord, ring_mod, pt_range);
-                auto b0 = mpc.wrap_protocol(data_process.to_array_1d(), data_trans.io_in, otpack, party);
+                auto b0 = mpc.wrap_protocol(data_process.to_array_1d(), party);
 
                 Array<double, 1> b0_mult_mod_div_s_mg(im_2d->data.get_shape());
                 double scale = DEFAULT_SCALE;
@@ -239,7 +239,7 @@ Array1DUint process(map<string, unique_ptr<CkksContext>>* ckks_contexts) {
                 auto data_process = x_e.encrypt_from_share(*im_2d, n_channel, im_2d->shape, pack_type);
 
                 MPC mpc(scale_ord, ring_mod, pt_range);
-                auto b0 = mpc.wrap_protocol(data_process.to_array_1d(), data_trans.io_in, otpack, party);
+                auto b0 = mpc.wrap_protocol(data_process.to_array_1d(), party);
 
                 Array<double, 1> b0_mult_mod_div_s_mg(im_2d->data.get_shape());
                 double scale = DEFAULT_SCALE;
@@ -291,9 +291,9 @@ Array1DUint process(map<string, unique_ptr<CkksContext>>* ckks_contexts) {
                 }
                 auto data_process = x_e.encrypt_from_share(*im_0d, n_channel);
                 MPC mpc(scale_ord, ring_mod, pt_range);
-                data_trans.io_in->flush();
-                auto b0 = mpc.wrap_protocol(data_process.to_array_1d(), data_trans.io_in, otpack, party);
-                data_trans.io_in->flush();
+                data_trans.flush();
+                auto b0 = mpc.wrap_protocol(data_process.to_array_1d(), party);
+                data_trans.flush();
 
                 Array<double, 1> send_mg(im_0d->data.get_shape());
                 double scale = DEFAULT_SCALE;
@@ -332,9 +332,9 @@ Array1DUint process(map<string, unique_ptr<CkksContext>>* ckks_contexts) {
                 act.run(*im_2d, *im_2d);
             } else if (type == MpcProtoType::simple_poly_relu) {
                 int size = 0;
-                io->recv_data(&size, sizeof(int));
+                data_trans.recv_data(&size, sizeof(int));
                 Array1D coeff(size);
-                io->recv_data(coeff.data(), coeff.size() * sizeof(double));
+                data_trans.recv_data(coeff.data(), coeff.size() * sizeof(double));
                 SimplePoly sp(scale_ord, ring_mod, pt_range);
 
                 sp.init_coeff(coeff);
@@ -363,7 +363,7 @@ Array1DUint process(map<string, unique_ptr<CkksContext>>* ckks_contexts) {
                 cout << "dist res=" << im_0d->data[0] << endl;
             } else if (type == MpcProtoType::recovery_share) {
                 int data_size = im_0d->data.get_size();
-                data_trans.io_in->send_data(im_0d->data.get_data(), data_size * sizeof(uint64_t));
+                data_trans.send_data(im_0d->data.get_data(), data_size * sizeof(uint64_t));
             }
         }
     }

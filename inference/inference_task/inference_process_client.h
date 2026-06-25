@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-#include "../fhe-mpc/fhe_mpc.h"
+#include "fhe_mpc.h"
 #include "mpc_task_meta_data.h"
 
 using fhe_ops_lib::CkksBtpContext;

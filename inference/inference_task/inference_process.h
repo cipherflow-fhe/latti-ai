@@ -24,7 +24,7 @@
 
 #include "util.h"
 #include "fhe_layers/fhe_layers.h"
-#include "../fhe-mpc/mpc_refresh_layer.h"
+#include "mpc_refresh_layer.h"
 #include "mpc_task_meta_data.h"
 
 namespace lattisense {

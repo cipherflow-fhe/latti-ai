@@ -17,6 +17,7 @@
  */
 
 #include "fhe_mpc.h"
+#include "inference_task/mpc_data_transmission.h"
 #include "SCI/src/globals.h"
 #include "data_structs/feature.h"
 
@@ -90,7 +91,7 @@ void run_relu_client(int port_in) {
 
     DataTransmission dt(io);
     CkksContext context = make_test_context();
-    dt.send_public_context(context);
+    send_public_context(dt, context);
 
     Bytes x_share1_bytes = dt.receive_bytes();
     Feature2DEncrypted x_share1_enc(&context, kLevel, {1, 1}, {1, 1}, PackType::MultipleChannelPacking);
@@ -109,7 +110,7 @@ void run_relu_client(int port_in) {
         y_share1_enc.encrypt_from_share(y_share1, kNChannel, kShape, PackType::MultipleChannelPacking);
 
     MPC mpc(DEFAULT_SCALE_BIT, RING_MOD, 128.0);
-    auto b0 = mpc.wrap_protocol(y_share1_add_mod.to_array_1d(), dt.io_in, otpack, party);
+    auto b0 = mpc.wrap_protocol(y_share1_add_mod.to_array_1d(), party);
 
     Array<double, 1> b0_mult_mod_div_s({b0.size()});
     for (int i = 0; i < b0.size(); i++) {
