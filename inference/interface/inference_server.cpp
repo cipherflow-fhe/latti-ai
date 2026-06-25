@@ -230,8 +230,14 @@ InferenceServer::evaluate_plaintext(const std::map<std::string, std::string>& in
         const auto& param = it->second;
 
         if (param.is_mat) {
-            auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.height, (uint64_t)param.width});
-            fp_->p_feature_mat_x[name] = std::move(input_array.copy());
+            if (is_par_diagonal_pack(mat_pack_style_)) {
+                auto csv_array = csv_to_array<2>(csv_path, {(uint64_t)param.width, (uint64_t)param.height});
+                auto input_array = transpose_2d_array(csv_array);
+                fp_->p_feature_mat_x[name] = std::move(input_array.copy());
+            } else {
+                auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.height, (uint64_t)param.width});
+                fp_->p_feature_mat_x[name] = std::move(input_array.copy());
+            }
         } else if (param.dim == 0) {
             auto input_array = csv_to_array<1>(csv_path);
             fp_->p_feature0d_x[name] = input_array.to_array_1d();

@@ -119,6 +119,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
     output_roots = [node for node, out_deg in graph.dag.out_degree() if out_deg == 0]
 
     param_dict = dict()
+    is_transposed = getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack'
     for node in input_roots + output_roots:
         if node.dim == 0:
             param_dict[node.node_id] = {
@@ -131,6 +132,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 'level': graph.dag.nodes[node]['level'],
                 'depth': node.depth,
                 'pack_num': graph.dag.nodes[node]['pack_num'],
+                'is_transposed': is_transposed,
             }
         elif node.dim in (1, 2):
             param_dict[node.node_id] = {
@@ -145,6 +147,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 'depth': node.depth,
                 'pack_num': graph.dag.nodes[node]['pack_num'],
                 'invalid_fill': node.invalid_fill,
+                'is_transposed': is_transposed,
             }
             if node.data_type:
                 param_dict[node.node_id]['data_type'] = node.data_type

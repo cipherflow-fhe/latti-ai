@@ -213,13 +213,12 @@ Examples:
                 print(f'[H5 Export] JSON: {json_path}')
                 print(f'[H5 Export] H5:   {h5_path}')
                 try:
-                    # TO_DO:to fix
-                    # export_h5_from_onnx(
-                    #     onnx_path=str(onnx_path),
-                    #     json_path=str(json_path),
-                    #     h5_path=str(h5_path),
-                    #     feature_mat=feature_mat,
-                    # )
+                    export_h5_from_onnx(
+                        onnx_path=str(onnx_path),
+                        json_path=str(json_path),
+                        h5_path=str(h5_path),
+                        feature_mat=feature_mat,
+                    )
                     print(f'[H5 Export] Done: {h5_path}')
                 except Exception as e:
                     print(f'\n[H5 Export] Failed: {e}')
