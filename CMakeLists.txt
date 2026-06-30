@@ -68,5 +68,6 @@ enable_testing()
 
 add_subdirectory(inference)
 add_subdirectory(examples)
+add_subdirectory(mpc_examples)
 
 add_definitions(-w)

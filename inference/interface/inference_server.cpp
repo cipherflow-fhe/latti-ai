@@ -22,10 +22,8 @@
 #include <map>
 #include <type_traits>
 
-#include "fhe_mpc.h"
-#include "SCI/src/globals.h"
 #include "interface/inference_server.h"
-#include "inference_task/mpc_task_meta_data.h"
+#include "mpc_adapter/mpc_data_transmission.h"
 
 using namespace lattisense;
 
@@ -298,10 +296,7 @@ std::map<std::string, Bytes> InferenceServer::evaluate_mpc_sdk(const std::map<st
     timer.stop();
     timer.print("SDK MPC encrypted inference time");
 
-    MpcTaskMetaData end_meta;
-    end_meta.append(MpcProtoType::end, {});
-    DataTransmission data_trans(io);
-    data_trans.send_bytes(end_meta.serialize());
+    send_mpc_end();
 
     std::cout << "[Server] Done." << std::endl;
 

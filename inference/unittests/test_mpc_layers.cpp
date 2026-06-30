@@ -1,10 +1,11 @@
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
-#include "fhe_mpc.h"
-#include "inference_task/mpc_data_transmission.h"
-#include "SCI/src/globals.h"
+#include "mpc/fhe_mpc.h"
+#include "mpc_adapter/enc_share_conversion.h"
+#include "mpc_adapter/mpc_data_transmission.h"
 #include "inference_task/inference_process.h"
-#include "inference_task/mpc_task_meta_data.h"
+#include "mpc/mpc_task_meta_data.h"
+#include "mpc/mpc_session.h"
 #include "ut_util.h"
 
 #include <iomanip>
@@ -19,13 +20,9 @@
 #include <unistd.h>
 
 using namespace std;
-using namespace sci;
 using namespace lattisense;
 
-int party = SERVER;
-int port = 12309;
-string address = "127.0.0.1";
-int num_threads = 1;
+constexpr int kDefaultMpcTestPort = 12309;
 bool auto_start_client_task = true;
 
 vector<uint32_t> save_vec(uint32_t is_2d, MpcLayerType type, uint32_t pool_type = 0, uint32_t pack = 0) {
@@ -96,6 +93,20 @@ ArrayComparison compare(const Array1D& expected, const Array1D& output) {
     return compare(Array<double, 1>::from_array_1d(expected), Array<double, 1>::from_array_1d(output));
 }
 
+template <typename T, int dim>
+mpc::Array<T, dim> to_mpc_array(const Array<T, dim>& input) {
+    mpc::Array<T, dim> output(input.get_shape());
+    output.set_data(input.to_array_1d());
+    return output;
+}
+
+template <typename T, int dim>
+Array<T, dim> to_latti_array(mpc::Array<T, dim>&& input) {
+    Array<T, dim> output(input.get_shape());
+    output.move_data(input.move_to_array_1d());
+    return output;
+}
+
 class ClientTaskProcess {
 public:
     ClientTaskProcess() {
@@ -112,7 +123,7 @@ public:
             if (getppid() == 1) {
                 _exit(1);
             }
-            execl("../inference_task/client_task", "client_task", (char*)nullptr);
+            execl("../../mpc_examples/client_task", "client_task", (char*)nullptr);
             _exit(1);
         }
     }
@@ -136,14 +147,9 @@ class MpcFixture {
 public:
     MpcFixture() {
         srand(time(NULL));
-        party = SERVER;
-        port = 12309;
-        address = "127.0.0.1";
-        num_threads = 1;
-        bitlength = RING_MOD_BIT;
-        StartComputation();
-        data_trans.io_in = io;
-        context = recv_public_context(data_trans);
+        ::mpc::init_party(SERVER, kDefaultMpcTestPort);
+        data_trans = ::mpc::data_transmission();
+        context = MpcDataTransmission(data_trans).recv_public_context();
         parameter = context.get_parameter().copy();
         slot_size = parameter.get_n() / 2;
     }
@@ -158,6 +164,22 @@ protected:
     int scale_ord = DEFAULT_SCALE_BIT;
     double pt_range = 128.0;
     uint64_t ring_mod = RING_MOD;
+
+    EncToShareServer enc_to_share_server() {
+        return EncToShareServer(context, scale_ord, ring_mod);
+    }
+
+    void split_to_shares(const Feature2DEncrypted& x_enc, Feature2DEncrypted* share0, Feature2DShare* share1) {
+        enc_to_share_server().split_to_shares(x_enc, share0, share1);
+    }
+
+    void split_to_shares(const Feature0DEncrypted& x_enc, Feature0DEncrypted* share0, Feature0DShare* share1) {
+        enc_to_share_server().split_to_shares(x_enc, share0, share1);
+    }
+
+    ShareToEncServer share_to_enc_server() {
+        return ShareToEncServer(context, scale_ord, ring_mod, pt_range);
+    }
 };
 
 TEST_CASE_METHOD(MpcFixture, "multi_channel_mpc_refresh_test") {
@@ -184,12 +206,12 @@ TEST_CASE_METHOD(MpcFixture, "multi_channel_mpc_refresh_test") {
             Feature2DEncrypted x_e(&context, level, skip);
             x_e.pack_multiplexed(x_mg, false, DEFAULT_SCALE);
 
-            auto x_share0 = server_enc_to_share_multi_pack(context, x_e, scale_ord, ring_mod,PackType::MultiplexedPacking);
+            auto x_share0 = enc_to_share_server().server_enc_to_share_multi_pack(x_e, PackType::MultiplexedPacking);
 
             Feature2DShare y_share0(ring_mod, scale_ord);
             y_share0.data = x_share0.data.copy();
 
-            auto y_ct = server_share_to_enc_multi_pack(context, y_share0, scale_ord, ring_mod, level, PackType::MultiplexedPacking);
+            auto y_ct = share_to_enc_server().server_share_to_enc_multi_pack(y_share0, level, PackType::MultiplexedPacking);
             Array<double, 3> y_mg = y_ct.unpack_multiplexed();
             for (int i = 0; i < y_mg.get_size(); i++) {
                 y_mg.set(i, y_mg.get_data()[i] / T_SCALE);
@@ -220,8 +242,8 @@ TEST_CASE_METHOD(MpcFixture, "multi_channel_mpc_refresh_simple_test") {
     Feature2DEncrypted x_e(&context, level, skip);
     x_e.pack_multiplexed(x_mg, false, DEFAULT_SCALE);
 
-    auto x_share0 = server_enc_to_share_multi_pack_simple(context, x_e, scale_ord, ring_mod, pack_type);
-    auto y_ct = server_share_to_enc_multi_pack_simple(context, x_share0, scale_ord, ring_mod, level, pack_type);
+    auto x_share0 = enc_to_share_server().server_enc_to_share_multi_pack_simple(x_e, pack_type);
+    auto y_ct = share_to_enc_server().server_share_to_enc_multi_pack_simple(x_share0, level, pack_type);
 
     Array<double, 3> y_mg = y_ct.unpack_multiplexed();
     auto compare_res = compare(x_mg, y_mg);
@@ -252,13 +274,12 @@ TEST_CASE_METHOD(MpcFixture, "big_size_e2s_s2e_no_conv_test") {
     Bytes meta_data_bytes = meta_data.serialize();
     data_trans.send_bytes(meta_data_bytes);
 
-    auto x_share0 = server_enc_to_share_multi_pack(context, x_e, scale_ord, ring_mod, PackType::InterleavedPacking);
+    auto x_share0 = enc_to_share_server().server_enc_to_share_multi_pack(x_e, PackType::InterleavedPacking);
 
     Feature2DShare y_share0(ring_mod, scale_ord);
     y_share0.data = x_share0.data.copy();
 
-    auto y_ct = server_share_to_enc_multi_pack(context, y_share0, scale_ord, ring_mod, x_e.level,
-                                               PackType::InterleavedPacking);
+    auto y_ct = share_to_enc_server().server_share_to_enc_multi_pack(y_share0, x_e.level, PackType::InterleavedPacking);
     Array<double, 3> y_mg = y_ct.unpack_interleaved(block_shape, block_expansion);
     for (int i = 0; i < y_mg.get_size(); i++) {
         y_mg.set(i, y_mg.get_data()[i] / T_SCALE);
@@ -314,13 +335,12 @@ TEST_CASE_METHOD(MpcFixture, "big_size_e2s_s2e_test") {
     Bytes meta_data_bytes = meta_data.serialize();
     data_trans.send_bytes(meta_data_bytes);
     auto x_share0 =
-        server_enc_to_share_multi_pack(context, x_e, scale_ord, ring_mod, PackType::InterleavedPacking);
+        enc_to_share_server().server_enc_to_share_multi_pack(x_e, PackType::InterleavedPacking);
 
     Feature2DShare y_share0(ring_mod, scale_ord);
     y_share0.data = x_share0.data.copy();
 
-    auto y_ct = server_share_to_enc_multi_pack(context, y_share0, scale_ord, ring_mod, init_level,
-                                               PackType::InterleavedPacking);
+    auto y_ct = share_to_enc_server().server_share_to_enc_multi_pack(y_share0, init_level, PackType::InterleavedPacking);
     Array<double, 3> y_mg = y_ct.unpack_interleaved(block_shape, next_stride);
     for (int i = 0; i < y_mg.get_size(); i++) {
         y_mg.set(i, y_mg.get_data()[i] / T_SCALE);
@@ -378,8 +398,8 @@ TEST_CASE_METHOD(MpcFixture, "big_size_e2s_s2e_simple_test") {
     meta_data.append(MpcProtoType::end, {});
     data_trans.send_bytes(meta_data.serialize());
 
-    auto x_share0 = server_enc_to_share_multi_pack_simple(context, x_e, scale_ord, ring_mod, pack_type);
-    auto y_ct = server_share_to_enc_multi_pack_simple(context, x_share0, scale_ord, ring_mod, x_e.level, pack_type);
+    auto x_share0 = enc_to_share_server().server_enc_to_share_multi_pack_simple(x_e, pack_type);
+    auto y_ct = share_to_enc_server().server_share_to_enc_multi_pack_simple(x_share0, x_e.level, pack_type);
 
     Array<double, 3> y_mg = y_ct.unpack_interleaved(block_shape, next_stride);
     auto x_mg = conv.run_plaintext(input_array_vec);
@@ -413,7 +433,7 @@ TEST_CASE_METHOD(MpcFixture, "Feature2DEncrypted to shares and back") {
 
             Feature2DEncrypted x_share1_enc(&context, x_e.level);
             Feature2DShare x_share0(ring_mod, scale_ord);
-            x_e.split_to_shares(&x_share1_enc, &x_share0);
+            split_to_shares(x_e, &x_share1_enc, &x_share0);
             Bytes x_share1_enc_bytes = x_share1_enc.serialize();
             data_trans.send_bytes(x_share1_enc_bytes);
 
@@ -422,7 +442,7 @@ TEST_CASE_METHOD(MpcFixture, "Feature2DEncrypted to shares and back") {
                 x_share0.data.set(i, temp);
             }
             MPC mpc(scale_ord, ring_mod, pt_range);
-            Bytes b1 = mpc.wrap_protocol(x_share0.data.to_array_1d(), party);
+            Bytes b1 = mpc.wrap_protocol(x_share0.data.to_array_1d(), ::mpc::current_party());
             Bytes y_share1_bytes = data_trans.receive_bytes();
             Feature2DEncrypted y_share1_enc(&context, x_e.level);
             y_share1_enc.deserialize(y_share1_bytes);
@@ -457,8 +477,8 @@ TEST_CASE_METHOD(MpcFixture, "Feature2DEncrypted simple E2S to shares and back")
     Feature2DEncrypted x_e(&context, level);
     x_e.pack_multiple_channel(x_mg);
 
-    Feature2DShare x_share0 = server_enc_to_share_simple(context, x_e, scale_ord, ring_mod);
-    Feature2DEncrypted y_ct = server_share_to_enc_simple(context, x_share0, scale_ord, ring_mod, x_e.level);
+    Feature2DShare x_share0 = enc_to_share_server().server_enc_to_share_simple(x_e);
+    Feature2DEncrypted y_ct = share_to_enc_server().server_share_to_enc_simple(x_share0, x_e.level);
 
     Array<double, 3> y_mg = y_ct.unpack_multiple_channel();
     auto compare_res = compare(x_mg, y_mg);
@@ -487,26 +507,26 @@ TEST_CASE_METHOD(MpcFixture, "Feature0DEncrypted to shares relu0d and back") {
 
             Feature0DEncrypted x_share1_enc(&context, x_e.level);
             Feature0DShare x_share0(ring_mod, scale_ord);
-            x_e.split_to_shares(&x_share1_enc, &x_share0);
+            split_to_shares(x_e, &x_share1_enc, &x_share0);
 
             vector<uint8_t> x_share1_enc_bytes = x_share1_enc.serialize();
             data_trans.send_bytes(x_share1_enc_bytes);
             cout << "byte=" << x_e.data[0].serialize(parameter).size() << endl;
             MPC mpc(scale_ord, ring_mod, pt_range);
-            data_trans.io_in->flush();
+            data_trans.flush();
 
             // relu
             ReluLayerServer act(scale_ord, ring_mod, pt_range);
             Feature0DShare y_share0(ring_mod, scale_ord);
-            act.run(x_share0, y_share0);
+            y_share0.data = to_latti_array(act.run(to_mpc_array(x_share0.data)));
 
             for (int i = 0; i < y_share0.data.get_size(); i++) {
                 uint64_t temp = (y_share0.data.get(i) * T_SCALE) % RING_MOD;
                 y_share0.data.set(i, temp);
             }
 
-            auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
-            data_trans.io_in->flush();
+            auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), ::mpc::current_party());
+            data_trans.flush();
 
             Bytes y_share1_bytes = data_trans.receive_bytes();
             Feature0DEncrypted y_share1_enc(&context, x_e.level);
@@ -526,7 +546,7 @@ TEST_CASE_METHOD(MpcFixture, "Feature0DEncrypted to shares relu0d and back") {
             }
             print_double_message(y_mg.get_data(), "ct_res=", 10);
             print_double_message(x_mg.get_data(), "real_res=", 10);
-            Array<double, 1> y_mg_expected = act.run_relu_plaintext(x_mg);
+            Array<double, 1> y_mg_expected = to_latti_array(act.run_relu_plaintext(to_mpc_array(x_mg)));
             auto compare_res = compare(y_mg_expected, y_mg);
             fprintf(stderr, "max_erro=%f\n", compare_res.max_error);
             REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
@@ -567,14 +587,15 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d relu: change shape and skip") {
                     // enc_to_share
                     Feature2DEncrypted x_share1_enc(&context, x_e.level);
                     Feature2DShare x_share0(ring_mod, scale_ord);
-                    x_e.split_to_shares(&x_share1_enc, &x_share0);
+                    split_to_shares(x_e, &x_share1_enc, &x_share0);
                     vector<uint8_t> x_share1_enc_bytes = x_share1_enc.serialize();
                     data_trans.send_bytes(x_share1_enc_bytes);
 
                     // relu
                     ReluLayerServer act(scale_ord, ring_mod, pt_range);
                     Feature2DShare y_share0(ring_mod, scale_ord);
-                    act.run(x_share0, y_share0);
+                    y_share0.data = to_latti_array(act.run(to_mpc_array(x_share0.data)));
+                    y_share0.shape = x_share0.shape;
 
                     
                     for (int i = 0; i < y_share0.data.get_size(); i++) {
@@ -583,7 +604,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d relu: change shape and skip") {
                     }
 
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
+                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), ::mpc::current_party());
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share1_enc(&context, x_e.level);
@@ -599,7 +620,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d relu: change shape and skip") {
 
                     // compare
                     Array<double, 3> x_mg_skip = x_mg.apply_skip(skip);
-                    Array<double, 3> y_mg_expected = act.run_relu_plaintext(x_mg_skip);
+                    Array<double, 3> y_mg_expected = to_latti_array(act.run_relu_plaintext(to_mpc_array(x_mg_skip)));
                     print_double_message(y_mg_expected.get_data(), "expected", 10);
                     for (int i = 0; i < y_mg.get_size(); i++) {
                         y_mg.set(i, y_mg.get_data()[i] / T_SCALE);
@@ -644,21 +665,22 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d relu: change n_channel") {
             // enc_to_share
             Feature2DEncrypted x_share1_enc(&context, x_e.level);
             Feature2DShare x_share0(ring_mod, scale_ord);
-            x_e.split_to_shares(&x_share1_enc, &x_share0);
+            split_to_shares(x_e, &x_share1_enc, &x_share0);
             vector<uint8_t> x_share1_enc_bytes = x_share1_enc.serialize();
             data_trans.send_bytes(x_share1_enc_bytes);
 
             // relu
             ReluLayerServer act(scale_ord, ring_mod, pt_range);
             Feature2DShare y_share0(ring_mod, scale_ord);
-            act.run(x_share0, y_share0);
+            y_share0.data = to_latti_array(act.run(to_mpc_array(x_share0.data)));
+            y_share0.shape = x_share0.shape;
 
           
             for (int i = 0; i < y_share0.data.get_size(); i++) {
                 y_share0.data[i] = (y_share0.data[i] * T_SCALE) % RING_MOD;
             }
             MPC mpc(scale_ord, ring_mod, pt_range);
-            Bytes b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
+            Bytes b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), ::mpc::current_party());
             Bytes y_share1_bytes = data_trans.receive_bytes();
             Feature2DEncrypted y_share1_enc(&context, x_e.level);
             y_share1_enc.deserialize(y_share1_bytes);
@@ -673,7 +695,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d relu: change n_channel") {
 
             // compare
             Array<double, 3> x_mg_skip = x_mg.apply_skip(skip);
-            Array<double, 3> y_mg_expected = act.run_relu_plaintext(x_mg_skip);
+            Array<double, 3> y_mg_expected = to_latti_array(act.run_relu_plaintext(to_mpc_array(x_mg_skip)));
 
             for (int i = 0; i < y_mg.get_size(); i++) {
                 y_mg[i] = y_mg[i] / T_SCALE;
@@ -716,20 +738,21 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d maxpool") {
 
                     Feature2DEncrypted x_share1_enc(&context, x_e.level);
                     Feature2DShare x_share0(ring_mod, scale_ord);
-                    x_e.split_to_shares(&x_share1_enc, &x_share0);
+                    split_to_shares(x_e, &x_share1_enc, &x_share0);
                     Bytes x_share1_enc_bytes = x_share1_enc.serialize();
                     data_trans.send_bytes(x_share1_enc_bytes);
 
                     PoolLayerServer pool(kernel_shape, pool_stride, scale_ord, ring_mod, pool_type, pt_range);
                     Feature2DShare y_share0(ring_mod, scale_ord);
-                    pool.run(x_e, x_share0, y_share0);
+                    y_share0.data = to_latti_array(pool.run(x_share0.data.to_array_1d(), x_e.shape, x_e.n_channel));
+                    y_share0.shape = pool.output_shape(x_e.shape);
 
                     for (int i = 0; i < y_share0.data.get_size(); i++) {
                         uint64_t temp = (y_share0.data.get(i) * T_SCALE) % RING_MOD;
                         y_share0.data.set(i, temp);
                     }
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
+                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), ::mpc::current_party());
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share1_enc(&context, x_e.level);
@@ -751,7 +774,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d maxpool") {
                         y_mg.set(i, y_mg.get_data()[i] / T_SCALE);
                     }
 
-                    Array<double, 3> y_mg_expected = pool.run_maxpool_plaintext(x_mg);
+                    Array<double, 3> y_mg_expected = to_latti_array(pool.run_maxpool_plaintext(to_mpc_array(x_mg)));
                     print_double_message(y_mg_expected.get_data(), "expected", 20);
                     print_double_message(y_mg.get_data(), "y_mg", 20);
                     auto compare_res = compare(y_mg_expected, y_mg);
@@ -793,21 +816,22 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d avgpool") {
 
                     Feature2DEncrypted x_share1_enc(&context, x_e.level);
                     Feature2DShare x_share0(ring_mod, scale_ord);
-                    x_e.split_to_shares(&x_share1_enc, &x_share0);
+                    split_to_shares(x_e, &x_share1_enc, &x_share0);
                     Bytes x_share1_enc_bytes = x_share1_enc.serialize();
                     data_trans.send_bytes(x_share1_enc_bytes);
 
                     PoolLayerServer pool(kernel_shape, pool_stride, scale_ord, ring_mod, pool_type, pt_range);
 
                     Feature2DShare y_share0(ring_mod, scale_ord);
-                    pool.run(x_e, x_share0, y_share0);
+                    y_share0.data = to_latti_array(pool.run(x_share0.data.to_array_1d(), x_e.shape, x_e.n_channel));
+                    y_share0.shape = pool.output_shape(x_e.shape);
 
                     for (int i = 0; i < y_share0.data.get_size(); i++) {
                         uint64_t temp = (y_share0.data.get(i) * T_SCALE) % RING_MOD;
                         y_share0.data.set(i, temp);
                     }
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
+                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), ::mpc::current_party());
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share1_enc(&context, x_e.level);
@@ -821,7 +845,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d avgpool") {
 
                     auto y_mg = y_ct.unpack_multiple_channel();
 
-                    auto y_mg_expected = pool.run_avgpool_plaintext(x_mg);
+                    auto y_mg_expected = to_latti_array(pool.run_avgpool_plaintext(to_mpc_array(x_mg)));
 
                     for (int i = 0; i < y_mg.get_size(); i++) {
                         y_mg.set(i, y_mg.get_data()[i] / (T_SCALE * kernel_shape[0] * kernel_shape[1]));
@@ -867,19 +891,21 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d maxpool relu") {
                     // to_share
                     Feature2DEncrypted x_share1_enc(&context, x_e.level);
                     Feature2DShare x_share0(ring_mod, scale_ord);
-                    x_e.split_to_shares(&x_share1_enc, &x_share0);
+                    split_to_shares(x_e, &x_share1_enc, &x_share0);
                     Bytes x_share1_enc_bytes = x_share1_enc.serialize();
                     data_trans.send_bytes(x_share1_enc_bytes);
 
                     // pool
                     PoolLayerServer pool(kernel_shape, pool_stride, scale_ord, ring_mod, pool_type, pt_range);
                     Feature2DShare y_share0(ring_mod, scale_ord);
-                    pool.run(x_e, x_share0, y_share0);
+                    y_share0.data = to_latti_array(pool.run(x_share0.data.to_array_1d(), x_e.shape, x_e.n_channel));
+                    y_share0.shape = pool.output_shape(x_e.shape);
 
                     // relu
                     ReluLayerServer act(scale_ord, ring_mod, pt_range);
                     Feature2DShare y_share1(ring_mod, scale_ord);
-                    act.run(y_share0, y_share1);
+                    y_share1.data = to_latti_array(act.run(to_mpc_array(y_share0.data)));
+                    y_share1.shape = y_share0.shape;
 
                     for (int i = 0; i < y_share1.data.get_size(); i++) {
                         uint64_t temp = (y_share1.data.get(i) * T_SCALE) % RING_MOD;
@@ -887,7 +913,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d maxpool relu") {
                     }
 
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share1.data.to_array_1d(), party);
+                    auto b1 = mpc.wrap_protocol(y_share1.data.to_array_1d(), ::mpc::current_party());
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share1_enc(&context, x_e.level);
@@ -907,8 +933,9 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d maxpool relu") {
 
                     auto y_mg_vec = y_mg.reshape<1>({0});
 
-                    auto y_mg_expected = pool.run_maxpool_plaintext(x_mg);
-                    auto z_mg_expected = act.run_relu_plaintext(y_mg_expected.reshape<1>({0}));
+                    auto y_mg_expected = to_latti_array(pool.run_maxpool_plaintext(to_mpc_array(x_mg)));
+                    auto z_mg_expected = to_latti_array(
+                        act.run_relu_plaintext(to_mpc_array(y_mg_expected.reshape<1>({0}))));
 
                     auto compare_res = compare(z_mg_expected, y_mg_vec);
                     cout << "max_erro=" << compare_res.max_error << endl;
@@ -951,19 +978,21 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d avgpool relu") {
                     // to_share
                     Feature2DEncrypted x_share1_enc(&context, x_e.level);
                     Feature2DShare x_share0(ring_mod, scale_ord);
-                    x_e.split_to_shares(&x_share1_enc, &x_share0);
+                    split_to_shares(x_e, &x_share1_enc, &x_share0);
                     Bytes x_share1_enc_bytes = x_share1_enc.serialize();
                     data_trans.send_bytes(x_share1_enc_bytes);
 
                     // pool
                     PoolLayerServer pool(kernel_shape, pool_stride, scale_ord, ring_mod, pool_type, pt_range);
                     Feature2DShare y_share0(ring_mod, scale_ord);
-                    pool.run(x_e, x_share0, y_share0);
+                    y_share0.data = to_latti_array(pool.run(x_share0.data.to_array_1d(), x_e.shape, x_e.n_channel));
+                    y_share0.shape = pool.output_shape(x_e.shape);
 
                     // relu
                     ReluLayerServer act(scale_ord, ring_mod, pt_range);
                     Feature2DShare y_share1(ring_mod, scale_ord);
-                    act.run(y_share0, y_share1);
+                    y_share1.data = to_latti_array(act.run(to_mpc_array(y_share0.data)));
+                    y_share1.shape = y_share0.shape;
 
                     for (int i = 0; i < y_share1.data.get_size(); i++) {
                         uint64_t temp = (y_share1.data.get(i) * T_SCALE) % RING_MOD;
@@ -971,7 +1000,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d avgpool relu") {
                     }
 
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share1.data.to_array_1d(), party);
+                    auto b1 = mpc.wrap_protocol(y_share1.data.to_array_1d(), ::mpc::current_party());
                     printf("b1=%lu\n", b1[0]);
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
@@ -990,8 +1019,8 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d avgpool relu") {
                         y_mg.set(i, y_mg.get_data()[i] / (T_SCALE * kernel_shape[0] * kernel_shape[1]));
                     }
 
-                    auto y_mg_expected = pool.run_avgpool_plaintext(x_mg);
-                    auto z_mg_expected = act.run_relu_plaintext(y_mg_expected);
+                    auto y_mg_expected = to_latti_array(pool.run_avgpool_plaintext(to_mpc_array(x_mg)));
+                    auto z_mg_expected = to_latti_array(act.run_relu_plaintext(to_mpc_array(y_mg_expected)));
                     auto compare_res = compare(z_mg_expected, y_mg);
                     cout << "max_erro=" << compare_res.max_error << endl;
                     REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
@@ -1060,7 +1089,7 @@ TEST_CASE_METHOD(MpcFixture, "conv relu") {
                     // enc_to_share
                     Feature2DEncrypted x_share1_enc(&context, x_e.level);
                     Feature2DShare x_share0(ring_mod, scale_ord);
-                    x_e.split_to_shares(&x_share1_enc, &x_share0);
+                    split_to_shares(x_e, &x_share1_enc, &x_share0);
                     cout << "x_e res=" << x_share1_enc.unpack_multiple_channel().get(0, 0, 0) << ", share=" << x_share0.data[0] << endl;
                     vector<uint8_t> x_share1_enc_bytes = x_share1_enc.serialize();
                     data_trans.send_bytes(x_share1_enc_bytes);
@@ -1068,7 +1097,8 @@ TEST_CASE_METHOD(MpcFixture, "conv relu") {
                     // relu
                     ReluLayerServer act(scale_ord, ring_mod, pt_range);
                     Feature2DShare y_share0(ring_mod, scale_ord);
-                    act.run(x_share0, y_share0);
+                    y_share0.data = to_latti_array(act.run(to_mpc_array(x_share0.data)));
+                    y_share0.shape = x_share0.shape;
                     cout << "act run=" << y_share0.data[0] << endl;
 
                     for (int i = 0; i < y_share0.data.get_size(); i++) {
@@ -1077,7 +1107,7 @@ TEST_CASE_METHOD(MpcFixture, "conv relu") {
                     }
 
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
+                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), ::mpc::current_party());
                     printf("b1=%lu\n", b1[0]);
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
@@ -1097,7 +1127,7 @@ TEST_CASE_METHOD(MpcFixture, "conv relu") {
                     }
 
                     auto conv0_array = conv0_layer.run_plaintext(input_array);
-                    Array<double, 3> relu_array = act.run_relu_plaintext(conv0_array);
+                    Array<double, 3> relu_array = to_latti_array(act.run_relu_plaintext(to_mpc_array(conv0_array)));
                     print_double_message(conv0_array.get_data(), "real conv0", 15);
                     auto compare_result_relu = compare(relu_array, relu_array_pt);
                     cout << "max_erro_relu=" << compare_result_relu.max_error << endl;
@@ -1130,7 +1160,7 @@ TEST_CASE_METHOD(MpcFixture, "f2d to share and f0d back") {
 
             Feature2DEncrypted x_share1_enc(&context, x_e.level);
             Feature2DShare x_share0(ring_mod, scale_ord);
-            x_e.split_to_shares(&x_share1_enc, &x_share0);
+            split_to_shares(x_e, &x_share1_enc, &x_share0);
             vector<uint8_t> x_share1_enc_bytes = x_share1_enc.serialize();
             data_trans.send_bytes(x_share1_enc_bytes);
 
@@ -1138,15 +1168,15 @@ TEST_CASE_METHOD(MpcFixture, "f2d to share and f0d back") {
             x_share0_0d.data = std::move(x_share0.data);
 
             MPC mpc(scale_ord, ring_mod, pt_range);
-            data_trans.io_in->flush();
+            data_trans.flush();
 
             for (int i = 0; i < x_share0_0d.data.get_size(); i++) {
                 uint64_t temp = (x_share0_0d.data.get(i) * T_SCALE) % RING_MOD;
                 x_share0_0d.data.set(i, temp);
             }
 
-            auto b1 = mpc.wrap_protocol(x_share0_0d.data.to_array_1d(), party);
-            data_trans.io_in->flush();
+            auto b1 = mpc.wrap_protocol(x_share0_0d.data.to_array_1d(), ::mpc::current_party());
+            data_trans.flush();
 
             Bytes y_share1_bytes = data_trans.receive_bytes();
             Feature0DEncrypted y_share1_enc(&context, x_e.level);
@@ -1246,14 +1276,15 @@ TEST_CASE_METHOD(MpcFixture, "conv maxpool conv") {
                     // enc_to_share
                     Feature2DEncrypted x_share1_enc(&context, x_e.level);
                     Feature2DShare x_share0(ring_mod, scale_ord);
-                    x_e.split_to_shares(&x_share1_enc, &x_share0);
+                    split_to_shares(x_e, &x_share1_enc, &x_share0);
                     vector<uint8_t> x_share1_enc_bytes = x_share1_enc.serialize();
                     data_trans.send_bytes(x_share1_enc_bytes);
 
                     // maxpool
                     PoolLayerServer pool(pool_kernel_shape, pool_stride, scale_ord, ring_mod, pool_type, pt_range);
                     Feature2DShare y_share0(ring_mod, scale_ord);
-                    pool.run(x_e, x_share0, y_share0);
+                    y_share0.data = to_latti_array(pool.run(x_share0.data.to_array_1d(), x_e.shape, x_e.n_channel));
+                    y_share0.shape = pool.output_shape(x_e.shape);
 
                     for (int i = 0; i < y_share0.data.get_size(); i++) {
                         uint64_t temp = (y_share0.data.get(i) * T_SCALE) % RING_MOD;
@@ -1261,7 +1292,7 @@ TEST_CASE_METHOD(MpcFixture, "conv maxpool conv") {
                     }
 
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
+                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), ::mpc::current_party());
                     printf("b1=%lu\n", b1[0]);
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
@@ -1280,7 +1311,7 @@ TEST_CASE_METHOD(MpcFixture, "conv maxpool conv") {
                     Array<double, 3> output_array = z_ct.unpack_multiple_channel();
 
                     Array<double, 3> conv0_array = conv0_layer.run_plaintext(input_array);
-                    Array<double, 3> pool_array = pool.run_maxpool_plaintext(conv0_array);
+                    Array<double, 3> pool_array = to_latti_array(pool.run_maxpool_plaintext(to_mpc_array(conv0_array)));
                     print_double_message(pool_array.get_data(), "pt-res=", 10);
                     Array<double, 3> conv1_array = conv1_layer_pt.run_plaintext(pool_array);
 
@@ -1370,14 +1401,15 @@ TEST_CASE_METHOD(MpcFixture, "conv avgpool conv") {
                     // enc_to_share
                     Feature2DEncrypted x_share1_enc(&context, x_e.level);
                     Feature2DShare x_share0(ring_mod, scale_ord);
-                    x_e.split_to_shares(&x_share1_enc, &x_share0);
+                    split_to_shares(x_e, &x_share1_enc, &x_share0);
                     vector<uint8_t> x_share1_enc_bytes = x_share1_enc.serialize();
                     data_trans.send_bytes(x_share1_enc_bytes);
 
                     // maxpool
                     PoolLayerServer pool(pool_kernel_shape, pool_stride, scale_ord, ring_mod, pool_type, pt_range);
                     Feature2DShare y_share0(ring_mod, scale_ord);
-                    pool.run(x_e, x_share0, y_share0);
+                    y_share0.data = to_latti_array(pool.run(x_share0.data.to_array_1d(), x_e.shape, x_e.n_channel));
+                    y_share0.shape = pool.output_shape(x_e.shape);
 
                     for (int i = 0; i < y_share0.data.get_size(); i++) {
                         uint64_t temp = (y_share0.data.get(i) * T_SCALE) % RING_MOD;
@@ -1385,7 +1417,7 @@ TEST_CASE_METHOD(MpcFixture, "conv avgpool conv") {
                     }
 
                     MPC mpc(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
+                    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), ::mpc::current_party());
                     printf("b1=%lu\n", b1[0]);
 
                     Bytes y_share1_bytes = data_trans.receive_bytes();
@@ -1403,7 +1435,7 @@ TEST_CASE_METHOD(MpcFixture, "conv avgpool conv") {
                     Array<double, 3> output_array = z_ct.unpack_multiple_channel();
 
                     Array<double, 3> conv0_array = conv0_layer.run_plaintext(input_array);
-                    Array<double, 3> pool_array = pool.run_avgpool_plaintext(conv0_array);
+                    Array<double, 3> pool_array = to_latti_array(pool.run_avgpool_plaintext(to_mpc_array(conv0_array)));
                     Array<double, 3> conv1_array = conv1_layer_pt.run_plaintext(pool_array);
 
                     auto compare_result = compare(conv1_array, output_array);
@@ -1427,7 +1459,7 @@ compute_distance_fhe(Feature0DEncrypted& x_e, CkksContext& context, int level, s
     Array1D vec1 = read_plain_face(file_path, name, 1.0, 1);
     vec1 = L2_normal(vec1);
     vec_list.push_back(vec1);
-    DataTransmission data_trans(io);
+    DataTransmission data_trans = ::mpc::data_transmission();
     MpcTaskMetaData meta_data;
     Duo array_num = {1, 128};
     meta_data.append(MpcProtoType::enc_to_share_0d, {"u8", "u32", "u8", "u8"}, (uint8_t)level, 128, 0, 0);
@@ -1442,7 +1474,7 @@ compute_distance_fhe(Feature0DEncrypted& x_e, CkksContext& context, int level, s
     uint64_t ring_mod = RING_MOD;
     Feature0DEncrypted x_share1_enc(&context, x_e.level);
     Feature0DShare x_share0(ring_mod, scale_ord);
-    x_e.split_to_shares(&x_share1_enc, &x_share0);
+    EncToShareServer(context, scale_ord, ring_mod).split_to_shares(x_e, &x_share1_enc, &x_share0);
     Bytes x_share1_enc_bytes = x_share1_enc.serialize();
     data_trans.send_bytes(x_share1_enc_bytes);
 
@@ -1455,7 +1487,7 @@ compute_distance_fhe(Feature0DEncrypted& x_e, CkksContext& context, int level, s
         input_y_mat.push_back(input_y_vec_uint);
     }
 
-    dist.run(x_share0, input_y_mat, y_share0, false);
+    y_share0.data = to_latti_array(dist.run(to_mpc_array(x_share0.data), input_y_mat));
     cout << "dist res=" << y_share0.data[0] << endl;
 
     for (int i = 0; i < y_share0.data.get_size(); i++) {
@@ -1464,9 +1496,9 @@ compute_distance_fhe(Feature0DEncrypted& x_e, CkksContext& context, int level, s
     }
 
     MPC mpc(scale_ord, ring_mod, pt_range);
-    data_trans.io_in->flush();
-    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
-    data_trans.io_in->flush();
+    data_trans.flush();
+    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), ::mpc::current_party());
+    data_trans.flush();
 
     Bytes y_share1_bytes = data_trans.receive_bytes();
     Feature0DEncrypted y_share1_enc(&context, x_e.level);
@@ -1521,7 +1553,7 @@ TEST_CASE_METHOD(MpcFixture, "test distance") {
     // to_share
     Feature0DEncrypted x_share1_enc(&context, x_e.level);
     Feature0DShare x_share0(ring_mod, scale_ord);
-    x_e.split_to_shares(&x_share1_enc, &x_share0);
+    split_to_shares(x_e, &x_share1_enc, &x_share0);
     Bytes x_share1_enc_bytes = x_share1_enc.serialize();
     data_trans.send_bytes(x_share1_enc_bytes);
 
@@ -1534,11 +1566,11 @@ TEST_CASE_METHOD(MpcFixture, "test distance") {
         input_y_mat.push_back(input_y_vec_uint);
     }
 
-    dist.run(x_share0, input_y_mat, y_share0, false);
+    y_share0.data = to_latti_array(dist.run(to_mpc_array(x_share0.data), input_y_mat));
     cout << "dist res=" << y_share0.data[0] << endl;
     // recovery share
     Array1DUint recv_vec(y_share0.data.get_size(), 0);
-    io->recv_data(recv_vec.data(), recv_vec.size() * sizeof(uint64_t));
+    data_trans.recv_data(recv_vec.data(), recv_vec.size() * sizeof(uint64_t));
     auto res = recovery_share(recv_vec, y_share0.data.to_array_1d(), ring_mod, scale_ord);
 
     auto vec1_L2 = L2_normal(vec1);
@@ -1578,14 +1610,15 @@ TEST_CASE_METHOD(MpcFixture, "test relu6") {
     // enc_to_share
     Feature2DEncrypted x_share1_enc(&context, x_e.level);
     Feature2DShare x_share0(ring_mod, scale_ord);
-    x_e.split_to_shares(&x_share1_enc, &x_share0);
+    split_to_shares(x_e, &x_share1_enc, &x_share0);
     vector<uint8_t> x_share1_enc_bytes = x_share1_enc.serialize();
     data_trans.send_bytes(x_share1_enc_bytes);
 
     // relu6:
     Relu6LayerServer act(scale_ord, ring_mod, pt_range);
     Feature2DShare y_share0(ring_mod, scale_ord);
-    act.run(x_share0, y_share0);
+    y_share0.data = to_latti_array(act.run(to_mpc_array(x_share0.data)));
+    y_share0.shape = x_share0.shape;
     cout << "server relu6 data=" << y_share0.data[0] << endl;
 
     for (int i = 0; i < y_share0.data.get_size(); i++) {
@@ -1594,7 +1627,7 @@ TEST_CASE_METHOD(MpcFixture, "test relu6") {
     }
 
     MPC mpc(scale_ord, ring_mod, pt_range);
-    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
+    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), ::mpc::current_party());
     printf("b1=%lu\n", b1[0]);
 
     Bytes y_share1_bytes = data_trans.receive_bytes();
@@ -1608,7 +1641,7 @@ TEST_CASE_METHOD(MpcFixture, "test relu6") {
     auto y_ct = y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
     Array<double, 3> y_mg = y_ct.unpack_multiple_channel();
 
-    Array<double, 3> y_true = act.run_relu6_plaintext(x_mg);
+    Array<double, 3> y_true = to_latti_array(act.run_relu6_plaintext(to_mpc_array(x_mg)));
 
     for (int i = 0; i < y_mg.get_size(); i++) {
         double temp = y_mg.get(i) / T_SCALE;
@@ -1644,14 +1677,14 @@ TEST_CASE_METHOD(MpcFixture, "test_sqrt") {
             x_e.skip = 1;
             x_e.n_channel = n_channel;
 
-            auto x_share0 = server_enc_to_share(context, x_e, scale_ord, ring_mod);
+            auto x_share0 = enc_to_share_server().server_enc_to_share(x_e);
 
             // sqrt
             SqrtLayer sqrt_layer(scale_ord, ring_mod, pt_range);
             Feature0DShare y_share0(ring_mod, scale_ord);
-            sqrt_layer.run(x_share0, y_share0);
+            y_share0.data = decltype(y_share0.data)::from_array_1d(sqrt_layer.run(x_share0.data.to_array_1d()));
 
-            auto y_ct = share_to_enc(y_share0, context, scale_ord, ring_mod, pt_range, x_e.level);
+            auto y_ct = share_to_enc_server().share_to_enc(y_share0, x_e.level);
 
             Array<double, 1> y_mg = y_ct.unpack();
 
@@ -1659,8 +1692,7 @@ TEST_CASE_METHOD(MpcFixture, "test_sqrt") {
                 y_mg.set(i, y_mg.get_data()[i] / T_SCALE);
             }
             print_double_message(y_mg.get_data(), "ct_res=", 10);
-            Array<double, 1>& y_mg_expected = x_mg;
-            y_mg_expected = sqrt_layer.sqrt_plaintext_call(y_mg_expected);
+            Array<double, 1> y_mg_expected = to_latti_array(sqrt_layer.sqrt_plaintext_call(to_mpc_array(x_mg)));
             print_double_message(y_mg_expected.get_data(), "pt_res=", 10);
             auto compare_res = compare(y_mg_expected, y_mg);
             REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
@@ -1693,25 +1725,25 @@ TEST_CASE_METHOD(MpcFixture, "test_argmax") {
 
             Feature0DEncrypted x_share1_enc(&context, x_e.level);
             Feature0DShare x_share0(ring_mod, scale_ord);
-            x_e.split_to_shares(&x_share1_enc, &x_share0);
+            split_to_shares(x_e, &x_share1_enc, &x_share0);
 
             vector<uint8_t> x_share1_enc_bytes = x_share1_enc.serialize();
             data_trans.send_bytes(x_share1_enc_bytes);
 
             MPC mpc(scale_ord, ring_mod, pt_range);
-            data_trans.io_in->flush();
+            data_trans.flush();
             // relu
             ArgMaxLayer argmax(scale_ord, ring_mod, pt_range);
             Feature0DShare y_share0(ring_mod, scale_ord);
-            argmax.run(x_share0, y_share0);
+            y_share0.data = decltype(y_share0.data)::from_array_1d(argmax.run(x_share0.data.to_array_1d()));
 
             for (int i = 0; i < y_share0.data.get_size(); i++) {
                 uint64_t temp = (y_share0.data.get(i) * T_SCALE) % RING_MOD;
                 y_share0.data.set(i, temp);
             }
 
-            auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), party);
-            data_trans.io_in->flush();
+            auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), ::mpc::current_party());
+            data_trans.flush();
 
             Bytes y_share1_bytes = data_trans.receive_bytes();
             Feature0DEncrypted y_share1_enc(&context, x_e.level);
@@ -1764,14 +1796,14 @@ TEST_CASE_METHOD(MpcFixture, "test_div") {
             x_e.skip = 1;
             x_e.n_channel = n_channel;
 
-            auto x_share0 = server_enc_to_share(context, x_e, scale_ord, ring_mod);
+            auto x_share0 = enc_to_share_server().server_enc_to_share(x_e);
 
             // div
             DivLayerServer div_layer(scale_ord, ring_mod, pt_range);
             Feature0DShare y_share0(ring_mod, scale_ord);
-            div_layer.run(x_share0, div_num, y_share0);
+            y_share0.data = decltype(y_share0.data)::from_array_1d(div_layer.run(x_share0.data.to_array_1d(), div_num));
 
-            auto y_ct = share_to_enc(y_share0, context, scale_ord, ring_mod, pt_range, x_e.level);
+            auto y_ct = share_to_enc_server().share_to_enc(y_share0, x_e.level);
             Array<double, 1> y_mg = y_ct.unpack();
 
             for (int i = 0; i < y_mg.get_size(); i++) {
@@ -1781,8 +1813,7 @@ TEST_CASE_METHOD(MpcFixture, "test_div") {
             print_double_message(x_mg.get_data(), "input——mg=", 10);
             print_double_message(unpack_res.get_data(), "input=", 10);
             print_double_message(y_mg.get_data(), "ct_res=", 10);
-            Array<double, 1>& y_mg_expected = x_mg;
-            y_mg_expected = div_layer.div_plaintext_call(y_mg_expected, div_num);
+            Array<double, 1> y_mg_expected = to_latti_array(div_layer.div_plaintext_call(to_mpc_array(x_mg), div_num));
             print_double_message(y_mg_expected.get_data(), "pt_res=", 10);
             auto compare_res = compare(y_mg_expected, y_mg);
             write_file_common("y_mg", y_mg.to_array_1d());
@@ -1817,14 +1848,15 @@ TEST_CASE_METHOD(MpcFixture, "test_div_reciprocal") {
             x_e.skip = 1;
             x_e.n_channel = n_channel;
 
-            auto x_share0 = server_enc_to_share(context, x_e, scale_ord, ring_mod);
+            auto x_share0 = enc_to_share_server().server_enc_to_share(x_e);
 
             // div_reciprocal
             DivLayerServer div_layer(scale_ord, ring_mod, pt_range);
             Feature0DShare y_share0(ring_mod, scale_ord);
-            div_layer.run_reciprocal(x_share0, y_share0);
+            y_share0.data =
+                decltype(y_share0.data)::from_array_1d(div_layer.run_reciprocal(x_share0.data.to_array_1d()));
 
-            auto y_ct = share_to_enc(y_share0, context, scale_ord, ring_mod, pt_range, x_e.level);
+            auto y_ct = share_to_enc_server().share_to_enc(y_share0, x_e.level);
 
             Array<double, 1> y_mg = y_ct.unpack();
 
@@ -1832,8 +1864,8 @@ TEST_CASE_METHOD(MpcFixture, "test_div_reciprocal") {
                 y_mg.set(i, y_mg.get_data()[i] / T_SCALE);
             }
             print_double_message(y_mg.get_data(), "ct_res=", 10);
-            Array<double, 1>& y_mg_expected = x_mg;
-            y_mg_expected = div_layer.div_reciprocal_plaintext_call(y_mg_expected);
+            Array<double, 1> y_mg_expected =
+                to_latti_array(div_layer.div_reciprocal_plaintext_call(to_mpc_array(x_mg)));
             print_double_message(y_mg_expected.get_data(), "pt_res=", 10);
             auto compare_res = compare(y_mg_expected, y_mg);
             REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
@@ -1865,14 +1897,14 @@ TEST_CASE_METHOD(MpcFixture, "test_softmax") {
             x_e.skip = 1;
             x_e.n_channel = n_channel;
 
-            auto x_share0 = server_enc_to_share(context, x_e, scale_ord, ring_mod);
+            auto x_share0 = enc_to_share_server().server_enc_to_share(x_e);
             // softmax
             SoftMaxLayerServer softmax_layer(scale_ord, ring_mod, pt_range);
             Feature0DShare y_share0(ring_mod, scale_ord);
             // EndComputation();
-            softmax_layer.run(x_share0, y_share0);
+            y_share0.data = decltype(y_share0.data)::from_array_1d(softmax_layer.run(x_share0.data.to_array_1d()));
             // EndComputation();
-            auto y_ct = share_to_enc(y_share0, context, scale_ord, ring_mod, pt_range, x_e.level);
+            auto y_ct = share_to_enc_server().share_to_enc(y_share0, x_e.level);
 
             Array<double, 1> y_mg = y_ct.unpack();
 
@@ -1880,8 +1912,8 @@ TEST_CASE_METHOD(MpcFixture, "test_softmax") {
                 y_mg.set(i, y_mg.get_data()[i] / T_SCALE);
             }
             print_double_message(y_mg.get_data(), "ct_res=", 10);
-            Array<double, 1>& y_mg_expected = x_mg;
-            y_mg_expected = softmax_layer.softmax_plaintext_call(y_mg_expected);
+            Array<double, 1> y_mg_expected =
+                to_latti_array(softmax_layer.softmax_plaintext_call(to_mpc_array(x_mg)));
             print_double_message(y_mg_expected.get_data(), "pt_res=", 10);
             auto compare_res = compare(y_mg_expected, y_mg);
             REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
@@ -1894,20 +1926,15 @@ int get_refresh_test_port() {
     if (const char* env_port = getenv("MPC_TEST_PORT")) {
         return atoi(env_port);
     }
-    return port;
+    return kDefaultMpcTestPort;
 }
 
 }  // namespace
 
 void test_new_mpc_refresh_server() {
-    party = SERVER;
-    port = get_refresh_test_port();
-    address = "127.0.0.1";
-    num_threads = 1;
-    bitlength = RING_MOD_BIT;
-    StartComputation();
+    ::mpc::init_party(SERVER, get_refresh_test_port());
 
-    DataTransmission dt(io);
+    DataTransmission dt = ::mpc::data_transmission();
     CkksContext context = CkksContext::deserialize(dt.receive_bytes());
     const CkksParameter& param = context.get_parameter();
     int N = param.get_n();

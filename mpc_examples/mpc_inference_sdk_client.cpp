@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#include "inference_task/inference_process_client.h"
+#include "mpc_adapter/inference_process_client.h"
 #include "mpc_inference_sdk_common.h"
 
 using namespace std;
@@ -278,33 +278,30 @@ int main(int argc, char* argv[]) {
         auto encrypted_inputs = client.encrypt(input_csvs);
 
         cout << "[Client] Starting MPC channel..." << endl;
-        init_mpc_party(CLIENT, mpc_port);
+        init_mpc_party(MPC_CLIENT, mpc_port);
         cout << "[Client] MPC channel ready." << endl;
 
-        DataTransmission data_trans(io);
-        unsigned char dump_flag = 0;
-        data_trans.recv_data(&dump_flag, sizeof(dump_flag));
-        bool server_needs_full_context = dump_flag != 0;
+        MpcDataTransmission mpc_trans = MpcDataTransmission::current();
+        bool server_needs_full_context = mpc_trans.receive_dump_flag();
         auto server_ctx = server_needs_full_context ? client.export_full_context() : client.export_eval_context();
         cout << "[Client] Sending " << (server_needs_full_context ? "full" : "public")
              << " context, bytes=" << server_ctx.size() << endl;
-        data_trans.send_bytes(server_ctx);
-        data_trans.flush();
+        mpc_trans.send_context_bytes(server_ctx);
         cout << "[Client] Sending encrypted inputs..." << endl;
-        send_encrypted_map(data_trans, encrypted_inputs);
+        mpc_trans.send_encrypted_map(encrypted_inputs);
         cout << "[Client] Initial payload sent; entering MPC process loop." << endl;
 
         auto full_ctx = client.export_full_context();
         auto ckks_contexts = make_client_context_map(full_ctx);
-        process(&ckks_contexts);
+        InferenceMpcClient(ckks_contexts).run();
         cout << "[Client] MPC process loop finished; waiting encrypted outputs." << endl;
 
-        auto encrypted_outputs = receive_encrypted_map(data_trans);
+        auto encrypted_outputs = mpc_trans.receive_encrypted_map();
         auto results = client.decrypt(encrypted_outputs);
         print_outputs(results);
 
         if (verify) {
-            auto plaintext_outputs = receive_plaintext_map(data_trans);
+            auto plaintext_outputs = mpc_trans.receive_plaintext_map();
             for (auto& [name, plaintext_output] : plaintext_outputs) {
                 fhe_ops_lib::print_double_message(plaintext_output.data(), ("Plaintext output [" + name + "]").c_str(),
                                                   1);

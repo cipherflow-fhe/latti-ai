@@ -40,15 +40,12 @@ public:
 
     void to_share(Feature0DEncrypted* share0, Feature0DShare* share1) const;
     Array<uint64_t, 1> encrypt_from_share(const Feature0DShare& share, int n_channel);
-    void split_to_shares(Feature0DEncrypted* share0, Feature0DShare* share1) const;
-    void split_to_shares_reshape(Feature0DEncrypted* share0, Feature0DShare* share1) const;
     Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;
     void decompress();
     Feature0DEncrypted combine_with_share(const Feature0DShare& share) const;
     Feature0DEncrypted
     combine_with_share_new_protocol(const Feature0DShare& share, const Feature0DEncrypted& f2d, const Bytes& b1) const;
-    void decrypt_to_share(Feature0DShare* share, int n_channel);
     Feature0DEncrypted refresh_ciphertext() const;
     Feature0DEncrypted drop_level(int n_level_to_drop) const;
     Feature0DEncrypted copy() const;

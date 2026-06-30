@@ -24,8 +24,6 @@
 
 #include "util.h"
 #include "fhe_layers/fhe_layers.h"
-#include "mpc_refresh_layer.h"
-#include "mpc_task_meta_data.h"
 
 namespace lattisense {
 class FheTaskGpu;
@@ -37,6 +35,8 @@ namespace ls = lattisense;
 enum class ComputeDevice { CPU, GPU, FPGA };
 
 class InferenceProcess;
+class InitInferenceProcess;
+class InitMpc;
 
 class Node {
 public:
@@ -92,8 +92,8 @@ class InitInferenceProcess {
     friend class InferenceProcess;
 
 public:
-    InitInferenceProcess() {}
-    InitInferenceProcess(const std::string& project_path_in, bool is_fpga = true);
+    InitInferenceProcess();
+    InitInferenceProcess(const std::string& project_path_in, bool is_fpga = true, InitMpc* init_mpc = nullptr);
     virtual ~InitInferenceProcess();
 
     std::filesystem::path project_path;
@@ -110,6 +110,9 @@ public:
 
     virtual void init_parameters(bool is_bootstrapping = false);
     virtual void load_model_prepare();
+    void set_mpc_init(InitMpc& init_mpc);
+    InitMpc& mpc_init();
+    const InitMpc& mpc_init() const;
 
     template <typename T> T& get_layer(const std::string& key) {
         auto it = ckks_layers_.find(key);
@@ -150,10 +153,6 @@ private:
                                          const hid_t& h5_file,
                                          const Duo& block_shape = {128, 256});
     virtual void _init_drop_level_layer(const std::string& key, const json& layer);
-    virtual void _init_mpc_refresh_layer(const std::string& key, const json& layer);
-    virtual void _init_mpc_layer(const std::vector<MpcProtoType>& operations,
-                                 const json& layer,
-                                 MpcTaskMetaData& meta_data);
     virtual void _init_fhe_avgpool_layer(const std::string& key,
                                          const json& layer,
                                          const bool& is_adaptive = true,
@@ -211,8 +210,8 @@ private:
 
     std::map<std::string, UPtr<ls::CkksParameter>> ckks_parameters_;
     std::map<std::string, UPtr<Layer>> ckks_layers_;
-    std::map<std::string, UPtr<MpcTaskMetaData>> meta_data_map_;
-    std::map<std::string, UPtr<MpcRefreshLayerServer>> ckks_mpc_refresh_;
+    UPtr<InitMpc> owned_mpc_init_;
+    InitMpc* mpc_init_ = nullptr;
 };
 
 class InferenceServer;  // forward declaration for friend
@@ -250,11 +249,6 @@ private:
 
     // Register the encode_pt custom executor
     void register_custom_executors(std::unordered_map<std::string, ExecutorFunc>& executors);
-    Feature2DEncrypted calculate_mpc_refresh(const std::string& key,
-                                             const json& layer,
-                                             int scale_ord,
-                                             double pt_range,
-                                             uint64_t ring_mod);
     void set_feature(const std::string& feature_id, UPtr<FeatureEncrypted> feature);
     template <typename T> T get_ciphertext_output_feature(const std::string& feature_id) {
         return dynamic_cast<const T&>(_get_feature(feature_id)).copy();
@@ -272,53 +266,3 @@ private:
 };
 
 PackType choose_pack_type(Duo shape, Duo block_shape);
-
-Feature2DShare
-server_enc_to_share(ls::CkksContext& context, const Feature2DEncrypted& x_enc, int scale_ord, uint64_t ring_mod);
-
-Feature2DShare server_enc_to_share_simple(ls::CkksContext& context,
-                                          const Feature2DEncrypted& x_enc,
-                                          int scale_ord,
-                                          uint64_t ring_mod);
-
-Feature0DShare
-server_enc_to_share(ls::CkksContext& context, const Feature0DEncrypted& x_enc, int scale_ord, uint64_t ring_mod);
-
-Feature0DEncrypted share_to_enc(Feature0DShare& y_share0,
-                                ls::CkksContext& context,
-                                int scale_ord,
-                                uint64_t ring_mod,
-                                double pt_range,
-                                int level);
-
-Feature2DShare server_enc_to_share_multi_pack(ls::CkksContext& context,
-                                              const Feature2DEncrypted& x_enc,
-                                              int scale_ord,
-                                              uint64_t ring_mod,
-                                              PackType pack_type = PackType::MultiplexedPacking);
-
-Feature2DShare server_enc_to_share_multi_pack_simple(ls::CkksContext& context,
-                                                     const Feature2DEncrypted& x_enc,
-                                                     int scale_ord,
-                                                     uint64_t ring_mod,
-                                                     PackType pack_type = PackType::MultiplexedPacking);
-
-Feature2DEncrypted server_share_to_enc_multi_pack(ls::CkksContext& context,
-                                                  Feature2DShare& y_share0,
-                                                  int scale_ord,
-                                                  uint64_t ring_mod,
-                                                  int level,
-                                                  PackType pack_type = PackType::MultiplexedPacking);
-
-Feature2DEncrypted server_share_to_enc_multi_pack_simple(ls::CkksContext& context,
-                                                         Feature2DShare& y_share0,
-                                                         int scale_ord,
-                                                         uint64_t ring_mod,
-                                                         int level,
-                                                         PackType pack_type = PackType::MultiplexedPacking);
-
-Feature2DEncrypted server_share_to_enc_simple(ls::CkksContext& context,
-                                              Feature2DShare& y_share0,
-                                              int scale_ord,
-                                              uint64_t ring_mod,
-                                              int level);

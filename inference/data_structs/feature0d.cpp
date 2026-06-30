@@ -263,11 +263,6 @@ Array<uint64_t, 1> Feature0DEncrypted::encrypt_from_share(const Feature0DShare& 
     return data_add;
 }
 
-void Feature0DEncrypted::decrypt_to_share(Feature0DShare* share, int n_channel) {
-    Array<double, 1> x_double_vec = this->unpack();
-    share->data = array_double_to_uint64(x_double_vec, share->scale_ord, share->ring_mod);
-}
-
 void Feature0DEncrypted::decompress() {
     assert(data.size() == 0);
     assert(data_compressed.size() > 0);
@@ -340,91 +335,4 @@ Feature0DEncrypted Feature0DEncrypted::combine_with_share_new_protocol(const Fea
         result.data[i] = context->add(result.data[i], f2d_mult);
     }
     return result;
-}
-
-void Feature0DEncrypted::split_to_shares(Feature0DEncrypted* share0, Feature0DShare* share1) const {
-    int n_slot = context->get_parameter().get_n() / 2;
-    double share_scale = pow(2, share1->scale_ord);
-    int r_bitlength = 40;
-    int feature_bitlength = DEFAULT_SCALE_BIT + 1;
-    int sigma = SIGMA;
-    share0->n_channel = n_channel;
-    share0->n_channel_per_ct = n_channel_per_ct;
-    share0->skip = skip;
-    share0->level = level;
-    share0->data.clear();
-    vector<vector<double>> mask_d_mat;
-    vector<vector<int64_t>> r_mat;
-    for (int i = 0; i < data.size(); i++) {
-        vector<double> mask_d(n_slot);
-        vector<int64_t> r(n_slot);
-        for (int j = 0; j < n_slot; j++) {
-            r[j] =
-                int64_t(gen_random_uint(feature_bitlength + sigma)) - int64_t(1ull << (feature_bitlength + sigma - 1));
-            mask_d[j] = double(r[j]) / share_scale;
-        }
-        mask_d_mat.push_back(mask_d);
-        r_mat.push_back(r);
-        CkksPlaintext mask_pt = context->encode(mask_d, level, DEFAULT_SCALE);
-        CkksCiphertext share0_ct = context->add_plain(data[i], mask_pt);
-
-        share0->data.push_back(move(share0_ct));
-    }
-    double scale = pow(2, share1->scale_ord);
-    share1->data.resize({n_channel});
-    int T = 0;
-    for (int i = 0; i < mask_d_mat.size(); i++) {
-        for (int j = 0; j < n_channel_per_ct; j++) {
-            if (T >= n_channel) {
-                break;
-            }
-            uint64_t neg_r = (-r_mat[i][j * skip] % share1->ring_mod + share1->ring_mod) % share1->ring_mod;
-            share1->data.set(T, neg_r);
-            T = T + 1;
-        }
-    }
-}
-
-void Feature0DEncrypted::split_to_shares_reshape(Feature0DEncrypted* share0, Feature0DShare* share1) const {
-    int n_slot = context->get_parameter().get_n() / 2;
-    double share_scale = pow(2, share1->scale_ord);
-    int r_bitlength = 40;
-    int feature_bitlength = DEFAULT_SCALE_BIT + 1;
-    int sigma = SIGMA;
-    share0->n_channel = n_channel;
-    share0->n_channel_per_ct = n_channel_per_ct;
-    share0->skip = skip;
-    share0->level = level;
-    share0->data.clear();
-    vector<vector<double>> mask_d_mat;
-    vector<vector<int64_t>> r_mat;
-    for (int i = 0; i < data.size(); i++) {
-        vector<double> mask_d(n_slot);
-        vector<int64_t> r(n_slot);
-        for (int j = 0; j < n_slot; j++) {
-            r[j] =
-                int64_t(gen_random_uint(feature_bitlength + sigma)) - int64_t(1ull << (feature_bitlength + sigma - 1));
-            mask_d[j] = double(r[j]) / share_scale;
-        }
-        r_mat.push_back(r);
-        mask_d_mat.push_back(mask_d);
-        CkksPlaintext mask_pt = context->encode(mask_d, level, DEFAULT_SCALE);
-        CkksCiphertext share0_ct = context->add_plain(data[i], mask_pt);
-        share0->data.push_back(move(share0_ct));
-    }
-
-    share1->data.resize({n_channel});
-    int T = 0;
-    double scale = pow(2, share1->scale_ord);
-
-    for (int i = 0; i < mask_d_mat.size(); i++) {
-        for (int j = 0; j < div_ceil(n_channel, data.size()); j++) {
-            if (T >= n_channel) {
-                break;
-            }
-            uint64_t neg_r = (-r_mat[i][j * skip] % share1->ring_mod + share1->ring_mod) % share1->ring_mod;
-            share1->data.set(T, neg_r);
-            T += 1;
-        }
-    }
 }

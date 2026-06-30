@@ -18,9 +18,9 @@
 
 #include "inference_process.h"
 #include "../lattisense/cxx_sdk_v2/cxx_fhe_task.h"
-#include "fhe_mpc.h"
-#include "SCI/src/globals.h"
-#include "mpc_task_meta_data.h"
+#include "mpc_adapter/enc_share_conversion.h"
+#include "mpc_adapter/inference_process_mpc_server.h"
+#include "mpc_adapter/mpc_data_transmission.h"
 #include <cmath>
 #include <iostream>
 
@@ -28,187 +28,12 @@ using namespace std;
 using namespace lattisense;
 uint64_t fhe_time = 0;
 bool normal_output = false;
-int party __attribute__((weak)) = SERVER;
-int port __attribute__((weak)) = 12309;
-string address __attribute__((weak)) = "127.0.0.1";
-int num_threads __attribute__((weak)) = 1;
-
-const vector<MpcProtoType> REFRESH_MPC = {MpcProtoType::enc_to_share_for_multi_channel_pack_simple,
-                                          MpcProtoType::share_to_enc_for_multi_channel_pack_simple};
-
-static uint8_t ckks_parameter_id_to_u8(const string& param_id) {
-    if (param_id.rfind("param", 0) == 0) {
-        return static_cast<uint8_t>(stoi(param_id.substr(5)));
-    }
-    return static_cast<uint8_t>(stoi(param_id));
-}
 
 PackType choose_pack_type(Duo shape, Duo block_shape) {
     if (shape[0] > block_shape[0] || shape[1] > block_shape[1]) {
         return PackType::InterleavedPacking;
     }
     return PackType::MultiplexedPacking;
-}
-
-Feature2DShare server_enc_to_share_multi_pack(CkksContext& context,
-                                              const Feature2DEncrypted& x_enc,
-                                              int scale_ord,
-                                              uint64_t ring_mod,
-                                              PackType pack_type) {
-    DataTransmission data_trans(io);
-
-    Feature2DEncrypted x_share1_enc(&context, x_enc.level, x_enc.skip, x_enc.invalid_fill, pack_type);
-    Feature2DShare x_share0(ring_mod, scale_ord);
-
-    x_enc.split_to_shares_for_multi_channel_pack(&x_share1_enc, &x_share0, pack_type);
-    data_trans.send_bytes(x_share1_enc.serialize());
-
-    return x_share0;
-}
-
-Feature2DShare server_enc_to_share_multi_pack_simple(CkksContext& context,
-                                                     const Feature2DEncrypted& x_enc,
-                                                     int scale_ord,
-                                                     uint64_t ring_mod,
-                                                     PackType pack_type) {
-    DataTransmission data_trans(io);
-
-    Feature2DEncrypted x_share1_enc(&context, x_enc.level, x_enc.skip, x_enc.invalid_fill, pack_type);
-    Feature2DShare x_share0(ring_mod, scale_ord);
-
-    x_enc.split_to_shares_for_multi_channel_pack_simple(&x_share1_enc, &x_share0, pack_type);
-    data_trans.send_bytes(x_share1_enc.serialize());
-
-    return x_share0;
-}
-
-Feature2DEncrypted server_share_to_enc_multi_pack(CkksContext& context,
-                                                  Feature2DShare& y_share0,
-                                                  int scale_ord,
-                                                  uint64_t ring_mod,
-                                                  int level,
-                                                  PackType pack_type) {
-    DataTransmission data_trans(io);
-    for (int i = 0; i < y_share0.data.get_size(); i++) {
-        y_share0.data.set(i, (y_share0.data.get(i) * T_SCALE) % ring_mod);
-    }
-
-    MPC mpc(scale_ord, ring_mod, 128.0);
-    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), SERVER);
-
-    Feature2DEncrypted y_share1_enc(&context, level, {1, 1}, {1, 1}, pack_type);
-    y_share1_enc.deserialize(data_trans.receive_bytes());
-    y_share1_enc.packing_type = pack_type;
-    y_share1_enc.decompress();
-
-    CkksContext& extra_context = context.get_extra_level_context();
-    Feature2DEncrypted y_share2_enc(&extra_context, level + 1, y_share1_enc.skip, {1, 1}, pack_type);
-    y_share2_enc.deserialize(data_trans.receive_bytes());
-    y_share2_enc.packing_type = pack_type;
-
-    Feature2DEncrypted y_ct =
-        y_share1_enc.combine_with_share_new_protocol_for_multi_pack(y_share0, y_share2_enc, b1, pack_type);
-    y_ct.packing_type = pack_type;
-    return y_ct;
-}
-
-Feature2DEncrypted server_share_to_enc_multi_pack_simple(CkksContext& context,
-                                                         Feature2DShare& y_share0,
-                                                         int scale_ord,
-                                                         uint64_t ring_mod,
-                                                         int level,
-                                                         PackType pack_type) {
-    DataTransmission data_trans(io);
-    Feature2DEncrypted y_share1_enc(&context, level, {1, 1}, {1, 1}, pack_type);
-    y_share1_enc.deserialize(data_trans.receive_bytes());
-    y_share1_enc.packing_type = pack_type;
-    y_share1_enc.decompress();
-
-    Feature2DEncrypted y_ct = y_share1_enc.combine_with_share_simple_for_multi_pack(y_share0, pack_type);
-    y_ct.packing_type = pack_type;
-    return y_ct;
-}
-
-Feature2DEncrypted server_share_to_enc_simple(CkksContext& context,
-                                              Feature2DShare& y_share0,
-                                              int scale_ord,
-                                              uint64_t ring_mod,
-                                              int level) {
-    DataTransmission data_trans(io);
-    Feature2DEncrypted y_share1_enc(&context, level, {1, 1}, {1, 1}, PackType::MultipleChannelPacking);
-    y_share1_enc.deserialize(data_trans.receive_bytes());
-    y_share1_enc.packing_type = PackType::MultipleChannelPacking;
-    y_share1_enc.decompress();
-
-    Feature2DEncrypted y_ct = y_share1_enc.combine_with_share_simple(y_share0);
-    y_ct.packing_type = PackType::MultipleChannelPacking;
-    return y_ct;
-}
-
-Feature2DShare
-server_enc_to_share(CkksContext& context, const Feature2DEncrypted& x_enc, int scale_ord, uint64_t ring_mod) {
-    DataTransmission data_trans(io);
-
-    Feature2DEncrypted x_share1_enc(&context, x_enc.level, x_enc.skip, x_enc.invalid_fill,
-                                    PackType::MultipleChannelPacking);
-    Feature2DShare x_share0(ring_mod, scale_ord);
-
-    x_enc.split_to_shares(&x_share1_enc, &x_share0);
-    data_trans.send_bytes(x_share1_enc.serialize());
-
-    return x_share0;
-}
-
-Feature2DShare
-server_enc_to_share_simple(CkksContext& context, const Feature2DEncrypted& x_enc, int scale_ord, uint64_t ring_mod) {
-    DataTransmission data_trans(io);
-
-    Feature2DEncrypted x_share1_enc(&context, x_enc.level, x_enc.skip, x_enc.invalid_fill,
-                                    PackType::MultipleChannelPacking);
-    Feature2DShare x_share0(ring_mod, scale_ord);
-
-    x_enc.split_to_shares_simple(&x_share1_enc, &x_share0);
-    data_trans.send_bytes(x_share1_enc.serialize());
-
-    return x_share0;
-}
-
-Feature0DShare
-server_enc_to_share(CkksContext& context, const Feature0DEncrypted& x_enc, int scale_ord, uint64_t ring_mod) {
-    DataTransmission data_trans(io);
-
-    Feature0DShare x_share0(ring_mod, scale_ord);
-    Feature0DEncrypted x_share1_enc(&context, x_enc.level);
-
-    x_enc.split_to_shares(&x_share1_enc, &x_share0);
-    data_trans.send_bytes(x_share1_enc.serialize());
-
-    return x_share0;
-}
-
-Feature0DEncrypted share_to_enc(Feature0DShare& y_share0,
-                                CkksContext& context,
-                                int scale_ord,
-                                uint64_t ring_mod,
-                                double pt_range,
-                                int level) {
-    DataTransmission data_trans(io);
-    for (int i = 0; i < y_share0.data.get_size(); i++) {
-        y_share0.data.set(i, (y_share0.data.get(i) * T_SCALE) % ring_mod);
-    }
-
-    MPC mpc(scale_ord, ring_mod, pt_range);
-    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), SERVER);
-
-    Feature0DEncrypted y_share1_enc(&context, level);
-    y_share1_enc.deserialize(data_trans.receive_bytes());
-    y_share1_enc.decompress();
-
-    CkksContext& extra_context = context.get_extra_level_context();
-    Feature0DEncrypted y_share2_enc(&extra_context, level + 1);
-    y_share2_enc.deserialize(data_trans.receive_bytes());
-
-    return y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
 }
 
 Node::Node() {}
@@ -281,8 +106,16 @@ int FeatureNode::get_n_ciphertexts(const Duo& block_shape) const {
     return n_ciphertexts;
 }
 
-InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool is_fpga)
+InitInferenceProcess::InitInferenceProcess() : owned_mpc_init_(MakeU<InitMpc>()), mpc_init_(owned_mpc_init_.get()) {}
+
+InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool is_fpga, InitMpc* init_mpc)
     : project_path(project_path_in) {
+    if (init_mpc != nullptr) {
+        mpc_init_ = init_mpc;
+    } else {
+        owned_mpc_init_ = MakeU<InitMpc>();
+        mpc_init_ = owned_mpc_init_.get();
+    }
     const json& config = read_json(project_path / "task_config.json");
     pack_style = config["pack_style"].get<string>();
     if (config["block_shape"].size() == 1) {
@@ -295,6 +128,25 @@ InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool i
 }
 
 InitInferenceProcess::~InitInferenceProcess() {}
+
+void InitInferenceProcess::set_mpc_init(InitMpc& init_mpc) {
+    owned_mpc_init_.reset();
+    mpc_init_ = &init_mpc;
+}
+
+InitMpc& InitInferenceProcess::mpc_init() {
+    if (mpc_init_ == nullptr) {
+        throw runtime_error("InitInferenceProcess has no InitMpc instance");
+    }
+    return *mpc_init_;
+}
+
+const InitMpc& InitInferenceProcess::mpc_init() const {
+    if (mpc_init_ == nullptr) {
+        throw runtime_error("InitInferenceProcess has no InitMpc instance");
+    }
+    return *mpc_init_;
+}
 
 void InitInferenceProcess::init_parameters(bool is_bootstrapping) {
     auto json_params = read_json(project_path / "ckks_parameter.json");
@@ -472,42 +324,6 @@ void InitInferenceProcess::_init_drop_level_layer(const string& key, const json&
     auto drop_level = MakeU<DropLevelLayer>();
 
     _prepare_layer(key, move(drop_level));
-}
-
-void InitInferenceProcess::_init_mpc_layer(const vector<MpcProtoType>& operations,
-                                           const json& layer,
-                                           MpcTaskMetaData& meta_data) {
-    FeatureNode feature_input0(json_features[layer["feature_input"][0].get<string>()]);
-    FeatureNode feature_output0(json_features[layer["feature_output"][0].get<string>()]);
-    PackType pack_type = PackType::MultipleChannelPacking;
-    if (pack_style == "multiplexed") {
-        pack_type = choose_pack_type(feature_input0.shape, block_shape);
-    }
-
-    uint8_t param_id_in = ckks_parameter_id_to_u8(feature_input0.ckks_parameter_id);
-    uint8_t param_id_out = ckks_parameter_id_to_u8(feature_output0.ckks_parameter_id);
-
-    for (MpcProtoType operation : operations) {
-        if (operation == MpcProtoType::enc_to_share_for_multi_channel_pack ||
-            operation == MpcProtoType::enc_to_share_for_multi_channel_pack_simple) {
-            meta_data.append(operation, {"u8", "u8", "u8", "u8"}, (uint8_t)feature_input0.level, param_id_in,
-                             param_id_out, (uint8_t)pack_type);
-        } else if (operation == MpcProtoType::share_to_enc_for_multi_channel_pack ||
-                   operation == MpcProtoType::share_to_enc_for_multi_channel_pack_simple) {
-            meta_data.append(operation, {"u8", "u32", "duo", "u8"}, (uint8_t)feature_output0.level,
-                             feature_output0.channel, feature_output0.skip, (uint8_t)pack_type);
-        } else {
-            throw runtime_error("unsupported mpc operation for InitInferenceProcess::_init_mpc_layer");
-        }
-    }
-
-}
-
-void InitInferenceProcess::_init_mpc_refresh_layer(const string& key, const json& layer) {
-    MpcTaskMetaData meta_data;
-    _init_mpc_layer(REFRESH_MPC, layer, meta_data);
-    meta_data_map_[key] = MakeU<MpcTaskMetaData>(move(meta_data));
-    ckks_mpc_refresh_[key] = MakeU<MpcRefreshLayerServer>(DEFAULT_SCALE_BIT, RING_MOD, 128.0);
 }
 
 void InitInferenceProcess::_init_reshape_layer(const string& key, const json& layer) {
@@ -839,7 +655,7 @@ void InitInferenceProcess::load_model_prepare() {
         } else if (layer_type == "drop_level") {
             _init_drop_level_layer(key, value);
         } else if (layer_type == "mpc_refresh") {
-            _init_mpc_refresh_layer(key, value);
+            mpc_init().init_mpc_refresh_layer(*this, key, value);
         } else if (layer_type == "concat2d") {
             _init_concat_layer(key, value);
         } else if (layer_type == "upsample") {
@@ -861,36 +677,6 @@ void InitInferenceProcess::load_model_prepare() {
         }
     }
     H5Fclose(h5_file);
-}
-
-Feature2DEncrypted InferenceProcess::calculate_mpc_refresh(const string& key,
-                                                           const json& layer,
-                                                           int scale_ord,
-                                                           double pt_range,
-                                                           uint64_t ring_mod) {
-    FeatureNode feature_input(fp->json_features[layer["feature_input"][0].get<string>()]);
-    FeatureNode feature_output(fp->json_features[layer["feature_output"][0].get<string>()]);
-    const FeatureEncrypted& feature_node = _get_feature(layer["feature_input"][0].get<string>());
-    if (feature_node.dim != 2) {
-        throw runtime_error("mpc_refresh currently expects Feature2DEncrypted input");
-    }
-
-    const Feature2DEncrypted& x_enc = dynamic_cast<const Feature2DEncrypted&>(feature_node);
-    CkksContext& context_in = *ckks_contexts.at(feature_input.ckks_parameter_id);
-    CkksContext& context_out = *ckks_contexts.at(feature_output.ckks_parameter_id);
-    PackType pack_type = PackType::MultipleChannelPacking;
-    if (fp->pack_style == "multiplexed") {
-        pack_type = choose_pack_type(feature_input.shape, fp->block_shape);
-    }
-
-    Feature2DShare x_share0 = server_enc_to_share_multi_pack_simple(context_in, x_enc, scale_ord, ring_mod, pack_type);
-    Feature2DShare y_share0(ring_mod, scale_ord);
-    fp->ckks_mpc_refresh_.at(key)->run(x_share0, y_share0);
-
-    Feature2DEncrypted y_ct = server_share_to_enc_multi_pack_simple(context_out, y_share0, scale_ord, ring_mod,
-                                                                    feature_output.level, pack_type);
-    y_ct.packing_type = pack_type;
-    return y_ct;
 }
 
 void InferenceProcess::run_task_sdk(bool enable_mpc) {
@@ -998,10 +784,13 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     throw runtime_error("mpc_refresh requires enable_mpc=true and an active MPC client");
                 }
                 mpc_timer.start();
-                DataTransmission data_trans(io);
                 cout << "[Server][MPC] Sending refresh metadata for layer " << key << endl;
-                data_trans.send_bytes(fp->meta_data_map_.at(key)->serialize());
-                auto refresh_result = calculate_mpc_refresh(key, layer.value(), DEFAULT_SCALE_BIT, 128.0, RING_MOD);
+                send_mpc_metadata(fp->mpc_init().meta_data(key));
+                const FeatureEncrypted& mpc_input = _get_feature(feature_input[0]);
+                InferenceMpcServer mpc_server;
+                auto refresh_result = mpc_server.calculate_mpc_refresh(*fp, fp->mpc_init(), ckks_contexts, mpc_input,
+                                                                       key, layer.value(), DEFAULT_SCALE_BIT, 128.0,
+                                                                       RING_MOD);
                 cout << "[Server][MPC] Finished refresh layer " << key << endl;
                 result = MakeU<Feature2DEncrypted>(move(refresh_result));
                 mpc_timer.stop();

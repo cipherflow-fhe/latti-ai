@@ -172,15 +172,6 @@ public:
     virtual Array<double, 2> unpack_column() const;
     virtual Array<double, 2> unpack_row() const;
 
-    void split_to_shares(Feature2DEncrypted* share0, Feature2DShare* share1) const;
-    void split_to_shares_simple(Feature2DEncrypted* share0, Feature2DShare* share1) const;
-    void split_to_shares_for_multi_channel_pack(Feature2DEncrypted* share0,
-                                                Feature2DShare* share1,
-                                                PackType pack_type = PackType::MultiplexedPacking) const;
-    void split_to_shares_for_multi_channel_pack_simple(
-        Feature2DEncrypted* share0,
-        Feature2DShare* share1,
-        PackType pack_type = PackType::MultiplexedPacking) const;
     Feature2DEncrypted combine_with_share(const Feature2DShare& share) const;
     Feature2DEncrypted combine_with_share_simple(const Feature2DShare& share) const;
     Feature2DEncrypted combine_with_share_simple_for_multi_pack(
@@ -192,8 +183,6 @@ public:
                                                                       const Feature2DEncrypted& f2d,
                                                                       const Bytes& b1,
                                                                       PackType pack_type = PackType::MultiplexedPacking) const;
-    void decrypt_to_share(Feature2DShare* share, PackType pack_type = PackType::MultiplexedPacking) const;
-    void decrypt_to_share_simple(Feature2DShare* share, PackType pack_type = PackType::MultipleChannelPacking) const;
     Array<uint64_t, 1> encrypt_from_share(const Feature2DShare& share,
                                           int n_channel,
                                           const Duo& input_shape,

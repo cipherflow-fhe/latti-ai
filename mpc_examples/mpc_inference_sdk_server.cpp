@@ -94,20 +94,18 @@ int main(int argc, char* argv[]) {
         cout << endl;
 
         cout << "[Server] Starting MPC channel..." << endl;
-        init_mpc_party(SERVER, mpc_port);
+        init_mpc_party(MPC_SERVER, mpc_port);
         cout << "[Server] MPC channel ready." << endl;
 
-        DataTransmission data_trans(io);
-        unsigned char dump_flag = g_dump_intermediate_plaintexts ? 1 : 0;
-        data_trans.send_data(&dump_flag, sizeof(dump_flag));
-        data_trans.flush();
+        MpcDataTransmission mpc_trans = MpcDataTransmission::current();
+        mpc_trans.send_dump_flag(g_dump_intermediate_plaintexts);
 
         cout << "[Server] Receiving client " << (g_dump_intermediate_plaintexts ? "full" : "public")
              << " context and encrypted inputs..." << endl;
-        auto eval_ctx = data_trans.receive_bytes();
+        auto eval_ctx = mpc_trans.receive_context_bytes();
         cout << "[Server] Received " << (g_dump_intermediate_plaintexts ? "full" : "public")
              << " context, bytes=" << eval_ctx.size() << endl;
-        auto encrypted_inputs = receive_encrypted_map(data_trans);
+        auto encrypted_inputs = mpc_trans.receive_encrypted_map();
         cout << "[Server] Received all encrypted inputs." << endl;
 
         cout << "[Server] Loading model and importing context..." << endl;
@@ -126,12 +124,12 @@ int main(int argc, char* argv[]) {
         }
 
         cout << "[Server] Sending encrypted outputs..." << endl;
-        send_encrypted_map(data_trans, encrypted_outputs);
+        mpc_trans.send_encrypted_map(encrypted_outputs);
         cout << "[Server] Encrypted outputs sent." << endl;
 
         if (verify) {
             auto plaintext_outputs = server.evaluate_plaintext(input_csvs);
-            send_plaintext_map(data_trans, plaintext_outputs);
+            mpc_trans.send_plaintext_map(plaintext_outputs);
         }
     } catch (const exception& e) {
         cerr << "[Server][Error] " << e.what() << endl;
