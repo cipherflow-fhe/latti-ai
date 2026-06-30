@@ -172,26 +172,6 @@ public:
     virtual Array<double, 2> unpack_column() const;
     virtual Array<double, 2> unpack_row() const;
 
-    Feature2DEncrypted combine_with_share(const Feature2DShare& share) const;
-    Feature2DEncrypted combine_with_share_simple(const Feature2DShare& share) const;
-    Feature2DEncrypted combine_with_share_simple_for_multi_pack(
-        const Feature2DShare& share,
-        PackType pack_type = PackType::MultiplexedPacking) const;
-    Feature2DEncrypted
-    combine_with_share_new_protocol(const Feature2DShare& share, const Feature2DEncrypted& f2d, const Bytes& b1) const;
-    Feature2DEncrypted combine_with_share_new_protocol_for_multi_pack(const Feature2DShare& share,
-                                                                      const Feature2DEncrypted& f2d,
-                                                                      const Bytes& b1,
-                                                                      PackType pack_type = PackType::MultiplexedPacking) const;
-    Array<uint64_t, 1> encrypt_from_share(const Feature2DShare& share,
-                                          int n_channel,
-                                          const Duo& input_shape,
-                                          PackType pack_type = PackType::MultiplexedPacking);
-    void encrypt_from_share_simple(const Feature2DShare& share,
-                                   int n_channel,
-                                   const Duo& input_shape,
-                                   PackType pack_type = PackType::MultipleChannelPacking,
-                                   bool use_recode = false);
     void decompress();
 
     Bytes serialize() const override;

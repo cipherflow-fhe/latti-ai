@@ -83,6 +83,325 @@ EncToShareServer::EncToShareServer(CkksContext& context, int scale_ord, uint64_t
 ShareToEncServer::ShareToEncServer(CkksContext& context, int scale_ord, uint64_t ring_mod, double pt_range)
     : context_(context), scale_ord_(scale_ord), ring_mod_(ring_mod), pt_range_(pt_range) {}
 
+Array<uint64_t, 1> ShareToEncClient::encrypt_from_share(Feature2DEncrypted& x_enc,
+                                                        const Feature2DShare& share,
+                                                        int n_channel,
+                                                        const Duo& input_shape,
+                                                        PackType pack_type) const {
+    x_enc.shape = input_shape;
+    Array<double, 1> y0_sub_mod_div_s(share.data.get_shape());
+    Array<uint64_t, 1> y0_add_mod(share.data.get_shape());
+    double scale = DEFAULT_SCALE;
+    for (int i = 0; i < share.data.get_size(); i++) {
+        uint64_t y0_add_mod_value = (share.data[i] + (share.ring_mod / 2)) % share.ring_mod;
+        y0_add_mod.set(i, y0_add_mod_value);
+        double y0_sub = double(int64_t(y0_add_mod_value) - int64_t(share.ring_mod / 2)) / scale;
+        y0_sub_mod_div_s.set(i, y0_sub);
+    }
+
+    Array<double, 3> y3 = y0_sub_mod_div_s.reshape<3>({uint64_t(n_channel), input_shape[0], input_shape[1]});
+    if (pack_type == PackType::MultiplexedPacking) {
+        x_enc.pack_multiplexed(y3, true, DEFAULT_SCALE);
+    } else if (pack_type == PackType::MultipleChannelPacking) {
+        x_enc.pack_multiple_channel(y3, true, DEFAULT_SCALE);
+    } else if (pack_type == PackType::InterleavedPacking) {
+        Duo block_expansion = {(uint32_t)ceil(input_shape[0] / (double)BLOCK_SHAPE[0]),
+                               (uint32_t)ceil(input_shape[1] / (double)BLOCK_SHAPE[1])};
+        x_enc.pack_interleaved(y3, BLOCK_SHAPE, block_expansion, true);
+    }
+
+    return y0_add_mod;
+}
+
+void ShareToEncClient::encrypt_from_share_simple(Feature2DEncrypted& x_enc,
+                                                 const Feature2DShare& share,
+                                                 int n_channel,
+                                                 const Duo& input_shape,
+                                                 PackType pack_type,
+                                                 bool use_recode) const {
+    x_enc.shape = input_shape;
+    Array<double, 1> share_mg = share.data_double.copy();
+
+    Array<double, 3> y3 = share_mg.reshape<3>({uint64_t(n_channel), input_shape[0], input_shape[1]});
+    if (pack_type == PackType::MultipleChannelPacking) {
+        x_enc.pack_multiple_channel(y3, true, DEFAULT_SCALE, use_recode);
+    } else if (pack_type == PackType::MultiplexedPacking) {
+        x_enc.pack_multiplexed(y3, true, DEFAULT_SCALE, use_recode);
+    } else if (pack_type == PackType::InterleavedPacking) {
+        Duo block_expansion = {(uint32_t)ceil(input_shape[0] / (double)BLOCK_SHAPE[0]),
+                               (uint32_t)ceil(input_shape[1] / (double)BLOCK_SHAPE[1])};
+        x_enc.pack_interleaved(y3, BLOCK_SHAPE, block_expansion, true, DEFAULT_SCALE, use_recode);
+    }
+}
+
+Array<uint64_t, 1> ShareToEncClient::encrypt_from_share(Feature0DEncrypted& x_enc,
+                                                        const Feature0DShare& share,
+                                                        int n_channel) const {
+    int n_slot = x_enc.context->get_parameter().get_n() / 2;
+    x_enc.skip = 1;
+
+    Array<double, 1> out_data_mg(share.data.get_shape());
+    Array<uint64_t, 1> data_add(share.data.get_shape());
+    double scale = DEFAULT_SCALE;
+    for (int i = 0; i < share.data.get_size(); i++) {
+        uint64_t data_add_value = (share.data[i] + (share.ring_mod / 2)) % share.ring_mod;
+        data_add.set(i, data_add_value);
+        double out_data_value = double(int64_t(data_add_value) - int64_t(share.ring_mod / 2)) / scale;
+        out_data_mg.set(i, out_data_value);
+    }
+
+    double encode_scale = pow(2, DEFAULT_SCALE_BIT);
+    x_enc.pack_cyclic(out_data_mg.to_array_1d(), true, encode_scale);
+    x_enc.n_channel = n_channel;
+    x_enc.n_channel_per_ct = n_slot;
+    return data_add;
+}
+
+Feature2DEncrypted ShareToEncServer::combine_with_share(const Feature2DEncrypted& y_share1_enc,
+                                                        const Feature2DShare& share) const {
+    const int N_THREAD = 4;
+    int n_slot = y_share1_enc.context->get_parameter().get_n() / 2;
+    Feature2DEncrypted result(y_share1_enc.context, y_share1_enc.level);
+    result.n_channel = y_share1_enc.n_channel;
+    result.n_channel_per_ct = y_share1_enc.n_channel_per_ct;
+    result.shape = y_share1_enc.shape;
+    result.skip = y_share1_enc.skip;
+    double scale = pow(2, share.scale_ord);
+    int n_ct = y_share1_enc.data.size();
+
+    result.data.clear();
+    result.data.resize(n_ct);
+    parallel_for(n_ct, N_THREAD, *y_share1_enc.context, [&](CkksContext& ctx_copy, int i) {
+        vector<double> mask_d(n_slot);
+        for (int j = 0; j < n_slot; j++) {
+            uint64_t v;
+            if (i * n_slot + j >= share.data.get_size()) {
+                v = share.data.get((i * n_slot + j) % share.data.get_size());
+            } else {
+                v = share.data.get(i * n_slot + j);
+            }
+            mask_d[j] = uint64_to_double(v, scale, share.ring_mod);
+        }
+        CkksPlaintext mask_pt =
+            ctx_copy.encode(mask_d, y_share1_enc.level, ctx_copy.get_parameter().get_default_scale());
+        result.data[i] = ctx_copy.add_plain(y_share1_enc.data[i], mask_pt);
+    });
+    return result;
+}
+
+Feature2DEncrypted ShareToEncServer::combine_with_share_simple(const Feature2DEncrypted& y_share1_enc,
+                                                               const Feature2DShare& share) const {
+    const int N_THREAD = 4;
+    int n_slot = y_share1_enc.context->get_parameter().get_n() / 2;
+    Feature2DEncrypted result(y_share1_enc.context, y_share1_enc.level);
+    result.n_channel = y_share1_enc.n_channel;
+    result.n_channel_per_ct = y_share1_enc.n_channel_per_ct;
+    result.shape = y_share1_enc.shape;
+    result.skip = y_share1_enc.skip;
+    int n_ct = y_share1_enc.data.size();
+
+    result.data.clear();
+    result.data.resize(n_ct);
+    parallel_for(n_ct, N_THREAD, *y_share1_enc.context, [&](CkksContext& ctx_copy, int i) {
+        vector<double> mask_d(n_slot);
+        for (int j = 0; j < n_slot; j++) {
+            int share_idx = (i * n_slot + j) % share.data_double.get_size();
+            mask_d[j] = share.data_double.get(share_idx);
+        }
+        CkksPlaintext mask_pt =
+            ctx_copy.encode(mask_d, y_share1_enc.level, ctx_copy.get_parameter().get_default_scale());
+        result.data[i] = ctx_copy.add_plain(y_share1_enc.data[i], mask_pt);
+    });
+    return result;
+}
+
+Feature2DEncrypted ShareToEncServer::combine_with_share_simple_for_multi_pack(
+    const Feature2DEncrypted& y_share1_enc,
+    const Feature2DShare& share,
+    PackType pack_type) const {
+    Feature2DEncrypted result(y_share1_enc.context, y_share1_enc.level, y_share1_enc.skip, y_share1_enc.invalid_fill,
+                              pack_type);
+    result.n_channel = y_share1_enc.n_channel;
+    result.n_channel_per_ct = y_share1_enc.n_channel_per_ct;
+    result.shape = y_share1_enc.shape;
+    result.skip = y_share1_enc.skip;
+    result.packing_type = pack_type;
+
+    Array<double, 1> share_mg = share.data_double.copy();
+    Array<double, 3> share_mg_3d =
+        share_mg.reshape<3>({y_share1_enc.n_channel, y_share1_enc.shape[0], y_share1_enc.shape[1]});
+    auto result_copy = result.copy();
+    auto mask_pt = multi_pack_to_pt(share_mg_3d, result_copy, y_share1_enc.n_channel, y_share1_enc.shape,
+                                    y_share1_enc.skip, *y_share1_enc.context, y_share1_enc.level,
+                                    y_share1_enc.context->get_parameter().get_default_scale(), pack_type);
+
+    int n_ct = y_share1_enc.data.size();
+    result.data.clear();
+    result.data.resize(n_ct);
+    for (int i = 0; i < n_ct; i++) {
+        result.data[i] = y_share1_enc.context->add_plain(y_share1_enc.data[i], mask_pt[i]);
+    }
+    return result;
+}
+
+Feature2DEncrypted ShareToEncServer::combine_with_share_new_protocol(const Feature2DEncrypted& y_share1_enc,
+                                                                     const Feature2DShare& share,
+                                                                     const Feature2DEncrypted& y_share2_enc,
+                                                                     const Bytes& b1) const {
+    const int N_THREAD = 8;
+    int n_slot = y_share1_enc.context->get_parameter().get_n() / 2;
+    Feature2DEncrypted result(y_share1_enc.context, y_share1_enc.level);
+    result.n_channel = y_share1_enc.n_channel;
+    result.n_channel_per_ct = y_share1_enc.n_channel_per_ct;
+    result.shape = y_share1_enc.shape;
+    result.skip = y_share1_enc.skip;
+    double scale = DEFAULT_SCALE;
+    double encode_scale = pow(2, DEFAULT_SCALE_BIT);
+    int n_ct = y_share1_enc.data.size();
+
+    result.data.clear();
+    result.data.resize(n_ct);
+
+    parallel_for_with_extra_level_context(
+        n_ct, N_THREAD, *y_share1_enc.context, [&](CkksContext& ctx_copy, CkksContext& extra_level_ctx_copy, int i) {
+            vector<double> mask_d(n_slot, 0);
+            vector<double> b1_value(n_slot, 0);
+            for (int j = 0; j < n_slot; j++) {
+                int mg_idx = (i * n_slot + j) % share.data.get_size();
+                b1_value[j] = 2 * b1[mg_idx] - 1;
+                int64_t mask_value = int64_t(share.data.get(mg_idx)) - int64_t(b1[mg_idx] * share.ring_mod);
+                mask_d[j] = double(mask_value) / scale;
+            }
+            CkksPlaintext mask_pt = ctx_copy.encode(mask_d, y_share1_enc.level, encode_scale);
+            result.data[i] = ctx_copy.add_plain(y_share1_enc.data[i], mask_pt);
+
+            CkksPlaintext b1_pt = extra_level_ctx_copy.encode(
+                b1_value, y_share1_enc.level + 1, extra_level_ctx_copy.get_parameter().get_q(y_share1_enc.level + 1));
+
+            auto f2d_mult = extra_level_ctx_copy.mult_plain(y_share2_enc.data[i], b1_pt);
+            f2d_mult = extra_level_ctx_copy.rescale(f2d_mult, encode_scale);
+
+            result.data[i] = ctx_copy.add(result.data[i], f2d_mult);
+        });
+    return result;
+}
+
+Feature2DEncrypted ShareToEncServer::combine_with_share_new_protocol_for_multi_pack(
+    const Feature2DEncrypted& y_share1_enc,
+    const Feature2DShare& share,
+    const Feature2DEncrypted& y_share2_enc,
+    const Bytes& b1,
+    PackType pack_type) const {
+    double scale = DEFAULT_SCALE;
+    double encode_scale = pow(2, DEFAULT_SCALE_BIT);
+    Feature2DEncrypted result(y_share1_enc.context, y_share1_enc.level);
+    result.n_channel = y_share1_enc.n_channel;
+    result.n_channel_per_ct = y_share1_enc.n_channel_per_ct;
+    result.shape = y_share1_enc.shape;
+    result.skip = y_share1_enc.skip;
+
+    result.data.clear();
+    result.data.resize(y_share1_enc.data.size());
+
+    Array<double, 1> mask_d({share.data.get_size()});
+    for (int i = 0; i < share.data.get_size(); i++) {
+        int64_t mask_value = int64_t(share.data.get(i)) - int64_t(b1[i] * share.ring_mod);
+        mask_d.set(i, mask_value / scale);
+    }
+    auto y_share2_copy = y_share2_enc.copy();
+    Array<double, 3> mask_d_3d =
+        mask_d.reshape<3>({y_share1_enc.n_channel, y_share1_enc.shape[0], y_share1_enc.shape[1]});
+    auto mask_pt = multi_pack_to_pt(mask_d_3d, y_share2_copy, y_share1_enc.n_channel, y_share1_enc.shape,
+                                    y_share1_enc.skip, *y_share1_enc.context, y_share1_enc.level, DEFAULT_SCALE,
+                                    pack_type);
+    Array<double, 1> b1_value({b1.size()});
+    for (int i = 0; i < b1.size(); i++) {
+        b1_value.set(i, 2 * b1[i] - 1);
+    }
+    Array<double, 3> b1_value_3d =
+        b1_value.reshape<3>({y_share1_enc.n_channel, y_share1_enc.shape[0], y_share1_enc.shape[1]});
+    CkksContext& extra_level_context = y_share1_enc.context->get_extra_level_context();
+    auto mask_b1 = multi_pack_to_pt(b1_value_3d, y_share2_copy, y_share1_enc.n_channel, y_share1_enc.shape,
+                                    y_share1_enc.skip, extra_level_context, y_share1_enc.level + 1,
+                                    extra_level_context.get_parameter().get_q(y_share1_enc.level + 1), pack_type);
+    for (int i = 0; i < y_share1_enc.data.size(); i++) {
+        auto f2d_mult = extra_level_context.mult_plain(y_share2_enc.data[i], mask_b1[i]);
+        f2d_mult = extra_level_context.rescale(f2d_mult, encode_scale);
+        result.data[i] = y_share1_enc.context->add_plain(y_share1_enc.data[i], mask_pt[i]);
+        result.data[i] = y_share1_enc.context->add(result.data[i], f2d_mult);
+    }
+    return result;
+}
+
+Feature0DEncrypted ShareToEncServer::combine_with_share(const Feature0DEncrypted& y_share1_enc,
+                                                        const Feature0DShare& share) const {
+    int n_slot = y_share1_enc.context->get_parameter().get_n() / 2;
+    Feature0DEncrypted result(y_share1_enc.context, y_share1_enc.level);
+    result.n_channel = y_share1_enc.n_channel;
+    result.n_channel_per_ct = y_share1_enc.n_channel_per_ct;
+    result.skip = y_share1_enc.skip;
+    double scale = pow(2, share.scale_ord);
+
+    for (int i = 0; i < y_share1_enc.data.size(); i++) {
+        vector<double> mask_d(n_slot, 0.0);
+        for (int j = 0; j < n_slot; j++) {
+            if (i * n_slot + j >= share.data.get_size()) {
+                mask_d[j] =
+                    uint64_to_double(share.data.get((i * n_slot + j) % share.data.get_size()), scale, share.ring_mod);
+            } else {
+                mask_d[j] = uint64_to_double(share.data.get(i * n_slot + j), scale, share.ring_mod);
+            }
+        }
+        CkksPlaintext mask_pt =
+            y_share1_enc.context->encode(mask_d, y_share1_enc.level,
+                                         y_share1_enc.context->get_parameter().get_default_scale());
+        result.data.push_back(y_share1_enc.context->add_plain(y_share1_enc.data[i], mask_pt));
+    }
+    return result;
+}
+
+Feature0DEncrypted ShareToEncServer::combine_with_share_new_protocol(const Feature0DEncrypted& y_share1_enc,
+                                                                     const Feature0DShare& share,
+                                                                     const Feature0DEncrypted& y_share2_enc,
+                                                                     const Bytes& b1) const {
+    int n_slot = y_share1_enc.context->get_parameter().get_n() / 2;
+    Feature0DEncrypted result(y_share1_enc.context, y_share1_enc.level);
+    result.n_channel = y_share1_enc.n_channel;
+    result.n_channel_per_ct = y_share1_enc.n_channel_per_ct;
+    result.skip = y_share1_enc.skip;
+    double scale = DEFAULT_SCALE;
+    double encode_scale = pow(2, DEFAULT_SCALE_BIT);
+
+    for (int i = 0; i < y_share1_enc.data.size(); i++) {
+        vector<double> b1_value(n_slot, 0);
+        vector<double> mask_d(n_slot, 0.0);
+        for (int j = 0; j < n_slot; j++) {
+            int64_t mask_value;
+            if (i * n_slot + j >= share.data.get_size()) {
+                b1_value[j] = b1[(i * n_slot + j) % share.data.get_size()];
+                mask_value = int64_t(share.data.get((i * n_slot + j) % share.data.get_size())) -
+                             int64_t(b1_value[j] * share.ring_mod);
+            } else {
+                b1_value[j] = b1[i * n_slot + j];
+                mask_value = int64_t(share.data.get(i * n_slot + j)) - int64_t(b1[i * n_slot + j] * share.ring_mod);
+            }
+            b1_value[j] = 2 * b1_value[j] - 1;
+            mask_d[j] = double(mask_value) / scale;
+        }
+        CkksPlaintext mask_pt = y_share1_enc.context->encode(mask_d, y_share1_enc.level, encode_scale);
+        result.data.push_back(y_share1_enc.context->add_plain(y_share1_enc.data[i], mask_pt));
+
+        CkksContext& ctx_extra = y_share1_enc.context->get_extra_level_context();
+        CkksPlaintext b1_pt =
+            ctx_extra.encode(b1_value, y_share1_enc.level + 1, ctx_extra.get_parameter().get_q(y_share1_enc.level + 1));
+        auto f2d_mult = ctx_extra.mult_plain(y_share2_enc.data[i], b1_pt);
+        f2d_mult = ctx_extra.rescale(f2d_mult, encode_scale);
+
+        result.data[i] = y_share1_enc.context->add(result.data[i], f2d_mult);
+    }
+    return result;
+}
+
 Feature2DShare EncToShareClient::decrypt_to_share(const Feature2DEncrypted& x_enc, PackType pack_type) const {
     Feature2DShare share(ring_mod_, scale_ord_);
     share.shape = x_enc.shape;
@@ -508,7 +827,7 @@ void ShareToEncClient::client_share_to_enc(Feature2DShare& share, const Bytes& m
     for (int i = 0; i < share.data.get_size(); i++) {
         share.data.set(i, share.data.get(i) * T_SCALE % ring_mod_);
     }
-    auto data_process = x_e.encrypt_from_share(share, n_channel, share.shape, PackType::MultipleChannelPacking);
+    auto data_process = encrypt_from_share(x_e, share, n_channel, share.shape, PackType::MultipleChannelPacking);
 
     MPC mpc(scale_ord_, ring_mod_, pt_range_);
     auto b0 = mpc.wrap_protocol(data_process.to_array_1d(), ::mpc::current_party());
@@ -535,8 +854,8 @@ void ShareToEncClient::client_share_to_enc_simple(Feature2DShare& share, const B
     bytes_to_va(meta_data_bytes, {"u8", "u32"}, &level, &n_channel);
 
     Feature2DEncrypted x_e(&context_out_, level, {1, 1}, {1, 1}, PackType::MultipleChannelPacking);
-    x_e.encrypt_from_share_simple(share, n_channel, share.shape, PackType::MultipleChannelPacking,
-                                  MPC_REFRESH_USE_RECODE);
+    encrypt_from_share_simple(x_e, share, n_channel, share.shape, PackType::MultipleChannelPacking,
+                              MPC_REFRESH_USE_RECODE);
 
     data_trans.send_bytes(x_e.serialize());
 }
@@ -555,7 +874,7 @@ void ShareToEncClient::client_share_to_enc_for_multi_channel_pack(Feature2DShare
     for (int i = 0; i < share.data.get_size(); i++) {
         share.data.set(i, share.data.get(i) * T_SCALE % ring_mod_);
     }
-    auto data_process = x_e.encrypt_from_share(share, n_channel, share.shape, pack_type);
+    auto data_process = encrypt_from_share(x_e, share, n_channel, share.shape, pack_type);
 
     MPC mpc(scale_ord_, ring_mod_, pt_range_);
     auto b0 = mpc.wrap_protocol(data_process.to_array_1d(), ::mpc::current_party());
@@ -594,7 +913,7 @@ void ShareToEncClient::client_share_to_enc_for_multi_channel_pack_simple(Feature
     bytes_to_va(meta_data_bytes, {"u8", "u32", "duo", "u8"}, &level, &n_channel, &skip, &temp_int);
     PackType pack_type = (PackType)temp_int;
     Feature2DEncrypted x_e(&context_out_, level, skip, {1, 1}, pack_type);
-    x_e.encrypt_from_share_simple(share, n_channel, share.shape, pack_type, MPC_REFRESH_USE_RECODE);
+    encrypt_from_share_simple(x_e, share, n_channel, share.shape, pack_type, MPC_REFRESH_USE_RECODE);
 
     data_trans.send_bytes(x_e.serialize());
 }
@@ -609,7 +928,7 @@ void ShareToEncClient::client_share_to_enc_0d(Feature0DShare& share, const Bytes
     for (int i = 0; i < share.data.get_size(); i++) {
         share.data.set(i, share.data.get(i) * T_SCALE % ring_mod_);
     }
-    auto data_process = x_e.encrypt_from_share(share, n_channel);
+    auto data_process = encrypt_from_share(x_e, share, n_channel);
     MPC mpc(scale_ord_, ring_mod_, pt_range_);
     data_trans.flush();
     auto b0 = mpc.wrap_protocol(data_process.to_array_1d(), ::mpc::current_party());
@@ -677,8 +996,8 @@ Feature2DEncrypted ShareToEncServer::server_share_to_enc_multi_pack(Feature2DSha
     y_share2_enc.deserialize(data_trans.receive_bytes());
     y_share2_enc.packing_type = pack_type;
 
-    Feature2DEncrypted y_ct =
-        y_share1_enc.combine_with_share_new_protocol_for_multi_pack(y_share0, y_share2_enc, b1, pack_type);
+    Feature2DEncrypted y_ct = combine_with_share_new_protocol_for_multi_pack(y_share1_enc, y_share0, y_share2_enc, b1,
+                                                                             pack_type);
     y_ct.packing_type = pack_type;
     return y_ct;
 }
@@ -692,7 +1011,7 @@ Feature2DEncrypted ShareToEncServer::server_share_to_enc_multi_pack_simple(Featu
     y_share1_enc.packing_type = pack_type;
     y_share1_enc.decompress();
 
-    Feature2DEncrypted y_ct = y_share1_enc.combine_with_share_simple_for_multi_pack(y_share0, pack_type);
+    Feature2DEncrypted y_ct = combine_with_share_simple_for_multi_pack(y_share1_enc, y_share0, pack_type);
     y_ct.packing_type = pack_type;
     return y_ct;
 }
@@ -704,7 +1023,7 @@ Feature2DEncrypted ShareToEncServer::server_share_to_enc_simple(Feature2DShare& 
     y_share1_enc.packing_type = PackType::MultipleChannelPacking;
     y_share1_enc.decompress();
 
-    Feature2DEncrypted y_ct = y_share1_enc.combine_with_share_simple(y_share0);
+    Feature2DEncrypted y_ct = combine_with_share_simple(y_share1_enc, y_share0);
     y_ct.packing_type = PackType::MultipleChannelPacking;
     return y_ct;
 }
@@ -764,5 +1083,5 @@ Feature0DEncrypted ShareToEncServer::share_to_enc(Feature0DShare& y_share0, int 
     Feature0DEncrypted y_share2_enc(&extra_context, level + 1);
     y_share2_enc.deserialize(data_trans.receive_bytes());
 
-    return y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
+    return combine_with_share_new_protocol(y_share1_enc, y_share0, y_share2_enc, b1);
 }

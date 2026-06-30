@@ -18,10 +18,11 @@ Added a first simple E2S/S2E path for 2D `enc_to_share` comparison:
 - New proto enum: `MpcProtoType::enc_to_share_simple`.
 - New proto enum: `MpcProtoType::share_to_enc_simple`.
 - Client process handles `enc_to_share_simple` with `EncToShareClient::decrypt_to_share_simple`: receive encrypted masked feature, decrypt, and store each floating-point share in `Feature2DShare::data_double`.
-- Client process handles `share_to_enc_simple` with `encrypt_from_share_simple`: encrypt values from `Feature2DShare::data_double`.
+- Client process handles `share_to_enc_simple` with `ShareToEncClient::encrypt_from_share_simple`: encrypt values from `Feature2DShare::data_double`.
 - Server helper: `EncToShareServer(...).server_enc_to_share_simple(...)`, backed by `EncToShareServer::split_to_shares_simple(...)`.
 - Server helper: `ShareToEncServer(...).server_share_to_enc_simple(...)`.
-- Data struct methods retained for S2E: `Feature2DEncrypted::encrypt_from_share_simple(...)` and `combine_with_share_simple(...)`.
+- Client-side S2E encryption is handled by `ShareToEncClient::encrypt_from_share_simple(...)`.
+- Server-side S2E combine is handled by `ShareToEncServer::combine_with_share_simple(...)`.
 
 Simple semantics:
 

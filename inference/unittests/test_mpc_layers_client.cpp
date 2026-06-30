@@ -102,8 +102,10 @@ void run_relu_client(int port_in) {
     scale_share_by_t(y_share1);
 
     Feature2DEncrypted y_share1_enc(&context, kLevel, {1, 1}, {1, 1}, PackType::MultipleChannelPacking);
+    ShareToEncClient share_to_enc_client(context);
     Array<uint64_t, 1> y_share1_add_mod =
-        y_share1_enc.encrypt_from_share(y_share1, kNChannel, kShape, PackType::MultipleChannelPacking);
+        share_to_enc_client.encrypt_from_share(y_share1_enc, y_share1, kNChannel, kShape,
+                                               PackType::MultipleChannelPacking);
 
     MPC mpc(DEFAULT_SCALE_BIT, RING_MOD, 128.0);
     auto b0 = mpc.wrap_protocol(y_share1_add_mod.to_array_1d(), ::mpc::current_party());

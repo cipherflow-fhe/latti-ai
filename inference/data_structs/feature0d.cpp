@@ -241,28 +241,6 @@ void Feature0DShare::to_encrypted(Feature0DEncrypted* encrypted_share, Feature0D
     }
 }
 
-Array<uint64_t, 1> Feature0DEncrypted::encrypt_from_share(const Feature0DShare& share, int n_channel) {
-    int n_slot = context->get_parameter().get_n() / 2;
-    uint32_t skip = 1;
-    this->skip = skip;
-
-    Array<double, 1> out_data_mg(share.data.get_shape());
-    Array<uint64_t, 1> data_add(share.data.get_shape());
-    double scale = DEFAULT_SCALE;
-    for (int i = 0; i < share.data.get_size(); i++) {
-        uint64_t data_add_value = (share.data[i] + (share.ring_mod / 2)) % share.ring_mod;
-        data_add.set(i, data_add_value);
-        double out_data_value = double(int64_t(data_add_value) - int64_t(share.ring_mod / 2)) / scale;
-        out_data_mg.set(i, out_data_value);
-    }
-
-    double encode_scale = pow(2, DEFAULT_SCALE_BIT);
-    this->pack_cyclic(out_data_mg.to_array_1d(), true, encode_scale);
-    this->n_channel = n_channel;
-    this->n_channel_per_ct = n_slot;
-    return data_add;
-}
-
 void Feature0DEncrypted::decompress() {
     assert(data.size() == 0);
     assert(data_compressed.size() > 0);
@@ -271,68 +249,4 @@ void Feature0DEncrypted::decompress() {
         data.push_back(context->compressed_ciphertext_to_ciphertext(data_compressed[i]));
     }
     data_compressed.clear();
-}
-
-Feature0DEncrypted Feature0DEncrypted::combine_with_share(const Feature0DShare& share) const {
-    int n_slot = context->get_parameter().get_n() / 2;
-    Feature0DEncrypted result(this->context, this->level);
-    result.n_channel = this->n_channel;
-    result.n_channel_per_ct = this->n_channel_per_ct;
-    result.skip = this->skip;
-    double scale = pow(2, share.scale_ord);
-
-    for (int i = 0; i < this->data.size(); i++) {
-        vector<double> mask_d(n_slot, 0.0);
-        for (int j = 0; j < n_slot; j++) {
-            if (i * n_slot + j >= share.data.get_size()) {
-                mask_d[j] =
-                    uint64_to_double(share.data.get((i * n_slot + j) % share.data.get_size()), scale, share.ring_mod);
-            } else {
-                mask_d[j] = uint64_to_double(share.data.get(i * n_slot + j), scale, share.ring_mod);
-            }
-        }
-        CkksPlaintext mask_pt = context->encode(mask_d, level, context->get_parameter().get_default_scale());
-        result.data.push_back(context->add_plain(data[i], mask_pt));
-    }
-    return result;
-}
-
-Feature0DEncrypted Feature0DEncrypted::combine_with_share_new_protocol(const Feature0DShare& share,
-                                                                       const Feature0DEncrypted& f2d,
-                                                                       const Bytes& b1) const {
-    int n_slot = context->get_parameter().get_n() / 2;
-    Feature0DEncrypted result(this->context, this->level);
-    result.n_channel = this->n_channel;
-    result.n_channel_per_ct = this->n_channel_per_ct;
-    result.skip = this->skip;
-    double scale = DEFAULT_SCALE;
-    double encode_scale = pow(2, DEFAULT_SCALE_BIT);
-
-    for (int i = 0; i < this->data.size(); i++) {
-        vector<double> b1_value(n_slot, 0);
-        vector<double> mask_d(n_slot, 0.0);
-        for (int j = 0; j < n_slot; j++) {
-            int64_t mask_value;
-            if (i * n_slot + j >= share.data.get_size()) {
-                b1_value[j] = b1[(i * n_slot + j) % share.data.get_size()];
-                mask_value = int64_t(share.data.get((i * n_slot + j) % share.data.get_size())) -
-                             int64_t(b1_value[j] * share.ring_mod);
-            } else {
-                b1_value[j] = b1[i * n_slot + j];
-                mask_value = int64_t(share.data.get(i * n_slot + j)) - int64_t(b1[i * n_slot + j] * share.ring_mod);
-            }
-            b1_value[j] = 2 * b1_value[j] - 1;
-            mask_d[j] = double(mask_value) / scale;
-        }
-        CkksPlaintext mask_pt = context->encode(mask_d, level, encode_scale);
-        result.data.push_back(context->add_plain(data[i], mask_pt));
-
-        CkksContext& ctx_extra = context->get_extra_level_context();
-        CkksPlaintext b1_pt = ctx_extra.encode(b1_value, level + 1, ctx_extra.get_parameter().get_q(level + 1));
-        auto f2d_mult = ctx_extra.mult_plain(f2d.data[i], b1_pt);
-        f2d_mult = ctx_extra.rescale(f2d_mult, encode_scale);
-
-        result.data[i] = context->add(result.data[i], f2d_mult);
-    }
-    return result;
 }

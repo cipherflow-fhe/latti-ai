@@ -180,6 +180,20 @@ protected:
     ShareToEncServer share_to_enc_server() {
         return ShareToEncServer(context, scale_ord, ring_mod, pt_range);
     }
+
+    Feature2DEncrypted combine_with_share_new_protocol(const Feature2DEncrypted& y_share1_enc,
+                                                       const Feature2DShare& share,
+                                                       const Feature2DEncrypted& y_share2_enc,
+                                                       const Bytes& b1) {
+        return share_to_enc_server().combine_with_share_new_protocol(y_share1_enc, share, y_share2_enc, b1);
+    }
+
+    Feature0DEncrypted combine_with_share_new_protocol(const Feature0DEncrypted& y_share1_enc,
+                                                       const Feature0DShare& share,
+                                                       const Feature0DEncrypted& y_share2_enc,
+                                                       const Bytes& b1) {
+        return share_to_enc_server().combine_with_share_new_protocol(y_share1_enc, share, y_share2_enc, b1);
+    }
 };
 
 TEST_CASE_METHOD(MpcFixture, "multi_channel_mpc_refresh_test") {
@@ -450,7 +464,7 @@ TEST_CASE_METHOD(MpcFixture, "Feature2DEncrypted to shares and back") {
             Bytes y_share2_bytes = data_trans.receive_bytes();
             Feature2DEncrypted y_share2_enc(&context, x_e.level);
             y_share2_enc.deserialize(y_share2_bytes);
-            Feature2DEncrypted y_ct = y_share1_enc.combine_with_share_new_protocol(x_share0, y_share2_enc, b1);
+            Feature2DEncrypted y_ct = combine_with_share_new_protocol(y_share1_enc, x_share0, y_share2_enc, b1);
 
             Array<double, 3> y_mg = y_ct.unpack_multiple_channel();
             for (int i = 0; i < y_mg.get_size(); i++) {
@@ -537,7 +551,7 @@ TEST_CASE_METHOD(MpcFixture, "Feature0DEncrypted to shares relu0d and back") {
             cout << " y byte=" << x_share1_enc_bytes.size() << endl;
             Feature0DEncrypted y_share2_enc(&context, x_e.level);
             y_share2_enc.deserialize(y_share2_bytes);
-            auto y_ct = y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
+            auto y_ct = combine_with_share_new_protocol(y_share1_enc, y_share0, y_share2_enc, b1);
 
             Array<double, 1> y_mg = y_ct.unpack();
 
@@ -615,7 +629,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d relu: change shape and skip") {
                     Feature2DEncrypted y_share2_enc(&context, x_e.level);
                     y_share2_enc.deserialize(y_share2_bytes);
 
-                    auto y_ct = y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
+                    auto y_ct = combine_with_share_new_protocol(y_share1_enc, y_share0, y_share2_enc, b1);
                     Array<double, 3> y_mg = y_ct.unpack_multiple_channel();
 
                     // compare
@@ -688,7 +702,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d relu: change n_channel") {
             Bytes y_share2_bytes = data_trans.receive_bytes();
             Feature2DEncrypted y_share2_enc(&context, x_e.level);
             y_share2_enc.deserialize(y_share2_bytes);
-            Feature2DEncrypted y_ct = y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
+            Feature2DEncrypted y_ct = combine_with_share_new_protocol(y_share1_enc, y_share0, y_share2_enc, b1);
 
             // decrypt
             Array<double, 3> y_mg = y_ct.unpack_multiple_channel();
@@ -766,7 +780,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d maxpool") {
                     auto y_share1_dec = y_share1_enc.unpack_multiple_channel();
                     auto y_share2_dec = y_share2_enc.unpack_multiple_channel();
 
-                    auto y_ct = y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
+                    auto y_ct = combine_with_share_new_protocol(y_share1_enc, y_share0, y_share2_enc, b1);
 
                     Array<double, 3> y_mg = y_ct.unpack_multiple_channel();
 
@@ -841,7 +855,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d avgpool") {
                     Bytes y_share2_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share2_enc(&context, x_e.level);
                     y_share2_enc.deserialize(y_share2_bytes);
-                    auto y_ct = y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
+                    auto y_ct = combine_with_share_new_protocol(y_share1_enc, y_share0, y_share2_enc, b1);
 
                     auto y_mg = y_ct.unpack_multiple_channel();
 
@@ -923,7 +937,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d maxpool relu") {
                     Bytes y_share2_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share2_enc(&context, x_e.level);
                     y_share2_enc.deserialize(y_share2_bytes);
-                    auto y_ct = y_share1_enc.combine_with_share_new_protocol(y_share1, y_share2_enc, b1);
+                    auto y_ct = combine_with_share_new_protocol(y_share1_enc, y_share1, y_share2_enc, b1);
 
                     auto y_mg = y_ct.unpack_multiple_channel();
 
@@ -1011,7 +1025,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d avgpool relu") {
                     Bytes y_share2_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share2_enc(&context, x_e.level);
                     y_share2_enc.deserialize(y_share2_bytes);
-                    auto y_ct = y_share1_enc.combine_with_share_new_protocol(y_share1, y_share2_enc, b1);
+                    auto y_ct = combine_with_share_new_protocol(y_share1_enc, y_share1, y_share2_enc, b1);
 
                     Array<double, 3> y_mg = y_ct.unpack_multiple_channel();
 
@@ -1118,7 +1132,7 @@ TEST_CASE_METHOD(MpcFixture, "conv relu") {
                     Bytes y_share2_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share2_enc(&context, x_e.level);
                     y_share2_enc.deserialize(y_share2_bytes);
-                    auto y_ct = y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
+                    auto y_ct = combine_with_share_new_protocol(y_share1_enc, y_share0, y_share2_enc, b1);
                     Array<double, 3> relu_array_pt = y_ct.unpack_multiple_channel();
 
                     for (int i = 0; i < relu_array_pt.get_size(); i++) {
@@ -1187,7 +1201,7 @@ TEST_CASE_METHOD(MpcFixture, "f2d to share and f0d back") {
             Feature0DEncrypted y_share2_enc(&context, x_e.level);
             y_share2_enc.deserialize(y_share2_bytes);
             // y_share2_enc.decompress();
-            auto y_ct = y_share1_enc.combine_with_share_new_protocol(x_share0_0d, y_share2_enc, b1);
+            auto y_ct = combine_with_share_new_protocol(y_share1_enc, x_share0_0d, y_share2_enc, b1);
             Array1D y_mg = y_ct.unpack().to_array_1d();
 
             for (int i = 0; i < y_mg.size(); i++) {
@@ -1303,7 +1317,7 @@ TEST_CASE_METHOD(MpcFixture, "conv maxpool conv") {
                     Bytes y_share2_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share2_enc(&context, x_e.level);
                     y_share2_enc.deserialize(y_share2_bytes);
-                    auto y_ct = y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
+                    auto y_ct = combine_with_share_new_protocol(y_share1_enc, y_share0, y_share2_enc, b1);
                     auto y_res = context.decode(context.decrypt(y_ct.data[0]));
                     print_double_message(y_res.data(), "conv0-max-res=", 10);
                     // conv1
@@ -1428,7 +1442,7 @@ TEST_CASE_METHOD(MpcFixture, "conv avgpool conv") {
                     Bytes y_share2_bytes = data_trans.receive_bytes();
                     Feature2DEncrypted y_share2_enc(&context, x_e.level);
                     y_share2_enc.deserialize(y_share2_bytes);
-                    auto y_ct = y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
+                    auto y_ct = combine_with_share_new_protocol(y_share1_enc, y_share0, y_share2_enc, b1);
 
                     // conv1
                     Feature2DEncrypted z_ct = conv1_layer.run(context, y_ct);
@@ -1508,7 +1522,9 @@ compute_distance_fhe(Feature0DEncrypted& x_e, CkksContext& context, int level, s
     Bytes y_share2_bytes = data_trans.receive_bytes();
     Feature0DEncrypted y_share2_enc(&context, x_e.level);
     y_share2_enc.deserialize(y_share2_bytes);
-    auto f0d = y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
+    auto f0d =
+        ShareToEncServer(context, scale_ord, ring_mod, pt_range).combine_with_share_new_protocol(y_share1_enc, y_share0,
+                                                                                                 y_share2_enc, b1);
 
     auto pt_res = x_e.unpack().to_array_1d();
     auto pt_res_L2 = L2_normal(pt_res);
@@ -1638,7 +1654,7 @@ TEST_CASE_METHOD(MpcFixture, "test relu6") {
     Bytes y_share2_bytes = data_trans.receive_bytes();
     Feature2DEncrypted y_share2_enc(&context, x_e.level);
     y_share2_enc.deserialize(y_share2_bytes);
-    auto y_ct = y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
+    auto y_ct = combine_with_share_new_protocol(y_share1_enc, y_share0, y_share2_enc, b1);
     Array<double, 3> y_mg = y_ct.unpack_multiple_channel();
 
     Array<double, 3> y_true = to_latti_array(act.run_relu6_plaintext(to_mpc_array(x_mg)));
@@ -1753,7 +1769,7 @@ TEST_CASE_METHOD(MpcFixture, "test_argmax") {
             Bytes y_share2_bytes = data_trans.receive_bytes();
             Feature0DEncrypted y_share2_enc(&context, x_e.level);
             y_share2_enc.deserialize(y_share2_bytes);
-            auto y_ct = y_share1_enc.combine_with_share_new_protocol(y_share0, y_share2_enc, b1);
+            auto y_ct = combine_with_share_new_protocol(y_share1_enc, y_share0, y_share2_enc, b1);
 
             Array<double, 1> y_mg = y_ct.unpack();
 

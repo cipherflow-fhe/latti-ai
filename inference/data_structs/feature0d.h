@@ -39,13 +39,9 @@ public:
     Array<double, 1> unpack() const;
 
     void to_share(Feature0DEncrypted* share0, Feature0DShare* share1) const;
-    Array<uint64_t, 1> encrypt_from_share(const Feature0DShare& share, int n_channel);
     Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;
     void decompress();
-    Feature0DEncrypted combine_with_share(const Feature0DShare& share) const;
-    Feature0DEncrypted
-    combine_with_share_new_protocol(const Feature0DShare& share, const Feature0DEncrypted& f2d, const Bytes& b1) const;
     Feature0DEncrypted refresh_ciphertext() const;
     Feature0DEncrypted drop_level(int n_level_to_drop) const;
     Feature0DEncrypted copy() const;
@@ -55,7 +51,6 @@ class Feature0DShare : public FeatureShare {
 public:
     Feature0DShare(uint64_t q, int s);
     void to_encrypted(Feature0DEncrypted* encrypted_share, Feature0DEncrypted* encrypted, int level);
-    void encrypt_from_share(const Feature2DShare& share, int n_channel, const Duo& input_shape);
 };
 
 inline void set_shape_0D(Feature0DEncrypted& f0d, uint32_t n_channel, uint32_t n_channel_per_ct, uint32_t skip) {

@@ -59,6 +59,23 @@ public:
 
     void client_share_to_enc_0d(Feature0DShare& share, const Bytes& meta_data_bytes);
 
+    Array<uint64_t, 1> encrypt_from_share(Feature2DEncrypted& x_enc,
+                                          const Feature2DShare& share,
+                                          int n_channel,
+                                          const Duo& input_shape,
+                                          PackType pack_type = PackType::MultiplexedPacking) const;
+
+    void encrypt_from_share_simple(Feature2DEncrypted& x_enc,
+                                   const Feature2DShare& share,
+                                   int n_channel,
+                                   const Duo& input_shape,
+                                   PackType pack_type = PackType::MultipleChannelPacking,
+                                   bool use_recode = false) const;
+
+    Array<uint64_t, 1> encrypt_from_share(Feature0DEncrypted& x_enc,
+                                          const Feature0DShare& share,
+                                          int n_channel) const;
+
 private:
     CkksContext& context_out_;
     int scale_ord_;
@@ -130,6 +147,37 @@ public:
     Feature2DEncrypted server_share_to_enc_simple(Feature2DShare& y_share0, int level);
 
     Feature0DEncrypted share_to_enc(Feature0DShare& y_share0, int level);
+
+    Feature2DEncrypted combine_with_share(const Feature2DEncrypted& y_share1_enc,
+                                          const Feature2DShare& share) const;
+
+    Feature2DEncrypted combine_with_share_simple(const Feature2DEncrypted& y_share1_enc,
+                                                 const Feature2DShare& share) const;
+
+    Feature2DEncrypted combine_with_share_simple_for_multi_pack(
+        const Feature2DEncrypted& y_share1_enc,
+        const Feature2DShare& share,
+        PackType pack_type = PackType::MultiplexedPacking) const;
+
+    Feature2DEncrypted combine_with_share_new_protocol(const Feature2DEncrypted& y_share1_enc,
+                                                       const Feature2DShare& share,
+                                                       const Feature2DEncrypted& y_share2_enc,
+                                                       const Bytes& b1) const;
+
+    Feature2DEncrypted combine_with_share_new_protocol_for_multi_pack(
+        const Feature2DEncrypted& y_share1_enc,
+        const Feature2DShare& share,
+        const Feature2DEncrypted& y_share2_enc,
+        const Bytes& b1,
+        PackType pack_type = PackType::MultiplexedPacking) const;
+
+    Feature0DEncrypted combine_with_share(const Feature0DEncrypted& y_share1_enc,
+                                          const Feature0DShare& share) const;
+
+    Feature0DEncrypted combine_with_share_new_protocol(const Feature0DEncrypted& y_share1_enc,
+                                                       const Feature0DShare& share,
+                                                       const Feature0DEncrypted& y_share2_enc,
+                                                       const Bytes& b1) const;
 
 private:
     CkksContext& context_;
