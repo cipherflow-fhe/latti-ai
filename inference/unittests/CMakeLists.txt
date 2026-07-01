@@ -18,22 +18,14 @@ configure_file(
 add_executable(test_fhe_layers_hetero test_fhe_layers_hetero.cpp ut_util.cpp)
 target_link_libraries(test_fhe_layers_hetero PUBLIC fhe_layers lattisense)
 
-set(MPC_TEST_LIBS
+set(INFERENCE_TEST_LIBS
     -Wl,--start-group
     inference_task
-    mpc_adapter
-    mpc
     fhe_layers
     log
     -Wl,--end-group
     lattisense
 )
-
-add_executable(test_mpc_layers test_mpc_layers.cpp ut_util.cpp)
-target_link_libraries(test_mpc_layers PUBLIC ${MPC_TEST_LIBS})
-
-add_executable(test_mpc_layers_client test_mpc_layers_client.cpp)
-target_link_libraries(test_mpc_layers_client PUBLIC ${MPC_TEST_LIBS})
 
 if(INFERENCE_SDK_ENABLE_GPU)
     target_compile_definitions(test_fhe_layers_hetero PRIVATE INFERENCE_SDK_ENABLE_GPU)
@@ -47,7 +39,7 @@ add_executable(test_e2e_multiple_layer test_e2e_multiple_layer.cpp)
 target_link_libraries(test_e2e_multiple_layer PUBLIC
     -Wl,--start-group
     inference_interface
-    ${MPC_TEST_LIBS}
+    ${INFERENCE_TEST_LIBS}
     -Wl,--end-group
     ${HDF5_CXX_LIBRARIES}
 )
@@ -63,7 +55,7 @@ add_executable(test_e2e_single_layer test_e2e_single_layer.cpp)
 target_link_libraries(test_e2e_single_layer PUBLIC
     -Wl,--start-group
     inference_interface
-    ${MPC_TEST_LIBS}
+    ${INFERENCE_TEST_LIBS}
     -Wl,--end-group
     ${HDF5_CXX_LIBRARIES}
 )

@@ -11,8 +11,8 @@
 
 #include "fhe_ops_lib/utils.h"
 #include "interface/inference_client.h"
-#include "mpc_adapter/mpc_adapter.h"
-#include "mpc_adapter/mpc_data_transmission.h"
+#include "mpc_wrapper/mpc_wrapper.h"
+#include "mpc_wrapper/mpc_data_transmission.h"
 
 #ifndef LATTIAI_SOURCE_DIR
 #define LATTIAI_SOURCE_DIR "."

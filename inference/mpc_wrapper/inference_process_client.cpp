@@ -1,5 +1,5 @@
 #include "inference_process_client.h"
-#include "mpc_adapter/enc_share_conversion.h"
+#include "mpc_wrapper/enc_share_conversion.h"
 #include "mpc/fhe_mpc.h"
 #include "mpc_array_bridge.h"
 #include "mpc/mpc_session.h"
@@ -15,7 +15,7 @@ Feature2DShare client_maxpool(const Bytes& meta_data_bytes, const Feature2DShare
     Duo pool_stride;
     bytes_to_va(meta_data_bytes, {"duo", "duo"}, &kernel_shape, &pool_stride);
 
-    PoolLayerClient pool(kernel_shape, pool_stride, DEFAULT_SCALE_BIT, RING_MOD, MAXPOOL, pt_range);
+    PoolLayerClient pool(kernel_shape, pool_stride, mpc::DEFAULT_SCALE_BIT, mpc::RING_MOD, MAXPOOL, pt_range);
     Feature2DShare y(x.ring_mod, x.scale_ord);
     int num_matrix = x.data.get_size() / x.shape[0] / x.shape[1];
     assign_share_data_from_mpc_array(y.data, pool.run(x.data.to_array_1d(), x.shape, num_matrix));

@@ -39,6 +39,7 @@ Feature2DEncrypted::Feature2DEncrypted(CkksContext* context_in,
 vector<CkksPlaintext> Feature2DEncrypted::encode_multiple_channel(const Array<double, 3>& feature_mg,
                                                                   double scale_in,
                                                                   bool use_recode) {
+    scale_in = resolve_encode_scale(context, scale_in);
     int n_slot = context->get_parameter().get_n() / 2;
     const int N_THREAD = 4;
 
@@ -80,6 +81,7 @@ vector<CkksPlaintext> Feature2DEncrypted::encode_multiple_channel(const Array<do
 vector<CkksPlaintext> Feature2DEncrypted::encode_multiplexed(const Array<double, 3>& feature_mg,
                                                              double scale_in,
                                                              bool use_recode) {
+    scale_in = resolve_encode_scale(context, scale_in);
     int n_slot = context->get_parameter().get_n() / 2;
     const int N_THREAD = 4;
 
@@ -131,6 +133,7 @@ vector<CkksPlaintext> Feature2DEncrypted::encode_interleaved(const Array<double,
                                                              const Duo& stride,
                                                              double scale_in,
                                                              bool use_recode) {
+    scale_in = resolve_encode_scale(context, scale_in);
     const int N_THREAD = 4;
 
     auto input_shape = feature_mg.get_shape();
@@ -242,6 +245,7 @@ void Feature2DEncrypted::pack_multiplexed(const Array<double, 3>& feature_mg,
 }
 
 void Feature2DEncrypted::column_pack(const Array<double, 2>& feature_mg, bool is_symmetric, double scale_in) {
+    scale_in = resolve_encode_scale(context, scale_in);
     uint64_t tol_size = feature_mg.get_shape()[0] * feature_mg.get_shape()[1];
     int pack_num = div_ceil(tol_size, (context->get_parameter().get_n() / 2));
     vector<vector<double>> feature_mg_pack(pack_num);
@@ -266,6 +270,7 @@ void Feature2DEncrypted::column_pack(const Array<double, 2>& feature_mg, bool is
 }
 
 void Feature2DEncrypted::row_pack(const Array<double, 2>& feature_mg, bool is_symmetric, double scale_in) {
+    scale_in = resolve_encode_scale(context, scale_in);
     int N = context->get_parameter().get_n();
     uint64_t tol_size = feature_mg.get_shape()[0] * feature_mg.get_shape()[1];
     int pack_num = div_ceil(tol_size, (N / 2));

@@ -23,8 +23,6 @@
 using namespace std;
 using namespace lattisense;
 
-int32_t bitlength = RING_MOD_BIT;
-
 Bytes save_ct(const CkksCiphertext& ct, const CkksParameter& param_h) {
     auto vec = ct.serialize(param_h);
     return vec;

@@ -4,18 +4,22 @@ include_directories(${CMAKE_SOURCE_DIR}/inference/lib)
 add_definitions(-DSOURCE_PATH="${CMAKE_SOURCE_DIR}/inference")
 
 add_executable(inference inference.cpp)
-target_link_libraries(inference PUBLIC
+set(INFERENCE_EXAMPLE_LIBS
     -Wl,--start-group
     inference_interface
     inference_task
-    mpc_adapter
-    mpc
     fhe_layers
     log
     -Wl,--end-group
     lattisense
     ${HDF5_CXX_LIBRARIES}
 )
+
+if(INFERENCE_SDK_ENABLE_MPC)
+    list(INSERT INFERENCE_EXAMPLE_LIBS 3 mpc_wrapper mpc)
+endif()
+
+target_link_libraries(inference PUBLIC ${INFERENCE_EXAMPLE_LIBS})
 
 # --- Example verification tests ---
 set(EXAMPLES_DIR ${CMAKE_CURRENT_SOURCE_DIR})

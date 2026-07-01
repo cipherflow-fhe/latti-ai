@@ -33,6 +33,7 @@ Feature1DEncrypted::Feature1DEncrypted(CkksContext* context_in,
 }
 
 void Feature1DEncrypted::pack(Array<double, 2>& feature_mg, bool is_symmetric, double scale_in) {
+    scale_in = resolve_encode_scale(context, scale_in);
     const int N_THREAD = 4;
     n_channel = feature_mg.get_shape()[0];
     shape = feature_mg.get_shape()[1];
@@ -86,6 +87,7 @@ void Feature1DEncrypted::pack(Array<double, 2>& feature_mg, bool is_symmetric, d
 }
 
 void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, bool is_symmetric, double scale_in) {
+    scale_in = resolve_encode_scale(context, scale_in);
     const int N_THREAD = 4;
     n_channel = feature_mg.get_shape()[0];
     shape = feature_mg.get_shape()[1];

@@ -1,4 +1,4 @@
-#include "mpc_adapter.h"
+#include "mpc_wrapper.h"
 
 #include "mpc/mpc_session.h"
 

@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#include "mpc_adapter/inference_process_client.h"
+#include "mpc_wrapper/inference_process_client.h"
 #include "mpc_inference_sdk_common.h"
 
 using namespace std;

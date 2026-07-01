@@ -1,6 +1,6 @@
-#include "mpc_adapter/inference_process_mpc_server.h"
+#include "mpc_wrapper/inference_process_mpc_server.h"
 
-#include "mpc_adapter/enc_share_conversion.h"
+#include "mpc_wrapper/enc_share_conversion.h"
 #include "mpc/fhe_mpc.h"
 #include "mpc_array_bridge.h"
 
@@ -43,7 +43,7 @@ void InitMpc::init_mpc_layer(const InitInferenceProcess& init,
         } else if (operation == MpcProtoType::share_to_enc_for_multi_channel_pack ||
                    operation == MpcProtoType::share_to_enc_for_multi_channel_pack_simple) {
             meta_data.append(operation, {"u8", "u32", "duo", "u8"}, (uint8_t)feature_output0.level,
-                             feature_output0.channel, feature_output0.skip, (uint8_t)pack_type);
+                             feature_output0.channel, &feature_output0.skip, (uint8_t)pack_type);
         } else {
             throw runtime_error("unsupported mpc operation for init_mpc_layer");
         }
@@ -54,7 +54,7 @@ void InitMpc::init_mpc_refresh_layer(const InitInferenceProcess& init, const str
     MpcTaskMetaData meta_data;
     init_mpc_layer(init, REFRESH_MPC, layer, meta_data);
     meta_data_map_[key] = MakeU<MpcTaskMetaData>(move(meta_data));
-    ckks_mpc_refresh_[key] = MakeU<MpcRefreshLayerServer>(DEFAULT_SCALE_BIT, RING_MOD, 128.0);
+    ckks_mpc_refresh_[key] = MakeU<MpcRefreshLayerServer>(mpc::DEFAULT_SCALE_BIT, mpc::RING_MOD, 128.0);
 }
 
 const MpcTaskMetaData& InitMpc::meta_data(const string& key) const {
@@ -70,10 +70,11 @@ Feature2DEncrypted InferenceMpcServer::calculate_mpc_refresh(const InitInference
                                                              const map<string, UPtr<CkksContext>>& ckks_contexts,
                                                              const FeatureEncrypted& feature_node,
                                                              const string& key,
-                                                             const json& layer,
-                                                             int scale_ord,
-                                                             double pt_range,
-                                                             uint64_t ring_mod) {
+                                                             const json& layer) {
+    constexpr int scale_ord = mpc::DEFAULT_SCALE_BIT;
+    constexpr uint64_t ring_mod = mpc::RING_MOD;
+    constexpr double pt_range = 128.0;
+
     FeatureNode feature_input(init.json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(init.json_features[layer["feature_output"][0].get<string>()]);
     if (feature_node.dim != 2) {

@@ -41,18 +41,6 @@ using json = nlohmann::ordered_json;
 
 #define th_nums 16
 
-const int SIGMA = 32;
-const int DEFAULT_SCALE_BIT = 30;
-const double DEFAULT_SCALE = pow(2, DEFAULT_SCALE_BIT);
-
-const int RING_MOD_BIT = 44;
-const uint64_t RING_MOD = 1ULL << RING_MOD_BIT;
-const int DATA_BIT = 2;
-const bool MPC_REFRESH_USE_RECODE = false;
-
-const int T_SCALE_BIT = 4;
-const uint64_t T_SCALE = 1ULL << T_SCALE_BIT;
-
 const Duo BLOCK_SHAPE = {64, 64};
 
 inline uint64_t gen_random_uint(int n_bit) {

@@ -34,7 +34,7 @@ public:
     void block_col_major_pack(const Array<double, 2>& matrix,
                               uint32_t d,
                               bool is_symmetric = false,
-                              double scale_in = DEFAULT_SCALE);
+                              double scale_in = 0);
     Array<double, 2> block_col_major_unpack(uint32_t m, uint32_t n, uint32_t d) const;
 
     // Parallel (interleaved) block column-major packing: interleave blocks from
@@ -44,7 +44,7 @@ public:
                                   uint32_t d,
                                   uint32_t n_heads,
                                   bool is_symmetric = false,
-                                  double scale_in = DEFAULT_SCALE);
+                                  double scale_in = 0);
     Array<double, 2> par_block_col_major_unpack(uint32_t m, uint32_t n_per_head, uint32_t d, uint32_t n_heads) const;
 
     void decompress();

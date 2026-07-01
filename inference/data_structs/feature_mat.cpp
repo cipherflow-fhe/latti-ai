@@ -31,6 +31,7 @@ void FeatureMatEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
                                                uint32_t d,
                                                bool is_symmetric,
                                                double scale_in) {
+    scale_in = resolve_encode_scale(context, scale_in);
     uint32_t m = matrix.get_shape()[0];
     uint32_t n_cols = matrix.get_shape()[1];
     uint32_t num_block_rows = div_ceil(m, d);
@@ -122,6 +123,7 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
                                                    uint32_t n_heads,
                                                    bool is_symmetric,
                                                    double scale_in) {
+    scale_in = resolve_encode_scale(context, scale_in);
     uint32_t m = matrix.get_shape()[0];
     uint32_t total_cols = matrix.get_shape()[1];
     uint32_t cols_per_head = total_cols / n_heads;

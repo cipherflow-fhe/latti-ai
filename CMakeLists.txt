@@ -17,7 +17,9 @@
 cmake_minimum_required(VERSION 3.26.4)
 
 option(INFERENCE_SDK_ENABLE_GPU "Enable GPU acceleration support" OFF)
+option(INFERENCE_SDK_ENABLE_MPC "Enable MPC support" ON)
 message(STATUS "INFERENCE_SDK_ENABLE_GPU: ${INFERENCE_SDK_ENABLE_GPU}")
+message(STATUS "INFERENCE_SDK_ENABLE_MPC: ${INFERENCE_SDK_ENABLE_MPC}")
 
 # Configure lattisense options before add_subdirectory
 set(LATTISENSE_ENABLE_GPU ${INFERENCE_SDK_ENABLE_GPU} CACHE BOOL "Enable GPU in lattisense" FORCE)
@@ -68,6 +70,8 @@ enable_testing()
 
 add_subdirectory(inference)
 add_subdirectory(examples)
-add_subdirectory(mpc_examples)
+if(INFERENCE_SDK_ENABLE_MPC)
+  add_subdirectory(inference/mpc_wrapper/mpc_examples)
+endif()
 
 add_definitions(-w)

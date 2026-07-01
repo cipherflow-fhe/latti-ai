@@ -17,8 +17,9 @@
  */
 
 #include "mpc/fhe_mpc.h"
-#include "mpc_adapter/enc_share_conversion.h"
-#include "mpc_adapter/mpc_data_transmission.h"
+#include "mpc/mpc_numeric.h"
+#include "mpc_wrapper/enc_share_conversion.h"
+#include "mpc_wrapper/mpc_data_transmission.h"
 #include "data_structs/feature.h"
 #include "mpc/mpc_session.h"
 
@@ -69,7 +70,7 @@ void init_mpc_party(int port_in) {
 
 void scale_share_by_t(Feature2DShare& share) {
     for (int i = 0; i < share.data.get_size(); i++) {
-        share.data.set(i, (share.data.get(i) * T_SCALE) % share.ring_mod);
+        share.data.set(i, (share.data.get(i) * mpc::T_SCALE) % share.ring_mod);
     }
 }
 
@@ -94,8 +95,8 @@ void run_relu_client(int port_in) {
     EncToShareClient enc_to_share_client(ckks_contexts, context_in, context_out);
     Feature2DShare x_share1 = enc_to_share_client.decrypt_to_share(x_share1_enc, PackType::MultipleChannelPacking);
 
-    ReluLayerClient relu(DEFAULT_SCALE_BIT, RING_MOD, 128.0);
-    Feature2DShare y_share1(RING_MOD, DEFAULT_SCALE_BIT);
+    ReluLayerClient relu(mpc::DEFAULT_SCALE_BIT, mpc::RING_MOD, 128.0);
+    Feature2DShare y_share1(mpc::RING_MOD, mpc::DEFAULT_SCALE_BIT);
     y_share1.data = decltype(y_share1.data)::move_from_array_1d(
         relu.run(mpc::Array<uint64_t, 1>::from_array_1d(x_share1.data.to_array_1d())).move_to_array_1d());
     y_share1.shape = x_share1.shape;
@@ -107,18 +108,18 @@ void run_relu_client(int port_in) {
         share_to_enc_client.encrypt_from_share(y_share1_enc, y_share1, kNChannel, kShape,
                                                PackType::MultipleChannelPacking);
 
-    MPC mpc(DEFAULT_SCALE_BIT, RING_MOD, 128.0);
-    auto b0 = mpc.wrap_protocol(y_share1_add_mod.to_array_1d(), ::mpc::current_party());
+    MPC mpc_protocol(mpc::DEFAULT_SCALE_BIT, mpc::RING_MOD, 128.0);
+    auto b0 = mpc_protocol.wrap_protocol(y_share1_add_mod.to_array_1d(), ::mpc::current_party());
 
     Array<double, 1> b0_mult_mod_div_s({b0.size()});
     for (int i = 0; i < b0.size(); i++) {
-        b0_mult_mod_div_s.set(i, double(b0[i] * RING_MOD) / DEFAULT_SCALE);
+        b0_mult_mod_div_s.set(i, double(b0[i] * mpc::RING_MOD) / mpc::DEFAULT_SCALE);
     }
 
     CkksContext& extra_context = context.get_extra_level_context();
     Feature2DEncrypted wrap_enc(&extra_context, kLevel + 1, {1, 1}, {1, 1}, PackType::MultipleChannelPacking);
     wrap_enc.pack_multiple_channel(b0_mult_mod_div_s.reshape<3>({kNChannel, kShape[0], kShape[1]}), false,
-                                   DEFAULT_SCALE);
+                                   mpc::DEFAULT_SCALE);
 
     dt.send_bytes(y_share1_enc.serialize());
     dt.send_bytes(wrap_enc.serialize());

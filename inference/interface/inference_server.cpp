@@ -23,7 +23,9 @@
 #include <type_traits>
 
 #include "interface/inference_server.h"
-#include "mpc_adapter/mpc_data_transmission.h"
+#ifdef INFERENCE_SDK_ENABLE_MPC
+#include "mpc_wrapper/mpc_data_transmission.h"
+#endif
 
 using namespace lattisense;
 
@@ -181,6 +183,9 @@ void InferenceServer::load_model() {
 }
 
 void InferenceServer::load_model_for_mpc_sdk() {
+#ifndef INFERENCE_SDK_ENABLE_MPC
+    throw std::runtime_error("MPC support is disabled. Reconfigure with -DINFERENCE_SDK_ENABLE_MPC=ON to enable it.");
+#else
     std::cout << "[Server] Loading model for SDK MPC executor..." << std::endl;
 
     init_ = std::make_unique<InitInferenceProcess>(server_dir_.string() + "/", false);
@@ -208,6 +213,7 @@ void InferenceServer::load_model_for_mpc_sdk() {
     }
 
     std::cout << "[Server] Done." << std::endl;
+#endif
 }
 
 std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::string, Bytes>& encrypted_inputs,
@@ -264,6 +270,9 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
 }
 
 std::map<std::string, Bytes> InferenceServer::evaluate_mpc_sdk(const std::map<std::string, Bytes>& encrypted_inputs) {
+#ifndef INFERENCE_SDK_ENABLE_MPC
+    throw std::runtime_error("MPC support is disabled. Reconfigure with -DINFERENCE_SDK_ENABLE_MPC=ON to enable it.");
+#else
     // Deserialize and set all input ciphertexts
     for (auto& [name, bytes] : encrypted_inputs) {
         auto it = input_params_.find(name);
@@ -315,6 +324,7 @@ std::map<std::string, Bytes> InferenceServer::evaluate_mpc_sdk(const std::map<st
         }
     }
     return encrypted_outputs;
+#endif
 }
 
 void InferenceServer::dump_intermediate_plaintexts(const std::string& output_path) const {

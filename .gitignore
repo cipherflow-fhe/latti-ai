@@ -1,5 +1,6 @@
 # Build artifacts
 build/
+build-no-mpc/
 vs_build/
 Testing/
 

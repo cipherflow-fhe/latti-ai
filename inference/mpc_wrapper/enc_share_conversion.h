@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "inference_task/inference_process.h"
+#include "mpc/mpc_numeric.h"
 #include "mpc/mpc_task_meta_data.h"
 
 using fhe_ops_lib::CkksContext;
@@ -13,8 +14,8 @@ public:
     EncToShareClient(std::map<std::string, std::unique_ptr<CkksContext>>& ckks_contexts,
                      CkksContext*& context_in,
                      CkksContext*& context_out,
-                     int scale_ord = DEFAULT_SCALE_BIT,
-                     uint64_t ring_mod = RING_MOD);
+                     int scale_ord = mpc::DEFAULT_SCALE_BIT,
+                     uint64_t ring_mod = mpc::RING_MOD);
 
     Feature2DShare client_enc_to_share(const Bytes& meta_data_bytes);
 
@@ -45,8 +46,8 @@ private:
 class ShareToEncClient {
 public:
     ShareToEncClient(CkksContext& context_out,
-                     int scale_ord = DEFAULT_SCALE_BIT,
-                     uint64_t ring_mod = RING_MOD,
+                     int scale_ord = mpc::DEFAULT_SCALE_BIT,
+                     uint64_t ring_mod = mpc::RING_MOD,
                      double pt_range = 128.0);
 
     void client_share_to_enc(Feature2DShare& share, const Bytes& meta_data_bytes);
@@ -85,7 +86,7 @@ private:
 
 class EncToShareServer {
 public:
-    EncToShareServer(CkksContext& context, int scale_ord = DEFAULT_SCALE_BIT, uint64_t ring_mod = RING_MOD);
+    EncToShareServer(CkksContext& context, int scale_ord = mpc::DEFAULT_SCALE_BIT, uint64_t ring_mod = mpc::RING_MOD);
 
     Feature2DShare server_enc_to_share_multi_pack(const Feature2DEncrypted& x_enc,
                                                   PackType pack_type = PackType::MultiplexedPacking);
@@ -132,8 +133,8 @@ private:
 class ShareToEncServer {
 public:
     ShareToEncServer(CkksContext& context,
-                     int scale_ord = DEFAULT_SCALE_BIT,
-                     uint64_t ring_mod = RING_MOD,
+                     int scale_ord = mpc::DEFAULT_SCALE_BIT,
+                     uint64_t ring_mod = mpc::RING_MOD,
                      double pt_range = 128.0);
 
     Feature2DEncrypted server_share_to_enc_multi_pack(Feature2DShare& y_share0,

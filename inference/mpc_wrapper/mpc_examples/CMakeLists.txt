@@ -8,7 +8,7 @@ function(add_mpc_inference_example target source)
         -Wl,--start-group
         inference_interface
         inference_task
-        mpc_adapter
+        mpc_wrapper
         mpc
         fhe_layers
         log
@@ -20,4 +20,3 @@ endfunction()
 
 add_mpc_inference_example(mpc_inference_sdk_server mpc_inference_sdk_server.cpp)
 add_mpc_inference_example(mpc_inference_sdk_client mpc_inference_sdk_client.cpp)
-add_mpc_inference_example(client_task mpc_client_task.cpp)

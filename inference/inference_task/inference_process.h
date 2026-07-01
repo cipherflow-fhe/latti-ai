@@ -36,7 +36,9 @@ enum class ComputeDevice { CPU, GPU, FPGA };
 
 class InferenceProcess;
 class InitInferenceProcess;
+#ifdef INFERENCE_SDK_ENABLE_MPC
 class InitMpc;
+#endif
 
 class Node {
 public:
@@ -93,7 +95,11 @@ class InitInferenceProcess {
 
 public:
     InitInferenceProcess();
+#ifdef INFERENCE_SDK_ENABLE_MPC
     InitInferenceProcess(const std::string& project_path_in, bool is_fpga = true, InitMpc* init_mpc = nullptr);
+#else
+    InitInferenceProcess(const std::string& project_path_in, bool is_fpga = true);
+#endif
     virtual ~InitInferenceProcess();
 
     std::filesystem::path project_path;
@@ -110,9 +116,10 @@ public:
 
     virtual void init_parameters(bool is_bootstrapping = false);
     virtual void load_model_prepare();
+#ifdef INFERENCE_SDK_ENABLE_MPC
     void set_mpc_init(InitMpc& init_mpc);
     InitMpc& mpc_init();
-    const InitMpc& mpc_init() const;
+#endif
 
     template <typename T> T& get_layer(const std::string& key) {
         auto it = ckks_layers_.find(key);
@@ -210,8 +217,10 @@ private:
 
     std::map<std::string, UPtr<ls::CkksParameter>> ckks_parameters_;
     std::map<std::string, UPtr<Layer>> ckks_layers_;
+#ifdef INFERENCE_SDK_ENABLE_MPC
     UPtr<InitMpc> owned_mpc_init_;
     InitMpc* mpc_init_ = nullptr;
+#endif
 };
 
 class InferenceServer;  // forward declaration for friend

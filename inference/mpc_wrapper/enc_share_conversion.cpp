@@ -16,7 +16,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "mpc_adapter/enc_share_conversion.h"
+#include "mpc_wrapper/enc_share_conversion.h"
 
 #include <cmath>
 #include <random>
@@ -91,7 +91,7 @@ Array<uint64_t, 1> ShareToEncClient::encrypt_from_share(Feature2DEncrypted& x_en
     x_enc.shape = input_shape;
     Array<double, 1> y0_sub_mod_div_s(share.data.get_shape());
     Array<uint64_t, 1> y0_add_mod(share.data.get_shape());
-    double scale = DEFAULT_SCALE;
+    double scale = mpc::DEFAULT_SCALE;
     for (int i = 0; i < share.data.get_size(); i++) {
         uint64_t y0_add_mod_value = (share.data[i] + (share.ring_mod / 2)) % share.ring_mod;
         y0_add_mod.set(i, y0_add_mod_value);
@@ -101,9 +101,9 @@ Array<uint64_t, 1> ShareToEncClient::encrypt_from_share(Feature2DEncrypted& x_en
 
     Array<double, 3> y3 = y0_sub_mod_div_s.reshape<3>({uint64_t(n_channel), input_shape[0], input_shape[1]});
     if (pack_type == PackType::MultiplexedPacking) {
-        x_enc.pack_multiplexed(y3, true, DEFAULT_SCALE);
+        x_enc.pack_multiplexed(y3, true, mpc::DEFAULT_SCALE);
     } else if (pack_type == PackType::MultipleChannelPacking) {
-        x_enc.pack_multiple_channel(y3, true, DEFAULT_SCALE);
+        x_enc.pack_multiple_channel(y3, true, mpc::DEFAULT_SCALE);
     } else if (pack_type == PackType::InterleavedPacking) {
         Duo block_expansion = {(uint32_t)ceil(input_shape[0] / (double)BLOCK_SHAPE[0]),
                                (uint32_t)ceil(input_shape[1] / (double)BLOCK_SHAPE[1])};
@@ -124,13 +124,13 @@ void ShareToEncClient::encrypt_from_share_simple(Feature2DEncrypted& x_enc,
 
     Array<double, 3> y3 = share_mg.reshape<3>({uint64_t(n_channel), input_shape[0], input_shape[1]});
     if (pack_type == PackType::MultipleChannelPacking) {
-        x_enc.pack_multiple_channel(y3, true, DEFAULT_SCALE, use_recode);
+        x_enc.pack_multiple_channel(y3, true, mpc::DEFAULT_SCALE, use_recode);
     } else if (pack_type == PackType::MultiplexedPacking) {
-        x_enc.pack_multiplexed(y3, true, DEFAULT_SCALE, use_recode);
+        x_enc.pack_multiplexed(y3, true, mpc::DEFAULT_SCALE, use_recode);
     } else if (pack_type == PackType::InterleavedPacking) {
         Duo block_expansion = {(uint32_t)ceil(input_shape[0] / (double)BLOCK_SHAPE[0]),
                                (uint32_t)ceil(input_shape[1] / (double)BLOCK_SHAPE[1])};
-        x_enc.pack_interleaved(y3, BLOCK_SHAPE, block_expansion, true, DEFAULT_SCALE, use_recode);
+        x_enc.pack_interleaved(y3, BLOCK_SHAPE, block_expansion, true, mpc::DEFAULT_SCALE, use_recode);
     }
 }
 
@@ -142,7 +142,7 @@ Array<uint64_t, 1> ShareToEncClient::encrypt_from_share(Feature0DEncrypted& x_en
 
     Array<double, 1> out_data_mg(share.data.get_shape());
     Array<uint64_t, 1> data_add(share.data.get_shape());
-    double scale = DEFAULT_SCALE;
+    double scale = mpc::DEFAULT_SCALE;
     for (int i = 0; i < share.data.get_size(); i++) {
         uint64_t data_add_value = (share.data[i] + (share.ring_mod / 2)) % share.ring_mod;
         data_add.set(i, data_add_value);
@@ -150,7 +150,7 @@ Array<uint64_t, 1> ShareToEncClient::encrypt_from_share(Feature0DEncrypted& x_en
         out_data_mg.set(i, out_data_value);
     }
 
-    double encode_scale = pow(2, DEFAULT_SCALE_BIT);
+    double encode_scale = pow(2, mpc::DEFAULT_SCALE_BIT);
     x_enc.pack_cyclic(out_data_mg.to_array_1d(), true, encode_scale);
     x_enc.n_channel = n_channel;
     x_enc.n_channel_per_ct = n_slot;
@@ -255,8 +255,8 @@ Feature2DEncrypted ShareToEncServer::combine_with_share_new_protocol(const Featu
     result.n_channel_per_ct = y_share1_enc.n_channel_per_ct;
     result.shape = y_share1_enc.shape;
     result.skip = y_share1_enc.skip;
-    double scale = DEFAULT_SCALE;
-    double encode_scale = pow(2, DEFAULT_SCALE_BIT);
+    double scale = mpc::DEFAULT_SCALE;
+    double encode_scale = pow(2, mpc::DEFAULT_SCALE_BIT);
     int n_ct = y_share1_enc.data.size();
 
     result.data.clear();
@@ -292,8 +292,8 @@ Feature2DEncrypted ShareToEncServer::combine_with_share_new_protocol_for_multi_p
     const Feature2DEncrypted& y_share2_enc,
     const Bytes& b1,
     PackType pack_type) const {
-    double scale = DEFAULT_SCALE;
-    double encode_scale = pow(2, DEFAULT_SCALE_BIT);
+    double scale = mpc::DEFAULT_SCALE;
+    double encode_scale = pow(2, mpc::DEFAULT_SCALE_BIT);
     Feature2DEncrypted result(y_share1_enc.context, y_share1_enc.level);
     result.n_channel = y_share1_enc.n_channel;
     result.n_channel_per_ct = y_share1_enc.n_channel_per_ct;
@@ -312,7 +312,7 @@ Feature2DEncrypted ShareToEncServer::combine_with_share_new_protocol_for_multi_p
     Array<double, 3> mask_d_3d =
         mask_d.reshape<3>({y_share1_enc.n_channel, y_share1_enc.shape[0], y_share1_enc.shape[1]});
     auto mask_pt = multi_pack_to_pt(mask_d_3d, y_share2_copy, y_share1_enc.n_channel, y_share1_enc.shape,
-                                    y_share1_enc.skip, *y_share1_enc.context, y_share1_enc.level, DEFAULT_SCALE,
+                                    y_share1_enc.skip, *y_share1_enc.context, y_share1_enc.level, mpc::DEFAULT_SCALE,
                                     pack_type);
     Array<double, 1> b1_value({b1.size()});
     for (int i = 0; i < b1.size(); i++) {
@@ -369,8 +369,8 @@ Feature0DEncrypted ShareToEncServer::combine_with_share_new_protocol(const Featu
     result.n_channel = y_share1_enc.n_channel;
     result.n_channel_per_ct = y_share1_enc.n_channel_per_ct;
     result.skip = y_share1_enc.skip;
-    double scale = DEFAULT_SCALE;
-    double encode_scale = pow(2, DEFAULT_SCALE_BIT);
+    double scale = mpc::DEFAULT_SCALE;
+    double encode_scale = pow(2, mpc::DEFAULT_SCALE_BIT);
 
     for (int i = 0; i < y_share1_enc.data.size(); i++) {
         vector<double> b1_value(n_slot, 0);
@@ -455,9 +455,9 @@ void EncToShareServer::split_to_shares(const Feature2DEncrypted& x_enc,
                                        Feature2DEncrypted* share0,
                                        Feature2DShare* share1) const {
     int n_slot = x_enc.context->get_parameter().get_n() / 2;
-    double share_scale = DEFAULT_SCALE;
-    int feature_bitlength = DEFAULT_SCALE_BIT + 1;
-    int sigma = SIGMA;
+    double share_scale = mpc::DEFAULT_SCALE;
+    int feature_bitlength = mpc::DEFAULT_SCALE_BIT + 1;
+    int sigma = mpc::SIGMA;
 
     Duo pre_skip_shape = x_enc.shape * x_enc.skip;
     size_t n_share_feature = x_enc.n_channel * x_enc.shape[0] * x_enc.shape[1];
@@ -481,7 +481,7 @@ void EncToShareServer::split_to_shares(const Feature2DEncrypted& x_enc,
         size_t start = i * n_slot;
         size_t length = i == x_enc.data.size() - 1 ? (mask_d_span.size() - start) : n_slot;
         vector<double> mask_mg_vec(mask_d_span.begin() + start, mask_d_span.begin() + start + length);
-        CkksPlaintext mask_pt = x_enc.context->encode(mask_mg_vec, x_enc.level, DEFAULT_SCALE);
+        CkksPlaintext mask_pt = x_enc.context->encode(mask_mg_vec, x_enc.level, mpc::DEFAULT_SCALE);
         CkksCiphertext share0_ct = x_enc.context->add_plain(x_enc.data[i], mask_pt);
         share0->data.push_back(move(share0_ct));
     }
@@ -505,7 +505,7 @@ void EncToShareServer::split_to_shares_simple(const Feature2DEncrypted& x_enc,
                                               Feature2DEncrypted* share0,
                                               Feature2DShare* share1) const {
     int n_slot = x_enc.context->get_parameter().get_n() / 2;
-    int sigma = SIGMA;
+    int sigma = mpc::SIGMA;
 
     Duo pre_skip_shape = x_enc.shape * x_enc.skip;
     size_t n_share_feature = x_enc.n_channel * x_enc.shape[0] * x_enc.shape[1];
@@ -515,7 +515,7 @@ void EncToShareServer::split_to_shares_simple(const Feature2DEncrypted& x_enc,
     vector<double> r(n_mask);
     random_device rd;
     mt19937 gen(rd());
-    uniform_real_distribution<double> dis(-pow(2, DATA_BIT + sigma), pow(2, DATA_BIT + sigma));
+    uniform_real_distribution<double> dis(-pow(2, mpc::DATA_BIT + sigma), pow(2, mpc::DATA_BIT + sigma));
     for (int i = 0; i < n_mask; i++) {
         r[i] = dis(gen);
         mask_d[i] = -r[i];
@@ -532,7 +532,7 @@ void EncToShareServer::split_to_shares_simple(const Feature2DEncrypted& x_enc,
         size_t start = i * n_slot;
         size_t length = i == x_enc.data.size() - 1 ? (mask_d_span.size() - start) : n_slot;
         vector<double> mask_mg_vec(mask_d_span.begin() + start, mask_d_span.begin() + start + length);
-        CkksPlaintext mask_pt = x_enc.context->encode(mask_mg_vec, x_enc.level, DEFAULT_SCALE);
+        CkksPlaintext mask_pt = x_enc.context->encode(mask_mg_vec, x_enc.level, mpc::DEFAULT_SCALE);
         CkksCiphertext share0_ct = x_enc.context->add_plain(x_enc.data[i], mask_pt);
         share0->data.push_back(move(share0_ct));
     }
@@ -555,9 +555,9 @@ void EncToShareServer::split_to_shares_for_multi_channel_pack(const Feature2DEnc
                                                               Feature2DEncrypted* share0,
                                                               Feature2DShare* share1,
                                                               PackType pack_type) const {
-    double share_scale = DEFAULT_SCALE;
-    int feature_bitlength = DEFAULT_SCALE_BIT + 1;
-    int sigma = SIGMA;
+    double share_scale = mpc::DEFAULT_SCALE;
+    int feature_bitlength = mpc::DEFAULT_SCALE_BIT + 1;
+    int sigma = mpc::SIGMA;
     size_t n_mask = x_enc.n_channel * x_enc.shape[0] * x_enc.shape[1];
 
     vector<double> mask_d(n_mask);
@@ -575,7 +575,7 @@ void EncToShareServer::split_to_shares_for_multi_channel_pack(const Feature2DEnc
     auto mask_d_array = Array<double, 1>::from_array_1d(mask_d).reshape<3>(
         {x_enc.n_channel, x_enc.shape[0], x_enc.shape[1]});
     auto mask_pt = multi_pack_to_pt(mask_d_array, *share0, x_enc.n_channel, x_enc.shape, x_enc.skip, *x_enc.context,
-                                    x_enc.level, DEFAULT_SCALE, pack_type);
+                                    x_enc.level, mpc::DEFAULT_SCALE, pack_type);
     for (int i = 0; i < x_enc.data.size(); i++) {
         CkksCiphertext share0_ct = x_enc.context->add_plain(x_enc.data[i], mask_pt[i]);
         share0->data.push_back(move(share0_ct));
@@ -592,14 +592,14 @@ void EncToShareServer::split_to_shares_for_multi_channel_pack_simple(const Featu
                                                                      Feature2DEncrypted* share0,
                                                                      Feature2DShare* share1,
                                                                      PackType pack_type) const {
-    int sigma = SIGMA;
+    int sigma = mpc::SIGMA;
     size_t n_share_feature = x_enc.n_channel * x_enc.shape[0] * x_enc.shape[1];
 
     vector<double> mask_d(n_share_feature);
     vector<double> r(n_share_feature);
     random_device rd;
     mt19937 gen(rd());
-    uniform_real_distribution<double> dis(-pow(2, DATA_BIT + sigma), pow(2, DATA_BIT + sigma));
+    uniform_real_distribution<double> dis(-pow(2, mpc::DATA_BIT + sigma), pow(2, mpc::DATA_BIT + sigma));
     for (int i = 0; i < n_share_feature; i++) {
         r[i] = dis(gen);
         mask_d[i] = -r[i];
@@ -616,7 +616,7 @@ void EncToShareServer::split_to_shares_for_multi_channel_pack_simple(const Featu
     auto mask_d_array = Array<double, 1>::from_array_1d(mask_d).reshape<3>(
         {x_enc.n_channel, x_enc.shape[0], x_enc.shape[1]});
     auto mask_pt = multi_pack_to_pt(mask_d_array, *share0, x_enc.n_channel, x_enc.shape, x_enc.skip, *x_enc.context,
-                                    x_enc.level, DEFAULT_SCALE, pack_type);
+                                    x_enc.level, mpc::DEFAULT_SCALE, pack_type);
     for (int i = 0; i < x_enc.data.size(); i++) {
         CkksCiphertext share0_ct = x_enc.context->add_plain(x_enc.data[i], mask_pt[i]);
         share0->data.push_back(move(share0_ct));
@@ -634,8 +634,8 @@ void EncToShareServer::split_to_shares(const Feature0DEncrypted& x_enc,
                                        Feature0DShare* share1) const {
     int n_slot = x_enc.context->get_parameter().get_n() / 2;
     double share_scale = pow(2, share1->scale_ord);
-    int feature_bitlength = DEFAULT_SCALE_BIT + 1;
-    int sigma = SIGMA;
+    int feature_bitlength = mpc::DEFAULT_SCALE_BIT + 1;
+    int sigma = mpc::SIGMA;
     share0->n_channel = x_enc.n_channel;
     share0->n_channel_per_ct = x_enc.n_channel_per_ct;
     share0->skip = x_enc.skip;
@@ -653,7 +653,7 @@ void EncToShareServer::split_to_shares(const Feature0DEncrypted& x_enc,
         }
         mask_d_mat.push_back(mask_d);
         r_mat.push_back(r);
-        CkksPlaintext mask_pt = x_enc.context->encode(mask_d, x_enc.level, DEFAULT_SCALE);
+        CkksPlaintext mask_pt = x_enc.context->encode(mask_d, x_enc.level, mpc::DEFAULT_SCALE);
         CkksCiphertext share0_ct = x_enc.context->add_plain(x_enc.data[i], mask_pt);
 
         share0->data.push_back(move(share0_ct));
@@ -678,8 +678,8 @@ void EncToShareServer::split_to_shares_reshape(const Feature0DEncrypted& x_enc,
                                                Feature0DShare* share1) const {
     int n_slot = x_enc.context->get_parameter().get_n() / 2;
     double share_scale = pow(2, share1->scale_ord);
-    int feature_bitlength = DEFAULT_SCALE_BIT + 1;
-    int sigma = SIGMA;
+    int feature_bitlength = mpc::DEFAULT_SCALE_BIT + 1;
+    int sigma = mpc::SIGMA;
     share0->n_channel = x_enc.n_channel;
     share0->n_channel_per_ct = x_enc.n_channel_per_ct;
     share0->skip = x_enc.skip;
@@ -697,7 +697,7 @@ void EncToShareServer::split_to_shares_reshape(const Feature0DEncrypted& x_enc,
         }
         r_mat.push_back(r);
         mask_d_mat.push_back(mask_d);
-        CkksPlaintext mask_pt = x_enc.context->encode(mask_d, x_enc.level, DEFAULT_SCALE);
+        CkksPlaintext mask_pt = x_enc.context->encode(mask_d, x_enc.level, mpc::DEFAULT_SCALE);
         CkksCiphertext share0_ct = x_enc.context->add_plain(x_enc.data[i], mask_pt);
         share0->data.push_back(move(share0_ct));
     }
@@ -825,15 +825,15 @@ void ShareToEncClient::client_share_to_enc(Feature2DShare& share, const Bytes& m
 
     Feature2DEncrypted x_e(&context_out_, level, {1, 1}, {1, 1}, PackType::MultipleChannelPacking);
     for (int i = 0; i < share.data.get_size(); i++) {
-        share.data.set(i, share.data.get(i) * T_SCALE % ring_mod_);
+        share.data.set(i, share.data.get(i) * mpc::T_SCALE % ring_mod_);
     }
     auto data_process = encrypt_from_share(x_e, share, n_channel, share.shape, PackType::MultipleChannelPacking);
 
-    MPC mpc(scale_ord_, ring_mod_, pt_range_);
-    auto b0 = mpc.wrap_protocol(data_process.to_array_1d(), ::mpc::current_party());
+    MPC mpc_protocol(scale_ord_, ring_mod_, pt_range_);
+    auto b0 = mpc_protocol.wrap_protocol(data_process.to_array_1d(), ::mpc::current_party());
 
     Array<double, 1> b0_mult_mod_div_s_mg(share.data.get_shape());
-    double scale = DEFAULT_SCALE;
+    double scale = mpc::DEFAULT_SCALE;
     for (int i = 0; i < b0.size(); i++) {
         double temp_res = double(b0[i] * ring_mod_) / scale;
         b0_mult_mod_div_s_mg.set(i, temp_res);
@@ -842,7 +842,7 @@ void ShareToEncClient::client_share_to_enc(Feature2DShare& share, const Bytes& m
     Feature2DEncrypted send_ct(&ctx_extra, level + 1, {1, 1}, {1, 1}, PackType::MultipleChannelPacking);
     send_ct.pack_multiple_channel(
         b0_mult_mod_div_s_mg.reshape<3>({(uint64_t)n_channel, (uint64_t)share.shape[0], (uint64_t)share.shape[1]}),
-        false, DEFAULT_SCALE);
+        false, mpc::DEFAULT_SCALE);
     data_trans.send_bytes(x_e.serialize());
     data_trans.send_bytes(send_ct.serialize());
 }
@@ -855,7 +855,7 @@ void ShareToEncClient::client_share_to_enc_simple(Feature2DShare& share, const B
 
     Feature2DEncrypted x_e(&context_out_, level, {1, 1}, {1, 1}, PackType::MultipleChannelPacking);
     encrypt_from_share_simple(x_e, share, n_channel, share.shape, PackType::MultipleChannelPacking,
-                              MPC_REFRESH_USE_RECODE);
+                              mpc::MPC_REFRESH_USE_RECODE);
 
     data_trans.send_bytes(x_e.serialize());
 }
@@ -872,15 +872,15 @@ void ShareToEncClient::client_share_to_enc_for_multi_channel_pack(Feature2DShare
     PackType pack_type = (PackType)temp_int;
     Feature2DEncrypted x_e(&context_out_, level, skip);
     for (int i = 0; i < share.data.get_size(); i++) {
-        share.data.set(i, share.data.get(i) * T_SCALE % ring_mod_);
+        share.data.set(i, share.data.get(i) * mpc::T_SCALE % ring_mod_);
     }
     auto data_process = encrypt_from_share(x_e, share, n_channel, share.shape, pack_type);
 
-    MPC mpc(scale_ord_, ring_mod_, pt_range_);
-    auto b0 = mpc.wrap_protocol(data_process.to_array_1d(), ::mpc::current_party());
+    MPC mpc_protocol(scale_ord_, ring_mod_, pt_range_);
+    auto b0 = mpc_protocol.wrap_protocol(data_process.to_array_1d(), ::mpc::current_party());
 
     Array<double, 1> b0_mult_mod_div_s_mg(share.data.get_shape());
-    double scale = DEFAULT_SCALE;
+    double scale = mpc::DEFAULT_SCALE;
     for (int i = 0; i < b0.size(); i++) {
         double temp_res = double(b0[i] * ring_mod_) / scale;
         b0_mult_mod_div_s_mg.set(i, temp_res);
@@ -890,13 +890,13 @@ void ShareToEncClient::client_share_to_enc_for_multi_channel_pack(Feature2DShare
     auto send_mg =
         b0_mult_mod_div_s_mg.reshape<3>({(uint64_t)n_channel, (uint64_t)share.shape[0], (uint64_t)share.shape[1]});
     if (pack_type == PackType::MultipleChannelPacking) {
-        send_ct.pack_multiple_channel(send_mg, false, DEFAULT_SCALE);
+        send_ct.pack_multiple_channel(send_mg, false, mpc::DEFAULT_SCALE);
     } else if (pack_type == PackType::MultiplexedPacking) {
-        send_ct.pack_multiplexed(send_mg, false, DEFAULT_SCALE);
+        send_ct.pack_multiplexed(send_mg, false, mpc::DEFAULT_SCALE);
     } else if (pack_type == PackType::InterleavedPacking) {
         Duo block_expansion = {(uint32_t)ceil(share.shape[0] / (double)BLOCK_SHAPE[0]),
                                (uint32_t)ceil(share.shape[1] / (double)BLOCK_SHAPE[1])};
-        send_ct.pack_interleaved(send_mg, BLOCK_SHAPE, block_expansion, false, DEFAULT_SCALE);
+        send_ct.pack_interleaved(send_mg, BLOCK_SHAPE, block_expansion, false, mpc::DEFAULT_SCALE);
     }
     data_trans.send_bytes(x_e.serialize());
     data_trans.send_bytes(send_ct.serialize());
@@ -913,7 +913,7 @@ void ShareToEncClient::client_share_to_enc_for_multi_channel_pack_simple(Feature
     bytes_to_va(meta_data_bytes, {"u8", "u32", "duo", "u8"}, &level, &n_channel, &skip, &temp_int);
     PackType pack_type = (PackType)temp_int;
     Feature2DEncrypted x_e(&context_out_, level, skip, {1, 1}, pack_type);
-    encrypt_from_share_simple(x_e, share, n_channel, share.shape, pack_type, MPC_REFRESH_USE_RECODE);
+    encrypt_from_share_simple(x_e, share, n_channel, share.shape, pack_type, mpc::MPC_REFRESH_USE_RECODE);
 
     data_trans.send_bytes(x_e.serialize());
 }
@@ -926,16 +926,16 @@ void ShareToEncClient::client_share_to_enc_0d(Feature0DShare& share, const Bytes
     Feature0DEncrypted x_e(&context_out_, level);
     x_e.skip = 1;
     for (int i = 0; i < share.data.get_size(); i++) {
-        share.data.set(i, share.data.get(i) * T_SCALE % ring_mod_);
+        share.data.set(i, share.data.get(i) * mpc::T_SCALE % ring_mod_);
     }
     auto data_process = encrypt_from_share(x_e, share, n_channel);
-    MPC mpc(scale_ord_, ring_mod_, pt_range_);
+    MPC mpc_protocol(scale_ord_, ring_mod_, pt_range_);
     data_trans.flush();
-    auto b0 = mpc.wrap_protocol(data_process.to_array_1d(), ::mpc::current_party());
+    auto b0 = mpc_protocol.wrap_protocol(data_process.to_array_1d(), ::mpc::current_party());
     data_trans.flush();
 
     Array<double, 1> send_mg(share.data.get_shape());
-    double scale = DEFAULT_SCALE;
+    double scale = mpc::DEFAULT_SCALE;
     for (int i = 0; i < b0.size(); i++) {
         double temp_res = double(b0[i] * ring_mod_) / scale;
         send_mg.set(i, temp_res);
@@ -943,7 +943,7 @@ void ShareToEncClient::client_share_to_enc_0d(Feature0DShare& share, const Bytes
     CkksContext& ctx_extra = context_out_.get_extra_level_context();
     Feature0DEncrypted send_ct(&ctx_extra, level + 1);
     send_ct.skip = 1;
-    double encode_scale = pow(2, DEFAULT_SCALE_BIT);
+    double encode_scale = pow(2, mpc::DEFAULT_SCALE_BIT);
     send_ct.pack_cyclic(send_mg.to_array_1d(), false, encode_scale);
     data_trans.send_bytes(x_e.serialize());
     data_trans.send_bytes(send_ct.serialize());
@@ -980,11 +980,11 @@ Feature2DEncrypted ShareToEncServer::server_share_to_enc_multi_pack(Feature2DSha
                                                                     PackType pack_type) {
     DataTransmission data_trans = ::mpc::data_transmission();
     for (int i = 0; i < y_share0.data.get_size(); i++) {
-        y_share0.data.set(i, (y_share0.data.get(i) * T_SCALE) % ring_mod_);
+        y_share0.data.set(i, (y_share0.data.get(i) * mpc::T_SCALE) % ring_mod_);
     }
 
-    MPC mpc(scale_ord_, ring_mod_, pt_range_);
-    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), SERVER);
+    MPC mpc_protocol(scale_ord_, ring_mod_, pt_range_);
+    auto b1 = mpc_protocol.wrap_protocol(y_share0.data.to_array_1d(), SERVER);
 
     Feature2DEncrypted y_share1_enc(&context_, level, {1, 1}, {1, 1}, pack_type);
     y_share1_enc.deserialize(data_trans.receive_bytes());
@@ -1069,11 +1069,11 @@ Feature0DShare EncToShareServer::server_enc_to_share(const Feature0DEncrypted& x
 Feature0DEncrypted ShareToEncServer::share_to_enc(Feature0DShare& y_share0, int level) {
     DataTransmission data_trans = ::mpc::data_transmission();
     for (int i = 0; i < y_share0.data.get_size(); i++) {
-        y_share0.data.set(i, (y_share0.data.get(i) * T_SCALE) % ring_mod_);
+        y_share0.data.set(i, (y_share0.data.get(i) * mpc::T_SCALE) % ring_mod_);
     }
 
-    MPC mpc(scale_ord_, ring_mod_, pt_range_);
-    auto b1 = mpc.wrap_protocol(y_share0.data.to_array_1d(), SERVER);
+    MPC mpc_protocol(scale_ord_, ring_mod_, pt_range_);
+    auto b1 = mpc_protocol.wrap_protocol(y_share0.data.to_array_1d(), SERVER);
 
     Feature0DEncrypted y_share1_enc(&context_, level);
     y_share1_enc.deserialize(data_trans.receive_bytes());

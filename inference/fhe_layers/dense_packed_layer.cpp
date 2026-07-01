@@ -80,7 +80,7 @@ void DensePackedLayer::prepare_weight_0d_skip_lazy(uint32_t skip_0d) {
     bsgs_gs = div_ceil(n_channel_per_ct, bsgs_bs);
 
     if (!normal_dense) {
-        modified_scale = modified_scale * DEFAULT_SCALE / param_.get_default_scale();
+        modified_scale = modified_scale;
     }
 }
 
@@ -109,7 +109,7 @@ CkksPlaintextRingt DensePackedLayer::generate_weight_0d_pt_for_indices(CkksConte
 }
 
 CkksPlaintextRingt DensePackedLayer::generate_bias_0d_pt_for_index(CkksContext& ctx, uint32_t packed_out_idx) const {
-    double bias_scale = normal_dense ? param_.get_default_scale() : DEFAULT_SCALE;
+    double bias_scale = param_.get_default_scale();
 
     vector<double> bv;
     for (uint32_t j = 0; j < n_channel_per_ct; j++) {

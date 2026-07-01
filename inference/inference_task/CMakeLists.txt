@@ -4,7 +4,12 @@ add_library(inference_task
     inference_process.cpp
 )
 
-target_link_libraries(inference_task PUBLIC lattisense fhe_layers mpc log ${HDF5_CXX_LIBRARIES})
+target_link_libraries(inference_task PUBLIC lattisense fhe_layers log ${HDF5_CXX_LIBRARIES})
+
+if(INFERENCE_SDK_ENABLE_MPC)
+    target_compile_definitions(inference_task PUBLIC INFERENCE_SDK_ENABLE_MPC)
+    target_link_libraries(inference_task PUBLIC mpc_wrapper mpc)
+endif()
 
 if(INFERENCE_SDK_ENABLE_GPU)
     target_compile_definitions(inference_task PRIVATE INFERENCE_SDK_ENABLE_GPU)

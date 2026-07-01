@@ -29,8 +29,5 @@ public:
         const std::map<std::string, UPtr<fhe_ops_lib::CkksContext>>& ckks_contexts,
         const FeatureEncrypted& feature_node,
         const std::string& key,
-        const json& layer,
-        int scale_ord,
-        double pt_range,
-        uint64_t ring_mod);
+        const json& layer);
 };

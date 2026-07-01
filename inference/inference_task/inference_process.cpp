@@ -18,9 +18,11 @@
 
 #include "inference_process.h"
 #include "../lattisense/cxx_sdk_v2/cxx_fhe_task.h"
-#include "mpc_adapter/enc_share_conversion.h"
-#include "mpc_adapter/inference_process_mpc_server.h"
-#include "mpc_adapter/mpc_data_transmission.h"
+#ifdef INFERENCE_SDK_ENABLE_MPC
+#include "mpc_wrapper/enc_share_conversion.h"
+#include "mpc_wrapper/inference_process_mpc_server.h"
+#include "mpc_wrapper/mpc_data_transmission.h"
+#endif
 #include <cmath>
 #include <iostream>
 
@@ -106,8 +108,13 @@ int FeatureNode::get_n_ciphertexts(const Duo& block_shape) const {
     return n_ciphertexts;
 }
 
-InitInferenceProcess::InitInferenceProcess() : owned_mpc_init_(MakeU<InitMpc>()), mpc_init_(owned_mpc_init_.get()) {}
+InitInferenceProcess::InitInferenceProcess()
+#ifdef INFERENCE_SDK_ENABLE_MPC
+    : owned_mpc_init_(MakeU<InitMpc>()), mpc_init_(owned_mpc_init_.get())
+#endif
+{}
 
+#ifdef INFERENCE_SDK_ENABLE_MPC
 InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool is_fpga, InitMpc* init_mpc)
     : project_path(project_path_in) {
     if (init_mpc != nullptr) {
@@ -116,6 +123,9 @@ InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool i
         owned_mpc_init_ = MakeU<InitMpc>();
         mpc_init_ = owned_mpc_init_.get();
     }
+#else
+InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool is_fpga) : project_path(project_path_in) {
+#endif
     const json& config = read_json(project_path / "task_config.json");
     pack_style = config["pack_style"].get<string>();
     if (config["block_shape"].size() == 1) {
@@ -129,6 +139,7 @@ InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool i
 
 InitInferenceProcess::~InitInferenceProcess() {}
 
+#ifdef INFERENCE_SDK_ENABLE_MPC
 void InitInferenceProcess::set_mpc_init(InitMpc& init_mpc) {
     owned_mpc_init_.reset();
     mpc_init_ = &init_mpc;
@@ -141,12 +152,7 @@ InitMpc& InitInferenceProcess::mpc_init() {
     return *mpc_init_;
 }
 
-const InitMpc& InitInferenceProcess::mpc_init() const {
-    if (mpc_init_ == nullptr) {
-        throw runtime_error("InitInferenceProcess has no InitMpc instance");
-    }
-    return *mpc_init_;
-}
+#endif
 
 void InitInferenceProcess::init_parameters(bool is_bootstrapping) {
     auto json_params = read_json(project_path / "ckks_parameter.json");
@@ -288,7 +294,7 @@ void InitInferenceProcess::_init_add_layer(const string& key, const json& layer,
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
     CkksParameter& param = *ckks_parameters_.at(feature_input0.ckks_parameter_id);
     auto add2d = MakeU<AddLayer>(*ckks_parameters_.at(feature_input0.ckks_parameter_id));
-    add2d->target_ckks_scale = feature_output.ckks_scale;
+    // add2d->target_ckks_scale = feature_output.ckks_scale;
     _prepare_layer(key, move(add2d));
 }
 
@@ -654,8 +660,10 @@ void InitInferenceProcess::load_model_prepare() {
             _init_reshape_layer(key, value);
         } else if (layer_type == "drop_level") {
             _init_drop_level_layer(key, value);
+#ifdef INFERENCE_SDK_ENABLE_MPC
         } else if (layer_type == "mpc_refresh") {
             mpc_init().init_mpc_refresh_layer(*this, key, value);
+#endif
         } else if (layer_type == "concat2d") {
             _init_concat_layer(key, value);
         } else if (layer_type == "upsample") {
@@ -779,6 +787,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 } else {
                     throw runtime_error("input is not available, expect Feature2DEncrypted or Feature0DEncrypted");
                 }
+#ifdef INFERENCE_SDK_ENABLE_MPC
             } else if (layer_type == "mpc_refresh") {
                 if (!enable_mpc) {
                     throw runtime_error("mpc_refresh requires enable_mpc=true and an active MPC client");
@@ -788,12 +797,12 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 send_mpc_metadata(fp->mpc_init().meta_data(key));
                 const FeatureEncrypted& mpc_input = _get_feature(feature_input[0]);
                 InferenceMpcServer mpc_server;
-                auto refresh_result = mpc_server.calculate_mpc_refresh(*fp, fp->mpc_init(), ckks_contexts, mpc_input,
-                                                                       key, layer.value(), DEFAULT_SCALE_BIT, 128.0,
-                                                                       RING_MOD);
+                auto refresh_result =
+                    mpc_server.calculate_mpc_refresh(*fp, fp->mpc_init(), ckks_contexts, mpc_input, key, layer.value());
                 cout << "[Server][MPC] Finished refresh layer " << key << endl;
                 result = MakeU<Feature2DEncrypted>(move(refresh_result));
                 mpc_timer.stop();
+#endif
             } else if (layer_type == "batchnorm" || layer_type == "batchnorm2d" || layer_type == "dropout" ||
                        layer_type == "mul" || layer_type == "identity") {
                 const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);

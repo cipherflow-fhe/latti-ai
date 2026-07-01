@@ -1,6 +1,6 @@
-#include "mpc_adapter/inference_process_client.h"
-#include "mpc_adapter/mpc_data_transmission.h"
-#include "mpc_adapter/mpc_adapter.h"
+#include "mpc_wrapper/inference_process_client.h"
+#include "mpc_wrapper/mpc_data_transmission.h"
+#include "mpc_wrapper/mpc_wrapper.h"
 
 #include <iostream>
 

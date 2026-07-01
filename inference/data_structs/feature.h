@@ -29,6 +29,10 @@ namespace ls = lattisense;
 
 enum class PackType { MultipleChannelPacking, MultiplexedPacking, InterleavedPacking };
 
+inline double resolve_encode_scale(ls::CkksContext* context, double scale_in) {
+    return scale_in == 0.0 ? context->get_parameter().get_default_scale() : scale_in;
+}
+
 class FeatureEncrypted {
 public:
     FeatureEncrypted();

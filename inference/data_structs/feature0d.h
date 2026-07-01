@@ -31,11 +31,8 @@ public:
     std::vector<ls::CkksCompressedCiphertext> data_compressed;
 
     Feature0DEncrypted(ls::CkksContext* context_in, int ct_level);
-    void pack(const Array<double, 1>& feature_mg,
-              bool is_symmetric = false,
-              double scale_in = DEFAULT_SCALE,
-              uint32_t skip_in = 1);
-    void pack_cyclic(const std::vector<double>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
+    void pack(const Array<double, 1>& feature_mg, bool is_symmetric = false, double scale_in = 0, uint32_t skip_in = 1);
+    void pack_cyclic(const std::vector<double>& feature_mg, bool is_symmetric = false, double scale_in = 0);
     Array<double, 1> unpack() const;
 
     void to_share(Feature0DEncrypted* share0, Feature0DShare* share1) const;

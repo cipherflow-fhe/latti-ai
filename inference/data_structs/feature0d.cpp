@@ -34,6 +34,7 @@ void Feature0DEncrypted::pack(const Array<double, 1>& feature_mg,
                               bool is_symmetric,
                               double scale_in,
                               uint32_t skip_in) {
+    scale_in = resolve_encode_scale(context, scale_in);
     uint32_t n_in_features = feature_mg.get_size();
     uint32_t n_slots = context->get_parameter().get_n() / 2;
     n_channel = n_in_features;
@@ -60,6 +61,7 @@ void Feature0DEncrypted::pack(const Array<double, 1>& feature_mg,
 }
 
 void Feature0DEncrypted::pack_cyclic(const std::vector<double>& feature_mg, bool is_symmetric, double scale_in) {
+    scale_in = resolve_encode_scale(context, scale_in);
     uint32_t n_in_features = feature_mg.size();
     uint32_t n_slots = context->get_parameter().get_n() / 2;
     n_channel_per_ct = n_slots / skip;

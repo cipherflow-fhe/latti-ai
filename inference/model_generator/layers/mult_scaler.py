@@ -22,11 +22,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
 
-DEFAULT_SCALE = 2**31
-
-ENC_TOSHARE_SCALE = 2**28
-
-
 def f_equal(a, b):
     eps = 1e-8
     if abs(b) < eps:
