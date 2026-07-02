@@ -58,7 +58,7 @@ MatPolyBase::MatPolyBase(const CkksParameter& param_in, Array<double, 2>&& coeff
 }
 
 int MatPolyBase::compute_stockmeyer_level_cost(int order) {
-    if (order < 0 || order >= 64) {
+    if (order <= 0 || order >= 64) {
         throw invalid_argument("MatPolyBase Stockmeyer supports only order < 64");
     }
     if (order < 2) {
@@ -74,7 +74,7 @@ void MatPolyBase::init_stockmeyer() {
         return;
     }
 
-    if (order < 0 || order >= 64) {
+    if (order <= 0 || order >= 64) {
         throw invalid_argument("MatPolyBase Stockmeyer supports only order < 64");
     }
 
