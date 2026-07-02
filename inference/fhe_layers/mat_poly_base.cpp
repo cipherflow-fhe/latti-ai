@@ -109,7 +109,7 @@ void MatPolyBase::compute_stockmeyer_power_info() {
         if (result_level < 0 || half.level >= (int)modulus.size()) {
             throw invalid_argument("MatPolyBase Stockmeyer power level is out of range");
         }
-        double result_scale = half.scale * half.scale / modulus[half.level];
+        double result_scale = (half.scale / modulus[half.level]) * half.scale;
         stockmeyer_powers[power] = {half.depth + 1, result_level, result_scale, half_power, half_power, true};
     };
 
@@ -161,7 +161,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
             int combine_power = stockmeyer_baby_steps * half;
             const auto& power_info = stockmeyer_powers.at(combine_power);
             int right_level = target_level + 1;
-            double right_scale = target_scale * param_.get_q(right_level) / power_info.scale;
+            double right_scale = (target_scale / power_info.scale) * param_.get_q(right_level);
             assign_targets(start + half, half, right_count, right_level, right_scale);
         }
     };
@@ -185,7 +185,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
                 throw invalid_argument("MatPolyBase Stockmeyer linear coefficient target level is out of range");
             }
             level_order[base + 1] = target_level + 1;
-            coeff_scale[base + 1] = target_scale * param_.get_q(target_level + 1) / A1;
+            coeff_scale[base + 1] = (target_scale / A1) * param_.get_q(target_level + 1);
         }
         if (base + 2 <= order) {
             if (target_level + 1 > (int)level_) {
@@ -193,7 +193,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
             }
             double A2 = stockmeyer_powers.at(2).scale;
             level_order[base + 2] = target_level + 1;
-            coeff_scale[base + 2] = target_scale * param_.get_q(target_level + 1) / A2;
+            coeff_scale[base + 2] = (target_scale / A2) * param_.get_q(target_level + 1);
         }
         if (base + 3 <= order) {
             if (target_level + 2 > (int)level_) {
@@ -202,7 +202,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
             double A2 = stockmeyer_powers.at(2).scale;
             level_order[base + 3] = target_level + 2;
             coeff_scale[base + 3] =
-                target_scale * param_.get_q(target_level + 1) * param_.get_q(target_level + 2) / (A2 * A1);
+                ((target_scale / A2) * param_.get_q(target_level + 1) / A1) * param_.get_q(target_level + 2);
         }
     }
 }

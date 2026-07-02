@@ -332,7 +332,7 @@ vector<CkksCiphertext> ParUpperDiagonalPoly::run_core_stockmeyer(CkksContext& ct
 
             if (base + 3 <= order) {
                 double c3x_scale =
-                    target_scale * ctx_copy.get_parameter().get_q(target_level + 1) / stockmeyer_powers.at(2).scale;
+                    (target_scale / stockmeyer_powers.at(2).scale) * ctx_copy.get_parameter().get_q(target_level + 1);
                 auto c3x = multiply_plain_term(x_powers.at(1), base + 3, target_level + 2, c3x_scale,
                                                "P" + to_string(baby_idx) + "_c3x");
                 auto x2_for_c3 =
