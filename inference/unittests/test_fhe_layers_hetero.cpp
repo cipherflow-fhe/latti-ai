@@ -66,6 +66,7 @@
 #include "fhe_layers/block_col_major_polyactrn.h"
 #include "fhe_layers/par_block_col_major_polyactrn.h"
 #include "fhe_layers/par_upper_diagonal_polyact.h"
+#include "fhe_layers/par_upper_diagonal_poly.h"
 #include "data_structs/feature_mat.h"
 #include "ut_util.h"
 #include <fhe_ops_lib/utils.h>
@@ -1006,6 +1007,195 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
     REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
     REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_upper_diagonal_poly][stockmeyer]") {
+    const uint32_t N = 65536;
+    CkksParameter param = CkksParameter::create_parameter(N);
+    const int init_level = 17;
+    CkksContext context = CkksContext::create_random_context(param, init_level);
+
+    const uint32_t n_slot = param.get_n() / 2;
+    const uint32_t n_prepad = 128;
+    const uint32_t n_heads = 2;
+    const uint32_t m_prepad = 128;
+    const uint32_t total_cols = 256;
+    const uint32_t order = 15;
+    const double scale = 64.0;
+    const double f2_input_scale = 0.5;
+    const double f3_input_scale = 0.5;
+    const double default_scale = param.get_default_scale();
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+
+    REQUIRE(n_slot == n_prepad * total_cols);
+    REQUIRE(init_level >= 14);
+
+    const vector<double> p1_desc = {
+        -0.029080343483084341, 2.3066773634990557e-17,  0.45471038861073326, -2.8078925777913385e-16,
+        -2.8915411182152724,   1.2572521416511905e-15,  9.6019913623544397,  -2.3997776216928771e-15,
+        -17.785134844150317,   1.4296496501542554e-15,  18.198630605563167,  5.618746855114301e-16,
+        -9.6389986430588284,   -2.7157761908506778e-16, 2.6150871121857149,  -2.1483406699330675e-17,
+    };
+    const vector<double> p2_desc = {
+        -22.772929128163085, -9.9238473151061153e-13, 133.52575642060197, 5.1885599061549671e-12,
+        -322.28293092520312, -1.057124065245549e-11,  412.46567940639022, 1.0572474934837157e-11,
+        -300.32201839910158, -5.3476054574106177e-12, 124.10645061245243, 1.2506387010969551e-12,
+        -27.696116404655168, -1.0228470304160076e-13, 3.4795291737254996, 9.2762077723673713e-16,
+    };
+    const vector<double> p3_desc = {
+        -3.2153402192444749,  -1.9791353470822114e-13, 17.416597794210833,  5.9631920964000009e-13,
+        -36.618586273953056,  -6.1161725269934055e-13, 38.03096482489083,   2.6665573637468773e-13,
+        -20.470163356627168,  -1.136498515409159e-13,  5.5037834886270582,  8.0623177269952888e-14,
+        -0.86849898556709171, -1.9246732444228731e-14, 0.72131651367427774, -1.0400333128983701e-15,
+    };
+
+    auto to_increasing = [](const vector<double>& desc) { return vector<double>(desc.rbegin(), desc.rend()); };
+    const vector<double> p1 = to_increasing(p1_desc);
+    const vector<double> p2 = to_increasing(p2_desc);
+    const vector<double> p3 = to_increasing(p3_desc);
+
+    auto eval_poly = [](double x, const vector<double>& coeffs) {
+        double result = 0.0;
+        for (auto it = coeffs.rbegin(); it != coeffs.rend(); ++it) {
+            result = result * x + *it;
+        }
+        return result;
+    };
+
+    auto make_coeff_matrix = [&](const vector<double>& coeffs) {
+        Array<double, 2> result({static_cast<uint64_t>(coeffs.size()), static_cast<uint64_t>(total_cols)});
+        for (uint32_t k = 0; k < coeffs.size(); k++) {
+            for (uint32_t j = 0; j < total_cols; j++) {
+                result.set(k, j, coeffs[k]);
+            }
+        }
+        return result;
+    };
+
+    Array<double, 2> X_mat({n_prepad, total_cols});
+    for (uint32_t idx = 0; idx < n_slot; idx++) {
+        double x = -128.0 + 256.0 * static_cast<double>(idx) / static_cast<double>(n_slot - 1);
+        X_mat.set(idx / total_cols, idx % total_cols, x);
+    }
+
+    Array<double, 2> expected({n_prepad, total_cols});
+    for (uint32_t i = 0; i < n_prepad; i++) {
+        for (uint32_t j = 0; j < total_cols; j++) {
+            double x = X_mat.get(i, j);
+            double f1 = eval_poly(x / scale, p1);
+            double half_tanh = eval_poly(f1 / f2_input_scale, p2);
+            double refined = eval_poly(half_tanh / f3_input_scale, p3);
+            expected.set(i, j, x * (0.5 + refined));
+        }
+    }
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, default_scale);
+
+    auto multiply_by_scalar = [&](const FeatureMatEncrypted& input, double scalar) {
+        FeatureMatEncrypted result(&context, input.level - 1);
+        result.shape = input.shape;
+        result.head_shape = input.head_shape;
+        result.matmul_block_size = input.matmul_block_size;
+        result.n_channel = input.n_channel;
+        result.n_channel_per_ct = input.n_channel_per_ct;
+        result.data.resize(input.data.size());
+
+        vector<double> scalar_vec(n_slot, scalar);
+        auto scalar_rt = context.encode_ringt(scalar_vec, default_scale);
+        for (uint32_t ct_idx = 0; ct_idx < input.data.size(); ct_idx++) {
+            auto scalar_mul = context.ringt_to_mul(scalar_rt, input.data[ct_idx].get_level());
+            result.data[ct_idx] =
+                context.rescale(context.mult_plain_mul(input.data[ct_idx], scalar_mul), default_scale);
+        }
+        result.level = result.data[0].get_level();
+        return result;
+    };
+
+    auto multiply_by_scalar_q_level = [&](const FeatureMatEncrypted& input, double scalar) {
+        FeatureMatEncrypted result(&context, input.level - 1);
+        result.shape = input.shape;
+        result.head_shape = input.head_shape;
+        result.matmul_block_size = input.matmul_block_size;
+        result.n_channel = input.n_channel;
+        result.n_channel_per_ct = input.n_channel_per_ct;
+        result.data.resize(input.data.size());
+
+        for (uint32_t ct_idx = 0; ct_idx < input.data.size(); ct_idx++) {
+            int level = input.data[ct_idx].get_level();
+            vector<double> scalar_vec(n_slot, scalar);
+            auto scalar_rt = context.encode_ringt(scalar_vec, static_cast<double>(param.get_q(level)));
+            auto scalar_mul = context.ringt_to_mul(scalar_rt, level);
+            result.data[ct_idx] =
+                context.rescale(context.mult_plain_mul(input.data[ct_idx], scalar_mul), default_scale);
+        }
+        result.level = result.data[0].get_level();
+        return result;
+    };
+
+    FeatureMatEncrypted X_scaled = multiply_by_scalar(X_enc, 1.0 / scale);
+    REQUIRE(X_scaled.level == init_level - 1);
+
+    ParUpperDiagonalPoly poly1(param, shape, head_shape, n_heads, X_scaled.level, make_coeff_matrix(p1), order);
+    poly1.prepare_weight_stockmeyer();
+    FeatureMatEncrypted f1_enc = poly1.run_stockmeyer(context, X_scaled);
+    REQUIRE(f1_enc.level == init_level - 5);
+
+    FeatureMatEncrypted f1_scaled_for_poly2 = multiply_by_scalar_q_level(f1_enc, 1.0 / f2_input_scale);
+    REQUIRE(f1_scaled_for_poly2.level == init_level - 6);
+
+    ParUpperDiagonalPoly poly2(param, shape, head_shape, n_heads, f1_scaled_for_poly2.level, make_coeff_matrix(p2),
+                               order);
+    poly2.prepare_weight_stockmeyer();
+    FeatureMatEncrypted half_tanh_enc = poly2.run_stockmeyer(context, f1_scaled_for_poly2);
+    REQUIRE(half_tanh_enc.level == init_level - 10);
+
+    FeatureMatEncrypted half_tanh_scaled_for_poly3 = multiply_by_scalar_q_level(half_tanh_enc, 1.0 / f3_input_scale);
+    REQUIRE(half_tanh_scaled_for_poly3.level == init_level - 11);
+
+    ParUpperDiagonalPoly poly3(param, shape, head_shape, n_heads, half_tanh_scaled_for_poly3.level,
+                               make_coeff_matrix(p3), order);
+    poly3.prepare_weight_stockmeyer();
+    FeatureMatEncrypted half_tanh_refined = poly3.run_stockmeyer(context, half_tanh_scaled_for_poly3);
+    REQUIRE(half_tanh_refined.level == init_level - 15);
+
+    FeatureMatEncrypted gelu_enc(&context, half_tanh_refined.level - 1);
+    gelu_enc.shape = shape;
+    gelu_enc.head_shape = head_shape;
+    gelu_enc.matmul_block_size = X_enc.matmul_block_size;
+    gelu_enc.data.resize(half_tanh_refined.data.size());
+
+    vector<double> half_vec(n_slot, 0.5);
+    auto half_rt = context.encode_ringt(half_vec, default_scale);
+    for (uint32_t ct_idx = 0; ct_idx < half_tanh_refined.data.size(); ct_idx++) {
+        auto half_plus = context.add_plain_ringt(half_tanh_refined.data[ct_idx], half_rt);
+        auto x_drop = X_enc.data[ct_idx].copy();
+        while (x_drop.get_level() > half_plus.get_level()) {
+            x_drop = context.drop_level(x_drop);
+        }
+        REQUIRE(x_drop.get_level() == half_plus.get_level());
+        gelu_enc.data[ct_idx] = context.rescale(context.relinearize(context.mult(x_drop, half_plus)), default_scale);
+    }
+    gelu_enc.level = gelu_enc.data[0].get_level();
+    REQUIRE(gelu_enc.level == init_level - 16);
+    REQUIRE(init_level - gelu_enc.level > 9);
+
+    Array<double, 2> output_mg = gelu_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
+    Array<double, 2> plain_output = expected.copy();
+    auto output_mg_1d = output_mg.to_array_1d();
+    auto plain_output_1d = plain_output.to_array_1d();
+    print_double_message(output_mg_1d.data(), "output_mg", 10);
+    print_double_message(plain_output_1d.data(), "plain_output", 10);
+    print_double_message(output_mg_1d.data() + output_mg_1d.size() - 10, "output_mg_last", 10);
+    print_double_message(plain_output_1d.data() + plain_output_1d.size() - 10, "plain_output_last", 10);
+
+    auto compare_result = compare(plain_output, output_mg);
+    std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+              << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+    CAPTURE(compare_result.max_error, compare_result.max_abs, compare_result.rmse, compare_result.rms);
+    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
 }
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "sq", "", HeteroProcessors) {
