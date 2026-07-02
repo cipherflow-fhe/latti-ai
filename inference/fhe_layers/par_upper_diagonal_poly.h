@@ -38,13 +38,11 @@ public:
     void prepare_weight() override;
     void prepare_weight_lazy() override;
 
-    ls::CkksPlaintextRingt generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int coeff_idx, int ct_idx) const;
     ls::CkksPlaintextRingt generate_weight_pt_for_stockmeyer(ls::CkksContext& ctx, int coeff_idx, int ct_idx) const;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     FeatureMatEncrypted run_stockmeyer(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
-    std::vector<ls::CkksCiphertext> run_core_bsgs(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
     std::vector<ls::CkksCiphertext> run_core_stockmeyer(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
     void prepare_weight_stockmeyer();
     void prepare_weight_stockmeyer_lazy();
@@ -54,7 +52,6 @@ private:
     uint32_t n_prepad_ = 0, total_cols_ = 0, m_prepad_ = 0;
     uint32_t H_prepad_ = 0, H_ = 0, m_ = 0, n_ = 0, packed_extent_ = 0;
     uint32_t n_slot_ = 0, segment_len_ = 0, c_ = 0, cts_per_mb_ = 0, n_mb_ = 0;
-    std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt_;
     std::vector<std::vector<ls::CkksPlaintextRingt>> stockmeyer_weight_pt_;
 
     uint32_t ct_index(uint32_t mb, uint32_t ct_local) const;

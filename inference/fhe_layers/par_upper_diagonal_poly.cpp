@@ -141,17 +141,6 @@ vector<double> ParUpperDiagonalPoly::build_coeff_vec(uint32_t coeff_idx, uint32_
 }
 
 CkksPlaintextRingt
-ParUpperDiagonalPoly::generate_weight_pt_for_bsgs(CkksContext& ctx, int coeff_idx, int ct_idx) const {
-    assert(coeff_idx >= 0 && coeff_idx <= order);
-    assert(ct_idx >= 0 && static_cast<uint32_t>(ct_idx) < total_cts());
-
-    uint32_t mb = static_cast<uint32_t>(ct_idx) / cts_per_mb_;
-    uint32_t ct_local = static_cast<uint32_t>(ct_idx) % cts_per_mb_;
-    double pack_scale = cached_bsgs_coeff_scale.at(coeff_idx);
-    return ctx.encode_ringt(build_coeff_vec(static_cast<uint32_t>(coeff_idx), mb, ct_local), pack_scale);
-}
-
-CkksPlaintextRingt
 ParUpperDiagonalPoly::generate_weight_pt_for_stockmeyer(CkksContext& ctx, int coeff_idx, int ct_idx) const {
     assert(coeff_idx >= 0 && coeff_idx <= order);
     assert(ct_idx >= 0 && static_cast<uint32_t>(ct_idx) < total_cts());
@@ -163,23 +152,11 @@ ParUpperDiagonalPoly::generate_weight_pt_for_stockmeyer(CkksContext& ctx, int co
 }
 
 void ParUpperDiagonalPoly::prepare_weight() {
-    init_bsgs();
-
-    uint32_t n_ct = total_cts();
-    weight_pt_.resize(order + 1);
-    CkksContext ctx = CkksContext::create_empty_context(param_);
-
-    parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int coeff_idx) {
-        weight_pt_[coeff_idx].resize(n_ct);
-        for (uint32_t ct_idx = 0; ct_idx < n_ct; ct_idx++) {
-            weight_pt_[coeff_idx][ct_idx] = generate_weight_pt_for_bsgs(ctx_copy, coeff_idx, ct_idx);
-        }
-    });
+    prepare_weight_stockmeyer();
 }
 
 void ParUpperDiagonalPoly::prepare_weight_lazy() {
-    init_bsgs();
-    weight_pt_.clear();
+    prepare_weight_stockmeyer_lazy();
 }
 
 void ParUpperDiagonalPoly::prepare_weight_stockmeyer() {
@@ -203,177 +180,7 @@ void ParUpperDiagonalPoly::prepare_weight_stockmeyer_lazy() {
 }
 
 vector<CkksCiphertext> ParUpperDiagonalPoly::run_core(CkksContext& ctx, const vector<CkksCiphertext>& x) {
-    return run_core_bsgs(ctx, x);
-}
-
-vector<CkksCiphertext> ParUpperDiagonalPoly::run_core_bsgs(CkksContext& ctx, const vector<CkksCiphertext>& x) {
-    init_bsgs();
-    vector<CkksCiphertext> result(x.size());
-
-    if (order <= 0) {
-        throw runtime_error("ParUpperDiagonalPoly: order must be at least 1");
-    }
-
-    parallel_for(x.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int x_idx) {
-        map<int, CkksCiphertext> x_powers;
-        x_powers[1] = x[x_idx].copy();
-        if (x_powers[1].is_empty()) {
-            throw runtime_error("ParUpperDiagonalPoly BSGS: input x[" + to_string(x_idx) + "] has invalid handle");
-        }
-
-        set<int> powers_to_compute;
-        for (int p : required_powers) {
-            powers_to_compute.insert(p);
-            function<void(int)> add_dependencies = [&](int n) {
-                if (n <= 1) {
-                    return;
-                }
-                MatPolyPowerInfo info = get_power_info(n);
-                if (info.decomp_a > 1) {
-                    powers_to_compute.insert(info.decomp_a);
-                    add_dependencies(info.decomp_a);
-                }
-                if (info.decomp_b > 1) {
-                    powers_to_compute.insert(info.decomp_b);
-                    add_dependencies(info.decomp_b);
-                }
-            };
-            add_dependencies(p);
-        }
-
-        for (int i = 2; i <= order; i++) {
-            if (powers_to_compute.find(i) == powers_to_compute.end()) {
-                continue;
-            }
-
-            MatPolyPowerInfo info = get_power_info(i);
-            auto x_a = x_powers[info.decomp_a].copy();
-            auto x_b = x_powers[info.decomp_b].copy();
-
-            int target_level = std::min(x_a.get_level(), x_b.get_level());
-            while (x_a.get_level() > target_level) {
-                x_a = ctx_copy.drop_level(x_a);
-            }
-            while (x_b.get_level() > target_level) {
-                x_b = ctx_copy.drop_level(x_b);
-            }
-
-            x_powers[i] = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(x_a, x_b)),
-                                           ctx_copy.get_parameter().get_default_scale());
-            if (x_powers[i].is_empty()) {
-                throw runtime_error("ParUpperDiagonalPoly BSGS: x_powers[" + to_string(i) +
-                                    "] is empty after computation");
-            }
-        }
-
-        vector<CkksCiphertext> baby_polys(bsgs_giant_steps);
-        vector<bool> baby_poly_initialized(bsgs_giant_steps, false);
-        vector<bool> baby_poly_has_terms(bsgs_giant_steps, false);
-
-        for (int g = 0; g < bsgs_giant_steps; g++) {
-            int target_level = baby_poly_output_level[g];
-            double target_scale = baby_poly_output_scale[g];
-
-            for (int b = 0; b < baby_steps; b++) {
-                int coeff_idx = g * baby_steps + b;
-                if (coeff_idx > order) {
-                    break;
-                }
-                if (b == 0) {
-                    continue;
-                }
-
-                baby_poly_has_terms[g] = true;
-                auto x_copy = x_powers[b].copy();
-                while (x_copy.get_level() > target_level + 1) {
-                    x_copy = ctx_copy.drop_level(x_copy);
-                }
-
-                CkksCiphertext term;
-                if (weight_pt_.empty()) {
-                    auto coeff_pt_rt = generate_weight_pt_for_bsgs(ctx_copy, coeff_idx, x_idx);
-                    auto coeff_pt = ctx_copy.ringt_to_mul(coeff_pt_rt, x_copy.get_level());
-                    term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_copy, coeff_pt), target_scale);
-                } else {
-                    auto coeff_pt = ctx_copy.ringt_to_mul(weight_pt_[coeff_idx][x_idx], x_copy.get_level());
-                    term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_copy, coeff_pt), target_scale);
-                }
-
-                if (!baby_poly_initialized[g]) {
-                    baby_polys[g] = term.copy();
-                    baby_poly_initialized[g] = true;
-                } else {
-                    if (baby_polys[g].is_empty() || term.is_empty()) {
-                        throw runtime_error("ParUpperDiagonalPoly BSGS baby add: g=" + to_string(g));
-                    }
-                    baby_polys[g] = ctx_copy.add(baby_polys[g], term);
-                }
-            }
-
-            int const_idx = g * baby_steps;
-            if (const_idx <= order && baby_poly_has_terms[g]) {
-                if (weight_pt_.empty()) {
-                    auto coeff_pt = generate_weight_pt_for_bsgs(ctx_copy, const_idx, x_idx);
-                    baby_polys[g] = ctx_copy.add_plain_ringt(baby_polys[g], coeff_pt);
-                } else {
-                    baby_polys[g] = ctx_copy.add_plain_ringt(baby_polys[g], weight_pt_[const_idx][x_idx]);
-                }
-            }
-        }
-
-        if (baby_polys[0].is_empty()) {
-            throw runtime_error("ParUpperDiagonalPoly BSGS: baby_polys[0] is empty before combine, x_idx=" +
-                                to_string(x_idx));
-        }
-        result[x_idx] = baby_polys[0].copy();
-        if (result[x_idx].is_empty()) {
-            throw runtime_error("ParUpperDiagonalPoly BSGS: result[" + to_string(x_idx) + "] is empty");
-        }
-
-        for (int g = 1; g < bsgs_giant_steps; g++) {
-            int giant_power = g * baby_steps;
-            if (giant_power > order) {
-                break;
-            }
-
-            auto x_giant = x_powers[giant_power].copy();
-            int mult_level = bsgs_output_level + 1;
-            while (x_giant.get_level() > mult_level) {
-                x_giant = ctx_copy.drop_level(x_giant);
-            }
-
-            CkksCiphertext term;
-            if (baby_poly_has_terms[g]) {
-                auto baby_poly_copy = baby_polys[g].copy();
-                while (baby_poly_copy.get_level() > mult_level) {
-                    baby_poly_copy = ctx_copy.drop_level(baby_poly_copy);
-                }
-                term = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(baby_poly_copy, x_giant)),
-                                        ctx_copy.get_parameter().get_default_scale());
-            } else {
-                int const_idx = g * baby_steps;
-                if (const_idx <= order) {
-                    if (weight_pt_.empty()) {
-                        auto coeff_pt_rt = generate_weight_pt_for_bsgs(ctx_copy, const_idx, x_idx);
-                        auto coeff_pt = ctx_copy.ringt_to_mul(coeff_pt_rt, x_giant.get_level());
-                        term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_giant, coeff_pt),
-                                                ctx_copy.get_parameter().get_default_scale());
-                    } else {
-                        auto coeff_pt = ctx_copy.ringt_to_mul(weight_pt_[const_idx][x_idx], x_giant.get_level());
-                        term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_giant, coeff_pt),
-                                                ctx_copy.get_parameter().get_default_scale());
-                    }
-                }
-            }
-
-            result[x_idx] = ctx_copy.add(result[x_idx], term);
-            if (result[x_idx].is_empty()) {
-                throw runtime_error("ParUpperDiagonalPoly BSGS combine: result empty after add, g=" + to_string(g));
-            }
-        }
-    });
-
-    return result;
+    return run_core_stockmeyer(ctx, x);
 }
 
 vector<CkksCiphertext> ParUpperDiagonalPoly::run_core_stockmeyer(CkksContext& ctx, const vector<CkksCiphertext>& x) {
@@ -635,22 +442,7 @@ vector<CkksCiphertext> ParUpperDiagonalPoly::run_core_stockmeyer(CkksContext& ct
 }
 
 FeatureMatEncrypted ParUpperDiagonalPoly::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
-    init_bsgs();
-    assert(x.level == level_);
-    assert(x.shape[0] == n_prepad_ && x.shape[1] == total_cols_);
-    assert(x.head_shape[0] == n_prepad_ && x.head_shape[1] == m_prepad_);
-    assert(x.matmul_block_size == m_);
-    assert(x.data.size() == total_cts());
-
-    FeatureMatEncrypted result(&ctx, bsgs_output_level);
-    result.shape = x.shape;
-    result.head_shape = x.head_shape;
-    result.matmul_block_size = x.matmul_block_size;
-    result.n_channel = x.n_channel;
-    result.n_channel_per_ct = x.n_channel_per_ct;
-    result.data = run_core(ctx, x.data);
-    result.level = result.data[0].get_level();
-    return result;
+    return run_stockmeyer(ctx, x);
 }
 
 FeatureMatEncrypted ParUpperDiagonalPoly::run_stockmeyer(CkksContext& ctx, const FeatureMatEncrypted& x) {

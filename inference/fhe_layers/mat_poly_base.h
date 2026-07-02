@@ -20,7 +20,6 @@
 
 #include "layer.h"
 #include <map>
-#include <set>
 #include <vector>
 
 struct MatPolyPowerInfo {
@@ -36,7 +35,6 @@ class MatPolyBase : public Layer {
 public:
     MatPolyBase(const ls::CkksParameter& param_in, Array<double, 2>&& coeffs_in, uint32_t level_in, int order_in);
 
-    static int compute_bsgs_level_cost(int order);
     static int compute_stockmeyer_level_cost(int order);
 
 protected:
@@ -44,27 +42,11 @@ protected:
     int order = 0;
     Array<double, 2> coeffs_;
 
-    void init_bsgs();
-    void compute_all_powers();
-    void compute_power(int n);
-    MatPolyPowerInfo get_power_info(int n) const;
-    void determine_required_powers_bsgs();
-    void compute_coefficient_scales_bsgs(std::map<int, double>& coeff_scale, std::map<int, int>& level_order);
     void init_stockmeyer();
     void compute_stockmeyer_power_info();
     void compute_coefficient_scales_stockmeyer(std::map<int, double>& coeff_scale, std::map<int, int>& level_order);
 
-    int baby_steps = 0;
-    int bsgs_giant_steps = 0;
     std::vector<double> modulus;
-    std::map<int, MatPolyPowerInfo> powers;
-    std::set<int> required_powers;
-    std::vector<double> baby_poly_output_scale;
-    std::vector<int> baby_poly_output_level;
-    int bsgs_output_level = 0;
-    std::map<int, double> cached_bsgs_coeff_scale;
-    std::map<int, int> cached_bsgs_level_order;
-    bool bsgs_initialized = false;
 
     int stockmeyer_baby_steps = 4;
     int stockmeyer_n_baby_polys = 0;
