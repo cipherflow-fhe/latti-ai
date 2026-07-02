@@ -27,6 +27,32 @@
 using namespace std;
 using namespace lattisense;
 
+namespace {
+
+int ceil_log2_int(int n) {
+    int depth = 0;
+    int span = 1;
+    while (span < n) {
+        span <<= 1;
+        depth++;
+    }
+    return depth;
+}
+
+int next_power_of_two_int(int n) {
+    int span = 1;
+    while (span < n) {
+        span <<= 1;
+    }
+    return span;
+}
+
+int stockmeyer_baby_poly_count(int order) {
+    return (order + 4) / 4;
+}
+
+}  // namespace
+
 MatPolyBase::MatPolyBase(const CkksParameter& param_in, Array<double, 2>&& coeffs_in, uint32_t level_in, int order_in)
     : Layer(param_in), order(order_in), coeffs_(move(coeffs_in)) {
     level_ = level_in;
@@ -163,13 +189,15 @@ int MatPolyBase::compute_bsgs_level_cost(int order) {
 }
 
 int MatPolyBase::compute_stockmeyer_level_cost(int order) {
-    if (order == 15) {
-        return 4;
+    if (order < 0 || order >= 64) {
+        throw invalid_argument("MatPolyBase Stockmeyer supports only order < 64");
     }
-    if (order == 31) {
-        return 5;
+    if (order < 2) {
+        return 1;
     }
-    throw invalid_argument("MatPolyBase Stockmeyer currently supports only order 15 and 31");
+
+    int n_baby_polys = stockmeyer_baby_poly_count(order);
+    return 2 + ceil_log2_int(n_baby_polys);
 }
 
 void MatPolyBase::init_bsgs() {
@@ -264,8 +292,8 @@ void MatPolyBase::init_stockmeyer() {
         return;
     }
 
-    if (order != 15 && order != 31) {
-        throw invalid_argument("MatPolyBase Stockmeyer currently supports only order 15 and 31");
+    if (order < 0 || order >= 64) {
+        throw invalid_argument("MatPolyBase Stockmeyer supports only order < 64");
     }
 
     int level_cost = compute_stockmeyer_level_cost(order);
@@ -279,7 +307,7 @@ void MatPolyBase::init_stockmeyer() {
     }
 
     stockmeyer_baby_steps = 4;
-    stockmeyer_n_baby_polys = (order + stockmeyer_baby_steps) / stockmeyer_baby_steps;
+    stockmeyer_n_baby_polys = stockmeyer_baby_poly_count(order);
     stockmeyer_output_level = (int)level_ - level_cost;
 
     compute_stockmeyer_power_info();
@@ -303,11 +331,17 @@ void MatPolyBase::compute_stockmeyer_power_info() {
         stockmeyer_powers[power] = {half.depth + 1, result_level, result_scale, half_power, half_power, true};
     };
 
-    add_square_power(2, 1);
-    add_square_power(4, 2);
-    add_square_power(8, 4);
-    if (order == 31) {
-        add_square_power(16, 8);
+    int max_power = 1;
+    if (order >= 2) {
+        max_power = 2;
+    }
+    if (stockmeyer_n_baby_polys > 1) {
+        int tree_span = next_power_of_two_int(stockmeyer_n_baby_polys);
+        max_power = std::max(max_power, 2 * tree_span);
+    }
+
+    for (int power = 2; power <= max_power; power <<= 1) {
+        add_square_power(power, power / 2);
     }
 }
 
@@ -318,55 +352,44 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
 
     double S = param_.get_default_scale();
     double A1 = stockmeyer_powers.at(1).scale;
-    double A2 = stockmeyer_powers.at(2).scale;
-    double A4 = stockmeyer_powers.at(4).scale;
-    double A8 = stockmeyer_powers.at(8).scale;
 
     stockmeyer_baby_poly_output_scale.assign(stockmeyer_n_baby_polys, 0.0);
     stockmeyer_baby_poly_output_level.assign(stockmeyer_n_baby_polys, -1);
 
     int Lout = stockmeyer_output_level;
-    if (order == 15) {
-        double T_G1 = S * param_.get_q(Lout + 1) / A8;
+    int tree_span = next_power_of_two_int(stockmeyer_n_baby_polys);
 
-        stockmeyer_baby_poly_output_level[0] = Lout;
-        stockmeyer_baby_poly_output_scale[0] = S;
-        stockmeyer_baby_poly_output_level[1] = Lout + 1;
-        stockmeyer_baby_poly_output_scale[1] = S * param_.get_q(Lout + 1) / A4;
-        stockmeyer_baby_poly_output_level[2] = Lout + 1;
-        stockmeyer_baby_poly_output_scale[2] = T_G1;
-        stockmeyer_baby_poly_output_level[3] = Lout + 2;
-        stockmeyer_baby_poly_output_scale[3] = T_G1 * param_.get_q(Lout + 2) / A4;
-    } else if (order == 31) {
-        double A16 = stockmeyer_powers.at(16).scale;
-        double T_H1 = S * param_.get_q(Lout + 1) / A16;
-        double T_G1 = S * param_.get_q(Lout + 1) / A8;
-        double T_G3 = T_H1 * param_.get_q(Lout + 2) / A8;
+    function<void(int, int, int, int, double)> assign_targets = [&](int start, int span, int actual_count,
+                                                                    int target_level, double target_scale) {
+        if (actual_count <= 0) {
+            return;
+        }
+        if (span == 1) {
+            stockmeyer_baby_poly_output_level[start] = target_level;
+            stockmeyer_baby_poly_output_scale[start] = target_scale;
+            return;
+        }
 
-        stockmeyer_baby_poly_output_level[0] = Lout;
-        stockmeyer_baby_poly_output_scale[0] = S;
-        stockmeyer_baby_poly_output_level[1] = Lout + 1;
-        stockmeyer_baby_poly_output_scale[1] = S * param_.get_q(Lout + 1) / A4;
-        stockmeyer_baby_poly_output_level[2] = Lout + 1;
-        stockmeyer_baby_poly_output_scale[2] = T_G1;
-        stockmeyer_baby_poly_output_level[3] = Lout + 2;
-        stockmeyer_baby_poly_output_scale[3] = T_G1 * param_.get_q(Lout + 2) / A4;
-        stockmeyer_baby_poly_output_level[4] = Lout + 1;
-        stockmeyer_baby_poly_output_scale[4] = T_H1;
-        stockmeyer_baby_poly_output_level[5] = Lout + 2;
-        stockmeyer_baby_poly_output_scale[5] = T_H1 * param_.get_q(Lout + 2) / A4;
-        stockmeyer_baby_poly_output_level[6] = Lout + 2;
-        stockmeyer_baby_poly_output_scale[6] = T_G3;
-        stockmeyer_baby_poly_output_level[7] = Lout + 3;
-        stockmeyer_baby_poly_output_scale[7] = T_G3 * param_.get_q(Lout + 3) / A4;
-    } else {
-        throw invalid_argument("MatPolyBase Stockmeyer currently supports only order 15 and 31");
-    }
+        int half = span / 2;
+        int left_count = std::min(actual_count, half);
+        int right_count = actual_count - left_count;
+        assign_targets(start, half, left_count, target_level, target_scale);
+
+        if (right_count > 0) {
+            int combine_power = stockmeyer_baby_steps * half;
+            const auto& power_info = stockmeyer_powers.at(combine_power);
+            int right_level = target_level + 1;
+            double right_scale = target_scale * param_.get_q(right_level) / power_info.scale;
+            assign_targets(start + half, half, right_count, right_level, right_scale);
+        }
+    };
+
+    assign_targets(0, tree_span, stockmeyer_n_baby_polys, Lout, S);
 
     for (int j = 0; j < stockmeyer_n_baby_polys; j++) {
         int target_level = stockmeyer_baby_poly_output_level[j];
         double target_scale = stockmeyer_baby_poly_output_scale[j];
-        if (target_level < 0 || target_level + 2 > (int)level_) {
+        if (target_level < 0 || target_level > (int)level_) {
             throw invalid_argument("MatPolyBase Stockmeyer baby polynomial target level is out of range");
         }
 
@@ -376,14 +399,25 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
             coeff_scale[base] = target_scale;
         }
         if (base + 1 <= order) {
+            if (target_level + 1 > (int)level_) {
+                throw invalid_argument("MatPolyBase Stockmeyer linear coefficient target level is out of range");
+            }
             level_order[base + 1] = target_level + 1;
             coeff_scale[base + 1] = target_scale * param_.get_q(target_level + 1) / A1;
         }
         if (base + 2 <= order) {
+            if (target_level + 1 > (int)level_) {
+                throw invalid_argument("MatPolyBase Stockmeyer quadratic coefficient target level is out of range");
+            }
+            double A2 = stockmeyer_powers.at(2).scale;
             level_order[base + 2] = target_level + 1;
             coeff_scale[base + 2] = target_scale * param_.get_q(target_level + 1) / A2;
         }
         if (base + 3 <= order) {
+            if (target_level + 2 > (int)level_) {
+                throw invalid_argument("MatPolyBase Stockmeyer cubic coefficient target level is out of range");
+            }
+            double A2 = stockmeyer_powers.at(2).scale;
             level_order[base + 3] = target_level + 2;
             coeff_scale[base + 3] =
                 target_scale * param_.get_q(target_level + 1) * param_.get_q(target_level + 2) / (A2 * A1);

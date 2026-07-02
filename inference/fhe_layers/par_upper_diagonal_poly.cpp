@@ -380,9 +380,18 @@ vector<CkksCiphertext> ParUpperDiagonalPoly::run_core_stockmeyer(CkksContext& ct
     init_stockmeyer();
     vector<CkksCiphertext> result(x.size());
 
-    if (order != 15 && order != 31) {
-        throw runtime_error("ParUpperDiagonalPoly Stockmeyer currently supports only order 15 and 31");
+    if (order <= 0 || order >= 64) {
+        throw runtime_error("ParUpperDiagonalPoly Stockmeyer supports only 1 <= order < 64");
     }
+
+    struct StockmeyerNode {
+        CkksCiphertext ct;
+        int const_coeff_idx = -1;
+        int target_level = -1;
+        double target_scale = 0.0;
+        bool has_ct = false;
+        bool const_only = false;
+    };
 
     parallel_for(x.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int x_idx) {
         map<int, CkksCiphertext> x_powers;
@@ -416,11 +425,13 @@ vector<CkksCiphertext> ParUpperDiagonalPoly::run_core_stockmeyer(CkksContext& ct
             }
         };
 
-        square_power(2, 1);
-        square_power(4, 2);
-        square_power(8, 4);
-        if (order == 31) {
-            square_power(16, 8);
+        for (const auto& kv : stockmeyer_powers) {
+            int power = kv.first;
+            const auto& info = kv.second;
+            if (power <= 1) {
+                continue;
+            }
+            square_power(power, info.decomp_a);
         }
 
         auto get_coeff_mul = [&](int coeff_idx, int level) {
@@ -458,49 +469,117 @@ vector<CkksCiphertext> ParUpperDiagonalPoly::run_core_stockmeyer(CkksContext& ct
             return term;
         };
 
-        auto eval_baby = [&](int baby_idx) -> CkksCiphertext {
-            int base = baby_idx * stockmeyer_baby_steps;
-            if (base + 3 > order) {
-                throw runtime_error("ParUpperDiagonalPoly Stockmeyer: incomplete baby polynomial " +
-                                    to_string(baby_idx));
+        auto clone_node = [](const StockmeyerNode& node) -> StockmeyerNode {
+            StockmeyerNode cloned;
+            cloned.const_coeff_idx = node.const_coeff_idx;
+            cloned.target_level = node.target_level;
+            cloned.target_scale = node.target_scale;
+            cloned.has_ct = node.has_ct;
+            cloned.const_only = node.const_only;
+            if (node.has_ct) {
+                cloned.ct = node.ct.copy();
             }
-
-            int target_level = stockmeyer_baby_poly_output_level[baby_idx];
-            double target_scale = stockmeyer_baby_poly_output_scale[baby_idx];
-            double c3x_scale =
-                target_scale * ctx_copy.get_parameter().get_q(target_level + 1) / stockmeyer_powers.at(2).scale;
-
-            auto c1x = multiply_plain_term(x_powers.at(1), base + 1, target_level + 1, target_scale,
-                                           "P" + to_string(baby_idx) + "_c1x");
-            auto c2x2 = multiply_plain_term(x_powers.at(2), base + 2, target_level + 1, target_scale,
-                                            "P" + to_string(baby_idx) + "_c2x2");
-            auto acc = ctx_copy.add(c1x, c2x2);
-
-            auto c3x = multiply_plain_term(x_powers.at(1), base + 3, target_level + 2, c3x_scale,
-                                           "P" + to_string(baby_idx) + "_c3x");
-            auto x2_for_c3 =
-                drop_to_level(x_powers.at(2).copy(), target_level + 1, "P" + to_string(baby_idx) + "_x2_for_c3");
-            auto c3x3 = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(c3x, x2_for_c3)), target_scale);
-            if (c3x3.is_empty()) {
-                throw runtime_error("ParUpperDiagonalPoly Stockmeyer: empty cubic term in P" + to_string(baby_idx));
-            }
-
-            acc = ctx_copy.add(acc, c3x3);
-            acc = add_const_coeff(acc, base);
-            if (acc.is_empty()) {
-                throw runtime_error("ParUpperDiagonalPoly Stockmeyer: empty baby polynomial P" + to_string(baby_idx));
-            }
-            return acc;
+            return cloned;
         };
 
-        auto combine_with_power = [&](const CkksCiphertext& left, const CkksCiphertext& right, int power,
-                                      int target_level, double target_scale, const string& label) -> CkksCiphertext {
-            auto left_copy = drop_to_level(left.copy(), target_level, label + "_left");
-            int mult_level = target_level + 1;
-            auto right_copy = drop_to_level(right.copy(), mult_level, label + "_right");
+        auto eval_baby_node = [&](int baby_idx) -> StockmeyerNode {
+            int base = baby_idx * stockmeyer_baby_steps;
+            if (base > order) {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer: missing baby polynomial " + to_string(baby_idx));
+            }
+
+            StockmeyerNode node;
+            int target_level = stockmeyer_baby_poly_output_level[baby_idx];
+            double target_scale = stockmeyer_baby_poly_output_scale[baby_idx];
+            node.target_level = target_level;
+            node.target_scale = target_scale;
+
+            CkksCiphertext acc;
+            bool acc_initialized = false;
+            auto add_term = [&](const CkksCiphertext& term, const string& label) {
+                if (term.is_empty()) {
+                    throw runtime_error("ParUpperDiagonalPoly Stockmeyer: empty baby term in " + label);
+                }
+                if (!acc_initialized) {
+                    acc = term.copy();
+                    acc_initialized = true;
+                } else {
+                    acc = ctx_copy.add(acc, term);
+                }
+                if (acc.is_empty()) {
+                    throw runtime_error("ParUpperDiagonalPoly Stockmeyer: empty baby accumulator in " + label);
+                }
+            };
+
+            if (base + 1 <= order) {
+                auto c1x = multiply_plain_term(x_powers.at(1), base + 1, target_level + 1, target_scale,
+                                               "P" + to_string(baby_idx) + "_c1x");
+                add_term(c1x, "P" + to_string(baby_idx) + "_c1x");
+            }
+
+            if (base + 2 <= order) {
+                auto c2x2 = multiply_plain_term(x_powers.at(2), base + 2, target_level + 1, target_scale,
+                                                "P" + to_string(baby_idx) + "_c2x2");
+                add_term(c2x2, "P" + to_string(baby_idx) + "_c2x2");
+            }
+
+            if (base + 3 <= order) {
+                double c3x_scale =
+                    target_scale * ctx_copy.get_parameter().get_q(target_level + 1) / stockmeyer_powers.at(2).scale;
+                auto c3x = multiply_plain_term(x_powers.at(1), base + 3, target_level + 2, c3x_scale,
+                                               "P" + to_string(baby_idx) + "_c3x");
+                auto x2_for_c3 =
+                    drop_to_level(x_powers.at(2).copy(), target_level + 1, "P" + to_string(baby_idx) + "_x2_for_c3");
+                auto c3x3 = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(c3x, x2_for_c3)), target_scale);
+                if (c3x3.is_empty()) {
+                    throw runtime_error("ParUpperDiagonalPoly Stockmeyer: empty cubic term in P" + to_string(baby_idx));
+                }
+                add_term(c3x3, "P" + to_string(baby_idx) + "_c3x3");
+            }
+
+            if (acc_initialized) {
+                node.ct = add_const_coeff(acc, base);
+                if (node.ct.is_empty()) {
+                    throw runtime_error("ParUpperDiagonalPoly Stockmeyer: empty baby polynomial P" +
+                                        to_string(baby_idx));
+                }
+                node.has_ct = true;
+                return node;
+            }
+
+            node.const_coeff_idx = base;
+            node.const_only = true;
+            return node;
+        };
+
+        auto combine_with_power = [&](const StockmeyerNode& left, const StockmeyerNode& right, int power,
+                                      const string& label) -> StockmeyerNode {
+            if (!left.has_ct) {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer: left node is not ciphertext in " + label);
+            }
+
+            StockmeyerNode combined_node;
+            combined_node.target_level = left.target_level;
+            combined_node.target_scale = left.target_scale;
+
+            auto left_copy = drop_to_level(left.ct.copy(), left.target_level, label + "_left");
+            int mult_level = left.target_level + 1;
+            if (right.target_level != mult_level) {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer: right node target level mismatch in " + label);
+            }
             auto power_copy = drop_to_level(x_powers.at(power).copy(), mult_level, label + "_x" + to_string(power));
 
-            auto term = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(right_copy, power_copy)), target_scale);
+            CkksCiphertext term;
+            if (right.has_ct) {
+                auto right_copy = drop_to_level(right.ct.copy(), mult_level, label + "_right");
+                term = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(right_copy, power_copy)), left.target_scale);
+            } else if (right.const_only) {
+                auto coeff_pt = get_coeff_mul(right.const_coeff_idx, power_copy.get_level());
+                term = ctx_copy.rescale(ctx_copy.mult_plain_mul(power_copy, coeff_pt), left.target_scale);
+            } else {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer: empty right node in " + label);
+            }
+
             if (term.is_empty()) {
                 throw runtime_error("ParUpperDiagonalPoly Stockmeyer: empty product in " + label);
             }
@@ -509,29 +588,43 @@ vector<CkksCiphertext> ParUpperDiagonalPoly::run_core_stockmeyer(CkksContext& ct
             if (combined.is_empty()) {
                 throw runtime_error("ParUpperDiagonalPoly Stockmeyer: empty combined node " + label);
             }
-            return combined;
+            combined_node.ct = move(combined);
+            combined_node.has_ct = true;
+            return combined_node;
         };
 
-        vector<CkksCiphertext> P(stockmeyer_n_baby_polys);
+        vector<StockmeyerNode> nodes;
+        nodes.reserve(stockmeyer_n_baby_polys);
         for (int j = 0; j < stockmeyer_n_baby_polys; j++) {
-            P[j] = eval_baby(j);
+            nodes.push_back(eval_baby_node(j));
         }
 
-        int Lout = stockmeyer_output_level;
-        double S = ctx_copy.get_parameter().get_default_scale();
-        if (order == 15) {
-            auto G0 = combine_with_power(P[0], P[1], 4, Lout, S, "G0");
-            auto G1 = combine_with_power(P[2], P[3], 4, Lout + 1, stockmeyer_baby_poly_output_scale[2], "G1");
-            result[x_idx] = combine_with_power(G0, G1, 8, Lout, S, "out");
-        } else {
-            auto G0 = combine_with_power(P[0], P[1], 4, Lout, S, "G0");
-            auto G1 = combine_with_power(P[2], P[3], 4, Lout + 1, stockmeyer_baby_poly_output_scale[2], "G1");
-            auto G2 = combine_with_power(P[4], P[5], 4, Lout + 1, stockmeyer_baby_poly_output_scale[4], "G2");
-            auto G3 = combine_with_power(P[6], P[7], 4, Lout + 2, stockmeyer_baby_poly_output_scale[6], "G3");
-            auto H0 = combine_with_power(G0, G1, 8, Lout, S, "H0");
-            auto H1 = combine_with_power(G2, G3, 8, Lout + 1, stockmeyer_baby_poly_output_scale[4], "H1");
-            result[x_idx] = combine_with_power(H0, H1, 16, Lout, S, "out");
+        int combine_power = stockmeyer_baby_steps;
+        int combine_round = 0;
+        while (nodes.size() > 1) {
+            vector<StockmeyerNode> next_nodes;
+            next_nodes.reserve((nodes.size() + 1) / 2);
+
+            for (size_t i = 0; i < nodes.size(); i += 2) {
+                if (i + 1 >= nodes.size()) {
+                    next_nodes.push_back(clone_node(nodes[i]));
+                    continue;
+                }
+
+                next_nodes.push_back(
+                    combine_with_power(nodes[i], nodes[i + 1], combine_power,
+                                       "combine_" + to_string(combine_round) + "_" + to_string(i / 2)));
+            }
+
+            nodes = move(next_nodes);
+            combine_power *= 2;
+            combine_round++;
         }
+
+        if (nodes.empty() || !nodes[0].has_ct) {
+            throw runtime_error("ParUpperDiagonalPoly Stockmeyer: result is not a ciphertext");
+        }
+        result[x_idx] = nodes[0].ct.copy();
 
         if (result[x_idx].is_empty()) {
             throw runtime_error("ParUpperDiagonalPoly Stockmeyer: result[" + to_string(x_idx) + "] is empty");
