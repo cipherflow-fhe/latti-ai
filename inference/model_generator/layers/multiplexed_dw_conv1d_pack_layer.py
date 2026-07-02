@@ -22,7 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
-from inference.model_generator.layers.fhe_op_utils import naf_weight
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts, naf_weight
 
 
 op_class = 'MultiplexedDWConv1DPackedLayer'
@@ -293,6 +293,20 @@ class MultiplexedDWConv1DPackedLayer:
         else:
             block_select_pt = []
         return weight_pt, bias_pt, block_select_pt
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        """Return generated plaintext counts and estimated bytes for this layer."""
+        import math as _math
+
+        n_packed_ct = _math.ceil(self.n_channel / self.n_channel_per_ct)
+        needs_rearrange = self.skip > 1 or self.stride > 1
+        n_select = min(self.n_channel_per_ct, self.n_channel) if needs_rearrange else 0
+        counts = {
+            'weight': n_packed_ct * self.kernel_shape,
+            'bias': n_packed_ct,
+            'mask': n_select,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, block_select_pt=None) -> list[CkksCiphertextNode]:
         # 1. Kernel direction rotation

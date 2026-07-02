@@ -21,7 +21,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
-from inference.model_generator.layers.fhe_op_utils import naf_weight
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts, naf_weight
 
 
 op_class = 'Conv2DPackedLayer'
@@ -163,6 +163,15 @@ class Conv2DPackedLayer:
         ]
         bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_packed_out_channel)]
         return weight_pt, bias_pt
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        """Return generated plaintext counts and estimated bytes for this layer."""
+        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
+        counts = {
+            'weight': self.n_packed_out_channel * self.n_packed_in_channel * self.pack * kernel_size,
+            'bias': self.n_packed_out_channel,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call(), grouped by level.

@@ -22,6 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts
 
 op_class = 'ParBlockColMajorPolyActRNPoly'
 gamma_op_class = 'ParBlockColMajorPolyActRNGamma'
@@ -111,6 +112,10 @@ class ParBlockColMajorPolyActRNGamma:
                 gamma_mb.append(gamma_bi)
             gamma_pt.append(gamma_mb)
         return self.call(input_cts, gamma_pt)
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': self.total_cts, 'bias': 0, 'mask': 0}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
 
 class ParBlockColMajorPolyActRNPoly:
@@ -358,6 +363,14 @@ class ParBlockColMajorPolyActRNPoly:
         return self.call(
             input_cts, c2_pt, c1_pt, c0_add_pt, c4_pt if self.degree == 4 else None, c3_pt if self.degree == 4 else None
         )
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {
+            'weight': self.degree * self.total_cts,
+            'bias': self.total_cts,
+            'mask': 0,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def get_fhe_op_count(self, level: int) -> dict:
         ops = defaultdict(

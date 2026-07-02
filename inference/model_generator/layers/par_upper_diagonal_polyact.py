@@ -22,6 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts
 
 
 gamma_op_class = 'ParUpperDiagonalPolyActRNGamma'
@@ -93,6 +94,10 @@ class ParUpperDiagonalPolyActRNGamma(_ParUpperDiagonalPolyBase):
                 )
                 gamma_pt[idx] = node
         return self.call(input_cts, gamma_pt)
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': self.total_cts, 'bias': 0, 'mask': 0}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def get_fhe_op_count(self, level: int) -> dict:
         ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
@@ -176,6 +181,14 @@ class ParUpperDiagonalPolyActRNPoly(_ParUpperDiagonalPolyBase):
             c3_pt = None
             c4_pt = None
         return self.call(input_cts, c0_add_pt, c1_pt, c2_pt, c3_pt, c4_pt)
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {
+            'weight': self.degree * self.total_cts,
+            'bias': self.total_cts,
+            'mask': 0,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def get_fhe_op_count(self, level: int) -> dict:
         ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})

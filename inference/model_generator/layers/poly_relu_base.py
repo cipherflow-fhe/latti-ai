@@ -22,6 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts
 
 
 class PolyReluBase:
@@ -321,3 +322,25 @@ class PolyReluBase:
             [CkksPlaintextRingtNode(f'poly_reluw_{layer_id}_{i}_{j}') for j in range(n_pack_in_channel)]
             for i in range(self.order + 1)
         ]
+
+    def get_memory_bsgs(self, n_ct: int, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        """Return plaintext memory for BSGS polyrelu weights.
+
+        Eager BSGS preparation stores weight_pt[coeff_idx][ct_idx] with
+        coeff_idx in [0, order] and ct_idx in input ciphertexts.
+        """
+        counts = {
+            'weight': (self.order + 1) * int(n_ct),
+            'bias': 0,
+            'mask': 0,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
+
+    def get_memory_horner(self, n_ct: int, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        """Return plaintext memory for Horner polyrelu weights."""
+        counts = {
+            'weight': (self.order + 1) * int(n_ct),
+            'bias': 0,
+            'mask': 0,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)

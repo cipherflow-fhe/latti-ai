@@ -22,6 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts
 
 
 op_class = 'ParLowerDiagPCMM'
@@ -204,6 +205,15 @@ class ParLowerDiagPCMM:
                     bias_pt.append(node)
 
         return self.call(input_cts, pt_A, mask_wrap_pt, bias_pt)
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        bias_count = self.n_out_mbs * self.m_c if self.has_bias else 0
+        counts = {
+            'weight': self.K * self.H * self.m_c * self.m,
+            'bias': bias_count,
+            'mask': self.H - 1,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def get_fhe_op_count(self, level: int) -> dict:
         """Count FHE primitive operations grouped by level.

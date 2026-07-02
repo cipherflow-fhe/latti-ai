@@ -22,7 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
-from inference.model_generator.layers.fhe_op_utils import naf_weight
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts, naf_weight
 
 
 op_class = 'MultiplexedConv2DPackedLayer'
@@ -375,6 +375,26 @@ class MultiplexedConv2DPackedLayer:
             n_mask = min(self.n_block_per_ct, self.n_out_channel)
             mask_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_mask)]
         return weight_pt, bias_pt, mask_pt
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        """Return generated plaintext counts and estimated bytes for this layer."""
+        import math as _math
+
+        n_pack_in_channel = _math.ceil(self.n_in_channel / self.n_channel_per_ct)
+        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
+        size_0 = _math.ceil(self.n_out_channel / self.n_block_per_ct)
+        size_1 = n_pack_in_channel * self.n_block_per_ct
+        n_bias = _math.ceil(self.n_out_channel / (self.stride[0] * self.stride[1] * self.n_channel_per_ct))
+        if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
+            n_mask = 0
+        else:
+            n_mask = min(self.n_block_per_ct, self.n_out_channel)
+        counts = {
+            'weight': size_0 * size_1 * kernel_size,
+            'bias': n_bias,
+            'mask': n_mask,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mast_pt) -> list[CkksCiphertextNode]:
         # 1. block direction rotation

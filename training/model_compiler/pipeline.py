@@ -17,6 +17,8 @@
 
 from pathlib import Path
 import copy
+import json
+import math
 import time
 
 import networkx as nx
@@ -584,6 +586,208 @@ def dump_graph(
         json.dump(ckks_param, f, indent=4)
 
 
+def _format_bytes(n_bytes: int) -> str:
+    units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+    value = float(n_bytes)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            return f'{value:.2f} {unit}' if unit != 'B' else f'{int(value)} {unit}'
+        value /= 1024
+    return f'{n_bytes} B'
+
+
+def calculate_pt_memory(graph: LayerAbstractGraph) -> dict[str, int]:
+    param_dict = generate_param_dict_for_graph()
+    feature_mat_memory_layers = {
+        'add_pt',
+        'pcm_add_pt',
+        'pdm_add_pt',
+        'pcmgamma',
+        'pdmgamma',
+        'pcmpoly',
+        'pdmpoly',
+        'pcmstats',
+        'pdmstats',
+        'pcmcenter',
+        'pdmcenter',
+        'pcminit',
+        'pdminit',
+        'pcmgs',
+        'pdmgs',
+        'pcmaffine',
+        'pdmaffine',
+        'parcpmm',
+        'pdmpcmm',
+        'partranspose',
+        'pdmtranspose',
+        'parccmm',
+        'pdmccmm',
+    }
+    total = {'weight': 0, 'bias': 0, 'mask': 0, 'total': 0, 'bytes': 0}
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode):
+            continue
+        if (
+            node.layer_type not in {'conv1d', 'conv2d', 'polyact', 'poly_relu2d'}
+            and node.layer_type not in feature_mat_memory_layers
+            and 'fc' not in node.layer_type
+        ):
+            continue
+        memory = FheScoreParam(
+            graph.dag,
+            node,
+            param_dict,
+            graph.dag.nodes[list(graph.dag.predecessors(node))[0]]['level'],
+            use_gpu=getattr(config, 'use_gpu', True),
+        ).get_memory()
+        for key in total:
+            total[key] += memory.get(key, 0)
+    return total
+
+
+def _ciphertext_bytes(poly_modulus_degree: int, level: int) -> int:
+    return poly_modulus_degree * (level + 1) * 2 * 8
+
+
+def _next_pow2(value: int) -> int:
+    if value <= 1:
+        return 1
+    return 1 << (value - 1).bit_length()
+
+
+def _get_par_group_count(block_size: int, n_heads: int, n_slot: int) -> int:
+    n_heads_padded = _next_pow2(n_heads)
+    block_slot_size = block_size * block_size
+    if block_size <= 0 or n_slot < block_slot_size:
+        raise ValueError(f'Invalid feature_mat packing: n_slot={n_slot}, block_size={block_size}')
+    if n_slot >= n_heads_padded * block_slot_size:
+        return 1
+    heads_per_ct = n_slot // block_slot_size
+    if heads_per_ct == 1:
+        n_heads_padded = n_heads
+    return n_heads_padded // heads_per_ct
+
+
+def _get_par_diagonal_ct_count(feature: FeatureNode, poly_modulus_degree: int) -> int:
+    if feature.head_shape is None or len(feature.head_shape) < 2:
+        raise ValueError(f'Missing head_shape for par_diagonal_pack feature_mat: {feature.node_id}')
+
+    shape_rows, shape_cols = [int(x) for x in feature.shape]
+    head_rows, head_cols = [int(x) for x in feature.head_shape]
+    n_heads = max(1, int(config.n_heads))
+    is_transposed = getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack'
+
+    n_prepad = head_cols if is_transposed else head_rows
+    m_prepad = head_rows if is_transposed else head_cols
+    if n_heads == 0 or n_prepad == 0 or m_prepad == 0:
+        raise ValueError(f'Invalid par_diagonal_pack feature_mat shape: {feature.node_id}')
+
+    h = _next_pow2(n_heads)
+    n = _next_pow2(n_prepad)
+    m = _next_pow2(m_prepad)
+    segment_len = h * n
+    n_slot = poly_modulus_degree // 2
+    if segment_len == 0 or n_slot % segment_len != 0:
+        raise ValueError(
+            f'Invalid par_diagonal_pack segment for {feature.node_id}: '
+            f'n_slot={n_slot}, segment_len={segment_len}, shape={feature.shape}, head_shape={feature.head_shape}'
+        )
+    c = n_slot // segment_len
+    if c == 0 or m % c != 0:
+        raise ValueError(f'Invalid par_diagonal_pack ciphertext layout for {feature.node_id}: m={m}, c={c}')
+
+    packed_extent = n_heads * m_prepad
+    packed_total = shape_rows if is_transposed else shape_cols
+    return math.ceil(packed_total / packed_extent) * (m // c)
+
+
+def _get_feature_ct_count(feature: FeatureNode, attrs: dict, poly_modulus_degree: int) -> int:
+    if getattr(feature, 'data_type', '') == 'feature_mat':
+        if getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack':
+            return _get_par_diagonal_ct_count(feature, poly_modulus_degree)
+        if feature.head_shape is None or len(feature.head_shape) < 2:
+            raise ValueError(f'Missing head_shape for feature_mat: {feature.node_id}')
+        block_size = int(config.matmul_block_size)
+        n_heads = max(1, int(config.n_heads))
+        n_slot = poly_modulus_degree // 2
+        group_count = _get_par_group_count(block_size, n_heads, n_slot)
+        return (
+            math.ceil(feature.head_shape[0] / block_size)
+            * math.ceil(feature.head_shape[1] / block_size)
+            * group_count
+        )
+
+    pack_num = attrs['pack_num']
+    n_ciphertexts = math.ceil(feature.channel / pack_num)
+    if feature.dim == 2:
+        shape = [int(x) for x in feature.shape]
+        block_shape = [int(x) for x in config.block_shape]
+        if shape[0] > block_shape[0] or shape[1] > block_shape[1]:
+            n_ciphertexts *= (shape[0] // block_shape[0]) * (shape[1] // block_shape[1])
+    return n_ciphertexts
+
+
+def calculate_ct_memory(graph: LayerAbstractGraph) -> dict:
+    param_dict = generate_param_dict_for_graph()
+    total = {'ciphertexts': 0, 'bytes': 0, 'layers': []}
+
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode):
+            continue
+
+        layer_total = {'ciphertexts': 0, 'bytes': 0}
+        outputs = []
+        for feature in graph.dag.successors(node):
+            if not isinstance(feature, FeatureNode):
+                continue
+            attrs = graph.dag.nodes[feature]
+            param = param_dict[feature.ckks_parameter_id]
+            level = int(attrs['level'])
+            ct_count = _get_feature_ct_count(feature, attrs, param.poly_modulus_degree)
+            ct_bytes = _ciphertext_bytes(param.poly_modulus_degree, level)
+            output_bytes = ct_count * ct_bytes
+            layer_total['ciphertexts'] += ct_count
+            layer_total['bytes'] += output_bytes
+            outputs.append(
+                {
+                    'feature_id': feature.node_id,
+                    'dim': feature.dim,
+                    'data_type': getattr(feature, 'data_type', ''),
+                    'shape': [int(x) for x in feature.shape],
+                    'head_shape': [int(x) for x in feature.head_shape] if feature.head_shape is not None else None,
+                    'channel': int(feature.channel),
+                    'pack_num': int(attrs['pack_num']) if 'pack_num' in attrs else None,
+                    'level': level,
+                    'poly_modulus_degree': int(param.poly_modulus_degree),
+                    'ciphertexts': ct_count,
+                    'bytes_per_ciphertext': ct_bytes,
+                    'bytes': output_bytes,
+                }
+            )
+
+        if not outputs:
+            continue
+        total['ciphertexts'] += layer_total['ciphertexts']
+        total['bytes'] += layer_total['bytes']
+        total['layers'].append(
+            {
+                'layer_id': node.layer_id,
+                'layer_type': node.layer_type,
+                'ciphertexts': layer_total['ciphertexts'],
+                'bytes': layer_total['bytes'],
+                'outputs': outputs,
+            }
+        )
+
+    return total
+
+
+def write_ct_memory(output_dir: Path, ct_memory: dict):
+    server_dir = output_dir / 'task' / 'server'
+    with open(server_dir / 'ct_memory.json', 'w') as f:
+        json.dump(ct_memory, f, indent=4)
+
+
 import os
 
 
@@ -667,7 +871,20 @@ def run_pipeline(
         if not succeeded:
             raise ValueError('Compilation failed.')
     dump_graph(graph, output_dir, score, use_btp=use_btp)
+    pt_memory = calculate_pt_memory(graph)
+    print(
+        f'PT memory: {_format_bytes(pt_memory["bytes"])} '
+        f'({pt_memory["bytes"]} bytes, plaintexts={pt_memory["total"]}, '
+        f'weight={pt_memory["weight"]}, bias={pt_memory["bias"]}, mask={pt_memory["mask"]})'
+    )
 
+    ct_memory = calculate_ct_memory(graph)
+    write_ct_memory(output_dir, ct_memory)
+    print(
+        f'Output CT memory: {_format_bytes(ct_memory["bytes"])} '
+        f'({ct_memory["bytes"]} bytes, ciphertexts={ct_memory["ciphertexts"]}, '
+        f'detail={output_dir / "task" / "server" / "ct_memory.json"})'
+    )
     compile_elapsed_time = time.perf_counter() - compile_start_time
     print(f'Total compilation time: {compile_elapsed_time:.3f}s')
 

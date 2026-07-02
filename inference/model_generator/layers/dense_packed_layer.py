@@ -23,7 +23,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
-from inference.model_generator.layers.fhe_op_utils import naf_weight
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts, naf_weight
 
 
 op_class = 'DensePackedLayer'
@@ -193,6 +193,50 @@ class DensePackedLayer:
         ops[lv]['add'] += n_packed_out  # bias
 
         return dict(ops)
+
+    def get_memory_skip_0d(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        """Return plaintext counts and estimated bytes for call_skip_0d()."""
+        counts = {
+            'weight': self.n_packed_out_feature * self.n_packed_in_feature * self.pack,
+            'bias': self.n_packed_out_feature,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
+
+    def get_memory_multiplexed(self, n: int, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        """Return plaintext counts and estimated bytes for call_multiplexed()."""
+        input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
+        N_half = int(n / 2)
+        n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
+        valid_skip_0 = self.skip[0] // self.invalid_fill[0]
+        valid_skip_1 = self.skip[1] // self.invalid_fill[1]
+        n_channel_per_block = valid_skip_0 * valid_skip_1
+        n_channel = self.n_in_channel // (self.input_shape[0] * self.input_shape[1])
+        n_block_input = int(np.ceil(n_channel / (n_channel_per_block * n_num_pre_ct))) * n_num_pre_ct
+        n_packed_out = int(np.ceil(self.n_out_channel / n_num_pre_ct))
+        counts = {
+            'weight': n_packed_out * n_block_input,
+            'bias': n_packed_out,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
+
+    def get_memory_1d_multiplexed(self, n: int, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        """Return plaintext counts and estimated bytes for call_1d_multiplexed()."""
+        N_half = n // 2
+        shape = int(self.input_shape[0])
+        skip_val = int(self.skip[0])
+        invalid_fill_val = int(self.invalid_fill[0])
+        block_size = shape * skip_val
+        n_block_per_ct = N_half // block_size
+        valid_sub = skip_val // invalid_fill_val
+        n_valid_per_ct = n_block_per_ct * valid_sub
+        n_actual_channels = self.n_in_channel // shape
+        n_block_input = int(np.ceil(n_actual_channels / n_valid_per_ct)) * n_block_per_ct
+        n_packed_out = int(np.ceil(self.n_out_channel / n_block_per_ct))
+        counts = {
+            'weight': n_packed_out * n_block_input,
+            'bias': n_packed_out,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     @staticmethod
     def populate_rotations_1_side(x: CkksCiphertextNode, n_rotation: int, unit: int) -> list[DataNode]:

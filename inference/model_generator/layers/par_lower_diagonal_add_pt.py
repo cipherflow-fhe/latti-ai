@@ -22,6 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts
 
 
 op_class = 'ParLowerDiagonalAddPt'
@@ -83,6 +84,10 @@ class ParLowerDiagonalAddPt:
                 )
                 pt_nodes.append(node)
         return self.call(A_cts, pt_nodes)
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': 0, 'bias': self.total_cts, 'mask': 0}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def get_fhe_op_count(self, level: int | None = None) -> dict:
         """Count the plaintext additions performed by ``call``."""

@@ -22,6 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts
 
 
 def _next_pow2(n: int) -> int:
@@ -173,6 +174,10 @@ class ParBlockColMajorLNStats(_ParBlockColMajorLNBase):
         eps_add_pt = self._make_pt(data_source, self.op_class, 3)
         return self.call(input_cts, h0_mask_pt, inv_n_pt, iv_pt, eps_add_pt)
 
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': 2, 'bias': 1, 'mask': 1}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
+
     def get_fhe_op_count(self, level: int) -> dict:
         ops = _new_ops()
         n = self.total_cts
@@ -234,6 +239,10 @@ class ParBlockColMajorLNXCentered(_ParBlockColMajorLNBase):
         inv_n_pt = self._make_pt(data_source, self.op_class, 1)
         return self.call(input_cts, h0_mask_pt, inv_n_pt)
 
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': 1, 'bias': 0, 'mask': 1}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
+
     def get_fhe_op_count(self, level: int) -> dict:
         ops = _new_ops()
         n = self.total_cts
@@ -292,6 +301,10 @@ class ParBlockColMajorLNMinimaxInit:
         c2_norm_pt = self._make_pt(data_source, 2)
         return self.call(a_cts, c0_add_pt, c1_pt, c2_norm_pt)
 
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': 2, 'bias': 1, 'mask': 0}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
+
     def get_fhe_op_count(self, n_ct: int, level: int) -> dict:
         ops = _new_ops()
 
@@ -347,6 +360,10 @@ class ParBlockColMajorLNGoldschmidt:
         three_pt = self._make_pt(data_source, 0)
         half_norm_pt = self._make_pt(data_source, 1)
         return self.call(y_cts, a_cts, three_pt, half_norm_pt)
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': 2, 'bias': 0, 'mask': 0}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def get_fhe_op_count(self, n_ct: int, level: int, a_level: int | None = None) -> dict:
         ops = _new_ops()
@@ -414,6 +431,10 @@ class ParBlockColMajorLNAffine(_ParBlockColMajorLNBase):
             beta_add_pt.append(beta_bi)
 
         return self.call(x_centered, y_cts, gamma_pt, beta_add_pt)
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': self.total_cts, 'bias': self.total_cts, 'mask': 0}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def get_fhe_op_count(self, level: int, x_centered_level: int | None = None) -> dict:
         ops = _new_ops()

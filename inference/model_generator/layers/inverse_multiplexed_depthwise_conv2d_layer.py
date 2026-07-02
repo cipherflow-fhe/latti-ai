@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
-from inference.model_generator.layers.fhe_op_utils import naf_weight
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts, naf_weight
 
 
 op_class = 'InverseMultiplexedConv2DLayerDepthwise'
@@ -295,6 +295,16 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_out_channel)]
         repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}') if self.need_repack else None
         return weight_pt, bias_pt, repack_mask_pt
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        """Return generated plaintext counts and estimated bytes for this layer."""
+        inner = self.kernel_shape[0] * self.kernel_shape[1] * self.output_step[0] * self.output_step[1]
+        counts = {
+            'weight': self.n_out_channel * inner,
+            'bias': self.n_out_channel,
+            'mask': 1 if self.need_repack else 0,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def get_fhe_op_count(self, level: int, N: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call(), grouped by level.

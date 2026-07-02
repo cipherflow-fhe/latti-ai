@@ -21,7 +21,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
-from inference.model_generator.layers.fhe_op_utils import naf_weight
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts, naf_weight
 
 
 op_class = 'Conv1DPackedLayer'
@@ -210,6 +210,15 @@ class Conv1DPackedLayer:
         ]
         bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_packed_out_channel)]
         return weight_pt, bias_pt
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        """Return generated plaintext counts and estimated bytes for this layer."""
+        rot_num = min(self.n_in_channel, self.pack)
+        counts = {
+            'weight': self.n_packed_out_channel * self.n_packed_in_channel * rot_num * self.kernel_shape,
+            'bias': self.n_packed_out_channel,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt) -> list[CkksCiphertextNode]:
         rot_num = min(self.n_in_channel, self.pack)

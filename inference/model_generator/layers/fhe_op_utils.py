@@ -28,3 +28,13 @@ def naf_weight(n: int) -> int:
     x3 = n + xh
     c = xh ^ x3
     return bin(x3 & c).count('1') + bin(xh & c).count('1')
+
+
+def memory_from_pt_counts(counts: dict[str, int], bytes_per_plaintext: int = 0) -> dict[str, int]:
+    """Build a plaintext-memory summary from plaintext-node counts."""
+    result = dict(counts)
+    total = sum(counts.values())
+    result['total'] = total
+    result['bytes_per_plaintext'] = bytes_per_plaintext
+    result['bytes'] = total * bytes_per_plaintext
+    return result

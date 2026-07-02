@@ -22,7 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
-from inference.model_generator.layers.fhe_op_utils import naf_weight
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts, naf_weight
 
 
 op_class = 'ParBlockColMajorCPMM'
@@ -353,6 +353,15 @@ class ParBlockColMajorCPMM:
                         bias_pt.append(bp_node)
 
         return self.call(A_cts, diag_pt, mask_h0_pt, bias_pt)
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        bias_count = self.n_out_mbs * self.num_block_rows_A * self.G if self.has_bias else 0
+        counts = {
+            'weight': self.K * self.G * self.n_heads * self.d,
+            'bias': bias_count,
+            'mask': 1,
+        }
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     # ------------------------------------------------------------------ #
     #  FHE operation count                                                #

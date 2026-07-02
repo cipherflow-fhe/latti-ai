@@ -52,6 +52,7 @@ from inference.model_generator.layers.poly_relu0d import PolyRelu0D
 from inference.model_generator.layers.poly_relu1d import PolyRelu1D
 from inference.model_generator.layers.poly_relu2d import PolyRelu2D
 from inference.model_generator.layers.par_block_col_major_ccmm import ParBlockColMajorCCMM
+from inference.model_generator.layers.par_block_col_major_add_pt import ParBlockColMajorAddPt
 from inference.model_generator.layers.par_block_col_major_cpmm import ParBlockColMajorCPMM
 from inference.model_generator.layers.par_block_col_major_transpose import ParBlockColMajorTranspose
 from inference.model_generator.layers.par_block_col_major_polyactrn import (
@@ -922,6 +923,7 @@ class FheScoreParam:
         self.compute_node = compute_node
         self.input_mult_level = dag.nodes[preds[0]]['level']
         self.output_mult_level = dag.nodes[succs[0]]['level']
+        self.input_param = param[preds[0].ckks_parameter_id]
         self.input_degree = param[preds[0].ckks_parameter_id].poly_modulus_degree
         self.output_degree = param[succs[0].ckks_parameter_id].poly_modulus_degree
         if 'conv' in compute_node.layer_type:
@@ -974,6 +976,36 @@ class FheScoreParam:
         self.rotate_score = self._rotate_table[self.input_degree][level]
         self.add_score = self._add_table[self.input_degree][level]
 
+    def _get_plaintext_bytes(self, level: int) -> int:
+        """Estimate one runtime CkksPlaintextRingt.
+
+        Lattigo stores ring plaintext coefficients as uint64 limbs in ring.Poly,
+        so a level-0 PlaintextRingT is at least poly_modulus_degree * 8 bytes
+        rather than a bit-packed modulus-size buffer.
+        """
+        if level < 0:
+            return 0
+        return self.input_degree * 8
+
+    def get_memory(self) -> dict[str, int]:
+        """Return generated plaintext memory for supported generated layers."""
+        preds: list[FeatureNode] = list(self.dag.predecessors(self.compute_node))
+        n = self.input_degree
+        layer_type = self.compute_node.layer_type
+        style = config.style
+
+        memory = self._build_layer_and_get_op_count(preds, n, layer_type, style, get_memory=True)
+        if memory is None:
+            return {
+                'weight': 0,
+                'bias': 0,
+                'mask': 0,
+                'total': 0,
+                'bytes_per_plaintext': self._get_plaintext_bytes(self.input_mult_level),
+                'bytes': 0,
+            }
+        return memory
+
     def get_score(self) -> float:
         """Compute layer latency score by instantiating the exact inference layer class,
         calling get_fhe_op_count() to get primitive op counts, then multiplying by per-op
@@ -1016,8 +1048,9 @@ class FheScoreParam:
             )
         return score * self.acc_rate
 
-    def _build_layer_and_get_op_count(self, preds, n, layer_type, style):
-        """Instantiate the matching inference layer and return its get_fhe_op_count() dict.
+    def _build_layer_and_get_op_count(self, preds, n, layer_type, style, get_memory=False):
+        """Instantiate the matching inference layer and return op counts or plaintext memory.
+
         Returns None if the layer type is not handled here.
         """
         node = self.compute_node
@@ -1026,6 +1059,8 @@ class FheScoreParam:
         pack = self.pack
         n_packed_in = self.n_packed_in  # ceil(n_in / pack)
         n_packed_out = self.n_packed_out  # ceil(n_out / pack_out)
+        # pt_ringt memory level = 0
+        bytes_per_plaintext = self._get_plaintext_bytes(0) if get_memory else 0
 
         # ── conv2d ──────────────────────────────────────────────────────────
         if layer_type == 'conv2d' and node.dim == 2:
@@ -1063,6 +1098,8 @@ class FheScoreParam:
                         stride,
                         block_shape,
                     )
+                if get_memory:
+                    return layer.get_memory(bytes_per_plaintext)
                 return layer.get_fhe_op_count(self.input_mult_level, n)
 
             if style == 'ordinary':
@@ -1090,6 +1127,8 @@ class FheScoreParam:
                         n_packed_in,
                         n_packed_out,
                     )
+                if get_memory:
+                    return layer.get_memory(bytes_per_plaintext)
                 return layer.get_fhe_op_count(self.input_mult_level)
 
             # style == 'multiplexed'
@@ -1118,6 +1157,8 @@ class FheScoreParam:
                     n_packed_in,
                     n_packed_out,
                 )
+            if get_memory:
+                return layer.get_memory(bytes_per_plaintext)
             return layer.get_fhe_op_count(self.input_mult_level)
 
         # ── conv1d ──────────────────────────────────────────────────────────
@@ -1156,6 +1197,8 @@ class FheScoreParam:
                         n_packed_in_ch,
                         n_packed_out_ch,
                     )
+                if get_memory:
+                    return layer.get_memory(bytes_per_plaintext)
                 return layer.get_fhe_op_count(self.input_mult_level)
 
             # style == 'ordinary'
@@ -1173,6 +1216,8 @@ class FheScoreParam:
                 n_pack_in,
                 n_packed_out_ch,
             )
+            if get_memory:
+                return layer.get_memory(bytes_per_plaintext)
             return layer.get_fhe_op_count(self.input_mult_level)
 
         # ── fc0 (dense) ──────────────────────────────────────────────────────
@@ -1202,6 +1247,8 @@ class FheScoreParam:
                         n_packed_in_feat,
                         n_packed_out_feat,
                     )
+                    if get_memory:
+                        return layer.get_memory_skip_0d(bytes_per_plaintext)
                     return layer.get_fhe_op_count_skip_0d(n_packed_in_feat, skip_0d, self.input_mult_level)
 
                 elif len(special_shape) == 1:
@@ -1226,6 +1273,8 @@ class FheScoreParam:
                         invalid_fill=[invalid_fill_1d, 1],
                     )
                     n_input_ct = math.ceil(n_in / n_channel_per_ct_1d)
+                    if get_memory:
+                        return layer.get_memory_1d_multiplexed(n, bytes_per_plaintext)
                     return layer.get_fhe_op_count_1d_multiplexed(n_input_ct, n, self.input_mult_level)
 
                 else:
@@ -1246,11 +1295,231 @@ class FheScoreParam:
                         invalid_fill=invalid_fill,
                     )
                     n_input_ct = math.ceil(n_in / pack)
+                    if get_memory:
+                        return layer.get_memory_multiplexed(n, bytes_per_plaintext)
                     return layer.get_fhe_op_count_multiplexed(n_input_ct, n, self.input_mult_level)
             return None
 
+        if get_memory and layer_type in ('polyact', 'poly_relu2d'):
+            pred = preds[0]
+            order = getattr(node, 'order', 0)
+            if pred.dim == 0:
+                skip_0d = pred.sp_info['skip'][0] if isinstance(pred.sp_info.get('skip'), list) else 1
+                n_channel_per_ct_0d = int(n // 2 // skip_0d)
+                layer = PolyRelu0D(order, skip_0d, n_channel_per_ct_0d)
+                return layer.get_memory_bsgs(n_packed_in, bytes_per_plaintext)
+            if pred.dim == 1:
+                shape_1d = pred.shape[0]
+                skip_1d = pred.sp_info['skip'][0] if isinstance(pred.sp_info.get('skip'), list) else 1
+                if style == 'multiplexed':
+                    n_channel_per_ct_1d = int(n // 2 // shape_1d)
+                else:
+                    n_channel_per_ct_1d = int(n // 2 // shape_1d // skip_1d)
+                layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
+                return layer.get_memory_bsgs(n_packed_in, bytes_per_plaintext)
+            input_shape = self.input_shape
+            skip = self.input_skip
+            layer = PolyRelu2D(input_shape, order, skip, pack)
+            return layer.get_memory_bsgs(n_packed_in, bytes_per_plaintext)
+
+        if get_memory:
+            n_slot = n // 2
+            try:
+                if layer_type in ('add_pt', 'pcm_add_pt') and getattr(preds[0], 'data_type', '') == 'feature_mat':
+                    layer = ParBlockColMajorAddPt(
+                        shape=tuple(preds[0].shape),
+                        block_size=config.matmul_block_size,
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pdm_add_pt':
+                    layer = ParLowerDiagonalAddPt(
+                        shape=tuple(preds[0].shape),
+                        head_shape=tuple(preds[0].head_shape),
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pcmgamma':
+                    layer = ParBlockColMajorPolyActRNGamma(
+                        shape=tuple(preds[0].shape),
+                        block_size=config.matmul_block_size,
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                        K=getattr(node, 'K', 1),
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pdmgamma':
+                    layer = ParUpperDiagonalPolyActRNGamma(
+                        shape=tuple(preds[0].shape),
+                        head_shape=tuple(preds[0].head_shape),
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pcmpoly':
+                    layer = ParBlockColMajorPolyActRNPoly(
+                        shape=tuple(preds[0].shape),
+                        block_size=config.matmul_block_size,
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                        degree=getattr(node, 'order', 4),
+                        K=getattr(node, 'K', 1),
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pdmpoly':
+                    layer = ParUpperDiagonalPolyActRNPoly(
+                        shape=tuple(preds[0].shape),
+                        head_shape=tuple(preds[0].head_shape),
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                        degree=getattr(node, 'order', 4),
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pcmstats':
+                    layer = ParBlockColMajorLNStats(
+                        shape=tuple(preds[0].shape),
+                        block_size=config.matmul_block_size,
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pdmstats':
+                    layer = ParUpperDiagonalLNStats(
+                        shape=tuple(preds[0].shape),
+                        head_shape=tuple(preds[0].head_shape),
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pcmcenter':
+                    layer = ParBlockColMajorLNXCentered(
+                        shape=tuple(preds[0].shape),
+                        block_size=config.matmul_block_size,
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pdmcenter':
+                    layer = ParUpperDiagonalLNXCentered(
+                        shape=tuple(preds[0].shape),
+                        head_shape=tuple(preds[0].head_shape),
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pcminit':
+                    layer = ParBlockColMajorLNMinimaxInit(block_size=config.matmul_block_size, n_slot=n_slot)
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pdminit':
+                    layer = ParUpperDiagonalLNMinimaxInit(
+                        shape=tuple(preds[0].shape),
+                        head_shape=tuple(preds[0].head_shape),
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pcmgs':
+                    layer = ParBlockColMajorLNGoldschmidt(block_size=config.matmul_block_size, n_slot=n_slot)
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pdmgs':
+                    layer = ParUpperDiagonalLNGoldschmidt(
+                        shape=tuple(preds[0].shape),
+                        head_shape=tuple(preds[0].head_shape),
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pcmaffine':
+                    layer = ParBlockColMajorLNAffine(
+                        shape=tuple(preds[0].shape),
+                        block_size=config.matmul_block_size,
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pdmaffine':
+                    ordered_preds = sorted(
+                        preds,
+                        key=lambda p: self.dag.edges[p, node].get('input_index')
+                        if self.dag.edges[p, node].get('input_index') is not None
+                        else 0,
+                    )
+                    layer = ParUpperDiagonalLNAffine(
+                        shape=tuple(ordered_preds[0].shape),
+                        head_shape=tuple(ordered_preds[0].head_shape),
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'parcpmm':
+                    m = preds[0].shape[0]
+                    n_total = preds[0].shape[1]
+                    n_per_head = n_total // config.n_heads
+                    layer = ParBlockColMajorCPMM(
+                        shape_A=(m, n_per_head),
+                        W_shape=(n_total, self.output_shape[1]),
+                        block_size=config.matmul_block_size,
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                        has_bias=bool(getattr(node, 'bias_path', '')),
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pdmpcmm':
+                    layer = ParLowerDiagPCMM(
+                        shape_X_T=tuple(preds[0].shape),
+                        W_T_shape=tuple(getattr(node, 'weight_shape', [])),
+                        n_heads=config.n_heads,
+                        head_dim=config.head_dim,
+                        n_slot=n_slot,
+                        has_bias=bool(getattr(node, 'bias_path', '')),
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'partranspose':
+                    layer = ParBlockColMajorTranspose(
+                        shape=(preds[0].shape[0], preds[0].shape[1] // config.n_heads),
+                        block_size=config.matmul_block_size,
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pdmtranspose':
+                    layer = ParLowerDiagTranspose(
+                        shape=tuple(preds[0].head_shape),
+                        n_heads=config.n_heads,
+                        head_dim=config.head_dim,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'parccmm':
+                    layer = ParBlockColMajorCCMM(
+                        shape_A=(preds[0].shape[0], preds[0].shape[1] // config.n_heads),
+                        shape_B=(preds[0].shape[1] // config.n_heads, preds[1].shape[1] // config.n_heads),
+                        block_size=config.matmul_block_size,
+                        n_heads=config.n_heads,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+                if layer_type == 'pdmccmm':
+                    edge_indices = {pred: self.dag.edges[pred, node].get('input_index') for pred in preds}
+                    ordered_preds = sorted(preds, key=lambda p: edge_indices[p]) if all(
+                        idx is not None for idx in edge_indices.values()
+                    ) else preds
+                    layer = ParLowerDiagCCMM(
+                        shape_A=tuple(ordered_preds[0].head_shape),
+                        shape_B=tuple(ordered_preds[1].head_shape),
+                        n_heads=config.n_heads,
+                        head_dim=config.head_dim,
+                        n_slot=n_slot,
+                    )
+                    return layer.get_memory(bytes_per_plaintext)
+            except (AssertionError, ValueError, TypeError, ZeroDivisionError):
+                return None
+            return None
+
         # ── avgpool ──────────────────────────────────────────────────────────
-        elif layer_type == 'avgpool2d':
+        if layer_type == 'avgpool2d':
             input_shape = self.input_shape
             stride = node.stride
             skip = self.input_skip
@@ -1291,7 +1560,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack, self.input_mult_level)
 
         # ── polyact / activation ─────────────────────────────────────────────
-        elif layer_type == 'polyact':
+        elif layer_type in ('polyact', 'poly_relu2d'):
             pred = preds[0]
             order = getattr(node, 'order', 0)
             if pred.dim == 0:

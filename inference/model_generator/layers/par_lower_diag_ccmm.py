@@ -21,6 +21,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts
 
 
 op_class = 'ParLowerDiagCCMM'
@@ -271,6 +272,13 @@ class ParLowerDiagCCMM:
                 route_ell.append(node)
             ordinary_route_pt.append(route_ell)
         return self.call(A_cts, B_cts, replication_mask_pt, ordinary_route_pt=ordinary_route_pt)
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        replication_count = self.m if self.is_kqt else self.n
+        replication_masks = min(self.c, replication_count)
+        route_masks = self.n_c * self.m * 4 if self.is_kqt else self.n * 4
+        counts = {'weight': 0, 'bias': 0, 'mask': replication_masks + route_masks}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def get_fhe_op_count(self, level: int) -> dict:
         """Count FHE primitive operations grouped by level."""

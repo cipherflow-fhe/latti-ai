@@ -22,6 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts
 
 op_class = 'ParBlockColMajorTranspose'
 
@@ -209,6 +210,10 @@ class ParBlockColMajorTranspose:
             transpose_diag_pt.append(node)
 
         return self.call(input_cts, transpose_diag_pt)
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': 0, 'bias': 0, 'mask': 2 * self.d - 1}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     # ------------------------------------------------------------------ #
     #  FHE operation count                                                #

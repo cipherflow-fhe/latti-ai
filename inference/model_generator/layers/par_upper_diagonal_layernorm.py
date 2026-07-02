@@ -22,6 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import memory_from_pt_counts
 
 
 def _next_pow2(n: int) -> int:
@@ -152,6 +153,10 @@ class ParUpperDiagonalLNStats(_ParUpperDiagonalBase):
         eps_add_pt = self._make_pt_per_ct(data_source, 3)
         return self.call(input_cts, h0_mask_pt, inv_n_pt, iv_pt, eps_add_pt)
 
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': 2 * self.total_cts, 'bias': self.total_cts, 'mask': 1}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
+
     def get_fhe_op_count(self, level: int) -> dict:
         ops = self._empty_op_count()
         T = self.total_cts
@@ -190,6 +195,10 @@ class ParUpperDiagonalLNXCentered(_ParUpperDiagonalBase):
         inv_n_pt = self._make_pt_per_ct(data_source, 1)
         return self.call(input_cts, h0_mask_pt, inv_n_pt)
 
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': self.total_cts, 'bias': 0, 'mask': 1}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
+
     def get_fhe_op_count(self, level: int) -> dict:
         ops = self._empty_op_count()
         T = self.total_cts
@@ -227,6 +236,10 @@ class ParUpperDiagonalLNMinimaxInit(_ParUpperDiagonalBase):
         c1_pt = self._make_pt_per_ct(data_source, 1)
         c2_norm_pt = self._make_pt_per_ct(data_source, 2)
         return self.call(a_cts, c0_add_pt, c1_pt, c2_norm_pt)
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': 2 * self.total_cts, 'bias': self.total_cts, 'mask': 0}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def get_fhe_op_count(self, level: int) -> dict:
         ops = self._empty_op_count()
@@ -267,6 +280,10 @@ class ParUpperDiagonalLNGoldschmidt(_ParUpperDiagonalBase):
         half_norm_pt = self._make_pt_per_ct(data_source, 1)
         return self.call(y_cts, a_cts, three_pt, half_norm_pt)
 
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': 2 * self.total_cts, 'bias': 0, 'mask': 0}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
+
     def get_fhe_op_count(self, level: int, a_level: int | None = None) -> dict:
         ops = self._empty_op_count()
         T = self.total_cts
@@ -300,6 +317,10 @@ class ParUpperDiagonalLNAffine(_ParUpperDiagonalBase):
         gamma_pt = self._make_pt_per_ct(data_source, 0)
         beta_add_pt = self._make_pt_per_ct(data_source, 1)
         return self.call(x_centered, y_cts, gamma_pt, beta_add_pt)
+
+    def get_memory(self, bytes_per_plaintext: int = 0) -> dict[str, int]:
+        counts = {'weight': self.total_cts, 'bias': self.total_cts, 'mask': 0}
+        return memory_from_pt_counts(counts, bytes_per_plaintext)
 
     def get_fhe_op_count(self, level: int, x_centered_level: int | None = None) -> dict:
         ops = self._empty_op_count()
