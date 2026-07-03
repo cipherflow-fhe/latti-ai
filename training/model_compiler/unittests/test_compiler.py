@@ -707,6 +707,190 @@ class TestSingleLayer(CompilerTestBase):
         # )
         return graph, score
 
+    def test_explicit_bootstrapping_marker_split_and_sort_subgraphs(self):
+        model = nn_modules.ExplicitBootstrappingModel()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=(1, 32, 8, 8),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+        graph = LayerAbstractGraph.from_json(str(self.temp_json_path))
+
+        self.assertIsNotNone(graph)
+        self.assertTrue(self._has_bootstrapping(graph))
+
+        transforms.init_levels(graph)
+        splitter = transforms.GraphSplitSorter(graph)
+        subgraphs = splitter.split_graph()
+        sorted_subgraphs, next_sub_dict, prev_sub_dict = splitter.sort_graph(subgraphs)
+        split_output_dir = script_dir / 'split_subgraphs'
+        split_output_dir.mkdir(exist_ok=True)
+        for index, sub in enumerate(sorted_subgraphs):
+            sub.to_json(dict(), output_path=str(split_output_dir / f'subgraph_{index}.json'))
+
+        self.assertGreater(len(sorted_subgraphs), 1)
+        self.assertTrue(next_sub_dict)
+        btp_subgraphs = []
+        for subgraph in sorted_subgraphs:
+            self.assertTrue(nx.is_directed_acyclic_graph(subgraph.dag))
+            btp_nodes = [
+                node
+                for node in subgraph.dag.nodes
+                if isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping'
+            ]
+            if btp_nodes:
+                btp_subgraphs.append(subgraph)
+                self.assertEqual(len(btp_nodes), 1)
+                self.assertEqual(len(list(subgraph.dag.predecessors(btp_nodes[0]))), 1)
+                self.assertEqual(len(list(subgraph.dag.successors(btp_nodes[0]))), 1)
+
+        self.assertEqual(len(btp_subgraphs), 1)
+
+        next_edges = {(u, v) for u, vs in next_sub_dict.items() for v in vs}
+        prev_edges = {(u, v) for v, us in prev_sub_dict.items() for u in us}
+        self.assertEqual(next_edges, prev_edges)
+
+        subgraph_indices = set(range(len(sorted_subgraphs)))
+        for u, v in next_edges:
+            self.assertIn(u, subgraph_indices)
+            self.assertIn(v, subgraph_indices)
+            self.assertLess(u, v)
+
+    def test_multiple_bootstrapping_split_and_sort_subgraphs(self):
+        model = nn_modules.MultipleExplicitBootstrappingModel()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=(1, 32, 8, 8),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+        graph = LayerAbstractGraph.from_json(str(self.temp_json_path))
+
+        self.assertIsNotNone(graph)
+        self.assertTrue(self._has_bootstrapping(graph))
+
+        transforms.init_levels(graph)
+        splitter = transforms.GraphSplitSorter(graph)
+        subgraphs = splitter.split_graph()
+        sorted_subgraphs, next_sub_dict, prev_sub_dict = splitter.sort_graph(subgraphs)
+        split_output_dir = script_dir / 'split_subgraphs_multiple_btp'
+        split_output_dir.mkdir(exist_ok=True)
+        graph.to_json(dict(), output_path=str(split_output_dir / 'full_graph.json'))
+        for index, sub in enumerate(sorted_subgraphs):
+            sub.to_json(dict(), output_path=str(split_output_dir / f'subgraph_{index}.json'))
+
+        btp_subgraphs = [
+            subgraph
+            for subgraph in sorted_subgraphs
+            if any(
+                isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping'
+                for node in subgraph.dag.nodes
+            )
+        ]
+        self.assertEqual(len(btp_subgraphs), 2)
+
+        original_compute_ids = [
+            node.layer_id
+            for node in graph.dag.nodes
+            if isinstance(node, ComputeNode)
+        ]
+        split_compute_ids = []
+        for subgraph in sorted_subgraphs:
+            self.assertTrue(nx.is_directed_acyclic_graph(subgraph.dag))
+            for node in subgraph.dag.nodes:
+                if isinstance(node, ComputeNode):
+                    split_compute_ids.append(node.layer_id)
+
+        self.assertCountEqual(split_compute_ids, original_compute_ids)
+
+        next_edges = {(u, v) for u, vs in next_sub_dict.items() for v in vs}
+        prev_edges = {(u, v) for v, us in prev_sub_dict.items() for u in us}
+        self.assertEqual(next_edges, prev_edges)
+
+        subgraph_indices = set(range(len(sorted_subgraphs)))
+        for u, v in next_edges:
+            self.assertIn(u, subgraph_indices)
+            self.assertIn(v, subgraph_indices)
+            self.assertLess(u, v)
+
+    def test_mostly_acyclic_bootstrapping_split_refines_one_cycle(self):
+        model = nn_modules.MostlyAcyclicBootstrappingModel()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=(1, 32, 8, 8),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+        graph = LayerAbstractGraph.from_json(str(self.temp_json_path))
+
+        self.assertIsNotNone(graph)
+        self.assertTrue(self._has_bootstrapping(graph))
+
+        transforms.init_levels(graph)
+        splitter = transforms.GraphSplitSorter(graph)
+        coarse_subgraphs = splitter.split_graph()
+        coarse_index_graph = splitter.compress_subgraphs_to_index_graph(coarse_subgraphs)
+        coarse_cycles = list(nx.simple_cycles(coarse_index_graph))
+        cycle_btp_indices = {
+            index
+            for cycle in coarse_cycles
+            for index in cycle
+            if isinstance(index, int)
+            and any(
+                isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping'
+                for node in coarse_subgraphs[index].dag.nodes
+            )
+        }
+        self.assertEqual(len(cycle_btp_indices), 1)
+
+        sorted_subgraphs, next_sub_dict, prev_sub_dict = splitter.sort_graph(coarse_subgraphs)
+        split_output_dir = script_dir / 'split_subgraphs_mostly_acyclic_btp'
+        split_output_dir.mkdir(exist_ok=True)
+        graph.to_json(dict(), output_path=str(split_output_dir / 'full_graph.json'))
+        for index, sub in enumerate(sorted_subgraphs):
+            sub.to_json(dict(), output_path=str(split_output_dir / f'subgraph_{index}.json'))
+
+        btp_subgraphs = [
+            subgraph
+            for subgraph in sorted_subgraphs
+            if any(
+                isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping'
+                for node in subgraph.dag.nodes
+            )
+        ]
+        self.assertEqual(len(btp_subgraphs), 3)
+
+        original_compute_ids = [
+            node.layer_id
+            for node in graph.dag.nodes
+            if isinstance(node, ComputeNode)
+        ]
+        split_compute_ids = []
+        for subgraph in sorted_subgraphs:
+            self.assertTrue(nx.is_directed_acyclic_graph(subgraph.dag))
+            for node in subgraph.dag.nodes:
+                if isinstance(node, ComputeNode):
+                    split_compute_ids.append(node.layer_id)
+
+        self.assertCountEqual(split_compute_ids, original_compute_ids)
+
+        next_edges = {(u, v) for u, vs in next_sub_dict.items() for v in vs}
+        prev_edges = {(u, v) for v, us in prev_sub_dict.items() for u in us}
+        self.assertEqual(next_edges, prev_edges)
+
+        subgraph_indices = set(range(len(sorted_subgraphs)))
+        for u, v in next_edges:
+            self.assertIn(u, subgraph_indices)
+            self.assertIn(v, subgraph_indices)
+            self.assertLess(u, v)
+
 
 class TestLayerInteraction(CompilerTestBase):
     def test_mismatched_scale(self):

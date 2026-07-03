@@ -190,7 +190,7 @@ def get_op_id(op: str):
         output = 'drop_level'
     elif op == 'poly_relu2d' or op == 'PolyReluListIndependent':
         output = 'PolyRelu'
-    elif op == 'bootstrapping':
+    elif op == 'Bootstrapping' or op == 'bootstrapping':
         output = 'Identity'
     elif op == 'ConvTranspose':
         output = 'ConvTranspose'
@@ -258,6 +258,8 @@ def get_type_id(op: str):
         output = 'conv2d'
     elif op == 'Concat':
         output = 'concat2d'
+    elif op == 'Bootstrapping' or op == 'bootstrapping':
+        output = 'bootstrapping'
     elif op == 'HermitePoly':
         output = 'identity'
     elif op == 'Softmax':

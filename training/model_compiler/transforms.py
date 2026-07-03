@@ -30,6 +30,349 @@ class Direction(Enum):
     DOWN = 'down'
 
 
+PCM_TO_PDM_TYPES = {
+    'pcm_add_pt': 'pdm_add_pt',
+    'pcmgamma': 'pdmgamma',
+    'pcmpoly': 'pdmpoly',
+    'pcmstats': 'pdmstats',
+    'pcmcenter': 'pdmcenter',
+    'pcminit': 'pdminit',
+    'pcmgs': 'pdmgs',
+    'pcmaffine': 'pdmaffine',
+}
+
+
+def _is_diagonal_mat_pack() -> bool:
+    return getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack'
+
+
+def _pack_pcm_type(layer_type: str) -> str:
+    if _is_diagonal_mat_pack():
+        return PCM_TO_PDM_TYPES.get(layer_type, layer_type)
+    return layer_type
+
+
+def sort_preds_by_input_index(dag: nx.DiGraph, node, preds: list[FeatureNode]) -> list[FeatureNode]:
+    if len(preds) <= 1:
+        return preds
+    edge_indices = {pred: dag.edges[pred, node].get('input_index') for pred in preds}
+    if all(idx is not None for idx in edge_indices.values()):
+        return sorted(preds, key=lambda pred: edge_indices[pred])
+    return preds
+
+
+class GraphSplitSorter:
+    def __init__(self, graph_with_btp: nx.DiGraph | LayerAbstractGraph | None = None):
+        self.dag = self._extract_dag(graph_with_btp) if graph_with_btp is not None else None
+
+    @staticmethod
+    def _extract_dag(graph_with_btp: nx.DiGraph | LayerAbstractGraph) -> nx.DiGraph:
+        if isinstance(graph_with_btp, LayerAbstractGraph):
+            return graph_with_btp.dag
+        return graph_with_btp
+
+    def split_graph(
+        self,
+        graph_with_btp: nx.DiGraph | LayerAbstractGraph | None = None,
+    ) -> list[LayerAbstractGraph]:
+        dag = self._resolve_dag(graph_with_btp)
+        return self.build_initial_btp_partition(dag)
+
+    def sort_graph(
+        self,
+        subgraphs: list[LayerAbstractGraph],
+        graph_with_btp: nx.DiGraph | LayerAbstractGraph | None = None,
+    ) -> tuple[list[LayerAbstractGraph], dict[int, list[int]], dict[int, list[int]]]:
+        dag = self._resolve_dag(graph_with_btp)
+        btp_count = sum(1 for node in dag.nodes if self.is_bootstrapping_node(node))
+        compute_count = sum(1 for node in dag.nodes if isinstance(node, ComputeNode))
+        max_iterations = max(1, btp_count * compute_count + 1)
+
+        for _ in range(max_iterations):
+            index_graph = self.compress_subgraphs_to_index_graph(subgraphs)
+            if nx.is_directed_acyclic_graph(index_graph):
+                return self.sort_subgraphs_by_compressed_graph(subgraphs, index_graph)
+
+            split_result = self.find_btp_cycle_and_split(index_graph, subgraphs, dag)
+            if split_result is None:
+                cycles = list(nx.simple_cycles(index_graph))
+                raise ValueError(f'Subgraph dependency graph contains cycles: {cycles}')
+
+            split_index, split_subgraphs = split_result
+            if len(split_subgraphs) <= 1:
+                cycles = list(nx.simple_cycles(index_graph))
+                raise ValueError(f'Unable to split subgraph dependency cycle: {cycles}')
+
+            subgraphs = subgraphs[:split_index] + split_subgraphs + subgraphs[split_index + 1:]
+
+        index_graph = self.compress_subgraphs_to_index_graph(subgraphs)
+        cycles = list(nx.simple_cycles(index_graph))
+        raise ValueError(f'Unable to resolve subgraph dependency cycles after refinement: {cycles}')
+
+    def build_initial_btp_partition(self, dag: nx.DiGraph | None = None) -> list[LayerAbstractGraph]:
+        dag = self._resolve_dag(dag)
+        btp_nodes = [node for node in nx.topological_sort(dag) if self.is_bootstrapping_node(node)]
+        non_btp_computes = {
+            node
+            for node in dag.nodes
+            if isinstance(node, ComputeNode) and not self.is_bootstrapping_node(node)
+        }
+
+        subgraphs = [self.build_bootstrapping_subgraph(btp_node, dag) for btp_node in btp_nodes]
+        subgraphs.extend(self.build_subgraphs_from_compute_nodes(non_btp_computes, dag))
+        return subgraphs
+
+    def compress_subgraphs_to_index_graph(self, subgraphs: list[LayerAbstractGraph]) -> nx.DiGraph:
+        index_graph = nx.DiGraph()
+        for i, subgraph in enumerate(subgraphs):
+            index_graph = nx.compose(index_graph, self.compress_graph(subgraph, i))
+        return index_graph
+
+    def find_btp_cycle_and_split(
+        self,
+        index_graph: nx.DiGraph,
+        subgraphs: list[LayerAbstractGraph],
+        dag: nx.DiGraph | None = None,
+    ) -> tuple[int, list[LayerAbstractGraph]] | None:
+        dag = self._resolve_dag(dag)
+        for cycle in nx.simple_cycles(index_graph):
+            subgraph_indices = [node for node in cycle if isinstance(node, int)]
+            btp_candidates = [
+                (index, btp_node)
+                for index in subgraph_indices
+                for btp_node in self.bootstrapping_nodes(subgraphs[index])
+            ]
+
+            for btp_index, btp_node in btp_candidates:
+                for index in subgraph_indices:
+                    if index == btp_index or self.bootstrapping_nodes(subgraphs[index]):
+                        continue
+                    if not nx.has_path(index_graph, index, btp_index):
+                        continue
+                    if not nx.has_path(index_graph, btp_index, index):
+                        continue
+                    if self.can_split_subgraph_around_btp(subgraphs[index], btp_node, dag):
+                        return index, self.split_cyclic_subgraph_around_btp(subgraphs[index], btp_node, dag)
+        return None
+
+    def split_cyclic_subgraph_around_btp(
+        self,
+        subgraph: LayerAbstractGraph,
+        btp_node: ComputeNode,
+        dag: nx.DiGraph | None = None,
+    ) -> list[LayerAbstractGraph]:
+        dag = self._resolve_dag(dag)
+        ancestors = nx.ancestors(dag, btp_node)
+        descendants = nx.descendants(dag, btp_node)
+        before: set[ComputeNode] = set()
+        after: set[ComputeNode] = set()
+        side: set[ComputeNode] = set()
+
+        for compute in self.compute_nodes(subgraph):
+            if self.is_bootstrapping_node(compute):
+                continue
+            if compute in ancestors:
+                before.add(compute)
+            elif compute in descendants:
+                after.add(compute)
+            else:
+                side.add(compute)
+
+        split_subgraphs: list[LayerAbstractGraph] = []
+        for group in (before, side, after):
+            split_subgraphs.extend(self.build_subgraphs_from_compute_nodes(group, dag))
+        return split_subgraphs
+
+    def can_split_subgraph_around_btp(
+        self,
+        subgraph: LayerAbstractGraph,
+        btp_node: ComputeNode,
+        dag: nx.DiGraph | None = None,
+    ) -> bool:
+        dag = self._resolve_dag(dag)
+        ancestors = nx.ancestors(dag, btp_node)
+        descendants = nx.descendants(dag, btp_node)
+        computes = [
+            node
+            for node in self.compute_nodes(subgraph)
+            if not self.is_bootstrapping_node(node)
+        ]
+        return any(node in ancestors for node in computes) and any(node in descendants for node in computes)
+
+    def build_subgraphs_from_compute_nodes(
+        self,
+        compute_nodes: set[ComputeNode],
+        dag: nx.DiGraph | None = None,
+    ) -> list[LayerAbstractGraph]:
+        dag = self._resolve_dag(dag)
+        if not compute_nodes:
+            return []
+
+        compute_graph = nx.DiGraph()
+        for compute in compute_nodes:
+            self.copy_node_to_graph(dag, compute_graph, compute)
+            for pred in dag.predecessors(compute):
+                if isinstance(pred, FeatureNode):
+                    self.copy_node_to_graph(dag, compute_graph, pred)
+                    compute_graph.add_edge(pred, compute, **dag.edges[pred, compute])
+            for succ in dag.successors(compute):
+                if isinstance(succ, FeatureNode):
+                    self.copy_node_to_graph(dag, compute_graph, succ)
+                    compute_graph.add_edge(compute, succ, **dag.edges[compute, succ])
+
+        subgraphs: list[LayerAbstractGraph] = []
+        for component in nx.weakly_connected_components(compute_graph):
+            if not any(isinstance(node, ComputeNode) for node in component):
+                continue
+            subgraph = LayerAbstractGraph()
+            subgraph.dag = compute_graph.subgraph(component).copy()
+            subgraphs.append(subgraph)
+        return subgraphs
+
+    def build_bootstrapping_subgraph(
+        self,
+        btp_node: ComputeNode,
+        dag: nx.DiGraph | None = None,
+    ) -> LayerAbstractGraph:
+        dag = self._resolve_dag(dag)
+        btp_subgraph = LayerAbstractGraph()
+        self.copy_node_to_graph(dag, btp_subgraph.dag, btp_node)
+
+        preds = [node for node in dag.predecessors(btp_node) if isinstance(node, FeatureNode)]
+        succs = [node for node in dag.successors(btp_node) if isinstance(node, FeatureNode)]
+        for pred in preds:
+            self.copy_node_to_graph(dag, btp_subgraph.dag, pred)
+            btp_subgraph.dag.add_edge(pred, btp_node, **dag.edges[pred, btp_node])
+        for succ in succs:
+            self.copy_node_to_graph(dag, btp_subgraph.dag, succ)
+            btp_subgraph.dag.add_edge(btp_node, succ, **dag.edges[btp_node, succ])
+        return btp_subgraph
+
+    def sort_subgraphs_by_compressed_graph(
+        self,
+        subgraphs: list[LayerAbstractGraph],
+        index_graph: nx.DiGraph,
+    ) -> tuple[list[LayerAbstractGraph], dict[int, list[int]], dict[int, list[int]]]:
+        sorted_subgraphs: list[LayerAbstractGraph] = []
+
+        if not nx.is_directed_acyclic_graph(index_graph):
+            cycles = list(nx.simple_cycles(index_graph))
+            raise ValueError(f'Subgraph dependency graph contains cycles: {cycles}')
+
+        all_nodes_in_topo_sort = list(nx.topological_sort(index_graph))
+        int_res = [value for value in all_nodes_in_topo_sort if isinstance(value, int)]
+
+        pre_next_dict: dict[int, int] = {}
+        for index, value in enumerate(int_res):
+            sorted_subgraphs.append(subgraphs[value])
+            pre_next_dict[value] = index
+
+        next_sub_dict: dict[int, list[int]] = {}
+        for pred, succ in index_graph.edges:
+            if isinstance(pred, int) and isinstance(succ, int):
+                self.add_subgraph_dependency(next_sub_dict, pre_next_dict[pred], pre_next_dict[succ])
+
+        for node in index_graph.nodes:
+            if isinstance(node, int):
+                continue
+
+            preds = [pred for pred in index_graph.predecessors(node) if isinstance(pred, int)]
+            succs = [succ for succ in index_graph.successors(node) if isinstance(succ, int)]
+            if not preds or not succs:
+                continue
+
+            for pred in preds:
+                pred_index = pre_next_dict[pred]
+                for succ in succs:
+                    succ_index = pre_next_dict[succ]
+                    self.add_subgraph_dependency(next_sub_dict, pred_index, succ_index)
+
+        prev_sub_dict: dict[int, list[int]] = {}
+        for u, vs in next_sub_dict.items():
+            for v in vs:
+                prev_sub_dict.setdefault(v, [])
+                if u not in prev_sub_dict[v]:
+                    prev_sub_dict[v].append(u)
+
+        return sorted_subgraphs, next_sub_dict, prev_sub_dict
+
+    def compress_graph(self, graph: LayerAbstractGraph, graph_out_index: int) -> nx.DiGraph:
+        graph_out = nx.DiGraph()
+        graph_out.add_node(graph_out_index)
+
+        inputs, outputs = self.find_input_and_output(graph)
+        for node in inputs:
+            feature_key = self.compressed_feature_key(node)
+            graph_out.add_node(feature_key)
+            graph_out.add_edge(feature_key, graph_out_index)
+        for node in outputs:
+            feature_key = self.compressed_feature_key(node)
+            graph_out.add_node(feature_key)
+            graph_out.add_edge(graph_out_index, feature_key)
+        return graph_out
+
+    @staticmethod
+    def find_input_and_output(graph: LayerAbstractGraph) -> tuple[list[FeatureNode], list[FeatureNode]]:
+        inputs: list[FeatureNode] = []
+        outputs: list[FeatureNode] = []
+        for node in graph.dag.nodes:
+            if not isinstance(node, FeatureNode):
+                continue
+            if graph.dag.in_degree(node) == 0:
+                inputs.append(node)
+            if graph.dag.out_degree(node) == 0:
+                outputs.append(node)
+        return inputs, outputs
+
+    @staticmethod
+    def compressed_feature_key(node: FeatureNode) -> tuple[str, str]:
+        return 'feature', node.node_id
+
+    @staticmethod
+    def add_subgraph_dependency(next_sub_dict: dict[int, list[int]], pred_index: int, succ_index: int):
+        if pred_index == succ_index:
+            return
+        next_sub_dict.setdefault(pred_index, [])
+        if succ_index not in next_sub_dict[pred_index]:
+            next_sub_dict[pred_index].append(succ_index)
+
+    @staticmethod
+    def is_bootstrapping_node(node) -> bool:
+        return isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping'
+
+    @staticmethod
+    def compute_nodes(subgraph: LayerAbstractGraph) -> list[ComputeNode]:
+        return [node for node in subgraph.dag.nodes if isinstance(node, ComputeNode)]
+
+    def bootstrapping_nodes(self, subgraph: LayerAbstractGraph) -> list[ComputeNode]:
+        return [node for node in self.compute_nodes(subgraph) if self.is_bootstrapping_node(node)]
+
+    @staticmethod
+    def copy_node_to_graph(source: nx.DiGraph, target: nx.DiGraph, node):
+        if not target.has_node(node):
+            target.add_node(node, **source.nodes[node])
+
+    def _resolve_dag(self, dag: nx.DiGraph | LayerAbstractGraph | None = None) -> nx.DiGraph:
+        if dag is not None:
+            return self._extract_dag(dag)
+        if self.dag is None:
+            raise ValueError('GraphSplitSorter requires a graph for this operation')
+        return self.dag
+
+
+def sort_graph(
+    subgraphs: list[LayerAbstractGraph],
+    graph_with_btp: nx.DiGraph | LayerAbstractGraph,
+) -> tuple[list[LayerAbstractGraph], dict[int, list[int]], dict[int, list[int]]]:
+    return GraphSplitSorter(graph_with_btp).sort_graph(subgraphs)
+
+
+def split_graph(
+    graph_with_btp: nx.DiGraph | LayerAbstractGraph,
+) -> list[LayerAbstractGraph]:
+    return GraphSplitSorter(graph_with_btp).split_graph()
+
+
 def _calc_pack_num(dag: nx.DiGraph, feature_node, slot_num: int, use_skip: bool = True) -> int:
     attrs = dag.nodes[feature_node]
     if feature_node.dim == 0:

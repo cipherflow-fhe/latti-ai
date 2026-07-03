@@ -39,6 +39,7 @@ from .operations.PolyAct import PolyActComputeNode, PolyActRNPolyComputeNode
 from .operations.MatMul import MatMulComputeNode
 from .operations.Transpose import TransposeComputeNode
 from .operations.LayerNorm import LayerNormComputeNode
+from .operations.Identity import IdentityComputeNode
 from .onnx_model_manipulations import simplify_onnx_model
 
 log = logging.getLogger(__name__)
@@ -361,6 +362,13 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_m
                 compute_node = CustomMultiHeadAttentionComputeNode.from_onnx_node(n, features_nodes)
             case 'PolyActRN':
                 compute_node = PolyActRNPolyComputeNode.from_onnx_node(n, features_nodes)
+            case 'Bootstrapping':
+                compute_node = IdentityComputeNode(
+                    format_id(n.name),
+                    'bootstrapping',
+                    [features_nodes[format_id(n.input[0])]],
+                    [features_nodes[format_id(n.output[0])]],
+                )
             case _:
                 if n.op_type == 'Add' and feature_mat:
                     raw_inputs = list(n.input)

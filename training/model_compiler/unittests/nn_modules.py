@@ -16,6 +16,7 @@
 
 import torch
 import torch.nn as nn
+from nn_tools.activations import BootstrappingMarker
 
 
 class SingleConv(nn.Module):
@@ -29,6 +30,96 @@ class SingleConv(nn.Module):
     def forward(self, x):
         x = self.conv0(x)
         return x
+
+
+class ExplicitBootstrappingModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.btp0 = BootstrappingMarker()
+        self.conv1 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        x1 = self.conv0(x)
+        x1 = self.btp0(x1)
+        x1 = self.conv1(x1)
+        x2 = self.conv2(x)
+        res = x1+x2
+        return res
+
+
+class MultipleExplicitBootstrappingModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.btp0 = BootstrappingMarker()
+        self.conv1 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.btp1 = BootstrappingMarker()
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.conv_skip = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        x1 = self.conv0(x)
+        x1 = self.btp0(x1)
+        x1 = self.conv1(x1)
+        x1 = self.btp1(x1)
+        x1 = self.conv2(x1)
+        x2 = self.conv_skip(x)
+        res = x1+x2
+        return res
+
+class MyExplicitBootstrappingModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.btp0 = BootstrappingMarker()
+        self.conv1 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.btp1 = BootstrappingMarker()
+        self.conv_skip = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        x1 = self.conv0(x)
+        x1 = self.btp0(x1)
+        x1 = self.conv1(x1)
+        x1 = self.btp1(x1)
+        x2 = self.conv_skip(x)
+        res = x1+x2
+        return res
+
+
+class MostlyAcyclicBootstrappingModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.cycle_pre = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.cycle_btp = BootstrappingMarker()
+        self.cycle_post = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.cycle_skip = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+
+        self.linear_pre = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.linear_btp = BootstrappingMarker()
+        self.linear_post = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+
+        self.side_pre = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.side_btp = BootstrappingMarker()
+        self.side_post = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        cycle_main = self.cycle_pre(x)
+        cycle_main = self.cycle_btp(cycle_main)
+        cycle_main = self.cycle_post(cycle_main)
+        cycle_skip = self.cycle_skip(x)
+        merged = cycle_main + cycle_skip
+
+        linear = self.linear_pre(merged)
+        linear = self.linear_btp(linear)
+        linear = self.linear_post(linear)
+
+        side = self.side_pre(x)
+        side = self.side_btp(side)
+        side = self.side_post(side)
+
+        return linear + side
 
 
 class SingleConv1d(nn.Module):

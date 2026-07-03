@@ -168,6 +168,27 @@ class FHELayerNorm(nn.Module):
         return f'normalized_shape={self.normalized_shape}, eps={self.eps}'
 
 
+class _BootstrappingExport(torch.autograd.Function):
+    """ONNX export helper: emit an identity tensor as ``nn_tools::Bootstrapping``."""
+
+    @staticmethod
+    def forward(ctx, x):
+        return x
+
+    @staticmethod
+    def symbolic(g, x):
+        return g.op('nn_tools::Bootstrapping', x).setType(x.type())
+
+
+class BootstrappingMarker(nn.Module):
+    """Identity layer that marks an explicit bootstrapping split point for export."""
+
+    def forward(self, x):
+        if torch.onnx.is_in_onnx_export():
+            return _BootstrappingExport.apply(x)
+        return x
+
+
 class _PolyActExport(torch.autograd.Function):
     """ONNX export helper: emit PolyAct as a single custom op."""
 
