@@ -66,6 +66,7 @@
 #include "fhe_layers/block_col_major_polyactrn.h"
 #include "fhe_layers/par_block_col_major_polyactrn.h"
 #include "fhe_layers/par_upper_diagonal_polyact.h"
+#include "fhe_layers/par_upper_diagonal_poly_mult_ct.h"
 #include "fhe_layers/par_upper_diagonal_poly.h"
 #include "data_structs/feature_mat.h"
 #include "ut_util.h"
@@ -1012,7 +1013,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_upper_diagonal_poly][stockmeyer]") {
     const uint32_t N = 65536;
     CkksParameter param = CkksParameter::create_parameter(N);
-    const int init_level = 16;
+    const int init_level = 17;
     CkksContext context = CkksContext::create_random_context(param, init_level);
 
     const uint32_t n_slot = param.get_n() / 2;
@@ -1029,7 +1030,7 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_u
     Duo head_shape = {n_prepad, m_prepad};
 
     REQUIRE(n_slot == n_prepad * total_cols);
-    REQUIRE(init_level >= 16);
+    REQUIRE(init_level >= 17);
 
     const vector<double> p1_desc = {
         -0.029080343483084341, 2.3066773634990557e-17,  0.45471038861073326, -2.8078925777913385e-16,
@@ -1093,26 +1094,19 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_u
     FeatureMatEncrypted X_enc(&context, init_level);
     X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, default_scale);
 
-    auto multiply_by_scalar = [&](const FeatureMatEncrypted& input, double scalar, double scalar_pt_scale = -1.0) {
-        FeatureMatEncrypted result(&context, input.level - 1);
-        result.shape = input.shape;
-        result.head_shape = input.head_shape;
-        result.matmul_block_size = input.matmul_block_size;
-        result.n_channel = input.n_channel;
-        result.n_channel_per_ct = input.n_channel_per_ct;
-        result.data.resize(input.data.size());
-
-        for (uint32_t ct_idx = 0; ct_idx < input.data.size(); ct_idx++) {
-            int level = input.data[ct_idx].get_level();
-            vector<double> scalar_vec(n_slot, scalar);
-            double encode_scale = scalar_pt_scale > 0.0 ? scalar_pt_scale : static_cast<double>(param.get_q(level));
-            auto scalar_rt = context.encode_ringt(scalar_vec, encode_scale);
-            auto scalar_mul = context.ringt_to_mul(scalar_rt, level);
-            result.data[ct_idx] =
-                context.rescale(context.mult_plain_mul(input.data[ct_idx], scalar_mul), default_scale);
+    auto make_scalar_gamma = [&](double scalar) {
+        Array<double, 1> gamma({total_cols});
+        for (uint32_t col = 0; col < total_cols; col++) {
+            gamma.set(col, scalar);
         }
-        result.level = result.data[0].get_level();
-        return result;
+        return gamma;
+    };
+
+    auto multiply_by_scalar = [&](const FeatureMatEncrypted& input, double scalar) {
+        ParUpperDiagonalPolyActRNGamma scalar_layer(param, shape, head_shape, n_heads, input.level,
+                                                    make_scalar_gamma(scalar));
+        scalar_layer.prepare_weight();
+        return scalar_layer.run(context, input);
     };
 
     FeatureMatEncrypted X_scaled = multiply_by_scalar(X_enc, 1.0 / scale);
@@ -1141,32 +1135,12 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_u
     FeatureMatEncrypted half_tanh_refined = poly3.run_stockmeyer(context, half_tanh_scaled_for_poly3);
     REQUIRE(half_tanh_refined.level == init_level - 15);
 
-    FeatureMatEncrypted gelu_enc(&context, half_tanh_refined.level - 1);
-    gelu_enc.shape = shape;
-    gelu_enc.head_shape = head_shape;
-    gelu_enc.matmul_block_size = X_enc.matmul_block_size;
-    gelu_enc.data.resize(half_tanh_refined.data.size());
-
-    const int half_plus_level = half_tanh_refined.level;
-    const int x_drop_level = half_plus_level + 1;
-    FeatureMatEncrypted X_for_gelu = X_enc.drop_level(X_enc.level - x_drop_level);
-    REQUIRE(X_for_gelu.level == x_drop_level);
-    const double x_for_gelu_scalar_scale = static_cast<double>(param.get_q(half_plus_level)) / default_scale *
-                                           static_cast<double>(param.get_q(x_drop_level));
-    X_for_gelu = multiply_by_scalar(X_for_gelu, 1.0, x_for_gelu_scalar_scale);
-    REQUIRE(X_for_gelu.level == half_plus_level);
-
-    vector<double> half_vec(n_slot, 0.5);
-    auto half_rt = context.encode_ringt(half_vec, default_scale);
-    for (uint32_t ct_idx = 0; ct_idx < half_tanh_refined.data.size(); ct_idx++) {
-        auto half_plus =
-            context.add_plain_ringt(half_tanh_refined.data[ct_idx], half_rt);  // lv L-15, scale default scale D
-        REQUIRE(X_for_gelu.data[ct_idx].get_level() == half_plus.get_level());
-        gelu_enc.data[ct_idx] =
-            context.rescale(context.relinearize(context.mult(X_for_gelu.data[ct_idx], half_plus)), default_scale);
-    }
-    gelu_enc.level = gelu_enc.data[0].get_level();
-    REQUIRE(gelu_enc.level == init_level - 16);
+    FeatureMatEncrypted X_for_gelu = X_enc.drop_level(X_enc.level - half_tanh_refined.level);
+    REQUIRE(X_for_gelu.level == half_tanh_refined.level);
+    ParUpperDiagonalPolyMultCt gelu_layer(param, shape, head_shape, n_heads, half_tanh_refined.level);
+    gelu_layer.prepare_weight();
+    FeatureMatEncrypted gelu_enc = gelu_layer.run(context, half_tanh_refined, X_for_gelu);
+    REQUIRE(gelu_enc.level == init_level - 17);
     CAPTURE(gelu_enc.data[0].get_scale(), default_scale);
     REQUIRE(fabs(gelu_enc.data[0].get_scale() - default_scale) <= default_scale * 1.0e-12);
 

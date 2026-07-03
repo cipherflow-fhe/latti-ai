@@ -49,6 +49,7 @@
 #include "fhe_layers/par_block_col_major_transpose.h"
 #include "fhe_layers/par_upper_diagonal_layernorm.h"
 #include "fhe_layers/par_upper_diagonal_poly.h"
+#include "fhe_layers/par_upper_diagonal_poly_mult_ct.h"
 #include "fhe_layers/par_upper_diagonal_polyact.h"
 #include "fhe_layers/poly_relu2d.h"
 #include "fhe_layers/poly_relu_base.h"
