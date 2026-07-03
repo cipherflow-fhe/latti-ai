@@ -39,13 +39,20 @@ public:
     void prepare_weight_lazy() override;
 
     ls::CkksPlaintextRingt generate_weight_pt_for_stockmeyer(ls::CkksContext& ctx, int coeff_idx, int ct_idx) const;
+    ls::CkksPlaintextRingt
+    generate_weight_pt_for_stockmeyer_horner(ls::CkksContext& ctx, int coeff_idx, int ct_idx) const;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     FeatureMatEncrypted run_stockmeyer(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
+    FeatureMatEncrypted run_stockmeyer_horner(ls::CkksContext& ctx, const FeatureMatEncrypted& x, int baby_steps = 8);
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
     std::vector<ls::CkksCiphertext> run_core_stockmeyer(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
+    std::vector<ls::CkksCiphertext>
+    run_core_stockmeyer_horner(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x, int baby_steps = 8);
     void prepare_weight_stockmeyer();
     void prepare_weight_stockmeyer_lazy();
+    void prepare_weight_stockmeyer_horner(int baby_steps = 8);
+    void prepare_weight_stockmeyer_horner_lazy(int baby_steps = 8);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
 private:
@@ -53,6 +60,8 @@ private:
     uint32_t H_prepad_ = 0, H_ = 0, m_ = 0, n_ = 0, packed_extent_ = 0;
     uint32_t n_slot_ = 0, segment_len_ = 0, c_ = 0, cts_per_mb_ = 0, n_mb_ = 0;
     std::vector<std::vector<ls::CkksPlaintextRingt>> stockmeyer_weight_pt_;
+    std::vector<std::vector<ls::CkksPlaintextRingt>> stockmeyer_horner_weight_pt_;
+    int stockmeyer_horner_weight_baby_steps_ = 0;
 
     uint32_t ct_index(uint32_t mb, uint32_t ct_local) const;
     uint32_t total_cts() const;

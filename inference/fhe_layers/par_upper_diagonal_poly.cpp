@@ -151,6 +151,17 @@ ParUpperDiagonalPoly::generate_weight_pt_for_stockmeyer(CkksContext& ctx, int co
     return ctx.encode_ringt(build_coeff_vec(static_cast<uint32_t>(coeff_idx), mb, ct_local), pack_scale);
 }
 
+CkksPlaintextRingt
+ParUpperDiagonalPoly::generate_weight_pt_for_stockmeyer_horner(CkksContext& ctx, int coeff_idx, int ct_idx) const {
+    assert(coeff_idx >= 0 && coeff_idx <= order);
+    assert(ct_idx >= 0 && static_cast<uint32_t>(ct_idx) < total_cts());
+
+    uint32_t mb = static_cast<uint32_t>(ct_idx) / cts_per_mb_;
+    uint32_t ct_local = static_cast<uint32_t>(ct_idx) % cts_per_mb_;
+    double pack_scale = cached_stockmeyer_horner_coeff_scale.at(coeff_idx);
+    return ctx.encode_ringt(build_coeff_vec(static_cast<uint32_t>(coeff_idx), mb, ct_local), pack_scale);
+}
+
 void ParUpperDiagonalPoly::prepare_weight() {
     prepare_weight_stockmeyer();
 }
@@ -177,6 +188,29 @@ void ParUpperDiagonalPoly::prepare_weight_stockmeyer() {
 void ParUpperDiagonalPoly::prepare_weight_stockmeyer_lazy() {
     init_stockmeyer();
     stockmeyer_weight_pt_.clear();
+}
+
+void ParUpperDiagonalPoly::prepare_weight_stockmeyer_horner(int baby_steps) {
+    init_stockmeyer_horner(baby_steps);
+
+    uint32_t n_ct = total_cts();
+    stockmeyer_horner_weight_pt_.resize(order + 1);
+    stockmeyer_horner_weight_baby_steps_ = baby_steps;
+    CkksContext ctx = CkksContext::create_empty_context(param_);
+
+    parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int coeff_idx) {
+        stockmeyer_horner_weight_pt_[coeff_idx].resize(n_ct);
+        for (uint32_t ct_idx = 0; ct_idx < n_ct; ct_idx++) {
+            stockmeyer_horner_weight_pt_[coeff_idx][ct_idx] =
+                generate_weight_pt_for_stockmeyer_horner(ctx_copy, coeff_idx, ct_idx);
+        }
+    });
+}
+
+void ParUpperDiagonalPoly::prepare_weight_stockmeyer_horner_lazy(int baby_steps) {
+    init_stockmeyer_horner(baby_steps);
+    stockmeyer_horner_weight_pt_.clear();
+    stockmeyer_horner_weight_baby_steps_ = baby_steps;
 }
 
 vector<CkksCiphertext> ParUpperDiagonalPoly::run_core(CkksContext& ctx, const vector<CkksCiphertext>& x) {
@@ -441,6 +475,307 @@ vector<CkksCiphertext> ParUpperDiagonalPoly::run_core_stockmeyer(CkksContext& ct
     return result;
 }
 
+vector<CkksCiphertext>
+ParUpperDiagonalPoly::run_core_stockmeyer_horner(CkksContext& ctx, const vector<CkksCiphertext>& x, int baby_steps) {
+    init_stockmeyer_horner(baby_steps);
+    vector<CkksCiphertext> result(x.size());
+
+    if (order <= 0 || order >= 64) {
+        throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner supports only 1 <= order < 64");
+    }
+    if (!stockmeyer_horner_weight_pt_.empty() && stockmeyer_horner_weight_baby_steps_ != baby_steps) {
+        throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner prepared weight baby_steps mismatch");
+    }
+
+    struct StockmeyerHornerNode {
+        CkksCiphertext ct;
+        int const_coeff_idx = -1;
+        int target_level = -1;
+        double target_scale = 0.0;
+        bool has_ct = false;
+        bool const_only = false;
+    };
+
+    parallel_for(x.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int x_idx) {
+        map<int, CkksCiphertext> x_powers;
+        x_powers[1] = x[x_idx].copy();
+        if (x_powers[1].is_empty()) {
+            throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: input x[" + to_string(x_idx) +
+                                "] has invalid handle");
+        }
+
+        auto drop_to_level = [&](CkksCiphertext ct, int target_level, const string& label) -> CkksCiphertext {
+            if (target_level < 0) {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner " + label + ": negative target level");
+            }
+            while (ct.get_level() > target_level) {
+                ct = ctx_copy.drop_level(ct);
+            }
+            if (ct.get_level() != target_level) {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner " + label + ": cannot raise level from " +
+                                    to_string(ct.get_level()) + " to " + to_string(target_level));
+            }
+            return ct;
+        };
+
+        auto square_power = [&](int power, int half_power) {
+            auto half = x_powers.at(half_power).copy();
+            x_powers[power] = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(half, half)),
+                                               ctx_copy.get_parameter().get_default_scale());
+            if (x_powers[power].is_empty()) {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: x^" + to_string(power) +
+                                    " is empty after computation");
+            }
+        };
+
+        for (const auto& kv : stockmeyer_horner_powers) {
+            int power = kv.first;
+            const auto& info = kv.second;
+            if (power <= 1) {
+                continue;
+            }
+            square_power(power, info.decomp_a);
+        }
+
+        auto get_coeff_mul = [&](int coeff_idx, int level) {
+            auto it = cached_stockmeyer_horner_level_order.find(coeff_idx);
+            if (it == cached_stockmeyer_horner_level_order.end() || it->second != level) {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: coeff " + to_string(coeff_idx) +
+                                    " expected at level " +
+                                    to_string(it == cached_stockmeyer_horner_level_order.end() ? -1 : it->second) +
+                                    ", got " + to_string(level));
+            }
+
+            if (stockmeyer_horner_weight_pt_.empty()) {
+                auto coeff_pt_rt = generate_weight_pt_for_stockmeyer_horner(ctx_copy, coeff_idx, x_idx);
+                return ctx_copy.ringt_to_mul(coeff_pt_rt, level);
+            }
+            return ctx_copy.ringt_to_mul(stockmeyer_horner_weight_pt_[coeff_idx][x_idx], level);
+        };
+
+        auto add_const_coeff = [&](const CkksCiphertext& acc, int coeff_idx) -> CkksCiphertext {
+            if (stockmeyer_horner_weight_pt_.empty()) {
+                auto coeff_pt = generate_weight_pt_for_stockmeyer_horner(ctx_copy, coeff_idx, x_idx);
+                return ctx_copy.add_plain_ringt(acc, coeff_pt);
+            }
+            return ctx_copy.add_plain_ringt(acc, stockmeyer_horner_weight_pt_[coeff_idx][x_idx]);
+        };
+
+        auto multiply_plain_term = [&](const CkksCiphertext& power_ct, int coeff_idx, int mult_level,
+                                       double target_scale, const string& label) -> CkksCiphertext {
+            auto power_copy = drop_to_level(power_ct.copy(), mult_level, label + "_power");
+            auto coeff_pt = get_coeff_mul(coeff_idx, power_copy.get_level());
+            auto term = ctx_copy.rescale(ctx_copy.mult_plain_mul(power_copy, coeff_pt), target_scale);
+            if (term.is_empty()) {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: empty term in " + label);
+            }
+            return term;
+        };
+
+        auto multiply_ct_term = [&](const CkksCiphertext& left, const CkksCiphertext& right, double target_scale,
+                                    const string& label) -> CkksCiphertext {
+            auto term = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(left, right)), target_scale);
+            if (term.is_empty()) {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: empty ct term in " + label);
+            }
+            return term;
+        };
+
+        auto clone_node = [](const StockmeyerHornerNode& node) -> StockmeyerHornerNode {
+            StockmeyerHornerNode cloned;
+            cloned.const_coeff_idx = node.const_coeff_idx;
+            cloned.target_level = node.target_level;
+            cloned.target_scale = node.target_scale;
+            cloned.has_ct = node.has_ct;
+            cloned.const_only = node.const_only;
+            if (node.has_ct) {
+                cloned.ct = node.ct.copy();
+            }
+            return cloned;
+        };
+
+        auto eval_baby_node = [&](int baby_idx) -> StockmeyerHornerNode {
+            int base = baby_idx * stockmeyer_horner_baby_steps;
+            if (base > order) {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: missing baby polynomial " +
+                                    to_string(baby_idx));
+            }
+
+            StockmeyerHornerNode node;
+            int target_level = stockmeyer_horner_baby_poly_output_level[baby_idx];
+            double target_scale = stockmeyer_horner_baby_poly_output_scale[baby_idx];
+            node.target_level = target_level;
+            node.target_scale = target_scale;
+
+            CkksCiphertext acc;
+            bool acc_initialized = false;
+            auto add_term = [&](const CkksCiphertext& term, const string& label) {
+                if (term.is_empty()) {
+                    throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: empty baby term in " + label);
+                }
+                if (!acc_initialized) {
+                    acc = term.copy();
+                    acc_initialized = true;
+                } else {
+                    acc = ctx_copy.add(acc, term);
+                }
+                if (acc.is_empty()) {
+                    throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: empty baby accumulator in " + label);
+                }
+            };
+
+            auto add_direct_power_term = [&](int offset, int power) {
+                if (base + offset > order) {
+                    return;
+                }
+                auto term =
+                    multiply_plain_term(x_powers.at(power), base + offset, target_level + 1, target_scale,
+                                        "P" + to_string(baby_idx) + "_c" + to_string(offset) + "x" + to_string(power));
+                add_term(term, "P" + to_string(baby_idx) + "_c" + to_string(offset) + "x" + to_string(power));
+            };
+
+            add_direct_power_term(1, 1);
+            add_direct_power_term(2, 2);
+
+            if (base + 3 <= order) {
+                double c3x_scale = (target_scale / stockmeyer_horner_powers.at(2).scale) *
+                                   ctx_copy.get_parameter().get_q(target_level + 1);
+                auto c3x = multiply_plain_term(x_powers.at(1), base + 3, target_level + 2, c3x_scale,
+                                               "P" + to_string(baby_idx) + "_c3x");
+                auto x2_for_c3 =
+                    drop_to_level(x_powers.at(2).copy(), target_level + 1, "P" + to_string(baby_idx) + "_x2_for_c3");
+                auto c3x3 = multiply_ct_term(c3x, x2_for_c3, target_scale, "P" + to_string(baby_idx) + "_c3x3");
+                add_term(c3x3, "P" + to_string(baby_idx) + "_c3x3");
+            }
+
+            if (stockmeyer_horner_baby_steps == 8) {
+                add_direct_power_term(4, 4);
+
+                if (base + 5 <= order) {
+                    double c5x_scale = (target_scale / stockmeyer_horner_powers.at(4).scale) *
+                                       ctx_copy.get_parameter().get_q(target_level + 1);
+                    auto c5x = multiply_plain_term(x_powers.at(1), base + 5, target_level + 2, c5x_scale,
+                                                   "P" + to_string(baby_idx) + "_c5x");
+                    auto x4_for_c5 = drop_to_level(x_powers.at(4).copy(), target_level + 1,
+                                                   "P" + to_string(baby_idx) + "_x4_for_c5");
+                    auto c5x5 = multiply_ct_term(c5x, x4_for_c5, target_scale, "P" + to_string(baby_idx) + "_c5x5");
+                    add_term(c5x5, "P" + to_string(baby_idx) + "_c5x5");
+                }
+
+                if (base + 6 <= order) {
+                    double c6x2_scale = (target_scale / stockmeyer_horner_powers.at(4).scale) *
+                                        ctx_copy.get_parameter().get_q(target_level + 1);
+                    auto c6x2 = multiply_plain_term(x_powers.at(2), base + 6, target_level + 2, c6x2_scale,
+                                                    "P" + to_string(baby_idx) + "_c6x2");
+                    auto x4_for_c6 = drop_to_level(x_powers.at(4).copy(), target_level + 1,
+                                                   "P" + to_string(baby_idx) + "_x4_for_c6");
+                    auto c6x6 = multiply_ct_term(c6x2, x4_for_c6, target_scale, "P" + to_string(baby_idx) + "_c6x6");
+                    add_term(c6x6, "P" + to_string(baby_idx) + "_c6x6");
+                }
+
+                if (base + 7 <= order) {
+                    double c7x2_scale = (target_scale / stockmeyer_horner_powers.at(4).scale) *
+                                        ctx_copy.get_parameter().get_q(target_level + 1);
+                    double c7x_scale = (c7x2_scale / stockmeyer_horner_powers.at(2).scale) *
+                                       ctx_copy.get_parameter().get_q(target_level + 2);
+                    auto c7x = multiply_plain_term(x_powers.at(1), base + 7, target_level + 3, c7x_scale,
+                                                   "P" + to_string(baby_idx) + "_c7x");
+                    auto x2_for_c7 = drop_to_level(x_powers.at(2).copy(), target_level + 2,
+                                                   "P" + to_string(baby_idx) + "_x2_for_c7");
+                    auto c7x3 = multiply_ct_term(c7x, x2_for_c7, c7x2_scale, "P" + to_string(baby_idx) + "_c7x3");
+                    auto x4_for_c7 = drop_to_level(x_powers.at(4).copy(), target_level + 1,
+                                                   "P" + to_string(baby_idx) + "_x4_for_c7");
+                    auto c7x7 = multiply_ct_term(c7x3, x4_for_c7, target_scale, "P" + to_string(baby_idx) + "_c7x7");
+                    add_term(c7x7, "P" + to_string(baby_idx) + "_c7x7");
+                }
+            }
+
+            if (acc_initialized) {
+                node.ct = add_const_coeff(acc, base);
+                if (node.ct.is_empty()) {
+                    throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: empty baby polynomial P" +
+                                        to_string(baby_idx));
+                }
+                node.has_ct = true;
+                return node;
+            }
+
+            node.const_coeff_idx = base;
+            node.const_only = true;
+            return node;
+        };
+
+        auto combine_horner = [&](const StockmeyerHornerNode& left, const StockmeyerHornerNode& right,
+                                  const string& label) -> StockmeyerHornerNode {
+            StockmeyerHornerNode combined_node;
+            combined_node.target_level = left.target_level;
+            combined_node.target_scale = left.target_scale;
+
+            int mult_level = left.target_level + 1;
+            if (right.target_level != mult_level) {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: right node target level mismatch in " +
+                                    label);
+            }
+            auto power_copy = drop_to_level(x_powers.at(stockmeyer_horner_baby_steps).copy(), mult_level,
+                                            label + "_x" + to_string(stockmeyer_horner_baby_steps));
+
+            CkksCiphertext term;
+            if (right.has_ct) {
+                auto right_copy = drop_to_level(right.ct.copy(), mult_level, label + "_right");
+                term = multiply_ct_term(right_copy, power_copy, left.target_scale, label + "_right_xB");
+            } else if (right.const_only) {
+                auto coeff_pt = get_coeff_mul(right.const_coeff_idx, power_copy.get_level());
+                term = ctx_copy.rescale(ctx_copy.mult_plain_mul(power_copy, coeff_pt), left.target_scale);
+            } else {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: empty right node in " + label);
+            }
+
+            CkksCiphertext combined;
+            if (left.has_ct) {
+                auto left_copy = drop_to_level(left.ct.copy(), left.target_level, label + "_left");
+                combined = ctx_copy.add(left_copy, term);
+            } else if (left.const_only) {
+                combined = add_const_coeff(term, left.const_coeff_idx);
+            } else {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: empty left node in " + label);
+            }
+
+            if (combined.is_empty()) {
+                throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: empty combined node " + label);
+            }
+            combined_node.ct = move(combined);
+            combined_node.has_ct = true;
+            return combined_node;
+        };
+
+        vector<StockmeyerHornerNode> blocks;
+        blocks.reserve(stockmeyer_horner_n_baby_polys);
+        for (int j = 0; j < stockmeyer_horner_n_baby_polys; j++) {
+            blocks.push_back(eval_baby_node(j));
+        }
+
+        if (blocks.empty()) {
+            throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: no baby blocks");
+        }
+
+        StockmeyerHornerNode acc = clone_node(blocks.back());
+        for (int j = static_cast<int>(blocks.size()) - 2; j >= 0; j--) {
+            acc = combine_horner(blocks[j], acc, "horner_combine_" + to_string(j));
+        }
+
+        if (!acc.has_ct) {
+            throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: result is not a ciphertext");
+        }
+        result[x_idx] = acc.ct.copy();
+
+        if (result[x_idx].is_empty()) {
+            throw runtime_error("ParUpperDiagonalPoly Stockmeyer Horner: result[" + to_string(x_idx) + "] is empty");
+        }
+    });
+
+    return result;
+}
+
 FeatureMatEncrypted ParUpperDiagonalPoly::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
     return run_stockmeyer(ctx, x);
 }
@@ -460,6 +795,26 @@ FeatureMatEncrypted ParUpperDiagonalPoly::run_stockmeyer(CkksContext& ctx, const
     result.n_channel = x.n_channel;
     result.n_channel_per_ct = x.n_channel_per_ct;
     result.data = run_core_stockmeyer(ctx, x.data);
+    result.level = result.data[0].get_level();
+    return result;
+}
+
+FeatureMatEncrypted
+ParUpperDiagonalPoly::run_stockmeyer_horner(CkksContext& ctx, const FeatureMatEncrypted& x, int baby_steps) {
+    init_stockmeyer_horner(baby_steps);
+    assert(x.level == level_);
+    assert(x.shape[0] == n_prepad_ && x.shape[1] == total_cols_);
+    assert(x.head_shape[0] == n_prepad_ && x.head_shape[1] == m_prepad_);
+    assert(x.matmul_block_size == m_);
+    assert(x.data.size() == total_cts());
+
+    FeatureMatEncrypted result(&ctx, stockmeyer_horner_output_level);
+    result.shape = x.shape;
+    result.head_shape = x.head_shape;
+    result.matmul_block_size = x.matmul_block_size;
+    result.n_channel = x.n_channel;
+    result.n_channel_per_ct = x.n_channel_per_ct;
+    result.data = run_core_stockmeyer_horner(ctx, x.data, baby_steps);
     result.level = result.data[0].get_level();
     return result;
 }

@@ -36,6 +36,7 @@ public:
     MatPolyBase(const ls::CkksParameter& param_in, Array<double, 2>&& coeffs_in, uint32_t level_in, int order_in);
 
     static int compute_stockmeyer_level_cost(int order);
+    static int compute_stockmeyer_horner_level_cost(int order, int baby_steps = 8);
 
 protected:
     int N = 0;
@@ -45,6 +46,10 @@ protected:
     void init_stockmeyer();
     void compute_stockmeyer_power_info();
     void compute_coefficient_scales_stockmeyer(std::map<int, double>& coeff_scale, std::map<int, int>& level_order);
+    void init_stockmeyer_horner(int baby_steps = 8);
+    void compute_stockmeyer_horner_power_info();
+    void compute_coefficient_scales_stockmeyer_horner(std::map<int, double>& coeff_scale,
+                                                      std::map<int, int>& level_order);
 
     std::vector<double> modulus;
 
@@ -57,4 +62,14 @@ protected:
     std::map<int, double> cached_stockmeyer_coeff_scale;
     std::map<int, int> cached_stockmeyer_level_order;
     bool stockmeyer_initialized = false;
+
+    int stockmeyer_horner_baby_steps = 8;
+    int stockmeyer_horner_n_baby_polys = 0;
+    std::map<int, MatPolyPowerInfo> stockmeyer_horner_powers;
+    std::vector<double> stockmeyer_horner_baby_poly_output_scale;
+    std::vector<int> stockmeyer_horner_baby_poly_output_level;
+    int stockmeyer_horner_output_level = 0;
+    std::map<int, double> cached_stockmeyer_horner_coeff_scale;
+    std::map<int, int> cached_stockmeyer_horner_level_order;
+    bool stockmeyer_horner_initialized = false;
 };
