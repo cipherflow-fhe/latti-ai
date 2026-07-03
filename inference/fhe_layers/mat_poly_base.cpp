@@ -49,6 +49,22 @@ int stockmeyer_baby_poly_count(int order) {
     return (order + 4) / 4;
 }
 
+void validate_horner_baby_steps(int baby_steps) {
+    if (baby_steps != 4 && baby_steps != 8) {
+        throw invalid_argument("MatPolyBase Stockmeyer Horner supports only baby_steps 4 or 8");
+    }
+}
+
+int log2_horner_baby_steps(int baby_steps) {
+    validate_horner_baby_steps(baby_steps);
+    return baby_steps == 4 ? 2 : 3;
+}
+
+int stockmeyer_horner_baby_poly_count(int order, int baby_steps) {
+    validate_horner_baby_steps(baby_steps);
+    return (order + baby_steps) / baby_steps;
+}
+
 }  // namespace
 
 MatPolyBase::MatPolyBase(const CkksParameter& param_in, Array<double, 2>&& coeffs_in, uint32_t level_in, int order_in)
@@ -67,6 +83,16 @@ int MatPolyBase::compute_stockmeyer_level_cost(int order) {
 
     int n_baby_polys = stockmeyer_baby_poly_count(order);
     return 2 + ceil_log2_int(n_baby_polys);
+}
+
+int MatPolyBase::compute_stockmeyer_horner_level_cost(int order, int baby_steps) {
+    validate_horner_baby_steps(baby_steps);
+    if (order <= 0 || order >= 64) {
+        throw invalid_argument("MatPolyBase Stockmeyer Horner supports only order < 64");
+    }
+
+    int n_baby_polys = stockmeyer_horner_baby_poly_count(order, baby_steps);
+    return (n_baby_polys - 1) + log2_horner_baby_steps(baby_steps);
 }
 
 void MatPolyBase::init_stockmeyer() {
@@ -97,6 +123,36 @@ void MatPolyBase::init_stockmeyer() {
     stockmeyer_initialized = true;
 }
 
+void MatPolyBase::init_stockmeyer_horner(int baby_steps) {
+    validate_horner_baby_steps(baby_steps);
+    if (stockmeyer_horner_initialized && stockmeyer_horner_baby_steps == baby_steps) {
+        return;
+    }
+
+    if (order <= 0 || order >= 64) {
+        throw invalid_argument("MatPolyBase Stockmeyer Horner supports only order < 64");
+    }
+
+    int level_cost = compute_stockmeyer_horner_level_cost(order, baby_steps);
+    if ((int)level_ < level_cost) {
+        throw invalid_argument("MatPolyBase Stockmeyer Horner input level is too low for order " + to_string(order));
+    }
+
+    modulus.clear();
+    for (int i = 0; i <= (int)level_; i++) {
+        modulus.push_back(param_.get_q(i));
+    }
+
+    stockmeyer_horner_baby_steps = baby_steps;
+    stockmeyer_horner_n_baby_polys = stockmeyer_horner_baby_poly_count(order, baby_steps);
+    stockmeyer_horner_output_level = (int)level_ - level_cost;
+
+    compute_stockmeyer_horner_power_info();
+    compute_coefficient_scales_stockmeyer_horner(cached_stockmeyer_horner_coeff_scale,
+                                                 cached_stockmeyer_horner_level_order);
+    stockmeyer_horner_initialized = true;
+}
+
 void MatPolyBase::compute_stockmeyer_power_info() {
     double S = param_.get_default_scale();
     stockmeyer_powers.clear();
@@ -123,6 +179,27 @@ void MatPolyBase::compute_stockmeyer_power_info() {
     }
 
     for (int power = 2; power <= max_power; power <<= 1) {
+        add_square_power(power, power / 2);
+    }
+}
+
+void MatPolyBase::compute_stockmeyer_horner_power_info() {
+    double S = param_.get_default_scale();
+    stockmeyer_horner_powers.clear();
+
+    stockmeyer_horner_powers[1] = {0, (int)level_, S, 0, 0, true};
+
+    auto add_square_power = [&](int power, int half_power) {
+        const auto& half = stockmeyer_horner_powers.at(half_power);
+        int result_level = half.level - 1;
+        if (result_level < 0 || half.level >= (int)modulus.size()) {
+            throw invalid_argument("MatPolyBase Stockmeyer Horner power level is out of range");
+        }
+        double result_scale = (half.scale / modulus[half.level]) * half.scale;
+        stockmeyer_horner_powers[power] = {half.depth + 1, result_level, result_scale, half_power, half_power, true};
+    };
+
+    for (int power = 2; power <= stockmeyer_horner_baby_steps; power <<= 1) {
         add_square_power(power, power / 2);
     }
 }
@@ -203,6 +280,88 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
             level_order[base + 3] = target_level + 2;
             coeff_scale[base + 3] =
                 ((target_scale / A2) * param_.get_q(target_level + 1) / A1) * param_.get_q(target_level + 2);
+        }
+    }
+}
+
+void MatPolyBase::compute_coefficient_scales_stockmeyer_horner(std::map<int, double>& coeff_scale,
+                                                               std::map<int, int>& level_order) {
+    coeff_scale.clear();
+    level_order.clear();
+
+    double S = param_.get_default_scale();
+    double A1 = stockmeyer_horner_powers.at(1).scale;
+    double A2 = stockmeyer_horner_powers.at(2).scale;
+    double A4 = stockmeyer_horner_powers.at(4).scale;
+    double AB = stockmeyer_horner_powers.at(stockmeyer_horner_baby_steps).scale;
+
+    stockmeyer_horner_baby_poly_output_scale.assign(stockmeyer_horner_n_baby_polys, 0.0);
+    stockmeyer_horner_baby_poly_output_level.assign(stockmeyer_horner_n_baby_polys, -1);
+
+    int Lout = stockmeyer_horner_output_level;
+    stockmeyer_horner_baby_poly_output_level[0] = Lout;
+    stockmeyer_horner_baby_poly_output_scale[0] = S;
+
+    for (int j = 1; j < stockmeyer_horner_n_baby_polys; j++) {
+        int target_level = Lout + j;
+        if (target_level < 0 || target_level > (int)level_) {
+            throw invalid_argument("MatPolyBase Stockmeyer Horner baby polynomial target level is out of range");
+        }
+        stockmeyer_horner_baby_poly_output_level[j] = target_level;
+        stockmeyer_horner_baby_poly_output_scale[j] =
+            (stockmeyer_horner_baby_poly_output_scale[j - 1] / AB) * param_.get_q(target_level);
+    }
+
+    auto set_coeff = [&](int coeff_idx, int coeff_level, double scale) {
+        if (coeff_level < 0 || coeff_level > (int)level_) {
+            throw invalid_argument("MatPolyBase Stockmeyer Horner coefficient target level is out of range");
+        }
+        level_order[coeff_idx] = coeff_level;
+        coeff_scale[coeff_idx] = scale;
+    };
+
+    for (int j = 0; j < stockmeyer_horner_n_baby_polys; j++) {
+        int target_level = stockmeyer_horner_baby_poly_output_level[j];
+        double target_scale = stockmeyer_horner_baby_poly_output_scale[j];
+        if (target_level < 0 || target_level > (int)level_) {
+            throw invalid_argument("MatPolyBase Stockmeyer Horner baby polynomial target level is out of range");
+        }
+
+        int base = j * stockmeyer_horner_baby_steps;
+        if (base <= order) {
+            set_coeff(base, target_level, target_scale);
+        }
+        if (base + 1 <= order) {
+            set_coeff(base + 1, target_level + 1, (target_scale / A1) * param_.get_q(target_level + 1));
+        }
+        if (base + 2 <= order) {
+            set_coeff(base + 2, target_level + 1, (target_scale / A2) * param_.get_q(target_level + 1));
+        }
+        if (base + 3 <= order) {
+            set_coeff(base + 3, target_level + 2,
+                      ((target_scale / A2) * param_.get_q(target_level + 1) / A1) * param_.get_q(target_level + 2));
+        }
+
+        if (stockmeyer_horner_baby_steps == 4) {
+            continue;
+        }
+
+        if (base + 4 <= order) {
+            set_coeff(base + 4, target_level + 1, (target_scale / A4) * param_.get_q(target_level + 1));
+        }
+        if (base + 5 <= order) {
+            set_coeff(base + 5, target_level + 2,
+                      ((target_scale / A4) * param_.get_q(target_level + 1) / A1) * param_.get_q(target_level + 2));
+        }
+        if (base + 6 <= order) {
+            set_coeff(base + 6, target_level + 2,
+                      ((target_scale / A4) * param_.get_q(target_level + 1) / A2) * param_.get_q(target_level + 2));
+        }
+        if (base + 7 <= order) {
+            set_coeff(
+                base + 7, target_level + 3,
+                (((target_scale / A4) * param_.get_q(target_level + 1) / A2) * param_.get_q(target_level + 2) / A1) *
+                    param_.get_q(target_level + 3));
         }
     }
 }
