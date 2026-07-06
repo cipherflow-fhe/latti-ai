@@ -33,6 +33,7 @@ class FheTaskCpu;
 namespace ls = lattisense;
 
 enum class ComputeDevice { CPU, GPU, FPGA };
+enum class SubGraphExecMode { MegaLazy, DirectLayer };
 
 class InferenceProcess;
 class InitInferenceProcess;
@@ -73,6 +74,15 @@ public:
     FeatureNode(const json& json_data);
 
     int get_n_ciphertexts(const Duo& block_shape) const;
+};
+
+struct InferenceSubGraph {
+    std::string name;
+    SubGraphExecMode mode = SubGraphExecMode::MegaLazy;
+    std::filesystem::path runner_path;
+    json json_data;
+    json json_features;
+    json json_layers;
 };
 
 template <int dim>
@@ -116,6 +126,12 @@ public:
 
     virtual void init_parameters(bool is_bootstrapping = false);
     virtual void load_model_prepare();
+    bool has_hybrid_pipeline() const {
+        return hybrid_pipeline_enabled_;
+    }
+    const std::vector<InferenceSubGraph>& subgraphs() const {
+        return subgraphs_;
+    }
 #ifdef INFERENCE_SDK_ENABLE_MPC
     void set_mpc_init(InitMpc& init_mpc);
     InitMpc& mpc_init();
@@ -217,6 +233,8 @@ private:
 
     std::map<std::string, UPtr<ls::CkksParameter>> ckks_parameters_;
     std::map<std::string, UPtr<Layer>> ckks_layers_;
+    bool hybrid_pipeline_enabled_ = false;
+    std::vector<InferenceSubGraph> subgraphs_;
 #ifdef INFERENCE_SDK_ENABLE_MPC
     UPtr<InitMpc> owned_mpc_init_;
     InitMpc* mpc_init_ = nullptr;
@@ -248,6 +266,8 @@ public:
     void run_task_sdk(bool is_mpc = false);
     void run_task_plaintext(bool is_mpc = false);
     void run_task_lazy(bool is_mpc = false, ls::ProgressCallback progress_cb = nullptr);
+    void run_task_hybrid_pipeline(bool enable_mpc = false, ls::ProgressCallback progress_cb = nullptr);
+    void run_task_plaintext_hybrid_pipeline(bool is_mpc = false);
 
     // load_model
     void prepare_task();
@@ -255,9 +275,18 @@ public:
 private:
     // Prepare CustomData wrappers for all layer objects (keyed by layer_id)
     std::vector<std::pair<std::string, fhe_ops_lib::CustomData>> prepare_layer_data_sources();
+    std::vector<std::pair<std::string, fhe_ops_lib::CustomData>>
+    prepare_layer_data_sources(const json& graph_layers, const json& graph_features);
 
     // Register the encode_pt custom executor
     void register_custom_executors(std::unordered_map<std::string, ExecutorFunc>& executors);
+    void run_task_lazy_graph(const InferenceSubGraph& graph,
+                             int graph_idx,
+                             bool is_mpc = false,
+                             ls::ProgressCallback progress_cb = nullptr);
+    void run_task_direct_graph(const InferenceSubGraph& graph, bool enable_mpc = false);
+    void run_task_plaintext_graph(const InferenceSubGraph& graph, bool is_mpc = false);
+    void prepare_subgraph_task(int graph_idx);
     void set_feature(const std::string& feature_id, UPtr<FeatureEncrypted> feature);
     template <typename T> T get_ciphertext_output_feature(const std::string& feature_id) {
         return dynamic_cast<const T&>(_get_feature(feature_id)).copy();
@@ -269,8 +298,10 @@ private:
 
 #ifdef INFERENCE_SDK_ENABLE_GPU
     std::unique_ptr<lattisense::FheTaskGpu> fhe_task_gpu_;
+    std::vector<std::unique_ptr<lattisense::FheTaskGpu>> subgraph_fhe_task_gpu_;
 #endif
     std::unique_ptr<lattisense::FheTaskCpu> fhe_task_cpu_;
+    std::vector<std::unique_ptr<lattisense::FheTaskCpu>> subgraph_fhe_task_cpu_;
     std::unordered_map<std::string, ExecutorFunc> task_custom_executors_;
 };
 

@@ -19,7 +19,7 @@
 #endif
 
 inline std::string default_task_dir() {
-    return std::string(LATTIAI_SOURCE_DIR) + "/data/cifar10/task";
+    return std::string(LATTIAI_SOURCE_DIR) + "/data/cifar10_split/task";
 }
 
 inline std::string default_input_csv() {

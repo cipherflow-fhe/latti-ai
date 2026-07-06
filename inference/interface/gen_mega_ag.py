@@ -42,6 +42,18 @@ def main():
         required=True,
         help='Path to the task directory',
     )
+    parser.add_argument(
+        '--graph-json',
+        type=str,
+        default=None,
+        help='Generate mega_ag for one graph JSON, relative to task/server unless absolute.',
+    )
+    parser.add_argument(
+        '--output-instruction-path',
+        type=str,
+        default=None,
+        help='Directory for task_signature.json and mega_ag.json, relative to task/server unless absolute.',
+    )
     args = parser.parse_args()
 
     task_dir = os.path.abspath(args.task_dir)
@@ -76,9 +88,39 @@ def main():
     with open(server_config_path, 'r', encoding='utf-8') as f:
         server_config = json.load(f)
 
-    for erg_name, erg_config in server_config['server_task'].items():
-        if erg_config['enable_fpga']:
-            gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style, lazy=True)
+    def resolve_server_path(path):
+        if path is None:
+            return None
+        path_obj = Path(path)
+        if path_obj.is_absolute():
+            return str(path_obj)
+        return str(Path(ergs_path) / path_obj)
+
+    def generate_one(graph_json='nn_layers_ct_0.json', output_instruction_path=None):
+        gen_custom_task(
+            ergs_path,
+            use_gpu=True,
+            param_name=param_name,
+            style=style,
+            lazy=True,
+            graph_json=graph_json,
+            output_instruction_path=resolve_server_path(output_instruction_path),
+        )
+
+    if args.graph_json is not None:
+        generate_one(args.graph_json, args.output_instruction_path)
+    elif 'hybrid_pipeline' in server_config:
+        for graph_config in server_config['hybrid_pipeline']:
+            mode = graph_config.get('mode', 'mega_lazy')
+            if mode not in ('mega_lazy', 'mega', 'lazy'):
+                continue
+            graph_json = graph_config.get('json', graph_config.get('json_file', f"{graph_config['name']}.json"))
+            output_instruction_path = graph_config.get('runner_path')
+            generate_one(graph_json, output_instruction_path)
+    else:
+        for erg_name, erg_config in server_config['server_task'].items():
+            if erg_config['enable_fpga']:
+                generate_one()
 
     print(f'Done: mega_ag generated for {task_dir}.')
 

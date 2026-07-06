@@ -31,6 +31,29 @@ using namespace lattisense;
 uint64_t fhe_time = 0;
 bool normal_output = false;
 
+namespace {
+
+SubGraphExecMode parse_subgraph_mode(const json& graph_config) {
+    string mode = graph_config.value("mode", string("mega_lazy"));
+    if (mode == "mega_lazy" || mode == "mega" || mode == "lazy") {
+        return SubGraphExecMode::MegaLazy;
+    }
+    if (mode == "direct_layer" || mode == "direct" || mode == "layer") {
+        return SubGraphExecMode::DirectLayer;
+    }
+    throw runtime_error("Unknown hybrid pipeline graph mode: " + mode);
+}
+
+filesystem::path resolve_project_path(const filesystem::path& base, const string& path) {
+    filesystem::path p(path);
+    if (p.is_absolute()) {
+        return p;
+    }
+    return base / p;
+}
+
+}  // namespace
+
 PackType choose_pack_type(Duo shape, Duo block_shape) {
     if (shape[0] > block_shape[0] || shape[1] > block_shape[1]) {
         return PackType::InterleavedPacking;
@@ -633,56 +656,90 @@ void InitInferenceProcess::_init_fhe_avgpool1d_layer(const string& key, const js
 }
 
 void InitInferenceProcess::load_model_prepare() {
-    json_data = read_json(project_path / "nn_layers_ct_0.json");
-    json_features = json_data.at("feature");
-    json_layers = json_data.at("layer");
-    string block_input_feature = json_data["input_feature"][0];
-
     string h5_filename = project_path / "model_parameters.h5";
     hid_t h5_file = H5Fopen(h5_filename.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
-    for (auto& layer : json_layers.items()) {
-        const string& key = layer.key();
-        const json& value = layer.value();
-        const string& layer_type = value["type"].get<string>();
-        if (layer_type == "conv2d") {
-            if (pack_style == "multiplexed") {
-                _init_multiplexed_conv_layer(key, value, h5_file, block_shape);
-            } else {
-                _init_conv_layer(key, value, h5_file);
-            }
-        } else if (layer_type == "square2d") {
-            _init_square_layer(key, value, h5_file);
-        } else if (layer_type == "fc0") {
-            _init_dense_layer(key, value, h5_file);
-        } else if (layer_type == "add2d") {
-            _init_add_layer(key, value, block_input_feature);
-        } else if (layer_type == "reshape") {
-            _init_reshape_layer(key, value);
-        } else if (layer_type == "drop_level") {
-            _init_drop_level_layer(key, value);
+
+    auto init_graph_layers = [this, &h5_file](const json& graph_data) {
+        json_data = graph_data;
+        json_features = graph_data.at("feature");
+        json_layers = graph_data.at("layer");
+        string block_input_feature = graph_data["input_feature"][0];
+
+        for (auto& layer : json_layers.items()) {
+            const string& key = layer.key();
+            const json& value = layer.value();
+            const string& layer_type = value["type"].get<string>();
+            if (layer_type == "conv2d") {
+                if (pack_style == "multiplexed") {
+                    _init_multiplexed_conv_layer(key, value, h5_file, block_shape);
+                } else {
+                    _init_conv_layer(key, value, h5_file);
+                }
+            } else if (layer_type == "square2d") {
+                _init_square_layer(key, value, h5_file);
+            } else if (layer_type == "fc0") {
+                _init_dense_layer(key, value, h5_file);
+            } else if (layer_type == "add2d") {
+                _init_add_layer(key, value, block_input_feature);
+            } else if (layer_type == "reshape") {
+                _init_reshape_layer(key, value);
+            } else if (layer_type == "drop_level") {
+                _init_drop_level_layer(key, value);
 #ifdef INFERENCE_SDK_ENABLE_MPC
-        } else if (layer_type == "mpc_refresh") {
-            mpc_init().init_mpc_refresh_layer(*this, key, value);
+            } else if (layer_type == "mpc_refresh") {
+                mpc_init().init_mpc_refresh_layer(*this, key, value);
 #endif
-        } else if (layer_type == "concat2d") {
-            _init_concat_layer(key, value);
-        } else if (layer_type == "upsample") {
-            _init_upsample_layer(key, value, block_shape);
-        } else if (layer_type == "upsample_nearest") {
-            _init_upsample_nearest_layer(key, value);
-        } else if (layer_type == "mult_scalar") {
-            _init_mult_scalar_layer(key, value, h5_file, block_shape);
-        } else if (layer_type == "poly_relu2d" || layer_type == "polyact") {
-            _init_poly_relu_layer(key, value, h5_file, is_absorb_polyrelu, block_shape);
-        } else if (layer_type == "avgpool2d") {
-            bool is_adaptive_avgpool = value["is_adaptive_avgpool"];
-            _init_fhe_avgpool_layer(key, value, is_adaptive_avgpool, block_shape);
-        } else if (layer_type == "avgpool1d") {
-            bool is_adaptive_avgpool = value["is_adaptive_avgpool"];
-            _init_fhe_avgpool1d_layer(key, value, is_adaptive_avgpool);
-        } else if (layer_type == "conv1d") {
-            _init_conv1d_layer(key, value, h5_file);
+            } else if (layer_type == "concat2d") {
+                _init_concat_layer(key, value);
+            } else if (layer_type == "upsample") {
+                _init_upsample_layer(key, value, block_shape);
+            } else if (layer_type == "upsample_nearest") {
+                _init_upsample_nearest_layer(key, value);
+            } else if (layer_type == "mult_scalar") {
+                _init_mult_scalar_layer(key, value, h5_file, block_shape);
+            } else if (layer_type == "poly_relu2d" || layer_type == "polyact") {
+                _init_poly_relu_layer(key, value, h5_file, is_absorb_polyrelu, block_shape);
+            } else if (layer_type == "avgpool2d") {
+                bool is_adaptive_avgpool = value["is_adaptive_avgpool"];
+                _init_fhe_avgpool_layer(key, value, is_adaptive_avgpool, block_shape);
+            } else if (layer_type == "avgpool1d") {
+                bool is_adaptive_avgpool = value["is_adaptive_avgpool"];
+                _init_fhe_avgpool1d_layer(key, value, is_adaptive_avgpool);
+            } else if (layer_type == "conv1d") {
+                _init_conv1d_layer(key, value, h5_file);
+            }
         }
+    };
+
+    subgraphs_.clear();
+    json config = read_json((project_path / "task_config.json").string());
+    hybrid_pipeline_enabled_ = config.contains("hybrid_pipeline");
+
+    if (hybrid_pipeline_enabled_) {
+        for (const auto& graph_config : config["hybrid_pipeline"]) {
+            InferenceSubGraph graph;
+            graph.name = graph_config.value("name", string("graph_") + to_string(subgraphs_.size()));
+            graph.mode = parse_subgraph_mode(graph_config);
+            const string graph_json = graph_config.value("json", graph_config.value("json_file", graph.name + ".json"));
+            graph.runner_path = graph_config.contains("runner_path")
+                                    ? resolve_project_path(project_path, graph_config["runner_path"].get<string>())
+                                    : project_path;
+            graph.json_data = read_json(resolve_project_path(project_path, graph_json).string());
+            graph.json_features = graph.json_data.at("feature");
+            graph.json_layers = graph.json_data.at("layer");
+            init_graph_layers(graph.json_data);
+            subgraphs_.push_back(move(graph));
+        }
+        if (!subgraphs_.empty()) {
+            json_data = subgraphs_.front().json_data;
+            json_features = subgraphs_.front().json_features;
+            json_layers = subgraphs_.front().json_layers;
+        }
+    } else {
+        json_data = read_json((project_path / "nn_layers_ct_0.json").string());
+        json_features = json_data.at("feature");
+        json_layers = json_data.at("layer");
+        init_graph_layers(json_data);
     }
     H5Fclose(h5_file);
 }
@@ -1346,8 +1403,31 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
 }
 
 void InferenceProcess::run_task_plaintext(bool is_mpc) {
-    const json& json_features = fp->json_features;
-    json json_layers = fp->json_layers;
+    InferenceSubGraph graph;
+    graph.name = "nn_layers_ct_0";
+    graph.mode = SubGraphExecMode::MegaLazy;
+    graph.runner_path = fp->project_path;
+    graph.json_data = fp->json_data;
+    graph.json_features = fp->json_features;
+    graph.json_layers = fp->json_layers;
+    run_task_plaintext_graph(graph, is_mpc);
+}
+
+void InferenceProcess::run_task_plaintext_hybrid_pipeline(bool is_mpc) {
+    if (!fp->has_hybrid_pipeline()) {
+        run_task_plaintext(is_mpc);
+        return;
+    }
+
+    for (int i = 0; i < (int)fp->subgraphs_.size(); i++) {
+        const auto& graph = fp->subgraphs_[i];
+        run_task_plaintext_graph(graph, is_mpc);
+    }
+}
+
+void InferenceProcess::run_task_plaintext_graph(const InferenceSubGraph& graph, bool is_mpc) {
+    const json& json_features = graph.json_features;
+    json json_layers = graph.json_layers;
 
     while (json_layers.size() > 0) {
         for (auto& layer : json_layers.items()) {
@@ -1588,13 +1668,18 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
     }
 }
 
-void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_cb) {
-    fp->total_fhe_time = 0.0;
-    fp->total_fpga_time = 0.0;
+void InferenceProcess::run_task_lazy_graph(const InferenceSubGraph& graph,
+                                           int graph_idx,
+                                           bool is_mpc,
+                                           ls::ProgressCallback progress_cb) {
+    if (graph_idx < 0) {
+        fp->total_fhe_time = 0.0;
+        fp->total_fpga_time = 0.0;
+    }
 
-    const json& json_data = fp->json_data;
-    const json& json_features = fp->json_features;
-    const json& json_layers = fp->json_layers;
+    const json& json_data = graph.json_data;
+    const json& json_features = graph.json_features;
+    const json& json_layers = graph.json_layers;
     Duo block_shape = fp->block_shape;
 
     vector<CxxVectorArgument> cxx_args;
@@ -1623,7 +1708,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_
     }
 
     // 2. eager pt_ringt + CustomData
-    auto layer_data_sources = prepare_layer_data_sources();
+    auto layer_data_sources = prepare_layer_data_sources(json_layers, json_features);
     unordered_map<string, fhe_ops_lib::CustomData*> data_source_map;
     for (auto& [k, v] : layer_data_sources)
         data_source_map[k] = &v;
@@ -1685,19 +1770,31 @@ void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_
     // 4. run
     switch (compute_device) {
         case ComputeDevice::CPU: {
-            if (!fhe_task_cpu_) {
-                prepare_task();
+            if (graph_idx >= 0) {
+                prepare_subgraph_task(graph_idx);
+                fhe_time = fhe_time + subgraph_fhe_task_cpu_[graph_idx]->run(ckks_contexts.at(context_id).get(),
+                                                                              cxx_args, progress_cb);
+            } else {
+                if (!fhe_task_cpu_) {
+                    prepare_task();
+                }
+                fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb);
             }
-            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
         case ComputeDevice::GPU: {
-            if (!fhe_task_gpu_) {
-                prepare_task();
+            if (graph_idx >= 0) {
+                prepare_subgraph_task(graph_idx);
+                fhe_time = fhe_time + subgraph_fhe_task_gpu_[graph_idx]->run(ckks_contexts.at(context_id).get(),
+                                                                              cxx_args, progress_cb, gpu_device);
+            } else {
+                if (!fhe_task_gpu_) {
+                    prepare_task();
+                }
+                fhe_time =
+                    fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb, gpu_device);
             }
-            fhe_time =
-                fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb, gpu_device);
             break;
         }
 #else
@@ -1742,12 +1839,103 @@ void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_
     }
 }
 
+void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_cb) {
+    InferenceSubGraph graph;
+    graph.name = "nn_layers_ct_0";
+    graph.mode = SubGraphExecMode::MegaLazy;
+    graph.runner_path = fp->project_path;
+    graph.json_data = fp->json_data;
+    graph.json_features = fp->json_features;
+    graph.json_layers = fp->json_layers;
+    run_task_lazy_graph(graph, -1, is_mpc, progress_cb);
+}
+
+void InferenceProcess::run_task_hybrid_pipeline(bool enable_mpc, ls::ProgressCallback progress_cb) {
+    cout << "[Hybrid] run_task_hybrid_pipeline, subgraphs=" << fp->subgraphs_.size() << endl;
+    if (!fp->has_hybrid_pipeline()) {
+        run_task_lazy(enable_mpc, progress_cb);
+        return;
+    }
+
+    fp->total_fhe_time = 0.0;
+    fp->total_fpga_time = 0.0;
+    for (int i = 0; i < (int)fp->subgraphs_.size(); i++) {
+        auto& graph = fp->subgraphs_[i];
+        cout << "[Hybrid] Begin subgraph " << i << " name=" << graph.name
+             << " mode=" << (graph.mode == SubGraphExecMode::MegaLazy ? "mega_lazy" : "direct_layer") << endl;
+        if (graph.mode == SubGraphExecMode::MegaLazy) {
+            run_task_lazy_graph(graph, i, enable_mpc, progress_cb);
+        } else {
+            run_task_direct_graph(graph, enable_mpc);
+        }
+        cout << "[Hybrid] End subgraph  " << i << " name=" << graph.name << endl;
+    }
+}
+
+void InferenceProcess::run_task_direct_graph(const InferenceSubGraph& graph, bool enable_mpc) {
+    json old_json_data = fp->json_data;
+    json old_json_features = fp->json_features;
+    json old_json_layers = fp->json_layers;
+    fp->json_data = graph.json_data;
+    fp->json_features = graph.json_features;
+    fp->json_layers = graph.json_layers;
+
+    auto restore_graph_context = [&]() {
+        fp->json_data = move(old_json_data);
+        fp->json_features = move(old_json_features);
+        fp->json_layers = move(old_json_layers);
+    };
+
+    try {
+    for (const auto& layer : graph.json_layers.items()) {
+        const string& key = layer.key();
+        const json& value = layer.value();
+        const string layer_type = value["type"].get<string>();
+
+        if (layer_type != "mpc_refresh") {
+            throw runtime_error("DirectLayer graph only supports mpc_refresh, got: " + layer_type);
+        }
+
+#ifndef INFERENCE_SDK_ENABLE_MPC
+        throw runtime_error("MPC support is disabled. Reconfigure with -DINFERENCE_SDK_ENABLE_MPC=ON to enable it.");
+#else
+        if (!enable_mpc) {
+            throw runtime_error("mpc_refresh requires enable_mpc=true and an active MPC client");
+        }
+
+        auto feature_input = value["feature_input"].get<vector<string>>();
+        auto feature_output = value["feature_output"].get<vector<string>>();
+        Timer mpc_timer;
+        mpc_timer.start();
+        send_mpc_metadata(fp->mpc_init().meta_data(key));
+
+        const FeatureEncrypted& input = _get_feature(feature_input[0]);
+        InferenceMpcServer mpc_server;
+        auto refresh_result =
+            mpc_server.calculate_mpc_refresh(*fp, fp->mpc_init(), ckks_contexts, input, key, value);
+        mpc_timer.stop();
+        fp->total_fpga_time += mpc_timer.get_duration().count();
+        set_feature(feature_output[0], MakeU<Feature2DEncrypted>(move(refresh_result)));
+#endif
+    }
+    } catch (...) {
+        restore_graph_context();
+        throw;
+    }
+    restore_graph_context();
+}
+
 // ==================== CustomData mode ====================
 
 vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_data_sources() {
+    return prepare_layer_data_sources(fp->json_layers, fp->json_features);
+}
+
+vector<pair<string, fhe_ops_lib::CustomData>>
+InferenceProcess::prepare_layer_data_sources(const json& graph_layers, const json& graph_features) {
     vector<pair<string, fhe_ops_lib::CustomData>> data_sources;
 
-    for (const auto& layer : fp->json_layers.items()) {
+    for (const auto& layer : graph_layers.items()) {
         const string& key = layer.key();
         const string& layer_type = layer.value()["type"].get<string>();
 
@@ -1782,7 +1970,7 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
                 key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<DensePackedLayer>(key))));
         } else if (layer_type == "poly_relu2d" || layer_type == "polyact") {
             auto feature_input = layer.value()["feature_input"].get<vector<string>>();
-            FeatureNode d_input_node(fp->json_features[feature_input[0]]);
+            FeatureNode d_input_node(graph_features[feature_input[0]]);
             if (d_input_node.dim == 0) {
                 data_sources.emplace_back(key,
                                           fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<PolyRelu0D>(key))));
@@ -1816,7 +2004,7 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
             data_sources.emplace_back(
                 key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<MultScalarLayer>(key))));
         } else if (layer_type == "avgpool2d") {
-            FeatureNode d_input_node(fp->json_features[layer.value()["feature_input"][0].get<string>()]);
+            FeatureNode d_input_node(graph_features[layer.value()["feature_input"][0].get<string>()]);
             if (d_input_node.dim == 2) {
                 bool is_big_size = layer.value()["is_big_size"];
                 bool is_adaptive = layer.value()["is_adaptive_avgpool"];
@@ -1840,6 +2028,14 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
 #ifdef INFERENCE_SDK_ENABLE_GPU
 void InferenceProcess::prepare_task() {
     register_custom_executors(task_custom_executors_);
+    if (fp->has_hybrid_pipeline()) {
+        for (int i = 0; i < (int)fp->subgraphs_.size(); i++) {
+            if (fp->subgraphs_[i].mode == SubGraphExecMode::MegaLazy) {
+                prepare_subgraph_task(i);
+            }
+        }
+        return;
+    }
     if (compute_device == ComputeDevice::GPU) {
         fhe_task_gpu_ = make_unique<FheTaskGpu>(fp->project_path);
         fhe_task_gpu_->bind_custom_executors(task_custom_executors_);
@@ -1851,10 +2047,48 @@ void InferenceProcess::prepare_task() {
 #else
 void InferenceProcess::prepare_task() {
     register_custom_executors(task_custom_executors_);
+    if (fp->has_hybrid_pipeline()) {
+        for (int i = 0; i < (int)fp->subgraphs_.size(); i++) {
+            if (fp->subgraphs_[i].mode == SubGraphExecMode::MegaLazy) {
+                prepare_subgraph_task(i);
+            }
+        }
+        return;
+    }
     fhe_task_cpu_ = make_unique<FheTaskCpu>(fp->project_path);
     fhe_task_cpu_->bind_custom_executors(task_custom_executors_);
 }
 #endif
+
+void InferenceProcess::prepare_subgraph_task(int graph_idx) {
+    if (graph_idx < 0 || graph_idx >= (int)fp->subgraphs_.size()) {
+        throw runtime_error("Invalid subgraph index: " + to_string(graph_idx));
+    }
+    const auto& graph = fp->subgraphs_[graph_idx];
+    if (graph.mode != SubGraphExecMode::MegaLazy) {
+        return;
+    }
+    register_custom_executors(task_custom_executors_);
+    if ((int)subgraph_fhe_task_cpu_.size() <= graph_idx) {
+        subgraph_fhe_task_cpu_.resize(graph_idx + 1);
+    }
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    if ((int)subgraph_fhe_task_gpu_.size() <= graph_idx) {
+        subgraph_fhe_task_gpu_.resize(graph_idx + 1);
+    }
+    if (compute_device == ComputeDevice::GPU) {
+        if (!subgraph_fhe_task_gpu_[graph_idx]) {
+            subgraph_fhe_task_gpu_[graph_idx] = make_unique<FheTaskGpu>(graph.runner_path.string());
+            subgraph_fhe_task_gpu_[graph_idx]->bind_custom_executors(task_custom_executors_);
+        }
+        return;
+    }
+#endif
+    if (!subgraph_fhe_task_cpu_[graph_idx]) {
+        subgraph_fhe_task_cpu_[graph_idx] = make_unique<FheTaskCpu>(graph.runner_path.string());
+        subgraph_fhe_task_cpu_[graph_idx]->bind_custom_executors(task_custom_executors_);
+    }
+}
 
 void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorFunc>& executors) {
     auto* fp_ptr = this->fp;

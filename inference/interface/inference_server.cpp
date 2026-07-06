@@ -157,6 +157,8 @@ void InferenceServer::load_model() {
     init_->init_parameters(needs_btp_);
     init_->is_lazy = true;
     init_->load_model_prepare();
+    std::cout << "[Server] Hybrid pipeline: " << (init_->has_hybrid_pipeline() ? "enabled" : "disabled")
+              << std::endl;
 
     fp_ = std::make_unique<InferenceProcess>(init_.get());
     for (auto& key : input_keys_) {
@@ -247,7 +249,11 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
     std::cout << "[Server] Device: " << (use_gpu_ ? "GPU" : "CPU") << std::endl;
     Timer timer;
     timer.start();
-    fp_->run_task_lazy(false, progress_cb);
+    if (init_->has_hybrid_pipeline()) {
+        fp_->run_task_hybrid_pipeline(false, progress_cb);
+    } else {
+        fp_->run_task_lazy(false, progress_cb);
+    }
     timer.stop();
     timer.print("Encrypted inference time");
     std::cout << "[Server] Done." << std::endl;
@@ -301,7 +307,13 @@ std::map<std::string, Bytes> InferenceServer::evaluate_mpc_sdk(const std::map<st
     std::cout << "[Server] Device: " << (use_gpu_ ? "GPU" : "CPU") << std::endl;
     Timer timer;
     timer.start();
-    fp_->run_task_sdk(true);
+    if (init_->has_hybrid_pipeline()) {
+        std::cout << "[Server] Dispatch: hybrid MPC pipeline" << std::endl;
+        fp_->run_task_hybrid_pipeline(true);
+    } else {
+        std::cout << "[Server] Dispatch: SDK MPC layer executor" << std::endl;
+        fp_->run_task_sdk(true);
+    }
     timer.stop();
     timer.print("SDK MPC encrypted inference time");
 
@@ -488,7 +500,11 @@ void InferenceServer::dump_plaintext_intermediates(const std::map<std::string, s
         }
     }
 
-    fp_->run_task_plaintext();
+    if (init_->has_hybrid_pipeline()) {
+        fp_->run_task_plaintext_hybrid_pipeline();
+    } else {
+        fp_->run_task_plaintext();
+    }
 
     std::ofstream ofs(output_path);
     if (!ofs.is_open()) {
@@ -496,7 +512,14 @@ void InferenceServer::dump_plaintext_intermediates(const std::map<std::string, s
     }
 
     ofs << std::setprecision(12);
-    const auto& json_features = init_->json_features;
+    json json_features = init_->json_features;
+    if (init_->has_hybrid_pipeline()) {
+        for (const auto& graph : init_->subgraphs()) {
+            for (const auto& item : graph.json_features.items()) {
+                json_features[item.key()] = item.value();
+            }
+        }
+    }
     constexpr int kDumpLimit = 10;
     constexpr int kChannelDumpLimit = 64;
 
@@ -614,18 +637,34 @@ InferenceServer::evaluate_plaintext(const std::map<std::string, std::string>& in
             fp_->p_feature2d_x[name] = std::move(input_array.copy());
         }
     }
-    fp_->run_task_plaintext();
+    if (init_->has_hybrid_pipeline()) {
+        fp_->run_task_plaintext_hybrid_pipeline();
+    } else {
+        fp_->run_task_plaintext();
+    }
 
     std::map<std::string, std::vector<double>> results;
     for (auto& [name, param] : output_params_) {
         if (param.dim == 0) {
-            results[name] = fp_->p_feature0d_x[name];
+            auto it = fp_->p_feature0d_x.find(name);
+            if (it == fp_->p_feature0d_x.end()) {
+                throw std::runtime_error("[Server] Missing plaintext output: " + name);
+            }
+            results[name] = it->second;
         } else if (param.dim == 1) {
-            auto& arr = fp_->p_feature1d_x[name];
+            auto it = fp_->p_feature1d_x.find(name);
+            if (it == fp_->p_feature1d_x.end()) {
+                throw std::runtime_error("[Server] Missing plaintext output: " + name);
+            }
+            auto& arr = it->second;
             auto arr_1d = arr.to_array_1d();
             results[name] = std::vector<double>(arr_1d.data(), arr_1d.data() + arr_1d.size());
         } else {
-            auto& arr = fp_->p_feature2d_x[name];
+            auto it = fp_->p_feature2d_x.find(name);
+            if (it == fp_->p_feature2d_x.end()) {
+                throw std::runtime_error("[Server] Missing plaintext output: " + name);
+            }
+            auto& arr = it->second;
             auto arr_1d = arr.to_array_1d();
             results[name] = std::vector<double>(arr_1d.data(), arr_1d.data() + arr_1d.size());
         }

@@ -293,7 +293,10 @@ int main(int argc, char* argv[]) {
 
         auto full_ctx = client.export_full_context();
         auto ckks_contexts = make_client_context_map(full_ctx);
+
+        //run mpc process
         InferenceMpcClient(ckks_contexts).run();
+
         cout << "[Client] MPC process loop finished; waiting encrypted outputs." << endl;
 
         auto encrypted_outputs = mpc_trans.receive_encrypted_map();

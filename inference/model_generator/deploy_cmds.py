@@ -77,7 +77,15 @@ def set_param(param_name):
     set_fhe_param(param)
 
 
-def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordinary', lazy=False):
+def gen_custom_task(
+    task_path,
+    param_name='PN14QP438',
+    use_gpu=True,
+    style='ordinary',
+    lazy=False,
+    graph_json='nn_layers_ct_0.json',
+    output_instruction_path=None,
+):
     n = _FHE_PARAMS[param_name].poly_modulus_degree
     set_param(param_name)
     task_config_info = read_config(os.path.join(task_path, 'task_config.json'))
@@ -85,7 +93,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         block_shape = task_config_info['block_shape']
     except Exception:
         block_shape = [64, 64]
-    config_info = read_config(os.path.join(task_path, 'nn_layers_ct_0.json'))
+    graph_json_path = graph_json if os.path.isabs(graph_json) else os.path.join(task_path, graph_json)
+    config_info = read_config(graph_json_path)
     input_args = list()
     feature_id_to_nodes_map = {}
     task_output_feature_ids = config_info['output_feature']
@@ -847,7 +856,10 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     output_args = [Argument(output_id, feature_id_to_nodes_map[output_id]) for output_id in task_output_feature_ids]
 
     process_custom_task(
-        input_args=input_args, output_args=output_args, output_instruction_path=task_path, fpga_acc=False
+        input_args=input_args,
+        output_args=output_args,
+        output_instruction_path=output_instruction_path or task_path,
+        fpga_acc=False,
     )
 
 
@@ -862,6 +874,16 @@ if __name__ == '__main__':
     parser.add_argument(
         '--lazy', action='store_true', help='Use lazy weight generation (encode_pt custom compute nodes)'
     )
+    parser.add_argument(
+        '--graph-json',
+        default='nn_layers_ct_0.json',
+        help='FHE layer JSON to compile, relative to the server directory unless absolute',
+    )
+    parser.add_argument(
+        '--output-instruction-path',
+        default=None,
+        help='Directory for task_signature.json and mega_ag.json; defaults to the server directory',
+    )
     args = parser.parse_args()
 
     task_path = args.task_path
@@ -870,4 +892,14 @@ if __name__ == '__main__':
 
     for _, is_fpga in config['server_task'].items():
         if is_fpga['enable_fpga']:
-            gen_custom_task(os.path.join(task_path, 'server'), use_gpu=True, lazy=args.lazy)
+            server_dir = os.path.join(task_path, 'server')
+            output_instruction_path = args.output_instruction_path
+            if output_instruction_path is not None and not os.path.isabs(output_instruction_path):
+                output_instruction_path = os.path.join(server_dir, output_instruction_path)
+            gen_custom_task(
+                server_dir,
+                use_gpu=True,
+                lazy=args.lazy,
+                graph_json=args.graph_json,
+                output_instruction_path=output_instruction_path,
+            )
