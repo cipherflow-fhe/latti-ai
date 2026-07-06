@@ -28,6 +28,7 @@ import logging
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).parent / 'model_compiler'))
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -115,6 +116,12 @@ Examples:
         help='Wrap each bootstrapping layer with pcmgamma layers using this scale',
     )
 
+    parser.add_argument(
+        '--dump_split_subgraphs',
+        action='store_true',
+        help='Dump sorted split subgraphs to task/split_tasks/{index}/ct.json',
+    )
+
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -171,7 +178,8 @@ Examples:
     print(f'[Compile] Output: {output_dir}')
     print(
         f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, '
-        f'COMPILE_CONFIG={args.config or "<none>"}, SET_BTP_SCALE={set_btp_scale}'
+        f'COMPILE_CONFIG={args.config or "<none>"}, SET_BTP_SCALE={set_btp_scale}, '
+        f'DUMP_SPLIT_SUBGRAPHS={args.dump_split_subgraphs}'
     )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
@@ -188,6 +196,7 @@ Examples:
             head_dim=compile_config.get('head_dim'),
             matmul_block_size=compile_config.get('matmul_block_size'),
             set_btp_scale=set_btp_scale,
+            dump_split_subgraphs=args.dump_split_subgraphs,
         )
 
         print(f'\n[Compile] Success! Output: {output_dir}')

@@ -109,8 +109,12 @@ def substitute_layers_for_btp(subgraph: LayerAbstractGraph):
 
 
 def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = True):
+    has_mpc_refresh = any(
+        isinstance(node, ComputeNode) and node.layer_type == 'mpc_refresh'
+        for node in graph.dag.nodes
+    )
     server_task = {}
-    if graph.is_mpc:
+    if graph.is_mpc or has_mpc_refresh:
         server_task['nn_layers_ct_0'] = {'enable_fpga': False}
     else:
         server_task['nn_layers_ct_0'] = {'enable_fpga': True}
@@ -161,7 +165,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
     )
 
     task_config = {
-        'task_type': 'fhe',
+        'task_type': 'mpc_refresh' if has_mpc_refresh else 'fhe',
         'task_num': 1,
         'server_start_id': 0,
         'server_end_id': 0,

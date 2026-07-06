@@ -932,6 +932,7 @@ class LayerAbstractGraph:
         param: dict[str, FheParameter],
         output_path: str | None,
         is_last_mpc=False,
+        mark_last_mpc_refresh=True,
         score=0.0,
     ) -> None:
         param_dict = dict()
@@ -1365,7 +1366,7 @@ class LayerAbstractGraph:
                     conv_type = config.style
                 layers[layer_id]['style'] = conv_type
 
-        if mpc_refresh_ids:
+        if mark_last_mpc_refresh and mpc_refresh_ids:
             last_mpc_refresh_id = mpc_refresh_ids[-1]
             if last_mpc_refresh_id in layers:
                 layers[last_mpc_refresh_id]['is_end'] = True
@@ -1444,7 +1445,9 @@ class LayerAbstractGraph:
         output_feature = [
             node.node_id for node in self.dag.nodes if node not in compute_set and self.dag.out_degree(node) == 0
         ]
+        is_mpc = any(layer.get('type') == 'mpc_refresh' for layer in layers.values())
         config_info = {
+            'is_mpc': is_mpc,
             'score': score,
             'ckks_parameter': param_dict,
             'feature': features,

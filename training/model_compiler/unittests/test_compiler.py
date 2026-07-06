@@ -722,6 +722,7 @@ class TestSingleLayer(CompilerTestBase):
         self.assertIsNotNone(graph)
         self.assertTrue(self._has_bootstrapping(graph))
 
+        config.graph_type = 'btp'
         transforms.init_levels(graph)
         splitter = transforms.GraphSplitSorter(graph)
         subgraphs = splitter.split_graph()
@@ -774,6 +775,7 @@ class TestSingleLayer(CompilerTestBase):
         self.assertIsNotNone(graph)
         self.assertTrue(self._has_bootstrapping(graph))
 
+        config.graph_type = 'btp'
         transforms.init_levels(graph)
         splitter = transforms.GraphSplitSorter(graph)
         subgraphs = splitter.split_graph()
@@ -833,6 +835,7 @@ class TestSingleLayer(CompilerTestBase):
         self.assertIsNotNone(graph)
         self.assertTrue(self._has_bootstrapping(graph))
 
+        config.graph_type = 'btp'
         transforms.init_levels(graph)
         splitter = transforms.GraphSplitSorter(graph)
         coarse_subgraphs = splitter.split_graph()

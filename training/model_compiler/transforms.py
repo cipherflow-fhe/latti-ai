@@ -84,9 +84,9 @@ class GraphSplitSorter:
         graph_with_btp: nx.DiGraph | LayerAbstractGraph | None = None,
     ) -> tuple[list[LayerAbstractGraph], dict[int, list[int]], dict[int, list[int]]]:
         dag = self._resolve_dag(graph_with_btp)
-        btp_count = sum(1 for node in dag.nodes if self.is_bootstrapping_node(node))
+        refresh_count = sum(1 for node in dag.nodes if self.is_refresh_node(node))
         compute_count = sum(1 for node in dag.nodes if isinstance(node, ComputeNode))
-        max_iterations = max(1, btp_count * compute_count + 1)
+        max_iterations = max(1, refresh_count * compute_count + 1)
 
         for _ in range(max_iterations):
             index_graph = self.compress_subgraphs_to_index_graph(subgraphs)
@@ -111,15 +111,15 @@ class GraphSplitSorter:
 
     def build_initial_btp_partition(self, dag: nx.DiGraph | None = None) -> list[LayerAbstractGraph]:
         dag = self._resolve_dag(dag)
-        btp_nodes = [node for node in nx.topological_sort(dag) if self.is_bootstrapping_node(node)]
-        non_btp_computes = {
+        refresh_nodes = [node for node in nx.topological_sort(dag) if self.is_refresh_node(node)]
+        non_refresh_computes = {
             node
             for node in dag.nodes
-            if isinstance(node, ComputeNode) and not self.is_bootstrapping_node(node)
+            if isinstance(node, ComputeNode) and not self.is_refresh_node(node)
         }
 
-        subgraphs = [self.build_bootstrapping_subgraph(btp_node, dag) for btp_node in btp_nodes]
-        subgraphs.extend(self.build_subgraphs_from_compute_nodes(non_btp_computes, dag))
+        subgraphs = [self.build_refresh_subgraph(refresh_node, dag) for refresh_node in refresh_nodes]
+        subgraphs.extend(self.build_subgraphs_from_compute_nodes(non_refresh_computes, dag))
         return subgraphs
 
     def compress_subgraphs_to_index_graph(self, subgraphs: list[LayerAbstractGraph]) -> nx.DiGraph:
@@ -140,12 +140,12 @@ class GraphSplitSorter:
             btp_candidates = [
                 (index, btp_node)
                 for index in subgraph_indices
-                for btp_node in self.bootstrapping_nodes(subgraphs[index])
+                for btp_node in self.refresh_nodes(subgraphs[index])
             ]
 
             for btp_index, btp_node in btp_candidates:
                 for index in subgraph_indices:
-                    if index == btp_index or self.bootstrapping_nodes(subgraphs[index]):
+                    if index == btp_index or self.refresh_nodes(subgraphs[index]):
                         continue
                     if not nx.has_path(index_graph, index, btp_index):
                         continue
@@ -169,7 +169,7 @@ class GraphSplitSorter:
         side: set[ComputeNode] = set()
 
         for compute in self.compute_nodes(subgraph):
-            if self.is_bootstrapping_node(compute):
+            if self.is_refresh_node(compute):
                 continue
             if compute in ancestors:
                 before.add(compute)
@@ -195,7 +195,7 @@ class GraphSplitSorter:
         computes = [
             node
             for node in self.compute_nodes(subgraph)
-            if not self.is_bootstrapping_node(node)
+            if not self.is_refresh_node(node)
         ]
         return any(node in ancestors for node in computes) and any(node in descendants for node in computes)
 
@@ -229,24 +229,24 @@ class GraphSplitSorter:
             subgraphs.append(subgraph)
         return subgraphs
 
-    def build_bootstrapping_subgraph(
+    def build_refresh_subgraph(
         self,
-        btp_node: ComputeNode,
+        refresh_node: ComputeNode,
         dag: nx.DiGraph | None = None,
     ) -> LayerAbstractGraph:
         dag = self._resolve_dag(dag)
-        btp_subgraph = LayerAbstractGraph()
-        self.copy_node_to_graph(dag, btp_subgraph.dag, btp_node)
+        refresh_subgraph = LayerAbstractGraph()
+        self.copy_node_to_graph(dag, refresh_subgraph.dag, refresh_node)
 
-        preds = [node for node in dag.predecessors(btp_node) if isinstance(node, FeatureNode)]
-        succs = [node for node in dag.successors(btp_node) if isinstance(node, FeatureNode)]
+        preds = [node for node in dag.predecessors(refresh_node) if isinstance(node, FeatureNode)]
+        succs = [node for node in dag.successors(refresh_node) if isinstance(node, FeatureNode)]
         for pred in preds:
-            self.copy_node_to_graph(dag, btp_subgraph.dag, pred)
-            btp_subgraph.dag.add_edge(pred, btp_node, **dag.edges[pred, btp_node])
+            self.copy_node_to_graph(dag, refresh_subgraph.dag, pred)
+            refresh_subgraph.dag.add_edge(pred, refresh_node, **dag.edges[pred, refresh_node])
         for succ in succs:
-            self.copy_node_to_graph(dag, btp_subgraph.dag, succ)
-            btp_subgraph.dag.add_edge(btp_node, succ, **dag.edges[btp_node, succ])
-        return btp_subgraph
+            self.copy_node_to_graph(dag, refresh_subgraph.dag, succ)
+            refresh_subgraph.dag.add_edge(refresh_node, succ, **dag.edges[refresh_node, succ])
+        return refresh_subgraph
 
     def sort_subgraphs_by_compressed_graph(
         self,
@@ -337,15 +337,18 @@ class GraphSplitSorter:
             next_sub_dict[pred_index].append(succ_index)
 
     @staticmethod
-    def is_bootstrapping_node(node) -> bool:
-        return isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping'
+    def refresh_layer_type() -> str:
+        return 'mpc_refresh' if getattr(config, 'graph_type', 'btp') == 'mpc' else 'bootstrapping'
+
+    def is_refresh_node(self, node) -> bool:
+        return isinstance(node, ComputeNode) and node.layer_type == self.refresh_layer_type()
 
     @staticmethod
     def compute_nodes(subgraph: LayerAbstractGraph) -> list[ComputeNode]:
         return [node for node in subgraph.dag.nodes if isinstance(node, ComputeNode)]
 
-    def bootstrapping_nodes(self, subgraph: LayerAbstractGraph) -> list[ComputeNode]:
-        return [node for node in self.compute_nodes(subgraph) if self.is_bootstrapping_node(node)]
+    def refresh_nodes(self, subgraph: LayerAbstractGraph) -> list[ComputeNode]:
+        return [node for node in self.compute_nodes(subgraph) if self.is_refresh_node(node)]
 
     @staticmethod
     def copy_node_to_graph(source: nx.DiGraph, target: nx.DiGraph, node):

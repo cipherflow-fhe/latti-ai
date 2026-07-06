@@ -17,6 +17,7 @@
 
 from pathlib import Path
 import copy
+import shutil
 
 import networkx as nx
 import numpy as np
@@ -36,6 +37,7 @@ from components import (
 import processor
 from processor import *
 from graph_partition_dp import *
+import transforms
 
 
 def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
@@ -152,8 +154,8 @@ def process_with_no_btp(graph: LayerAbstractGraph):
 
 def get_restore_param_candidates():
     if is_mpc_flow():
-        # return [PN13QP218]
-        return [PN14QP438]
+        return [PN13QP218]
+        # return [PN14QP438]
     return [N16QP1546H192H32]
 
 
@@ -540,11 +542,76 @@ def recompute_final_level(graph: LayerAbstractGraph):
         dag.nodes[feature]['level'] = int(level)
 
 
+def _write_ckks_parameter(output_dir: Path, ckks_param: dict):
+    with open(output_dir / 'ckks_parameter.json', 'w') as f:
+        json.dump(ckks_param, f, indent=4)
+
+
+def _subgraph_has_refresh_layer(subgraph: LayerAbstractGraph) -> bool:
+    return any(
+        isinstance(node, ComputeNode) and node.layer_type in {'bootstrapping', 'mpc_refresh'}
+        for node in subgraph.dag.nodes
+    )
+
+
+def dump_split_tasks(graph: LayerAbstractGraph, task_dir: Path) -> list[dict[str, str]]:
+    splitter = transforms.GraphSplitSorter(graph)
+    subgraphs = splitter.split_graph()
+    sorted_subgraphs, _, _ = splitter.sort_graph(subgraphs)
+
+    split_tasks_dir = task_dir / 'split_tasks'
+    if split_tasks_dir.exists():
+        shutil.rmtree(split_tasks_dir)
+    split_tasks_dir.mkdir(parents=True, exist_ok=True)
+
+    last_mpc_refresh_subgraph_index = None
+    for index, subgraph in enumerate(sorted_subgraphs):
+        if any(
+            isinstance(node, ComputeNode) and node.layer_type == 'mpc_refresh'
+            for node in subgraph.dag.nodes
+        ):
+            last_mpc_refresh_subgraph_index = index
+
+    hybrid_pipeline = []
+    for index, subgraph in enumerate(sorted_subgraphs):
+        subtask_dir = split_tasks_dir / str(index)
+        subtask_dir.mkdir(parents=True, exist_ok=True)
+        ct_path = subtask_dir / 'ct.json'
+        subgraph.to_json(
+            dict(),
+            str(ct_path),
+            mark_last_mpc_refresh=index == last_mpc_refresh_subgraph_index,
+        )
+        subgraph_has_refresh = _subgraph_has_refresh_layer(subgraph)
+        graph_to_task_config(subgraph, str(subtask_dir), use_btp=subgraph_has_refresh)
+
+        mode = 'direct_layer' if subgraph_has_refresh else 'mega_lazy'
+        pipeline_item = {
+            'name': str(index),
+            'mode': mode,
+            'json': f'../split_tasks/{index}/ct.json',
+        }
+        if mode == 'mega_lazy':
+            pipeline_item['runner_path'] = f'../split_tasks/{index}'
+        hybrid_pipeline.append(pipeline_item)
+
+    return hybrid_pipeline
+
+
+def _add_hybrid_pipeline_to_task_config(task_config_path: Path, hybrid_pipeline: list[dict[str, str]]):
+    with open(task_config_path, 'r', encoding='utf-8') as f:
+        task_config = json.load(f)
+    task_config['hybrid_pipeline'] = hybrid_pipeline
+    with open(task_config_path, 'w', encoding='utf-8') as f:
+        json.dump(task_config, f, indent=4, ensure_ascii=False)
+
+
 def dump_graph(
     graph: LayerAbstractGraph,
     output_dir: Path,
     score: float,
     use_btp: bool,
+    dump_split_subgraphs: bool = False,
 ):
     task_dir = output_dir / 'task'
     server_dir = task_dir / 'server'
@@ -553,6 +620,7 @@ def dump_graph(
 
     ergs_dir.mkdir(parents=True, exist_ok=True)
     client_dir.mkdir(parents=True, exist_ok=True)
+    ckks_param = {'param0': {**config.fhe_param.to_dict()}}
 
     erg0_path = ergs_dir / 'nn_layers_ct_0.json'
     insert_btp_scale_gamma_layers(graph)
@@ -560,6 +628,9 @@ def dump_graph(
     recompute_final_level(graph)
     transforms.insert_drop_level_layers(graph)
     graph.to_json(dict(), str(erg0_path), score=score)
+    hybrid_pipeline = None
+    if dump_split_subgraphs:
+        hybrid_pipeline = dump_split_tasks(graph, task_dir)
 
     if use_btp:
         graph_to_task_config(graph, str(server_dir))
@@ -567,17 +638,15 @@ def dump_graph(
         graph_to_task_config(graph, str(server_dir), False)
 
     server_task_config = server_dir / 'task_config.json'
+    if hybrid_pipeline is not None:
+        _add_hybrid_pipeline_to_task_config(server_task_config, hybrid_pipeline)
+
     client_task_config = client_dir / 'task_config.json'
     if server_task_config.exists():
         shutil.copy(str(server_task_config), str(client_task_config))
 
-    ckks_param = {'param0': {**config.fhe_param.to_dict()}}
-
-    with open(server_dir / 'ckks_parameter.json', 'w') as f:
-        json.dump(ckks_param, f, indent=4)
-
-    with open(client_dir / 'ckks_parameter.json', 'w') as f:
-        json.dump(ckks_param, f, indent=4)
+    _write_ckks_parameter(server_dir, ckks_param)
+    _write_ckks_parameter(client_dir, ckks_param)
 
 
 import os
@@ -597,6 +666,7 @@ def run_pipeline(
     matmul_block_size: int | None = None,
     set_btp_scale: float | None = None,
     use_gpu: bool = True,
+    dump_split_subgraphs: bool = False,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -614,6 +684,7 @@ def run_pipeline(
         graph_type: Graph type (GRAPH_TYPE)
         set_btp_scale: if not None, wrap BTP with pcmgamma scales and enable special level handling
         use_gpu: If True, use GPU primitive timing tables for FHE score; otherwise use CPU timing
+        dump_split_subgraphs: If True, dump sorted split subgraphs to task/split_tasks/{index}/ct.json
     """
     if style is not None:
         config.style = style
@@ -648,6 +719,6 @@ def run_pipeline(
         succeeded, graph, score = try_btp(num_experiments, raw_graph, temperature, num_workers)
         if not succeeded:
             raise ValueError('Compilation failed.')
-    dump_graph(graph, output_dir, score, use_btp=use_btp)
+    dump_graph(graph, output_dir, score, use_btp=use_btp, dump_split_subgraphs=dump_split_subgraphs)
 
     return graph, score
