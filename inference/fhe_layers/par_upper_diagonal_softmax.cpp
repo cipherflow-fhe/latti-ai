@@ -486,7 +486,8 @@ FeatureMatEncrypted ParUpperDiagonalInverseInit::run(CkksContext& ctx, const Fea
     result.data.resize(total_cts());
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        result.data[idx] = ctx_copy.add_plain_ringt(ctx_copy.negate(b.data[idx]), two_pt_[idx]);
+        auto zero = ctx_copy.sub(b.data[idx], b.data[idx]);
+        result.data[idx] = ctx_copy.add_plain_ringt(ctx_copy.sub(zero, b.data[idx]), two_pt_[idx]);
     });
 
     result.level = level_;
