@@ -19,6 +19,7 @@
 #include "par_upper_diagonal_layernorm.h"
 #include "layer_util.h"
 #include <cassert>
+#include <cmath>
 #include <stdexcept>
 #include <utility>
 
@@ -117,13 +118,13 @@ uint32_t ParUpperDiagonalLNStats::total_cts() const {
     return n_mb_ * cts_per_mb_;
 }
 
-vector<double> ParUpperDiagonalLNStats::build_h0_mask() const {
+vector<double> ParUpperDiagonalLNStats::build_h0_mask(double value) const {
     // Applied after local-diagonal aggregation; local_diag lanes are working copies here.
     vector<double> mask(n_slot_, 0.0);
     for (uint32_t local_diag = 0; local_diag < c_; local_diag++) {
         uint32_t segment_base = local_diag * segment_len_;
         for (uint32_t t = 0; t < n_prepad_; t++) {
-            mask[segment_base + t * H_] = 1.0;
+            mask[segment_base + t * H_] = value;
         }
     }
     return mask;
@@ -155,16 +156,17 @@ CkksPlaintextRingt ParUpperDiagonalLNStats::generate_pt(CkksContext& ctx,
     double q_L = param_.get_q(level_);
     double q_L1 = param_.get_q(level_ - 1);
     double q_L2 = param_.get_q(level_ - 2);
-    double q_L3 = param_.get_q(level_ - 3);
+    double n_cols = static_cast<double>(total_cols_);
+    double input_scale = sqrt(inv_var_) / n_cols;
 
     if (pt_idx == 0) {
-        return ctx.encode_ringt(build_h0_mask(), q_L);
+        return ctx.encode_ringt(build_h0_mask(input_scale), q_L);
     }
     if (pt_idx == 1) {
-        return ctx.encode_ringt(build_valid_mask(mb, ct_local, 1.0 / static_cast<double>(total_cols_)), q_L1);
+        return ctx.encode_ringt(build_h0_mask(n_cols * input_scale * input_scale), q_L);
     }
     if (pt_idx == 2) {
-        return ctx.encode_ringt(build_valid_mask(mb, ct_local, inv_var_), q_L2 / D * q_L3);
+        return ctx.encode_ringt(build_valid_mask(mb, ct_local, 1.0), q_L1 / D * q_L2);
     }
     if (pt_idx == 3) {
         return ctx.encode_ringt(build_valid_mask(mb, ct_local, eps_ * inv_var_), D);
@@ -189,8 +191,10 @@ void ParUpperDiagonalLNStats::prepare_weight() {
     }
 }
 
-CkksCiphertext
-ParUpperDiagonalLNStats::reduce_cols_in_ct(CkksContext& ctx, const CkksCiphertext& ct, double rescale_target) const {
+CkksCiphertext ParUpperDiagonalLNStats::reduce_cols_in_ct(CkksContext& ctx,
+                                                          const CkksCiphertext& ct,
+                                                          double rescale_target,
+                                                          const CkksPlaintextRingt& h0_mask_pt) const {
     CkksCiphertext result = ct.copy();
     for (uint32_t step = 1; step < c_; step <<= 1) {
         result = ctx.add(result, ctx.rotate(result, (int)(step * segment_len_)));
@@ -199,7 +203,7 @@ ParUpperDiagonalLNStats::reduce_cols_in_ct(CkksContext& ctx, const CkksCiphertex
         result = ctx.add(result, ctx.rotate(result, (int)step));
     }
 
-    auto mask_mul = ctx.ringt_to_mul(h0_mask_pt_, result.get_level());
+    auto mask_mul = ctx.ringt_to_mul(h0_mask_pt, result.get_level());
     auto masked = ctx.rescale(ctx.mult_plain_mul(result, mask_mul), rescale_target);
 
     CkksCiphertext replicated = masked.copy();
@@ -222,7 +226,7 @@ vector<CkksCiphertext> ParUpperDiagonalLNStats::run(CkksContext& ctx, const Feat
     vector<CkksCiphertext> partial_sum_x(n_ct);
     vector<CkksCiphertext> x_sq(n_ct);
     parallel_for(n_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        partial_sum_x[idx] = reduce_cols_in_ct(ctx_copy, x.data[idx], D);  // level L-1, scale D
+        partial_sum_x[idx] = reduce_cols_in_ct(ctx_copy, x.data[idx], D, h0_mask_pt_);  // sqrt(inv_var) * mean(x)
         auto prod = ctx_copy.mult(x.data[idx], x.data[idx]);
         x_sq[idx] =
             ctx_copy.rescale(ctx_copy.relinearize(prod), D / param_.get_q(level_) * D);  // level L-1, scale D/q_L * D
@@ -233,10 +237,14 @@ vector<CkksCiphertext> ParUpperDiagonalLNStats::run(CkksContext& ctx, const Feat
         sum_x = ctx.add(sum_x, partial_sum_x[idx]);  // level L-1, scale D
     }
 
+    auto sq_sum_x_raw = ctx.mult(sum_x, sum_x);
+    CkksCiphertext sq_sum_x =
+        ctx.rescale(ctx.relinearize(sq_sum_x_raw), D / param_.get_q(level_ - 1) * D);  // level L-2
+
     vector<CkksCiphertext> partial_sum_x_sq(n_ct);
     parallel_for(n_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        partial_sum_x_sq[idx] =
-            reduce_cols_in_ct(ctx_copy, x_sq[idx], D / param_.get_q(level_ - 1) * D);  // level L-2, scale D/q_{L-1} *D
+        partial_sum_x_sq[idx] = reduce_cols_in_ct(ctx_copy, x_sq[idx], D / param_.get_q(level_ - 1) * D,
+                                                  inv_n_pt_[idx]);  // inv_var * mean(x^2), level L-2
     });
 
     CkksCiphertext sum_x_sq = partial_sum_x_sq[0].copy();
@@ -244,33 +252,16 @@ vector<CkksCiphertext> ParUpperDiagonalLNStats::run(CkksContext& ctx, const Feat
         sum_x_sq = ctx.add(sum_x_sq, partial_sum_x_sq[idx]);  // level L-2, scale D/q_{L-1} *D
     }
 
-    vector<CkksCiphertext> mean_cts(n_ct);
-    parallel_for(n_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto pt_inv_n = ctx_copy.ringt_to_mul(inv_n_pt_[idx], level_ - 1);
-        mean_cts[idx] = ctx_copy.rescale(ctx_copy.mult_plain_mul(sum_x, pt_inv_n), D);  // level L-2, scale D
-    });
-
-    vector<CkksCiphertext> E_x_sq(n_ct);
-    vector<CkksCiphertext> mean_sq(n_ct);
-    parallel_for(n_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto mean_prod = ctx_copy.mult(mean_cts[idx], mean_cts[idx]);
-        mean_sq[idx] = ctx_copy.rescale(ctx_copy.relinearize(mean_prod),
-                                        D / param_.get_q(level_ - 2) * D);  // level L-3, scale D/q_{L-2} * D
-
-        auto pt_inv_n = ctx_copy.ringt_to_mul(inv_n_pt_[idx], level_ - 2);
-        auto ex_raw = ctx_copy.mult_plain_mul(sum_x_sq, pt_inv_n);
-        E_x_sq[idx] = ctx_copy.rescale(ex_raw, D / param_.get_q(level_ - 2) * D);  // level L-3, scale D/q_{L-2} * D
-    });
+    CkksCiphertext variance = ctx.sub(sum_x_sq, sq_sum_x);  // inv_var * (mean(x^2) - mean(x)^2)
 
     vector<CkksCiphertext> a_cts(n_ct);
     parallel_for(n_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto var = ctx_copy.sub(E_x_sq[idx], mean_sq[idx]);  // level L-3, scale D/q_{L-2} * D
-        auto pt_iv = ctx_copy.ringt_to_mul(iv_pt_[idx], level_ - 3);
-        a_cts[idx] = ctx_copy.rescale(ctx_copy.mult_plain_mul(var, pt_iv), D);  // level L-4, scale D
-        a_cts[idx] = ctx_copy.add_plain_ringt(a_cts[idx], eps_add_pt_[idx]);    // level L-4, scale D
+        auto pt_one = ctx_copy.ringt_to_mul(iv_pt_[idx], level_ - 2);
+        a_cts[idx] = ctx_copy.rescale(ctx_copy.mult_plain_mul(variance, pt_one), D);  // level L-3, scale D
+        a_cts[idx] = ctx_copy.add_plain_ringt(a_cts[idx], eps_add_pt_[idx]);          // level L-3, scale D
     });
 
-    return a_cts;  // level L-4, scale D
+    return a_cts;  // level L-3, scale D
 }
 
 Array<double, 2> ParUpperDiagonalLNStats::run_plaintext(const Array<double, 2>& x) const {
@@ -283,8 +274,9 @@ Array<double, 2> ParUpperDiagonalLNStats::run_plaintext(const Array<double, 2>& 
             sum_x += v;
             sum_x2 += v * v;
         }
-        double mean = sum_x / static_cast<double>(total_cols_);
-        double var = sum_x2 / static_cast<double>(total_cols_) - mean * mean;
+        double n_cols = static_cast<double>(total_cols_);
+        double mean = sum_x / n_cols;
+        double var = sum_x2 / n_cols - mean * mean;
         double a = (var + eps_) * inv_var_;
         for (uint32_t j = 0; j < total_cols_; j++) {
             result.set(i, j, a);
@@ -450,7 +442,8 @@ Array<double, 2> ParUpperDiagonalLNXCentered::run_plaintext(const Array<double, 
         for (uint32_t j = 0; j < total_cols_; j++) {
             sum_x += x.get(i, j);
         }
-        double mean = sum_x / static_cast<double>(total_cols_);
+        double n_cols = static_cast<double>(total_cols_);
+        double mean = sum_x / n_cols;
         for (uint32_t j = 0; j < total_cols_; j++) {
             result.set(i, j, x.get(i, j) - mean);
         }

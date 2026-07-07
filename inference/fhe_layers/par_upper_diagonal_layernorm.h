@@ -55,10 +55,12 @@ private:
 
     uint32_t ct_index(uint32_t mb, uint32_t ct_local) const;
     uint32_t total_cts() const;
-    std::vector<double> build_h0_mask() const;
+    std::vector<double> build_h0_mask(double value = 1.0) const;
     std::vector<double> build_valid_mask(uint32_t mb, uint32_t ct_local, double value = 1.0) const;
-    ls::CkksCiphertext
-    reduce_cols_in_ct(ls::CkksContext& ctx, const ls::CkksCiphertext& ct, double rescale_target) const;
+    ls::CkksCiphertext reduce_cols_in_ct(ls::CkksContext& ctx,
+                                         const ls::CkksCiphertext& ct,
+                                         double rescale_target,
+                                         const ls::CkksPlaintextRingt& h0_mask_pt) const;
 };
 
 class ParUpperDiagonalLNXCentered : public Layer {
