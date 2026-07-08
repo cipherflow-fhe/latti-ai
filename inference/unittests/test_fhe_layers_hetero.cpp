@@ -1164,6 +1164,134 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_u
     REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
 }
 
+TEST_CASE("par_upper_diagonal_poly_stockmeyer_polytanh_cpp", "[fhe_layers][par_upper_diagonal_poly][stockmeyer]") {
+    const uint32_t N = 65536;
+    CkksParameter param = CkksParameter::create_parameter(N);
+    const int init_level = 9;
+    CkksContext context = CkksContext::create_random_context(param, init_level);
+
+    const uint32_t n_slot = param.get_n() / 2;
+    const uint32_t n_prepad = 128;
+    const uint32_t n_heads = 2;
+    const uint32_t m_prepad = 128;
+    const uint32_t total_cols = 256;
+    const uint32_t order = 15;
+    const int stockmeyer_level_cost = MatPolyBase::compute_stockmeyer_level_cost(order);
+    const double input_scale = 40.0;
+    const double default_scale = param.get_default_scale();
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+
+    REQUIRE(n_slot == n_prepad * total_cols);
+    REQUIRE(init_level >= 1 + 2 * stockmeyer_level_cost);
+
+    const vector<double> p1_desc = {
+        -7.14529052e+03, -7.76519925e+01, 2.74279201e+04,  2.45150249e+02,  -4.25793697e+04, -3.01953016e+02,
+        3.42189880e+04,  1.82989351e+02,  -1.51158283e+04, -5.64098990e+01, 3.58757327e+03,  8.17596753e+00,
+        -4.13341496e+02, -4.29024545e-01, 1.95056729e+01,  2.06201784e-03,
+    };
+    const vector<double> p2_desc = {
+        -9.02573450e-03, -1.12320034e-04, 1.08762008e-01,  7.96793166e-04,  -5.41327356e-01, -1.42873183e-03,
+        1.46476749e+00,  -2.22416152e-03, -2.43259032e+00, 1.17381072e-02,  2.74974898e+00,  -1.77631073e-02,
+        -2.38934873e+00, 1.30194294e-02,  2.02874846e+00,  -4.08442578e-03,
+    };
+
+    auto to_increasing = [](const vector<double>& desc) { return vector<double>(desc.rbegin(), desc.rend()); };
+    auto rescale_coeffs_for_input_multiplier = [](vector<double> coeffs, double input_multiplier) {
+        double degree_scale = 1.0;
+        for (double& coeff : coeffs) {
+            coeff *= degree_scale;
+            degree_scale /= input_multiplier;
+        }
+        return coeffs;
+    };
+    const vector<double> p1 = rescale_coeffs_for_input_multiplier(to_increasing(p1_desc), 2.0);
+    const vector<double> p2 = to_increasing(p2_desc);
+
+    auto make_coeff_matrix = [&](const vector<double>& coeffs) {
+        Array<double, 2> result({static_cast<uint64_t>(coeffs.size()), static_cast<uint64_t>(total_cols)});
+        for (uint32_t k = 0; k < coeffs.size(); k++) {
+            for (uint32_t j = 0; j < total_cols; j++) {
+                result.set(k, j, coeffs[k]);
+            }
+        }
+        return result;
+    };
+
+    auto make_scalar_gamma = [&](double scalar) {
+        Array<double, 1> gamma({total_cols});
+        for (uint32_t col = 0; col < total_cols; col++) {
+            gamma.set(col, scalar);
+        }
+        return gamma;
+    };
+
+    Array<double, 2> X_mat({n_prepad, total_cols});
+    for (uint32_t idx = 0; idx < n_slot; idx++) {
+        double x = -40.0 + 80.0 * static_cast<double>(idx) / static_cast<double>(n_slot - 1);
+        X_mat.set(idx / total_cols, idx % total_cols, x);
+    }
+
+    ParUpperDiagonalPolyActRNGamma input_scale_layer(param, shape, head_shape, n_heads, init_level,
+                                                     make_scalar_gamma(2.0 / input_scale));
+    ParUpperDiagonalPoly poly1(param, shape, head_shape, n_heads, init_level - 1, make_coeff_matrix(p1), order);
+    ParUpperDiagonalPoly poly2(param, shape, head_shape, n_heads, init_level - 1 - stockmeyer_level_cost,
+                               make_coeff_matrix(p2), order);
+
+    Array<double, 2> X_scaled_plain = input_scale_layer.run_plaintext(X_mat);
+    Array<double, 2> f1_plain = poly1.run_plaintext(X_scaled_plain);
+    Array<double, 2> expected = poly2.run_plaintext(f1_plain);
+    Array<double, 2> ground_truth({n_prepad, total_cols});
+    for (uint32_t i = 0; i < n_prepad; i++) {
+        for (uint32_t j = 0; j < total_cols; j++) {
+            ground_truth.set(i, j, tanh(X_mat.get(i, j)));
+        }
+    }
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, default_scale);
+
+    input_scale_layer.prepare_weight();
+    FeatureMatEncrypted X_scaled = input_scale_layer.run(context, X_enc);
+    REQUIRE(X_scaled.level == init_level - 1);
+
+    poly1.prepare_weight_stockmeyer();
+    FeatureMatEncrypted f1_enc = poly1.run_stockmeyer(context, X_scaled);
+    REQUIRE(f1_enc.level == X_scaled.level - stockmeyer_level_cost);
+
+    poly2.prepare_weight_stockmeyer();
+    FeatureMatEncrypted tanh_enc = poly2.run_stockmeyer(context, f1_enc);
+    REQUIRE(tanh_enc.level == f1_enc.level - stockmeyer_level_cost);
+    CAPTURE(tanh_enc.data[0].get_scale(), default_scale);
+    REQUIRE(fabs(tanh_enc.data[0].get_scale() - default_scale) <= default_scale * 1.0e-12);
+
+    Array<double, 2> output_mg = tanh_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
+    Array<double, 2> plain_output = expected.copy();
+    Array<double, 2> ground_truth_output = ground_truth.copy();
+    auto output_mg_1d = output_mg.to_array_1d();
+    auto plain_output_1d = plain_output.to_array_1d();
+    auto ground_truth_1d = ground_truth_output.to_array_1d();
+    print_double_message(output_mg_1d.data(), "output_mg", 10);
+    print_double_message(plain_output_1d.data(), "plain_output", 10);
+    print_double_message(ground_truth_1d.data(), "ground_truth", 10);
+    print_double_message(output_mg_1d.data() + output_mg_1d.size() - 10, "output_mg_last", 10);
+    print_double_message(plain_output_1d.data() + plain_output_1d.size() - 10, "plain_output_last", 10);
+    print_double_message(ground_truth_1d.data() + ground_truth_1d.size() - 10, "ground_truth_last", 10);
+
+    auto compare_result = compare(plain_output, output_mg);
+    auto ground_truth_compare_result = compare(ground_truth_output, output_mg);
+    std::cout << "tanh max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+              << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+    std::cout << "tanh ground_truth max_error=" << ground_truth_compare_result.max_error
+              << " max_abs=" << ground_truth_compare_result.max_abs << " rmse=" << ground_truth_compare_result.rmse
+              << " rms=" << ground_truth_compare_result.rms << std::endl;
+    CAPTURE(compare_result.max_error, compare_result.max_abs, compare_result.rmse, compare_result.rms);
+    CAPTURE(ground_truth_compare_result.max_error, ground_truth_compare_result.max_abs,
+            ground_truth_compare_result.rmse, ground_truth_compare_result.rms);
+    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+}
+
 TEST_CASE("par_upper_diagonal_poly_stockmeyer_horner_polygelu_cpp",
           "[fhe_layers][par_upper_diagonal_poly][stockmeyer][horner]") {
     const uint32_t N = 65536;
@@ -1404,7 +1532,7 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
     };
 
     auto run_normalize_plain = [&](const Array<double, 2>& values, double denominator_scale) {
-        ParUpperDiagonalSum sum_layer(param, shape, head_shape, n_heads, plaintext_level);
+        ParUpperDiagonalHeadColSum sum_layer(param, shape, head_shape, n_heads, plaintext_level);
         Array<double, 2> denominator = sum_layer.run_plaintext(values);
         if (denominator_scale != 1.0) {
             ParUpperDiagonalPolyActRNGamma denom_scale_layer(param, shape, head_shape, n_heads, plaintext_level,
@@ -1426,7 +1554,7 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
             inv_denominator = inv_scale_layer.run_plaintext(inv_denominator);
         }
 
-        ParUpperDiagonalMultCt mult_layer(param, shape, head_shape, n_heads, plaintext_level);
+        ParUpperDiagonalGELU mult_layer(param, shape, head_shape, n_heads, plaintext_level);
         return mult_layer.run_plaintext(values, inv_denominator);
     };
 
@@ -1453,7 +1581,7 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
             refinement_steps++;
         }
         for (uint32_t step = 0; step < refinement_steps; step++) {
-            ParUpperDiagonalMultCt square_layer(param, shape, head_shape, n_heads, plaintext_level);
+            ParUpperDiagonalGELU square_layer(param, shape, head_shape, n_heads, plaintext_level);
             Array<double, 2> squared = square_layer.run_plaintext(probabilities, probabilities);
             double denominator_scale =
                 (step == 0) ? profile.first_refinement_denominator_scale : profile.later_refinement_denominator_scale;
@@ -1513,7 +1641,7 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
     auto run_normalize_encrypt = [&](CkksBtpContext& context, const FeatureMatEncrypted& values_in,
                                      double denominator_scale) {
         FeatureMatEncrypted values = refresh_to_min_level(values_in.drop_level(0), 1);
-        ParUpperDiagonalSum sum_layer(param, shape, head_shape, n_heads, values.level);
+        ParUpperDiagonalHeadColSum sum_layer(param, shape, head_shape, n_heads, values.level);
         sum_layer.prepare_weight();
         FeatureMatEncrypted denominator = sum_layer.run(context, values);
         if (denominator_scale != 1.0) {
@@ -1553,7 +1681,7 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
             inv_denominator = refresh_inverse_to_min_level(context, std::move(inv_denominator), 2);
         }
         FeatureMatEncrypted values_dropped = align_to_level(std::move(values), inv_denominator.level);
-        ParUpperDiagonalMultCt mult_layer(param, shape, head_shape, n_heads, inv_denominator.level);
+        ParUpperDiagonalGELU mult_layer(param, shape, head_shape, n_heads, inv_denominator.level);
         mult_layer.prepare_weight();
         return mult_layer.run(context, values_dropped, inv_denominator);
     };
@@ -1590,7 +1718,7 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
         uint32_t refinement_step = 0;
         for (uint32_t delta = profile.delta_2; delta > 1; delta >>= 1) {
             probabilities = refresh_to_min_level(std::move(probabilities), 3);
-            ParUpperDiagonalMultCt square_layer(param, shape, head_shape, n_heads, probabilities.level);
+            ParUpperDiagonalGELU square_layer(param, shape, head_shape, n_heads, probabilities.level);
             square_layer.prepare_weight();
             FeatureMatEncrypted squared = square_layer.run(context, probabilities, probabilities);
             double denominator_scale = (refinement_step == 0) ? profile.first_refinement_denominator_scale :

@@ -287,14 +287,14 @@ Array<double, 2> ParUpperDiagonalMultipleSquare::run_plaintext(const Array<doubl
 }
 
 // ============================================================
-// ParUpperDiagonalSum
+// ParUpperDiagonalHeadColSum
 // ============================================================
 
-ParUpperDiagonalSum::ParUpperDiagonalSum(const CkksParameter& param,
-                                         Duo shape,
-                                         Duo head_shape,
-                                         uint32_t n_heads,
-                                         uint32_t init_level)
+ParUpperDiagonalHeadColSum::ParUpperDiagonalHeadColSum(const CkksParameter& param,
+                                                       Duo shape,
+                                                       Duo head_shape,
+                                                       uint32_t n_heads,
+                                                       uint32_t init_level)
     : Layer(param) {
     assert(init_level >= 1);
     level_ = init_level;
@@ -314,11 +314,11 @@ ParUpperDiagonalSum::ParUpperDiagonalSum(const CkksParameter& param,
     n_cts_ = m_ / c_;
 }
 
-uint32_t ParUpperDiagonalSum::total_cts() const {
+uint32_t ParUpperDiagonalHeadColSum::total_cts() const {
     return n_cts_;
 }
 
-vector<double> ParUpperDiagonalSum::build_valid_mask(uint32_t ct_idx, double value) const {
+vector<double> ParUpperDiagonalHeadColSum::build_valid_mask(uint32_t ct_idx, double value) const {
     assert(ct_idx < total_cts());
     vector<double> mask(n_slot_, 0.0);
     for (uint32_t local_diag = 0; local_diag < c_; local_diag++) {
@@ -334,11 +334,11 @@ vector<double> ParUpperDiagonalSum::build_valid_mask(uint32_t ct_idx, double val
     return mask;
 }
 
-CkksPlaintextRingt ParUpperDiagonalSum::generate_mask_pt(CkksContext& ctx, uint32_t ct_idx) const {
+CkksPlaintextRingt ParUpperDiagonalHeadColSum::generate_mask_pt(CkksContext& ctx, uint32_t ct_idx) const {
     return ctx.encode_ringt(build_valid_mask(ct_idx, 1.0), param_.get_q(level_));
 }
 
-void ParUpperDiagonalSum::prepare_weight() {
+void ParUpperDiagonalHeadColSum::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
     mask_pt_.resize(total_cts());
     for (uint32_t ct_idx = 0; ct_idx < total_cts(); ct_idx++) {
@@ -346,7 +346,7 @@ void ParUpperDiagonalSum::prepare_weight() {
     }
 }
 
-CkksCiphertext ParUpperDiagonalSum::reduce_local_diags(CkksContext& ctx, const CkksCiphertext& ct) const {
+CkksCiphertext ParUpperDiagonalHeadColSum::reduce_local_diags(CkksContext& ctx, const CkksCiphertext& ct) const {
     CkksCiphertext result = ct.copy();
     for (uint32_t step = 1; step < c_; step <<= 1) {
         result = ctx.add(result, ctx.rotate(result, (int)(step * segment_len_)));
@@ -354,7 +354,7 @@ CkksCiphertext ParUpperDiagonalSum::reduce_local_diags(CkksContext& ctx, const C
     return result;
 }
 
-FeatureMatEncrypted ParUpperDiagonalSum::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
+FeatureMatEncrypted ParUpperDiagonalHeadColSum::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
     assert(x.level == level_);
     assert(x.shape[0] == n_prepad_ && x.shape[1] == total_cols_);
     assert(x.head_shape[0] == n_prepad_ && x.head_shape[1] == m_prepad_);
@@ -389,10 +389,10 @@ FeatureMatEncrypted ParUpperDiagonalSum::run(CkksContext& ctx, const FeatureMatE
     return result;
 }
 
-Array<double, 2> ParUpperDiagonalSum::run_plaintext(const Array<double, 2>& x) const {
+Array<double, 2> ParUpperDiagonalHeadColSum::run_plaintext(const Array<double, 2>& x) const {
     auto x_shape = x.get_shape();
     if (x_shape[0] != n_prepad_ || x_shape[1] != total_cols_) {
-        throw runtime_error("ParUpperDiagonalSum plaintext input shape mismatch");
+        throw runtime_error("ParUpperDiagonalHeadColSum plaintext input shape mismatch");
     }
     Array<double, 2> result({n_prepad_, total_cols_});
     for (uint32_t i = 0; i < n_prepad_; i++) {
@@ -642,14 +642,14 @@ Array<double, 2> ParUpperDiagonalInverseIter::run_plaintext(const Array<double, 
 }
 
 // ============================================================
-// ParUpperDiagonalMultCt
+// ParUpperDiagonalGELU
 // ============================================================
 
-ParUpperDiagonalMultCt::ParUpperDiagonalMultCt(const CkksParameter& param,
-                                               Duo shape,
-                                               Duo head_shape,
-                                               uint32_t n_heads,
-                                               uint32_t init_level)
+ParUpperDiagonalGELU::ParUpperDiagonalGELU(const CkksParameter& param,
+                                           Duo shape,
+                                           Duo head_shape,
+                                           uint32_t n_heads,
+                                           uint32_t init_level)
     : Layer(param) {
     assert(init_level >= 2);
     level_ = init_level;
@@ -669,11 +669,11 @@ ParUpperDiagonalMultCt::ParUpperDiagonalMultCt(const CkksParameter& param,
     n_cts_ = m_ / c_;
 }
 
-uint32_t ParUpperDiagonalMultCt::total_cts() const {
+uint32_t ParUpperDiagonalGELU::total_cts() const {
     return n_cts_;
 }
 
-vector<double> ParUpperDiagonalMultCt::build_valid_mask(uint32_t ct_idx, double value) const {
+vector<double> ParUpperDiagonalGELU::build_valid_mask(uint32_t ct_idx, double value) const {
     assert(ct_idx < total_cts());
     vector<double> mask(n_slot_, 0.0);
     for (uint32_t local_diag = 0; local_diag < c_; local_diag++) {
@@ -689,11 +689,11 @@ vector<double> ParUpperDiagonalMultCt::build_valid_mask(uint32_t ct_idx, double 
     return mask;
 }
 
-CkksPlaintextRingt ParUpperDiagonalMultCt::generate_mask_pt(CkksContext& ctx, uint32_t ct_idx) const {
+CkksPlaintextRingt ParUpperDiagonalGELU::generate_mask_pt(CkksContext& ctx, uint32_t ct_idx) const {
     return ctx.encode_ringt(build_valid_mask(ct_idx, 1.0), mask_scale_after_natural_square(param_, level_));
 }
 
-void ParUpperDiagonalMultCt::prepare_weight() {
+void ParUpperDiagonalGELU::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
     mask_pt_.resize(total_cts());
     for (uint32_t ct_idx = 0; ct_idx < total_cts(); ct_idx++) {
@@ -702,7 +702,7 @@ void ParUpperDiagonalMultCt::prepare_weight() {
 }
 
 FeatureMatEncrypted
-ParUpperDiagonalMultCt::run(CkksContext& ctx, const FeatureMatEncrypted& a, const FeatureMatEncrypted& b) {
+ParUpperDiagonalGELU::run(CkksContext& ctx, const FeatureMatEncrypted& a, const FeatureMatEncrypted& b) {
     assert(a.level == level_ && b.level == level_);
     assert(a.shape[0] == n_prepad_ && a.shape[1] == total_cols_);
     assert(b.shape == a.shape);
@@ -734,11 +734,11 @@ ParUpperDiagonalMultCt::run(CkksContext& ctx, const FeatureMatEncrypted& a, cons
     return result;
 }
 
-Array<double, 2> ParUpperDiagonalMultCt::run_plaintext(const Array<double, 2>& a, const Array<double, 2>& b) const {
+Array<double, 2> ParUpperDiagonalGELU::run_plaintext(const Array<double, 2>& a, const Array<double, 2>& b) const {
     auto a_shape = a.get_shape();
     auto b_shape = b.get_shape();
     if (a_shape[0] != n_prepad_ || a_shape[1] != total_cols_ || b_shape != a_shape) {
-        throw runtime_error("ParUpperDiagonalMultCt plaintext input shape mismatch");
+        throw runtime_error("ParUpperDiagonalGELU plaintext input shape mismatch");
     }
     Array<double, 2> result({n_prepad_, total_cols_});
     for (uint32_t i = 0; i < n_prepad_; i++) {

@@ -77,13 +77,13 @@ private:
     std::vector<double> build_valid_mask(uint32_t ct_idx, double value) const;
 };
 
-class ParUpperDiagonalSum : public Layer {
+class ParUpperDiagonalHeadColSum : public Layer {
 public:
-    ParUpperDiagonalSum(const ls::CkksParameter& param,
-                        Duo shape,
-                        Duo head_shape,
-                        uint32_t n_heads,
-                        uint32_t init_level);
+    ParUpperDiagonalHeadColSum(const ls::CkksParameter& param,
+                               Duo shape,
+                               Duo head_shape,
+                               uint32_t n_heads,
+                               uint32_t init_level);
     void prepare_weight() override;
     std::vector<ls::CkksPlaintextRingt> mask_pt_;
 
@@ -152,13 +152,13 @@ private:
     std::vector<double> build_valid_mask(uint32_t ct_idx, double value) const;
 };
 
-class ParUpperDiagonalMultCt : public Layer {
+class ParUpperDiagonalGELU : public Layer {
 public:
-    ParUpperDiagonalMultCt(const ls::CkksParameter& param,
-                           Duo shape,
-                           Duo head_shape,
-                           uint32_t n_heads,
-                           uint32_t init_level);
+    ParUpperDiagonalGELU(const ls::CkksParameter& param,
+                         Duo shape,
+                         Duo head_shape,
+                         uint32_t n_heads,
+                         uint32_t init_level);
     void prepare_weight() override;
     std::vector<ls::CkksPlaintextRingt> mask_pt_;
 
