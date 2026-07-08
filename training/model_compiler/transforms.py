@@ -1057,7 +1057,7 @@ def combine_convs_with_upsamples(graph: LayerAbstractGraph):
         _delete_layer(graph.dag, upsample_node)
 
 
-def set_level_costs(graph: LayerAbstractGraph):
+def set_level_costs(graph: LayerAbstractGraph, trust_adaptive_avgpool_attr: bool = False):
     for node in graph.dag.nodes:
         if not isinstance(node, ComputeNode):
             continue
@@ -1091,7 +1091,9 @@ def set_level_costs(graph: LayerAbstractGraph):
                 raise ValueError('Unsupported config.style')
 
         elif compute_node.layer_type in {'avgpool1d', 'avgpool2d'}:
-            if any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
+            if trust_adaptive_avgpool_attr and getattr(compute_node, 'is_adaptive_avgpool', False):
+                graph.dag.nodes[compute_node]['level_cost'] = 0
+            elif any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
                 compute_node.is_big_size = True
                 compute_node.is_adaptive_avgpool = False
                 if any(succ.shape[i] < config.block_shape[i] for i in range(succ.dim)):

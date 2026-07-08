@@ -254,7 +254,11 @@ class MpcSkipGraphPartitioner:
                             state = refreshed_feature_states[idx]
                             refreshed_states.append(NodeState(idx, state.level, state.skip))
                         refresh_key = _state_key(refreshed_states)
-                        refresh_score = self._mpc_refresh_score(dag, compute, pred_features, input_states)
+                        refresh_score = self._mpc_refresh_score_for_feature(
+                            dag,
+                            output_feature,
+                            transition.output_state,
+                        )
                         refresh_solution = MpcDpSolution(
                             score=solution.score + transition.score + refresh_score,
                             feature_states=refreshed_feature_states,
@@ -363,20 +367,31 @@ class MpcSkipGraphPartitioner:
                 continue
             seen.add(key)
             level_cost = self._dynamic_level_cost(dag, compute, pred_features, states, output_feature)
-            min_input_level = min(state.level for state in states)
-            output_level = min_input_level - level_cost
-            if output_level < _min_feature_level() or output_level > config.fhe_param.max_level:
+            max_output_level = min(state.level for state in states) - level_cost
+            if max_output_level < _min_feature_level():
                 continue
 
             output_skip = self._transfer_skip(dag, compute, pred_features, states, output_feature)
             if output_skip is None:
                 continue
 
-            output_state = FeatureState(output_level, output_skip)
-            compute_score = self._compute_score_with_states(
-                dag, compute, pred_features, states, output_feature, output_state, level_cost
-            )
-            transitions.append(_Transition(output_state, refresh_score + compute_score, edge_refreshes))
+            for output_level in range(_min_feature_level(), min(max_output_level, config.fhe_param.max_level) + 1):
+                actual_input_level = output_level + level_cost
+                actual_input_states = [
+                    FeatureState(actual_input_level, state.skip)
+                    for state in states
+                ]
+                output_state = FeatureState(output_level, output_skip)
+                compute_score = self._compute_score_with_states(
+                    dag,
+                    compute,
+                    pred_features,
+                    actual_input_states,
+                    output_feature,
+                    output_state,
+                    level_cost,
+                )
+                transitions.append(_Transition(output_state, refresh_score + compute_score, edge_refreshes))
         return transitions
 
     def _direct_input_candidates(
@@ -402,7 +417,7 @@ class MpcSkipGraphPartitioner:
             target = _normalize_skip(compute.upsample_factor_in, _feature_skip_dim(pred_features[0]))
             state = FeatureState(config.fhe_param.max_level, target)
             decision = EdgeRefreshDecision(node_to_idx[pred_features[0]], compute.layer_id, target)
-            score = self._mpc_refresh_score(dag, compute, pred_features, input_states)
+            score = self._mpc_refresh_score_for_feature(dag, pred_features[0], input_states[0])
             return [([state], (decision,), score)]
 
         if compute.layer_type not in {'add', 'add2d', 'concat2d'} or self._all_skips_equal(input_states):
@@ -419,7 +434,7 @@ class MpcSkipGraphPartitioner:
             repaired = FeatureState(config.fhe_param.max_level, unit)
             repaired_states.append(repaired)
             decisions.append(EdgeRefreshDecision(node_to_idx[feature], compute.layer_id, unit))
-            refresh_score += self._mpc_refresh_score(dag, compute, [feature], [state])
+            refresh_score += self._mpc_refresh_score_for_feature(dag, feature, state)
         return [(repaired_states, tuple(decisions), refresh_score)]
 
     def _dynamic_level_cost(
@@ -451,6 +466,8 @@ class MpcSkipGraphPartitioner:
             return 2
 
         if compute.layer_type in {'avgpool1d', 'avgpool2d'}:
+            if getattr(compute, 'is_adaptive_avgpool', False):
+                return 0
             if any(pred.shape[i] > config.block_shape[i] for i in range(pred.dim)):
                 return 1 if any(output_feature.shape[i] < config.block_shape[i] for i in range(output_feature.dim)) else 0
             succs_sub = list(dag.successors(output_feature))
@@ -602,17 +619,12 @@ class MpcSkipGraphPartitioner:
                 dag.nodes[node].clear()
                 dag.nodes[node].update(attrs)
 
-    def _mpc_refresh_score(
+    def _mpc_refresh_score_for_feature(
         self,
         dag: nx.DiGraph,
-        compute: ComputeNode,
-        pred_features: list[FeatureNode],
-        input_states: list[FeatureState],
+        feature: FeatureNode,
+        state: FeatureState,
     ) -> float:
-        if not pred_features:
-            return 0.0
-        feature = pred_features[0]
-        state = input_states[0]
         output = copy.deepcopy(feature)
         output.node_id = f'{feature.node_id}_mpc_refresh_cost_output'
         refresh = ComputeNode(
@@ -654,9 +666,45 @@ class MpcSkipGraphPartitioner:
         self,
         solutions: dict[tuple[NodeState, ...], MpcDpSolution],
     ) -> dict[tuple[NodeState, ...], MpcDpSolution]:
-        if len(solutions) <= self.max_states_per_frontier:
-            return solutions
-        return dict(sorted(solutions.items(), key=lambda item: item[1].score)[: self.max_states_per_frontier])
+        pruned = self._dominance_prune_solutions(solutions)
+        if len(pruned) <= self.max_states_per_frontier:
+            return pruned
+        return dict(sorted(pruned.items(), key=lambda item: item[1].score)[: self.max_states_per_frontier])
+
+    def _dominance_prune_solutions(
+        self,
+        solutions: dict[tuple[NodeState, ...], MpcDpSolution],
+    ) -> dict[tuple[NodeState, ...], MpcDpSolution]:
+        groups: dict[tuple[tuple[int, Skip], ...], list[tuple[tuple[NodeState, ...], MpcDpSolution]]] = {}
+        for key, solution in solutions.items():
+            layout_key = tuple((state.node_idx, state.skip) for state in key)
+            groups.setdefault(layout_key, []).append((key, solution))
+
+        kept: dict[tuple[NodeState, ...], MpcDpSolution] = {}
+        eps = 1e-12
+        for items in groups.values():
+            for key, solution in items:
+                levels = [state.level for state in key]
+                dominated = False
+                for other_key, other_solution in items:
+                    if other_key == key:
+                        continue
+                    other_levels = [state.level for state in other_key]
+                    score_not_worse = other_solution.score <= solution.score + eps
+                    levels_not_worse = all(
+                        other_level >= level
+                        for other_level, level in zip(other_levels, levels)
+                    )
+                    strictly_better = (
+                        other_solution.score < solution.score - eps
+                        or any(other_level > level for other_level, level in zip(other_levels, levels))
+                    )
+                    if score_not_worse and levels_not_worse and strictly_better:
+                        dominated = True
+                        break
+                if not dominated:
+                    kept[key] = solution
+        return kept
 
     def reconstruct_graph(
         self,
@@ -723,7 +771,7 @@ class MpcSkipGraphPartitioner:
                 graph.dag.nodes[feature]['skip'] = list(state.skip)
 
         transforms.infer_shapes_skips_and_pack_num(graph)
-        transforms.set_level_costs(graph)
+        transforms.set_level_costs(graph, trust_adaptive_avgpool_attr=True)
         restore_node_attributes(graph.dag)
         return graph.dag
 

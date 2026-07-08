@@ -249,7 +249,7 @@ def run_mpc_skip_compilation(
 
 def run_mpc_metadata_pass(graph: LayerAbstractGraph):
     transforms.infer_shapes_skips_and_pack_num(graph)
-    transforms.set_level_costs(graph)
+    transforms.set_level_costs(graph, trust_adaptive_avgpool_attr=True)
 
 
 def run_mpc_post_dp_passes(graph: LayerAbstractGraph):
