@@ -129,19 +129,18 @@ class ParUpperDiagonalLNStats(_ParUpperDiagonalBase):
         for idx in range(1, self.total_cts):
             sum_x = add(sum_x, partial_sum_x[idx])
 
-        partial_sum_x_sq = [self._reduce_cols_in_ct(ct, h0_mask_pt) for ct in x_sq]
+        sq_sum_x = rescale(relin(mult(sum_x, sum_x)))
+
+        partial_sum_x_sq = [self._reduce_cols_in_ct(x_sq[idx], inv_n_pt[idx]) for idx in range(self.total_cts)]
         sum_x_sq = partial_sum_x_sq[0]
         for idx in range(1, self.total_cts):
             sum_x_sq = add(sum_x_sq, partial_sum_x_sq[idx])
 
-        mean_cts = [rescale(mult(sum_x, inv_n_pt[idx])) for idx in range(self.total_cts)]
+        variance = sub(sum_x_sq, sq_sum_x)
 
         result = [None] * self.total_cts
         for idx in range(self.total_cts):
-            mean_sq = rescale(relin(mult(mean_cts[idx], mean_cts[idx])))
-            E_x_sq = rescale(mult(sum_x_sq, inv_n_pt[idx]))
-            var = sub(E_x_sq, mean_sq)
-            a_ct = rescale(mult(var, iv_pt[idx]))
+            a_ct = rescale(mult(variance, iv_pt[idx]))
             result[idx] = add(a_ct, eps_add_pt[idx])
         return result
 
@@ -161,10 +160,10 @@ class ParUpperDiagonalLNStats(_ParUpperDiagonalBase):
         ops[level]['add'] += 2 * T * reduce_ops['add'] + 2 * max(0, T - 1)
         ops[level]['rescale'] += 2 * T * reduce_ops['rescale']
 
-        ops[level]['mult'] += 2 * T
-        ops[level]['mult_plain'] += 3 * T
-        ops[level]['add'] += 2 * T
-        ops[level]['rescale'] += 5 * T
+        ops[level]['mult'] += T + 1
+        ops[level]['mult_plain'] += T
+        ops[level]['add'] += T + 1
+        ops[level]['rescale'] += 2 * T + 1
         return dict(ops)
 
 

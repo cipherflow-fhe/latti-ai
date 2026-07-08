@@ -823,8 +823,10 @@ def set_level_costs(graph: LayerAbstractGraph):
             graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type in ('pcmpoly', 'pdmpoly'):
             graph.dag.nodes[compute_node]['level_cost'] = 2 if compute_node.order == 2 else 3
-        elif compute_node.layer_type in ('pcmstats', 'pdmstats'):
+        elif compute_node.layer_type == 'pcmstats':
             graph.dag.nodes[compute_node]['level_cost'] = 4
+        elif compute_node.layer_type == 'pdmstats':
+            graph.dag.nodes[compute_node]['level_cost'] = 3
         elif compute_node.layer_type in ('pcmcenter', 'pdmcenter'):
             graph.dag.nodes[compute_node]['level_cost'] = 2
         elif compute_node.layer_type in ('pcminit', 'pdminit'):
@@ -1342,8 +1344,9 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
         # Remove the original layernorm node (keeps x_in and out in the graph)
         graph.dag.remove_node(ln_node)
 
-        # 1a. x_in → pcmstats → a  (computes mean/variance stats, costs 3 levels)
-        graph.dag.add_node(pcmstats, **c_attrs(3, pcmstats.layer_id))
+        stats_level_cost = 3 if stats_type == 'pdmstats' else 4
+        # 1a. x_in → stats → a  (computes mean/variance stats)
+        graph.dag.add_node(pcmstats, **c_attrs(stats_level_cost, pcmstats.layer_id))
         graph.dag.add_node(a, **f_attrs(a))
         graph.dag.add_edge(x_in, pcmstats)
         graph.dag.add_edge(pcmstats, a)
