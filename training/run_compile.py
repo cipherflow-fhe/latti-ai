@@ -122,6 +122,19 @@ Examples:
         help='Dump sorted split subgraphs to task/split_tasks/{index}/ct.json',
     )
 
+    parser.add_argument(
+        '--use_mpc_skip_dp',
+        action='store_true',
+        help='Use the experimental skip-aware MPC DP. Requires --graph_type=mpc.',
+    )
+
+    parser.add_argument(
+        '--mpc_skip_max_states',
+        type=int,
+        default=4096,
+        help='Maximum frontier states retained by --use_mpc_skip_dp (default: 4096).',
+    )
+
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -179,7 +192,8 @@ Examples:
     print(
         f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, '
         f'COMPILE_CONFIG={args.config or "<none>"}, SET_BTP_SCALE={set_btp_scale}, '
-        f'DUMP_SPLIT_SUBGRAPHS={args.dump_split_subgraphs}'
+        f'DUMP_SPLIT_SUBGRAPHS={args.dump_split_subgraphs}, USE_MPC_SKIP_DP={args.use_mpc_skip_dp}, '
+        f'MPC_SKIP_MAX_STATES={args.mpc_skip_max_states}'
     )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
@@ -197,6 +211,8 @@ Examples:
             matmul_block_size=compile_config.get('matmul_block_size'),
             set_btp_scale=set_btp_scale,
             dump_split_subgraphs=args.dump_split_subgraphs,
+            use_mpc_skip_dp=args.use_mpc_skip_dp,
+            mpc_skip_max_states=args.mpc_skip_max_states,
         )
 
         print(f'\n[Compile] Success! Output: {output_dir}')

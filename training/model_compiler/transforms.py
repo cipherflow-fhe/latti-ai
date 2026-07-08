@@ -259,18 +259,11 @@ class GraphSplitSorter:
             cycles = list(nx.simple_cycles(index_graph))
             raise ValueError(f'Subgraph dependency graph contains cycles: {cycles}')
 
-        all_nodes_in_topo_sort = list(nx.topological_sort(index_graph))
-        int_res = [value for value in all_nodes_in_topo_sort if isinstance(value, int)]
-
-        pre_next_dict: dict[int, int] = {}
-        for index, value in enumerate(int_res):
-            sorted_subgraphs.append(subgraphs[value])
-            pre_next_dict[value] = index
-
-        next_sub_dict: dict[int, list[int]] = {}
+        subgraph_dependency_graph = nx.DiGraph()
+        subgraph_dependency_graph.add_nodes_from(range(len(subgraphs)))
         for pred, succ in index_graph.edges:
             if isinstance(pred, int) and isinstance(succ, int):
-                self.add_subgraph_dependency(next_sub_dict, pre_next_dict[pred], pre_next_dict[succ])
+                subgraph_dependency_graph.add_edge(pred, succ)
 
         for node in index_graph.nodes:
             if isinstance(node, int):
@@ -278,14 +271,25 @@ class GraphSplitSorter:
 
             preds = [pred for pred in index_graph.predecessors(node) if isinstance(pred, int)]
             succs = [succ for succ in index_graph.successors(node) if isinstance(succ, int)]
-            if not preds or not succs:
-                continue
-
             for pred in preds:
-                pred_index = pre_next_dict[pred]
                 for succ in succs:
-                    succ_index = pre_next_dict[succ]
-                    self.add_subgraph_dependency(next_sub_dict, pred_index, succ_index)
+                    if pred != succ:
+                        subgraph_dependency_graph.add_edge(pred, succ)
+
+        if not nx.is_directed_acyclic_graph(subgraph_dependency_graph):
+            cycles = list(nx.simple_cycles(subgraph_dependency_graph))
+            raise ValueError(f'Subgraph dependency graph contains cycles after projection: {cycles}')
+
+        int_res = list(nx.topological_sort(subgraph_dependency_graph))
+
+        pre_next_dict: dict[int, int] = {}
+        for index, value in enumerate(int_res):
+            sorted_subgraphs.append(subgraphs[value])
+            pre_next_dict[value] = index
+
+        next_sub_dict: dict[int, list[int]] = {}
+        for pred, succ in subgraph_dependency_graph.edges:
+            self.add_subgraph_dependency(next_sub_dict, pre_next_dict[pred], pre_next_dict[succ])
 
         prev_sub_dict: dict[int, list[int]] = {}
         for u, vs in next_sub_dict.items():
@@ -311,16 +315,30 @@ class GraphSplitSorter:
             graph_out.add_edge(graph_out_index, feature_key)
         return graph_out
 
-    @staticmethod
-    def find_input_and_output(graph: LayerAbstractGraph) -> tuple[list[FeatureNode], list[FeatureNode]]:
+    def find_input_and_output(self, graph: LayerAbstractGraph) -> tuple[list[FeatureNode], list[FeatureNode]]:
         inputs: list[FeatureNode] = []
         outputs: list[FeatureNode] = []
+        original_dag = self.dag
         for node in graph.dag.nodes:
             if not isinstance(node, FeatureNode):
                 continue
-            if graph.dag.in_degree(node) == 0:
+            has_local_predecessor = any(isinstance(pred, ComputeNode) for pred in graph.dag.predecessors(node))
+            has_local_successor = any(isinstance(succ, ComputeNode) for succ in graph.dag.successors(node))
+            has_external_predecessor = False
+            has_external_successor = False
+            if original_dag is not None and node in original_dag:
+                has_external_predecessor = any(
+                    isinstance(pred, ComputeNode) and pred not in graph.dag
+                    for pred in original_dag.predecessors(node)
+                )
+                has_external_successor = any(
+                    isinstance(succ, ComputeNode) and succ not in graph.dag
+                    for succ in original_dag.successors(node)
+                )
+
+            if has_local_successor and (not has_local_predecessor or has_external_predecessor):
                 inputs.append(node)
-            if graph.dag.out_degree(node) == 0:
+            if has_local_predecessor and (not has_local_successor or has_external_successor):
                 outputs.append(node)
         return inputs, outputs
 

@@ -37,6 +37,7 @@ from components import (
 import processor
 from processor import *
 from graph_partition_dp import *
+from mpc_graph_partition_dp import compile_graph_mpc_skip_aware
 import transforms
 
 
@@ -156,6 +157,7 @@ def get_restore_param_candidates():
     if is_mpc_flow():
         return [PN13QP218]
         # return [PN14QP438]
+        # [N16QP1546H192H32]
     return [N16QP1546H192H32]
 
 
@@ -164,6 +166,8 @@ def try_btp(
     raw_graph: LayerAbstractGraph,
     temperature: float,
     num_workers: int,
+    use_mpc_skip_dp: bool = False,
+    mpc_skip_max_states: int = 4096,
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
     btp_param_list = get_restore_param_candidates()
     valid_results = []
@@ -176,12 +180,18 @@ def try_btp(
         pt_graph = prepare_graph(raw_graph)
 
         # (2) Process
-        graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
+        if is_mpc_flow() and use_mpc_skip_dp:
+            graph, score = run_mpc_skip_compilation(pt_graph, mpc_skip_max_states)
+        else:
+            graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
 
         # (3) Post-process
         if graph is not None:
             if is_mpc_flow():
-                run_mpc_post_dp_passes(graph)
+                if use_mpc_skip_dp:
+                    run_mpc_metadata_pass(graph)
+                else:
+                    run_mpc_post_dp_passes(graph)
             graph = post_process(graph)
             valid_results.append((score, graph))
 
@@ -215,6 +225,23 @@ def run_btp_compilation(
     # Find the best result
     score, graph = run_single_compile((pt_graph, temperature))
 
+    print(f'\n=== Results ===')
+    print(f'Final score: {score}')
+    return graph, score
+
+
+def run_mpc_skip_compilation(
+    pt_graph: LayerAbstractGraph,
+    max_states_per_frontier: int,
+) -> tuple[LayerAbstractGraph | None, float]:
+    print(
+        'Step 4: Starting skip-aware MPC DP compilation '
+        f'with max_states_per_frontier={max_states_per_frontier}'
+    )
+    score, graph = compile_graph_mpc_skip_aware(
+        pt_graph,
+        max_states_per_frontier=max_states_per_frontier,
+    )
     print(f'\n=== Results ===')
     print(f'Final score: {score}')
     return graph, score
@@ -554,6 +581,35 @@ def _subgraph_has_refresh_layer(subgraph: LayerAbstractGraph) -> bool:
     )
 
 
+def _rewrite_split_graph_io(ct_path: Path, inputs: list[FeatureNode], outputs: list[FeatureNode]) -> dict:
+    with open(ct_path, 'r', encoding='utf-8') as f:
+        graph_json = json.load(f)
+    graph_json['input_feature'] = [feature.node_id for feature in inputs]
+    graph_json['output_feature'] = [feature.node_id for feature in outputs]
+    with open(ct_path, 'w', encoding='utf-8') as f:
+        json.dump(graph_json, f, indent=4, ensure_ascii=False)
+    return graph_json
+
+
+def _rewrite_split_task_config_io(
+    task_config_path: Path,
+    graph_json: dict,
+    inputs: list[FeatureNode],
+    outputs: list[FeatureNode],
+):
+    with open(task_config_path, 'r', encoding='utf-8') as f:
+        task_config = json.load(f)
+    features = graph_json['feature']
+    input_ids = [feature.node_id for feature in inputs]
+    output_ids = [feature.node_id for feature in outputs]
+    task_config['task_input_id'] = input_ids
+    task_config['task_output_id'] = output_ids
+    task_config['task_input_param'] = {feature_id: features[feature_id] for feature_id in input_ids}
+    task_config['task_output_param'] = {feature_id: features[feature_id] for feature_id in output_ids}
+    with open(task_config_path, 'w', encoding='utf-8') as f:
+        json.dump(task_config, f, indent=4, ensure_ascii=False)
+
+
 def dump_split_tasks(graph: LayerAbstractGraph, task_dir: Path) -> list[dict[str, str]]:
     splitter = transforms.GraphSplitSorter(graph)
     subgraphs = splitter.split_graph()
@@ -582,8 +638,11 @@ def dump_split_tasks(graph: LayerAbstractGraph, task_dir: Path) -> list[dict[str
             str(ct_path),
             mark_last_mpc_refresh=index == last_mpc_refresh_subgraph_index,
         )
+        inputs, outputs = splitter.find_input_and_output(subgraph)
+        graph_json = _rewrite_split_graph_io(ct_path, inputs, outputs)
         subgraph_has_refresh = _subgraph_has_refresh_layer(subgraph)
         graph_to_task_config(subgraph, str(subtask_dir), use_btp=subgraph_has_refresh)
+        _rewrite_split_task_config_io(subtask_dir / 'task_config.json', graph_json, inputs, outputs)
 
         mode = 'direct_layer' if subgraph_has_refresh else 'mega_lazy'
         pipeline_item = {
@@ -667,6 +726,8 @@ def run_pipeline(
     set_btp_scale: float | None = None,
     use_gpu: bool = True,
     dump_split_subgraphs: bool = False,
+    use_mpc_skip_dp: bool = False,
+    mpc_skip_max_states: int = 4096,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -685,6 +746,8 @@ def run_pipeline(
         set_btp_scale: if not None, wrap BTP with pcmgamma scales and enable special level handling
         use_gpu: If True, use GPU primitive timing tables for FHE score; otherwise use CPU timing
         dump_split_subgraphs: If True, dump sorted split subgraphs to task/split_tasks/{index}/ct.json
+        use_mpc_skip_dp: If True, use the experimental MPC skip-aware DP instead of the BTP-style DP.
+        mpc_skip_max_states: Maximum frontier states retained by the MPC skip-aware DP.
     """
     if style is not None:
         config.style = style
@@ -698,10 +761,15 @@ def run_pipeline(
         config.matmul_block_size = matmul_block_size
     config.set_btp_scale = set_btp_scale
     config.use_gpu = use_gpu
+    if use_mpc_skip_dp:
+        if config.graph_type != 'mpc':
+            raise ValueError('--use_mpc_skip_dp requires graph_type="mpc"')
+        is_use_btp = True
     print(
         f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
         f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
-        f'SET_BTP_SCALE={config.set_btp_scale}, BACKEND={"gpu" if config.use_gpu else "cpu"}'
+        f'SET_BTP_SCALE={config.set_btp_scale}, BACKEND={"gpu" if config.use_gpu else "cpu"}, '
+        f'USE_MPC_SKIP_DP={use_mpc_skip_dp}, MPC_SKIP_MAX_STATES={mpc_skip_max_states}'
     )
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
@@ -711,12 +779,26 @@ def run_pipeline(
         succeeded, graph, score = try_no_btp(raw_graph)
         if not succeeded:
             use_btp = True
-            succeeded, graph, score = try_btp(num_experiments, raw_graph, temperature, num_workers)
+            succeeded, graph, score = try_btp(
+                num_experiments,
+                raw_graph,
+                temperature,
+                num_workers,
+                use_mpc_skip_dp=use_mpc_skip_dp,
+                mpc_skip_max_states=mpc_skip_max_states,
+            )
             if not succeeded:
                 raise ValueError('Compilation failed.')
     else:
         use_btp = True
-        succeeded, graph, score = try_btp(num_experiments, raw_graph, temperature, num_workers)
+        succeeded, graph, score = try_btp(
+            num_experiments,
+            raw_graph,
+            temperature,
+            num_workers,
+            use_mpc_skip_dp=use_mpc_skip_dp,
+            mpc_skip_max_states=mpc_skip_max_states,
+        )
         if not succeeded:
             raise ValueError('Compilation failed.')
     dump_graph(graph, output_dir, score, use_btp=use_btp, dump_split_subgraphs=dump_split_subgraphs)
