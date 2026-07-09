@@ -37,6 +37,7 @@ public:
                           uint32_t level,
                           Array<double, 2>&& B);
     void precompute_pts();
+    std::vector<ls::CkksPlaintextRingt> pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A);
     Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
@@ -50,6 +51,4 @@ private:
     uint32_t H_prepad_ = 0, H_ = 0, m_ = 0, n_ = 0, packed_extent_ = 0;
     uint32_t n_slot_ = 0, segment_len_ = 0, c_ = 0, cts_per_mb_ = 0, n_mb_ = 0;
     Array<double, 2> B_vals_;
-
-    std::vector<ls::CkksPlaintextRingt> pt_;
 };

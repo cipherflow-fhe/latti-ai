@@ -33,8 +33,9 @@ class PCMGammaComputeNode(ComputeNode):
         feature_input: list[FeatureNode],
         feature_output: list[FeatureNode],
         weight_path: str,
+        layer_type: str = 'pcmgamma',
     ):
-        super().__init__(layer_id, 'pcmgamma', feature_input, feature_output)
+        super().__init__(layer_id, layer_type, feature_input, feature_output)
         feature_output[0].shape = feature_input[0].shape
         feature_output[0].skip = feature_input[0].skip
         self.weight_path = weight_path
@@ -67,7 +68,9 @@ class MultCoeffComputeNode(ComputeNode):
         self.coeff = coeff
 
     @staticmethod
-    def from_onnx_node(x: NodeProto, features_nodes, constant_nodes) -> 'MultCoeffComputeNode | PCMGammaComputeNode':
+    def from_onnx_node(
+        x: NodeProto, features_nodes, constant_nodes, mat_pack_style: str = ''
+    ) -> 'MultCoeffComputeNode | PCMGammaComputeNode':
         layer_id = format_id(x.name)
         layer_type = 'mult_coeff'
         log.debug('%s', x)
@@ -86,7 +89,8 @@ class MultCoeffComputeNode(ComputeNode):
         const_value = constant_nodes[const_input_name][0]
         const_array = np.asarray(const_value)
         if feature_input[0].data_type == 'feature_mat' and const_array.size > 1:
-            return PCMGammaComputeNode(layer_id, feature_input, feature_output, weight_path)
+            gamma_type = 'pdmgamma' if mat_pack_style == 'par_diagonal_pack' else 'pcmgamma'
+            return PCMGammaComputeNode(layer_id, feature_input, feature_output, weight_path, layer_type=gamma_type)
 
         coeff = round(float(const_array.reshape(-1)[0]), 5)
 

@@ -52,39 +52,48 @@ class MatMulComputeNode(ComputeNode):
         info['type'] = self.layer_type
         info['feature_input'] = [i.node_id for i in self.feature_input]
         info['feature_output'] = [i.node_id for i in self.feature_output]
-        if self.layer_type == 'parcpmm' and self.weight_path:
+        if self.layer_type in ('parcpmm', 'pdmpcmm') and self.weight_path:
             info['weight_path'] = self.weight_path
-        if self.layer_type == 'parcpmm' and self.weight_shape:
+        if self.layer_type in ('parcpmm', 'pdmpcmm') and self.weight_shape:
             info['weight_shape'] = self.weight_shape
-        if self.layer_type == 'parcpmm' and self.bias_path:
+        if self.layer_type in ('parcpmm', 'pdmpcmm') and self.bias_path:
             info['bias_path'] = self.bias_path
-        if self.layer_type == 'parcpmm' and self.to_expand:
+        if self.layer_type in ('parcpmm', 'pdmpcmm') and self.to_expand:
             info['to_expand'] = True
         return info
 
     @staticmethod
-    def from_onnx_node(x: NodeProto, features_nodes, weight_shapes: dict | None = None) -> 'MatMulComputeNode':
+    def from_onnx_node(
+        x: NodeProto,
+        features_nodes,
+        weight_shapes: dict | None = None,
+        mat_pack_style: str = '',
+    ) -> 'MatMulComputeNode':
         layer_id = format_id(x.name)
         input1_id = format_id(x.input[1])
+        is_diagonal_pack = mat_pack_style == 'par_diagonal_pack'
         weight_path = ''
         weight_shape = []
         bias_path = ''
         if input1_id in features_nodes:
-            layer_type = 'parccmm'
+            layer_type = 'pdmccmm' if is_diagonal_pack else 'parccmm'
             feature_input = [features_nodes[format_id(x.input[0])], features_nodes[input1_id]]
         else:
-            layer_type = 'parcpmm'
+            layer_type = 'pdmpcmm' if is_diagonal_pack else 'parcpmm'
             feature_input = [features_nodes[format_id(x.input[0])]]
             weight_path = x.input[1]
             if weight_shapes and x.input[1] in weight_shapes:
                 weight_shape = list(weight_shapes[x.input[1]])
+                if is_diagonal_pack and len(weight_shape) == 2:
+                    weight_shape = [weight_shape[1], weight_shape[0]]
         feature_output = [features_nodes[format_id(x.output[0])]]
         attrs = ComputeNode.get_attr_value_dict(x)
         log.debug('%s', attrs)
         has_bias_input = len(x.input) > 2 and bool(x.input[2])
         has_fused_bias_input = has_bias_input and 'fused_bias' in x.input[2]
-        to_expand = layer_type == 'parcpmm' and x.op_type == 'Linear' and has_fused_bias_input
-        if layer_type == 'parcpmm' and x.op_type == 'Linear':
+        is_pcmm = layer_type in ('parcpmm', 'pdmpcmm')
+        to_expand = is_pcmm and x.op_type == 'Linear' and has_fused_bias_input
+        if is_pcmm and x.op_type == 'Linear':
             if has_bias_input:
                 bias_path = x.input[2]
 

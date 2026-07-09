@@ -406,3 +406,14 @@ private:
         }
     }
 };
+
+template <typename T> Array<T, 2> transpose_2d_array(const Array<T, 2>& x) {
+    const auto shape = x.get_shape();
+    Array<T, 2> result({shape[1], shape[0]});
+    for (uint64_t i = 0; i < shape[0]; i++) {
+        for (uint64_t j = 0; j < shape[1]; j++) {
+            result.set(j, i, x.get(i, j));
+        }
+    }
+    return result;
+}

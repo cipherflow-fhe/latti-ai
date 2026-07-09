@@ -44,6 +44,8 @@ from .onnx_model_manipulations import simplify_onnx_model
 
 log = logging.getLogger(__name__)
 
+MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
+
 
 def gen_data_nodes(value_infos, feature_mat: bool = False) -> dict[str, FeatureNode]:
     """Build FeatureNode dict from ONNX value_info entries."""
@@ -106,8 +108,9 @@ class PcmAddPtComputeNode(ComputeNode):
         feature_input: list[FeatureNode],
         feature_output: list[FeatureNode],
         weight_path: str,
+        layer_type: str = 'pcm_add_pt',
     ):
-        super().__init__(layer_id, 'pcm_add_pt', feature_input, feature_output)
+        super().__init__(layer_id, layer_type, feature_input, feature_output)
         self.weight_path = weight_path
         feature_output[0].skip = list(feature_input[0].skip)
         feature_output[0].shape = list(feature_input[0].shape)
@@ -263,14 +266,19 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
         return info
 
 
-def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_mat: bool = False):
+def onnx_to_json(onnx_filename: str, output_filename: str, style: str, mat_pack_style: str = ''):
     """Convert an ONNX model file to the JSON format for encrypted inference.
 
     Args:
         onnx_filename:  Path to the input ``.onnx`` model.
         output_filename: Path to the output ``.json`` file.
         style:          Packing style (``'ordinary'`` or ``'multiplexed'``).
+        mat_pack_style:      Data packing type.
     """
+    if mat_pack_style not in MAT_PACK_STYLES:
+        raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
+    feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
+
     onnx_model = onnx.load(onnx_filename)
     simplify_onnx_model(onnx_model)
     onnx_model = shape_inference.infer_shapes(onnx_model)
@@ -317,7 +325,9 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_m
             case 'Dropout':
                 compute_node = DropoutComputeNode.from_onnx_node(n, features_nodes)
             case 'Mul':
-                compute_node = MultCoeffComputeNode.from_onnx_node(n, features_nodes, constant_nodes)
+                compute_node = MultCoeffComputeNode.from_onnx_node(
+                    n, features_nodes, constant_nodes, mat_pack_style=mat_pack_style
+                )
             case 'AveragePool':
                 compute_node = AveragePoolComputeNode.from_onnx_node(n, features_nodes)
             case 'GlobalAveragePool':
@@ -341,9 +351,11 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_m
             case 'ConvTranspose':
                 compute_node = ConvTransposeComputeNode.from_onnx_node(n, features_nodes)
             case 'MatMul':
-                compute_node = MatMulComputeNode.from_onnx_node(n, features_nodes, weight_shapes)
+                compute_node = MatMulComputeNode.from_onnx_node(
+                    n, features_nodes, weight_shapes, mat_pack_style=mat_pack_style
+                )
             case 'Transpose':
-                compute_node = TransposeComputeNode.from_onnx_node(n, features_nodes)
+                compute_node = TransposeComputeNode.from_onnx_node(n, features_nodes, mat_pack_style=mat_pack_style)
             case 'LayerNorm':
                 compute_node = LayerNormComputeNode.from_onnx_node(n, features_nodes)
             case 'RangeNormPoly2d':
@@ -355,7 +367,9 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_m
             case 'PolyActRNPoly':
                 compute_node = PolyActRNPolyComputeNode.from_onnx_node(n, features_nodes)
             case 'Linear':
-                compute_node = MatMulComputeNode.from_onnx_node(n, features_nodes, weight_shapes)
+                compute_node = MatMulComputeNode.from_onnx_node(
+                    n, features_nodes, weight_shapes, mat_pack_style=mat_pack_style
+                )
             case 'CustomLayerNorm':
                 compute_node = LayerNormComputeNode.from_onnx_node(n, features_nodes)
             case 'CustomMultiHeadAttention':
@@ -390,6 +404,7 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, feature_m
                             [features_nodes[format_id(feature_inputs[0])]],
                             [features_nodes[format_id(n.output[0])]],
                             weight_path,
+                            layer_type='pdm_add_pt' if mat_pack_style == 'par_diagonal_pack' else 'pcm_add_pt',
                         )
                     else:
                         kwargs = {

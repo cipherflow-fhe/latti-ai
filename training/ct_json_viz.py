@@ -14,14 +14,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import graphviz
 import json
 import argparse
 import os
 
 
-def main(input_filename, output_folder, output_name='graph.gv', show_layer_id=False):
-    import graphviz
-
+def main(input_filename, output_folder, output_name='graph.gv'):
     ct_json_filename = input_filename
     with open(ct_json_filename, 'r') as f:
         ct_json = json.load(f)
@@ -34,8 +33,6 @@ def main(input_filename, output_folder, output_name='graph.gv', show_layer_id=Fa
         label_str = f'{channel}' if channel != '' else ''
         if 'shape' in feature_p.keys():
             label_str += (', ' if label_str else '') + f'{feature_p["shape"]}'
-        if 'skip' in feature_p.keys():
-            label_str += (', ' if label_str else '') + f'skip:{feature_p["skip"]}'
         label_str += f', lv{feature_p["level"]}'
         feature_scale = float(feature_p['scale'])
         if abs(feature_scale - 1.0) > 0.00001:
@@ -43,9 +40,7 @@ def main(input_filename, output_folder, output_name='graph.gv', show_layer_id=Fa
         graph.node(name=feature_id, label=label_str, shape='box')
 
     for layer_id, layer_p in ct_json['layer'].items():
-        label_str = layer_id if show_layer_id else f'{layer_p["type"]}'
-        if 'conv' in layer_p['type'] and 'stride' in layer_p:
-            label_str += f', stride:{layer_p["stride"]}'
+        label_str = f'{layer_p["type"]}'
         scale = float(layer_p.get('weight_scale', 1.0))
         if abs(scale - 1.0) > 0.00001:
             label_str += f', scale:{scale:4g}'
@@ -79,14 +74,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Visualize CT JSON graph')
     parser.add_argument('input_filename', help='Path to input CT JSON file')
     parser.add_argument('-o', '--output', default='graph.gv', help='Output filename (default: graph.gv)')
-    parser.add_argument(
-        '--show-layer-id',
-        action='store_true',
-        help='Show layer ids instead of layer types in compute node labels',
-    )
     args = parser.parse_args()
 
     input_filename = os.path.abspath(args.input_filename)
     output_folder = os.path.dirname(input_filename)
 
-    main(input_filename, output_folder, args.output, args.show_layer_id)
+    main(input_filename, output_folder, args.output)

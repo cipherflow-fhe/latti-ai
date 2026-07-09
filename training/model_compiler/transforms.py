@@ -822,17 +822,19 @@ def expand_parcpmm_add_pt(graph: LayerAbstractGraph):
     for parcpmm_node in list(graph.dag.nodes):
         if not isinstance(parcpmm_node, ComputeNode):
             continue
-        if parcpmm_node.layer_type != 'parcpmm' or not getattr(parcpmm_node, 'to_expand', False):
+        if parcpmm_node.layer_type not in ('parcpmm', 'pdmpcmm') or not getattr(parcpmm_node, 'to_expand', False):
             continue
 
         bias_path = getattr(parcpmm_node, 'bias_path', '')
         if not bias_path:
-            raise ValueError(f'parcpmm layer {parcpmm_node.layer_id} has to_expand=True but no bias_path')
+            raise ValueError(
+                f'{parcpmm_node.layer_type} layer {parcpmm_node.layer_id} has to_expand=True but no bias_path'
+            )
 
         old_feature_list = list(graph.dag.successors(parcpmm_node))
         if len(old_feature_list) != 1:
             raise ValueError(
-                f'Expected exactly one output feature for parcpmm layer {parcpmm_node.layer_id}, '
+                f'Expected exactly one output feature for {parcpmm_node.layer_type} layer {parcpmm_node.layer_id}, '
                 f'got {len(old_feature_list)}'
             )
         old_feature = old_feature_list[0]
@@ -854,7 +856,9 @@ def expand_parcpmm_add_pt(graph: LayerAbstractGraph):
             new_feature.head_shape = list(old_feature.head_shape)
 
         add_pt_id = make_unique_id(f'{parcpmm_node.layer_id}_add_pt')
-        add_pt_node = ComputeNode(add_pt_id, 'pcm_add_pt', parcpmm_node.channel_output, parcpmm_node.channel_output)
+        add_pt_node = ComputeNode(
+            add_pt_id, _pack_pcm_type('pcm_add_pt'), parcpmm_node.channel_output, parcpmm_node.channel_output
+        )
         add_pt_node.path = bias_path
 
         new_feature_args = copy.deepcopy(graph.dag.nodes[old_feature])
@@ -935,10 +939,19 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
             if node.data_type == 'feature_mat' and node.head_shape is None and n_heads > 1:
                 if head_dim <= 0:
                     raise ValueError('HEAD_DIM must be set when N_HEADS > 1 for feature_mat inputs')
-                node.head_shape = [node.shape[0], head_dim]
+                if _is_diagonal_mat_pack():
+                    if len(node.shape) < 2:
+                        raise ValueError(f'feature_mat input {node.node_id} must be rank-2 for par_diagonal_pack')
+                    seq_len, total_dim = node.shape[0], node.shape[1]
+                    node.shape[0] = total_dim
+                    node.shape[1] = seq_len
+                    node.head_shape = [head_dim, seq_len]
+                else:
+                    node.head_shape = [node.shape[0], head_dim]
 
     for compute_node in sorted_compute_nodes:
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
+        preds = sort_preds_by_input_index(graph.dag, compute_node, preds)
         succ: FeatureNode = next(graph.dag.successors(compute_node))
         # init skip,
         if succ.dim != 0:
@@ -988,7 +1001,25 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                         succ.shape[1] = weight_shape[-1]
                     if preds[0].head_shape is not None:
                         succ.head_shape = list(preds[0].head_shape)
+                elif compute_node.layer_type == 'pdmpcmm':
+                    weight_shape = getattr(compute_node, 'weight_shape', [])
+                    if preds[0].head_shape is not None:
+                        succ.head_shape = list(preds[0].head_shape)
+                    if len(weight_shape) >= 1:
+                        succ.shape[0] = weight_shape[0]
+                    else:
+                        succ.shape[0] = preds[0].shape[0]
+                    if len(preds[0].shape) > 1:
+                        succ.shape[1] = preds[0].shape[1]
                 elif compute_node.layer_type == 'partranspose':
+                    if preds[0].head_shape is not None:
+                        succ.head_shape = [preds[0].head_shape[1], preds[0].head_shape[0]]
+                        succ.shape[0] = succ.head_shape[0]
+                        succ.shape[1] = succ.head_shape[1] * n_heads
+                    else:
+                        succ.shape[0] = preds[0].shape[1]
+                        succ.shape[1] = preds[0].shape[0]
+                elif compute_node.layer_type == 'pdmtranspose':
                     if preds[0].head_shape is not None:
                         succ.head_shape = [preds[0].head_shape[1], preds[0].head_shape[0]]
                         succ.shape[0] = succ.head_shape[0]
@@ -1003,14 +1034,19 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                         succ.shape[1] = succ.head_shape[1] * n_heads
                     elif len(preds) > 1 and len(preds[1].shape) > 1:
                         succ.shape[1] = preds[1].shape[1]
+                elif compute_node.layer_type == 'pdmccmm':
+                    if preds[0].head_shape is not None and len(preds) > 1 and preds[1].head_shape is not None:
+                        succ.head_shape = [preds[0].head_shape[0], preds[1].head_shape[1]]
+                        succ.shape[0] = succ.head_shape[0] * n_heads
+                        succ.shape[1] = succ.head_shape[1]
+                    else:
+                        succ.shape[0] = preds[0].shape[0]
+                        if len(preds) > 1 and len(preds[1].shape) > 1:
+                            succ.shape[1] = preds[1].shape[1]
                 else:
                     for i in range(preds[0].dim):
                         succ.shape[i] = preds[0].shape[i]
-                    pred_skips = [graph.dag.nodes[pred]['skip'][: succ.dim] for pred in preds]
-                    if len(pred_skips) > 1 and any(skip != pred_skips[0] for skip in pred_skips[1:]):
-                        graph.dag.nodes[succ]['skip'] = [1] * succ.dim
-                    else:
-                        graph.dag.nodes[succ]['skip'] = pred_skips[0].copy()
+                        graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
                 # Propagate head_shape for feature_mat pass-through layers
                 if succ.head_shape is None and preds[0].head_shape is not None:
                     succ.head_shape = list(preds[0].head_shape)
@@ -1127,27 +1163,29 @@ def set_level_costs(graph: LayerAbstractGraph, trust_adaptive_avgpool_attr: bool
         elif compute_node.layer_type == 'concat2d':
             has_uneven = any(p.channel % graph.dag.nodes[p]['pack_num'] != 0 for p in preds)
             graph.dag.nodes[compute_node]['level_cost'] = 1 if has_uneven else 0
-        elif compute_node.layer_type == 'parcpmm':
+        elif compute_node.layer_type in ('parcpmm', 'pdmpcmm'):
             graph.dag.nodes[compute_node]['level_cost'] = 2
-        elif compute_node.layer_type in {'add_pt', 'pcm_add_pt'}:
+        elif compute_node.layer_type in {'add_pt', 'pcm_add_pt', 'pdm_add_pt'}:
             graph.dag.nodes[compute_node]['level_cost'] = 0
-        elif compute_node.layer_type == 'partranspose':
+        elif compute_node.layer_type in ('partranspose', 'pdmtranspose'):
             graph.dag.nodes[compute_node]['level_cost'] = 1
-        elif compute_node.layer_type == 'parccmm':
+        elif compute_node.layer_type in ('parccmm', 'pdmccmm'):
             graph.dag.nodes[compute_node]['level_cost'] = 3
-        elif compute_node.layer_type == 'pcmgamma':
+        elif compute_node.layer_type in ('pcmgamma', 'pdmgamma'):
             graph.dag.nodes[compute_node]['level_cost'] = 1
-        elif compute_node.layer_type == 'pcmpoly':
+        elif compute_node.layer_type in ('pcmpoly', 'pdmpoly'):
             graph.dag.nodes[compute_node]['level_cost'] = 2 if compute_node.order == 2 else 3
         elif compute_node.layer_type == 'pcmstats':
             graph.dag.nodes[compute_node]['level_cost'] = 4
-        elif compute_node.layer_type == 'pcmcenter':
-            graph.dag.nodes[compute_node]['level_cost'] = 2
-        elif compute_node.layer_type == 'pcminit':
-            graph.dag.nodes[compute_node]['level_cost'] = 2
-        elif compute_node.layer_type == 'pcmgs':
+        elif compute_node.layer_type == 'pdmstats':
             graph.dag.nodes[compute_node]['level_cost'] = 3
-        elif compute_node.layer_type == 'pcmaffine':
+        elif compute_node.layer_type in ('pcmcenter', 'pdmcenter'):
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type in ('pcminit', 'pdminit'):
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type in ('pcmgs', 'pdmgs'):
+            graph.dag.nodes[compute_node]['level_cost'] = 3
+        elif compute_node.layer_type in ('pcmaffine', 'pdmaffine'):
             graph.dag.nodes[compute_node]['level_cost'] = 2
         else:
             graph.dag.nodes[compute_node]['level_cost'] = 0
@@ -1459,27 +1497,31 @@ def expand_multi_head_attention(graph: LayerAbstractGraph):
         qkt_poly = make_feature(f'{base_id}_qkt_polyact', [m, m * n_heads])
         qktv = make_feature(f'{base_id}_qktv', list(out.shape))
 
-        q_node = ComputeNode(f'{base_id}_q_layer', 'parcpmm', 1, 1)
+        pcmm_type = 'pdmpcmm' if _is_diagonal_mat_pack() else 'parcpmm'
+        transpose_type = 'pdmtranspose' if _is_diagonal_mat_pack() else 'partranspose'
+        ccmm_type = 'pdmccmm' if _is_diagonal_mat_pack() else 'parccmm'
+
+        q_node = ComputeNode(f'{base_id}_q_layer', pcmm_type, 1, 1)
         q_node.path = getattr(vit_node, 'q_weight_path', f'{base_id}.q.weight')
         q_node.bias_path = getattr(vit_node, 'q_bias_path', '')
         q_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
-        k_node = ComputeNode(f'{base_id}_k_layer', 'parcpmm', 1, 1)
+        k_node = ComputeNode(f'{base_id}_k_layer', pcmm_type, 1, 1)
         k_node.path = getattr(vit_node, 'k_weight_path', f'{base_id}.k.weight')
         k_node.bias_path = getattr(vit_node, 'k_bias_path', '')
         k_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
-        v_node = ComputeNode(f'{base_id}_v_layer', 'parcpmm', 1, 1)
+        v_node = ComputeNode(f'{base_id}_v_layer', pcmm_type, 1, 1)
         v_node.path = getattr(vit_node, 'v_weight_path', f'{base_id}.v.weight')
         v_node.bias_path = getattr(vit_node, 'v_bias_path', '')
         v_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
-        kt_node = ComputeNode(f'{base_id}_kt_layer', 'partranspose', 1, 1)
-        qkt_node = ComputeNode(f'{base_id}_qkt_layer', 'parccmm', 1, 1)
-        poly_node = ComputeNode(f'{base_id}_poly', 'pcmpoly', 1, 1)
+        kt_node = ComputeNode(f'{base_id}_kt_layer', transpose_type, 1, 1)
+        qkt_node = ComputeNode(f'{base_id}_qkt_layer', ccmm_type, 1, 1)
+        poly_node = ComputeNode(f'{base_id}_poly', _pack_pcm_type('pcmpoly'), 1, 1)
         poly_node.path = getattr(vit_node, 'poly_weight_path', f'{base_id}.poly.weight')
         poly_node.coeffs_path = poly_node.path
         poly_node.gamma_path = getattr(vit_node, 'gamma_path', f'{base_id}.gamma')
         poly_node.order = getattr(vit_node, 'poly_order', 4)
-        qktv_node = ComputeNode(f'{base_id}_qktv_layer', 'parccmm', 1, 1)
-        out_node = ComputeNode(f'{base_id}_out', 'parcpmm', 1, 1)
+        qktv_node = ComputeNode(f'{base_id}_qktv_layer', ccmm_type, 1, 1)
+        out_node = ComputeNode(f'{base_id}_out', pcmm_type, 1, 1)
         out_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
         out_node.path = getattr(vit_node, 'proj_weight_path', f'{base_id}.proj.weight')
         out_node.bias_path = getattr(vit_node, 'proj_bias_path', '')
@@ -1507,15 +1549,21 @@ def expand_multi_head_attention(graph: LayerAbstractGraph):
         graph.dag.add_edge(k, kt_node)
         graph.dag.add_edge(kt_node, kt)
 
-        graph.dag.add_edge(q, qkt_node, input_index=0)
-        graph.dag.add_edge(kt, qkt_node, input_index=1)
+        def add_ccmm_inputs(lhs: FeatureNode, rhs: FeatureNode, node: ComputeNode):
+            if node.layer_type == 'pdmccmm':
+                graph.dag.add_edge(lhs, node, input_index=1)
+                graph.dag.add_edge(rhs, node, input_index=0)
+            else:
+                graph.dag.add_edge(lhs, node, input_index=0)
+                graph.dag.add_edge(rhs, node, input_index=1)
+
+        add_ccmm_inputs(q, kt, qkt_node)
         graph.dag.add_edge(qkt_node, qkt)
 
         graph.dag.add_edge(qkt, poly_node)
         graph.dag.add_edge(poly_node, qkt_poly)
 
-        graph.dag.add_edge(qkt_poly, qktv_node, input_index=0)
-        graph.dag.add_edge(v, qktv_node, input_index=1)
+        add_ccmm_inputs(qkt_poly, v, qktv_node)
         graph.dag.add_edge(qktv_node, qktv)
 
         graph.dag.add_edge(qktv, out_node)
@@ -1551,7 +1599,7 @@ def expand_poly_act_rn(graph: LayerAbstractGraph):
         input_edge_attrs = copy.deepcopy(graph.dag.edges[x_in, node])
         output_edge_attrs = copy.deepcopy(graph.dag.edges[node, out])
 
-        poly_node = ComputeNode(base_id, 'pcmpoly', node.channel_input, node.channel_output)
+        poly_node = ComputeNode(base_id, _pack_pcm_type('pcmpoly'), node.channel_input, node.channel_output)
         poly_node.depth = node.depth
         poly_node.path = coeffs_path or running_max_path
         poly_node.running_max_path = running_max_path
@@ -1585,6 +1633,16 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
         epsilon = ln_node.epsilon
         weight_path = ln_node.weight_path
         bias_path = ln_node.bias_path
+        node_n_iter = int(getattr(ln_node, 'num_iters', n_iter))
+        layernorm_param_attrs = {
+            'epsilon': epsilon,
+            'inv_std_scale': getattr(ln_node, 'inv_std_scale', config.layernorm_inv_std_scale),
+            'inv_var_scale': getattr(ln_node, 'inv_var_scale', config.layernorm_inv_var_scale),
+            'c0': getattr(ln_node, 'c0', config.layernorm_c0),
+            'c1': getattr(ln_node, 'c1', config.layernorm_c1),
+            'c2': getattr(ln_node, 'c2', config.layernorm_c2),
+            'num_iters': node_n_iter,
+        }
 
         x_in_attrs = graph.dag.nodes[x_in]
         skip = list(x_in_attrs.get('skip', [1] * x_in.dim))
@@ -1614,23 +1672,33 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
         a = make_feature(f'{base_id}_a')
         x_c = make_feature(f'{base_id}_x_c')
         y0 = make_feature(f'{base_id}_y0')
-        y_nodes = [y0] + [make_feature(f'{base_id}_y{i + 1}') for i in range(n_iter)]
+        y_nodes = [y0] + [make_feature(f'{base_id}_y{i + 1}') for i in range(node_n_iter)]
 
         # Sub-compute nodes
-        pcmstats = ComputeNode(f'{base_id}_pcmstats', 'pcmstats', 1, 1)
+        stats_type = _pack_pcm_type('pcmstats')
+        center_type = _pack_pcm_type('pcmcenter')
+        init_type = _pack_pcm_type('pcminit')
+        gs_type = _pack_pcm_type('pcmgs')
+        affine_type = _pack_pcm_type('pcmaffine')
+
+        pcmstats = ComputeNode(f'{base_id}_{stats_type}', stats_type, 1, 1)
         pcmstats.epsilon = epsilon
-        pcmcenter = ComputeNode(f'{base_id}_pcmcenter', 'pcmcenter', 1, 1)
-        pcminit = ComputeNode(f'{base_id}_pcminit', 'pcminit', 1, 1)
-        pcmgs_nodes = [ComputeNode(f'{base_id}_pcmgs_{i}', 'pcmgs', 1, 1) for i in range(n_iter)]
-        pcmaffine = ComputeNode(f'{base_id}_pcmaffine', 'pcmaffine', 1, 1)
+        pcmcenter = ComputeNode(f'{base_id}_{center_type}', center_type, 1, 1)
+        pcminit = ComputeNode(f'{base_id}_{init_type}', init_type, 1, 1)
+        pcmgs_nodes = [ComputeNode(f'{base_id}_{gs_type}_{i}', gs_type, 1, 1) for i in range(node_n_iter)]
+        pcmaffine = ComputeNode(f'{base_id}_{affine_type}', affine_type, 1, 1)
         pcmaffine.weight_path = weight_path
         pcmaffine.bias_path = bias_path
+        for stage_node in (pcmstats, pcmcenter, pcminit, *pcmgs_nodes, pcmaffine):
+            for attr_key, attr_value in layernorm_param_attrs.items():
+                setattr(stage_node, attr_key, attr_value)
 
         # Remove the original layernorm node (keeps x_in and out in the graph)
         graph.dag.remove_node(ln_node)
 
-        # 1a. x_in → pcmstats → a  (computes mean/variance stats, costs 3 levels)
-        graph.dag.add_node(pcmstats, **c_attrs(3, pcmstats.layer_id))
+        stats_level_cost = 3 if stats_type == 'pdmstats' else 4
+        # 1a. x_in → stats → a  (computes mean/variance stats)
+        graph.dag.add_node(pcmstats, **c_attrs(stats_level_cost, pcmstats.layer_id))
         graph.dag.add_node(a, **f_attrs(a))
         graph.dag.add_edge(x_in, pcmstats)
         graph.dag.add_edge(pcmstats, a)
@@ -1665,12 +1733,14 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
 
 
 def set_pcm_K(graph: LayerAbstractGraph):
-    """Set K attribute on pcmgamma and pcmpoly nodes."""
+    """Set K attribute on pcmgamma/pcmpoly nodes and their pdm aliases."""
     base_feat_dim = config.n_heads * config.matmul_block_size
+    gamma_types = ('pcmgamma', 'pdmgamma')
+    poly_types = ('pcmpoly', 'pdmpoly')
     for node in graph.dag.nodes:
         if not isinstance(node, ComputeNode):
             continue
-        if node.layer_type not in ('pcmgamma', 'pcmpoly'):
+        if node.layer_type not in gamma_types + poly_types:
             continue
         preds = list(graph.dag.predecessors(node))
         if not preds:
@@ -1688,20 +1758,24 @@ def set_pcm_K(graph: LayerAbstractGraph):
         return prev_compute_nodes[0]
 
     for node in graph.dag.nodes:
-        if not isinstance(node, ComputeNode) or node.layer_type not in ('pcmgamma', 'pcmpoly'):
+        if not isinstance(node, ComputeNode) or node.layer_type not in gamma_types + poly_types:
             continue
         preds = list(graph.dag.predecessors(node))
         if not preds:
             continue
         prev_compute = get_prev_compute(preds[0])
-        if node.layer_type == 'pcmgamma' and prev_compute is not None and prev_compute.layer_type == 'parccmm':
+        if (
+            node.layer_type in gamma_types
+            and prev_compute is not None
+            and prev_compute.layer_type in ('parccmm', 'pdmccmm')
+        ):
             node.K = 1
-        elif node.layer_type == 'pcmpoly' and prev_compute is not None:
-            if prev_compute.layer_type == 'parccmm':
+        elif node.layer_type in poly_types and prev_compute is not None:
+            if prev_compute.layer_type in ('parccmm', 'pdmccmm'):
                 node.K = 1
-            elif prev_compute.layer_type == 'pcmgamma':
+            elif prev_compute.layer_type in gamma_types:
                 prev_preds = list(graph.dag.predecessors(prev_compute))
                 if prev_preds:
                     prev_prev_compute = get_prev_compute(prev_preds[0])
-                    if prev_prev_compute is not None and prev_prev_compute.layer_type == 'parccmm':
+                    if prev_prev_compute is not None and prev_prev_compute.layer_type in ('parccmm', 'pdmccmm'):
                         node.K = 1

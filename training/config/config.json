@@ -2,5 +2,5 @@
   "n_heads": 3,
   "head_dim": 64,
   "matmul_block_size": 64,
-  "is_feature_mat": true
+  "mat_pack_style": "par_diagonal_pack"
 }

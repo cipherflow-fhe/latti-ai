@@ -41,6 +41,17 @@ from graph_partition_dp import *
 from mpc_graph_partition_dp import compile_graph_mpc_skip_aware
 import transforms
 
+MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
+PCM_TO_PDM_TYPES = {
+    'pcmgamma': 'pdmgamma',
+}
+
+
+def _pack_pcm_type(layer_type: str) -> str:
+    if getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack':
+        return PCM_TO_PDM_TYPES.get(layer_type, layer_type)
+    return layer_type
+
 
 def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     """
@@ -169,6 +180,7 @@ def try_btp(
     num_workers: int,
     use_mpc_skip_dp: bool = False,
     mpc_skip_max_states: int = 4096,
+    enable_score_cache: bool = True,
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
     btp_param_list = get_restore_param_candidates()
     valid_results = []
@@ -184,7 +196,7 @@ def try_btp(
         if is_mpc_flow() and use_mpc_skip_dp:
             graph, score = run_mpc_skip_compilation(pt_graph, mpc_skip_max_states)
         else:
-            graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers)
+            graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers, enable_score_cache=enable_score_cache)
 
         # (3) Post-process
         if graph is not None:
@@ -208,6 +220,7 @@ def run_btp_compilation(
     pt_graph: LayerAbstractGraph,
     temperature: float,
     num_workers: int,
+    enable_score_cache: bool = True,
 ) -> tuple[LayerAbstractGraph | None, float]:
     """
     Run BTP mode parallel compilation with prepared graph
@@ -217,15 +230,19 @@ def run_btp_compilation(
         temperature: Temperature parameter for randomization
         pt_graph: Prepared graph for BTP compilation
         num_workers: Number of parallel worker processes
+        enable_score_cache: If True, cache per-compute score in DP compilation
 
     Returns:
         (best_graph, best_score): best_graph is None if all runs failed
     """
     print(f'Step 4: Starting DP compilation of pt_graph with temperature={temperature}')
+    dp_start_time = time.perf_counter()
 
     # Find the best result
-    score, graph = run_single_compile((pt_graph, temperature))
+    score, graph = run_single_compile((pt_graph, temperature, enable_score_cache))
 
+    dp_elapsed_time = time.perf_counter() - dp_start_time
+    print(f'DP compilation time: {dp_elapsed_time:.3f}s')
     print(f'\n=== Results ===')
     print(f'Final score: {score}')
     return graph, score
@@ -315,17 +332,18 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         pred_feature = preds[0]
         succ_feature = succs[0]
 
-        pre_gamma_id = _unique_graph_node_id(graph, f'{btp_node.layer_id}_pre_pcmgamma', 'layer_id')
-        post_gamma_id = _unique_graph_node_id(graph, f'{btp_node.layer_id}_post_pcmgamma', 'layer_id')
+        gamma_type = _pack_pcm_type('pcmgamma')
+        pre_gamma_id = _unique_graph_node_id(graph, f'{btp_node.layer_id}_pre_{gamma_type}', 'layer_id')
+        post_gamma_id = _unique_graph_node_id(graph, f'{btp_node.layer_id}_post_{gamma_type}', 'layer_id')
         pre_feature_id = _unique_graph_node_id(graph, f'{pre_gamma_id}_output', 'node_id')
         post_gamma_input_feature_id = _unique_graph_node_id(graph, f'{post_gamma_id}_input', 'node_id')
 
-        pre_gamma = ComputeNode(pre_gamma_id, 'pcmgamma', btp_node.channel_input, btp_node.channel_input)
+        pre_gamma = ComputeNode(pre_gamma_id, gamma_type, btp_node.channel_input, btp_node.channel_input)
         pre_gamma.depth = btp_node.depth
         pre_gamma.path = f'{pre_gamma_id}.weight'
         pre_gamma.btp_scale = btp_scale
 
-        post_gamma = ComputeNode(post_gamma_id, 'pcmgamma', btp_node.channel_output, btp_node.channel_output)
+        post_gamma = ComputeNode(post_gamma_id, gamma_type, btp_node.channel_output, btp_node.channel_output)
         post_gamma.depth = btp_node.depth
         post_gamma.path = f'{post_gamma_id}.weight'
         post_gamma.btp_scale = 1 / btp_scale
@@ -360,8 +378,8 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         dag.add_edge(post_gamma, succ_feature)
 
 
-PCMGAMMA_ABSORB_TARGETS = {'pcmpoly', 'parcpmm'}
-PCMGAMMA_PASS_THROUGH_TYPES = {'pcmgamma'}
+PCMGAMMA_ABSORB_TARGETS = {'pcmpoly', 'pdmpoly', 'parcpmm', 'pdmpcmm'}
+PCMGAMMA_PASS_THROUGH_TYPES = {'pcmgamma', 'pdmgamma'}
 
 
 def _pcmgamma_fuse_info(pcmgamma_node: ComputeNode, direction: str) -> dict:
@@ -466,9 +484,9 @@ def _absorb_pcmgamma_into_target(
     dag, pcmgamma_node: ComputeNode, target_node: ComputeNode, search_direction: str
 ) -> bool:
     direction = f'after_{target_node.layer_type}' if search_direction == 'up' else f'before_{target_node.layer_type}'
-    if target_node.layer_type == 'parcpmm':
+    if target_node.layer_type in ('parcpmm', 'pdmpcmm'):
         _fuse_pcmgamma_attrs_into_parcpmm(pcmgamma_node, target_node, direction)
-    elif target_node.layer_type == 'pcmpoly':
+    elif target_node.layer_type in ('pcmpoly', 'pdmpoly'):
         _fuse_pcmgamma_attrs_into_pcmpoly(pcmgamma_node, target_node, direction)
     else:
         return False
@@ -489,7 +507,11 @@ def absorb_pcmgamma_layers(graph: LayerAbstractGraph):
     while changed:
         changed = False
         for node in list(dag.nodes):
-            if isinstance(node, ComputeNode) and node.layer_type == 'pcmgamma' and _try_absorb_pcmgamma(dag, node):
+            if (
+                isinstance(node, ComputeNode)
+                and node.layer_type in PCMGAMMA_PASS_THROUGH_TYPES
+                and _try_absorb_pcmgamma(dag, node)
+            ):
                 changed = True
                 break
 
@@ -729,6 +751,8 @@ def run_pipeline(
     dump_split_subgraphs: bool = False,
     use_mpc_skip_dp: bool = False,
     mpc_skip_max_states: int = 4096,
+    mat_pack_style: str = '',
+    enable_score_cache: bool = True,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -746,10 +770,12 @@ def run_pipeline(
         graph_type: Graph type (GRAPH_TYPE)
         set_btp_scale: if not None, wrap BTP with pcmgamma scales and enable special level handling
         use_gpu: If True, use GPU primitive timing tables for FHE score; otherwise use CPU timing
-        dump_split_subgraphs: If True, dump sorted split subgraphs to task/split_tasks/{index}/ct.json
-        use_mpc_skip_dp: If True, use the experimental MPC skip-aware DP instead of the BTP-style DP.
-        mpc_skip_max_states: Maximum frontier states retained by the MPC skip-aware DP.
+        enable_score_cache: If True, cache per-compute score in DP compilation
     """
+    compile_start_time = time.perf_counter()
+
+    if mat_pack_style not in MAT_PACK_STYLES:
+        raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
     if style is not None:
         config.style = style
     if graph_type is not None:
@@ -760,6 +786,7 @@ def run_pipeline(
         config.head_dim = head_dim
     if matmul_block_size is not None:
         config.matmul_block_size = matmul_block_size
+    config.mat_pack_style = mat_pack_style
     config.set_btp_scale = set_btp_scale
     config.use_gpu = use_gpu
     if use_mpc_skip_dp:
@@ -771,6 +798,7 @@ def run_pipeline(
         f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
         f'SET_BTP_SCALE={config.set_btp_scale}, BACKEND={"gpu" if config.use_gpu else "cpu"}, '
         f'USE_MPC_SKIP_DP={use_mpc_skip_dp}, MPC_SKIP_MAX_STATES={mpc_skip_max_states}'
+        f'SCORE_CACHE={enable_score_cache}'
     )
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
@@ -788,6 +816,7 @@ def run_pipeline(
                 num_workers,
                 use_mpc_skip_dp=use_mpc_skip_dp,
                 mpc_skip_max_states=mpc_skip_max_states,
+                enable_score_cache=enable_score_cache
             )
             if not succeeded:
                 raise ValueError('Compilation failed.')
@@ -800,6 +829,7 @@ def run_pipeline(
             num_workers,
             use_mpc_skip_dp=use_mpc_skip_dp,
             mpc_skip_max_states=mpc_skip_max_states,
+            enable_score_cache=enable_score_cache
         )
         if not succeeded:
             raise ValueError('Compilation failed.')

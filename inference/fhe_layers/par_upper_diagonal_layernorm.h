@@ -36,6 +36,10 @@ public:
                             double eps,
                             double inv_var);
     void prepare_weight() override;
+    ls::CkksPlaintextRingt h0_mask_pt_;
+    std::vector<ls::CkksPlaintextRingt> inv_n_pt_;
+    std::vector<ls::CkksPlaintextRingt> iv_pt_;
+    std::vector<ls::CkksPlaintextRingt> eps_add_pt_;
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
@@ -51,15 +55,12 @@ private:
 
     uint32_t ct_index(uint32_t mb, uint32_t ct_local) const;
     uint32_t total_cts() const;
-    std::vector<double> build_h0_mask() const;
+    std::vector<double> build_h0_mask(double value = 1.0) const;
     std::vector<double> build_valid_mask(uint32_t mb, uint32_t ct_local, double value = 1.0) const;
-    ls::CkksCiphertext
-    reduce_cols_in_ct(ls::CkksContext& ctx, const ls::CkksCiphertext& ct, double rescale_target) const;
-
-    ls::CkksPlaintextRingt h0_mask_pt_;
-    std::vector<ls::CkksPlaintextRingt> inv_n_pt_;
-    std::vector<ls::CkksPlaintextRingt> iv_pt_;
-    std::vector<ls::CkksPlaintextRingt> eps_add_pt_;
+    ls::CkksCiphertext reduce_cols_in_ct(ls::CkksContext& ctx,
+                                         const ls::CkksCiphertext& ct,
+                                         double rescale_target,
+                                         const ls::CkksPlaintextRingt& h0_mask_pt) const;
 };
 
 class ParUpperDiagonalLNXCentered : public Layer {
@@ -70,6 +71,8 @@ public:
                                 uint32_t n_heads,
                                 uint32_t init_level);
     void prepare_weight() override;
+    ls::CkksPlaintextRingt h0_mask_pt_;
+    std::vector<ls::CkksPlaintextRingt> inv_n_pt_;
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
@@ -88,9 +91,6 @@ private:
     std::vector<double> build_valid_mask(uint32_t mb, uint32_t ct_local, double value = 1.0) const;
     ls::CkksCiphertext
     reduce_cols_in_ct(ls::CkksContext& ctx, const ls::CkksCiphertext& ct, double rescale_target) const;
-
-    ls::CkksPlaintextRingt h0_mask_pt_;
-    std::vector<ls::CkksPlaintextRingt> inv_n_pt_;
 };
 
 class ParUpperDiagonalLNMinimaxInit : public Layer {
@@ -104,6 +104,9 @@ public:
                                   double c1,
                                   double c2);
     void prepare_weight() override;
+    std::vector<ls::CkksPlaintextRingt> c2_norm_pt_;
+    std::vector<ls::CkksPlaintextRingt> c1_pt_;
+    std::vector<ls::CkksPlaintextRingt> c0_add_pt_;
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& a_cts);
     Array<double, 2> run_plaintext(const Array<double, 2>& a) const;
@@ -120,10 +123,6 @@ private:
     uint32_t ct_index(uint32_t mb, uint32_t ct_local) const;
     uint32_t total_cts() const;
     std::vector<double> build_valid_mask(uint32_t mb, uint32_t ct_local, double value) const;
-
-    std::vector<ls::CkksPlaintextRingt> c2_norm_pt_;
-    std::vector<ls::CkksPlaintextRingt> c1_pt_;
-    std::vector<ls::CkksPlaintextRingt> c0_add_pt_;
 };
 
 class ParUpperDiagonalLNGoldschmidt : public Layer {
@@ -134,6 +133,8 @@ public:
                                   uint32_t n_heads,
                                   uint32_t input_level);
     void prepare_weight() override;
+    std::vector<ls::CkksPlaintextRingt> three_pt_;
+    std::vector<ls::CkksPlaintextRingt> half_norm_pt_;
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx,
                                         const std::vector<ls::CkksCiphertext>& y_cts,
@@ -151,9 +152,6 @@ private:
     uint32_t ct_index(uint32_t mb, uint32_t ct_local) const;
     uint32_t total_cts() const;
     std::vector<double> build_valid_mask(uint32_t mb, uint32_t ct_local, double value) const;
-
-    std::vector<ls::CkksPlaintextRingt> three_pt_;
-    std::vector<ls::CkksPlaintextRingt> half_norm_pt_;
 };
 
 class ParUpperDiagonalLNAffine : public Layer {
@@ -167,6 +165,8 @@ public:
                              Array<double, 1>&& gamma,
                              Array<double, 1>&& beta);
     void prepare_weight() override;
+    std::vector<ls::CkksPlaintextRingt> gamma_pt_;
+    std::vector<ls::CkksPlaintextRingt> beta_add_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx,
                             const std::vector<ls::CkksCiphertext>& x_centered,
@@ -188,7 +188,4 @@ private:
     uint32_t total_cts() const;
     std::vector<double>
     build_valid_weight(uint32_t mb, uint32_t ct_local, const Array<double, 1>& values, double factor) const;
-
-    std::vector<ls::CkksPlaintextRingt> gamma_pt_;
-    std::vector<ls::CkksPlaintextRingt> beta_add_pt_;
 };

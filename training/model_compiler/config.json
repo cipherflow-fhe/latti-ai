@@ -1,6 +1,7 @@
 {
-  "GRAPH_TYPE": "mpc",
+  "GRAPH_TYPE": "btp",
   "STYLE": "multiplexed",
+  "MPC_REFRESH": false,
   "APPROX_POLY_TYPE": "polyact",
   "SET_LEVEL_MAX": true,
   "SINGLE_THREAD": false
