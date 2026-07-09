@@ -18,6 +18,7 @@
 from pathlib import Path
 import copy
 import shutil
+import time
 
 import networkx as nx
 import numpy as np
@@ -774,6 +775,7 @@ def run_pipeline(
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
 
+    compile_start = time.perf_counter()
     if not is_use_btp:
         use_btp = False
         succeeded, graph, score = try_no_btp(raw_graph)
@@ -801,6 +803,8 @@ def run_pipeline(
         )
         if not succeeded:
             raise ValueError('Compilation failed.')
+    compile_elapsed = time.perf_counter() - compile_start
+    print(f'[Compile] Core compile time: {compile_elapsed:.3f}s')
     dump_graph(graph, output_dir, score, use_btp=use_btp, dump_split_subgraphs=dump_split_subgraphs)
 
     return graph, score
