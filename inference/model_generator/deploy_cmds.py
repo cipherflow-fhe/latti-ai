@@ -800,6 +800,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         n_channel_per_ct_1d,
                         math.ceil(n_in_channel / n_channel_per_ct_1d),
                         math.ceil(n_out_channel / n_block_per_ct),
+                        invalid_fill=[invalid_fill_1d, 1],
                     )
                     if lazy:
                         dense_data_source = CustomDataNode(type='fc_data_source', id=f'{layer_id}')
