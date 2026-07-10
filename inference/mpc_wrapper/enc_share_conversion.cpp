@@ -19,6 +19,7 @@
 #include "mpc_wrapper/enc_share_conversion.h"
 
 #include <cmath>
+#include <iostream>
 #include <random>
 
 #include "mpc/fhe_mpc.h"
@@ -230,14 +231,20 @@ Feature2DEncrypted ShareToEncServer::combine_with_share_simple_for_multi_pack(
     Array<double, 1> share_mg = share.data_double.copy();
     Array<double, 3> share_mg_3d =
         share_mg.reshape<3>({y_share1_enc.n_channel, y_share1_enc.shape[0], y_share1_enc.shape[1]});
+
+    int n_ct = y_share1_enc.data.size();
+
     auto result_copy = result.copy();
     auto mask_pt = multi_pack_to_pt(share_mg_3d, result_copy, y_share1_enc.n_channel, y_share1_enc.shape,
                                     y_share1_enc.skip, *y_share1_enc.context, y_share1_enc.level,
                                     y_share1_enc.context->get_parameter().get_default_scale(), pack_type);
 
-    int n_ct = y_share1_enc.data.size();
     result.data.clear();
     result.data.resize(n_ct);
+    if ((int)mask_pt.size() != n_ct) {
+        throw runtime_error("combine_with_share_simple_for_multi_pack mask/plaintext count mismatch: mask_pt=" +
+                            to_string(mask_pt.size()) + ", ct=" + to_string(n_ct));
+    }
     for (int i = 0; i < n_ct; i++) {
         result.data[i] = y_share1_enc.context->add_plain(y_share1_enc.data[i], mask_pt[i]);
     }
@@ -576,6 +583,10 @@ void EncToShareServer::split_to_shares_for_multi_channel_pack(const Feature2DEnc
         {x_enc.n_channel, x_enc.shape[0], x_enc.shape[1]});
     auto mask_pt = multi_pack_to_pt(mask_d_array, *share0, x_enc.n_channel, x_enc.shape, x_enc.skip, *x_enc.context,
                                     x_enc.level, mpc::DEFAULT_SCALE, pack_type);
+    if (mask_pt.size() != x_enc.data.size()) {
+        throw runtime_error("split_to_shares_for_multi_channel_pack mask/plaintext count mismatch: mask_pt=" +
+                            to_string(mask_pt.size()) + ", ct=" + to_string(x_enc.data.size()));
+    }
     for (int i = 0; i < x_enc.data.size(); i++) {
         CkksCiphertext share0_ct = x_enc.context->add_plain(x_enc.data[i], mask_pt[i]);
         share0->data.push_back(move(share0_ct));
@@ -617,6 +628,10 @@ void EncToShareServer::split_to_shares_for_multi_channel_pack_simple(const Featu
         {x_enc.n_channel, x_enc.shape[0], x_enc.shape[1]});
     auto mask_pt = multi_pack_to_pt(mask_d_array, *share0, x_enc.n_channel, x_enc.shape, x_enc.skip, *x_enc.context,
                                     x_enc.level, mpc::DEFAULT_SCALE, pack_type);
+    if (mask_pt.size() != x_enc.data.size()) {
+        throw runtime_error("split_to_shares_for_multi_channel_pack_simple mask/plaintext count mismatch: mask_pt=" +
+                            to_string(mask_pt.size()) + ", ct=" + to_string(x_enc.data.size()));
+    }
     for (int i = 0; i < x_enc.data.size(); i++) {
         CkksCiphertext share0_ct = x_enc.context->add_plain(x_enc.data[i], mask_pt[i]);
         share0->data.push_back(move(share0_ct));
@@ -763,6 +778,8 @@ Feature2DShare EncToShareClient::client_enc_to_share_for_multi_channel_pack(cons
     uint8_t temp_int = 0;
     bytes_to_va(meta_data_bytes, {"u8", "u8", "u8", "u8"}, &level, &param_id_in, &param_id_out, &temp_int);
     PackType pack_type = (PackType)temp_int;
+    cout << "[mpc_refresh][client] enc_to_share pack_type=" << static_cast<int>(pack_type)
+         << ", level=" << static_cast<int>(level) << endl;
 
     string param_in = param_to_string(param_id_in);
     string param_out = param_to_string(param_id_out);
@@ -912,6 +929,9 @@ void ShareToEncClient::client_share_to_enc_for_multi_channel_pack_simple(Feature
     uint8_t temp_int = 0;
     bytes_to_va(meta_data_bytes, {"u8", "u32", "duo", "u8"}, &level, &n_channel, &skip, &temp_int);
     PackType pack_type = (PackType)temp_int;
+    cout << "[mpc_refresh][client] share_to_enc pack_type=" << static_cast<int>(pack_type)
+         << ", level=" << static_cast<int>(level) << ", n_channel=" << n_channel
+         << ", skip=(" << skip[0] << "," << skip[1] << ")" << endl;
     Feature2DEncrypted x_e(&context_out_, level, skip, {1, 1}, pack_type);
     encrypt_from_share_simple(x_e, share, n_channel, share.shape, pack_type, mpc::MPC_REFRESH_USE_RECODE);
 

@@ -724,10 +724,11 @@ void InitInferenceProcess::load_model_prepare() {
             graph.runner_path = graph_config.contains("runner_path")
                                     ? resolve_project_path(project_path, graph_config["runner_path"].get<string>())
                                     : project_path;
-            graph.json_data = read_json(resolve_project_path(project_path, graph_json).string());
+            json graph_data = read_json(resolve_project_path(project_path, graph_json).string());
+            init_graph_layers(graph_data);
+            graph.json_data = std::move(graph_data);
             graph.json_features = graph.json_data.at("feature");
             graph.json_layers = graph.json_data.at("layer");
-            init_graph_layers(graph.json_data);
             subgraphs_.push_back(move(graph));
         }
         if (!subgraphs_.empty()) {
@@ -736,10 +737,8 @@ void InitInferenceProcess::load_model_prepare() {
             json_layers = subgraphs_.front().json_layers;
         }
     } else {
-        json_data = read_json((project_path / "nn_layers_ct_0.json").string());
-        json_features = json_data.at("feature");
-        json_layers = json_data.at("layer");
-        init_graph_layers(json_data);
+        json graph_data = read_json((project_path / "nn_layers_ct_0.json").string());
+        init_graph_layers(graph_data);
     }
     H5Fclose(h5_file);
 }
@@ -1338,6 +1337,9 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
             auto output = MakeU<Feature2DEncrypted>(output_context, feature_output.level);
             output->shape = feature_output.shape;
             output->skip = feature_output.skip;
+            output->invalid_fill = feature_output.invalid_fill;
+            output->packing_type = fp->pack_style == "multiplexed" ? choose_pack_type(feature_output.shape, block_shape)
+                                                                    : PackType::MultipleChannelPacking;
             output->n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
             output->n_channel = feature_output.channel;
             for (int i = 0; i < n_out_num; i++) {
@@ -1816,6 +1818,9 @@ void InferenceProcess::run_task_lazy_graph(const InferenceSubGraph& graph,
             f2d.data = move(z_lists[out_idx]);
             f2d.shape = feature_output.shape;
             f2d.skip = feature_output.skip;
+            f2d.invalid_fill = feature_output.invalid_fill;
+            f2d.packing_type = fp->pack_style == "multiplexed" ? choose_pack_type(feature_output.shape, block_shape)
+                                                               : PackType::MultipleChannelPacking;
             f2d.n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
             f2d.n_channel = feature_output.channel;
             result = make_unique<Feature2DEncrypted>(move(f2d));

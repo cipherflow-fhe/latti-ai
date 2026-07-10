@@ -12,5 +12,5 @@ if(INFERENCE_SDK_ENABLE_MPC)
 endif()
 
 if(INFERENCE_SDK_ENABLE_GPU)
-    target_compile_definitions(inference_task PRIVATE INFERENCE_SDK_ENABLE_GPU)
+    target_compile_definitions(inference_task PUBLIC INFERENCE_SDK_ENABLE_GPU)
 endif()

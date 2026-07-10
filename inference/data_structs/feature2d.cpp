@@ -436,6 +436,8 @@ Feature2DEncrypted Feature2DEncrypted::refresh_ciphertext() const {
         assert(new_level == result.data[ct_idx].get_level());
     });
     result.skip = skip;
+    result.invalid_fill = invalid_fill;
+    result.packing_type = packing_type;
     result.shape = shape;
     result.n_channel = n_channel;
     result.n_channel_per_ct = n_channel_per_ct;
@@ -449,6 +451,8 @@ Feature2DEncrypted Feature2DEncrypted::drop_level(int n_level_to_drop) const {
     result.n_channel_per_ct = n_channel_per_ct;
     result.shape = shape;
     result.skip = skip;
+    result.invalid_fill = invalid_fill;
+    result.packing_type = packing_type;
     result.data.resize(data.size());
     parallel_for(data.size(), th_nums, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         auto ct_tmp = data[ct_idx].copy();
@@ -468,6 +472,8 @@ Feature2DEncrypted Feature2DEncrypted::copy() const {
     result.n_channel_per_ct = n_channel_per_ct;
     result.shape = shape;
     result.skip = skip;
+    result.invalid_fill = invalid_fill;
+    result.packing_type = packing_type;
     for (int i = 0; i < data.size(); i++) {
         result.data.push_back(data[i].copy());
     }
@@ -509,6 +515,11 @@ Bytes Feature2DEncrypted::serialize() const {
         Bytes cct_data = cct.serialize(context->get_parameter());
         ss_write_vector(ss, cct_data);
     }
+    for (int i = 0; i < 2; i++) {
+        ss_write(ss, invalid_fill[i]);
+    }
+    uint32_t packing_type_value = static_cast<uint32_t>(packing_type);
+    ss_write(ss, packing_type_value);
 
     Bytes bytes = ss_to_bytes(ss);
     return bytes;
@@ -542,5 +553,13 @@ void Feature2DEncrypted::deserialize(const Bytes& bytes) {
         ss_read_vector(ss, &cct_data);
         auto y_ct = CkksCompressedCiphertext::deserialize(cct_data);
         data_compress.push_back(move(y_ct));
+    }
+    if (ss.peek() != EOF) {
+        for (int i = 0; i < 2; i++) {
+            ss_read(ss, &invalid_fill[i]);
+        }
+        uint32_t packing_type_value = 0;
+        ss_read(ss, &packing_type_value);
+        packing_type = static_cast<PackType>(packing_type_value);
     }
 }

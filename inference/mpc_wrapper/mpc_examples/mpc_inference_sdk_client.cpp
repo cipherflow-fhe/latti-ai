@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "mpc_wrapper/inference_process_client.h"
+#include "mpc/mpc_session.h"
 #include "mpc_inference_sdk_common.h"
 
 using namespace std;
@@ -147,6 +148,9 @@ struct CkksClientRuntime {
                 auto input_array = csv_to_array<3>(
                     csv_path, {(uint64_t)param_in.channel, (uint64_t)param_in.height, (uint64_t)param_in.width});
                 Feature2DEncrypted input_ct(context.get(), param_in.level, Duo{1, 1});
+                cout << "[Client][debug] pack_style=" << pack_style << ", h=" << param_in.height
+                     << ", w=" << param_in.width << ", n_slots=" << n_slots
+                     << ", h*w=" << param_in.height * param_in.width << endl;
                 if (pack_style == "ordinary") {
                     input_ct.pack_multiple_channel(input_array, false, scale);
                 } else if (param_in.height * param_in.width > n_slots) {
@@ -157,6 +161,7 @@ struct CkksClientRuntime {
                 } else {
                     input_ct.pack_multiplexed(input_array, false, scale);
                 }
+                cout << "[Client][debug] encrypted input '" << name << "' ct size=" << input_ct.data.size() << endl;
                 result[name] = input_ct.serialize();
             }
             cout << "[Client] Done." << endl;
@@ -294,8 +299,10 @@ int main(int argc, char* argv[]) {
         auto full_ctx = client.export_full_context();
         auto ckks_contexts = make_client_context_map(full_ctx);
 
+        mpc::print_communication_stats();
         //run mpc process
         InferenceMpcClient(ckks_contexts).run();
+        mpc::print_communication_stats();
 
         cout << "[Client] MPC process loop finished; waiting encrypted outputs." << endl;
 

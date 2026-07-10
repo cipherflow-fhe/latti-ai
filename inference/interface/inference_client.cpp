@@ -231,6 +231,8 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
             } else {
                 input_ct.pack_multiplexed(input_array, false, scale);
             }
+            std::cout << "[Client][debug] encrypted input '" << name << "' ct size=" << input_ct.data.size()
+                      << std::endl;
             result[name] = input_ct.serialize();
         }
         std::cout << "[Client] Done." << std::endl;

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "interface/inference_server.h"
+#include "mpc/mpc_session.h"
 #include "mpc_inference_sdk_common.h"
 
 using namespace std;
@@ -112,11 +113,10 @@ int main(int argc, char* argv[]) {
         InferenceServer server(task_dir + "/server", use_gpu, 0);
         server.import_eval_context_ckks(eval_ctx);
         server.load_model_for_mpc_sdk();
-
+        mpc::print_communication_stats();
         cout << "[Server] Running SDK MPC inference..." << endl;
-        // EndComputation();
         auto encrypted_outputs = server.evaluate_mpc_sdk(encrypted_inputs);
-        // EndComputation();
+        mpc::print_communication_stats();
         cout << "[Server] Pure MPC refresh time: " << server.get_last_mpc_time_ms() << " ms" << endl;
         if (g_dump_intermediate_plaintexts) {
             server.dump_intermediate_plaintexts(dump_layers_path);

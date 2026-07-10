@@ -1,5 +1,7 @@
 #include "mpc_wrapper/inference_process_mpc_server.h"
 
+#include <iostream>
+
 #include "mpc_wrapper/enc_share_conversion.h"
 #include "mpc/fhe_mpc.h"
 #include "mpc_array_bridge.h"
@@ -88,6 +90,9 @@ Feature2DEncrypted InferenceMpcServer::calculate_mpc_refresh(const InitInference
     if (init.pack_style == "multiplexed") {
         pack_type = choose_pack_type(feature_input.shape, init.block_shape);
     }
+    cout << "[mpc_refresh][server] key=" << key << ", pack_type=" << static_cast<int>(pack_type)
+         << ", input_shape=(" << feature_input.shape[0] << "," << feature_input.shape[1] << ")"
+         << ", output_shape=(" << feature_output.shape[0] << "," << feature_output.shape[1] << ")" << endl;
 
     EncToShareServer enc_to_share_server(context_in, scale_ord, ring_mod);
     Feature2DShare x_share0 = enc_to_share_server.server_enc_to_share_multi_pack_simple(x_enc, pack_type);
