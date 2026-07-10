@@ -1358,8 +1358,29 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 }
             }
             if (layer_type == "mult_scalar") {
-                const Array<double, 3>& input0 = p_feature2d_x[feature_input[0]];
-                result = fp->get_layer<MultScalarLayer>(key).run_plaintext(input0);
+                FeatureNode feature_input0(json_features[feature_input[0]]);
+                if (feature_input0.dim == 2) {
+                    const Array<double, 3>& input0 = p_feature2d_x[feature_input[0]];
+                    result = fp->get_layer<MultScalarLayer>(key).run_plaintext(input0);
+                } else if (feature_input0.dim == 1) {
+                    const auto& input0 = p_feature1d_x[feature_input[0]];
+                    auto shape = input0.get_shape();
+                    result1d = Array<double, 2>(shape);
+                    const auto& weight = fp->get_layer<MultScalarLayer>(key).weight;
+                    for (uint64_t ch = 0; ch < shape[0]; ch++) {
+                        double w = weight.get(ch);
+                        for (uint64_t i = 0; i < shape[1]; i++) {
+                            result1d.set(ch, i, input0.get(ch, i) * w);
+                        }
+                    }
+                } else {
+                    const auto& input0 = p_feature0d_x[feature_input[0]];
+                    result0d.resize(input0.size());
+                    const auto& weight = fp->get_layer<MultScalarLayer>(key).weight;
+                    for (size_t ch = 0; ch < input0.size(); ch++) {
+                        result0d[ch] = input0[ch] * weight.get(ch);
+                    }
+                }
             }
             if (layer_type == "concat2d") {
                 // "concat2d" is used for all dim in {0,1,2}; dispatch by input dim.
@@ -1410,9 +1431,19 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
             if (layer_type == "add2d") {
                 FeatureNode feature_input0(json_features[feature_input[0]]);
                 FeatureNode feature_input1(json_features[feature_input[1]]);
-                auto& input0 = p_feature2d_x[feature_input[0]];
-                auto& input1 = p_feature2d_x[feature_input[1]];
-                result = fp->get_layer<AddLayer>(key).run_plaintext(input0, input1);
+                if (feature_input0.dim == 2) {
+                    auto& input0 = p_feature2d_x[feature_input[0]];
+                    auto& input1 = p_feature2d_x[feature_input[1]];
+                    result = fp->get_layer<AddLayer>(key).run_plaintext(input0, input1);
+                } else if (feature_input0.dim == 1) {
+                    auto& input0 = p_feature1d_x[feature_input[0]];
+                    auto& input1 = p_feature1d_x[feature_input[1]];
+                    result1d = fp->get_layer<AddLayer>(key).run_plaintext_1d(input0, input1);
+                } else if (feature_input0.dim == 0) {
+                    auto& input0 = p_feature0d_x[feature_input[0]];
+                    auto& input1 = p_feature0d_x[feature_input[1]];
+                    result0d = fp->get_layer<AddLayer>(key).run_plaintext_0d(input0, input1);
+                }
             }
             if (layer_type == "poly_relu2d" || layer_type == "polyact") {
                 FeatureNode feature_input0(json_features[feature_input[0]]);

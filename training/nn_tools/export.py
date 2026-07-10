@@ -568,14 +568,14 @@ def export_h5_from_onnx(
     for layer_key, layer in layers.items():
         ltype = layer.get('type')
 
-        if ltype in ('conv2d', 'fc0'):
+        if ltype in ('conv2d', 'conv1d', 'fc0', 'fc1'):
             wp = layer.get('weight_path', '')
             bp = layer.get('bias_path', '')
             absorb_paths = layer.get('absorb_path', [])
             absorb_types = layer.get('absorb_type', [])
 
             if wp not in onnx_weights:
-                log.warning('conv weight not in ONNX: %s', wp)
+                log.warning('layer weight not in ONNX: %s', wp)
                 continue
 
             w = onnx_weights[wp].copy()
@@ -591,12 +591,12 @@ def export_h5_from_onnx(
                     w = w / s.reshape(-1, *([1] * (w.ndim - 1)))
                     b = b / s
                     if verbose:
-                        log.info('Conv (absorb %s): %s  <- %s', atype, wp, apath)
+                        log.info('Layer (absorb %s): %s  <- %s', atype, wp, apath)
                 else:
                     log.warning('unknown absorb_type "%s" for %s', atype, wp)
 
             if not absorb_paths and verbose:
-                log.info('Conv (no absorb):         %s', wp)
+                log.info('Layer (no absorb):        %s', wp)
 
             out[wp] = w
             if bp:
