@@ -31,18 +31,20 @@
 
 template <typename T, int dim> class Array {
 public:
-    Array() {}
+    Array() : _shape{} {}
 
-    Array(Array&& other) noexcept {
-        swap(_data, other._data);
-        swap(_shape, other._shape);
+    Array(Array&& other) noexcept : _data(std::move(other._data)), _shape(other._shape) {
+        other._shape = {};
     }
 
     Array(const Array& other) = delete;
 
     void operator=(Array&& other) noexcept {
-        swap(_data, other._data);
-        swap(_shape, other._shape);
+        if (this != &other) {
+            _data = std::move(other._data);
+            _shape = other._shape;
+            other._shape = {};
+        }
     }
 
     void operator=(const Array& other) = delete;

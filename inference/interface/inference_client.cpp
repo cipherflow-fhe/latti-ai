@@ -24,6 +24,21 @@ using namespace lattisense;
 
 using namespace fhe_ops_lib;
 
+namespace {
+
+int read_skip(const json& param, int default_value = 1) {
+    if (!param.contains("skip")) {
+        return default_value;
+    }
+    const auto& skip = param.at("skip");
+    if (skip.is_array()) {
+        return skip.empty() ? default_value : skip.at(0).get<int>();
+    }
+    return skip.get<int>();
+}
+
+}  // namespace
+
 InferenceClient::InferenceClient(const std::string& client_dir) : client_dir_(client_dir) {
     read_configuration();
 }
@@ -38,7 +53,7 @@ void InferenceClient::read_configuration() {
     auto& output_param = task_config_["task_output_param"].begin().value();
     int first_output_dim = output_param["dim"];
     if (first_output_dim == 0) {
-        output_skip_ = output_param["skip"];
+        output_skip_ = read_skip(output_param);
     }
 
     // Read per-output parameters
@@ -47,7 +62,7 @@ void InferenceClient::read_configuration() {
         op.dim = param["dim"];
         op.channel = param["channel"];
         if (op.dim == 0) {
-            op.skip = param["skip"];
+            op.skip = read_skip(param);
         } else if (op.dim == 1) {
             op.length = param["shape"][0];
             if (param.contains("invalid_fill")) {
@@ -77,8 +92,9 @@ void InferenceClient::read_configuration() {
             ip.width = param["shape"][1];
         } else if (ip.dim == 1) {
             ip.length = param["shape"][0];
+            ip.skip = read_skip(param);
         } else if (ip.dim == 0) {
-            ip.skip = param.value("skip", 1);
+            ip.skip = read_skip(param);
         }
         ip.pack_num = param.value("pack_num", 0);
         input_params_[name] = ip;
@@ -91,6 +107,9 @@ void InferenceClient::read_configuration() {
     auto& ckks_entry = ckks_config[ckks_param_id];
     poly_modulus_degree_ = ckks_entry["poly_modulus_degree"].get<int>();
     n_slots_ = poly_modulus_degree_ / 2;
+    if (ckks_entry.contains("log_slots")) {
+        log_slots_ = ckks_entry["log_slots"].get<int>();
+    }
     if (ckks_entry.contains("q") && ckks_entry.contains("p")) {
         q_ = ckks_entry["q"].get<std::vector<uint64_t>>();
         p_ = ckks_entry["p"].get<std::vector<uint64_t>>();
@@ -113,6 +132,9 @@ void InferenceClient::create_crypto_context() {
                 std::make_unique<CkksParameter>(CkksParameter::create_custom_parameter(poly_modulus_degree_, q_, p_));
         } else {
             ckks_param_ = std::make_unique<CkksParameter>(CkksParameter::create_parameter(poly_modulus_degree_));
+        }
+        if (log_slots_ > 0) {
+            ckks_param_->set_log_slots(log_slots_);
         }
         ckks_context_ = std::make_unique<CkksContext>(CkksContext::create_random_context(*ckks_param_));
         ckks_context_->gen_rotation_keys();
@@ -208,7 +230,7 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
             result[name] = input_ct.serialize();
         } else if (param.dim == 1) {
             auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.channel, (uint64_t)param.length});
-            uint32_t skip = param.pack_num > 0 ? (uint32_t)(n_slots_ / (param.length * param.pack_num)) : 1;
+            uint32_t skip = param.skip > 0 ? (uint32_t)param.skip : 1;
             Feature1DEncrypted input_ct(context_ptr_, param.level, skip);
             if (pack_style_ == "ordinary") {
                 input_ct.pack(input_array, false, scale);

@@ -560,6 +560,61 @@ def combine_convs_with_upsamples(graph: LayerAbstractGraph):
         _delete_layer(graph.dag, upsample_node)
 
 
+def replace_avgpool1d_with_depthwise_conv(graph: LayerAbstractGraph):
+    """Replace non-adaptive AvgPool1d nodes with synthetic depthwise Conv1d nodes.
+
+    The runtime multiplexed avgpool1d path preserves sparse skip layout, while the
+    downstream multiplexed conv1d path expects conv-style packed output. Replacing
+    avgpool1d with an equivalent depthwise conv1d during compilation keeps the
+    packing semantics consistent for subsequent conv1d layers.
+
+    The synthetic conv uses an odd kernel so the existing conv1d implementation's
+    implicit same-padding can reproduce the original left-aligned avgpool window:
+      avgpool window size = k
+      synthetic conv kernel size = 2 * k - 1
+      active taps are the last k positions, each weighted by 1 / k.
+    """
+    for node in list(graph.dag.nodes):
+        if not isinstance(node, PoolComputeNode):
+            continue
+        if node.layer_type != 'avgpool1d' or node.is_adaptive_avgpool:
+            continue
+
+        preds: list[FeatureNode] = list(graph.dag.predecessors(node))
+        succs: list[FeatureNode] = list(graph.dag.successors(node))
+        if len(preds) != 1 or len(succs) != 1:
+            raise ValueError(f'avgpool1d replacement expects single input/output: {node.layer_id}')
+
+        pool_kernel = int(node.kernel_shape[0])
+        synthetic_kernel = 2 * pool_kernel - 1
+        conv_node = ConvComputeNode(
+            node.layer_id,
+            'conv1d',
+            node.channel_input,
+            node.channel_output,
+            dim=1,
+            stride=list(node.stride),
+            groups=node.channel_input,
+            kernel_shape=[synthetic_kernel],
+            parameter_paths={
+                'weight': f'{node.layer_id}.weight',
+                'bias': f'{node.layer_id}.bias',
+            },
+        )
+        conv_node.synthetic_source = 'avgpool1d'
+        conv_node.source_pool_kernel_shape = list(node.kernel_shape)
+        conv_node.source_pool_padding = list(node.padding)
+        conv_node.is_big_size = getattr(node, 'is_big_size', False)
+
+        node_attrs = dict(graph.dag.nodes[node])
+        graph.dag.add_node(conv_node, **node_attrs)
+        for pred in preds:
+            graph.dag.add_edge(pred, conv_node, **dict(graph.dag.edges[pred, node]))
+        for succ in succs:
+            graph.dag.add_edge(conv_node, succ, **dict(graph.dag.edges[node, succ]))
+        graph.dag.remove_node(node)
+
+
 def set_level_costs(graph: LayerAbstractGraph):
     for node in graph.dag.nodes:
         if not isinstance(node, ComputeNode):

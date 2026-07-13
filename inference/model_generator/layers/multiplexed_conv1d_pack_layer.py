@@ -257,9 +257,12 @@ class MultiplexedConv1DPackedLayer:
             output_shape = self.input_shape // self.stride
             n_packed_out = int(np.ceil(self.n_out_channel / self.n_channel_per_ct))
 
-            # Pre-generate select tensor plaintexts
+            # Only generate select tensors that can be referenced by an output
+            # channel. Otherwise lazy graph generation leaves orphan encode_pt
+            # nodes when n_out_channel < n_block_per_ct.
+            n_select = min(self.n_block_per_ct, self.n_out_channel)
             select_pts = []
-            for t in range(self.n_block_per_ct):
+            for t in range(n_select):
                 s_pt = CkksPlaintextRingtNode(f'encode_pt_select_{t}')
                 custom_compute(
                     inputs=[conv_data_source],

@@ -573,6 +573,30 @@ def export_h5_from_onnx(
             bp = layer.get('bias_path', '')
             absorb_paths = layer.get('absorb_path', [])
             absorb_types = layer.get('absorb_type', [])
+            synthetic_source = layer.get('synthetic_source', '')
+
+            if synthetic_source == 'avgpool1d':
+                channels = int(layer['channel_output'])
+                pool_kernel = int(layer.get('source_pool_kernel_shape', layer['kernel_shape'])[0])
+                conv_kernel = int(layer['kernel_shape'][0])
+                start = conv_kernel // 2
+
+                w = np.zeros((channels, 1, conv_kernel), dtype=np.float64)
+                w[:, 0, start : start + pool_kernel] = 1.0 / float(pool_kernel)
+                b = np.zeros((channels,), dtype=np.float64)
+
+                out[wp] = w
+                if bp:
+                    out[bp] = b
+                if verbose:
+                    log.info(
+                        'Synthetic AvgPool1d->DWConv1d: %s  pool_kernel=%d conv_kernel=%d channels=%d',
+                        wp,
+                        pool_kernel,
+                        conv_kernel,
+                        channels,
+                    )
+                continue
 
             if wp not in onnx_weights:
                 log.warning('layer weight not in ONNX: %s', wp)
