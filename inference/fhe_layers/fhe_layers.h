@@ -19,6 +19,9 @@
 #pragma once
 
 #include "fhe_layers/activation_layer.h"
+#include "fhe_layers/complex_btp_layer.h"
+#include "fhe_layers/complex_pack_layer.h"
+#include "fhe_layers/complex_unpack_layer.h"
 #include "fhe_layers/add_layer.h"
 #include "fhe_layers/avgpool1d_layer.h"
 #include "fhe_layers/avgpool2d_layer.h"

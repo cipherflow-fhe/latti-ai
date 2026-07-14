@@ -28,8 +28,10 @@ import logging
 import sys
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).parent / 'model_compiler'))
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(REPO_ROOT / 'inference' / 'lattisense'))
 
 from model_compiler.pipeline import run_pipeline
 from model_export.onnx_to_json import onnx_to_json

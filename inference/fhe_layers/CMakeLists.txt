@@ -9,7 +9,10 @@ add_library(fhe_layers
   concat_layer.cpp
   conv2d_packed_layer.cpp 
   activation_layer.cpp 
-  dense_packed_layer.cpp 
+  complex_btp_layer.cpp
+  complex_pack_layer.cpp
+  complex_unpack_layer.cpp
+  dense_packed_layer.cpp
   reshape_layer.cpp
   add_layer.cpp
   conv2d_depthwise.cpp

@@ -15,6 +15,16 @@ target_link_libraries(inference PUBLIC
     ${HDF5_CXX_LIBRARIES}
 )
 
+# Small CKKS complex-packing/Bootstrap demo.
+add_executable(ckks_complex_packing_btp ckks_complex_packing_btp.cpp)
+target_link_libraries(ckks_complex_packing_btp PRIVATE lattisense)
+
+add_test(NAME example-ckks-complex-packing-btp
+    COMMAND ckks_complex_packing_btp)
+set_tests_properties(example-ckks-complex-packing-btp PROPERTIES
+    LABELS "example;example-cpu"
+    TIMEOUT 300)
+
 # --- Example verification tests ---
 set(EXAMPLES_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 

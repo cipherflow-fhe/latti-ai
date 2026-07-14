@@ -3342,7 +3342,7 @@ static double e2e_max_rel_error(const Array<double, 2>& expected, const Array<do
 }
 
 static ExecutorFunc make_block_col_major_encode_pt_executor() {
-    return [](ExecutionContext& exec_ctx, const std::unordered_map<NodeIndex, std::any>& inputs, std::any& output,
+    return [](ExecutionContext& exec_ctx, std::unordered_map<NodeIndex, std::any>& local_data,
               const ComputeNode& self) -> void {
         CkksContext* ctx_ptr = exec_ctx.get_arithmetic_context<CkksContext>();
         if (!ctx_ptr)
@@ -3357,7 +3357,7 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
         const std::string type = attrs.at("type").get<std::string>();
 
         NodeIndex in_idx = self.input_nodes[0]->index;
-        auto cd_ptr = std::any_cast<std::shared_ptr<CustomData>>(inputs.at(in_idx));
+        auto cd_ptr = std::any_cast<std::shared_ptr<CustomData>>(local_data.at(in_idx));
         void* layer_ptr = cd_ptr->get_typed_data<void>();
 
         CkksPlaintextRingt pt = [&]() -> CkksPlaintextRingt {
@@ -3436,7 +3436,7 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
             throw std::runtime_error("encode_pt: unknown op_class: " + op_class);
         }();
 
-        output = std::make_shared<CkksPlaintextRingt>(std::move(pt));
+        local_data[self.output_nodes[0]->index] = std::make_shared<CkksPlaintextRingt>(std::move(pt));
     };
 }
 

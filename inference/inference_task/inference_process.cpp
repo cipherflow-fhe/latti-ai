@@ -747,6 +747,23 @@ void InitInferenceProcess::_init_square_layer(const string& key, const json& lay
     _prepare_layer(key, move(squar2d));
 }
 
+void InitInferenceProcess::_init_complex_btp_layer(const string& key, const json& layer) {
+    const auto output_ids = layer.at("feature_output").get<vector<string>>();
+    if (output_ids.size() != 2) {
+        throw runtime_error("complex_bootstrapping requires exactly two outputs: a and b");
+    }
+    FeatureNode feature_input(json_features[layer.at("feature_input")[0].get<string>()]);
+    const bool use_complex_btp = layer.value("complex_bootstrapping", layer.value("use_complex_btp", true));
+    auto complex_btp = MakeU<ComplexBtpLayer>(*ckks_parameters_.at(feature_input.ckks_parameter_id), use_complex_btp);
+    _prepare_layer(key, move(complex_btp));
+}
+
+void InitInferenceProcess::_init_complex_btp_data_layer(const string& key, const json& layer) {
+    FeatureNode feature_input(json_features[layer.at("feature_input")[0].get<string>()]);
+    auto complex_btp = MakeU<ComplexBtpLayer>(*ckks_parameters_.at(feature_input.ckks_parameter_id));
+    _prepare_layer(key, move(complex_btp));
+}
+
 void InitInferenceProcess::_init_dense_layer(const string& key, const json& layer, const hid_t& h5_file) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
@@ -1197,6 +1214,10 @@ void InitInferenceProcess::load_model_prepare() {
             _init_reshape_layer(key, value);
         } else if (layer_type == "drop_level") {
             _init_drop_level_layer(key, value);
+        } else if (layer_type == "bootstrapping" && value.value("complex_bootstrapping", false)) {
+            _init_complex_btp_data_layer(key, value);
+        } else if (layer_type == "complex_bootstrapping") {
+            _init_complex_btp_layer(key, value);
         } else if (layer_type == "concat2d") {
             _init_concat_layer(key, value);
         } else if (layer_type == "upsample") {
@@ -1301,7 +1322,43 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
             UPtr<FeatureEncrypted> result;
             auto& context = *ckks_contexts.at(feature_input_node.ckks_parameter_id);
             cout << ">>> LAYER: " << key << " type=" << layer_type << endl;
-            if (layer_type == "conv2d") {
+            if (layer_type == "complex_bootstrapping") {
+                if (feature_input.size() != 1 || feature_output.size() != 2) {
+                    throw runtime_error("complex_bootstrapping expects one input and two outputs");
+                }
+                auto* btp_context = dynamic_cast<CkksBtpContext*>(&context);
+                if (btp_context == nullptr) {
+                    throw runtime_error("complex_bootstrapping requires CkksBtpContext");
+                }
+                const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
+                fhe_timer.start();
+                if (feature_input_node.is_mat) {
+                    const FeatureMatEncrypted& input = dynamic_cast<const FeatureMatEncrypted&>(feature_node);
+                    auto outputs = fp->get_layer<ComplexBtpLayer>(key).run(*btp_context, input);
+                    set_feature(feature_output[0], MakeU<FeatureMatEncrypted>(move(outputs.first)));
+                    set_feature(feature_output[1], MakeU<FeatureMatEncrypted>(move(outputs.second)));
+                } else if (feature_node.dim == 2) {
+                    const Feature2DEncrypted& input = dynamic_cast<const Feature2DEncrypted&>(feature_node);
+                    auto outputs = fp->get_layer<ComplexBtpLayer>(key).run(*btp_context, input);
+                    set_feature(feature_output[0], MakeU<Feature2DEncrypted>(move(outputs.first)));
+                    set_feature(feature_output[1], MakeU<Feature2DEncrypted>(move(outputs.second)));
+                } else if (feature_node.dim == 1) {
+                    const Feature1DEncrypted& input = dynamic_cast<const Feature1DEncrypted&>(feature_node);
+                    auto outputs = fp->get_layer<ComplexBtpLayer>(key).run(*btp_context, input);
+                    set_feature(feature_output[0], MakeU<Feature1DEncrypted>(move(outputs.first)));
+                    set_feature(feature_output[1], MakeU<Feature1DEncrypted>(move(outputs.second)));
+                } else if (feature_node.dim == 0) {
+                    const Feature0DEncrypted& input = dynamic_cast<const Feature0DEncrypted&>(feature_node);
+                    auto outputs = fp->get_layer<ComplexBtpLayer>(key).run(*btp_context, input);
+                    set_feature(feature_output[0], MakeU<Feature0DEncrypted>(move(outputs.first)));
+                    set_feature(feature_output[1], MakeU<Feature0DEncrypted>(move(outputs.second)));
+                } else {
+                    throw runtime_error("complex_bootstrapping does not support this feature type");
+                }
+                fhe_timer.stop();
+                json_layers.erase(key);
+                break;
+            } else if (layer_type == "conv2d") {
                 fhe_timer.start();
                 const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 if (feature_node.dim == 2) {
@@ -2901,6 +2958,12 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
         } else if (layer_type == "parccmm") {
             data_sources.emplace_back(
                 key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParBlockColMajorCCMM>(key))));
+        } else if (layer_type == "bootstrapping" && layer.value().value("complex_bootstrapping", false)) {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ComplexBtpLayer>(key))));
+        } else if (layer_type == "complex_bootstrapping") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ComplexBtpLayer>(key))));
         } else if (layer_type == "partranspose") {
             data_sources.emplace_back(
                 key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParBlockColMajorTranspose>(key))));
@@ -2988,8 +3051,8 @@ void InferenceProcess::prepare_task() {
 void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorFunc>& executors) {
     auto* fp_ptr = this->fp;
 
-    executors["encode_pt"] = [fp_ptr](ExecutionContext& exec_ctx, const unordered_map<NodeIndex, any>& inputs,
-                                      any& output, const ComputeNode& self) -> void {
+    executors["encode_pt"] = [fp_ptr](ExecutionContext& exec_ctx, unordered_map<NodeIndex, any>& local_data,
+                                      const ComputeNode& self) -> void {
         CkksContext* ckks_ctx_ptr = exec_ctx.get_arithmetic_context<CkksContext>();
         if (!ckks_ctx_ptr) {
             ckks_ctx_ptr = exec_ctx.get_arithmetic_context<CkksBtpContext>();
@@ -3011,7 +3074,7 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         int l = attrs.value("l", 0);
 
         NodeIndex input_node_idx = self.input_nodes[0]->index;
-        auto raw_ptr = any_cast<shared_ptr<fhe_ops_lib::CustomData>>(inputs.at(input_node_idx));
+        auto raw_ptr = any_cast<shared_ptr<fhe_ops_lib::CustomData>>(local_data.at(input_node_idx));
         auto* custom_data = raw_ptr.get();
         void* layer_ptr = custom_data->get_typed_data<void>();
 
@@ -3239,11 +3302,17 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             auto* layer = static_cast<ParUpperDiagonalLNAffine*>(layer_ptr);
             pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("mb", 0),
                                     attrs.value("ct_local", j), attrs.value("g", k));
+        } else if (op_class == "ComplexBtpLayer") {
+            auto* layer = static_cast<ComplexBtpLayer*>(layer_ptr);
+            if (type != "half_pt") {
+                throw runtime_error("encode_pt: unknown ComplexBtpLayer pt type: " + type);
+            }
+            pt = layer->generate_half_pt(ckks_ctx, attrs.value("level", 0));
         } else {
             throw runtime_error("encode_pt: unknown op_class: " + op_class);
         }
 
-        output = make_shared<CkksPlaintextRingt>(move(pt));
+        local_data[self.output_nodes[0]->index] = make_shared<CkksPlaintextRingt>(move(pt));
     };
 }
 

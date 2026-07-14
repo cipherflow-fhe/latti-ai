@@ -157,6 +157,8 @@ private:
                                          const hid_t& h5_file,
                                          const Duo& block_shape = {128, 256});
     virtual void _init_drop_level_layer(const std::string& key, const json& layer);
+    virtual void _init_complex_btp_layer(const std::string& key, const json& layer);
+    virtual void _init_complex_btp_data_layer(const std::string& key, const json& layer);
     virtual void _init_fhe_avgpool_layer(const std::string& key,
                                          const json& layer,
                                          const bool& is_adaptive = true,

@@ -100,7 +100,7 @@ def substitute_layers_for_btp(subgraph: LayerAbstractGraph):
     for compute in all_nodes_in_topo_sort:
         if not isinstance(compute, ComputeNode):
             continue
-        if compute.layer_type == 'relu2d' or compute.layer_type == 'polyact':
+        if compute.layer_type in ('relu2d', 'polyact', 'simple_polyrelu'):
             compute.layer_type = config.approx_poly_type
 
 

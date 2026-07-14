@@ -172,7 +172,7 @@ def get_restoring_score(dag, restore_node, param_dict):
 
 
 def get_min_feature_level() -> int:
-    return 1 if config.mpc_refresh or config.graph_type == 'mpc' or config.set_btp_scale is not None else 0
+    return 1 if config.mpc_refresh or config.graph_type == 'mpc' or config.set_btp_scale is not None else 1
 
 
 def restore_level_at(new_graph: nx.DiGraph, node: FeatureNode, param_dict):
@@ -613,9 +613,7 @@ def run_single_compile(args):
     """Wrapper function for multiprocessing - runs a single compilation"""
     pt_graph_prepared, temperature, *rest = args
     enable_score_cache = rest[0] if rest else True
-    score, graph = compile_model_btp(
-        pt_graph_prepared, temperature, stdout=True, enable_score_cache=enable_score_cache
-    )
+    score, graph = compile_model_btp(pt_graph_prepared, temperature, stdout=True, enable_score_cache=enable_score_cache)
     return score, graph
 
 

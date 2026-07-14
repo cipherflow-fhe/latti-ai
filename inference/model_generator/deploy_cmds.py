@@ -30,6 +30,9 @@ from inference.model_generator.layers.concat_layer import *
 from inference.model_generator.layers.conv1d_packed_layer import *
 from inference.model_generator.layers.conv2d_depthwise import *
 from inference.model_generator.layers.conv2d_packed_layer import *
+from inference.model_generator.layers.complex_btp_layer import ComplexBtpLayer
+from inference.model_generator.layers.complex_pack_layer import ComplexPackLayer
+from inference.model_generator.layers.complex_unpack_layer import ComplexUnpackLayer
 from inference.model_generator.layers.dense_packed_layer import *
 from inference.model_generator.layers.inverse_multiplexed_conv2d_layer import *
 from inference.model_generator.layers.inverse_multiplexed_depthwise_conv2d_layer import *
@@ -112,15 +115,60 @@ def set_param(param_name):
     set_fhe_param(param)
 
 
-def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordinary', lazy=False):
+def _parse_bool_option(value, name):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == 'true':
+            return True
+        if normalized == 'false':
+            return False
+    raise ValueError(f'{name} must be a boolean true/false, got {value!r}')
+
+
+def gen_custom_task(
+    task_path,
+    param_name='PN14QP438',
+    use_gpu=True,
+    style='ordinary',
+    lazy=False,
+    complex_bootstrapping=None,
+    use_complex_btp=None,
+):
     n = _FHE_PARAMS[param_name].poly_modulus_degree
     set_param(param_name)
     task_config_info = read_config(os.path.join(task_path, 'task_config.json'))
+    if complex_bootstrapping is not None and use_complex_btp is not None:
+        raise ValueError('Specify only one of complex_bootstrapping and use_complex_btp')
+    if complex_bootstrapping is None:
+        complex_bootstrapping = use_complex_btp
+    if complex_bootstrapping is None:
+        complex_bootstrapping = task_config_info.get('complex_bootstrapping', False)
+    complex_bootstrapping = _parse_bool_option(complex_bootstrapping, 'complex_bootstrapping')
     try:
         block_shape = task_config_info['block_shape']
     except Exception:
         block_shape = [64, 64]
     config_info = read_config(os.path.join(task_path, 'nn_layers_ct_0.json'))
+
+    # Complex BTP pairs ciphertexts inside one feature.  All ciphertexts
+    # produced for the same feature share the feature metadata, so pairing
+    # different bootstrapping layers is both unnecessary and unsafe: later
+    # layers may depend on earlier BTP outputs.
+    complex_btp_layers = set()
+    if complex_bootstrapping:
+        for layer_id, layer in config_info.get('layer', {}).items():
+            if layer.get('type') != 'bootstrapping':
+                continue
+            input_feature = config_info['feature'][layer['feature_input'][0]]
+            if int(input_feature.get('level', 0)) >= 1:
+                complex_btp_layers.add(layer_id)
+                # The C++ runtime uses this marker to initialize the matching
+                # ComplexBtpLayer and expose the same custom data source that
+                # is present in mega_ag/task_signature.
+                layer['complex_bootstrapping'] = True
+
     input_args = list()
     feature_id_to_nodes_map = {}
     par_feature_shapes = {}
@@ -938,11 +986,48 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map.update({output_fid: layer_output_nodes})
 
         elif layer_config['type'] == 'bootstrapping':
-            layer_output_nodes = []
-            for node in feature_id_to_nodes_map[layer_input_feature_ids[0]]:
-                if node.level > 0:
-                    node = drop_level(node, node.level)
-                layer_output_nodes.append(bootstrap(node))
+            input_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
+            output_feature = config_info['feature'][layer_output_feature_ids[0]]
+            output_level = int(output_feature['level'])
+
+            if layer_id in complex_btp_layers and len(input_nodes) >= 2:
+                output_nodes = [None] * len(input_nodes)
+                data_source = CustomDataNode(type='complex_btp_data_source', id=layer_id)
+                input_args.append(Argument(layer_id, [data_source]))
+                complex_btp = ComplexBtpLayer(complex_bootstrapping=True)
+
+                pair_count = len(input_nodes) // 2
+                for pair_index in range(pair_count):
+                    a_index = pair_index * 2
+                    b_index = a_index + 1
+                    a_output = CkksCiphertextNode(f'{layer_id}_complex_output_{a_index}', level=output_level)
+                    b_output = CkksCiphertextNode(f'{layer_id}_complex_output_{b_index}', level=output_level)
+                    complex_btp.call_paired_custom_compute(
+                        [input_nodes[a_index]],
+                        [input_nodes[b_index]],
+                        data_source,
+                        [a_output],
+                        [b_output],
+                        node_prefix=f'{layer_id}_{pair_index}',
+                    )
+                    output_nodes[a_index] = a_output
+                    output_nodes[b_index] = b_output
+
+                # Preserve the original behavior for an unpaired tail.
+                if len(input_nodes) % 2:
+                    tail = input_nodes[-1]
+                    if tail.level > 0:
+                        tail = drop_level(tail, tail.level)
+                    output_nodes[-1] = bootstrap(tail)
+
+                layer_output_nodes = output_nodes
+            else:
+                layer_output_nodes = []
+                for node in input_nodes:
+                    if node.level > 0:
+                        node = drop_level(node, node.level)
+                    layer_output_nodes.append(bootstrap(node))
+
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif layer_config['type'] in ('add', 'add2d'):
@@ -1720,8 +1805,16 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
     output_args = [Argument(output_id, feature_id_to_nodes_map[output_id]) for output_id in task_output_feature_ids]
 
+    # Persist only the implementation markers; the layer type remains
+    # "bootstrapping" for every layer.
+    with open(os.path.join(task_path, 'nn_layers_ct_0.json'), 'w', encoding='utf-8') as f:
+        json.dump(config_info, f, indent=2)
+
     process_custom_task(
-        input_args=input_args, output_args=output_args, output_instruction_path=task_path, fpga_acc=False
+        input_args=input_args,
+        output_args=output_args,
+        output_instruction_path=task_path,
+        processor=Processor.GPU if use_gpu else Processor.CPU,
     )
 
 

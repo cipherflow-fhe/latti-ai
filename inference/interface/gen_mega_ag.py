@@ -44,6 +44,12 @@ def main():
         required=True,
         help='Path to the task directory',
     )
+    parser.add_argument(
+        '--complex-bootstrapping',
+        choices=('true', 'false'),
+        default=None,
+        help='Explicitly select complex (true) or ordinary two-BTP (false) behavior.',
+    )
     args = parser.parse_args()
 
     task_dir = os.path.abspath(args.task_dir)
@@ -80,7 +86,14 @@ def main():
 
     for erg_name, erg_config in server_config['server_task'].items():
         if erg_config['enable_fpga']:
-            gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style, lazy=True)
+            gen_custom_task(
+                ergs_path,
+                use_gpu=True,
+                param_name=param_name,
+                style=style,
+                lazy=True,
+                complex_bootstrapping=args.complex_bootstrapping,
+            )
 
     print(f'Done: mega_ag generated for {task_dir}.')
 
