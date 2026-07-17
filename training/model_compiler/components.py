@@ -922,7 +922,7 @@ class LayerAbstractGraph:
                 compute_node = MultCoeffComputeNode(key, layer_type, layer_json['coeff'], channel_input, channel_output)
 
             elif layer_type in ('polyact', 'relu2d', 'square', 'sigmoid'):
-                if layer_type == 'relu2d' and config.graph_type != 'mpc':
+                if layer_type == 'relu2d' and config.graph_type not in ('mpc_refresh', 'mpc_compute'):
                     raise ValueError('Relu2d is not supported in current mode')
                 compute_node = ActivationComputeNode(key, layer_type, channel_input, channel_output)
                 if layer_type in ('polyact', 'relu2d'):
@@ -1410,6 +1410,16 @@ class LayerAbstractGraph:
                 layers[last_mpc_refresh_id]['is_end'] = True
                 print(f'Set the is_end of the last mpc_refresh node {last_mpc_refresh_id} to True')
 
+        if config.graph_type == 'mpc_compute':
+            for layer_info in layers.values():
+                if layer_info.get('absorb_type'):
+                    layer_info['weight_scale'] = 0.015625
+                    layer_info['bias_scale'] = 0.015625
+                    layer_info['absorb_type'] = []
+                    layer_info['absorb_path'] = []
+                if layer_info.get('type') == 'polyact':
+                    layer_info['type'] = 'relu2d'
+
         features = dict()
         all_nodes_in_topo_sort = list(nx.topological_sort(self.dag))
         for feature in all_nodes_in_topo_sort:
@@ -1483,7 +1493,9 @@ class LayerAbstractGraph:
         output_feature = [
             node.node_id for node in self.dag.nodes if node not in compute_set and self.dag.out_degree(node) == 0
         ]
-        is_mpc = any(layer.get('type') == 'mpc_refresh' for layer in layers.values())
+        is_mpc = config.graph_type in ('mpc_refresh', 'mpc_compute') or any(
+            layer.get('type') == 'mpc_refresh' for layer in layers.values()
+        )
         config_info = {
             'is_mpc': is_mpc,
             'score': score,

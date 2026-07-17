@@ -54,6 +54,7 @@ from graph_partition_dp import (
 
 
 Skip = tuple[int, ...]
+MPC_COMPUTE_CUT_LAYER_TYPES = {'relu2d', 'polyact'}
 
 
 class NodeState(NamedTuple):
@@ -146,24 +147,77 @@ class MpcSkipGraphPartitioner:
     skip refresh states plus forced resize target skips.
     """
 
-    def __init__(self, entire_graph: nx.DiGraph, max_states_per_frontier: int = 4096):
+    def __init__(
+        self,
+        entire_graph: nx.DiGraph,
+        max_states_per_frontier: int = 4096,
+        cut_compute_types: set[str] | None = None,
+    ):
         if max_states_per_frontier <= 0:
             raise ValueError('max_states_per_frontier must be positive')
         self.entire_graph = entire_graph
         self.param_dict = generate_param_dict_for_graph()
         self.max_states_per_frontier = max_states_per_frontier
+        self.cut_compute_types = cut_compute_types or set()
 
     def run(self) -> tuple[float, nx.DiGraph | None]:
+        if self.cut_compute_types:
+            return self._run_with_compute_cuts()
+        return self._run_weak_components(self.entire_graph)
+
+    def _run_weak_components(self, graph: nx.DiGraph) -> tuple[float, nx.DiGraph | None]:
         result = []
         total_score = 0.0
-        for nodes in nx.weakly_connected_components(self.entire_graph):
-            subgraph = self.entire_graph.subgraph(nodes).copy()
+        for nodes in nx.weakly_connected_components(graph):
+            subgraph = graph.subgraph(nodes).copy()
             score, dag = self.solve(subgraph)
             if dag is None:
                 return float('inf'), None
             total_score += score
             result.append(dag)
         return total_score, nx.compose_all(result) if result else nx.DiGraph()
+
+    def _run_with_compute_cuts(self) -> tuple[float, nx.DiGraph | None]:
+        cut_nodes = [
+            node
+            for node in self.entire_graph.nodes
+            if isinstance(node, ComputeNode) and node.layer_type in self.cut_compute_types
+        ]
+        if not cut_nodes:
+            print('MPC compute split: no cut layers found; compiling original weak components')
+            return self._run_weak_components(self.entire_graph)
+
+        split_graph = self.entire_graph.copy()
+        split_graph.remove_nodes_from(cut_nodes)
+        n_subgraphs = nx.number_weakly_connected_components(split_graph) if len(split_graph.nodes) > 0 else 0
+        print(
+            'MPC compute split: '
+            f'cut_layers={len(cut_nodes)}, weak_subgraphs={n_subgraphs}'
+        )
+
+        total_score, compiled_dag = self._run_weak_components(split_graph)
+        if compiled_dag is None:
+            return float('inf'), None
+
+        for node in cut_nodes:
+            attrs = copy.deepcopy(self.entire_graph.nodes[node])
+            attrs['level_cost'] = 0
+            compiled_dag.add_node(node, **attrs)
+
+        cut_node_set = set(cut_nodes)
+        for pred, succ, attrs in self.entire_graph.edges(data=True):
+            if pred in cut_node_set or succ in cut_node_set:
+                compiled_dag.add_edge(pred, succ, **copy.deepcopy(attrs))
+
+        for cut_node in cut_nodes:
+            for pred in self.entire_graph.predecessors(cut_node):
+                if isinstance(pred, FeatureNode) and pred in compiled_dag.nodes:
+                    compiled_dag.nodes[pred]['level'] = _min_feature_level()
+            for succ in self.entire_graph.successors(cut_node):
+                if isinstance(succ, FeatureNode) and succ in compiled_dag.nodes:
+                    compiled_dag.nodes[succ]['level'] = config.fhe_param.max_level
+
+        return total_score, compiled_dag
 
     def solve(self, dag: nx.DiGraph) -> tuple[float, nx.DiGraph | None]:
         if len(dag.nodes) == 0:
@@ -780,9 +834,11 @@ def compile_graph_mpc_skip_aware(
     pt_graph_prepared: LayerAbstractGraph,
     max_states_per_frontier: int = 4096,
 ) -> tuple[float, LayerAbstractGraph | None]:
+    cut_compute_types = MPC_COMPUTE_CUT_LAYER_TYPES if config.graph_type == 'mpc_compute' else None
     partitioner = MpcSkipGraphPartitioner(
         pt_graph_prepared.dag,
         max_states_per_frontier=max_states_per_frontier,
+        cut_compute_types=cut_compute_types,
     )
     score, compiled_dag = partitioner.run()
     if compiled_dag is None:

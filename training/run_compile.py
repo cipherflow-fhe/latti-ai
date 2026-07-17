@@ -95,7 +95,11 @@ Examples:
     )
 
     parser.add_argument(
-        '--graph_type', type=str, choices=['btp', 'mpc'], default='btp', help='Graph type: btp or mpc (default: btp)'
+        '--graph_type',
+        type=str,
+        choices=['btp', 'mpc_refresh', 'mpc_compute'],
+        default='btp',
+        help='Graph type: btp, mpc_refresh, or mpc_compute (default: btp)',
     )
 
     parser.add_argument(
@@ -129,16 +133,10 @@ Examples:
     )
 
     parser.add_argument(
-        '--use_mpc_skip_dp',
-        action='store_true',
-        help='Use the experimental skip-aware MPC DP. Requires --graph_type=mpc.',
-    )
-
-    parser.add_argument(
         '--mpc_skip_max_states',
         type=int,
         default=4096,
-        help='Maximum frontier states retained by --use_mpc_skip_dp (default: 4096).',
+        help='Maximum frontier states retained by MPC level+skip DP (default: 4096).',
     )
 
     args = parser.parse_args()
@@ -199,7 +197,7 @@ Examples:
     print(
         f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, '
         f'COMPILE_CONFIG={args.config or "<none>"}, SET_BTP_SCALE={set_btp_scale}, '
-        f'DUMP_SPLIT_SUBGRAPHS={args.dump_split_subgraphs}, USE_MPC_SKIP_DP={args.use_mpc_skip_dp}, '
+        f'DUMP_SPLIT_SUBGRAPHS={args.dump_split_subgraphs}, '
         f'MPC_SKIP_MAX_STATES={args.mpc_skip_max_states}'
     )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
@@ -218,7 +216,6 @@ Examples:
             matmul_block_size=compile_config.get('matmul_block_size'),
             set_btp_scale=set_btp_scale,
             dump_split_subgraphs=args.dump_split_subgraphs,
-            use_mpc_skip_dp=args.use_mpc_skip_dp,
             mpc_skip_max_states=args.mpc_skip_max_states,
             mat_pack_style=mat_pack_style,
         )

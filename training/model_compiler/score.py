@@ -1704,7 +1704,7 @@ class MpcScoreParam:
 
     def get_score(self) -> float:
         if 'relu2d' in self.compute_node.layer_type or 'pool' in self.compute_node.layer_type:
-            if 'relu2d' == self.compute_node.layer_type or config.graph_type == 'mpc':
+            if 'relu2d' == self.compute_node.layer_type or config.graph_type in ('mpc_refresh', 'mpc_compute'):
                 kernel_scale = 1
             elif 'pool' in self.compute_node.layer_type:
                 kernel_scale = self.compute_node.kernel_shape[0] * self.compute_node.kernel_shape[1]

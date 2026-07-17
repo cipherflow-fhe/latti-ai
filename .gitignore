@@ -45,6 +45,8 @@ training/model_compiler/unittests/temp*
 training/model_compiler/unittests/split_subgraphs/
 training/model_compiler/unittests/split_subgraphs_multiple_btp/
 training/model_compiler/unittests/split_subgraphs_mostly_acyclic_btp/
+# Generated compiler unittest task outputs
+training/model_compiler/unittests/task_res/
 config_user.json
 gen_task/*.json
 **/mega_ag.json

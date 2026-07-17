@@ -897,6 +897,70 @@ class TestSingleLayer(CompilerTestBase):
             self.assertIn(v, subgraph_indices)
             self.assertLess(u, v)
 
+    def test_mpc_compute_relu_and_refresh_with_pn13(self):
+        model = nn_modules.TenConvReluAfterSecond()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=(1, 32, 8, 8),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        output_dir = script_dir / 'task_res' / 'mpc_compute_relu_refresh'
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=output_dir,
+            temperature=0.0,
+            num_workers=1,
+            style='ordinary',
+            graph_type='mpc_compute',
+            is_use_btp=True,
+        )
+
+        layer_types = [
+            node.layer_type
+            for node in graph.dag.nodes
+            if isinstance(node, ComputeNode)
+        ]
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 8192)
+        self.assertEqual(layer_types.count('conv2d'), 10)
+        self.assertIn('polyact', layer_types)
+        self.assertIn('mpc_refresh', layer_types)
+        self.assertNotIn('bootstrapping', layer_types)
+
+        with open(output_dir / 'task' / 'server' / 'nn_layers_ct_0.json') as f:
+            graph_json = json.load(f)
+        json_layer_types = [layer['type'] for layer in graph_json['layer'].values()]
+        self.assertIn('relu2d', json_layer_types)
+        self.assertIn('mpc_refresh', json_layer_types)
+        self.assertNotIn('polyact', json_layer_types)
+
+    def test_mpc_compute_multi_branch_relu_refresh(self):
+        model = nn_modules.MultiBranchReluRefreshNet()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=(1, 32, 8, 8),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        output_dir = script_dir / 'task_res' / 'mpc_compute_multi_branch'
+        run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=output_dir,
+            temperature=0.0,
+            num_workers=1,
+            style='ordinary',
+            graph_type='mpc_compute',
+            is_use_btp=True,
+        )
+
 
 class TestLayerInteraction(CompilerTestBase):
     def test_mismatched_scale(self):

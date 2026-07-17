@@ -732,7 +732,10 @@ def export_h5_from_onnx(
             absorb_paths = layer.get('absorb_path', [])
             absorb_types = layer.get('absorb_type', [])
             if not absorb_paths:
-                log.warning('mult_scalar has no absorb_path: %s', layer_key)
+                n_channels = int(layer.get('channel_input') or json_data['feature'][layer['feature_input'][0]].get('channel', 1))
+                out[wp] = np.ones(n_channels)
+                if verbose:
+                    log.info('MultScalar:               %s  <- ones', wp)
                 continue
             # mult_scalar compounds all rangenorm scales into a single 1/s weight
             s_combined = np.ones(1)

@@ -32,7 +32,7 @@ import transforms
 
 
 def _is_mpc_flow() -> bool:
-    return config.graph_type == 'mpc'
+    return config.graph_type in ('mpc_refresh', 'mpc_compute')
 
 
 def process_levels(graph: LayerAbstractGraph):
@@ -114,7 +114,8 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
         for node in graph.dag.nodes
     )
     server_task = {}
-    if graph.is_mpc or has_mpc_refresh:
+    has_mpc_task = graph.is_mpc or has_mpc_refresh or _is_mpc_flow()
+    if has_mpc_task:
         server_task['nn_layers_ct_0'] = {'enable_fpga': False}
     else:
         server_task['nn_layers_ct_0'] = {'enable_fpga': True}
@@ -179,7 +180,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
     )
 
     task_config = {
-        'task_type': 'mpc_refresh' if has_mpc_refresh else 'fhe',
+        'task_type': 'mpc_refresh' if has_mpc_task else 'fhe',
         'task_num': 1,
         'server_start_id': 0,
         'server_end_id': 0,
@@ -388,6 +389,8 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
                 else:
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                     compute_node.is_adaptive_avgpool = False
+        elif config.graph_type == 'mpc_compute' and compute_node.layer_type in {'relu2d', 'polyact'}:
+            graph.dag.nodes[compute_node]['level_cost'] = 0
         elif compute_node.layer_type == config.approx_poly_type:
             graph.dag.nodes[compute_node]['level_cost'] = PolyReluBase.compute_bsgs_level_cost(compute_node.order)
             if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:

@@ -356,10 +356,14 @@ class GraphSplitSorter:
 
     @staticmethod
     def refresh_layer_type() -> str:
-        return 'mpc_refresh' if getattr(config, 'graph_type', 'btp') == 'mpc' else 'bootstrapping'
+        return 'mpc_refresh' if getattr(config, 'graph_type', 'btp') in ('mpc_refresh', 'mpc_compute') else 'bootstrapping'
 
     def is_refresh_node(self, node) -> bool:
-        return isinstance(node, ComputeNode) and node.layer_type == self.refresh_layer_type()
+        if not isinstance(node, ComputeNode):
+            return False
+        if getattr(config, 'graph_type', 'btp') == 'mpc_compute':
+            return node.layer_type in {'mpc_refresh', 'polyact', 'relu2d'}
+        return node.layer_type == self.refresh_layer_type()
 
     @staticmethod
     def compute_nodes(subgraph: LayerAbstractGraph) -> list[ComputeNode]:
@@ -671,7 +675,7 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
         raise ValueError(f'refreshed nodes with same node id {new_id}. Something is wrong!')
 
     refreshed_feature.node_id = new_id
-    if config.graph_type == 'mpc':
+    if config.graph_type in ('mpc_refresh', 'mpc_compute'):
         skip = [1] * upstream_feature.dim
     else:
         skip = dag.nodes[upstream_feature]['skip']
@@ -1145,6 +1149,8 @@ def set_level_costs(graph: LayerAbstractGraph, trust_adaptive_avgpool_attr: bool
                 else:
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                     compute_node.is_adaptive_avgpool = False
+        elif config.graph_type == 'mpc_compute' and compute_node.layer_type in {'relu2d', 'polyact'}:
+            graph.dag.nodes[compute_node]['level_cost'] = 0
         elif compute_node.layer_type == config.approx_poly_type:
             graph.dag.nodes[compute_node]['level_cost'] = PolyReluBase.compute_bsgs_level_cost(compute_node.order)
             if any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
@@ -1344,7 +1350,7 @@ def set_feature_scales(graph: LayerAbstractGraph):
 
         elif compute.layer_type in {'avgpool1d', 'avgpool2d'}:
             kernel_prod = math.prod(compute.kernel_shape)
-            if config.graph_type == 'mpc':
+            if config.graph_type in ('mpc_refresh', 'mpc_compute'):
                 scale = 1.0 / kernel_prod
             elif compute.is_adaptive_avgpool or compute.is_big_size:
                 scale = 1.0 / kernel_prod

@@ -178,7 +178,6 @@ def try_btp(
     raw_graph: LayerAbstractGraph,
     temperature: float,
     num_workers: int,
-    use_mpc_skip_dp: bool = False,
     mpc_skip_max_states: int = 4096,
     enable_score_cache: bool = True,
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
@@ -193,7 +192,7 @@ def try_btp(
         pt_graph = prepare_graph(raw_graph)
 
         # (2) Process
-        if is_mpc_flow() and use_mpc_skip_dp:
+        if is_mpc_flow():
             graph, score = run_mpc_skip_compilation(pt_graph, mpc_skip_max_states)
         else:
             graph, score = run_btp_compilation(num_experiments, pt_graph, temperature, num_workers, enable_score_cache=enable_score_cache)
@@ -201,10 +200,7 @@ def try_btp(
         # (3) Post-process
         if graph is not None:
             if is_mpc_flow():
-                if use_mpc_skip_dp:
-                    run_mpc_metadata_pass(graph)
-                else:
-                    run_mpc_post_dp_passes(graph)
+                run_mpc_metadata_pass(graph)
             graph = post_process(graph)
             valid_results.append((score, graph))
 
@@ -524,6 +520,8 @@ def recompute_final_level(graph: LayerAbstractGraph):
     dag = graph.dag
     min_feature_level = get_min_feature_level()
     reset_layer_types = {'bootstrapping', 'mpc_refresh'}
+    if config.graph_type == 'mpc_compute':
+        reset_layer_types |= {'relu2d', 'polyact'}
     anchors: dict[FeatureNode, int] = {}
 
     def set_anchor(feature: FeatureNode, level: int):
@@ -598,10 +596,10 @@ def _write_ckks_parameter(output_dir: Path, ckks_param: dict):
 
 
 def _subgraph_has_refresh_layer(subgraph: LayerAbstractGraph) -> bool:
-    return any(
-        isinstance(node, ComputeNode) and node.layer_type in {'bootstrapping', 'mpc_refresh'}
-        for node in subgraph.dag.nodes
-    )
+    refresh_layer_types = {'bootstrapping', 'mpc_refresh'}
+    if config.graph_type == 'mpc_compute':
+        refresh_layer_types |= {'polyact', 'relu2d'}
+    return any(isinstance(node, ComputeNode) and node.layer_type in refresh_layer_types for node in subgraph.dag.nodes)
 
 
 def _rewrite_split_graph_io(ct_path: Path, inputs: list[FeatureNode], outputs: list[FeatureNode]) -> dict:
@@ -643,10 +641,13 @@ def dump_split_tasks(graph: LayerAbstractGraph, task_dir: Path) -> list[dict[str
         shutil.rmtree(split_tasks_dir)
     split_tasks_dir.mkdir(parents=True, exist_ok=True)
 
+    split_boundary_types = {'mpc_refresh'}
+    if config.graph_type == 'mpc_compute':
+        split_boundary_types |= {'polyact', 'relu2d'}
     last_mpc_refresh_subgraph_index = None
     for index, subgraph in enumerate(sorted_subgraphs):
         if any(
-            isinstance(node, ComputeNode) and node.layer_type == 'mpc_refresh'
+            isinstance(node, ComputeNode) and node.layer_type in split_boundary_types
             for node in subgraph.dag.nodes
         ):
             last_mpc_refresh_subgraph_index = index
@@ -749,7 +750,6 @@ def run_pipeline(
     set_btp_scale: float | None = None,
     use_gpu: bool = True,
     dump_split_subgraphs: bool = False,
-    use_mpc_skip_dp: bool = False,
     mpc_skip_max_states: int = 4096,
     mat_pack_style: str = '',
     enable_score_cache: bool = True,
@@ -789,15 +789,13 @@ def run_pipeline(
     config.mat_pack_style = mat_pack_style
     config.set_btp_scale = set_btp_scale
     config.use_gpu = use_gpu
-    if use_mpc_skip_dp:
-        if config.graph_type != 'mpc':
-            raise ValueError('--use_mpc_skip_dp requires graph_type="mpc"')
+    if is_mpc_flow():
         is_use_btp = True
     print(
         f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
         f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
         f'SET_BTP_SCALE={config.set_btp_scale}, BACKEND={"gpu" if config.use_gpu else "cpu"}, '
-        f'USE_MPC_SKIP_DP={use_mpc_skip_dp}, MPC_SKIP_MAX_STATES={mpc_skip_max_states}'
+        f'MPC_SKIP_MAX_STATES={mpc_skip_max_states}, '
         f'SCORE_CACHE={enable_score_cache}'
     )
 
@@ -814,7 +812,6 @@ def run_pipeline(
                 raw_graph,
                 temperature,
                 num_workers,
-                use_mpc_skip_dp=use_mpc_skip_dp,
                 mpc_skip_max_states=mpc_skip_max_states,
                 enable_score_cache=enable_score_cache
             )
@@ -827,7 +824,6 @@ def run_pipeline(
             raw_graph,
             temperature,
             num_workers,
-            use_mpc_skip_dp=use_mpc_skip_dp,
             mpc_skip_max_states=mpc_skip_max_states,
             enable_score_cache=enable_score_cache
         )

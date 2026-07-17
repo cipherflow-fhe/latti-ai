@@ -281,6 +281,60 @@ class ConvSeries(nn.Module):
         return x
 
 
+class TenConvReluAfterSecond(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.n_layers = 10
+        self.convs = nn.ModuleList()
+        for _ in range(self.n_layers):
+            self.convs.append(nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1))
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        for i in range(self.n_layers):
+            x = self.convs[i](x)
+            if i == 1:
+                x = self.relu(x)
+        return x
+
+
+class MultiBranchReluRefreshNet(nn.Module):
+    
+    def __init__(self):
+        super().__init__()
+        stride_in = 1
+        self.branch0 = nn.Sequential(
+            nn.Conv2d(32, 32, kernel_size=3, bias=False, padding=1, stride=stride_in),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=3, bias=False, padding=1),
+            nn.Conv2d(32, 32, kernel_size=3, bias=False, padding=1),
+        )
+        self.branch1 = nn.Sequential(
+            nn.Conv2d(32, 32, kernel_size=1, bias=False),
+            nn.Conv2d(32, 32, kernel_size=3, bias=False, padding=1, stride=stride_in),
+            nn.Conv2d(32, 32, kernel_size=3, bias=False, padding=1),
+            nn.Conv2d(32, 32, kernel_size=3, bias=False, padding=1),
+        )
+        self.branch2 = nn.Conv2d(32, 32, kernel_size=1, bias=False, stride=stride_in)
+        self.fuse = nn.Conv2d(96, 32, kernel_size=1, bias=False)
+        self.post0 = nn.Conv2d(32, 32, kernel_size=3, bias=False, padding=1)
+        self.post1 = nn.Sequential(
+            nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=3, bias=False, padding=1),
+            nn.Conv2d(32, 32, kernel_size=3, bias=False, padding=1),
+        )
+        self.tail = nn.Conv2d(32, 32, kernel_size=3, bias=False, padding=1)
+
+    def forward(self, x):
+        a = self.branch0(x)
+        b = self.branch1(x)
+        c = self.branch2(x)
+        y = self.fuse(torch.cat([a, b, c], dim=1))
+        z = self.post0(y) + c
+        z = self.post1(z) + y
+        return self.tail(z)
+
+
 class ActSeries(nn.Module):
     def __init__(self):
         super().__init__()
