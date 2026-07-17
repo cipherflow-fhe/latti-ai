@@ -51,7 +51,8 @@ inline std::map<std::string, std::string> build_input_csvs(const std::string& ta
 inline void print_outputs(const std::map<std::string, DecryptedOutput>& results) {
     std::cout << "\n========== Results ==========" << std::endl;
     for (auto& [name, result] : results) {
-        fhe_ops_lib::print_double_message(result.output.data(), ("Encrypted output [" + name + "]").c_str(), 1);
+        int count = std::min(result.num_outputs, 10);
+        fhe_ops_lib::print_double_message(result.output.data(), ("Encrypted output [" + name + "]").c_str(), count);
     }
 }
 

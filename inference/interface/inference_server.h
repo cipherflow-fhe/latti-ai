@@ -82,6 +82,10 @@ public:
     void dump_plaintext_intermediates(const std::map<std::string, std::string>& input_csvs,
                                       const std::string& output_path);
 
+    /// Dump each task output's first ciphertext slots and matching plaintext slots.
+    void dump_task_output_debug(const std::map<std::string, std::string>& input_csvs,
+                                const std::string& output_path);
+
     /// Run plaintext inference on CSV input files (for verification).
     std::map<std::string, std::vector<double>> evaluate_plaintext(const std::map<std::string, std::string>& input_csvs);
 

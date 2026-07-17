@@ -581,30 +581,27 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d relu: change shape and skip") {
             for (uint32_t sk : skips) {
                 Duo skip = {sk, sk};
                 SECTION("skip=" + str(skip)) {
-                    MpcTaskMetaData meta_data;
-                    meta_data.append(MpcProtoType::enc_to_share, {"u8", "u8", "u8"}, (uint8_t)level, 0, 0);
-                    meta_data.append(MpcProtoType::relu, {});
-                    meta_data.append(MpcProtoType::share_to_enc, {"u8", "u32"}, (uint8_t)level, n_channel);
-                    meta_data.append(MpcProtoType::end, {});
-                    Bytes meta_data_bytes = meta_data.serialize();
-                    data_trans.send_bytes(meta_data_bytes);
-
                     // encrypt
                     Array<double, 3> x_mg = gen_random_array<3>({n_channel, shape[0], shape[1]}, 1.0);
                     x_mg.get_data()[0] = 0.1;
-                    vector<double> temp_vec(4096, 0.1);
                     Feature2DEncrypted x_e(&context, level);
                     x_e.pack_multiple_channel(x_mg, false, mpc::DEFAULT_SCALE);
 
                     x_e.skip = skip;
                     x_e.shape = {x_e.shape[0] / skip[0], x_e.shape[1] / skip[1]};
 
+                    PackType pack_type = PackType::MultipleChannelPacking;
+                    MpcTaskMetaData meta_data;
+                    meta_data.append(MpcProtoType::enc_to_share_for_multi_channel_pack, {"u8", "u8", "u8", "u8"},
+                                     (uint8_t)x_e.level, 0, 0, (uint8_t)pack_type);
+                    meta_data.append(MpcProtoType::relu, {});
+                    meta_data.append(MpcProtoType::share_to_enc_for_multi_channel_pack, {"u8", "u32", "duo", "u8"},
+                                     (uint8_t)x_e.level, x_e.n_channel, &x_e.skip, (uint8_t)pack_type);
+                    meta_data.append(MpcProtoType::end, {});
+                    data_trans.send_bytes(meta_data.serialize());
+
                     // enc_to_share
-                    Feature2DEncrypted x_share1_enc(&context, x_e.level);
-                    Feature2DShare x_share0(ring_mod, scale_ord);
-                    split_to_shares(x_e, &x_share1_enc, &x_share0);
-                    vector<uint8_t> x_share1_enc_bytes = x_share1_enc.serialize();
-                    data_trans.send_bytes(x_share1_enc_bytes);
+                    auto x_share0 = enc_to_share_server().server_enc_to_share_multi_pack(x_e, pack_type);
 
                     // relu
                     ReluLayerServer act(scale_ord, ring_mod, pt_range);
@@ -612,25 +609,7 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d relu: change shape and skip") {
                     y_share0.data = to_latti_array(act.run(to_mpc_array(x_share0.data)));
                     y_share0.shape = x_share0.shape;
 
-                    
-                    for (int i = 0; i < y_share0.data.get_size(); i++) {
-                        uint64_t temp = (y_share0.data.get(i) * mpc::T_SCALE) % mpc::RING_MOD;
-                        y_share0.data.set(i, temp);
-                    }
-
-                    MPC mpc_protocol(scale_ord, ring_mod, pt_range);
-                    auto b1 = mpc_protocol.wrap_protocol(y_share0.data.to_array_1d(), ::mpc::current_party());
-
-                    Bytes y_share1_bytes = data_trans.receive_bytes();
-                    Feature2DEncrypted y_share1_enc(&context, x_e.level);
-                    y_share1_enc.deserialize(y_share1_bytes);
-                    y_share1_enc.decompress();
-
-                    Bytes y_share2_bytes = data_trans.receive_bytes();
-                    Feature2DEncrypted y_share2_enc(&context, x_e.level);
-                    y_share2_enc.deserialize(y_share2_bytes);
-
-                    auto y_ct = combine_with_share_new_protocol(y_share1_enc, y_share0, y_share2_enc, b1);
+                    auto y_ct = share_to_enc_server().server_share_to_enc_multi_pack(y_share0, x_e.level, pack_type);
                     Array<double, 3> y_mg = y_ct.unpack_multiple_channel();
 
                     // compare

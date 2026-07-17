@@ -29,14 +29,15 @@ void print_usage(const char* argv0) {
     cerr << "Usage: " << argv0
          << " [--task-dir <path>] [--input [name=]<path>] [--port <port>] [--gpu] [--verify]"
             " [--dump-intermediates] [--no-dump-intermediates]"
-            " [--dump-layers <txt>] [--dump-plaintext <txt>]\n"
+            " [--dump-layers <txt>] [--dump-plaintext <txt>] [--dump-task-outputs <txt>]\n"
          << "Defaults:\n"
          << "  --task-dir " << default_task_dir() << "\n"
          << "  --input    " << default_input_csv() << "\n"
          << "  --port     12309\n"
          << "  dump intermediates disabled unless --dump-intermediates or LATTI_MPC_DUMP_INTERMEDIATES is set\n"
          << "  --dump-layers mpc_layer_dump.txt\n"
-         << "  --dump-plaintext mpc_plaintext_dump.txt" << endl;
+         << "  --dump-plaintext mpc_plaintext_dump.txt\n"
+         << "  --dump-task-outputs mpc_task_output_debug.txt" << endl;
 }
 
 }  // namespace
@@ -49,6 +50,7 @@ int main(int argc, char* argv[]) {
     bool verify = false;
     string dump_layers_path = "mpc_layer_dump.txt";
     string dump_plaintext_path = "mpc_plaintext_dump.txt";
+    string dump_task_outputs_path = "mpc_task_output_debug.txt";
     g_dump_intermediate_plaintexts = is_enabled_env(getenv("LATTI_MPC_DUMP_INTERMEDIATES"));
 
     for (int i = 1; i < argc; i++) {
@@ -74,6 +76,9 @@ int main(int argc, char* argv[]) {
             g_dump_intermediate_plaintexts = true;
         } else if (strcmp(argv[i], "--dump-plaintext") == 0 && i + 1 < argc) {
             dump_plaintext_path = argv[++i];
+            g_dump_intermediate_plaintexts = true;
+        } else if (strcmp(argv[i], "--dump-task-outputs") == 0 && i + 1 < argc) {
+            dump_task_outputs_path = argv[++i];
             g_dump_intermediate_plaintexts = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
@@ -121,6 +126,7 @@ int main(int argc, char* argv[]) {
         if (g_dump_intermediate_plaintexts) {
             server.dump_intermediate_plaintexts(dump_layers_path);
             server.dump_plaintext_intermediates(input_csvs, dump_plaintext_path);
+            server.dump_task_output_debug(input_csvs, dump_task_outputs_path);
         }
 
         cout << "[Server] Sending encrypted outputs..." << endl;

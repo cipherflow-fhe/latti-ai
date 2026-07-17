@@ -313,8 +313,9 @@ int main(int argc, char* argv[]) {
         if (verify) {
             auto plaintext_outputs = mpc_trans.receive_plaintext_map();
             for (auto& [name, plaintext_output] : plaintext_outputs) {
+                int count = std::min(static_cast<int>(plaintext_output.size()), 10);
                 fhe_ops_lib::print_double_message(plaintext_output.data(), ("Plaintext output [" + name + "]").c_str(),
-                                                  1);
+                                                  count);
             }
             if (!verify_outputs(results, plaintext_outputs, 0.1)) {
                 cout << "Result: FAIL" << endl;

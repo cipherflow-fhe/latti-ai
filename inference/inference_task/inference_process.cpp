@@ -18,7 +18,10 @@
 
 #include "inference_process.h"
 #include "../lattisense/cxx_sdk_v2/cxx_fhe_task.h"
+
 #ifdef INFERENCE_SDK_ENABLE_MPC
+#include "mpc/pool_layer.h"
+#include "mpc_wrapper/mpc_array_bridge.h"
 #include "mpc_wrapper/enc_share_conversion.h"
 #include "mpc_wrapper/inference_process_mpc_server.h"
 #include "mpc_wrapper/mpc_data_transmission.h"
@@ -688,6 +691,10 @@ void InitInferenceProcess::load_model_prepare() {
 #ifdef INFERENCE_SDK_ENABLE_MPC
             } else if (layer_type == "mpc_refresh") {
                 mpc_init().init_mpc_refresh_layer(*this, key, value);
+            } else if (layer_type == "relu2d") {
+                mpc_init().init_relu2d_layer(*this, key, value);
+            } else if (layer_type == "maxpool2d") {
+                mpc_init().init_maxpool2d_layer(*this, key, value);
 #endif
             } else if (layer_type == "concat2d") {
                 _init_concat_layer(key, value);
@@ -857,6 +864,34 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     mpc_server.calculate_mpc_refresh(*fp, fp->mpc_init(), ckks_contexts, mpc_input, key, layer.value());
                 cout << "[Server][MPC] Finished refresh layer " << key << endl;
                 result = MakeU<Feature2DEncrypted>(move(refresh_result));
+                mpc_timer.stop();
+            } else if (layer_type == "relu2d") {
+                if (!enable_mpc) {
+                    throw runtime_error("relu2d requires enable_mpc=true and an active MPC client");
+                }
+                mpc_timer.start();
+                cout << "[Server][MPC] Sending relu2d metadata for layer " << key << endl;
+                send_mpc_metadata(fp->mpc_init().meta_data(key));
+                const FeatureEncrypted& mpc_input = _get_feature(feature_input[0]);
+                InferenceMpcServer mpc_server;
+                auto relu_result =
+                    mpc_server.calculate_relu2d(*fp, fp->mpc_init(), ckks_contexts, mpc_input, key, layer.value());
+                cout << "[Server][MPC] Finished relu2d layer " << key << endl;
+                result = MakeU<Feature2DEncrypted>(move(relu_result));
+                mpc_timer.stop();
+            } else if (layer_type == "maxpool2d") {
+                if (!enable_mpc) {
+                    throw runtime_error("maxpool2d requires enable_mpc=true and an active MPC client");
+                }
+                mpc_timer.start();
+                cout << "[Server][MPC] Sending maxpool2d metadata for layer " << key << endl;
+                send_mpc_metadata(fp->mpc_init().meta_data(key));
+                const FeatureEncrypted& mpc_input = _get_feature(feature_input[0]);
+                InferenceMpcServer mpc_server;
+                auto maxpool_result =
+                    mpc_server.calculate_maxpool2d(*fp, fp->mpc_init(), ckks_contexts, mpc_input, key, layer.value());
+                cout << "[Server][MPC] Finished maxpool2d layer " << key << endl;
+                result = MakeU<Feature2DEncrypted>(move(maxpool_result));
                 mpc_timer.stop();
 #endif
             } else if (layer_type == "batchnorm" || layer_type == "batchnorm2d" || layer_type == "dropout" ||
@@ -1579,6 +1614,28 @@ void InferenceProcess::run_task_plaintext_graph(const InferenceSubGraph& graph, 
                     }
                 }
             }
+#ifdef INFERENCE_SDK_ENABLE_MPC
+            if (layer_type == "relu2d") {
+                FeatureNode feature_input0(json_features[feature_input[0]]);
+                if (feature_input0.dim != 2) {
+                    throw runtime_error("relu2d plaintext expects 2D input");
+                }
+                auto& input0 = p_feature2d_x[feature_input[0]];
+                result = input0.apply([](double x) { return x > 0.0 ? x * mpc::T_SCALE: 0.0; });
+            }
+
+            if (layer_type == "maxpool2d") {
+                FeatureNode feature_input0(json_features[feature_input[0]]);
+                if (feature_input0.dim != 2) {
+                    throw runtime_error("maxpool2d plaintext expects 2D input");
+                }
+                Duo kernel_shape = {layer.value()["kernel_shape"][0], layer.value()["kernel_shape"][1]};
+                Duo stride = {layer.value()["stride"][0], layer.value()["stride"][1]};
+                PoolLayer pool(kernel_shape, stride, mpc::DEFAULT_SCALE_BIT, mpc::RING_MOD, MAXPOOL, 128.0);
+                result = to_latti_array(pool.run_maxpool_plaintext(to_mpc_array(p_feature2d_x[feature_input[0]])))
+                             .apply([](double x) { return x * mpc::T_SCALE; });
+            }
+#endif
             if (layer_type == "fc0" || layer_type == "fc1") {
                 FeatureNode feature_input0(json_features[feature_input[0]]);
                 auto input0 = p_feature0d_x[feature_input[0]];
@@ -1897,15 +1954,15 @@ void InferenceProcess::run_task_direct_graph(const InferenceSubGraph& graph, boo
         const json& value = layer.value();
         const string layer_type = value["type"].get<string>();
 
-        if (layer_type != "mpc_refresh") {
-            throw runtime_error("DirectLayer graph only supports mpc_refresh, got: " + layer_type);
+        if (layer_type != "mpc_refresh" && layer_type != "relu2d" && layer_type != "maxpool2d") {
+            throw runtime_error("DirectLayer graph only supports mpc_refresh/relu2d/maxpool2d, got: " + layer_type);
         }
 
 #ifndef INFERENCE_SDK_ENABLE_MPC
         throw runtime_error("MPC support is disabled. Reconfigure with -DINFERENCE_SDK_ENABLE_MPC=ON to enable it.");
 #else
         if (!enable_mpc) {
-            throw runtime_error("mpc_refresh requires enable_mpc=true and an active MPC client");
+            throw runtime_error(layer_type + " requires enable_mpc=true and an active MPC client");
         }
 
         auto feature_input = value["feature_input"].get<vector<string>>();
@@ -1916,11 +1973,20 @@ void InferenceProcess::run_task_direct_graph(const InferenceSubGraph& graph, boo
 
         const FeatureEncrypted& input = _get_feature(feature_input[0]);
         InferenceMpcServer mpc_server;
-        auto refresh_result =
-            mpc_server.calculate_mpc_refresh(*fp, fp->mpc_init(), ckks_contexts, input, key, value);
+        UPtr<Feature2DEncrypted> result;
+        if (layer_type == "mpc_refresh") {
+            result = MakeU<Feature2DEncrypted>(
+                mpc_server.calculate_mpc_refresh(*fp, fp->mpc_init(), ckks_contexts, input, key, value));
+        } else if (layer_type == "relu2d") {
+            result = MakeU<Feature2DEncrypted>(
+                mpc_server.calculate_relu2d(*fp, fp->mpc_init(), ckks_contexts, input, key, value));
+        } else {
+            result = MakeU<Feature2DEncrypted>(
+                mpc_server.calculate_maxpool2d(*fp, fp->mpc_init(), ckks_contexts, input, key, value));
+        }
         mpc_timer.stop();
         fp->total_fpga_time += mpc_timer.get_duration().count();
-        set_feature(feature_output[0], MakeU<Feature2DEncrypted>(move(refresh_result)));
+        set_feature(feature_output[0], move(result));
 #endif
     }
     } catch (...) {
