@@ -21,6 +21,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from inference.lattisense.frontend import custom_task as _custom_task
+
+# The LattiSense frontend historically imports sibling modules through the
+# top-level ``frontend`` package.  The model generator imports it through the
+# repository package path, so both names must refer to the same module.  In
+# particular, GaloisKeyNode looks up g_param through ``frontend.custom_task``.
+sys.modules.setdefault('frontend.custom_task', _custom_task)
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.activation_layer import *
 from inference.model_generator.layers.add_pack import *
@@ -152,22 +159,24 @@ def gen_custom_task(
         block_shape = [64, 64]
     config_info = read_config(os.path.join(task_path, 'nn_layers_ct_0.json'))
 
+    # Remove implementation markers from previous generations before applying
+    # the requested mode.  The generator persists nn_layers_ct_0.json, so a
+    # prior complex generation must not leak into a subsequent ordinary-BTP
+    # generation.
+    for layer in config_info.get('layer', {}).values():
+        if layer.get('type') == 'bootstrapping':
+            layer.pop('complex_bootstrapping', None)
+            layer.pop('use_complex_btp', None)
+
     # Complex BTP pairs ciphertexts inside one feature.  All ciphertexts
     # produced for the same feature share the feature metadata, so pairing
     # different bootstrapping layers is both unnecessary and unsafe: later
-    # layers may depend on earlier BTP outputs.
+    # layers may depend on earlier BTP outputs.  Whether a layer can use
+    # complex BTP is finalized below, once its actual ciphertext count is
+    # known.  A single-ciphertext feature must use ordinary BTP; marking it
+    # complex would make the C++ runtime add a data-source argument that is
+    # absent from the generated graph/signature.
     complex_btp_layers = set()
-    if complex_bootstrapping:
-        for layer_id, layer in config_info.get('layer', {}).items():
-            if layer.get('type') != 'bootstrapping':
-                continue
-            input_feature = config_info['feature'][layer['feature_input'][0]]
-            if int(input_feature.get('level', 0)) >= 1:
-                complex_btp_layers.add(layer_id)
-                # The C++ runtime uses this marker to initialize the matching
-                # ComplexBtpLayer and expose the same custom data source that
-                # is present in mega_ag/task_signature.
-                layer['complex_bootstrapping'] = True
 
     input_args = list()
     feature_id_to_nodes_map = {}
@@ -989,6 +998,21 @@ def gen_custom_task(
             input_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
             output_feature = config_info['feature'][layer_output_feature_ids[0]]
             output_level = int(output_feature['level'])
+
+            can_use_complex_btp = (
+                complex_bootstrapping
+                and int(config_info['feature'][layer_input_feature_ids[0]].get('level', 0)) >= 1
+                and len(input_nodes) >= 2
+            )
+            if can_use_complex_btp:
+                complex_btp_layers.add(layer_id)
+                # The C++ runtime uses this marker to initialize the matching
+                # ComplexBtpLayer and expose the same custom data source that
+                # is present in mega_ag/task_signature.
+                layer_config['complex_bootstrapping'] = True
+            else:
+                layer_config.pop('complex_bootstrapping', None)
+                layer_config.pop('use_complex_btp', None)
 
             if layer_id in complex_btp_layers and len(input_nodes) >= 2:
                 output_nodes = [None] * len(input_nodes)
