@@ -133,6 +133,113 @@ Array<double, 2> FeatureMatEncrypted::block_col_major_unpack(uint32_t m, uint32_
     return result;
 }
 
+void FeatureMatEncrypted::batch_block_col_major_pack(const Array<double, 2>& matrix,
+                                                     uint32_t d,
+                                                     bool is_symmetric,
+                                                     double scale_in) {
+    uint32_t m = matrix.get_shape()[0];
+    uint32_t n_cols = matrix.get_shape()[1];
+    if (m == 0 || n_cols == 0)
+        throw invalid_argument("batch_block_col_major_pack requires a non-empty matrix");
+    shape = {m, n_cols};
+    head_shape = {m, n_cols};
+    matmul_block_size = d;
+
+    uint32_t n_slot = context->get_parameter().get_n() / 2;
+    uint32_t chunk_size = d * d;
+    if (d == 0 || (d & (d - 1)) != 0 || n_slot < chunk_size || n_slot % chunk_size != 0) {
+        throw std::invalid_argument("batch_block_col_major_pack requires power-of-two d and n_slot divisible by d*d");
+    }
+
+    uint32_t num_block_rows = div_ceil(m, d);
+    uint32_t num_block_cols = div_ceil(n_cols, d);
+    uint32_t chunks_per_ct = n_slot / chunk_size;
+    uint32_t batch_ct_groups = div_ceil(num_block_rows, chunks_per_ct);
+    uint32_t total_cts = num_block_cols * batch_ct_groups;
+
+    vector<vector<double>> packed(total_cts, vector<double>(n_slot, 0.0));
+    for (uint32_t block_col = 0; block_col < num_block_cols; block_col++) {
+        for (uint32_t group = 0; group < batch_ct_groups; group++) {
+            uint32_t ct_idx = block_col * batch_ct_groups + group;
+            for (uint32_t chunk = 0; chunk < chunks_per_ct; chunk++) {
+                uint32_t block_row = group * chunks_per_ct + chunk;
+                if (block_row >= num_block_rows)
+                    continue;
+
+                uint32_t chunk_base = chunk * chunk_size;
+                for (uint32_t col = 0; col < d; col++) {
+                    for (uint32_t row = 0; row < d; row++) {
+                        uint32_t src_row = block_row * d + row;
+                        uint32_t src_col = block_col * d + col;
+                        if (src_row < m && src_col < n_cols) {
+                            packed[ct_idx][chunk_base + row + d * col] = matrix.get(src_row, src_col);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    data.clear();
+    data_compress.clear();
+    if (is_symmetric) {
+        data_compress.resize(total_cts);
+    } else {
+        data.resize(total_cts);
+    }
+
+    const int n_threads = 4;
+    parallel_for(total_cts, n_threads, *context, [&](CkksContext& ctx_copy, int idx) {
+        auto encoded = ctx_copy.encode(packed[idx], level, scale_in);
+        if (is_symmetric) {
+            data_compress[idx] = ctx_copy.encrypt_symmetric_compressed(encoded);
+        } else {
+            data[idx] = ctx_copy.encrypt_symmetric(encoded);
+        }
+    });
+}
+
+Array<double, 2> FeatureMatEncrypted::batch_block_col_major_unpack(uint32_t m, uint32_t n, uint32_t d) const {
+    uint32_t n_slot = context->get_parameter().get_n() / 2;
+    uint32_t chunk_size = d * d;
+    if (d == 0 || (d & (d - 1)) != 0 || n_slot < chunk_size || n_slot % chunk_size != 0) {
+        throw std::invalid_argument("batch_block_col_major_unpack requires power-of-two d and n_slot divisible by d*d");
+    }
+
+    uint32_t num_block_rows = div_ceil(m, d);
+    uint32_t num_block_cols = div_ceil(n, d);
+    uint32_t chunks_per_ct = n_slot / chunk_size;
+    uint32_t batch_ct_groups = div_ceil(num_block_rows, chunks_per_ct);
+    uint32_t total_cts = num_block_cols * batch_ct_groups;
+    if (data.size() != total_cts) {
+        throw std::invalid_argument("batch_block_col_major_unpack ciphertext count does not match shape");
+    }
+
+    Array<double, 2> result({static_cast<uint64_t>(m), static_cast<uint64_t>(n)});
+    const int n_threads = 4;
+    parallel_for(total_cts, n_threads, *context, [&](CkksContext& ctx_copy, int ct_idx) {
+        auto decoded = ctx_copy.decode(ctx_copy.decrypt(data[ct_idx]));
+        uint32_t block_col = ct_idx / batch_ct_groups;
+        uint32_t group = ct_idx % batch_ct_groups;
+        for (uint32_t chunk = 0; chunk < chunks_per_ct; chunk++) {
+            uint32_t block_row = group * chunks_per_ct + chunk;
+            if (block_row >= num_block_rows)
+                continue;
+            uint32_t chunk_base = chunk * chunk_size;
+            for (uint32_t col = 0; col < d; col++) {
+                for (uint32_t row = 0; row < d; row++) {
+                    uint32_t dst_row = block_row * d + row;
+                    uint32_t dst_col = block_col * d + col;
+                    if (dst_row < m && dst_col < n) {
+                        result.set(dst_row, dst_col, decoded[chunk_base + row + d * col]);
+                    }
+                }
+            }
+        }
+    });
+    return result;
+}
+
 static uint32_t next_power_of_2(uint32_t x) {
     uint32_t p = 1;
     while (p < x)

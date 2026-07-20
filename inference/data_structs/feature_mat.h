@@ -38,6 +38,15 @@ public:
                               double scale_in = DEFAULT_SCALE);
     Array<double, 2> block_col_major_unpack(uint32_t m, uint32_t n, uint32_t d) const;
 
+    // Batch-packed block column-major format. For each input/output block
+    // column, different batch row blocks are stored in different d*d chunks
+    // of one ciphertext instead of repeating one block across all chunks.
+    void batch_block_col_major_pack(const Array<double, 2>& matrix,
+                                    uint32_t d,
+                                    bool is_symmetric = false,
+                                    double scale_in = DEFAULT_SCALE);
+    Array<double, 2> batch_block_col_major_unpack(uint32_t m, uint32_t n, uint32_t d) const;
+
     // Parallel (interleaved) block column-major packing: interleave blocks from
     // multiple heads at the same block position into a single ciphertext.
     // head_dim: columns per head within each megablock.
