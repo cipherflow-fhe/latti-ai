@@ -50,7 +50,7 @@ struct InputParam {
     int height = 0;    // dim=2 only
     int width = 0;     // dim=2 only
     int length = 0;    // dim=1 only
-    int skip = 1;      // dim=0 only
+    int skip = 1;      // dim=0/1 packing stride
     int pack_num = 0;  // n_channel_per_ct
 };
 
@@ -112,6 +112,7 @@ private:
     std::map<std::string, OutputParam> output_params_;
     int n_slots_ = 0;
     int poly_modulus_degree_ = 0;
+    int log_slots_ = -1;
     std::vector<uint64_t> q_;
     std::vector<uint64_t> p_;
     bool needs_btp_ = false;
