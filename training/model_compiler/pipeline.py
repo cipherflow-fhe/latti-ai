@@ -521,7 +521,7 @@ def recompute_final_level(graph: LayerAbstractGraph):
     min_feature_level = get_min_feature_level()
     reset_layer_types = {'bootstrapping', 'mpc_refresh'}
     if config.graph_type == 'mpc_compute':
-        reset_layer_types |= {'relu2d', 'polyact'}
+        reset_layer_types |= {'relu2d', 'polyact', 'maxpool2d'}
     anchors: dict[FeatureNode, int] = {}
 
     def set_anchor(feature: FeatureNode, level: int):
@@ -598,7 +598,7 @@ def _write_ckks_parameter(output_dir: Path, ckks_param: dict):
 def _subgraph_has_refresh_layer(subgraph: LayerAbstractGraph) -> bool:
     refresh_layer_types = {'bootstrapping', 'mpc_refresh'}
     if config.graph_type == 'mpc_compute':
-        refresh_layer_types |= {'polyact', 'relu2d'}
+        refresh_layer_types |= {'polyact', 'relu2d', 'maxpool2d'}
     return any(isinstance(node, ComputeNode) and node.layer_type in refresh_layer_types for node in subgraph.dag.nodes)
 
 
@@ -643,7 +643,7 @@ def dump_split_tasks(graph: LayerAbstractGraph, task_dir: Path) -> list[dict[str
 
     split_boundary_types = {'mpc_refresh'}
     if config.graph_type == 'mpc_compute':
-        split_boundary_types |= {'polyact', 'relu2d'}
+        split_boundary_types |= {'polyact', 'relu2d', 'maxpool2d'}
     last_mpc_refresh_subgraph_index = None
     for index, subgraph in enumerate(sorted_subgraphs):
         if any(

@@ -54,7 +54,7 @@ from graph_partition_dp import (
 
 
 Skip = tuple[int, ...]
-MPC_COMPUTE_CUT_LAYER_TYPES = {'relu2d', 'polyact'}
+MPC_COMPUTE_CUT_LAYER_TYPES = {'relu2d', 'polyact', 'maxpool2d'}
 
 
 class NodeState(NamedTuple):

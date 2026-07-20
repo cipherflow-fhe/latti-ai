@@ -362,7 +362,7 @@ class GraphSplitSorter:
         if not isinstance(node, ComputeNode):
             return False
         if getattr(config, 'graph_type', 'btp') == 'mpc_compute':
-            return node.layer_type in {'mpc_refresh', 'polyact', 'relu2d'}
+            return node.layer_type in {'mpc_refresh', 'polyact', 'relu2d', 'maxpool2d'}
         return node.layer_type == self.refresh_layer_type()
 
     @staticmethod
@@ -996,6 +996,8 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                         // compute_node.upsample_factor_in[i]
                         // compute_node.upsample_factor[i]
                     )
+                if config.graph_type == 'mpc_compute' and compute_node.layer_type == 'maxpool2d':
+                    graph.dag.nodes[succ]['skip'] = [1] * succ.dim
 
             else:
                 if compute_node.layer_type == 'parcpmm':
@@ -1149,7 +1151,7 @@ def set_level_costs(graph: LayerAbstractGraph, trust_adaptive_avgpool_attr: bool
                 else:
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                     compute_node.is_adaptive_avgpool = False
-        elif config.graph_type == 'mpc_compute' and compute_node.layer_type in {'relu2d', 'polyact'}:
+        elif config.graph_type == 'mpc_compute' and compute_node.layer_type in {'relu2d', 'polyact', 'maxpool2d'}:
             graph.dag.nodes[compute_node]['level_cost'] = 0
         elif compute_node.layer_type == config.approx_poly_type:
             graph.dag.nodes[compute_node]['level_cost'] = PolyReluBase.compute_bsgs_level_cost(compute_node.order)

@@ -389,7 +389,7 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
                 else:
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                     compute_node.is_adaptive_avgpool = False
-        elif config.graph_type == 'mpc_compute' and compute_node.layer_type in {'relu2d', 'polyact'}:
+        elif config.graph_type == 'mpc_compute' and compute_node.layer_type in {'relu2d', 'polyact', 'maxpool2d'}:
             graph.dag.nodes[compute_node]['level_cost'] = 0
         elif compute_node.layer_type == config.approx_poly_type:
             graph.dag.nodes[compute_node]['level_cost'] = PolyReluBase.compute_bsgs_level_cost(compute_node.order)

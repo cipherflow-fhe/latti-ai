@@ -335,6 +335,24 @@ class MultiBranchReluRefreshNet(nn.Module):
         return self.tail(z)
 
 
+class ConvMaxPoolFourConv(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv2d(3, 32, kernel_size=3, bias=False, padding=1)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.convs = nn.ModuleList(
+            nn.Conv2d(32, 32, kernel_size=3, bias=False, padding=1)
+            for _ in range(4)
+        )
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = self.pool(x)
+        for conv in self.convs:
+            x = conv(x)
+        return x
+
+
 class ActSeries(nn.Module):
     def __init__(self):
         super().__init__()

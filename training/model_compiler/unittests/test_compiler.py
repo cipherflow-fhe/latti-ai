@@ -715,7 +715,7 @@ class TestSingleLayer(CompilerTestBase):
         export_to_onnx(
             model,
             save_path=self.temp_onnx_path,
-            input_size=(1, 32, 8, 8),
+            input_size=(1, 3, 32, 32),
             dynamic_batch=False,
             save_h5=False,
         )
@@ -768,7 +768,7 @@ class TestSingleLayer(CompilerTestBase):
         export_to_onnx(
             model,
             save_path=self.temp_onnx_path,
-            input_size=(1, 32, 8, 8),
+            input_size=(1, 3, 32, 32),
             dynamic_batch=False,
             save_h5=False,
         )
@@ -959,6 +959,44 @@ class TestSingleLayer(CompilerTestBase):
             style='ordinary',
             graph_type='mpc_compute',
             is_use_btp=True,
+        )
+
+    def test_mpc_compute_maxpool_and_refresh(self):
+        import torch
+        import torch.nn as nn
+
+        model = nn_modules.ConvMaxPoolFourConv()
+        torch.manual_seed(0)
+        for module in model.modules():
+            if isinstance(module, nn.Conv2d):
+                nn.init.uniform_(module.weight, -0.1, 0.1)
+
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=(1, 3, 32, 32),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+
+        output_dir = script_dir / 'task_res' / 'mpc_compute_maxpool_refresh'
+        run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=output_dir,
+            temperature=0.0,
+            num_workers=1,
+            style='ordinary',
+            graph_type='mpc_compute',
+            is_use_btp=True,
+            dump_split_subgraphs=True,
+        )
+        export_h5_from_onnx(
+            onnx_path=str(self.temp_onnx_path),
+            json_path=str(output_dir / 'task' / 'server' / 'nn_layers_ct_0.json'),
+            h5_path=str(output_dir / 'task' / 'server' / 'model_parameters.h5'),
+            verbose=False,
         )
 
 
