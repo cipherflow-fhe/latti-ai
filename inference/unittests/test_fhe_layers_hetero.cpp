@@ -72,7 +72,7 @@
 #include "fhe_layers/par_upper_diagonal_poly.h"
 #include "fhe_layers/par_upper_diagonal_softmax.h"
 #include "data_structs/feature_mat.h"
-#include "fhe_layers/batch_packed_col_major_cpmm.h"
+#include "fhe_layers/batch_dense_packed_layer.h"
 #include "ut_util.h"
 #include <fhe_ops_lib/utils.h>
 #include <cxx_sdk_v2/cxx_fhe_task.h>
@@ -5885,7 +5885,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     }
 }
 
-TEST_CASE("batch_packed_col_major_cpmm/correctness", "[fhe_layers][batch_packed]") {
+TEST_CASE("batch_dense_packed_layer/correctness", "[fhe_layers][batch_dense_packed]") {
     constexpr uint32_t N = 16384;
     constexpr uint32_t batch = 9;
     constexpr uint32_t input_dim = 7;
@@ -5909,14 +5909,14 @@ TEST_CASE("batch_packed_col_major_cpmm/correctness", "[fhe_layers][batch_packed]
     for (uint32_t h = 0; h < output_dim; h++)
         bias.set(h, -0.01 * static_cast<double>(h + 1));
 
-    FeatureMatEncrypted input_enc(&context, level);
-    input_enc.batch_block_col_major_pack(input, block_size, false, param.get_default_scale());
+    Feature0DEncrypted input_enc(&context, level);
+    input_enc.batch_pack(input, block_size, false, param.get_default_scale());
 
-    BatchPackedColMajorCPMM layer(param, Duo{batch, input_dim}, Duo{input_dim, output_dim}, weight, block_size, level,
-                                  bias.copy());
+    BatchDensePackedLayer layer(param, Duo{batch, input_dim}, Duo{input_dim, output_dim}, weight, block_size, level,
+                                bias.copy());
     layer.precompute_diagonals();
     auto output_enc = layer.run(context, input_enc);
-    auto actual = output_enc.batch_block_col_major_unpack(batch, output_dim, block_size);
+    auto actual = output_enc.batch_unpack(batch, output_dim, block_size);
     auto expected = layer.run_plaintext(input);
 
     double max_error = 0.0;
@@ -5931,7 +5931,7 @@ TEST_CASE("batch_packed_col_major_cpmm/correctness", "[fhe_layers][batch_packed]
     REQUIRE(input_enc.data.size() == 2);
 }
 
-TEST_CASE("batch_packed_col_major_cpmm/multiple_groups_and_padding", "[fhe_layers][batch_packed]") {
+TEST_CASE("batch_dense_packed_layer/multiple_groups_and_padding", "[fhe_layers][batch_dense_packed]") {
     constexpr uint32_t N = 16384;
     constexpr uint32_t batch = 2049;
     constexpr uint32_t input_dim = 1024;
@@ -5955,14 +5955,14 @@ TEST_CASE("batch_packed_col_major_cpmm/multiple_groups_and_padding", "[fhe_layer
     for (uint32_t h = 0; h < output_dim; h++)
         bias.set(h, 0.001 * static_cast<double>(h + 1));
 
-    FeatureMatEncrypted input_enc(&context, level);
-    input_enc.batch_block_col_major_pack(input, block_size, false, param.get_default_scale());
+    Feature0DEncrypted input_enc(&context, level);
+    input_enc.batch_pack(input, block_size, false, param.get_default_scale());
 
-    BatchPackedColMajorCPMM layer(param, Duo{batch, input_dim}, Duo{input_dim, output_dim}, weight, block_size, level,
-                                  bias.copy());
+    BatchDensePackedLayer layer(param, Duo{batch, input_dim}, Duo{input_dim, output_dim}, weight, block_size, level,
+                                bias.copy());
     layer.precompute_diagonals();
     auto output_enc = layer.run(context, input_enc);
-    auto actual = output_enc.batch_block_col_major_unpack(batch, output_dim, block_size);
+    auto actual = output_enc.batch_unpack(batch, output_dim, block_size);
     auto expected = layer.run_plaintext(input);
 
     double max_error = 0.0;

@@ -38,6 +38,10 @@ void Feature0DEncrypted::pack(const Array<double, 1>& feature_mg,
     uint32_t n_slots = context->get_parameter().get_n() / 2;
     n_channel = n_in_features;
     skip = skip_in;
+    batch_packed = false;
+    batch_size = 0;
+    batch_feature_dim = 0;
+    batch_block_size = 0;
     n_channel_per_ct = n_slots / skip;
 
     for (int pack_ct_idx = 0; pack_ct_idx < div_ceil(n_in_features, n_channel_per_ct); pack_ct_idx++) {
@@ -59,9 +63,118 @@ void Feature0DEncrypted::pack(const Array<double, 1>& feature_mg,
     }
 }
 
+void Feature0DEncrypted::batch_pack(const Array<double, 2>& matrix, uint32_t d, bool is_symmetric, double scale_in) {
+    uint32_t batch = matrix.get_shape()[0];
+    uint32_t feature_dim = matrix.get_shape()[1];
+    if (batch == 0 || feature_dim == 0)
+        throw invalid_argument("Feature0DEncrypted::batch_pack requires a non-empty matrix");
+
+    uint32_t n_slot = context->get_parameter().get_n() / 2;
+    uint32_t chunk_size = d * d;
+    if (d == 0 || (d & (d - 1)) != 0 || n_slot < chunk_size || n_slot % chunk_size != 0) {
+        throw invalid_argument("Feature0DEncrypted::batch_pack requires power-of-two d and n_slot divisible by d*d");
+    }
+
+    uint32_t num_batch_blocks = div_ceil(batch, d);
+    uint32_t num_feature_blocks = div_ceil(feature_dim, d);
+    uint32_t chunks_per_ct = n_slot / chunk_size;
+    uint32_t batch_ct_groups = div_ceil(num_batch_blocks, chunks_per_ct);
+    uint32_t total_cts = num_feature_blocks * batch_ct_groups;
+
+    vector<vector<double>> packed(total_cts, vector<double>(n_slot, 0.0));
+    for (uint32_t feature_block = 0; feature_block < num_feature_blocks; ++feature_block) {
+        for (uint32_t group = 0; group < batch_ct_groups; ++group) {
+            uint32_t ct_idx = feature_block * batch_ct_groups + group;
+            for (uint32_t chunk = 0; chunk < chunks_per_ct; ++chunk) {
+                uint32_t batch_block = group * chunks_per_ct + chunk;
+                if (batch_block >= num_batch_blocks)
+                    continue;
+
+                uint32_t chunk_base = chunk * chunk_size;
+                for (uint32_t col = 0; col < d; ++col) {
+                    for (uint32_t row = 0; row < d; ++row) {
+                        uint32_t src_row = batch_block * d + row;
+                        uint32_t src_col = feature_block * d + col;
+                        if (src_row < batch && src_col < feature_dim)
+                            packed[ct_idx][chunk_base + row + d * col] = matrix.get(src_row, src_col);
+                    }
+                }
+            }
+        }
+    }
+
+    data.clear();
+    data_compressed.clear();
+    if (is_symmetric)
+        data_compressed.resize(total_cts);
+    else
+        data.resize(total_cts);
+
+    const int n_threads = 4;
+    parallel_for(total_cts, n_threads, *context, [&](CkksContext& ctx_copy, int idx) {
+        auto encoded = ctx_copy.encode(packed[idx], level, scale_in);
+        if (is_symmetric)
+            data_compressed[idx] = ctx_copy.encrypt_symmetric_compressed(encoded);
+        else
+            data[idx] = ctx_copy.encrypt_symmetric(encoded);
+    });
+
+    batch_packed = true;
+    batch_size = batch;
+    batch_feature_dim = feature_dim;
+    batch_block_size = d;
+    n_channel = feature_dim;
+    n_channel_per_ct = d;
+    skip = 1;
+}
+
+Array<double, 2> Feature0DEncrypted::batch_unpack(uint32_t batch, uint32_t feature_dim, uint32_t d) const {
+    uint32_t n_slot = context->get_parameter().get_n() / 2;
+    uint32_t chunk_size = d * d;
+    if (d == 0 || (d & (d - 1)) != 0 || n_slot < chunk_size || n_slot % chunk_size != 0)
+        throw invalid_argument("Feature0DEncrypted::batch_unpack requires power-of-two d and n_slot divisible by d*d");
+    if (!batch_packed || batch_size != batch || batch_feature_dim != feature_dim || batch_block_size != d)
+        throw invalid_argument("Feature0DEncrypted::batch_unpack metadata does not match the requested shape");
+
+    uint32_t num_batch_blocks = div_ceil(batch, d);
+    uint32_t num_feature_blocks = div_ceil(feature_dim, d);
+    uint32_t chunks_per_ct = n_slot / chunk_size;
+    uint32_t batch_ct_groups = div_ceil(num_batch_blocks, chunks_per_ct);
+    uint32_t total_cts = num_feature_blocks * batch_ct_groups;
+    if (data.size() != total_cts)
+        throw invalid_argument("Feature0DEncrypted::batch_unpack ciphertext count does not match shape");
+
+    Array<double, 2> result({static_cast<uint64_t>(batch), static_cast<uint64_t>(feature_dim)});
+    const int n_threads = 4;
+    parallel_for(total_cts, n_threads, *context, [&](CkksContext& ctx_copy, int ct_idx) {
+        auto decoded = ctx_copy.decode(ctx_copy.decrypt(data[ct_idx]));
+        uint32_t feature_block = ct_idx / batch_ct_groups;
+        uint32_t group = ct_idx % batch_ct_groups;
+        for (uint32_t chunk = 0; chunk < chunks_per_ct; ++chunk) {
+            uint32_t batch_block = group * chunks_per_ct + chunk;
+            if (batch_block >= num_batch_blocks)
+                continue;
+            uint32_t chunk_base = chunk * chunk_size;
+            for (uint32_t col = 0; col < d; ++col) {
+                for (uint32_t row = 0; row < d; ++row) {
+                    uint32_t dst_row = batch_block * d + row;
+                    uint32_t dst_col = feature_block * d + col;
+                    if (dst_row < batch && dst_col < feature_dim)
+                        result.set(dst_row, dst_col, decoded[chunk_base + row + d * col]);
+                }
+            }
+        }
+    });
+    return result;
+}
+
 void Feature0DEncrypted::pack_cyclic(const std::vector<double>& feature_mg, bool is_symmetric, double scale_in) {
     uint32_t n_in_features = feature_mg.size();
     uint32_t n_slots = context->get_parameter().get_n() / 2;
+    batch_packed = false;
+    batch_size = 0;
+    batch_feature_dim = 0;
+    batch_block_size = 0;
     n_channel_per_ct = n_slots / skip;
     for (int pack_ct_idx = 0; pack_ct_idx < div_ceil(n_in_features, n_slots); pack_ct_idx++) {
         vector<double> feature_flat;
@@ -89,6 +202,14 @@ Feature0DEncrypted Feature0DEncrypted::refresh_ciphertext() const {
     CkksBtpContext* ctx = dynamic_cast<CkksBtpContext*>(context);
     int new_level = 9;
     Feature0DEncrypted result(ctx, new_level);
+    result.dim = dim;
+    result.n_channel = n_channel;
+    result.n_channel_per_ct = n_channel_per_ct;
+    result.skip = skip;
+    result.batch_packed = batch_packed;
+    result.batch_size = batch_size;
+    result.batch_feature_dim = batch_feature_dim;
+    result.batch_block_size = batch_block_size;
     for (int i = 0; i < data.size(); i++) {
         result.data.push_back(ctx->bootstrap(data[i]));
     }
@@ -118,6 +239,10 @@ Feature0DEncrypted Feature0DEncrypted::drop_level(int n_level_to_drop) const {
     result.n_channel = n_channel;
     result.n_channel_per_ct = n_channel_per_ct;
     result.skip = skip;
+    result.batch_packed = batch_packed;
+    result.batch_size = batch_size;
+    result.batch_feature_dim = batch_feature_dim;
+    result.batch_block_size = batch_block_size;
     result.data.resize(data.size());
     parallel_for(data.size(), th_nums, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         auto ct_tmp = data[ct_idx].copy();
@@ -136,6 +261,10 @@ Feature0DEncrypted Feature0DEncrypted::copy() const {
     result.n_channel = n_channel;
     result.n_channel_per_ct = n_channel_per_ct;
     result.skip = skip;
+    result.batch_packed = batch_packed;
+    result.batch_size = batch_size;
+    result.batch_feature_dim = batch_feature_dim;
+    result.batch_block_size = batch_block_size;
     for (int i = 0; i < data.size(); i++) {
         result.data.push_back(data[i].copy());
     }
@@ -150,6 +279,10 @@ void Feature0DEncrypted::to_share(Feature0DEncrypted* share0, Feature0DShare* sh
     share0->n_channel = n_channel;
     share0->n_channel_per_ct = n_channel_per_ct;
     share0->skip = skip;
+    share0->batch_packed = batch_packed;
+    share0->batch_size = batch_size;
+    share0->batch_feature_dim = batch_feature_dim;
+    share0->batch_block_size = batch_block_size;
     share0->data.clear();
     double share_scale = pow(2, share1->scale_ord);
 
@@ -189,6 +322,14 @@ Bytes Feature0DEncrypted::serialize() const {
         ss_write_vector(ss, cct_data);
     }
 
+    // Appended for backward compatibility with older non-batch Feature0D
+    // serializations, which simply end after the compressed ciphertexts.
+    uint32_t batch_metadata_present = batch_packed ? 1 : 0;
+    ss_write(ss, batch_metadata_present);
+    ss_write(ss, batch_size);
+    ss_write(ss, batch_feature_dim);
+    ss_write(ss, batch_block_size);
+
     Bytes bytes = ss_to_bytes(ss);
     return bytes;
 }
@@ -218,6 +359,16 @@ void Feature0DEncrypted::deserialize(const Bytes& bytes) {
         ss_read_vector(ss, &cct_data);
         auto y_ct = CkksCompressedCiphertext::deserialize(cct_data);
         data_compressed.push_back(move(y_ct));
+    }
+
+    // Older serialized Feature0D values have no trailing batch metadata.
+    if (ss.peek() != EOF) {
+        uint32_t batch_metadata_present = 0;
+        ss_read(ss, &batch_metadata_present);
+        ss_read(ss, &batch_size);
+        ss_read(ss, &batch_feature_dim);
+        ss_read(ss, &batch_block_size);
+        batch_packed = batch_metadata_present != 0;
     }
 }
 

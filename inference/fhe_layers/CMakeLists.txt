@@ -34,7 +34,7 @@ add_library(fhe_layers
   par_block_col_major_add_pt.cpp
   par_lower_diagonal_add_pt.cpp
   block_col_major_layernorm.cpp
-  batch_packed_col_major_cpmm.cpp
+  batch_dense_packed_layer.cpp
   par_block_col_major_layernorm.cpp
   par_upper_diagonal_layernorm.cpp
   block_col_major_polyactrn.cpp

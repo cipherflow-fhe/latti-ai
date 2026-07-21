@@ -4,7 +4,7 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  */
 
-#include "batch_packed_col_major_cpmm.h"
+#include "batch_dense_packed_layer.h"
 #include "layer_util.h"
 
 #include <algorithm>
@@ -15,22 +15,22 @@
 using namespace std;
 using namespace lattisense;
 
-BatchPackedColMajorCPMM::BatchPackedColMajorCPMM(const CkksParameter& param_in,
-                                                 const Duo& shape_A,
-                                                 const Duo& shape_P,
-                                                 const Array<double, 2>& P_mat_in,
-                                                 uint32_t block_size,
-                                                 uint32_t level_A,
-                                                 Array<double, 1>&& bias)
+BatchDensePackedLayer::BatchDensePackedLayer(const CkksParameter& param_in,
+                                             const Duo& shape_A,
+                                             const Duo& shape_P,
+                                             const Array<double, 2>& P_mat_in,
+                                             uint32_t block_size,
+                                             uint32_t level_A,
+                                             Array<double, 1>&& bias)
     : Layer(param_in), P_mat_(P_mat_in.copy()), bias_(move(bias)) {
     if (shape_A[0] == 0 || shape_A[1] == 0 || shape_P[0] == 0 || shape_P[1] == 0)
-        throw invalid_argument("BatchPackedColMajorCPMM dimensions must be non-zero");
+        throw invalid_argument("BatchDensePackedLayer dimensions must be non-zero");
     if (shape_A[1] != shape_P[0])
-        throw invalid_argument("BatchPackedColMajorCPMM inner dimensions do not match");
+        throw invalid_argument("BatchDensePackedLayer inner dimensions do not match");
     if (P_mat_in.get_shape()[0] != shape_P[0] || P_mat_in.get_shape()[1] != shape_P[1])
-        throw invalid_argument("BatchPackedColMajorCPMM weight shape does not match shape_P");
+        throw invalid_argument("BatchDensePackedLayer weight shape does not match shape_P");
     if (block_size == 0 || (block_size & (block_size - 1)) != 0)
-        throw invalid_argument("BatchPackedColMajorCPMM block_size must be a power of two");
+        throw invalid_argument("BatchDensePackedLayer block_size must be a power of two");
 
     batch_size_ = shape_A[0];
     input_dim_ = shape_A[1];
@@ -41,7 +41,7 @@ BatchPackedColMajorCPMM::BatchPackedColMajorCPMM(const CkksParameter& param_in,
     n_slot_ = param_.get_n() / 2;
     chunk_size_ = block_size_ * block_size_;
     if (n_slot_ < chunk_size_ || n_slot_ % chunk_size_ != 0)
-        throw invalid_argument("BatchPackedColMajorCPMM requires n_slot divisible by block_size^2");
+        throw invalid_argument("BatchDensePackedLayer requires n_slot divisible by block_size^2");
 
     chunks_per_ct_ = n_slot_ / chunk_size_;
     n_batch_blocks_ = div_ceil(batch_size_, block_size_);
@@ -61,17 +61,17 @@ BatchPackedColMajorCPMM::BatchPackedColMajorCPMM(const CkksParameter& param_in,
 
     if (bias_.get_size() > 0) {
         if (bias_.get_size() != output_dim_)
-            throw invalid_argument("BatchPackedColMajorCPMM bias shape does not match output dimension");
+            throw invalid_argument("BatchDensePackedLayer bias shape does not match output dimension");
         has_bias_ = true;
     }
 }
 
-int BatchPackedColMajorCPMM::get_block_index(uint32_t block_col, uint32_t group, uint32_t groups_per_col) {
+int BatchDensePackedLayer::get_block_index(uint32_t block_col, uint32_t group, uint32_t groups_per_col) {
     return static_cast<int>(block_col * groups_per_col + group);
 }
 
 vector<double>
-BatchPackedColMajorCPMM::build_diagonal(uint32_t input_block, uint32_t output_block, uint32_t k, bool wrapping) const {
+BatchDensePackedLayer::build_diagonal(uint32_t input_block, uint32_t output_block, uint32_t k, bool wrapping) const {
     vector<double> result(n_slot_, 0.0);
     uint32_t rotation = k * block_size_;
     uint32_t wrap_begin = chunk_size_ - rotation;
@@ -96,7 +96,7 @@ BatchPackedColMajorCPMM::build_diagonal(uint32_t input_block, uint32_t output_bl
     return result;
 }
 
-vector<double> BatchPackedColMajorCPMM::build_bias(uint32_t output_block, uint32_t group) const {
+vector<double> BatchDensePackedLayer::build_bias(uint32_t output_block, uint32_t group) const {
     vector<double> result(n_slot_, 0.0);
     if (!has_bias_)
         return result;
@@ -117,7 +117,7 @@ vector<double> BatchPackedColMajorCPMM::build_bias(uint32_t output_block, uint32
     return result;
 }
 
-vector<double> BatchPackedColMajorCPMM::shift_plaintext_right(const vector<double>& values, uint32_t rotation) const {
+vector<double> BatchDensePackedLayer::shift_plaintext_right(const vector<double>& values, uint32_t rotation) const {
     vector<double> shifted(values.size(), 0.0);
     if (values.empty())
         return shifted;
@@ -129,7 +129,7 @@ vector<double> BatchPackedColMajorCPMM::shift_plaintext_right(const vector<doubl
     return shifted;
 }
 
-void BatchPackedColMajorCPMM::precompute_diagonals() {
+void BatchDensePackedLayer::precompute_diagonals() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
     if (has_bias_) {
         bias_pt_.resize(n_output_blocks_ * batch_ct_groups_);
@@ -145,14 +145,14 @@ void BatchPackedColMajorCPMM::precompute_diagonals() {
     diagonals_prepared_ = true;
 }
 
-CkksCiphertext BatchPackedColMajorCPMM::block_matmul(CkksContext& ctx,
-                                                     const RotatedInput& rotations,
-                                                     const vector<CkksPlaintextMul>& diagonal_now,
-                                                     const vector<CkksPlaintextMul>& diagonal_wrap) const {
+CkksCiphertext BatchDensePackedLayer::block_matmul(CkksContext& ctx,
+                                                   const RotatedInput& rotations,
+                                                   const vector<CkksPlaintextMul>& diagonal_now,
+                                                   const vector<CkksPlaintextMul>& diagonal_wrap) const {
     if (diagonal_now.size() != block_size_ || diagonal_wrap.size() != block_size_)
-        throw runtime_error("BatchPackedColMajorCPMM diagonal count mismatch");
+        throw runtime_error("BatchDensePackedLayer diagonal count mismatch");
     if (rotations.baby_now.size() != bsgs_baby_step_ || rotations.baby_wrap.size() != bsgs_baby_step_)
-        throw runtime_error("BatchPackedColMajorCPMM rotation count mismatch");
+        throw runtime_error("BatchDensePackedLayer rotation count mismatch");
 
     CkksCiphertext result(0);
     bool initialized = false;
@@ -208,8 +208,8 @@ CkksCiphertext BatchPackedColMajorCPMM::block_matmul(CkksContext& ctx,
     return ctx.rescale(result, ctx.get_parameter().get_default_scale());
 }
 
-BatchPackedColMajorCPMM::RotatedInput
-BatchPackedColMajorCPMM::precompute_input_rotations(CkksContext& ctx, const CkksCiphertext& input) const {
+BatchDensePackedLayer::RotatedInput
+BatchDensePackedLayer::precompute_input_rotations(CkksContext& ctx, const CkksCiphertext& input) const {
     RotatedInput result;
     // The same rotations are used by every output block. Keep them local to
     // one batch group so memory remains bounded by O(bsgs_baby_step_).
@@ -228,11 +228,11 @@ BatchPackedColMajorCPMM::precompute_input_rotations(CkksContext& ctx, const Ckks
     return result;
 }
 
-void BatchPackedColMajorCPMM::encode_diagonals(CkksContext& ctx,
-                                               uint32_t input_block,
-                                               uint32_t output_block,
-                                               vector<CkksPlaintextMul>& diagonal_now,
-                                               vector<CkksPlaintextMul>& diagonal_wrap) const {
+void BatchDensePackedLayer::encode_diagonals(CkksContext& ctx,
+                                             uint32_t input_block,
+                                             uint32_t output_block,
+                                             vector<CkksPlaintextMul>& diagonal_now,
+                                             vector<CkksPlaintextMul>& diagonal_wrap) const {
     double diagonal_scale = param_.get_q(level_);
     diagonal_now.clear();
     diagonal_wrap.clear();
@@ -250,22 +250,26 @@ void BatchPackedColMajorCPMM::encode_diagonals(CkksContext& ctx,
     }
 }
 
-FeatureMatEncrypted BatchPackedColMajorCPMM::run(CkksContext& ctx, const FeatureMatEncrypted& A) {
+Feature0DEncrypted BatchDensePackedLayer::run(CkksContext& ctx, const Feature0DEncrypted& A) {
     uint32_t expected_input_cts = n_input_blocks_ * batch_ct_groups_;
-    if (!A.data_compress.empty())
-        throw invalid_argument("BatchPackedColMajorCPMM requires decompressed input ciphertexts");
+    if (!A.data_compressed.empty())
+        throw invalid_argument("BatchDensePackedLayer requires decompressed input ciphertexts");
     if (!diagonals_prepared_)
-        throw runtime_error("BatchPackedColMajorCPMM::precompute_diagonals() was not called");
-    if (A.level != level_ || A.shape[0] != batch_size_ || A.shape[1] != input_dim_ ||
-        A.data.size() != expected_input_cts) {
-        throw invalid_argument("BatchPackedColMajorCPMM input shape or ciphertext layout mismatch");
+        throw runtime_error("BatchDensePackedLayer::precompute_diagonals() was not called");
+    if (A.level != level_ || !A.batch_packed || A.batch_size != batch_size_ || A.batch_feature_dim != input_dim_ ||
+        A.batch_block_size != block_size_ || A.data.size() != expected_input_cts) {
+        throw invalid_argument("BatchDensePackedLayer input shape or ciphertext layout mismatch");
     }
 
-    FeatureMatEncrypted result(&ctx, A.level - 1);
-    result.shape = {batch_size_, output_dim_};
-    result.head_shape = result.shape;
-    result.matmul_block_size = block_size_;
+    Feature0DEncrypted result(&ctx, A.level - 1);
     result.data.resize(n_output_blocks_ * batch_ct_groups_);
+    result.batch_packed = true;
+    result.batch_size = batch_size_;
+    result.batch_feature_dim = output_dim_;
+    result.batch_block_size = block_size_;
+    result.n_channel = output_dim_;
+    result.n_channel_per_ct = block_size_;
+    result.skip = 1;
 
     CkksContext diagonal_context = CkksContext::create_empty_context(param_);
     for (uint32_t input_block = 0; input_block < n_input_blocks_; input_block++) {
@@ -318,9 +322,9 @@ FeatureMatEncrypted BatchPackedColMajorCPMM::run(CkksContext& ctx, const Feature
     return result;
 }
 
-Array<double, 2> BatchPackedColMajorCPMM::run_plaintext(const Array<double, 2>& A) const {
+Array<double, 2> BatchDensePackedLayer::run_plaintext(const Array<double, 2>& A) const {
     if (A.get_shape()[0] != batch_size_ || A.get_shape()[1] != input_dim_)
-        throw invalid_argument("BatchPackedColMajorCPMM plaintext input shape mismatch");
+        throw invalid_argument("BatchDensePackedLayer plaintext input shape mismatch");
 
     Array<double, 2> result({static_cast<uint64_t>(batch_size_), static_cast<uint64_t>(output_dim_)});
     for (uint32_t batch = 0; batch < batch_size_; batch++) {
