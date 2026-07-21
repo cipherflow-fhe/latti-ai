@@ -171,6 +171,25 @@ private:
     SharedHeteroResources& operator=(const SharedHeteroResources&) = delete;
 };
 
+struct UpperDiagonalHeteroResources {
+    static UpperDiagonalHeteroResources& get() {
+        static UpperDiagonalHeteroResources instance;
+        return instance;
+    }
+    const int N = 8192;
+    const int n_slot = N / 2;
+    CkksParameter param;
+    CkksContext context;
+
+private:
+    UpperDiagonalHeteroResources()
+        : param(CkksParameter::create_parameter(N)), context(CkksContext::create_random_context(param)) {
+        context.gen_rotation_keys();
+    }
+    UpperDiagonalHeteroResources(const UpperDiagonalHeteroResources&) = delete;
+    UpperDiagonalHeteroResources& operator=(const UpperDiagonalHeteroResources&) = delete;
+};
+
 template <typename T> class HeteroFixture {
 public:
     HeteroFixture()
@@ -232,6 +251,7 @@ using HeteroProcessors = tuple<ProcessorCpu, ProcessorGpu>;
 #else
 using HeteroProcessors = tuple<ProcessorCpu>;
 #endif
+using UpperDiagonalGraphProcessors = tuple<ProcessorCpu>;
 
 #define FOR_EACH_SECTION(var_decl, range, section_name)                                                                \
     for (var_decl : range)                                                                                             \
@@ -3355,6 +3375,9 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
         const auto& attrs = self.custom_prop->attributes;
         const std::string op_class = attrs.at("op_class").get<std::string>();
         const std::string type = attrs.at("type").get<std::string>();
+        auto attr_u32 = [&](const std::string& key, uint32_t fallback) -> uint32_t {
+            return attrs.contains(key) ? attrs.at(key).get<uint32_t>() : fallback;
+        };
 
         NodeIndex in_idx = self.input_nodes[0]->index;
         auto cd_ptr = std::any_cast<std::shared_ptr<CustomData>>(inputs.at(in_idx));
@@ -3433,11 +3456,475 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
                 return layer->generate_pt(*ctx_ptr, attrs.value("pt_idx", 0), attrs.value("bi", 0),
                                           attrs.value("bj", 0), attrs.value("g", 0));
             }
+            if (op_class == "ParUpperDiagonalPoly") {
+                auto* layer = static_cast<ParUpperDiagonalPoly*>(layer_ptr);
+                if (type == "stockmeyer_coeff_pt")
+                    return layer->generate_weight_pt_for_stockmeyer(*ctx_ptr, attrs.value("coeff_idx", 0),
+                                                                    attrs.value("ct_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalPoly: " + type);
+            }
+            if (op_class == "ParUpperDiagonalPolyMultCt") {
+                auto* layer = static_cast<ParUpperDiagonalPolyMultCt*>(layer_ptr);
+                uint32_t mb = attr_u32("mb", 0);
+                uint32_t ct_local = attr_u32("ct_local", attr_u32("ct_idx", 0));
+                uint32_t g = attr_u32("g", 0);
+                if (type == "one_pt")
+                    return layer->generate_one_pt(*ctx_ptr, mb, ct_local, g);
+                if (type == "half_pt")
+                    return layer->generate_half_pt(*ctx_ptr, mb, ct_local, g);
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalPolyMultCt: " + type);
+            }
+            if (op_class == "ParUpperDiagonalAddPt") {
+                auto* layer = static_cast<ParUpperDiagonalAddPt*>(layer_ptr);
+                if (type == "pt")
+                    return layer->generate_pt(*ctx_ptr, attr_u32("ct_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalAddPt: " + type);
+            }
+            if (op_class == "ParUpperDiagonalMultipleSquare") {
+                auto* layer = static_cast<ParUpperDiagonalMultipleSquare*>(layer_ptr);
+                if (type == "mask_pt")
+                    return layer->generate_mask_pt(*ctx_ptr, attr_u32("ct_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalMultipleSquare: " + type);
+            }
+            if (op_class == "ParUpperDiagonalHeadColSum") {
+                auto* layer = static_cast<ParUpperDiagonalHeadColSum*>(layer_ptr);
+                if (type == "mask_pt")
+                    return layer->generate_mask_pt(*ctx_ptr, attr_u32("ct_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalHeadColSum: " + type);
+            }
+            if (op_class == "ParUpperDiagonalInverseInit") {
+                auto* layer = static_cast<ParUpperDiagonalInverseInit*>(layer_ptr);
+                if (type == "two_pt")
+                    return layer->generate_two_pt(*ctx_ptr, attr_u32("ct_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalInverseInit: " + type);
+            }
+            if (op_class == "ParUpperDiagonalInverseIter") {
+                auto* layer = static_cast<ParUpperDiagonalInverseIter*>(layer_ptr);
+                uint32_t ct_idx = attr_u32("ct_idx", 0);
+                if (type == "one_pt")
+                    return layer->generate_one_pt(*ctx_ptr, ct_idx);
+                if (type == "two_pt")
+                    return layer->generate_two_pt(*ctx_ptr, ct_idx);
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalInverseIter: " + type);
+            }
+            if (op_class == "ParUpperDiagonalGELU") {
+                auto* layer = static_cast<ParUpperDiagonalGELU*>(layer_ptr);
+                if (type == "mask_pt")
+                    return layer->generate_mask_pt(*ctx_ptr, attr_u32("ct_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalGELU: " + type);
+            }
             throw std::runtime_error("encode_pt: unknown op_class: " + op_class);
         }();
 
         output = std::make_shared<CkksPlaintextRingt>(std::move(pt));
     };
+}
+
+template <typename ProcessorT>
+static void run_generated_encode_pt_task(FheContext* context,
+                                         const fs::path& server_dir,
+                                         const vector<CxxVectorArgument>& cxx_args) {
+    std::unordered_map<std::string, ExecutorFunc> executors;
+    executors["encode_pt"] = make_block_col_major_encode_pt_executor();
+
+    if constexpr (is_same_v<ProcessorT, ProcessorCpu>) {
+        FheTaskCpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        task.run(context, cxx_args);
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    } else if constexpr (is_same_v<ProcessorT, ProcessorGpu>) {
+        FheTaskGpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        task.run(context, cxx_args);
+#endif
+    }
+}
+
+static void require_upper_diagonal_close(CkksContext& context,
+                                         int output_level,
+                                         const vector<CkksCiphertext>& out_cts,
+                                         const Array<double, 2>& expected,
+                                         Duo shape,
+                                         Duo head_shape,
+                                         uint32_t n_heads,
+                                         const string& label) {
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(context, output_level, out_cts, shape, head_shape, n_heads, false, false);
+    print_double_message(actual.to_array_1d().data(), (label + "_actual").c_str(), 10);
+    print_double_message(expected.to_array_1d().data(), (label + "_expected").c_str(), 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(label, comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_poly_stockmeyer_hetero",
+                               "[fhe_layers][par_upper_diagonal_poly][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64;
+    const uint32_t n_heads = 2;
+    const uint32_t m_prepad = 64;
+    const uint32_t total_cols = n_heads * m_prepad;
+    const uint32_t order = 7;
+    const int init_level = 4;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+
+    fs::path server_dir = base_path / "CKKS_par_upper_diagonal_poly" / "stockmeyer" / ("order_" + to_string(order)) /
+                          ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto X = gen_random_array<2>({n_prepad, total_cols}, 0.35);
+    auto coeffs = gen_random_array<2>({static_cast<uint64_t>(order) + 1, static_cast<uint64_t>(total_cols)}, 0.08);
+
+    auto layer =
+        std::make_shared<ParUpperDiagonalPoly>(param, shape, head_shape, n_heads, init_level, coeffs.copy(), order);
+    layer->prepare_weight_stockmeyer_lazy();
+    Array<double, 2> expected = layer->run_plaintext(X);
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+
+    const int output_level = init_level - MatPolyBase::compute_stockmeyer_level_cost(static_cast<int>(order));
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_upper_poly_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, output_level, out_cts, expected, shape, head_shape, n_heads,
+                                 "upper_poly_stockmeyer");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_poly_mult_ct_hetero",
+                               "[fhe_layers][par_upper_diagonal_poly_mult_ct][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64;
+    const uint32_t n_heads = 2;
+    const uint32_t m_prepad = 64;
+    const uint32_t total_cols = n_heads * m_prepad;
+    const int init_level = 2;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+
+    fs::path server_dir =
+        base_path / "CKKS_par_upper_diagonal_poly_mult_ct" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto half_tanh = gen_random_array<2>({n_prepad, total_cols}, 0.25);
+    auto X = gen_random_array<2>({n_prepad, total_cols}, 0.35);
+
+    auto layer = std::make_shared<ParUpperDiagonalPolyMultCt>(param, shape, head_shape, n_heads, init_level);
+    Array<double, 2> expected = layer->run_plaintext(half_tanh, X);
+
+    FeatureMatEncrypted half_tanh_enc(&context, init_level);
+    FeatureMatEncrypted X_enc(&context, init_level);
+    half_tanh_enc.par_diagonal_pack(half_tanh, n_heads, head_shape, false, false, false, param.get_default_scale());
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+
+    vector<CkksCiphertext> half_tanh_cts, x_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : half_tanh_enc.data)
+        half_tanh_cts.push_back(ct.copy());
+    for (auto& ct : X_enc.data)
+        x_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+
+    const int output_level = init_level - 2;
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"half_tanh_input", &half_tanh_cts},
+        {"x_input", &x_cts},
+        {"_poly_mult_ct_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, output_level, out_cts, expected, shape, head_shape, n_heads,
+                                 "upper_poly_mult_ct");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_add_pt_hetero",
+                               "[fhe_layers][par_upper_diagonal_softmax][add_pt][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64, n_heads = 2, m_prepad = 64, total_cols = n_heads * m_prepad;
+    const int init_level = 1;
+    const double value = -0.125;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+    fs::path server_dir =
+        base_path / "CKKS_par_upper_diagonal_softmax" / "add_pt" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto X = gen_random_array<2>({n_prepad, total_cols}, 0.5);
+    auto layer = std::make_shared<ParUpperDiagonalAddPt>(param, shape, head_shape, n_heads, init_level, value);
+    Array<double, 2> expected = layer->run_plaintext(X);
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(init_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_upper_add_pt_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, init_level, out_cts, expected, shape, head_shape, n_heads, "upper_add_pt");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_multiple_square_hetero",
+                               "[fhe_layers][par_upper_diagonal_softmax][multiple_square][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64, n_heads = 2, m_prepad = 64, total_cols = n_heads * m_prepad;
+    const int init_level = 2;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+    fs::path server_dir = base_path / "CKKS_par_upper_diagonal_softmax" / "multiple_square" /
+                          ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto X = gen_random_array<2>({n_prepad, total_cols}, 0.35);
+    auto layer = std::make_shared<ParUpperDiagonalMultipleSquare>(param, shape, head_shape, n_heads, init_level);
+    Array<double, 2> expected = layer->run_plaintext(X);
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+    const int output_level = init_level - 2;
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_upper_multiple_square_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, output_level, out_cts, expected, shape, head_shape, n_heads,
+                                 "upper_multiple_square");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_head_col_sum_hetero",
+                               "[fhe_layers][par_upper_diagonal_softmax][head_col_sum][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64, n_heads = 2, m_prepad = 64, total_cols = n_heads * m_prepad;
+    const int init_level = 1;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+    fs::path server_dir =
+        base_path / "CKKS_par_upper_diagonal_softmax" / "head_col_sum" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto X = gen_random_array<2>({n_prepad, total_cols}, 0.2);
+    auto layer = std::make_shared<ParUpperDiagonalHeadColSum>(param, shape, head_shape, n_heads, init_level);
+    Array<double, 2> expected = layer->run_plaintext(X);
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+    const int output_level = init_level - 1;
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_upper_head_col_sum_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, output_level, out_cts, expected, shape, head_shape, n_heads,
+                                 "upper_head_col_sum");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_inverse_init_hetero",
+                               "[fhe_layers][par_upper_diagonal_softmax][inverse_init][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64, n_heads = 2, m_prepad = 64, total_cols = n_heads * m_prepad;
+    const int init_level = 1;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+    fs::path server_dir =
+        base_path / "CKKS_par_upper_diagonal_softmax" / "inverse_init" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto B = gen_random_array<2>({n_prepad, total_cols}, 0.35);
+    auto layer = std::make_shared<ParUpperDiagonalInverseInit>(param, shape, head_shape, n_heads, init_level);
+    Array<double, 2> expected = layer->run_plaintext(B);
+
+    FeatureMatEncrypted B_enc(&context, init_level);
+    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, false, param.get_default_scale());
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : B_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(init_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_upper_inverse_init_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, init_level, out_cts, expected, shape, head_shape, n_heads,
+                                 "upper_inverse_init");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_inverse_iter_hetero",
+                               "[fhe_layers][par_upper_diagonal_softmax][inverse_iter][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64, n_heads = 2, m_prepad = 64, total_cols = n_heads * m_prepad;
+    const int init_level = 2;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+    fs::path server_dir =
+        base_path / "CKKS_par_upper_diagonal_softmax" / "inverse_iter" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto A = gen_random_array<2>({n_prepad, total_cols}, 0.25);
+    auto B = gen_random_array<2>({n_prepad, total_cols}, 0.2);
+    auto layer = std::make_shared<ParUpperDiagonalInverseIter>(param, shape, head_shape, n_heads, init_level);
+    Array<double, 2> expected = layer->run_plaintext(A, B);
+
+    FeatureMatEncrypted A_enc(&context, init_level);
+    FeatureMatEncrypted B_enc(&context, init_level);
+    A_enc.par_diagonal_pack(A, n_heads, head_shape, false, false, false, param.get_default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, false, param.get_default_scale());
+    vector<CkksCiphertext> a_cts, b_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : A_enc.data)
+        a_cts.push_back(ct.copy());
+    for (auto& ct : B_enc.data)
+        b_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+    const int output_level = init_level - 2;
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"a_input", &a_cts},
+        {"b_input", &b_cts},
+        {"_upper_inverse_iter_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, output_level, out_cts, expected, shape, head_shape, n_heads,
+                                 "upper_inverse_iter");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_gelu_hetero",
+                               "[fhe_layers][par_upper_diagonal_softmax][gelu][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64, n_heads = 2, m_prepad = 64, total_cols = n_heads * m_prepad;
+    const int init_level = 2;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+    fs::path server_dir =
+        base_path / "CKKS_par_upper_diagonal_softmax" / "gelu" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto A = gen_random_array<2>({n_prepad, total_cols}, 0.3);
+    auto B = gen_random_array<2>({n_prepad, total_cols}, 0.25);
+    auto layer = std::make_shared<ParUpperDiagonalGELU>(param, shape, head_shape, n_heads, init_level);
+    Array<double, 2> expected = layer->run_plaintext(A, B);
+
+    FeatureMatEncrypted A_enc(&context, init_level);
+    FeatureMatEncrypted B_enc(&context, init_level);
+    A_enc.par_diagonal_pack(A, n_heads, head_shape, false, false, false, param.get_default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, false, param.get_default_scale());
+    vector<CkksCiphertext> a_cts, b_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : A_enc.data)
+        a_cts.push_back(ct.copy());
+    for (auto& ct : B_enc.data)
+        b_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+    const int output_level = init_level - 2;
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"a_input", &a_cts},
+        {"b_input", &b_cts},
+        {"_upper_gelu_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, output_level, out_cts, expected, shape, head_shape, n_heads, "upper_gelu");
 }
 
 template <typename T>
