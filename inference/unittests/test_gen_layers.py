@@ -62,6 +62,16 @@ from inference.model_generator.layers.par_upper_diagonal_polyact import (  # noq
     ParUpperDiagonalPolyActRNGamma,
     ParUpperDiagonalPolyActRNPoly,
 )
+from inference.model_generator.layers.par_upper_diagonal_poly import ParUpperDiagonalPoly  # noqa: E402
+from inference.model_generator.layers.par_upper_diagonal_poly_mult_ct import ParUpperDiagonalPolyMultCt  # noqa: E402
+from inference.model_generator.layers.par_upper_diagonal_softmax import (  # noqa: E402
+    ParUpperDiagonalAddPt,
+    ParUpperDiagonalGELU,
+    ParUpperDiagonalHeadColSum,
+    ParUpperDiagonalInverseInit,
+    ParUpperDiagonalInverseIter,
+    ParUpperDiagonalMultipleSquare,
+)
 from training.model_export.onnx_to_json import *  # noqa: E402
 
 
@@ -2130,6 +2140,187 @@ class TestLayerExport(unittest.TestCase):
             / 'poly'
             / f'degree_{degree}'
             / f'level_{poly_level}'
+            / 'server',
+            fpga_acc=False,
+        )
+
+    def test_par_upper_diagonal_poly_stockmeyer(self):
+        """ParUpperDiagonalPoly generated DAG for the default Stockmeyer path."""
+        set_param('PN13QP218')
+        N_SLOT = 8192 // 2
+        n_prepad, n_heads, m_prepad = 64, 2, 64
+        total_cols = n_heads * m_prepad
+        shape = (n_prepad, total_cols)
+        head_shape = (n_prepad, m_prepad)
+        order, level = 7, 4
+
+        poly = ParUpperDiagonalPoly(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT, order=order)
+        input_cts = [CkksCiphertextNode(f'upper_poly_input_{k}', level=level) for k in range(poly.total_cts)]
+        data_source = CustomDataNode(type='upper_poly_data_source', id='_upper_poly_layer')
+        output_cts = poly.call_custom_compute(input_cts, data_source)
+
+        process_custom_task(
+            input_args=[
+                Argument('input', input_cts),
+                Argument('_upper_poly_layer', [data_source]),
+            ],
+            output_args=[Argument('output', output_cts)],
+            output_instruction_path=base_path
+            / 'CKKS_par_upper_diagonal_poly'
+            / 'stockmeyer'
+            / f'order_{order}'
+            / f'level_{level}'
+            / 'server',
+            fpga_acc=False,
+        )
+
+    def test_par_upper_diagonal_poly_mult_ct(self):
+        """ParUpperDiagonalPolyMultCt generated DAG."""
+        set_param('PN13QP218')
+        N_SLOT = 8192 // 2
+        n_prepad, n_heads, m_prepad = 64, 2, 64
+        total_cols = n_heads * m_prepad
+        shape = (n_prepad, total_cols)
+        head_shape = (n_prepad, m_prepad)
+        level = 2
+
+        layer = ParUpperDiagonalPolyMultCt(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
+        half_tanh_cts = [CkksCiphertextNode(f'poly_mult_half_tanh_{k}', level=level) for k in range(layer.total_cts)]
+        x_cts = [CkksCiphertextNode(f'poly_mult_x_{k}', level=level) for k in range(layer.total_cts)]
+        data_source = CustomDataNode(type='poly_mult_ct_data_source', id='_poly_mult_ct_layer')
+        output_cts = layer.call_custom_compute(half_tanh_cts, x_cts, data_source)
+
+        process_custom_task(
+            input_args=[
+                Argument('half_tanh_input', half_tanh_cts),
+                Argument('x_input', x_cts),
+                Argument('_poly_mult_ct_layer', [data_source]),
+            ],
+            output_args=[Argument('output', output_cts)],
+            output_instruction_path=base_path / 'CKKS_par_upper_diagonal_poly_mult_ct' / f'level_{level}' / 'server',
+            fpga_acc=False,
+        )
+
+    def test_par_upper_diagonal_softmax_helpers(self):
+        """ParUpperDiagonal softmax helper generated DAGs, one graph per helper class."""
+        set_param('PN13QP218')
+        N_SLOT = 8192 // 2
+        n_prepad, n_heads, m_prepad = 64, 2, 64
+        total_cols = n_heads * m_prepad
+        shape = (n_prepad, total_cols)
+        head_shape = (n_prepad, m_prepad)
+
+        add_level = 1
+        add_layer = ParUpperDiagonalAddPt(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
+        input_cts = [CkksCiphertextNode(f'upper_add_input_{k}', level=add_level) for k in range(add_layer.total_cts)]
+        data_source = CustomDataNode(type='upper_add_pt_data_source', id='_upper_add_pt_layer')
+        output_cts = add_layer.call_custom_compute(input_cts, data_source)
+        process_custom_task(
+            input_args=[Argument('input', input_cts), Argument('_upper_add_pt_layer', [data_source])],
+            output_args=[Argument('output', output_cts)],
+            output_instruction_path=base_path
+            / 'CKKS_par_upper_diagonal_softmax'
+            / 'add_pt'
+            / f'level_{add_level}'
+            / 'server',
+            fpga_acc=False,
+        )
+
+        square_level = 2
+        square_layer = ParUpperDiagonalMultipleSquare(
+            shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT
+        )
+        input_cts = [
+            CkksCiphertextNode(f'upper_multiple_square_input_{k}', level=square_level)
+            for k in range(square_layer.total_cts)
+        ]
+        data_source = CustomDataNode(type='upper_multiple_square_data_source', id='_upper_multiple_square_layer')
+        output_cts = square_layer.call_custom_compute(input_cts, data_source)
+        process_custom_task(
+            input_args=[Argument('input', input_cts), Argument('_upper_multiple_square_layer', [data_source])],
+            output_args=[Argument('output', output_cts)],
+            output_instruction_path=base_path
+            / 'CKKS_par_upper_diagonal_softmax'
+            / 'multiple_square'
+            / f'level_{square_level}'
+            / 'server',
+            fpga_acc=False,
+        )
+
+        sum_level = 1
+        sum_layer = ParUpperDiagonalHeadColSum(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
+        input_cts = [
+            CkksCiphertextNode(f'upper_head_col_sum_input_{k}', level=sum_level) for k in range(sum_layer.total_cts)
+        ]
+        data_source = CustomDataNode(type='upper_head_col_sum_data_source', id='_upper_head_col_sum_layer')
+        output_cts = sum_layer.call_custom_compute(input_cts, data_source)
+        process_custom_task(
+            input_args=[Argument('input', input_cts), Argument('_upper_head_col_sum_layer', [data_source])],
+            output_args=[Argument('output', output_cts)],
+            output_instruction_path=base_path
+            / 'CKKS_par_upper_diagonal_softmax'
+            / 'head_col_sum'
+            / f'level_{sum_level}'
+            / 'server',
+            fpga_acc=False,
+        )
+
+        init_level = 1
+        init_layer = ParUpperDiagonalInverseInit(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
+        input_cts = [
+            CkksCiphertextNode(f'upper_inverse_init_input_{k}', level=init_level) for k in range(init_layer.total_cts)
+        ]
+        data_source = CustomDataNode(type='upper_inverse_init_data_source', id='_upper_inverse_init_layer')
+        output_cts = init_layer.call_custom_compute(input_cts, data_source)
+        process_custom_task(
+            input_args=[Argument('input', input_cts), Argument('_upper_inverse_init_layer', [data_source])],
+            output_args=[Argument('output', output_cts)],
+            output_instruction_path=base_path
+            / 'CKKS_par_upper_diagonal_softmax'
+            / 'inverse_init'
+            / f'level_{init_level}'
+            / 'server',
+            fpga_acc=False,
+        )
+
+        iter_level = 2
+        iter_layer = ParUpperDiagonalInverseIter(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
+        a_cts = [CkksCiphertextNode(f'upper_inverse_iter_a_{k}', level=iter_level) for k in range(iter_layer.total_cts)]
+        b_cts = [CkksCiphertextNode(f'upper_inverse_iter_b_{k}', level=iter_level) for k in range(iter_layer.total_cts)]
+        data_source = CustomDataNode(type='upper_inverse_iter_data_source', id='_upper_inverse_iter_layer')
+        output_cts = iter_layer.call_custom_compute(a_cts, b_cts, data_source)
+        process_custom_task(
+            input_args=[
+                Argument('a_input', a_cts),
+                Argument('b_input', b_cts),
+                Argument('_upper_inverse_iter_layer', [data_source]),
+            ],
+            output_args=[Argument('output', output_cts)],
+            output_instruction_path=base_path
+            / 'CKKS_par_upper_diagonal_softmax'
+            / 'inverse_iter'
+            / f'level_{iter_level}'
+            / 'server',
+            fpga_acc=False,
+        )
+
+        gelu_level = 2
+        gelu_layer = ParUpperDiagonalGELU(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
+        a_cts = [CkksCiphertextNode(f'upper_gelu_a_{k}', level=gelu_level) for k in range(gelu_layer.total_cts)]
+        b_cts = [CkksCiphertextNode(f'upper_gelu_b_{k}', level=gelu_level) for k in range(gelu_layer.total_cts)]
+        data_source = CustomDataNode(type='upper_gelu_data_source', id='_upper_gelu_layer')
+        output_cts = gelu_layer.call_custom_compute(a_cts, b_cts, data_source)
+        process_custom_task(
+            input_args=[
+                Argument('a_input', a_cts),
+                Argument('b_input', b_cts),
+                Argument('_upper_gelu_layer', [data_source]),
+            ],
+            output_args=[Argument('output', output_cts)],
+            output_instruction_path=base_path
+            / 'CKKS_par_upper_diagonal_softmax'
+            / 'gelu'
+            / f'level_{gelu_level}'
             / 'server',
             fpga_acc=False,
         )
