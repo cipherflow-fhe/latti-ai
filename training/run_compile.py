@@ -55,6 +55,7 @@ def read_compile_config(config_path: str) -> dict[str, int | str]:
         'head_dim': int(data['head_dim']),
         'matmul_block_size': int(data['matmul_block_size']),
         'mat_pack_style': mat_pack_style,
+        'model_type': str(data.get('model_type', '')),
     }
 
 
@@ -146,6 +147,7 @@ Examples:
 
     compile_config = read_compile_config(args.config)
     mat_pack_style = compile_config.get('mat_pack_style', '')
+    model_type = compile_config.get('model_type', '')
     feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
     set_btp_scale = args.set_btp_scale
     onnx_path = input_path if is_onnx else None
@@ -159,7 +161,13 @@ Examples:
         print(f'[ONNX→JSON] Style: {onnx_style}')
 
         try:
-            onnx_to_json(str(input_path), str(pt_json_path), onnx_style, mat_pack_style=mat_pack_style)
+            onnx_to_json(
+                str(input_path),
+                str(pt_json_path),
+                onnx_style,
+                mat_pack_style=mat_pack_style,
+                model_type=model_type,
+            )
             log.info('[ONNX→JSON] Done: %s → %s (style=%s)', input_path, pt_json_path, onnx_style)
         except Exception as e:
             print(f'\n[Error] ONNX to JSON conversion failed: {e}')
@@ -176,7 +184,8 @@ Examples:
     print(f'[Compile] Output: {output_dir}')
     print(
         f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, '
-        f'COMPILE_CONFIG={args.config or "<none>"}, MAT_PACK_STYLE={mat_pack_style}, SET_BTP_SCALE={set_btp_scale}'
+        f'COMPILE_CONFIG={args.config or "<none>"}, MAT_PACK_STYLE={mat_pack_style}, '
+        f'MODEL_TYPE={model_type}, SET_BTP_SCALE={set_btp_scale}'
     )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
@@ -193,6 +202,7 @@ Examples:
             head_dim=compile_config.get('head_dim'),
             matmul_block_size=compile_config.get('matmul_block_size'),
             mat_pack_style=mat_pack_style,
+            model_type=model_type,
             set_btp_scale=set_btp_scale,
             # enable_score_cache=False
         )
@@ -218,6 +228,7 @@ Examples:
                         json_path=str(json_path),
                         h5_path=str(h5_path),
                         feature_mat=feature_mat,
+                        model_type=model_type,
                     )
                     print(f'[H5 Export] Done: {h5_path}')
                 except Exception as e:

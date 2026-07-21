@@ -91,7 +91,9 @@ class _ParUpperDiagonalSoftmaxBase:
         return result
 
     def _empty_op_count(self):
-        return defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'relin': 0, 'add': 0, 'rescale': 0})
+        return defaultdict(
+            lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'relin': 0, 'add': 0, 'rescale': 0, 'drop_level': 0}
+        )
 
 
 class ParUpperDiagonalAddPt(_ParUpperDiagonalSoftmaxBase):

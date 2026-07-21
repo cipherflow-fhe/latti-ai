@@ -70,6 +70,7 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     set_is_adaptive_avgpool(pt_graph)
     transforms.expand_multi_head_attention(pt_graph)
     transforms.expand_layer_norm(pt_graph)
+    transforms.expand_bert_custom_poly_functions(pt_graph)
     transforms.expand_poly_act_rn(pt_graph)
     transforms.expand_parcpmm_add_pt(pt_graph)
     transforms.split_upsampling_layers(pt_graph)
@@ -600,6 +601,7 @@ def run_pipeline(
     head_dim: int | None = None,
     matmul_block_size: int | None = None,
     mat_pack_style: str = '',
+    model_type: str = '',
     set_btp_scale: float | None = None,
     use_gpu: bool = True,
     enable_score_cache: bool = True,
@@ -637,12 +639,14 @@ def run_pipeline(
     if matmul_block_size is not None:
         config.matmul_block_size = matmul_block_size
     config.mat_pack_style = mat_pack_style
+    config.model_type = model_type
     config.set_btp_scale = set_btp_scale
     config.use_gpu = use_gpu
     print(
         f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
         f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
-        f'MAT_PACK_STYLE={config.mat_pack_style}, SET_BTP_SCALE={config.set_btp_scale}, '
+        f'MAT_PACK_STYLE={config.mat_pack_style}, MODEL_TYPE={config.model_type}, '
+        f'SET_BTP_SCALE={config.set_btp_scale}, '
         f'BACKEND={"gpu" if config.use_gpu else "cpu"}, '
         f'SCORE_CACHE={enable_score_cache}'
     )

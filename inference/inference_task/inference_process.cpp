@@ -108,6 +108,7 @@ InitInferenceProcess::InitInferenceProcess(const string& project_path_in, bool i
     const json& config = read_json(project_path / "task_config.json");
     pack_style = config["pack_style"].get<string>();
     mat_pack_style = config.value("mat_pack_style", string(""));
+    model_type = config.value("model_type", string(""));
     if (config["block_shape"].size() == 1) {
         block_shape = {config["block_shape"][0], config["block_shape"][0]};
     } else {
@@ -168,6 +169,17 @@ static uint32_t get_config_head_dim(uint32_t config_head_dim) {
     return config_head_dim;
 }
 
+static Duo normalize_pdm_upper_head_shape(Duo head_shape, uint32_t config_head_dim) {
+    if (config_head_dim > 0 && head_shape[0] == config_head_dim && head_shape[1] != config_head_dim) {
+        std::swap(head_shape[0], head_shape[1]);
+    }
+    return head_shape;
+}
+
+static Duo pdm_upper_shape_from_feature(const FeatureNode& feature, const Duo& head_shape) {
+    return {head_shape[0], feature.shape[0]};
+}
+
 static uint32_t get_config_matmul_block_size(uint32_t config_matmul_block_size) {
     if (config_matmul_block_size == 0) {
         throw runtime_error("matmul_block_size must be set in task_config.json for feature_mat layers");
@@ -221,8 +233,10 @@ static bool is_pcm_layer_type(const string& layer_type) {
 static bool is_pdm_layer_type(const string& layer_type) {
     return layer_type == "pdmpcmm" || layer_type == "pdmccmm" || layer_type == "pdmtranspose" ||
            layer_type == "pdm_add_pt" || layer_type == "pdmgamma" || layer_type == "pdmpoly" ||
-           layer_type == "pdmstats" || layer_type == "pdmcenter" || layer_type == "pdminit" || layer_type == "pdmgs" ||
-           layer_type == "pdmaffine";
+           layer_type == "pdmupperaddpt" || layer_type == "pdmupperpoly" || layer_type == "pdmmulsquare" ||
+           layer_type == "pdmheadcolsum" || layer_type == "pdminvinit" || layer_type == "pdminviter" ||
+           layer_type == "pdmctmul" || layer_type == "pdmupperpolymultct" || layer_type == "pdmstats" ||
+           layer_type == "pdmcenter" || layer_type == "pdminit" || layer_type == "pdmgs" || layer_type == "pdmaffine";
 }
 
 void InitInferenceProcess::init_parameters(bool is_bootstrapping) {
@@ -612,6 +626,118 @@ void InitInferenceProcess::_init_pdmpoly_layer(const string& key, const json& la
     _prepare_layer(
         key, move(pdmpoly), [](ParUpperDiagonalPolyActRNPoly&) {},
         [](ParUpperDiagonalPolyActRNPoly& l) { l.prepare_weight(); });
+}
+
+void InitInferenceProcess::_init_pdmupperaddpt_layer(const string& key, const json& layer) {
+    const string feat_in_id = layer["feature_input"][0].get<string>();
+    FeatureNode feat_in(json_features[feat_in_id]);
+    CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
+    Duo head_shape = normalize_pdm_upper_head_shape(get_feature_mat_head_shape(feat_in, feat_in_id), head_dim);
+    const Duo shape = pdm_upper_shape_from_feature(feat_in, head_shape);
+    const double value = layer.value("value", 0.0);
+
+    auto upper_add =
+        MakeU<ParUpperDiagonalAddPt>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level, value);
+    _prepare_layer(
+        key, move(upper_add), [](ParUpperDiagonalAddPt&) {}, [](ParUpperDiagonalAddPt& l) { l.prepare_weight(); });
+}
+
+void InitInferenceProcess::_init_pdmupperpoly_layer(const string& key, const json& layer, const hid_t& h5_file) {
+    const string feat_in_id = layer["feature_input"][0].get<string>();
+    FeatureNode feat_in(json_features[feat_in_id]);
+    CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
+    Duo head_shape = normalize_pdm_upper_head_shape(get_feature_mat_head_shape(feat_in, feat_in_id), head_dim);
+    const Duo shape = pdm_upper_shape_from_feature(feat_in, head_shape);
+    uint32_t order = layer.at("order").get<uint32_t>();
+    auto coeffs = load_h5_tensor_any<2>(layer, h5_file, {"coeffs", "coeff", "weight"}, {order + 1, shape[1]});
+
+    auto upper_poly = MakeU<ParUpperDiagonalPoly>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level,
+                                                  move(coeffs), order);
+    _prepare_layer(
+        key, move(upper_poly), [](ParUpperDiagonalPoly& l) { l.prepare_weight_stockmeyer_lazy(); },
+        [](ParUpperDiagonalPoly& l) { l.prepare_weight_stockmeyer(); });
+}
+
+void InitInferenceProcess::_init_pdmmulsquare_layer(const string& key, const json& layer) {
+    const string feat_in_id = layer["feature_input"][0].get<string>();
+    FeatureNode feat_in(json_features[feat_in_id]);
+    CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
+    Duo head_shape = normalize_pdm_upper_head_shape(get_feature_mat_head_shape(feat_in, feat_in_id), head_dim);
+    const Duo shape = pdm_upper_shape_from_feature(feat_in, head_shape);
+
+    auto layer_impl =
+        MakeU<ParUpperDiagonalMultipleSquare>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level);
+    _prepare_layer(
+        key, move(layer_impl), [](ParUpperDiagonalMultipleSquare&) {},
+        [](ParUpperDiagonalMultipleSquare& l) { l.prepare_weight(); });
+}
+
+void InitInferenceProcess::_init_pdmheadcolsum_layer(const string& key, const json& layer) {
+    const string feat_in_id = layer["feature_input"][0].get<string>();
+    FeatureNode feat_in(json_features[feat_in_id]);
+    CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
+    Duo head_shape = normalize_pdm_upper_head_shape(get_feature_mat_head_shape(feat_in, feat_in_id), head_dim);
+    const Duo shape = pdm_upper_shape_from_feature(feat_in, head_shape);
+
+    auto layer_impl =
+        MakeU<ParUpperDiagonalHeadColSum>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level);
+    _prepare_layer(
+        key, move(layer_impl), [](ParUpperDiagonalHeadColSum&) {},
+        [](ParUpperDiagonalHeadColSum& l) { l.prepare_weight(); });
+}
+
+void InitInferenceProcess::_init_pdminvinit_layer(const string& key, const json& layer) {
+    const string feat_in_id = layer["feature_input"][0].get<string>();
+    FeatureNode feat_in(json_features[feat_in_id]);
+    CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
+    Duo head_shape = normalize_pdm_upper_head_shape(get_feature_mat_head_shape(feat_in, feat_in_id), head_dim);
+    const Duo shape = pdm_upper_shape_from_feature(feat_in, head_shape);
+
+    auto layer_impl =
+        MakeU<ParUpperDiagonalInverseInit>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level);
+    _prepare_layer(
+        key, move(layer_impl), [](ParUpperDiagonalInverseInit&) {},
+        [](ParUpperDiagonalInverseInit& l) { l.prepare_weight(); });
+}
+
+void InitInferenceProcess::_init_pdminviter_layer(const string& key, const json& layer) {
+    const string feat_in_id = layer["feature_input"][0].get<string>();
+    FeatureNode feat_in(json_features[feat_in_id]);
+    CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
+    Duo head_shape = normalize_pdm_upper_head_shape(get_feature_mat_head_shape(feat_in, feat_in_id), head_dim);
+    const Duo shape = pdm_upper_shape_from_feature(feat_in, head_shape);
+
+    auto layer_impl =
+        MakeU<ParUpperDiagonalInverseIter>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level);
+    _prepare_layer(
+        key, move(layer_impl), [](ParUpperDiagonalInverseIter&) {},
+        [](ParUpperDiagonalInverseIter& l) { l.prepare_weight(); });
+}
+
+void InitInferenceProcess::_init_pdmctmul_layer(const string& key, const json& layer) {
+    const string feat_in_id = layer["feature_input"][0].get<string>();
+    FeatureNode feat_in(json_features[feat_in_id]);
+    CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
+    Duo head_shape = normalize_pdm_upper_head_shape(get_feature_mat_head_shape(feat_in, feat_in_id), head_dim);
+    const Duo shape = pdm_upper_shape_from_feature(feat_in, head_shape);
+
+    auto layer_impl = MakeU<ParUpperDiagonalGELU>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level);
+    _prepare_layer(
+        key, move(layer_impl), [](ParUpperDiagonalGELU&) {}, [](ParUpperDiagonalGELU& l) { l.prepare_weight(); });
+}
+
+void InitInferenceProcess::_init_pdmupperpolymultct_layer(const string& key, const json& layer) {
+    const string feat_in_id = layer["feature_input"][0].get<string>();
+    FeatureNode feat_in(json_features[feat_in_id]);
+    CkksParameter& param = *ckks_parameters_.at(feat_in.ckks_parameter_id);
+    Duo head_shape = normalize_pdm_upper_head_shape(get_feature_mat_head_shape(feat_in, feat_in_id), head_dim);
+    const Duo shape = pdm_upper_shape_from_feature(feat_in, head_shape);
+
+    auto layer_impl =
+        MakeU<ParUpperDiagonalPolyMultCt>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level);
+    _prepare_layer(
+        key, move(layer_impl), [](ParUpperDiagonalPolyMultCt&) {},
+        [](ParUpperDiagonalPolyMultCt& l) { l.prepare_weight(); });
 }
 
 void InitInferenceProcess::_init_pdmstats_layer(const string& key, const json& layer) {
@@ -1235,6 +1361,22 @@ void InitInferenceProcess::load_model_prepare() {
             _init_pdmgamma_layer(key, value, h5_file);
         } else if (layer_type == "pdmpoly") {
             _init_pdmpoly_layer(key, value, h5_file);
+        } else if (layer_type == "pdmupperaddpt") {
+            _init_pdmupperaddpt_layer(key, value);
+        } else if (layer_type == "pdmupperpoly") {
+            _init_pdmupperpoly_layer(key, value, h5_file);
+        } else if (layer_type == "pdmmulsquare") {
+            _init_pdmmulsquare_layer(key, value);
+        } else if (layer_type == "pdmheadcolsum") {
+            _init_pdmheadcolsum_layer(key, value);
+        } else if (layer_type == "pdminvinit") {
+            _init_pdminvinit_layer(key, value);
+        } else if (layer_type == "pdminviter") {
+            _init_pdminviter_layer(key, value);
+        } else if (layer_type == "pdmctmul") {
+            _init_pdmctmul_layer(key, value);
+        } else if (layer_type == "pdmupperpolymultct") {
+            _init_pdmupperpolymultct_layer(key, value);
         } else if (layer_type == "pdmstats") {
             _init_pdmstats_layer(key, value);
         } else if (layer_type == "pdmcenter") {
@@ -1723,6 +1865,67 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
                 result = MakeU<FeatureMatEncrypted>(
                     fp->get_layer<ParUpperDiagonalPolyActRNPoly>(key).run(context, inputMat));
+                fhe_timer.stop();
+            } else if (layer_type == "pdmupperaddpt") {
+                fhe_timer.start();
+                const FeatureMatEncrypted& inputMat =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
+                result = MakeU<FeatureMatEncrypted>(fp->get_layer<ParUpperDiagonalAddPt>(key).run(context, inputMat));
+                fhe_timer.stop();
+            } else if (layer_type == "pdmupperpoly") {
+                fhe_timer.start();
+                const FeatureMatEncrypted& inputMat =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
+                result = MakeU<FeatureMatEncrypted>(
+                    fp->get_layer<ParUpperDiagonalPoly>(key).run_stockmeyer(context, inputMat));
+                fhe_timer.stop();
+            } else if (layer_type == "pdmmulsquare") {
+                fhe_timer.start();
+                const FeatureMatEncrypted& inputMat =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
+                result = MakeU<FeatureMatEncrypted>(
+                    fp->get_layer<ParUpperDiagonalMultipleSquare>(key).run(context, inputMat));
+                fhe_timer.stop();
+            } else if (layer_type == "pdmheadcolsum") {
+                fhe_timer.start();
+                const FeatureMatEncrypted& inputMat =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
+                result =
+                    MakeU<FeatureMatEncrypted>(fp->get_layer<ParUpperDiagonalHeadColSum>(key).run(context, inputMat));
+                fhe_timer.stop();
+            } else if (layer_type == "pdminvinit") {
+                fhe_timer.start();
+                const FeatureMatEncrypted& inputMat =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
+                result =
+                    MakeU<FeatureMatEncrypted>(fp->get_layer<ParUpperDiagonalInverseInit>(key).run(context, inputMat));
+                fhe_timer.stop();
+            } else if (layer_type == "pdminviter") {
+                fhe_timer.start();
+                const FeatureMatEncrypted& inputA =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
+                const FeatureMatEncrypted& inputB =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[1]));
+                result = MakeU<FeatureMatEncrypted>(
+                    fp->get_layer<ParUpperDiagonalInverseIter>(key).run(context, inputA, inputB));
+                fhe_timer.stop();
+            } else if (layer_type == "pdmctmul") {
+                fhe_timer.start();
+                const FeatureMatEncrypted& inputA =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
+                const FeatureMatEncrypted& inputB =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[1]));
+                result =
+                    MakeU<FeatureMatEncrypted>(fp->get_layer<ParUpperDiagonalGELU>(key).run(context, inputA, inputB));
+                fhe_timer.stop();
+            } else if (layer_type == "pdmupperpolymultct") {
+                fhe_timer.start();
+                const FeatureMatEncrypted& inputA =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[0]));
+                const FeatureMatEncrypted& inputB =
+                    dynamic_cast<const FeatureMatEncrypted&>(_get_feature(feature_input[1]));
+                result = MakeU<FeatureMatEncrypted>(
+                    fp->get_layer<ParUpperDiagonalPolyMultCt>(key).run(context, inputA, inputB));
                 fhe_timer.stop();
             } else if (layer_type == "pdmstats") {
                 fhe_timer.start();
@@ -2508,6 +2711,62 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 auto result_upper = fp->get_layer<ParUpperDiagonalPolyActRNPoly>(key).run_plaintext(input0_upper);
                 result_mat = transpose_2d_array(result_upper);
             }
+            if (layer_type == "pdmupperaddpt") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                auto input0_upper = transpose_2d_array(input0);
+                auto result_upper = fp->get_layer<ParUpperDiagonalAddPt>(key).run_plaintext(input0_upper);
+                result_mat = transpose_2d_array(result_upper);
+            }
+            if (layer_type == "pdmupperpoly") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                auto input0_upper = transpose_2d_array(input0);
+                auto result_upper = fp->get_layer<ParUpperDiagonalPoly>(key).run_plaintext(input0_upper);
+                result_mat = transpose_2d_array(result_upper);
+            }
+            if (layer_type == "pdmmulsquare") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                auto input0_upper = transpose_2d_array(input0);
+                auto result_upper = fp->get_layer<ParUpperDiagonalMultipleSquare>(key).run_plaintext(input0_upper);
+                result_mat = transpose_2d_array(result_upper);
+            }
+            if (layer_type == "pdmheadcolsum") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                auto input0_upper = transpose_2d_array(input0);
+                auto result_upper = fp->get_layer<ParUpperDiagonalHeadColSum>(key).run_plaintext(input0_upper);
+                result_mat = transpose_2d_array(result_upper);
+            }
+            if (layer_type == "pdminvinit") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                auto input0_upper = transpose_2d_array(input0);
+                auto result_upper = fp->get_layer<ParUpperDiagonalInverseInit>(key).run_plaintext(input0_upper);
+                result_mat = transpose_2d_array(result_upper);
+            }
+            if (layer_type == "pdminviter") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                auto& input1 = p_feature_mat_x[feature_input[1]];
+                auto input0_upper = transpose_2d_array(input0);
+                auto input1_upper = transpose_2d_array(input1);
+                auto result_upper =
+                    fp->get_layer<ParUpperDiagonalInverseIter>(key).run_plaintext(input0_upper, input1_upper);
+                result_mat = transpose_2d_array(result_upper);
+            }
+            if (layer_type == "pdmctmul") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                auto& input1 = p_feature_mat_x[feature_input[1]];
+                auto input0_upper = transpose_2d_array(input0);
+                auto input1_upper = transpose_2d_array(input1);
+                auto result_upper = fp->get_layer<ParUpperDiagonalGELU>(key).run_plaintext(input0_upper, input1_upper);
+                result_mat = transpose_2d_array(result_upper);
+            }
+            if (layer_type == "pdmupperpolymultct") {
+                auto& input0 = p_feature_mat_x[feature_input[0]];
+                auto& input1 = p_feature_mat_x[feature_input[1]];
+                auto input0_upper = transpose_2d_array(input0);
+                auto input1_upper = transpose_2d_array(input1);
+                auto result_upper =
+                    fp->get_layer<ParUpperDiagonalPolyMultCt>(key).run_plaintext(input0_upper, input1_upper);
+                result_mat = transpose_2d_array(result_upper);
+            }
             if (layer_type == "pdmstats") {
                 auto& input0 = p_feature_mat_x[feature_input[0]];
                 auto input0_upper = transpose_2d_array(input0);
@@ -2922,6 +3181,30 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
         } else if (layer_type == "pdmpoly") {
             data_sources.emplace_back(
                 key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParUpperDiagonalPolyActRNPoly>(key))));
+        } else if (layer_type == "pdmupperaddpt") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParUpperDiagonalAddPt>(key))));
+        } else if (layer_type == "pdmupperpoly") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParUpperDiagonalPoly>(key))));
+        } else if (layer_type == "pdmmulsquare") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParUpperDiagonalMultipleSquare>(key))));
+        } else if (layer_type == "pdmheadcolsum") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParUpperDiagonalHeadColSum>(key))));
+        } else if (layer_type == "pdminvinit") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParUpperDiagonalInverseInit>(key))));
+        } else if (layer_type == "pdminviter") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParUpperDiagonalInverseIter>(key))));
+        } else if (layer_type == "pdmctmul") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParUpperDiagonalGELU>(key))));
+        } else if (layer_type == "pdmupperpolymultct") {
+            data_sources.emplace_back(
+                key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParUpperDiagonalPolyMultCt>(key))));
         } else if (layer_type == "pdmstats") {
             data_sources.emplace_back(
                 key, fhe_ops_lib::CustomData(static_cast<void*>(&fp->get_layer<ParUpperDiagonalLNStats>(key))));
@@ -3219,6 +3502,69 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             auto* layer = static_cast<ParUpperDiagonalPolyActRNPoly*>(layer_ptr);
             pt = layer->generate_coeff_pt(ckks_ctx, attrs.value("coeff_idx", i), attrs.value("mb", 0),
                                           attrs.value("ct_local", j), attrs.value("g", k));
+        } else if (op_class == "ParUpperDiagonalPoly") {
+            auto* layer = static_cast<ParUpperDiagonalPoly*>(layer_ptr);
+            if (type == "stockmeyer_coeff_pt") {
+                pt = layer->generate_weight_pt_for_stockmeyer(ckks_ctx, attrs.value("coeff_idx", i),
+                                                              attrs.value("ct_idx", j));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalPoly: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalPolyMultCt") {
+            auto* layer = static_cast<ParUpperDiagonalPolyMultCt*>(layer_ptr);
+            if (type == "one_pt") {
+                pt = layer->generate_one_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", j),
+                                            attrs.value("g", k));
+            } else if (type == "half_pt") {
+                pt = layer->generate_half_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", j),
+                                             attrs.value("g", k));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalPolyMultCt: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalAddPt") {
+            auto* layer = static_cast<ParUpperDiagonalAddPt*>(layer_ptr);
+            if (type == "pt") {
+                pt = layer->generate_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalAddPt: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalMultipleSquare") {
+            auto* layer = static_cast<ParUpperDiagonalMultipleSquare*>(layer_ptr);
+            if (type == "mask_pt") {
+                pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalMultipleSquare: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalHeadColSum") {
+            auto* layer = static_cast<ParUpperDiagonalHeadColSum*>(layer_ptr);
+            if (type == "mask_pt") {
+                pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalHeadColSum: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalInverseInit") {
+            auto* layer = static_cast<ParUpperDiagonalInverseInit*>(layer_ptr);
+            if (type == "two_pt") {
+                pt = layer->generate_two_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalInverseInit: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalInverseIter") {
+            auto* layer = static_cast<ParUpperDiagonalInverseIter*>(layer_ptr);
+            if (type == "one_pt") {
+                pt = layer->generate_one_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else if (type == "two_pt") {
+                pt = layer->generate_two_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalInverseIter: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalGELU") {
+            auto* layer = static_cast<ParUpperDiagonalGELU*>(layer_ptr);
+            if (type == "mask_pt") {
+                pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalGELU: " + type);
+            }
         } else if (op_class == "ParUpperDiagonalLNStats") {
             auto* layer = static_cast<ParUpperDiagonalLNStats*>(layer_ptr);
             pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("mb", 0),

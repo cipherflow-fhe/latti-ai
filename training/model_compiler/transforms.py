@@ -23,6 +23,7 @@ import networkx as nx
 
 from components import *
 from inference.model_generator.layers.poly_relu_base import PolyReluBase
+from inference.model_generator.layers.mat_poly_base import MatPolyBase
 
 
 class Direction(Enum):
@@ -821,6 +822,20 @@ def set_level_costs(graph: LayerAbstractGraph):
             graph.dag.nodes[compute_node]['level_cost'] = 3
         elif compute_node.layer_type in ('pcmgamma', 'pdmgamma'):
             graph.dag.nodes[compute_node]['level_cost'] = 1
+        elif compute_node.layer_type == 'pdmupperaddpt':
+            graph.dag.nodes[compute_node]['level_cost'] = 0
+        elif compute_node.layer_type == 'pdmupperpoly':
+            graph.dag.nodes[compute_node]['level_cost'] = MatPolyBase.compute_stockmeyer_level_cost(compute_node.order)
+        elif compute_node.layer_type == 'pdmmulsquare':
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type == 'pdmheadcolsum':
+            graph.dag.nodes[compute_node]['level_cost'] = 1
+        elif compute_node.layer_type == 'pdminvinit':
+            graph.dag.nodes[compute_node]['level_cost'] = 0
+        elif compute_node.layer_type == 'pdminviter':
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type in ('pdmctmul', 'pdmupperpolymultct'):
+            graph.dag.nodes[compute_node]['level_cost'] = 2
         elif compute_node.layer_type in ('pcmpoly', 'pdmpoly'):
             graph.dag.nodes[compute_node]['level_cost'] = 2 if compute_node.order == 2 else 3
         elif compute_node.layer_type == 'pcmstats':
@@ -1094,9 +1109,375 @@ def process_polyact(graph: LayerAbstractGraph) -> list:
     return res_list
 
 
+PDM_UPPER_PASS_THROUGH_TYPES = {
+    'pdmupperaddpt',
+    'pdmupperpoly',
+    'pdmmulsquare',
+    'pdmheadcolsum',
+    'pdminvinit',
+    'pdminviter',
+    'pdmctmul',
+    'pdmupperpolymultct',
+}
+
+
+def _parse_float_list(value) -> list[float]:
+    if value is None:
+        return []
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    if isinstance(value, str):
+        return [float(item.strip()) for item in value.split(',') if item.strip()]
+    return [float(item) for item in value]
+
+
+def _float_attr(node: ComputeNode, name: str, default: float) -> float:
+    value = getattr(node, name, default)
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    return float(value)
+
+
+def _int_attr(node: ComputeNode, name: str, default: int) -> int:
+    value = getattr(node, name, default)
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    return int(value)
+
+
+def _new_feature_like(source: FeatureNode, name: str, shape: list[int] | None = None) -> FeatureNode:
+    feature = FeatureNode(
+        key=name,
+        dim=source.dim,
+        channel=source.channel,
+        scale=source.scale,
+        ckks_parameter_id=source.ckks_parameter_id,
+        ckks_scale=source.ckks_scale,
+        shape=list(shape if shape is not None else source.shape),
+    )
+    feature.data_type = source.data_type
+    feature.invalid_fill = list(source.invalid_fill)
+    feature.sp_info = copy.deepcopy(source.sp_info)
+    feature.has_sp_info = source.has_sp_info
+    if source.head_shape is not None:
+        feature.head_shape = list(source.head_shape)
+    return feature
+
+
+def _feature_attrs_like(graph: LayerAbstractGraph, source: FeatureNode, feature: FeatureNode) -> dict:
+    source_attrs = graph.dag.nodes[source]
+    return {
+        'name': feature.node_id,
+        'skip': list(source_attrs.get('skip', [1] * source.dim)),
+        'level': source_attrs.get('level', 0),
+        'pack_num': source_attrs.get('pack_num', 1),
+    }
+
+
+def _compute_attrs(level_cost: int, name: str) -> dict:
+    return {'name': name, 'level_cost': level_cost}
+
+
+def _append_unary_compute(
+    graph: LayerAbstractGraph,
+    input_feature: FeatureNode,
+    compute_node: ComputeNode,
+    output_id: str,
+    level_cost: int,
+) -> FeatureNode:
+    output_feature = _new_feature_like(input_feature, output_id)
+    graph.dag.add_node(compute_node, **_compute_attrs(level_cost, compute_node.layer_id))
+    graph.dag.add_node(output_feature, **_feature_attrs_like(graph, input_feature, output_feature))
+    graph.dag.add_edge(input_feature, compute_node)
+    graph.dag.add_edge(compute_node, output_feature)
+    return output_feature
+
+
+def _append_binary_compute(
+    graph: LayerAbstractGraph,
+    lhs: FeatureNode,
+    rhs: FeatureNode,
+    compute_node: ComputeNode,
+    output_id: str,
+    level_cost: int,
+) -> FeatureNode:
+    output_feature = _new_feature_like(lhs, output_id)
+    graph.dag.add_node(compute_node, **_compute_attrs(level_cost, compute_node.layer_id))
+    graph.dag.add_node(output_feature, **_feature_attrs_like(graph, lhs, output_feature))
+    graph.dag.add_edge(lhs, compute_node, input_index=0)
+    graph.dag.add_edge(rhs, compute_node, input_index=1)
+    graph.dag.add_edge(compute_node, output_feature)
+    return output_feature
+
+
+def _make_scalar_gamma(layer_id: str, scalar: float) -> ComputeNode:
+    node = ComputeNode(layer_id, _pack_pcm_type('pcmgamma'), 1, 1)
+    node.path = f'{layer_id}.weight'
+    node.scalar_value = float(scalar)
+    return node
+
+
+def _make_upper_poly(layer_id: str, coefficients: list[float]) -> ComputeNode:
+    node = ComputeNode(layer_id, 'pdmupperpoly', 1, 1)
+    node.path = f'{layer_id}.weight'
+    node.coeffs_path = node.path
+    node.coefficients = list(coefficients)
+    node.order = len(coefficients) - 1
+    return node
+
+
+def _append_softmax_normalize(
+    graph: LayerAbstractGraph,
+    base_id: str,
+    values: FeatureNode,
+    denominator_scale: float,
+    max_inverse_iterations: int,
+) -> FeatureNode:
+    denom = _append_unary_compute(
+        graph,
+        values,
+        ComputeNode(f'{base_id}_head_col_sum', 'pdmheadcolsum', 1, 1),
+        f'{base_id}_denominator',
+        1,
+    )
+    if denominator_scale != 1.0:
+        denom = _append_unary_compute(
+            graph,
+            denom,
+            _make_scalar_gamma(f'{base_id}_denominator_scale', denominator_scale),
+            f'{base_id}_denominator_scaled',
+            1,
+        )
+
+    inv = _append_unary_compute(
+        graph,
+        denom,
+        ComputeNode(f'{base_id}_inverse_init', 'pdminvinit', 1, 1),
+        f'{base_id}_inverse_init_out',
+        0,
+    )
+    for idx in range(1, max_inverse_iterations):
+        inv = _append_binary_compute(
+            graph,
+            inv,
+            denom,
+            ComputeNode(f'{base_id}_inverse_iter_{idx}', 'pdminviter', 1, 1),
+            f'{base_id}_inverse_iter_{idx}_out',
+            2,
+        )
+
+    if denominator_scale != 1.0:
+        inv = _append_unary_compute(
+            graph,
+            inv,
+            _make_scalar_gamma(f'{base_id}_inverse_scale', denominator_scale),
+            f'{base_id}_inverse_scaled',
+            1,
+        )
+
+    return _append_binary_compute(
+        graph,
+        values,
+        inv,
+        ComputeNode(f'{base_id}_multiply', 'pdmctmul', 1, 1),
+        f'{base_id}_probabilities',
+        2,
+    )
+
+
+def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: FeatureNode, attn_node: ComputeNode):
+    range_min = _float_attr(attn_node, 'range_min', -3.0)
+    range_max = _float_attr(attn_node, 'range_max', 3.0)
+    mid = (range_min + range_max) / 2.0
+    exp_divisor = _float_attr(attn_node, 'exp_divisor', 1.0)
+    coefficients = _parse_float_list(getattr(attn_node, 'exp_coefficients', []))
+    if not coefficients:
+        raise ValueError(f'BERT attention node {attn_node.layer_id} is missing exp_coefficients')
+    max_inverse_iterations = _int_attr(attn_node, 'max_inverse_iterations', 15)
+    delta_1 = _int_attr(attn_node, 'delta_1', 2)
+    delta_2 = _int_attr(attn_node, 'delta_2', 1)
+
+    add_mid_node = ComputeNode(f'{base_id}_softmax_add_mid', 'pdmupperaddpt', 1, 1)
+    add_mid_node.value = -mid
+    centered = _append_unary_compute(
+        graph,
+        scores,
+        add_mid_node,
+        f'{base_id}_softmax_centered',
+        0,
+    )
+
+    exp_arg = _append_unary_compute(
+        graph,
+        centered,
+        _make_scalar_gamma(f'{base_id}_softmax_exp_gamma', 1.0 / exp_divisor),
+        f'{base_id}_softmax_exp_arg',
+        1,
+    )
+    exp_poly = _append_unary_compute(
+        graph,
+        exp_arg,
+        _make_upper_poly(f'{base_id}_softmax_exp_poly', coefficients),
+        f'{base_id}_softmax_exp_poly_out',
+        MatPolyBase.compute_stockmeyer_level_cost(len(coefficients) - 1),
+    )
+
+    values = exp_poly
+    delta = max(1, delta_1)
+    square_idx = 0
+    while delta > 1:
+        values = _append_unary_compute(
+            graph,
+            values,
+            ComputeNode(f'{base_id}_softmax_delta1_square_{square_idx}', 'pdmmulsquare', 1, 1),
+            f'{base_id}_softmax_delta1_square_{square_idx}_out',
+            2,
+        )
+        delta >>= 1
+        square_idx += 1
+
+    probabilities = _append_softmax_normalize(
+        graph,
+        f'{base_id}_softmax_normalize_initial',
+        values,
+        16.0,
+        max_inverse_iterations,
+    )
+
+    refinement_idx = 0
+    delta = max(1, delta_2)
+    while delta > 1:
+        squared = _append_unary_compute(
+            graph,
+            probabilities,
+            ComputeNode(f'{base_id}_softmax_refine_square_{refinement_idx}', 'pdmmulsquare', 1, 1),
+            f'{base_id}_softmax_refine_square_{refinement_idx}_out',
+            2,
+        )
+        denominator_scale = 2.0 if refinement_idx == 0 else 1.0
+        probabilities = _append_softmax_normalize(
+            graph,
+            f'{base_id}_softmax_normalize_refine_{refinement_idx}',
+            squared,
+            denominator_scale,
+            max_inverse_iterations,
+        )
+        delta >>= 1
+        refinement_idx += 1
+
+    return probabilities
+
+
+def _add_ccmm_inputs(graph: LayerAbstractGraph, lhs: FeatureNode, rhs: FeatureNode, node: ComputeNode):
+    if node.layer_type == 'pdmccmm':
+        graph.dag.add_edge(lhs, node, input_index=1)
+        graph.dag.add_edge(rhs, node, input_index=0)
+    else:
+        graph.dag.add_edge(lhs, node, input_index=0)
+        graph.dag.add_edge(rhs, node, input_index=1)
+
+
+def _expand_bert_multi_head_attention(graph: LayerAbstractGraph, attn_node: ComputeNode):
+    if not _is_diagonal_mat_pack():
+        raise ValueError('BERT CustomMultiHeadAttention expansion currently supports only par_diagonal_pack')
+
+    preds = list(graph.dag.predecessors(attn_node))
+    succs = list(graph.dag.successors(attn_node))
+    if len(preds) != 1 or len(succs) != 1:
+        raise ValueError(
+            f'BERT attention node {attn_node.layer_id} must have exactly 1 input and 1 output, '
+            f'got {len(preds)} inputs and {len(succs)} outputs'
+        )
+    x_in: FeatureNode = preds[0]
+    out: FeatureNode = succs[0]
+
+    base_id = attn_node.layer_id
+    m = x_in.shape[0]
+    n = x_in.shape[1]
+    n_heads = max(1, int(getattr(attn_node, 'num_heads', config.n_heads)))
+    scaling = _float_attr(attn_node, 'scaling', 1.0 / math.sqrt(max(1, config.head_dim)))
+
+    def make_feature(name: str, shape: list[int] | None = None) -> FeatureNode:
+        return _new_feature_like(x_in, name, shape)
+
+    q = make_feature(f'{base_id}_q')
+    k = make_feature(f'{base_id}_k')
+    v = make_feature(f'{base_id}_v')
+    kt = make_feature(f'{base_id}_kt', [n // n_heads, m * n_heads])
+    qkt = make_feature(f'{base_id}_qkt', [m, m * n_heads])
+    qktv = make_feature(f'{base_id}_qktv', list(out.shape))
+
+    pcmm_type = 'pdmpcmm'
+    transpose_type = 'pdmtranspose'
+    ccmm_type = 'pdmccmm'
+
+    q_node = ComputeNode(f'{base_id}_q_layer', pcmm_type, 1, 1)
+    q_node.path = getattr(attn_node, 'q_weight_path', f'{base_id}.q.weight')
+    q_node.bias_path = getattr(attn_node, 'q_bias_path', '')
+    q_node.weight_shape = [n, n]
+    q_node.weight_multiplier = scaling
+    q_node.bias_multiplier = scaling
+
+    k_node = ComputeNode(f'{base_id}_k_layer', pcmm_type, 1, 1)
+    k_node.path = getattr(attn_node, 'k_weight_path', f'{base_id}.k.weight')
+    k_node.bias_path = getattr(attn_node, 'k_bias_path', '')
+    k_node.weight_shape = [n, n]
+
+    v_node = ComputeNode(f'{base_id}_v_layer', pcmm_type, 1, 1)
+    v_node.path = getattr(attn_node, 'v_weight_path', f'{base_id}.v.weight')
+    v_node.bias_path = getattr(attn_node, 'v_bias_path', '')
+    v_node.weight_shape = [n, n]
+
+    kt_node = ComputeNode(f'{base_id}_kt_layer', transpose_type, 1, 1)
+    qkt_node = ComputeNode(f'{base_id}_qkt_layer', ccmm_type, 1, 1)
+    qktv_node = ComputeNode(f'{base_id}_qktv_layer', ccmm_type, 1, 1)
+
+    out_node = ComputeNode(f'{base_id}_out', pcmm_type, 1, 1)
+    out_node.weight_shape = [n, n]
+    out_node.path = getattr(attn_node, 'proj_weight_path', f'{base_id}.proj.weight')
+    out_node.bias_path = getattr(attn_node, 'proj_bias_path', '')
+
+    graph.dag.remove_node(attn_node)
+
+    for node in (q_node, k_node, v_node):
+        graph.dag.add_node(node, **_compute_attrs(2, node.layer_id))
+    graph.dag.add_node(kt_node, **_compute_attrs(1, kt_node.layer_id))
+    graph.dag.add_node(qkt_node, **_compute_attrs(3, qkt_node.layer_id))
+    graph.dag.add_node(qktv_node, **_compute_attrs(3, qktv_node.layer_id))
+    graph.dag.add_node(out_node, **_compute_attrs(2, out_node.layer_id))
+
+    for feature in (q, k, v, kt, qkt, qktv):
+        graph.dag.add_node(feature, **_feature_attrs_like(graph, x_in, feature))
+
+    graph.dag.add_edge(x_in, q_node)
+    graph.dag.add_edge(q_node, q)
+    graph.dag.add_edge(x_in, k_node)
+    graph.dag.add_edge(k_node, k)
+    graph.dag.add_edge(x_in, v_node)
+    graph.dag.add_edge(v_node, v)
+
+    graph.dag.add_edge(k, kt_node)
+    graph.dag.add_edge(kt_node, kt)
+
+    _add_ccmm_inputs(graph, q, kt, qkt_node)
+    graph.dag.add_edge(qkt_node, qkt)
+
+    softmax_out = _append_bert_softmax(graph, base_id, qkt, attn_node)
+
+    _add_ccmm_inputs(graph, softmax_out, v, qktv_node)
+    graph.dag.add_edge(qktv_node, qktv)
+
+    graph.dag.add_edge(qktv, out_node)
+    graph.dag.add_edge(out_node, out)
+
+
 def expand_multi_head_attention(graph: LayerAbstractGraph):
     for vit_node in list(graph.dag.nodes):
         if not (isinstance(vit_node, ComputeNode) and vit_node.layer_type == 'CustomMultiHeadAttention'):
+            continue
+
+        if getattr(vit_node, 'model_type', '') == 'bert' or getattr(config, 'model_type', '') == 'bert':
+            _expand_bert_multi_head_attention(graph, vit_node)
             continue
 
         preds = list(graph.dag.predecessors(vit_node))
@@ -1216,6 +1597,147 @@ def expand_multi_head_attention(graph: LayerAbstractGraph):
 
         graph.dag.add_edge(qktv, out_node)
         graph.dag.add_edge(out_node, out)
+
+
+def _expand_custom_gelu(graph: LayerAbstractGraph, node: ComputeNode):
+    preds = list(graph.dag.predecessors(node))
+    succs = list(graph.dag.successors(node))
+    if len(preds) != 1 or len(succs) != 1:
+        raise ValueError(
+            f'CustomGELU node {node.layer_id} must have exactly 1 input and 1 output, '
+            f'got {len(preds)} inputs and {len(succs)} outputs'
+        )
+    x_in: FeatureNode = preds[0]
+    out: FeatureNode = succs[0]
+    base_id = node.layer_id
+
+    scale = _float_attr(node, 'scale', 64.0)
+    f2_input_scale = _float_attr(node, 'f2_input_scale', 0.5)
+    f3_input_scale = _float_attr(node, 'f3_input_scale', 0.5)
+    p1 = _parse_float_list(getattr(node, 'p1_coefficients', []))
+    p2 = _parse_float_list(getattr(node, 'p2_coefficients', []))
+    p3 = _parse_float_list(getattr(node, 'p3_coefficients', []))
+    if not p1 or not p2 or not p3:
+        raise ValueError(f'CustomGELU node {node.layer_id} is missing polynomial coefficients')
+
+    input_edge_attrs = copy.deepcopy(graph.dag.edges[x_in, node])
+    input_edge_attrs.pop('input_index', None)
+    output_edge_attrs = copy.deepcopy(graph.dag.edges[node, out])
+    graph.dag.remove_node(node)
+
+    x_scaled = _append_unary_compute(
+        graph,
+        x_in,
+        _make_scalar_gamma(f'{base_id}_gelu_input_scale', 1.0 / scale),
+        f'{base_id}_gelu_x_scaled',
+        1,
+    )
+    f1 = _append_unary_compute(
+        graph,
+        x_scaled,
+        _make_upper_poly(f'{base_id}_gelu_poly1', p1),
+        f'{base_id}_gelu_f1',
+        MatPolyBase.compute_stockmeyer_level_cost(len(p1) - 1),
+    )
+    f1_scaled = _append_unary_compute(
+        graph,
+        f1,
+        _make_scalar_gamma(f'{base_id}_gelu_f2_input_scale', 1.0 / f2_input_scale),
+        f'{base_id}_gelu_f1_scaled',
+        1,
+    )
+    half_tanh = _append_unary_compute(
+        graph,
+        f1_scaled,
+        _make_upper_poly(f'{base_id}_gelu_poly2', p2),
+        f'{base_id}_gelu_half_tanh',
+        MatPolyBase.compute_stockmeyer_level_cost(len(p2) - 1),
+    )
+    half_tanh_scaled = _append_unary_compute(
+        graph,
+        half_tanh,
+        _make_scalar_gamma(f'{base_id}_gelu_f3_input_scale', 1.0 / f3_input_scale),
+        f'{base_id}_gelu_half_tanh_scaled',
+        1,
+    )
+    refined = _append_unary_compute(
+        graph,
+        half_tanh_scaled,
+        _make_upper_poly(f'{base_id}_gelu_poly3', p3),
+        f'{base_id}_gelu_refined',
+        MatPolyBase.compute_stockmeyer_level_cost(len(p3) - 1),
+    )
+
+    gelu_node = ComputeNode(f'{base_id}_gelu_mult_ct', 'pdmupperpolymultct', 1, 1)
+    graph.dag.add_node(gelu_node, **_compute_attrs(2, gelu_node.layer_id))
+    graph.dag.add_edge(refined, gelu_node, input_index=0)
+    graph.dag.add_edge(x_in, gelu_node, input_index=1, **input_edge_attrs)
+    graph.dag.add_edge(gelu_node, out, **output_edge_attrs)
+
+
+def _expand_custom_tanh(graph: LayerAbstractGraph, node: ComputeNode):
+    preds = list(graph.dag.predecessors(node))
+    succs = list(graph.dag.successors(node))
+    if len(preds) != 1 or len(succs) != 1:
+        raise ValueError(
+            f'CustomTanh node {node.layer_id} must have exactly 1 input and 1 output, '
+            f'got {len(preds)} inputs and {len(succs)} outputs'
+        )
+    x_in: FeatureNode = preds[0]
+    out: FeatureNode = succs[0]
+    base_id = node.layer_id
+
+    scale = _float_attr(node, 'scale', 40.0)
+    f1_input_scale = _float_attr(node, 'f1_input_scale', 1.0)
+    f2_input_scale = _float_attr(node, 'f2_input_scale', 1.0)
+    p1 = _parse_float_list(getattr(node, 'p1_coefficients', []))
+    p2 = _parse_float_list(getattr(node, 'p2_coefficients', []))
+    if not p1 or not p2:
+        raise ValueError(f'CustomTanh node {node.layer_id} is missing polynomial coefficients')
+
+    output_edge_attrs = copy.deepcopy(graph.dag.edges[node, out])
+    graph.dag.remove_node(node)
+
+    x_scaled = _append_unary_compute(
+        graph,
+        x_in,
+        _make_scalar_gamma(f'{base_id}_tanh_input_scale', 1.0 / (scale * f1_input_scale)),
+        f'{base_id}_tanh_x_scaled',
+        1,
+    )
+    f1 = _append_unary_compute(
+        graph,
+        x_scaled,
+        _make_upper_poly(f'{base_id}_tanh_poly1', p1),
+        f'{base_id}_tanh_f1',
+        MatPolyBase.compute_stockmeyer_level_cost(len(p1) - 1),
+    )
+    f1_scaled = _append_unary_compute(
+        graph,
+        f1,
+        _make_scalar_gamma(f'{base_id}_tanh_f2_input_scale', 1.0 / f2_input_scale),
+        f'{base_id}_tanh_f1_scaled',
+        1,
+    )
+    tanh_node = _make_upper_poly(f'{base_id}_tanh_poly2', p2)
+    graph.dag.add_node(
+        tanh_node,
+        **_compute_attrs(MatPolyBase.compute_stockmeyer_level_cost(len(p2) - 1), tanh_node.layer_id),
+    )
+    graph.dag.add_edge(f1_scaled, tanh_node)
+    graph.dag.add_edge(tanh_node, out, **output_edge_attrs)
+
+
+def expand_bert_custom_poly_functions(graph: LayerAbstractGraph):
+    if getattr(config, 'model_type', '') != 'bert':
+        return
+    for node in list(graph.dag.nodes):
+        if not isinstance(node, ComputeNode):
+            continue
+        if node.layer_type == 'CustomGELU':
+            _expand_custom_gelu(graph, node)
+        elif node.layer_type == 'CustomTanh':
+            _expand_custom_tanh(graph, node)
 
 
 def expand_poly_act_rn(graph: LayerAbstractGraph):

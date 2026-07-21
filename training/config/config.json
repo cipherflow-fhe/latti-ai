@@ -1,6 +1,7 @@
 {
-  "n_heads": 3,
+  "n_heads": 12,
   "head_dim": 64,
   "matmul_block_size": 64,
-  "mat_pack_style": "par_diagonal_pack"
+  "mat_pack_style": "par_diagonal_pack",
+  "model_type": "bert"
 }

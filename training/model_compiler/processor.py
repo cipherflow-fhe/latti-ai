@@ -177,6 +177,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
         'server_end_id': 0,
         'block_shape': config.block_shape,
         'mat_pack_style': config.mat_pack_style,
+        'model_type': config.model_type,
         'is_absorb_polyrelu': False,
         'pack_style': config.style,
         'n_heads': config.n_heads,

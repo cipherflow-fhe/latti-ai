@@ -66,6 +66,7 @@ def export_feature_mat_h5_from_onnx(
     json_path: str,
     h5_path: str,
     verbose: bool = True,
+    model_type: str = '',
 ) -> str:
     """Export H5 parameters for a compiled feature_mat CT graph.
 
@@ -84,6 +85,11 @@ def export_feature_mat_h5_from_onnx(
 
     with open(json_path, 'r', encoding='utf-8') as f:
         graph = json.load(f)
+    if not model_type:
+        task_config_path = os.path.join(os.path.dirname(json_path), 'task_config.json')
+        if os.path.exists(task_config_path):
+            with open(task_config_path, 'r', encoding='utf-8') as f:
+                model_type = str(json.load(f).get('model_type', ''))
 
     features: dict[str, dict[str, Any]] = graph['feature']
     layers: dict[str, dict[str, Any]] = graph['layer']
@@ -95,11 +101,13 @@ def export_feature_mat_h5_from_onnx(
         if ltype == 'parcpmm':
             _export_parcpmm(layer_key, layer, features, onnx_weights, out)
         elif ltype == 'pdmpcmm':
-            _export_pdmpcmm(layer_key, layer, features, onnx_weights, out)
+            _export_pdmpcmm(layer_key, layer, features, onnx_weights, out, model_type=model_type)
         elif ltype == 'pcmgamma':
             _export_pcmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
         elif ltype == 'pdmgamma':
             _export_pdmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
+        elif ltype == 'pdmupperpoly':
+            _export_pdmupperpoly(layer_key, layer, features, out)
         elif ltype == 'pcmpoly':
             _export_pcmpoly(
                 layer_key,
@@ -236,13 +244,14 @@ def _export_pdmpcmm(
     features: dict[str, dict[str, Any]],
     onnx_weights: dict[str, np.ndarray],
     out: dict[str, np.ndarray],
+    model_type: str = '',
 ) -> None:
     weight_path = _required_path(layer, 'weight_path', layer_key)
     fout = _feature(features, layer['feature_output'][0], layer_key)
 
     weight = _resolve_parcpmm_weight(weight_path, layer, features, onnx_weights)
     logical_shape = _pdmpcmm_logical_weight_shape(weight, layer, layer_key, weight_path)
-    weight = _pdmpcmm_weight_matrix(weight, logical_shape, layer_key, weight_path)
+    weight = _pdmpcmm_weight_matrix(weight, logical_shape, layer_key, weight_path, model_type=model_type)
     _put(out, weight_path, weight, layer_key)
 
     bias_path = layer.get('bias_path', '')
@@ -280,6 +289,8 @@ def _export_pdmgamma(
 
     if 'btp_scale' in layer:
         gamma = np.full(expected_shape, float(layer['btp_scale']), dtype=np.float64)
+    elif 'scalar_value' in layer:
+        gamma = np.full(expected_shape, float(layer['scalar_value']), dtype=np.float64)
     elif dst_path in attention_sources:
         source = attention_sources[dst_path]
         gamma = 1.0 / _scale_factor(source.running_max_path, source.upper_bound, source.eps, onnx_weights)
@@ -346,6 +357,25 @@ def _export_pdmpoly(
     _put(out, dst_path, coeffs, layer_key)
 
 
+def _export_pdmupperpoly(
+    layer_key: str,
+    layer: dict[str, Any],
+    features: dict[str, dict[str, Any]],
+    out: dict[str, np.ndarray],
+) -> None:
+    dst_path = layer.get('coeffs_path') or _required_path(layer, 'weight_path', layer_key)
+    fin = _feature(features, layer['feature_input'][0], layer_key)
+    order = int(layer.get('order', 15))
+    expected_shape = (order + 1, int(fin['shape'][0]))
+    if 'coefficients' not in layer:
+        raise KeyError(f'{layer_key}: pdmupperpoly requires coefficients in layer JSON')
+    coeffs = np.asarray(_parse_coefficients(layer['coefficients']), dtype='float64')
+    if coeffs.size != order + 1:
+        raise ValueError(f'{layer_key}: pdmupperpoly has {coeffs.size} coefficients, expected {order + 1}')
+    coeffs = np.tile(coeffs.reshape(order + 1, 1), (1, expected_shape[1]))
+    _put(out, dst_path, coeffs, layer_key)
+
+
 def _export_pdmaffine(
     layer_key: str,
     layer: dict[str, Any],
@@ -382,7 +412,14 @@ def _export_pdm_add_pt(
     data = np.asarray(onnx_weights[path], dtype='float64')
     if data.ndim == 3 and data.shape[0] == 1:
         data = data.reshape(data.shape[1], data.shape[2])
-    if data.ndim == 2 and tuple(data.T.shape) == expected_shape:
+    if layer.get('source_op_type') == 'CustomPositionEmbedding':
+        if data.ndim != 2 or tuple(data.T.shape) != expected_shape:
+            raise ValueError(
+                f'{layer_key}: CustomPositionEmbedding {path} shape {tuple(data.shape)} cannot transpose to '
+                f'pdm_add_pt matrix shape {expected_shape}'
+            )
+        data = data.T.copy()
+    elif data.ndim == 2 and tuple(data.T.shape) == expected_shape:
         data = data.T.copy()
     elif data.ndim == 2 and tuple(data.shape) == expected_shape:
         data = data.copy()
@@ -410,6 +447,8 @@ def _export_pcmgamma(
 
     if 'btp_scale' in layer:
         gamma = np.full(expected_shape, float(layer['btp_scale']), dtype=np.float64)
+    elif 'scalar_value' in layer:
+        gamma = np.full(expected_shape, float(layer['scalar_value']), dtype=np.float64)
     elif dst_path in attention_sources:
         source = attention_sources[dst_path]
         gamma = 1.0 / _scale_factor(source.running_max_path, source.upper_bound, source.eps, onnx_weights)
@@ -540,8 +579,13 @@ def _pdmpcmm_weight_matrix(
     logical_shape: tuple[int, int],
     layer_key: str,
     weight_path: str,
+    model_type: str = '',
 ) -> np.ndarray:
     weight = np.asarray(weight, dtype='float64')
+    if model_type == 'bert':
+        if weight.ndim == 2 and tuple(weight.shape) == logical_shape:
+            return weight.copy()
+        return _reshape_checked(weight, logical_shape, layer_key, weight_path)
     if weight.ndim == 2 and tuple(weight.T.shape) == logical_shape:
         return weight.T.copy()
     if weight.ndim == 2 and tuple(weight.shape) == logical_shape:
@@ -561,11 +605,16 @@ def _resolve_parcpmm_weight(
         weight = {'q': q, 'k': k, 'v': v}[part].copy()
         if part == 'q':
             weight *= 1.0 / math.sqrt(_layer_head_dim(layer, features))
+        if layer.get('weight_multiplier') is not None:
+            weight *= float(layer['weight_multiplier'])
         return weight
 
     if weight_path not in onnx_weights:
         raise KeyError(f'{layer.get("type", "parcpmm")}: weight not found in ONNX: {weight_path}')
-    return onnx_weights[weight_path].copy()
+    weight = onnx_weights[weight_path].copy()
+    if layer.get('weight_multiplier') is not None:
+        weight = weight * float(layer['weight_multiplier'])
+    return weight
 
 
 def _resolve_parcpmm_bias(
@@ -580,11 +629,16 @@ def _resolve_parcpmm_bias(
         bias = {'q': q, 'k': k, 'v': v}[part].copy()
         if part == 'q':
             bias *= 1.0 / math.sqrt(_layer_head_dim(layer, features))
+        if layer.get('bias_multiplier') is not None:
+            bias *= float(layer['bias_multiplier'])
         return bias
 
     if bias_path not in onnx_weights:
         raise KeyError(f'{layer.get("type", "parcpmm")}: bias not found in ONNX: {bias_path}')
-    return onnx_weights[bias_path].copy()
+    bias = onnx_weights[bias_path].copy()
+    if layer.get('bias_multiplier') is not None:
+        bias = bias * float(layer['bias_multiplier'])
+    return bias
 
 
 def _qkv_source(path: str, suffix: str) -> tuple[str, str]:
@@ -651,6 +705,14 @@ def _attrs(node: onnx.NodeProto) -> dict[str, Any]:
             value = value.decode('utf-8')
         values[attr.name] = value
     return values
+
+
+def _parse_coefficients(value: Any) -> list[float]:
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    if isinstance(value, str):
+        return [float(item.strip()) for item in value.split(',') if item.strip()]
+    return [float(item) for item in value]
 
 
 def _input_or_empty(node: onnx.NodeProto, idx: int) -> str:

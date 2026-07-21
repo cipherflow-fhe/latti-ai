@@ -109,7 +109,9 @@ class ParUpperDiagonalPolyMultCt:
         return self.call(half_tanh_cts, x_cts, one_pt, half_pt)
 
     def get_fhe_op_count(self, level: int) -> dict:
-        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'relin': 0, 'add': 0, 'rescale': 0})
+        ops = defaultdict(
+            lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'relin': 0, 'add': 0, 'rescale': 0, 'drop_level': 0}
+        )
         n = self.total_cts
         ops[level]['mult_plain'] += n
         ops[level]['rescale'] += n
