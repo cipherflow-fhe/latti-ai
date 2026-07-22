@@ -61,6 +61,16 @@ class MultScalarLayer:
             result.append(rescale(mult_res))
         return result
 
+    def call_encode_ringt_compute(self, x: list, layer_id: str, scale: float):
+        result = []
+        sources = []
+        for i, x_i in enumerate(x):
+            source = CustomDataNode(type='mult_scalar_encode_ringt_data_source', id=f'{layer_id}_{i}')
+            weight_pt = encode_ringt(source, scale, output_id=f'encode_ringt_{layer_id}_{i}')
+            sources.append(source)
+            result.append(rescale(mult(x_i, weight_pt)))
+        return result, sources
+
     def get_fhe_op_count(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call() for n_ct input ciphertexts, grouped by level.
 

@@ -124,6 +124,7 @@ void Avgpool2DLayer::prepare_weight_lazy(const CkksParameter& param_in,
                                          const Duo& shape_in) {
     // 仅缓存参数，不预编码 select_tensor_pt
     skip = skip_in;
+    n_channel_per_ct_ = n_channel_per_ct;
     n_block_per_ct = div_ceil(n_channel_per_ct, (skip[0] * skip[1]));
     shape = shape_in;
     level_ = level;
@@ -135,6 +136,10 @@ CkksPlaintextRingt Avgpool2DLayer::generate_select_tensor_pt_for_index(CkksConte
     return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_));
 }
 
+uint32_t Avgpool2DLayer::num_select_tensors() const {
+    return std::min(n_channel_, n_channel_per_ct_ * stride[0] * stride[1]);
+}
+
 void Avgpool2DLayer::prepare_weight(const CkksParameter& param_in,
                                     int n_channel_per_ct,
                                     int n_channel,
@@ -143,6 +148,7 @@ void Avgpool2DLayer::prepare_weight(const CkksParameter& param_in,
                                     const Duo& shape_in) {
     CkksContext ctx = CkksContext::create_empty_context(param_in);
     skip = skip_in;
+    n_channel_per_ct_ = n_channel_per_ct;
     n_block_per_ct = div_ceil(n_channel_per_ct, (skip[0] * skip[1]));
     shape = shape_in;
     level_ = level;

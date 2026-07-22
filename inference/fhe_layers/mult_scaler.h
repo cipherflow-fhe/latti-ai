@@ -34,7 +34,9 @@ public:
                     const Duo& block_expansion_in = {1, 1});
     void prepare_weight() override;
     void prepare_weight_lazy() override;
+    std::vector<double> generate_weight_values_for_index(int i) const;
     ls::CkksPlaintextRingt generate_weight_pt_for_index(ls::CkksContext& ctx, int i) const;
+    uint32_t num_weight_values() const;
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
     Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     virtual Array<double, 3> run_plaintext(const Array<double, 3>& x);

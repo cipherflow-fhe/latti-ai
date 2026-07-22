@@ -125,6 +125,17 @@ class ParBlockColMajorAddPt:
                     pt_nodes.append(pt_node)
         return self.call(A_cts, pt_nodes)
 
+    def call_encode_ringt(self, A_cts: list, layer_id: str, scale: float):
+        pt_nodes = []
+        sources = []
+        for bj in range(self.num_block_cols):
+            for bi in range(self.num_block_rows):
+                for g in range(self.G):
+                    source = CustomDataNode(type='pcm_add_pt_encode_ringt_data_source', id=f'{layer_id}_{bi}_{bj}_{g}')
+                    pt_nodes.append(encode_ringt(source, scale, output_id=f'encode_ringt_{layer_id}_{bi}_{bj}_{g}'))
+                    sources.append(source)
+        return self.call(A_cts, pt_nodes), sources
+
     # ------------------------------------------------------------------ #
     #  FHE operation count                                                #
     # ------------------------------------------------------------------ #

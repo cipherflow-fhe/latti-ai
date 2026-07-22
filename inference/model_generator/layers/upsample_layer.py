@@ -283,8 +283,13 @@ class UpsampleNearestLayer:
         return result
 
     def call_custom_compute(
-        self, x: list[CkksCiphertextNode], data_source: 'CustomDataNode', n_channel: int
-    ) -> list[CkksCiphertextNode]:
+        self,
+        x: list[CkksCiphertextNode],
+        data_source: 'CustomDataNode',
+        n_channel: int,
+        encode_scale: float | None = None,
+        layer_id: str | None = None,
+    ) -> list[CkksCiphertextNode] | tuple[list[CkksCiphertextNode], list[CustomDataNode]]:
         """
         Generate computation graph for upsample_nearest layer using custom_compute (Lazy mode)
 
@@ -307,6 +312,7 @@ class UpsampleNearestLayer:
             raise ValueError(f'UpsampleNearestLayer: n_channel is 0')
 
         result_tmp = []
+        encode_sources_by_pos = {}
 
         factor_h = self.upsample_factor[0]
         factor_w = self.upsample_factor[1]
@@ -380,17 +386,34 @@ class UpsampleNearestLayer:
 
                 # Generate select_tensor_pt on-demand and perform mask multiplication (C++ lines 108-111 - Lazy mode)
                 out_channel_pos = channel_id % out_channels_per_ct
-                select_pt = CkksPlaintextRingtNode(f'select_pt_{idx}_{i}_{out_channel_pos}')
-                custom_compute(
-                    inputs=[data_source],
-                    output=select_pt,
-                    type='encode_pt',
-                    attributes={
-                        'op_class': 'UpsampleNearestLayer',
-                        'type': 'select_tensor_pt',
-                        'i': out_channel_pos,
-                    },
-                )
+                if encode_scale is None:
+                    select_pt = CkksPlaintextRingtNode(f'select_pt_{idx}_{i}_{out_channel_pos}')
+                    custom_compute(
+                        inputs=[data_source],
+                        output=select_pt,
+                        type='encode_pt',
+                        attributes={
+                            'op_class': 'UpsampleNearestLayer',
+                            'type': 'select_tensor_pt',
+                            'i': out_channel_pos,
+                        },
+                    )
+                else:
+                    if layer_id is None:
+                        raise ValueError('layer_id is required for encode_ringt upsample')
+                    if out_channel_pos not in encode_sources_by_pos:
+                        source = CustomDataNode(
+                            type='upsample_encode_ringt_data_source', id=f'{layer_id}_{out_channel_pos}'
+                        )
+                        encode_sources_by_pos[out_channel_pos] = (
+                            source,
+                            encode_ringt(
+                                source,
+                                encode_scale,
+                                output_id=f'encode_ringt_{layer_id}_{out_channel_pos}',
+                            ),
+                        )
+                    select_pt = encode_sources_by_pos[out_channel_pos][1]
 
                 # Mask multiplication and rescale (C++ lines 111-119)
                 c_m_s = mult(x_rot, select_pt)
@@ -442,4 +465,6 @@ class UpsampleNearestLayer:
                 f'factor={self.upsample_factor}, out_channels_per_ct={out_channels_per_ct}'
             )
 
-        return result
+        if encode_scale is None:
+            return result
+        return result, [encode_sources_by_pos[i][0] for i in range(len(encode_sources_by_pos))]

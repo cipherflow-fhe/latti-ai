@@ -151,6 +151,62 @@ class Conv2DPackedLayer:
             result.append(result_ct)
         return result
 
+    def call_encode_ringt_compute(
+        self,
+        x: list[CkksCiphertextNode],
+        layer_id: str,
+        weight_scale: float,
+        bias_scale: float,
+    ) -> tuple[list[CkksCiphertextNode], list[CustomDataNode]]:
+        """Build ordinary-conv DAG with native GPU encode_ringt nodes.
+
+        Each plaintext has its own CustomDataNode because the GPU executor
+        accepts a concrete ``std::vector<double>`` rather than a layer object.
+        The returned source order is the same as the C++ runtime's source
+        materialization order: weight[output][input][kernel], then bias[output].
+        """
+        rotated_x: list[CkksCiphertextNode] = list()
+        for x_ct in x:
+            rotated_x += Conv2DPackedLayer.populate_rotations_1_side(
+                x_ct, self.pack - 1, self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
+            )
+        rotated_x_2d = self.gen_rotated_x(rotated_x)
+        result = []
+        encode_sources: list[CustomDataNode] = []
+
+        for packed_out_channel_idx in range(self.n_packed_out_channel):
+            x_ct_list = []
+            w_pt_list = []
+            for in_channel_idx in range(self.n_packed_in_channel * self.pack):
+                for kernel_idx in range(self.kernel_shape[0] * self.kernel_shape[1]):
+                    source = CustomDataNode(
+                        type='conv2d_encode_ringt_data_source',
+                        id=f'{layer_id}_w_{packed_out_channel_idx}_{in_channel_idx}_{kernel_idx}',
+                    )
+                    w_pt = encode_ringt(
+                        source,
+                        weight_scale,
+                        output_id=f'encode_ringt_{layer_id}_w_{packed_out_channel_idx}_{in_channel_idx}_{kernel_idx}',
+                    )
+                    encode_sources.append(source)
+                    x_ct_list.append(rotated_x_2d[in_channel_idx][kernel_idx])
+                    w_pt_list.append(w_pt)
+
+            partial_sum = rescale(ct_pt_mult_accumulate(x_ct_list, w_pt_list))
+            bias_source = CustomDataNode(
+                type='conv2d_encode_ringt_data_source',
+                id=f'{layer_id}_b_{packed_out_channel_idx}',
+            )
+            bias_pt = encode_ringt(
+                bias_source,
+                bias_scale,
+                output_id=f'encode_ringt_{layer_id}_b_{packed_out_channel_idx}',
+            )
+            encode_sources.append(bias_source)
+            result.append(add(partial_sum, bias_pt))
+
+        return result, encode_sources
+
     def make_pt_nodes(self, layer_id):
         """Return (weight_pt, bias_pt) with shapes matching call()."""
         index = self.kernel_shape[0] * self.kernel_shape[1]

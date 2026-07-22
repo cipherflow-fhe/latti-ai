@@ -255,6 +255,10 @@ void Conv2DPackedLayer::prepare_weight_lazy() {
 }
 
 CkksPlaintextRingt Conv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const {
+    return ctx.encode_ringt(generate_weight_values_for_indices(ct_idx, j, k), weight_scale_);
+}
+
+std::vector<double> Conv2DPackedLayer::generate_weight_values_for_indices(int ct_idx, int j, int k) const {
     const uint32_t packed_in_ct_idx = j / n_channel_per_ct_;
     const uint32_t rotate_idx = j % n_channel_per_ct_;
     const uint32_t ki = k / kernel_shape_[1];
@@ -263,7 +267,6 @@ CkksPlaintextRingt Conv2DPackedLayer::generate_weight_pt_for_indices(CkksContext
     const std::array<uint32_t, 2> input_shape_ct{input_shape_[0] * skip_[0], input_shape_[1] * skip_[1]};
 
     const auto& mask = kernel_masks_[k];
-    const double encode_pt_scale = weight_scale_;
 
     std::vector<double> packed_weights;
     packed_weights.reserve(param_.get_n() / 2);
@@ -283,15 +286,17 @@ CkksPlaintextRingt Conv2DPackedLayer::generate_weight_pt_for_indices(CkksContext
         }
     }
 
-    return ctx.encode_ringt(packed_weights, encode_pt_scale);
+    return packed_weights;
 }
 
 CkksPlaintextRingt Conv2DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const {
+    return ctx.encode_ringt(generate_bias_values_for_index(bpt_idx), param_.get_default_scale());
+}
+
+std::vector<double> Conv2DPackedLayer::generate_bias_values_for_index(int bpt_idx) const {
     const uint32_t packed_out_ct_idx = bpt_idx;
 
     const std::array<uint32_t, 2> input_shape_ct{input_shape_[0] * skip_[0], input_shape_[1] * skip_[1]};
-
-    const double bias_scale = param_.get_default_scale();
 
     std::vector<double> packed_bias;
     for (uint32_t pack_idx = 0; pack_idx < n_channel_per_ct_; pack_idx++) {
@@ -310,5 +315,5 @@ CkksPlaintextRingt Conv2DPackedLayer::generate_bias_pt_for_index(CkksContext& ct
         }
     }
 
-    return ctx.encode_ringt(packed_bias, bias_scale);
+    return packed_bias;
 }

@@ -49,6 +49,7 @@ public:
                              const Duo& skip_in,
                              const Duo& shape_in);
     ls::CkksPlaintextRingt generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int i) const;
+    uint32_t num_select_tensors() const;
     Feature2DEncrypted run_multiplexed_avgpool(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     Feature2DEncrypted run_split_avgpool(ls::CkksContext& ctx, const Feature2DEncrypted& x, const Duo block_expansion);
     void prepare_weight_repack(const ls::CkksParameter& param_in,
@@ -63,6 +64,7 @@ public:
     Duo block_shape;
     Duo skip;
     uint32_t n_block_per_ct;
+    uint32_t n_channel_per_ct_ = 0;
     bool need_repack = false;
     uint32_t n_channel_ = 0;
 };

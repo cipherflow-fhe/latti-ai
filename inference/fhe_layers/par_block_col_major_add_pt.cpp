@@ -89,6 +89,10 @@ CkksPlaintextRingt ParBlockColMajorAddPt::generate_pt(CkksContext& ctx, uint32_t
     return ctx.encode_ringt(build_pt_vec(bi, bj, g), param_.get_default_scale());
 }
 
+std::vector<double> ParBlockColMajorAddPt::generate_values(uint32_t bi, uint32_t bj, uint32_t g) const {
+    return build_pt_vec(bi, bj, g);
+}
+
 void ParBlockColMajorAddPt::precompute_pts() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
     double D = param_.get_default_scale();

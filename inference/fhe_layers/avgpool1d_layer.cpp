@@ -84,14 +84,20 @@ void Avgpool1DLayer::prepare_weight_lazy(const CkksParameter& param_in,
                                          uint32_t skip_in,
                                          uint32_t shape_in) {
     skip = skip_in;
+    n_channel_per_ct_ = n_channel_per_ct;
     n_block_per_ct = div_ceil(n_channel_per_ct, skip);
     shape = shape_in;
     level_ = level;
+    n_channel_ = n_channel;
 }
 
 CkksPlaintextRingt Avgpool1DLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int i) const {
     vector<double> si = select_tensor(i);
     return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_));
+}
+
+uint32_t Avgpool1DLayer::num_select_tensors() const {
+    return std::min(n_channel_, n_channel_per_ct_ * stride);
 }
 
 void Avgpool1DLayer::prepare_weight(const CkksParameter& param_in,
@@ -102,9 +108,11 @@ void Avgpool1DLayer::prepare_weight(const CkksParameter& param_in,
                                     uint32_t shape_in) {
     CkksContext ctx = CkksContext::create_empty_context(param_in);
     skip = skip_in;
+    n_channel_per_ct_ = n_channel_per_ct;
     n_block_per_ct = div_ceil(n_channel_per_ct, skip);
     shape = shape_in;
     level_ = level;
+    n_channel_ = n_channel;
     uint32_t out_channels_per_ct = n_channel_per_ct * stride;
     uint32_t n_select_pt = std::min((uint32_t)n_channel, out_channels_per_ct);
     select_tensor_pt.clear();

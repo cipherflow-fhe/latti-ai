@@ -264,16 +264,28 @@ void ParBlockColMajorCPMM::precompute_diagonals() {
 
 CkksPlaintextRingt
 ParBlockColMajorCPMM::generate_diag_pt(CkksContext& ctx, uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const {
-    return ctx.encode_ringt(build_block_diagonal(mb, g, bp, k), param_.get_q(level_));
+    return ctx.encode_ringt(generate_diag_values(mb, g, bp, k), param_.get_q(level_));
+}
+
+std::vector<double> ParBlockColMajorCPMM::generate_diag_values(uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const {
+    return build_block_diagonal(mb, g, bp, k);
 }
 
 CkksPlaintextRingt ParBlockColMajorCPMM::generate_mask_h0_pt(CkksContext& ctx) const {
-    return ctx.encode_ringt(build_head0_mask(), param_.get_q(level_ - 1));
+    return ctx.encode_ringt(generate_mask_h0_values(), param_.get_q(level_ - 1));
+}
+
+std::vector<double> ParBlockColMajorCPMM::generate_mask_h0_values() const {
+    return build_head0_mask();
 }
 
 CkksPlaintextRingt
 ParBlockColMajorCPMM::generate_bias_pt(CkksContext& ctx, uint32_t mb, uint32_t bi, uint32_t g) const {
-    return ctx.encode_ringt(build_bias_vec(mb, bi, g), param_.get_default_scale());
+    return ctx.encode_ringt(generate_bias_values(mb, bi, g), param_.get_default_scale());
+}
+
+std::vector<double> ParBlockColMajorCPMM::generate_bias_values(uint32_t mb, uint32_t bi, uint32_t g) const {
+    return build_bias_vec(mb, bi, g);
 }
 
 // block_mult_cpmm with BSGS: (bsgs_bs-1) baby rotations + (bsgs_gs-1) giant rotations

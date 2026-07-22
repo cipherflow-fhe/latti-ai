@@ -142,6 +142,7 @@ def gen_custom_task(
     lazy=False,
     complex_bootstrapping=None,
     use_complex_btp=None,
+    gpu_encode_ringt=False,
 ):
     n = _FHE_PARAMS[param_name].poly_modulus_degree
     set_param(param_name)
@@ -153,6 +154,8 @@ def gen_custom_task(
     if complex_bootstrapping is None:
         complex_bootstrapping = task_config_info.get('complex_bootstrapping', False)
     complex_bootstrapping = _parse_bool_option(complex_bootstrapping, 'complex_bootstrapping')
+    if gpu_encode_ringt and not (use_gpu and lazy):
+        raise ValueError('gpu_encode_ringt requires both use_gpu=True and lazy=True')
     try:
         block_shape = task_config_info['block_shape']
     except Exception:
@@ -164,6 +167,7 @@ def gen_custom_task(
     # prior complex generation must not leak into a subsequent ordinary-BTP
     # generation.
     for layer in config_info.get('layer', {}).values():
+        layer.pop('gpu_encode_ringt', None)
         if layer.get('type') == 'bootstrapping':
             layer.pop('complex_bootstrapping', None)
             layer.pop('use_complex_btp', None)
@@ -712,12 +716,32 @@ def gen_custom_task(
                         )
 
                     if lazy:
-                        conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
-                        layer_output_nodes = conv0_layer.call_custom_compute(
-                            feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source
-                        )
-                        feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-                        input_args.append(Argument(f'{layer_id}', [conv_data_source]))
+                        if gpu_encode_ringt and groups == 1:
+                            output_level = int(config_info['feature'][layer_output_feature_ids[0]]['level'])
+                            weight_level = output_level + 1
+                            try:
+                                weight_scale = float(_custom_task.g_param.q[weight_level])
+                                bias_scale = float(_custom_task.g_param.scale)
+                            except (AttributeError, IndexError) as exc:
+                                raise ValueError(
+                                    f"Layer '{layer_id}' cannot derive CKKS encode_ringt scales at level {weight_level}"
+                                ) from exc
+                            layer_config['gpu_encode_ringt'] = True
+                            layer_output_nodes, encode_sources = conv0_layer.call_encode_ringt_compute(
+                                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                                layer_id,
+                                weight_scale,
+                                bias_scale,
+                            )
+                            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                            input_args.append(Argument(f'{layer_id}_encode_ringt', encode_sources))
+                        else:
+                            conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
+                            layer_output_nodes = conv0_layer.call_custom_compute(
+                                feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source
+                            )
+                            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                            input_args.append(Argument(f'{layer_id}', [conv_data_source]))
                     else:
                         weight_pt, bias_pt = conv0_layer.make_pt_nodes(layer_id)
                         input_args.append(Argument(f'convw_{layer_id}', weight_pt))
@@ -957,10 +981,18 @@ def gen_custom_task(
             mult_scalar_layer = MultScalarLayer()
             input_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
             if lazy:
-                conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
-                layer_output_nodes = mult_scalar_layer.call_custom_compute(input_nodes, conv_data_source)
+                if gpu_encode_ringt:
+                    layer_config['gpu_encode_ringt'] = True
+                    scale = float(_custom_task.g_param.q[level])
+                    layer_output_nodes, encode_sources = mult_scalar_layer.call_encode_ringt_compute(
+                        input_nodes, layer_id, scale
+                    )
+                    input_args.append(Argument(f'{layer_id}_encode_ringt', encode_sources))
+                else:
+                    conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
+                    layer_output_nodes = mult_scalar_layer.call_custom_compute(input_nodes, conv_data_source)
+                    input_args.append(Argument(f'{layer_id}', [conv_data_source]))
                 feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-                input_args.append(Argument(f'{layer_id}', [conv_data_source]))
             else:
                 pt = mult_scalar_layer.make_pt_nodes(layer_id, len(input_nodes))
                 layer_output_nodes = mult_scalar_layer.call(input_nodes, pt)
@@ -1208,13 +1240,25 @@ def gen_custom_task(
                 level=level,
             )
             if lazy:
-                upsample_data_source = CustomDataNode(type='upsample_data_source', id=f'{layer_id}')
-                layer_output_nodes = upsample_layer.call_custom_compute(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]],
-                    upsample_data_source,
-                    n_in_channel,
-                )
-                input_args.append(Argument(f'{layer_id}', [upsample_data_source]))
+                if gpu_encode_ringt:
+                    layer_config['gpu_encode_ringt'] = True
+                    scale = float(_custom_task.g_param.q[level])
+                    layer_output_nodes, encode_sources = upsample_layer.call_custom_compute(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                        None,
+                        n_in_channel,
+                        encode_scale=scale,
+                        layer_id=layer_id,
+                    )
+                    input_args.append(Argument(f'{layer_id}_encode_ringt', encode_sources))
+                else:
+                    upsample_data_source = CustomDataNode(type='upsample_data_source', id=f'{layer_id}')
+                    layer_output_nodes = upsample_layer.call_custom_compute(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                        upsample_data_source,
+                        n_in_channel,
+                    )
+                    input_args.append(Argument(f'{layer_id}', [upsample_data_source]))
             else:
                 select_tensor_pt = upsample_layer.make_pt_nodes(layer_id, n_in_channel)
                 layer_output_nodes = upsample_layer.call(
@@ -1274,14 +1318,26 @@ def gen_custom_task(
                 else:
                     # level_cost=1: non-adaptive avgpool needs mult+rescale (select_tensor)
                     if is_1d and lazy:
-                        avg_data_source = CustomDataNode(type='avg_data_source', id=f'{layer_id}')
-                        layer_output_nodes = avgpool.call_custom_compute_multiplexed_avgpool(
-                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
-                            avg_data_source,
-                            n_in_channel,
-                            n,
-                        )
-                        input_args.append(Argument(f'{layer_id}', [avg_data_source]))
+                        if gpu_encode_ringt:
+                            layer_config['gpu_encode_ringt'] = True
+                            scale = float(_custom_task.g_param.q[level])
+                            layer_output_nodes, encode_sources = avgpool.call_encode_ringt_multiplexed_avgpool(
+                                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                                layer_id,
+                                n_in_channel,
+                                n,
+                                scale,
+                            )
+                            input_args.append(Argument(f'{layer_id}_encode_ringt', encode_sources))
+                        else:
+                            avg_data_source = CustomDataNode(type='avg_data_source', id=f'{layer_id}')
+                            layer_output_nodes = avgpool.call_custom_compute_multiplexed_avgpool(
+                                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                                avg_data_source,
+                                n_in_channel,
+                                n,
+                            )
+                            input_args.append(Argument(f'{layer_id}', [avg_data_source]))
                     elif is_1d:
                         n_channel_per_ct = int(math.ceil(n / 2 / input_shape[0]))
                         out_channels_per_ct = n_channel_per_ct * stride[0]
@@ -1297,14 +1353,26 @@ def gen_custom_task(
                         )
                         input_args.append(Argument(f'select_tensor_pt_{layer_id}', select_tensor_pt))
                     elif lazy:
-                        avg_data_source = CustomDataNode(type='avg_data_source', id=f'{layer_id}')
-                        layer_output_nodes = avgpool.call_custom_compute_multiplexed_avgpool(
-                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
-                            avg_data_source,
-                            n_in_channel,
-                            n,
-                        )
-                        input_args.append(Argument(f'{layer_id}', [avg_data_source]))
+                        if gpu_encode_ringt:
+                            layer_config['gpu_encode_ringt'] = True
+                            scale = float(_custom_task.g_param.q[level])
+                            layer_output_nodes, encode_sources = avgpool.call_encode_ringt_multiplexed_avgpool(
+                                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                                layer_id,
+                                n_in_channel,
+                                n,
+                                scale,
+                            )
+                            input_args.append(Argument(f'{layer_id}_encode_ringt', encode_sources))
+                        else:
+                            avg_data_source = CustomDataNode(type='avg_data_source', id=f'{layer_id}')
+                            layer_output_nodes = avgpool.call_custom_compute_multiplexed_avgpool(
+                                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                                avg_data_source,
+                                n_in_channel,
+                                n,
+                            )
+                            input_args.append(Argument(f'{layer_id}', [avg_data_source]))
                     else:
                         n_channel_per_ct = int(math.ceil(n / 2 / (input_shape[0] * input_shape[1])))
                         out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
@@ -1436,12 +1504,18 @@ def gen_custom_task(
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
-            data_source = CustomDataNode(type='partranspose_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
-            layer_output_nodes = partranspose_layer.call_custom_compute(
-                feature_id_to_nodes_map[input_fid],
-                data_source,
-            )
+            if gpu_encode_ringt:
+                layer_config['gpu_encode_ringt'] = True
+                layer_output_nodes, encode_sources = partranspose_layer.call_encode_ringt(
+                    feature_id_to_nodes_map[input_fid], layer_id, float(_custom_task.g_param.q[level])
+                )
+                input_args.append(Argument(f'{layer_id}_encode_ringt', encode_sources))
+            else:
+                data_source = CustomDataNode(type='partranspose_data_source', id=f'{layer_id}')
+                input_args.append(Argument(f'{layer_id}', [data_source]))
+                layer_output_nodes = partranspose_layer.call_custom_compute(
+                    feature_id_to_nodes_map[input_fid], data_source
+                )
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             par_feature_shapes[layer_output_feature_ids[0]] = (shape_per_head[1], shape_per_head[0])
 
@@ -1461,12 +1535,16 @@ def gen_custom_task(
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
-            data_source = CustomDataNode(type='pcm_add_pt_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
-            layer_output_nodes = add_pt_layer.call_custom_compute(
-                feature_id_to_nodes_map[input_fid],
-                data_source,
-            )
+            if gpu_encode_ringt:
+                layer_config['gpu_encode_ringt'] = True
+                layer_output_nodes, encode_sources = add_pt_layer.call_encode_ringt(
+                    feature_id_to_nodes_map[input_fid], layer_id, float(_custom_task.g_param.scale)
+                )
+                input_args.append(Argument(f'{layer_id}_encode_ringt', encode_sources))
+            else:
+                data_source = CustomDataNode(type='pcm_add_pt_data_source', id=f'{layer_id}')
+                input_args.append(Argument(f'{layer_id}', [data_source]))
+                layer_output_nodes = add_pt_layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
 
         elif layer_config['type'] == 'pdmtranspose':
@@ -1577,12 +1655,20 @@ def gen_custom_task(
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
-            data_source = CustomDataNode(type='parcpmm_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
-            layer_output_nodes = parcpmm_layer.call_custom_compute(
-                feature_id_to_nodes_map[input_fid],
-                data_source,
-            )
+            if gpu_encode_ringt:
+                layer_config['gpu_encode_ringt'] = True
+                layer_output_nodes, encode_sources = parcpmm_layer.call_encode_ringt(
+                    feature_id_to_nodes_map[input_fid],
+                    layer_id,
+                    float(_custom_task.g_param.q[level]),
+                    float(_custom_task.g_param.q[level - 1]),
+                    float(_custom_task.g_param.scale),
+                )
+                input_args.append(Argument(f'{layer_id}_encode_ringt', encode_sources))
+            else:
+                data_source = CustomDataNode(type='parcpmm_data_source', id=f'{layer_id}')
+                input_args.append(Argument(f'{layer_id}', [data_source]))
+                layer_output_nodes = parcpmm_layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
 
         elif layer_config['type'] == 'parccmm':
@@ -1621,13 +1707,27 @@ def gen_custom_task(
                     feature_id_to_nodes_map[input_fid] = x
                     input_args.append(Argument(input_fid, x))
 
-            data_source = CustomDataNode(type='parccmm_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
-            layer_output_nodes = parccmm_layer.call_custom_compute(
-                feature_id_to_nodes_map[fid_A],
-                feature_id_to_nodes_map[fid_B],
-                data_source,
-            )
+            if gpu_encode_ringt:
+                layer_config['gpu_encode_ringt'] = True
+                psi_scale = (
+                    float(_custom_task.g_param.q[level - 2])
+                    / float(_custom_task.g_param.scale)
+                    * float(_custom_task.g_param.q[level - 1])
+                )
+                layer_output_nodes, encode_sources = parccmm_layer.call_encode_ringt(
+                    feature_id_to_nodes_map[fid_A],
+                    feature_id_to_nodes_map[fid_B],
+                    layer_id,
+                    float(_custom_task.g_param.q[level]),
+                    psi_scale,
+                )
+                input_args.append(Argument(f'{layer_id}_encode_ringt', encode_sources))
+            else:
+                data_source = CustomDataNode(type='parccmm_data_source', id=f'{layer_id}')
+                input_args.append(Argument(f'{layer_id}', [data_source]))
+                layer_output_nodes = parccmm_layer.call_custom_compute(
+                    feature_id_to_nodes_map[fid_A], feature_id_to_nodes_map[fid_B], data_source
+                )
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             par_feature_shapes[layer_output_feature_ids[0]] = (shape_A[0], shape_B[1])
 
@@ -1853,6 +1953,11 @@ if __name__ == '__main__':
     parser.add_argument(
         '--lazy', action='store_true', help='Use lazy weight generation (encode_pt custom compute nodes)'
     )
+    parser.add_argument(
+        '--gpu-encode-ringt',
+        action='store_true',
+        help='Use native GPU encode_ringt for supported lazy layer plaintexts (requires --lazy)',
+    )
     args = parser.parse_args()
 
     task_path = args.task_path
@@ -1861,4 +1966,9 @@ if __name__ == '__main__':
 
     for _, is_fpga in config['server_task'].items():
         if is_fpga['enable_fpga']:
-            gen_custom_task(os.path.join(task_path, 'server'), use_gpu=True, lazy=args.lazy)
+            gen_custom_task(
+                os.path.join(task_path, 'server'),
+                use_gpu=True,
+                lazy=args.lazy,
+                gpu_encode_ringt=args.gpu_encode_ringt,
+            )

@@ -47,6 +47,29 @@ public:
     ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
     ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
 
+    // Raw slot vectors used by the GPU encode_ringt path. The ordering must
+    // stay identical to the corresponding plaintext generator above.
+    std::vector<double> generate_weight_values_for_indices(int ct_idx, int j, int k) const;
+    std::vector<double> generate_bias_values_for_index(int bpt_idx) const;
+    uint32_t packed_ct_in_count() const {
+        return n_packed_ct_in_;
+    }
+    uint32_t packed_ct_out_count() const {
+        return n_packed_ct_out_;
+    }
+    uint32_t channels_per_ct() const {
+        return n_channel_per_ct_;
+    }
+    uint32_t kernel_size() const {
+        return kernel_shape_[0] * kernel_shape_[1];
+    }
+    double weight_encode_scale() const {
+        return weight_scale_;
+    }
+    double bias_encode_scale() const {
+        return param_.get_default_scale();
+    }
+
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
 

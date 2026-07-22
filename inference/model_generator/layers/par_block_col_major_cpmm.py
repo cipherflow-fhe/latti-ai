@@ -354,6 +354,46 @@ class ParBlockColMajorCPMM:
 
         return self.call(A_cts, diag_pt, mask_h0_pt, bias_pt)
 
+    def call_encode_ringt(self, A_cts: list, layer_id: str, q_level: float, mask_scale: float, bias_scale: float):
+        diag_pt = []
+        sources = []
+        for mb in range(self.K):
+            diag_pt_mb = []
+            for g in range(self.G):
+                diag_pt_mbg = []
+                for bp in range(self.n_heads):
+                    diag_pt_mbgbp = []
+                    for k in range(self.d):
+                        source = CustomDataNode(
+                            type='parcpmm_encode_ringt_data_source', id=f'{layer_id}_d_{mb}_{g}_{bp}_{k}'
+                        )
+                        diag_pt_mbgbp.append(
+                            encode_ringt(source, q_level, output_id=f'encode_ringt_{layer_id}_d_{mb}_{g}_{bp}_{k}')
+                        )
+                        sources.append(source)
+                    diag_pt_mbg.append(diag_pt_mbgbp)
+                diag_pt_mb.append(diag_pt_mbg)
+            diag_pt.append(diag_pt_mb)
+
+        mask_source = CustomDataNode(type='parcpmm_encode_ringt_data_source', id=f'{layer_id}_mask')
+        mask_h0_pt = encode_ringt(mask_source, mask_scale, output_id=f'encode_ringt_{layer_id}_mask')
+        sources.append(mask_source)
+
+        bias_pt = None
+        if self.has_bias:
+            bias_pt = []
+            for mb in range(self.n_out_mbs):
+                for bi in range(self.num_block_rows_A):
+                    for g in range(self.G):
+                        source = CustomDataNode(
+                            type='parcpmm_encode_ringt_data_source', id=f'{layer_id}_b_{mb}_{bi}_{g}'
+                        )
+                        bias_pt.append(
+                            encode_ringt(source, bias_scale, output_id=f'encode_ringt_{layer_id}_b_{mb}_{bi}_{g}')
+                        )
+                        sources.append(source)
+        return self.call(A_cts, diag_pt, mask_h0_pt, bias_pt), sources
+
     # ------------------------------------------------------------------ #
     #  FHE operation count                                                #
     # ------------------------------------------------------------------ #

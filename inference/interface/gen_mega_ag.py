@@ -50,6 +50,12 @@ def main():
         default=None,
         help='Explicitly select complex (true) or ordinary two-BTP (false) behavior.',
     )
+    parser.add_argument(
+        '--gpu-encode-ringt',
+        choices=('true', 'false'),
+        default='true',
+        help='Enable or disable GPU encode_ringt lowering (default: true).',
+    )
     args = parser.parse_args()
 
     task_dir = os.path.abspath(args.task_dir)
@@ -93,6 +99,7 @@ def main():
                 style=style,
                 lazy=True,
                 complex_bootstrapping=args.complex_bootstrapping,
+                gpu_encode_ringt=args.gpu_encode_ringt,
             )
 
     print(f'Done: mega_ag generated for {task_dir}.')

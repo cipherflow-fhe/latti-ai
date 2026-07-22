@@ -210,6 +210,15 @@ class ParBlockColMajorTranspose:
 
         return self.call(input_cts, transpose_diag_pt)
 
+    def call_encode_ringt(self, input_cts: list, layer_id: str, scale: float):
+        transpose_diag_pt = []
+        sources = []
+        for k_idx in range(2 * self.d - 1):
+            source = CustomDataNode(type='partranspose_encode_ringt_data_source', id=f'{layer_id}_{k_idx}')
+            transpose_diag_pt.append(encode_ringt(source, scale, output_id=f'encode_ringt_{layer_id}_{k_idx}'))
+            sources.append(source)
+        return self.call(input_cts, transpose_diag_pt), sources
+
     # ------------------------------------------------------------------ #
     #  FHE operation count                                                #
     # ------------------------------------------------------------------ #

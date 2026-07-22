@@ -96,6 +96,10 @@ CkksPlaintextRingt UpsampleNearestLayer::generate_select_tensor_pt_for_index(Ckk
     return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_));
 }
 
+uint32_t UpsampleNearestLayer::num_select_tensors() const {
+    return n_channel_per_ct / (upsample_factor[0] * upsample_factor[1]);
+}
+
 Feature2DEncrypted UpsampleNearestLayer::run(CkksContext& ctx, const Feature2DEncrypted& x) {
     uint32_t x_size = x.data.size();
     vector<CkksCiphertext> x_data_cpy(x_size);

@@ -36,6 +36,14 @@ public:
     ls::CkksPlaintextRingt generate_psi_k0_pt(ls::CkksContext& ctx) const;
     ls::CkksPlaintextRingt generate_psi_wk_pt(ls::CkksContext& ctx, uint32_t i) const;
     ls::CkksPlaintextRingt generate_psi_wkd_pt(ls::CkksContext& ctx, uint32_t i) const;
+    std::vector<double> generate_sigma_values(uint32_t k) const;
+    std::vector<double> generate_tau_values(uint32_t offset_idx) const;
+    std::vector<double> generate_psi_k0_values() const;
+    std::vector<double> generate_psi_wk_values(uint32_t i) const;
+    std::vector<double> generate_psi_wkd_values(uint32_t i) const;
+    uint32_t block_size() const {
+        return d_;
+    }
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A, const FeatureMatEncrypted& B);
     Array<double, 2> run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const;

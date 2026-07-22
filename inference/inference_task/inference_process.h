@@ -269,6 +269,9 @@ private:
     // Prepare CustomData wrappers for all layer objects (keyed by layer_id)
     std::vector<std::pair<std::string, fhe_ops_lib::CustomData>> prepare_layer_data_sources();
 
+    // Prepare raw slot-vector inputs for native GPU encode_ringt nodes.
+    std::vector<std::pair<std::string, std::vector<fhe_ops_lib::CustomData>>> prepare_encode_ringt_data_sources();
+
     // Register the encode_pt custom executor
     void register_custom_executors(std::unordered_map<std::string, ExecutorFunc>& executors);
     void set_feature(const std::string& feature_id, UPtr<FeatureEncrypted> feature);

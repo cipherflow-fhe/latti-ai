@@ -61,12 +61,15 @@ void MultScalarLayer::prepare_weight_lazy() {
 }
 
 CkksPlaintextRingt MultScalarLayer::generate_weight_pt_for_index(CkksContext& ctx, int i) const {
+    return ctx.encode_ringt(generate_weight_values_for_index(i), ctx.get_parameter().get_q(level_));
+}
+
+std::vector<double> MultScalarLayer::generate_weight_values_for_index(int i) const {
     const int skip_prod = skip[0] * skip[1];
     int channel = weight.get_shape()[0];
     const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
-    double pack_scale = ctx.get_parameter().get_q(level_);
 
-    vector<double> feature_tmp_pack(ctx.get_parameter().get_n() / 2);
+    vector<double> feature_tmp_pack(param_.get_n() / 2);
     for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
         int block_i = linear_idx / (block_shape[0] * block_shape[1]);
         int residual = linear_idx % (block_shape[0] * block_shape[1]);
@@ -81,7 +84,14 @@ CkksPlaintextRingt MultScalarLayer::generate_weight_pt_for_index(CkksContext& ct
         int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;
         feature_tmp_pack[index] = weight.get(channel_idx);
     }
-    return ctx.encode_ringt(feature_tmp_pack, pack_scale);
+    return feature_tmp_pack;
+}
+
+uint32_t MultScalarLayer::num_weight_values() const {
+    const uint32_t block_count = block_expansion[0] * block_expansion[1];
+    if (block_count > 1)
+        return weight.get_shape()[0] * block_count;
+    return div_ceil(weight.get_shape()[0], n_channel_per_ct);
 }
 
 void MultScalarLayer::prepare_weight() {

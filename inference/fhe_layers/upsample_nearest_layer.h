@@ -41,6 +41,7 @@ public:
 
     // Helper function to generate select_tensor plaintext on-demand
     ls::CkksPlaintextRingt generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int idx) const;
+    uint32_t num_select_tensors() const;
 
     std::vector<ls::CkksPlaintextRingt> select_tensor_pt;
     Duo upsample_factor;

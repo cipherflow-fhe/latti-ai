@@ -62,6 +62,27 @@ public:
     generate_diag_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const;
     ls::CkksPlaintextRingt generate_mask_h0_pt(ls::CkksContext& ctx) const;
     ls::CkksPlaintextRingt generate_bias_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t bi, uint32_t g) const;
+    std::vector<double> generate_diag_values(uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const;
+    std::vector<double> generate_mask_h0_values() const;
+    std::vector<double> generate_bias_values(uint32_t mb, uint32_t bi, uint32_t g) const;
+    uint32_t megablocks() const {
+        return K_;
+    }
+    uint32_t groups() const {
+        return n_cts_per_block_idx_;
+    }
+    uint32_t output_blocks() const {
+        return n_heads_;
+    }
+    uint32_t input_block_rows() const {
+        return num_block_rows_A_;
+    }
+    uint32_t diagonal_count() const {
+        return d_;
+    }
+    uint32_t bias_megablocks() const {
+        return mode_ == Mode::EXPAND ? K_ : 1;
+    }
 
     bool has_bias() const {
         return has_bias_;

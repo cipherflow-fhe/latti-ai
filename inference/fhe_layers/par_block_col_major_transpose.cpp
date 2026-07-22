@@ -140,9 +140,12 @@ void ParBlockColMajorTranspose::precompute_diagonals() {
 }
 
 CkksPlaintextRingt ParBlockColMajorTranspose::generate_transpose_diag_pt(CkksContext& ctx, uint32_t k_idx) const {
+    return ctx.encode_ringt(generate_transpose_diag_values(k_idx), param_.get_q(level_));
+}
+
+std::vector<double> ParBlockColMajorTranspose::generate_transpose_diag_values(uint32_t k_idx) const {
     int k = (int)k_idx - (int)(d_ - 1);  // k_idx 0..2d-2 -> k -(d-1)..d-1
-    auto diag_vec = build_transpose_diagonal(k);
-    return ctx.encode_ringt(diag_vec, param_.get_q(level_));
+    return build_transpose_diagonal(k);
 }
 
 // transpose_on_ct with BSGS: (bsgs_bs-1) baby + up to bsgs_gs giant rotations

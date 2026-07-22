@@ -44,6 +44,16 @@ public:
     Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
 
     ls::CkksPlaintextRingt generate_pt(ls::CkksContext& ctx, uint32_t bi, uint32_t bj, uint32_t g) const;
+    std::vector<double> generate_values(uint32_t bi, uint32_t bj, uint32_t g) const;
+    uint32_t num_block_rows() const {
+        return num_block_rows_;
+    }
+    uint32_t num_block_cols() const {
+        return num_block_cols_;
+    }
+    uint32_t num_cts_per_block_idx() const {
+        return n_cts_per_block_idx_;
+    }
 
 private:
     std::vector<double> build_pt_vec(uint32_t bi, uint32_t bj, uint32_t g) const;

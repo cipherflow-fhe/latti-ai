@@ -321,6 +321,31 @@ class ParBlockColMajorCCMM:
 
         return self.call(A_cts, B_cts, sigma_pt, tau_pt, psi_k0_pt, psi_wk_pt, psi_wkd_pt)
 
+    def call_encode_ringt(self, A_cts: list, B_cts: list, layer_id: str, q_level: float, psi_scale: float):
+        sources = []
+        sigma_pt = []
+        for k in range(self.d):
+            source = CustomDataNode(type='parccmm_encode_ringt_data_source', id=f'{layer_id}_s_{k}')
+            sigma_pt.append(encode_ringt(source, q_level, output_id=f'encode_ringt_{layer_id}_s_{k}'))
+            sources.append(source)
+        tau_pt = []
+        for idx in range(2 * self.d - 1):
+            source = CustomDataNode(type='parccmm_encode_ringt_data_source', id=f'{layer_id}_t_{idx}')
+            tau_pt.append(encode_ringt(source, q_level, output_id=f'encode_ringt_{layer_id}_t_{idx}'))
+            sources.append(source)
+        source = CustomDataNode(type='parccmm_encode_ringt_data_source', id=f'{layer_id}_p0')
+        psi_k0_pt = encode_ringt(source, psi_scale, output_id=f'encode_ringt_{layer_id}_p0')
+        sources.append(source)
+        psi_wk_pt, psi_wkd_pt = [], []
+        for i in range(1, self.d):
+            source = CustomDataNode(type='parccmm_encode_ringt_data_source', id=f'{layer_id}_pk_{i}')
+            psi_wk_pt.append(encode_ringt(source, psi_scale, output_id=f'encode_ringt_{layer_id}_pk_{i}'))
+            sources.append(source)
+            source = CustomDataNode(type='parccmm_encode_ringt_data_source', id=f'{layer_id}_pkd_{i}')
+            psi_wkd_pt.append(encode_ringt(source, psi_scale, output_id=f'encode_ringt_{layer_id}_pkd_{i}'))
+            sources.append(source)
+        return self.call(A_cts, B_cts, sigma_pt, tau_pt, psi_k0_pt, psi_wk_pt, psi_wkd_pt), sources
+
     # ------------------------------------------------------------------ #
     #  FHE operation count                                                #
     # ------------------------------------------------------------------ #

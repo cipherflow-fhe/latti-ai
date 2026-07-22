@@ -48,10 +48,13 @@ public:
                              uint32_t skip_in,
                              uint32_t shape_in);
     ls::CkksPlaintextRingt generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int i) const;
+    uint32_t num_select_tensors() const;
     Feature1DEncrypted run_multiplexed_avgpool(ls::CkksContext& ctx, const Feature1DEncrypted& x);
     std::vector<ls::CkksPlaintextRingt> select_tensor_pt;
     uint32_t shape;
     uint32_t stride;
     uint32_t skip;
     uint32_t n_block_per_ct;
+    uint32_t n_channel_per_ct_ = 0;
+    uint32_t n_channel_ = 0;
 };

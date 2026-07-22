@@ -2694,6 +2694,14 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
     }
 
     // 2. eager pt_ringt + CustomData
+    // GPU encode_ringt vector arguments must be inserted at the same layer
+    // position as their Argument entries in task_signature.json.  Appending
+    // them after all layer sources would shift every subsequent argument.
+    auto encode_ringt_data_sources = prepare_encode_ringt_data_sources();
+    unordered_map<string, vector<fhe_ops_lib::CustomData>*> encode_ringt_source_map;
+    for (auto& [k, v] : encode_ringt_data_sources)
+        encode_ringt_source_map[k] = &v;
+
     auto layer_data_sources = prepare_layer_data_sources();
     unordered_map<string, fhe_ops_lib::CustomData*> data_source_map;
     for (auto& [k, v] : layer_data_sources)
@@ -2702,6 +2710,13 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
     for (const auto& layer : json_layers.items()) {
         const string& key = layer.key();
         const string& layer_type = layer.value()["type"].get<string>();
+        if (layer.value().value("gpu_encode_ringt", false)) {
+            const string encode_key = key + "_encode_ringt";
+            if (!encode_ringt_source_map.count(encode_key))
+                throw runtime_error("Missing GPU encode_ringt data source for layer: " + key);
+            cxx_args.push_back(CxxVectorArgument{encode_key, encode_ringt_source_map[encode_key]});
+            continue;
+        }
         if (layer_type == "avgpool2d") {
             FeatureNode d_input_node(json_features[layer.value()["feature_input"][0].get<string>()]);
             if (d_input_node.dim == 2) {
@@ -3027,6 +3042,90 @@ vector<pair<string, fhe_ops_lib::CustomData>> InferenceProcess::prepare_layer_da
         }
     }
     return data_sources;
+}
+
+vector<pair<string, vector<fhe_ops_lib::CustomData>>> InferenceProcess::prepare_encode_ringt_data_sources() {
+    vector<pair<string, vector<fhe_ops_lib::CustomData>>> result;
+
+    for (const auto& layer : fp->json_layers.items()) {
+        const string& key = layer.key();
+        const json& layer_config = layer.value();
+        if (!layer_config.value("gpu_encode_ringt", false)) {
+            continue;
+        }
+
+        vector<fhe_ops_lib::CustomData> sources;
+        const string layer_type = layer_config["type"].get<string>();
+        if (layer_type == "conv2d") {
+            auto& conv = fp->get_layer<Conv2DPackedLayer>(key);
+            const uint32_t n_input_vectors = conv.packed_ct_in_count() * conv.channels_per_ct();
+            const uint32_t kernel_size = conv.kernel_size();
+            for (uint32_t out_ct = 0; out_ct < conv.packed_ct_out_count(); ++out_ct) {
+                for (uint32_t input_vector = 0; input_vector < n_input_vectors; ++input_vector) {
+                    for (uint32_t kernel_idx = 0; kernel_idx < kernel_size; ++kernel_idx) {
+                        sources.emplace_back(conv.generate_weight_values_for_indices(out_ct, input_vector, kernel_idx));
+                    }
+                }
+                sources.emplace_back(conv.generate_bias_values_for_index(out_ct));
+            }
+        } else if (layer_type == "mult_scalar") {
+            auto& layer_obj = fp->get_layer<MultScalarLayer>(key);
+            for (uint32_t i = 0; i < layer_obj.num_weight_values(); ++i)
+                sources.emplace_back(layer_obj.generate_weight_values_for_index(i));
+        } else if (layer_type == "upsample_nearest") {
+            auto& layer_obj = fp->get_layer<UpsampleNearestLayer>(key);
+            for (uint32_t i = 0; i < layer_obj.num_select_tensors(); ++i)
+                sources.emplace_back(layer_obj.select_tensor(i));
+        } else if (layer_type == "avgpool1d") {
+            auto& layer_obj = fp->get_layer<Avgpool1DLayer>(key);
+            for (uint32_t i = 0; i < layer_obj.num_select_tensors(); ++i)
+                sources.emplace_back(layer_obj.select_tensor(i));
+        } else if (layer_type == "avgpool2d") {
+            auto& layer_obj = fp->get_layer<Avgpool2DLayer>(key);
+            for (uint32_t i = 0; i < layer_obj.num_select_tensors(); ++i)
+                sources.emplace_back(layer_obj.select_tensor(i));
+        } else if (layer_type == "partranspose") {
+            auto& layer_obj = fp->get_layer<ParBlockColMajorTranspose>(key);
+            for (uint32_t i = 0; i < 2 * layer_obj.block_size() - 1; ++i)
+                sources.emplace_back(layer_obj.generate_transpose_diag_values(i));
+        } else if (layer_type == "pcm_add_pt") {
+            auto& layer_obj = fp->get_layer<ParBlockColMajorAddPt>(key);
+            for (uint32_t bj = 0; bj < layer_obj.num_block_cols(); ++bj)
+                for (uint32_t bi = 0; bi < layer_obj.num_block_rows(); ++bi)
+                    for (uint32_t g = 0; g < layer_obj.num_cts_per_block_idx(); ++g)
+                        sources.emplace_back(layer_obj.generate_values(bi, bj, g));
+        } else if (layer_type == "parcpmm") {
+            auto& layer_obj = fp->get_layer<ParBlockColMajorCPMM>(key);
+            for (uint32_t mb = 0; mb < layer_obj.megablocks(); ++mb)
+                for (uint32_t g = 0; g < layer_obj.groups(); ++g)
+                    for (uint32_t bp = 0; bp < layer_obj.output_blocks(); ++bp)
+                        for (uint32_t k = 0; k < layer_obj.diagonal_count(); ++k)
+                            sources.emplace_back(layer_obj.generate_diag_values(mb, g, bp, k));
+            sources.emplace_back(layer_obj.generate_mask_h0_values());
+            if (layer_obj.has_bias())
+                for (uint32_t mb = 0; mb < layer_obj.bias_megablocks(); ++mb)
+                    for (uint32_t bi = 0; bi < layer_obj.input_block_rows(); ++bi)
+                        for (uint32_t g = 0; g < layer_obj.groups(); ++g)
+                            sources.emplace_back(layer_obj.generate_bias_values(mb, bi, g));
+        } else if (layer_type == "parccmm") {
+            auto& layer_obj = fp->get_layer<ParBlockColMajorCCMM>(key);
+            for (uint32_t k = 0; k < layer_obj.block_size(); ++k)
+                sources.emplace_back(layer_obj.generate_sigma_values(k));
+            for (uint32_t idx = 0; idx < 2 * layer_obj.block_size() - 1; ++idx)
+                sources.emplace_back(layer_obj.generate_tau_values(idx));
+            sources.emplace_back(layer_obj.generate_psi_k0_values());
+            for (uint32_t i = 1; i < layer_obj.block_size(); ++i) {
+                sources.emplace_back(layer_obj.generate_psi_wk_values(i));
+                sources.emplace_back(layer_obj.generate_psi_wkd_values(i));
+            }
+        } else {
+            throw runtime_error("GPU encode_ringt data source is not implemented for layer type: " + layer_type);
+        }
+
+        result.emplace_back(key + "_encode_ringt", move(sources));
+    }
+
+    return result;
 }
 
 #ifdef INFERENCE_SDK_ENABLE_GPU

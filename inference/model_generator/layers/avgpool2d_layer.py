@@ -317,6 +317,19 @@ class Avgpool2DLayer:
 
         return self.call_multiplexed_avgpool(x, select_tensor_pt, n_channel, n_channel_per_ct)
 
+    def call_encode_ringt_multiplexed_avgpool(self, x: list, layer_id: str, n_channel: int, n: int, scale: float):
+        n_channel_per_ct = int(math.ceil(n / 2 / (self.shape[0] * self.shape[1])))
+        out_channels_per_ct = n_channel_per_ct * self.stride[0] * self.stride[1]
+        n_select_pt = min(n_channel, out_channels_per_ct)
+        select_tensor_pt = []
+        sources = []
+        for i in range(n_select_pt):
+            source = CustomDataNode(type='avgpool2d_encode_ringt_data_source', id=f'{layer_id}_{i}')
+            select_tensor_pt.append(encode_ringt(source, scale, output_id=f'encode_ringt_{layer_id}_{i}'))
+            sources.append(source)
+        result = self.call_multiplexed_avgpool(x, select_tensor_pt, n_channel, n_channel_per_ct)
+        return result, sources
+
     def get_fhe_op_count_multiplexed(
         self, x_size: int, n_channel: int, n_channel_per_ct: int, level: int
     ) -> dict[int, dict[str, int]]:

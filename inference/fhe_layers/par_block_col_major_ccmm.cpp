@@ -260,29 +260,47 @@ void ParBlockColMajorCCMM::precompute_diagonals() {
 // ── Generate methods for encode_pt executor ───────────────────────────────────
 
 CkksPlaintextRingt ParBlockColMajorCCMM::generate_sigma_pt(CkksContext& ctx, uint32_t k) const {
-    return ctx.encode_ringt(build_sigma_diagonal(k), param_.get_q(level_));
+    return ctx.encode_ringt(generate_sigma_values(k), param_.get_q(level_));
+}
+
+std::vector<double> ParBlockColMajorCCMM::generate_sigma_values(uint32_t k) const {
+    return build_sigma_diagonal(k);
 }
 
 CkksPlaintextRingt ParBlockColMajorCCMM::generate_tau_pt(CkksContext& ctx, uint32_t offset_idx) const {
-    int offset = (int)offset_idx - (int)(d_ - 1);  // offset_idx 0..2d-2 → offset -(d-1)..d-1
-    return ctx.encode_ringt(build_tau_diagonal(offset), param_.get_q(level_));
+    return ctx.encode_ringt(generate_tau_values(offset_idx), param_.get_q(level_));
+}
+
+std::vector<double> ParBlockColMajorCCMM::generate_tau_values(uint32_t offset_idx) const {
+    int offset = (int)offset_idx - (int)(d_ - 1);
+    return build_tau_diagonal(offset);
 }
 
 CkksPlaintextRingt ParBlockColMajorCCMM::generate_psi_k0_pt(CkksContext& ctx) const {
     double psi_scale = param_.get_q(level_ - 2) / param_.get_default_scale() * param_.get_q(level_ - 1);
-    return ctx.encode_ringt(build_psi_k_equal_0_diagonals(), psi_scale);
+    return ctx.encode_ringt(generate_psi_k0_values(), psi_scale);
+}
+
+std::vector<double> ParBlockColMajorCCMM::generate_psi_k0_values() const {
+    return build_psi_k_equal_0_diagonals();
 }
 
 CkksPlaintextRingt ParBlockColMajorCCMM::generate_psi_wk_pt(CkksContext& ctx, uint32_t i) const {
     double psi_scale = param_.get_q(level_ - 2) / param_.get_default_scale() * param_.get_q(level_ - 1);
-    auto [w_k, w_kd] = build_psi_diagonals(i);
-    return ctx.encode_ringt(w_k, psi_scale);
+    return ctx.encode_ringt(generate_psi_wk_values(i), psi_scale);
+}
+
+std::vector<double> ParBlockColMajorCCMM::generate_psi_wk_values(uint32_t i) const {
+    return build_psi_diagonals(i).first;
 }
 
 CkksPlaintextRingt ParBlockColMajorCCMM::generate_psi_wkd_pt(CkksContext& ctx, uint32_t i) const {
     double psi_scale = param_.get_q(level_ - 2) / param_.get_default_scale() * param_.get_q(level_ - 1);
-    auto [w_k, w_kd] = build_psi_diagonals(i);
-    return ctx.encode_ringt(w_kd, psi_scale);
+    return ctx.encode_ringt(generate_psi_wkd_values(i), psi_scale);
+}
+
+std::vector<double> ParBlockColMajorCCMM::generate_psi_wkd_values(uint32_t i) const {
+    return build_psi_diagonals(i).second;
 }
 
 // sigma with BSGS: (bsgs_bs-1) baby + (bsgs_gs-1) giant rotations
