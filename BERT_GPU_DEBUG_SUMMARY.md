@@ -129,6 +129,33 @@ BTP 保护缩放当前为：
 - 如果 bootstrap 发生在已经做过 denominator scale 的 denominator 上，仍只按 BTP 保护语义处理，不再把 normalize scale 和保护 scale 混在一起。
 - BERT softmax values 当前不做额外保护缩放，避免把非常小的中间量和后续 denominator/inverse 误差耦合到一起。
 
+### 与 THOR scale 管理的对照
+
+这里参考 THOR 的方式只限于 scale 管理，不替换当前 `is_aSOR=false` 的 inverse 计算核心。当前编译图仍生成 `pdmheadcolsum -> pdmgamma(denominator_scale) -> pdminvinit -> pdminviter* -> pdmgamma(denominator_scale) -> pdmctmul`，对应 C++ `par_upper_diagonal_polysoftmax_cpp` 中的 `run_normalize_plain/run_normalize_encrypt`，不会生成 THOR `he_inv` 里那套 numerator/denominator 同步更新的 Goldschmidt 子图。
+
+THOR 里值得借鉴的是 refresh 前后的幅度保护：
+
+- denominator 过小且需要 refresh 时，先放大再 refresh，再乘回倒数。
+- inverse 迭代输出需要 refresh 时，先缩小再 refresh，再乘回倒数。
+- normalize 的 `denominator_scale` 和 BTP protection scale 是两类不同的 scale，前者改变 inverse 迭代输入区间并在末尾恢复，后者只包在 bootstrap 前后保持 plaintext 不变。
+
+当前 GPU pipeline 的对应关系是：
+
+```json
+"bert_softmax_initial_denominator_scale": 16.0,
+"bert_softmax_first_refinement_denominator_scale": 2.0,
+"bert_softmax_later_refinement_denominator_scale": 1.0,
+"bert_softmax_denominator_btp_scale": 16.0,
+"bert_softmax_scaled_denominator_btp_scale": 16.0,
+"bert_softmax_inverse_btp_scale": 0.125
+```
+
+因此，如果 DP 把 bootstrap 放在 raw denominator 后，图中会出现 `16 -> bootstrap -> 1/16` 的保护缩放，然后再执行 normalize 的 denominator scale。如果 bootstrap 放在已经乘过 denominator scale 的 denominator 后，也仍按 `16 -> bootstrap -> 1/16` 保护处理。inverse 迭代中的 bootstrap 使用 `0.125 -> bootstrap -> 8`，对应 C++ 单测里的 inverse refresh scale。
+
+当前不使用 `inverse_epsilon` 作为 denominator 的额外加法项；`inverse_epsilon`、`inverse_alpha`、`final_inverse_alpha` 会从 ONNX 进入 `pt.json`，但在 `is_aSOR=false` 的 `pdminvinit/pdminviter` 路径中只是保留属性，不参与子图生成。
+
+BERT 的 attention score 缩放继续以 ONNX `scaling=0.125` 为准，目前吸收到 Q projection 的 `weight_multiplier/bias_multiplier`。ViT 路径中为了旧 attention polynomial 语义保留的 `1/seq_len` 吸收不会用于 `model_type="bert"`。THOR encoder 对 BERT key plaintext 使用的 `1/512` 属于它那套 packing/score/exp 缩放组合；当前 ONNX 图已经显式携带 `scaling` 和 `exp_divisor`，所以不能无条件把这个 `1/512` 再套到 K 上。
+
 ## 6. BERT 和 ViT 的 H5 权重吸收差异
 
 ViT 的 feature_mat attention 旧路径会在 H5 导出时对 attention polynomial coefficients 吸收 `1/seq_len`。BERT 不走这条语义：BERT `CustomMultiHeadAttention` 已经在 compiler 中展开为 `pdmupperaddpt`、`pdmgamma`、`pdmupperpoly`、`pdmheadcolsum`、`pdminv*` 等底层节点，softmax polynomial coefficients 直接来自 ONNX 的 `exp_coefficients`。
