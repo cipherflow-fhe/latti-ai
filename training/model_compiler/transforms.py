@@ -1371,23 +1371,26 @@ def _append_softmax_normalize(
             2,
         )
 
-    if denominator_scale != 1.0:
-        inv = _append_unary_compute(
-            graph,
-            inv,
-            _make_scalar_gamma(f'{base_id}_inverse_scale', denominator_scale),
-            f'{base_id}_inverse_scaled',
-            1,
-        )
-
-    return _append_binary_compute(
+    probabilities_output_id = (
+        f'{base_id}_probabilities_unscaled' if denominator_scale != 1.0 else f'{base_id}_probabilities'
+    )
+    probabilities = _append_binary_compute(
         graph,
         values,
         inv,
         ComputeNode(f'{base_id}_multiply', 'pdmctmul', 1, 1),
-        f'{base_id}_probabilities',
+        probabilities_output_id,
         2,
     )
+    if denominator_scale != 1.0:
+        probabilities = _append_unary_compute(
+            graph,
+            probabilities,
+            _make_scalar_gamma(f'{base_id}_probabilities_scale', denominator_scale),
+            f'{base_id}_probabilities',
+            1,
+        )
+    return probabilities
 
 
 def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: FeatureNode, attn_node: ComputeNode):

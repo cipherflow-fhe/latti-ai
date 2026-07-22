@@ -284,11 +284,11 @@ class GlobalConfig:
             cls._instance.approx_poly_type = config_dict.get('APPROX_POLY_TYPE', 'polyact')
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
             cls._instance.set_btp_scale = None
-            cls._instance.bert_softmax_values_btp_scale = 1.0
+            cls._instance.bert_softmax_values_btp_scale = 512.0
             cls._instance.bert_softmax_denominator_btp_scale = 16.0
             cls._instance.bert_softmax_scaled_denominator_btp_scale = 16.0
             cls._instance.bert_softmax_inverse_btp_scale = 0.125
-            cls._instance.bert_softmax_initial_denominator_scale = 16.0
+            cls._instance.bert_softmax_initial_denominator_scale = 512.0
             cls._instance.bert_softmax_first_refinement_denominator_scale = 2.0
             cls._instance.bert_softmax_later_refinement_denominator_scale = 1.0
             cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'polyact']

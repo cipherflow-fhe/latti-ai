@@ -295,6 +295,8 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
             if '_softmax_delta1_square_' in layer_id and '_out_bootstrap' in layer_id:
                 return float(getattr(config, 'bert_softmax_values_btp_scale', btp_scale))
             if '_softmax_normalize_' in layer_id:
+                if '_probabilities_unscaled_bootstrap' in layer_id:
+                    return bert_softmax_denominator_scale_for_layer(layer_id)
                 if '_inverse_scaled_bootstrap' in layer_id:
                     denominator_scale = bert_softmax_denominator_scale_for_layer(layer_id)
                     return 1.0 / denominator_scale
