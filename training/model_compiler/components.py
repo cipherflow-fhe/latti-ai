@@ -284,6 +284,13 @@ class GlobalConfig:
             cls._instance.approx_poly_type = config_dict.get('APPROX_POLY_TYPE', 'polyact')
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
             cls._instance.set_btp_scale = None
+            cls._instance.bert_softmax_values_btp_scale = 1.0
+            cls._instance.bert_softmax_denominator_btp_scale = 16.0
+            cls._instance.bert_softmax_scaled_denominator_btp_scale = 16.0
+            cls._instance.bert_softmax_inverse_btp_scale = 0.125
+            cls._instance.bert_softmax_initial_denominator_scale = 16.0
+            cls._instance.bert_softmax_first_refinement_denominator_scale = 2.0
+            cls._instance.bert_softmax_later_refinement_denominator_scale = 1.0
             cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'polyact']
             cls._instance.single_thread = config_dict.get('SINGLE_THREAD', False)
             cls._instance.n_heads = 1
@@ -664,6 +671,7 @@ class LayerNormComputeNode(ComputeNode):
         c1: float = -16.15885111,
         c2: float = 11.52830778,
         num_iters: int = 2,
+        attrs: dict | None = None,
     ):
         super().__init__(layer_id, 'layernorm', 1, 1)
         self.epsilon = epsilon
@@ -675,6 +683,9 @@ class LayerNormComputeNode(ComputeNode):
         self.c1 = c1
         self.c2 = c2
         self.num_iters = num_iters
+        self.attrs = attrs or {}
+        for attr_key, attr_value in self.attrs.items():
+            setattr(self, attr_key, attr_value)
 
 
 class LayerAbstractGraph:
@@ -878,14 +889,38 @@ class LayerAbstractGraph:
             elif layer_type in ('pcmstats', 'pdmstats'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.epsilon = layer_json.get('epsilon', 1e-5)
+                for attr_key in (
+                    'inv_var',
+                    'inv_std',
+                    'min_var',
+                    'max_var',
+                    'w_buffer',
+                    'input_scale',
+                    'max_denominator',
+                    'normalized_epsilon',
+                    'profile',
+                    'use_asor',
+                ):
+                    if attr_key in layer_json:
+                        setattr(compute_node, attr_key, layer_json[attr_key])
 
             elif layer_type in ('pcmcenter', 'pdmcenter', 'pcminit', 'pdminit', 'pcmgs', 'pdmgs'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
+                if layer_type in ('pcminit', 'pdminit'):
+                    if 'coeffs' in layer_json:
+                        compute_node.c0 = layer_json['coeffs'][0]
+                        compute_node.c1 = layer_json['coeffs'][1]
+                        compute_node.c2 = layer_json['coeffs'][2]
+                    for attr_key in ('c0', 'c1', 'c2'):
+                        if attr_key in layer_json:
+                            setattr(compute_node, attr_key, layer_json[attr_key])
 
             elif layer_type in ('pcmaffine', 'pdmaffine'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.weight_path = layer_json.get('weight_path', '')
                 compute_node.bias_path = layer_json.get('bias_path', '')
+                if 'inv_std' in layer_json:
+                    compute_node.inv_std = layer_json['inv_std']
 
             elif layer_type == 'CustomMultiHeadAttention':
                 compute_node = ComputeNode(key, layer_type, 1, 1)
@@ -984,6 +1019,26 @@ class LayerAbstractGraph:
                     compute_node.weight_scale_list = layer_json.get('weight_scale_list', [1] * (compute_node.order + 1))
 
             elif layer_type == 'layernorm':
+                known_layernorm_keys = {
+                    'type',
+                    'feature_input',
+                    'feature_output',
+                    'eps',
+                    'epsilon',
+                    'weight_path',
+                    'bias_path',
+                    'inv_std_scale',
+                    'inv_var_scale',
+                    'c0',
+                    'c1',
+                    'c2',
+                    'num_iters',
+                }
+                layernorm_attrs = {
+                    attr_key: attr_value
+                    for attr_key, attr_value in layer_json.items()
+                    if attr_key not in known_layernorm_keys
+                }
                 compute_node = LayerNormComputeNode(
                     key,
                     epsilon=layer_json.get('eps', layer_json.get('epsilon', 1e-5)),
@@ -994,7 +1049,14 @@ class LayerAbstractGraph:
                     c0=layer_json.get('c0', 6.19067182),
                     c1=layer_json.get('c1', -16.15885111),
                     c2=layer_json.get('c2', 11.52830778),
-                    num_iters=layer_json.get('num_iters', 2),
+                    num_iters=layer_json.get(
+                        'num_iters',
+                        layer_json.get(
+                            'max_inverse_sqrt_iterations',
+                            layer_json.get('max_inverse_sqrt_iteration', 2),
+                        ),
+                    ),
+                    attrs=layernorm_attrs,
                 )
 
             else:
@@ -1306,6 +1368,20 @@ class LayerAbstractGraph:
                     'feature_output': output_feature_ids,
                     'epsilon': layer.epsilon,
                 }
+                for attr_key in (
+                    'inv_var',
+                    'inv_std',
+                    'min_var',
+                    'max_var',
+                    'w_buffer',
+                    'input_scale',
+                    'max_denominator',
+                    'normalized_epsilon',
+                    'profile',
+                    'use_asor',
+                ):
+                    if getattr(layer, attr_key, None) is not None:
+                        layers[layer_id][attr_key] = getattr(layer, attr_key)
             if layer_type in ('pcmcenter', 'pdmcenter'):
                 layers[layer_id] = {
                     'type': layer_type,
@@ -1318,6 +1394,11 @@ class LayerAbstractGraph:
                     'feature_input': input_feature_ids,
                     'feature_output': output_feature_ids,
                 }
+                if all(getattr(layer, attr_key, None) is not None for attr_key in ('c0', 'c1', 'c2')):
+                    layers[layer_id]['coeffs'] = [layer.c0, layer.c1, layer.c2]
+                    layers[layer_id]['c0'] = layer.c0
+                    layers[layer_id]['c1'] = layer.c1
+                    layers[layer_id]['c2'] = layer.c2
             if layer_type in ('pcmgs', 'pdmgs'):
                 edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
                 if all(v is not None for v in edge_indices.values()):
@@ -1338,6 +1419,8 @@ class LayerAbstractGraph:
                     'weight_path': layer.weight_path,
                     'bias_path': layer.bias_path,
                 }
+                if getattr(layer, 'inv_std', None) is not None:
+                    layers[layer_id]['inv_std'] = layer.inv_std
             if 'fc' in layer_type:
                 absorb_type = list()
                 absorb_path = list()

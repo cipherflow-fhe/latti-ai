@@ -118,6 +118,7 @@ def export_feature_mat_h5_from_onnx(
                 polyact_sources,
                 standalone_gamma_paths,
                 out,
+                model_type=model_type,
             )
         elif ltype == 'pdmpoly':
             _export_pdmpoly(
@@ -129,6 +130,7 @@ def export_feature_mat_h5_from_onnx(
                 polyact_sources,
                 standalone_gamma_paths,
                 out,
+                model_type=model_type,
             )
         elif ltype == 'pcmaffine':
             _export_pcmaffine(layer_key, layer, features, onnx_weights, out)
@@ -317,6 +319,7 @@ def _export_pdmpoly(
     polyact_sources: dict[str, PolyActRNSource],
     standalone_gamma_paths: set[str],
     out: dict[str, np.ndarray],
+    model_type: str = '',
 ) -> None:
     dst_path = layer.get('coeffs_path') or _required_path(layer, 'weight_path', layer_key)
     fin = _feature(features, layer['feature_input'][0], layer_key)
@@ -334,7 +337,8 @@ def _export_pdmpoly(
             onnx_weights,
             absorb_input_gamma=gamma_path not in standalone_gamma_paths,
         )
-        coeffs = coeffs / _sequence_length(fin, layer_key)
+        if model_type != 'bert':
+            coeffs = coeffs / _sequence_length(fin, layer_key)
     else:
         source_path = layer.get('running_max_path') or dst_path
         if source_path in polyact_sources:
@@ -413,12 +417,15 @@ def _export_pdm_add_pt(
     if data.ndim == 3 and data.shape[0] == 1:
         data = data.reshape(data.shape[1], data.shape[2])
     if layer.get('source_op_type') == 'CustomPositionEmbedding':
-        if data.ndim != 2 or tuple(data.T.shape) != expected_shape:
+        if data.ndim == 2 and data.shape[1] == expected_shape[0] and data.shape[0] >= expected_shape[1]:
+            data = data[: expected_shape[1], :].T.copy()
+        elif data.ndim == 2 and tuple(data.T.shape) == expected_shape:
+            data = data.T.copy()
+        else:
             raise ValueError(
                 f'{layer_key}: CustomPositionEmbedding {path} shape {tuple(data.shape)} cannot transpose to '
                 f'pdm_add_pt matrix shape {expected_shape}'
             )
-        data = data.T.copy()
     elif data.ndim == 2 and tuple(data.T.shape) == expected_shape:
         data = data.T.copy()
     elif data.ndim == 2 and tuple(data.shape) == expected_shape:
@@ -475,6 +482,7 @@ def _export_pcmpoly(
     polyact_sources: dict[str, PolyActRNSource],
     standalone_gamma_paths: set[str],
     out: dict[str, np.ndarray],
+    model_type: str = '',
 ) -> None:
     dst_path = layer.get('coeffs_path') or _required_path(layer, 'weight_path', layer_key)
     fin = _feature(features, layer['feature_input'][0], layer_key)
@@ -492,7 +500,8 @@ def _export_pcmpoly(
             onnx_weights,
             absorb_input_gamma=gamma_path not in standalone_gamma_paths,
         )
-        coeffs = coeffs / _sequence_length(fin, layer_key)
+        if model_type != 'bert':
+            coeffs = coeffs / _sequence_length(fin, layer_key)
     else:
         source_path = layer.get('running_max_path') or dst_path
         if source_path in polyact_sources:

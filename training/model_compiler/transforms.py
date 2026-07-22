@@ -47,6 +47,59 @@ def _is_diagonal_mat_pack() -> bool:
     return getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack'
 
 
+def _positive_int_attr(value, attr_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return None
+        return _positive_int_attr(value[0], attr_name)
+
+    result = int(value)
+    if result <= 0:
+        raise ValueError(f'{attr_name} must be positive, got {value}')
+    return result
+
+
+def get_bert_l_prepad_seq_len(graph: LayerAbstractGraph) -> int | None:
+    seq_lens = []
+    for node in graph.dag.nodes:
+        if not (isinstance(node, ComputeNode) and node.layer_type == 'CustomMultiHeadAttention'):
+            continue
+        if getattr(config, 'model_type', '') != 'bert' and getattr(node, 'model_type', '') != 'bert':
+            continue
+        seq_len = _positive_int_attr(getattr(node, 'L_prepad', None), f'{node.layer_id}.L_prepad')
+        if seq_len is not None:
+            seq_lens.append(seq_len)
+
+    if not seq_lens:
+        return None
+    seq_len = seq_lens[0]
+    if any(item != seq_len for item in seq_lens[1:]):
+        raise ValueError(f'Conflicting BERT L_prepad values: {seq_lens}')
+    return seq_len
+
+
+def apply_bert_l_prepad_to_feature_mat_shapes(graph: LayerAbstractGraph) -> int | None:
+    seq_len = get_bert_l_prepad_seq_len(graph)
+    if seq_len is None:
+        return None
+
+    for node in graph.dag.nodes:
+        if not (
+            isinstance(node, FeatureNode) and node.data_type == 'feature_mat' and node.dim == 2 and len(node.shape) >= 2
+        ):
+            continue
+        node.shape[0] = seq_len
+    return seq_len
+
+
 def _pack_pcm_type(layer_type: str) -> str:
     if _is_diagonal_mat_pack():
         return PCM_TO_PDM_TYPES.get(layer_type, layer_type)
@@ -1145,6 +1198,58 @@ def _int_attr(node: ComputeNode, name: str, default: int) -> int:
     return int(value)
 
 
+def _bert_softmax_denominator_scale(attn_node: ComputeNode, attr_name: str, config_name: str, default: float) -> float:
+    scale = _float_attr(attn_node, attr_name, float(getattr(config, config_name, default)))
+    if scale == 0:
+        raise ValueError(f'BERT softmax denominator scale {attr_name} cannot be 0')
+    return scale
+
+
+def _layernorm_iterations(node: ComputeNode, default: int) -> int:
+    return _int_attr(
+        node,
+        'max_inverse_sqrt_iterations',
+        _int_attr(node, 'max_inverse_sqrt_iteration', _int_attr(node, 'num_iters', default)),
+    )
+
+
+def _bert_layernorm_runtime_attrs(ln_node: ComputeNode, default_n_iter: int) -> dict:
+    eps = _float_attr(ln_node, 'epsilon', 1.0e-5)
+    min_var = _float_attr(ln_node, 'min_var', 0.75)
+    max_var = _float_attr(ln_node, 'max_var', 2500.0)
+    w_buffer = _float_attr(ln_node, 'w_buffer', 1.05)
+    input_scale = _float_attr(ln_node, 'input_scale', 1.0)
+    max_denominator = (max_var * w_buffer + eps) * input_scale * input_scale
+    if max_denominator <= 0:
+        raise ValueError(f'BERT LayerNorm node {ln_node.layer_id} has non-positive max_denominator={max_denominator}')
+    inv_var = 1.0 / max_denominator
+    inv_std = math.sqrt(inv_var)
+    normalized_epsilon = (min_var + eps) / max_denominator
+    use_asor = _int_attr(ln_node, 'use_asor', 0)
+    if use_asor != 0:
+        raise ValueError(
+            f'BERT LayerNorm node {ln_node.layer_id} requests use_asor={use_asor}, but only use_asor=0 is supported'
+        )
+
+    return {
+        'epsilon': eps,
+        'min_var': min_var,
+        'max_var': max_var,
+        'w_buffer': w_buffer,
+        'input_scale': input_scale,
+        'max_denominator': max_denominator,
+        'normalized_epsilon': normalized_epsilon,
+        'inv_var': inv_var,
+        'inv_std': inv_std,
+        'c0': _float_attr(ln_node, 'c0', config.layernorm_c0),
+        'c1': _float_attr(ln_node, 'c1', config.layernorm_c1),
+        'c2': _float_attr(ln_node, 'c2', config.layernorm_c2),
+        'num_iters': _layernorm_iterations(ln_node, default_n_iter),
+        'profile': getattr(ln_node, 'profile', ''),
+        'use_asor': use_asor,
+    }
+
+
 def _new_feature_like(source: FeatureNode, name: str, shape: list[int] | None = None) -> FeatureNode:
     feature = FeatureNode(
         key=name,
@@ -1293,9 +1398,31 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
     coefficients = _parse_float_list(getattr(attn_node, 'exp_coefficients', []))
     if not coefficients:
         raise ValueError(f'BERT attention node {attn_node.layer_id} is missing exp_coefficients')
-    max_inverse_iterations = _int_attr(attn_node, 'max_inverse_iterations', 15)
+    max_inverse_iterations = _int_attr(
+        attn_node,
+        'max_inverse_iterations',
+        _int_attr(attn_node, 'max_inverse_iteration', 15),
+    )
     delta_1 = _int_attr(attn_node, 'delta_1', 2)
     delta_2 = _int_attr(attn_node, 'delta_2', 1)
+    initial_denominator_scale = _bert_softmax_denominator_scale(
+        attn_node,
+        'initial_denominator_scale',
+        'bert_softmax_initial_denominator_scale',
+        16.0,
+    )
+    first_refinement_denominator_scale = _bert_softmax_denominator_scale(
+        attn_node,
+        'first_refinement_denominator_scale',
+        'bert_softmax_first_refinement_denominator_scale',
+        2.0,
+    )
+    later_refinement_denominator_scale = _bert_softmax_denominator_scale(
+        attn_node,
+        'later_refinement_denominator_scale',
+        'bert_softmax_later_refinement_denominator_scale',
+        1.0,
+    )
 
     add_mid_node = ComputeNode(f'{base_id}_softmax_add_mid', 'pdmupperaddpt', 1, 1)
     add_mid_node.value = -mid
@@ -1340,7 +1467,7 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
         graph,
         f'{base_id}_softmax_normalize_initial',
         values,
-        16.0,
+        initial_denominator_scale,
         max_inverse_iterations,
     )
 
@@ -1354,7 +1481,9 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
             f'{base_id}_softmax_refine_square_{refinement_idx}_out',
             2,
         )
-        denominator_scale = 2.0 if refinement_idx == 0 else 1.0
+        denominator_scale = (
+            first_refinement_denominator_scale if refinement_idx == 0 else later_refinement_denominator_scale
+        )
         probabilities = _append_softmax_normalize(
             graph,
             f'{base_id}_softmax_normalize_refine_{refinement_idx}',
@@ -1800,19 +1929,24 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
         out: FeatureNode = succs[0]
 
         base_id = ln_node.layer_id
-        epsilon = ln_node.epsilon
         weight_path = ln_node.weight_path
         bias_path = ln_node.bias_path
-        node_n_iter = int(getattr(ln_node, 'num_iters', n_iter))
-        layernorm_param_attrs = {
-            'epsilon': epsilon,
-            'inv_std_scale': getattr(ln_node, 'inv_std_scale', config.layernorm_inv_std_scale),
-            'inv_var_scale': getattr(ln_node, 'inv_var_scale', config.layernorm_inv_var_scale),
-            'c0': getattr(ln_node, 'c0', config.layernorm_c0),
-            'c1': getattr(ln_node, 'c1', config.layernorm_c1),
-            'c2': getattr(ln_node, 'c2', config.layernorm_c2),
-            'num_iters': node_n_iter,
-        }
+        if getattr(config, 'model_type', '') == 'bert':
+            layernorm_param_attrs = _bert_layernorm_runtime_attrs(ln_node, n_iter)
+            epsilon = layernorm_param_attrs['epsilon']
+            node_n_iter = int(layernorm_param_attrs['num_iters'])
+        else:
+            epsilon = ln_node.epsilon
+            node_n_iter = int(getattr(ln_node, 'num_iters', n_iter))
+            layernorm_param_attrs = {
+                'epsilon': epsilon,
+                'inv_std_scale': getattr(ln_node, 'inv_std_scale', config.layernorm_inv_std_scale),
+                'inv_var_scale': getattr(ln_node, 'inv_var_scale', config.layernorm_inv_var_scale),
+                'c0': getattr(ln_node, 'c0', config.layernorm_c0),
+                'c1': getattr(ln_node, 'c1', config.layernorm_c1),
+                'c2': getattr(ln_node, 'c2', config.layernorm_c2),
+                'num_iters': node_n_iter,
+            }
 
         x_in_attrs = graph.dag.nodes[x_in]
         skip = list(x_in_attrs.get('skip', [1] * x_in.dim))

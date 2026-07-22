@@ -62,6 +62,7 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     """
     pt_graph = copy.deepcopy(raw_graph)
 
+    transforms.apply_bert_l_prepad_to_feature_mat_shapes(pt_graph)
     substitute_layers_for_btp(pt_graph)
     # transforms.init_levels(pt_graph)
     # update_shape_for_btp(pt_graph)
@@ -95,6 +96,7 @@ def set_block_shape(params, raw_graph: LayerAbstractGraph):
     """Set config.block_shape based on the input graph's leading feature node shape and N.
 
     Rules:
+      (0) BERT/feature_mat graphs do not use block_shape-based spatial tiling.
       (1) If leading node is not 2D, use sqrt(N/2) as a square default.
       (2) If shape0 * shape1 <= N / 2, block_shape = [shape0, shape1]
       (3) Otherwise, divide both shape0 and shape1 by 2, 4, 8, 16, ...,
@@ -102,6 +104,9 @@ def set_block_shape(params, raw_graph: LayerAbstractGraph):
     """
     slot_num = params.poly_modulus_degree // 2
     leading_nodes = raw_graph.get_leading_feature_nodes()
+    if getattr(config, 'model_type', '') == 'bert' or any(node.data_type == 'feature_mat' for node in leading_nodes):
+        config.block_shape = [1, 1]
+        return
     if not leading_nodes or len(leading_nodes[0].shape) == 0:
         side = 1 << (slot_num.bit_length() // 2)
         config.block_shape = [side, side]
@@ -264,6 +269,19 @@ def _clone_feature_node(feature: FeatureNode, node_id: str) -> FeatureNode:
     return cloned
 
 
+def bert_softmax_denominator_scale_for_layer(layer_id: str) -> float:
+    if '_softmax_normalize_initial_' in layer_id:
+        scale = getattr(config, 'bert_softmax_initial_denominator_scale', 16.0)
+    elif '_softmax_normalize_refine_0_' in layer_id:
+        scale = getattr(config, 'bert_softmax_first_refinement_denominator_scale', 2.0)
+    else:
+        scale = getattr(config, 'bert_softmax_later_refinement_denominator_scale', 1.0)
+    scale = float(scale)
+    if scale == 0:
+        raise ValueError(f'BERT softmax denominator scale cannot be 0 for {layer_id}')
+    return scale
+
+
 def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
     if config.set_btp_scale is None:
         return
@@ -271,6 +289,22 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
     btp_scale = float(config.set_btp_scale)
     if btp_scale == 0:
         raise ValueError('set_btp_scale cannot be 0 when inserting BTP scale gamma layers')
+
+    def pre_btp_scale_for_node(layer_id: str) -> float:
+        if getattr(config, 'model_type', '') == 'bert':
+            if '_softmax_delta1_square_' in layer_id and '_out_bootstrap' in layer_id:
+                return float(getattr(config, 'bert_softmax_values_btp_scale', btp_scale))
+            if '_softmax_normalize_' in layer_id:
+                if '_inverse_scaled_bootstrap' in layer_id:
+                    denominator_scale = bert_softmax_denominator_scale_for_layer(layer_id)
+                    return 1.0 / denominator_scale
+                if '_denominator_scaled_bootstrap' in layer_id:
+                    return float(getattr(config, 'bert_softmax_scaled_denominator_btp_scale', btp_scale))
+                if '_denominator_bootstrap' in layer_id:
+                    return float(getattr(config, 'bert_softmax_denominator_btp_scale', btp_scale))
+                if '_inverse_iter_' in layer_id and '_out_bootstrap' in layer_id:
+                    return float(getattr(config, 'bert_softmax_inverse_btp_scale', btp_scale))
+        return btp_scale
 
     dag = graph.dag
     for btp_node in list(dag.nodes):
@@ -284,6 +318,9 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
 
         pred_feature = preds[0]
         succ_feature = succs[0]
+        pre_btp_scale = pre_btp_scale_for_node(btp_node.layer_id)
+        if pre_btp_scale == 0:
+            raise ValueError(f'BTP scale cannot be 0 for {btp_node.layer_id}')
 
         gamma_type = _pack_pcm_type('pcmgamma')
         pre_gamma_id = _unique_graph_node_id(graph, f'{btp_node.layer_id}_pre_{gamma_type}', 'layer_id')
@@ -294,12 +331,12 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         pre_gamma = ComputeNode(pre_gamma_id, gamma_type, btp_node.channel_input, btp_node.channel_input)
         pre_gamma.depth = btp_node.depth
         pre_gamma.path = f'{pre_gamma_id}.weight'
-        pre_gamma.btp_scale = btp_scale
+        pre_gamma.btp_scale = pre_btp_scale
 
         post_gamma = ComputeNode(post_gamma_id, gamma_type, btp_node.channel_output, btp_node.channel_output)
         post_gamma.depth = btp_node.depth
         post_gamma.path = f'{post_gamma_id}.weight'
-        post_gamma.btp_scale = 1 / btp_scale
+        post_gamma.btp_scale = 1 / pre_btp_scale
 
         pre_feature = _clone_feature_node(pred_feature, pre_feature_id)
         post_gamma_input_feature = _clone_feature_node(succ_feature, post_gamma_input_feature_id)
@@ -603,6 +640,13 @@ def run_pipeline(
     mat_pack_style: str = '',
     model_type: str = '',
     set_btp_scale: float | None = None,
+    bert_softmax_values_btp_scale: float | None = None,
+    bert_softmax_denominator_btp_scale: float | None = None,
+    bert_softmax_scaled_denominator_btp_scale: float | None = None,
+    bert_softmax_inverse_btp_scale: float | None = None,
+    bert_softmax_initial_denominator_scale: float | None = None,
+    bert_softmax_first_refinement_denominator_scale: float | None = None,
+    bert_softmax_later_refinement_denominator_scale: float | None = None,
     use_gpu: bool = True,
     enable_score_cache: bool = True,
 ):
@@ -641,12 +685,35 @@ def run_pipeline(
     config.mat_pack_style = mat_pack_style
     config.model_type = model_type
     config.set_btp_scale = set_btp_scale
+    if bert_softmax_values_btp_scale is not None:
+        config.bert_softmax_values_btp_scale = float(bert_softmax_values_btp_scale)
+    if bert_softmax_denominator_btp_scale is not None:
+        config.bert_softmax_denominator_btp_scale = float(bert_softmax_denominator_btp_scale)
+    if bert_softmax_scaled_denominator_btp_scale is not None:
+        config.bert_softmax_scaled_denominator_btp_scale = float(bert_softmax_scaled_denominator_btp_scale)
+    if bert_softmax_inverse_btp_scale is not None:
+        config.bert_softmax_inverse_btp_scale = float(bert_softmax_inverse_btp_scale)
+    if bert_softmax_initial_denominator_scale is not None:
+        config.bert_softmax_initial_denominator_scale = float(bert_softmax_initial_denominator_scale)
+    if bert_softmax_first_refinement_denominator_scale is not None:
+        config.bert_softmax_first_refinement_denominator_scale = float(bert_softmax_first_refinement_denominator_scale)
+    if bert_softmax_later_refinement_denominator_scale is not None:
+        config.bert_softmax_later_refinement_denominator_scale = float(bert_softmax_later_refinement_denominator_scale)
     config.use_gpu = use_gpu
     print(
         f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
         f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
         f'MAT_PACK_STYLE={config.mat_pack_style}, MODEL_TYPE={config.model_type}, '
         f'SET_BTP_SCALE={config.set_btp_scale}, '
+        f'BERT_SOFTMAX_VALUES_BTP_SCALE={config.bert_softmax_values_btp_scale}, '
+        f'BERT_SOFTMAX_DENOMINATOR_BTP_SCALE={config.bert_softmax_denominator_btp_scale}, '
+        f'BERT_SOFTMAX_SCALED_DENOMINATOR_BTP_SCALE={config.bert_softmax_scaled_denominator_btp_scale}, '
+        f'BERT_SOFTMAX_INVERSE_BTP_SCALE={config.bert_softmax_inverse_btp_scale}, '
+        f'BERT_SOFTMAX_INITIAL_DENOMINATOR_SCALE={config.bert_softmax_initial_denominator_scale}, '
+        f'BERT_SOFTMAX_FIRST_REFINEMENT_DENOMINATOR_SCALE='
+        f'{config.bert_softmax_first_refinement_denominator_scale}, '
+        f'BERT_SOFTMAX_LATER_REFINEMENT_DENOMINATOR_SCALE='
+        f'{config.bert_softmax_later_refinement_denominator_scale}, '
         f'BACKEND={"gpu" if config.use_gpu else "cpu"}, '
         f'SCORE_CACHE={enable_score_cache}'
     )

@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
 
 
-def read_compile_config(config_path: str) -> dict[str, int | str]:
+def read_compile_config(config_path: str) -> dict[str, int | float | str]:
     if not config_path:
         return {}
     with open(config_path, 'r', encoding='utf-8') as f:
@@ -50,13 +50,27 @@ def read_compile_config(config_path: str) -> dict[str, int | str]:
     mat_pack_style = data.get('mat_pack_style', '')
     if mat_pack_style not in MAT_PACK_STYLES:
         raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
-    return {
+    result = {
         'n_heads': int(data['n_heads']),
         'head_dim': int(data['head_dim']),
         'matmul_block_size': int(data['matmul_block_size']),
         'mat_pack_style': mat_pack_style,
         'model_type': str(data.get('model_type', '')),
     }
+    for key in (
+        'btp_scale',
+        'set_btp_scale',
+        'bert_softmax_values_btp_scale',
+        'bert_softmax_denominator_btp_scale',
+        'bert_softmax_scaled_denominator_btp_scale',
+        'bert_softmax_inverse_btp_scale',
+        'bert_softmax_initial_denominator_scale',
+        'bert_softmax_first_refinement_denominator_scale',
+        'bert_softmax_later_refinement_denominator_scale',
+    ):
+        if key in data and data[key] is not None:
+            result[key] = float(data[key])
+    return result
 
 
 def main():
@@ -115,6 +129,8 @@ Examples:
 
     parser.add_argument(
         '--set_btp_scale',
+        '--btp_scale',
+        dest='set_btp_scale',
         type=float,
         default=None,
         help='Wrap each bootstrapping layer with pcmgamma layers using this scale',
@@ -150,6 +166,8 @@ Examples:
     model_type = compile_config.get('model_type', '')
     feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
     set_btp_scale = args.set_btp_scale
+    if set_btp_scale is None:
+        set_btp_scale = compile_config.get('set_btp_scale', compile_config.get('btp_scale'))
     onnx_path = input_path if is_onnx else None
 
     if is_onnx:
@@ -204,6 +222,17 @@ Examples:
             mat_pack_style=mat_pack_style,
             model_type=model_type,
             set_btp_scale=set_btp_scale,
+            bert_softmax_values_btp_scale=compile_config.get('bert_softmax_values_btp_scale'),
+            bert_softmax_denominator_btp_scale=compile_config.get('bert_softmax_denominator_btp_scale'),
+            bert_softmax_scaled_denominator_btp_scale=compile_config.get('bert_softmax_scaled_denominator_btp_scale'),
+            bert_softmax_inverse_btp_scale=compile_config.get('bert_softmax_inverse_btp_scale'),
+            bert_softmax_initial_denominator_scale=compile_config.get('bert_softmax_initial_denominator_scale'),
+            bert_softmax_first_refinement_denominator_scale=compile_config.get(
+                'bert_softmax_first_refinement_denominator_scale'
+            ),
+            bert_softmax_later_refinement_denominator_scale=compile_config.get(
+                'bert_softmax_later_refinement_denominator_scale'
+            ),
             # enable_score_cache=False
         )
 

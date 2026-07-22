@@ -73,6 +73,12 @@ FeatureNode::FeatureNode(const json& json_data)
     } else if (dim == 1) {
         shape[0] = json_data["shape"][0];
         skip[0] = json_data["skip"][0];
+        if (json_data.contains("invalid_fill")) {
+            invalid_fill[0] = json_data["invalid_fill"][0];
+            if (json_data["invalid_fill"].size() > 1) {
+                invalid_fill[1] = json_data["invalid_fill"][1];
+            }
+        }
     } else if (dim == 0) {
         skip[0] = json_data["skip"];
         if (json_data.contains("special_info")) {
