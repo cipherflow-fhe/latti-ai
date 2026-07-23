@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
 
 
-def read_compile_config(config_path: str) -> dict[str, int | str]:
+def read_compile_config(config_path: str) -> dict[str, int | float | str]:
     if not config_path:
         return {}
     with open(config_path, 'r', encoding='utf-8') as f:
@@ -50,12 +50,30 @@ def read_compile_config(config_path: str) -> dict[str, int | str]:
     mat_pack_style = data.get('mat_pack_style', '')
     if mat_pack_style not in MAT_PACK_STYLES:
         raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
-    return {
+    result = {
         'n_heads': int(data['n_heads']),
         'head_dim': int(data['head_dim']),
         'matmul_block_size': int(data['matmul_block_size']),
         'mat_pack_style': mat_pack_style,
+        'model_type': str(data.get('model_type', '')),
     }
+    for key in (
+        'btp_scale',
+        'set_btp_scale',
+        'bert_softmax_values_btp_scale',
+        'bert_softmax_denominator_btp_scale',
+        'bert_softmax_scaled_denominator_btp_scale',
+        'bert_softmax_inverse_btp_scale',
+        'bert_layernorm_inverse_btp_scale',
+        'bert_softmax_initial_denominator_scale',
+        'bert_softmax_wide_initial_denominator_scale',
+        'bert_softmax_use_wide_inverse_epsilon',
+        'bert_softmax_first_refinement_denominator_scale',
+        'bert_softmax_later_refinement_denominator_scale',
+    ):
+        if key in data and data[key] is not None:
+            result[key] = float(data[key])
+    return result
 
 
 def main():
@@ -114,6 +132,8 @@ Examples:
 
     parser.add_argument(
         '--set_btp_scale',
+        '--btp_scale',
+        dest='set_btp_scale',
         type=float,
         default=None,
         help='Wrap each bootstrapping layer with pcmgamma layers using this scale',
@@ -146,8 +166,11 @@ Examples:
 
     compile_config = read_compile_config(args.config)
     mat_pack_style = compile_config.get('mat_pack_style', '')
+    model_type = compile_config.get('model_type', '')
     feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
     set_btp_scale = args.set_btp_scale
+    if set_btp_scale is None:
+        set_btp_scale = compile_config.get('set_btp_scale', compile_config.get('btp_scale'))
     onnx_path = input_path if is_onnx else None
 
     if is_onnx:
@@ -159,7 +182,13 @@ Examples:
         print(f'[ONNX→JSON] Style: {onnx_style}')
 
         try:
-            onnx_to_json(str(input_path), str(pt_json_path), onnx_style, mat_pack_style=mat_pack_style)
+            onnx_to_json(
+                str(input_path),
+                str(pt_json_path),
+                onnx_style,
+                mat_pack_style=mat_pack_style,
+                model_type=model_type,
+            )
             log.info('[ONNX→JSON] Done: %s → %s (style=%s)', input_path, pt_json_path, onnx_style)
         except Exception as e:
             print(f'\n[Error] ONNX to JSON conversion failed: {e}')
@@ -176,7 +205,8 @@ Examples:
     print(f'[Compile] Output: {output_dir}')
     print(
         f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, '
-        f'COMPILE_CONFIG={args.config or "<none>"}, MAT_PACK_STYLE={mat_pack_style}, SET_BTP_SCALE={set_btp_scale}'
+        f'COMPILE_CONFIG={args.config or "<none>"}, MAT_PACK_STYLE={mat_pack_style}, '
+        f'MODEL_TYPE={model_type}, SET_BTP_SCALE={set_btp_scale}'
     )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
@@ -193,7 +223,24 @@ Examples:
             head_dim=compile_config.get('head_dim'),
             matmul_block_size=compile_config.get('matmul_block_size'),
             mat_pack_style=mat_pack_style,
+            model_type=model_type,
             set_btp_scale=set_btp_scale,
+            bert_softmax_values_btp_scale=compile_config.get('bert_softmax_values_btp_scale'),
+            bert_softmax_denominator_btp_scale=compile_config.get('bert_softmax_denominator_btp_scale'),
+            bert_softmax_scaled_denominator_btp_scale=compile_config.get('bert_softmax_scaled_denominator_btp_scale'),
+            bert_softmax_inverse_btp_scale=compile_config.get('bert_softmax_inverse_btp_scale'),
+            bert_layernorm_inverse_btp_scale=compile_config.get('bert_layernorm_inverse_btp_scale'),
+            bert_softmax_initial_denominator_scale=compile_config.get('bert_softmax_initial_denominator_scale'),
+            bert_softmax_wide_initial_denominator_scale=compile_config.get(
+                'bert_softmax_wide_initial_denominator_scale'
+            ),
+            bert_softmax_use_wide_inverse_epsilon=compile_config.get('bert_softmax_use_wide_inverse_epsilon'),
+            bert_softmax_first_refinement_denominator_scale=compile_config.get(
+                'bert_softmax_first_refinement_denominator_scale'
+            ),
+            bert_softmax_later_refinement_denominator_scale=compile_config.get(
+                'bert_softmax_later_refinement_denominator_scale'
+            ),
             # enable_score_cache=False
         )
 
@@ -218,6 +265,7 @@ Examples:
                         json_path=str(json_path),
                         h5_path=str(h5_path),
                         feature_mat=feature_mat,
+                        model_type=model_type,
                     )
                     print(f'[H5 Export] Done: {h5_path}')
                 except Exception as e:

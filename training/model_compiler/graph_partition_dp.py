@@ -135,6 +135,14 @@ def get_compute_score(
         'pcmaffine',
         'pdmgamma',
         'pdmpoly',
+        'pdmupperaddpt',
+        'pdmupperpoly',
+        'pdmmulsquare',
+        'pdmheadcolsum',
+        'pdminvinit',
+        'pdminviter',
+        'pdmctmul',
+        'pdmupperpolymultct',
         'pdmstats',
         'pdmcenter',
         'pdminit',
@@ -613,9 +621,7 @@ def run_single_compile(args):
     """Wrapper function for multiprocessing - runs a single compilation"""
     pt_graph_prepared, temperature, *rest = args
     enable_score_cache = rest[0] if rest else True
-    score, graph = compile_model_btp(
-        pt_graph_prepared, temperature, stdout=True, enable_score_cache=enable_score_cache
-    )
+    score, graph = compile_model_btp(pt_graph_prepared, temperature, stdout=True, enable_score_cache=enable_score_cache)
     return score, graph
 
 

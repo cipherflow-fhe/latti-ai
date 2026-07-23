@@ -46,6 +46,25 @@ log = logging.getLogger(__name__)
 MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
 
 
+def _json_safe_attr_value(value):
+    if isinstance(value, bytes):
+        return value.decode('utf-8')
+    if isinstance(value, onnx.TensorProto):
+        return numpy_helper.to_array(value).tolist()
+    if hasattr(value, 'item') and callable(value.item):
+        return value.item()
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_attr_value(v) for v in value]
+    return value
+
+
+def _node_attrs(node: onnx.NodeProto) -> dict:
+    attrs = {}
+    for attr in node.attribute:
+        attrs[attr.name] = _json_safe_attr_value(onnx.helper.get_attribute_value(attr))
+    return attrs
+
+
 def gen_data_nodes(value_infos, feature_mat: bool = False) -> dict[str, FeatureNode]:
     """Build FeatureNode dict from ONNX value_info entries."""
     data_nodes: dict[str, FeatureNode] = dict()
@@ -108,21 +127,26 @@ class PcmAddPtComputeNode(ComputeNode):
         feature_output: list[FeatureNode],
         weight_path: str,
         layer_type: str = 'pcm_add_pt',
+        source_op_type: str = '',
     ):
         super().__init__(layer_id, layer_type, feature_input, feature_output)
         self.weight_path = weight_path
+        self.source_op_type = source_op_type
         feature_output[0].skip = list(feature_input[0].skip)
         feature_output[0].shape = list(feature_input[0].shape)
         feature_output[0].level = feature_input[0].level
         feature_output[0].data_type = feature_input[0].data_type
 
     def to_json(self) -> dict:
-        return {
+        info = {
             'type': self.layer_type,
             'feature_input': [i.node_id for i in self.feature_input],
             'feature_output': [i.node_id for i in self.feature_output],
             'weight_path': self.weight_path,
         }
+        if self.source_op_type:
+            info['source_op_type'] = self.source_op_type
+        return info
 
 
 class CustomMultiHeadAttentionComputeNode(ComputeNode):
@@ -142,6 +166,8 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
         v_bias_path: str = '',
         proj_bias_path: str = '',
         poly_order: int = 4,
+        model_type: str = '',
+        attrs: dict | None = None,
     ):
         super().__init__(layer_id, 'CustomMultiHeadAttention', feature_input, feature_output)
         self.q_weight_path = q_weight_path
@@ -155,6 +181,8 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
         self.v_bias_path = v_bias_path
         self.proj_bias_path = proj_bias_path
         self.poly_order = poly_order
+        self.model_type = model_type
+        self.attrs = attrs or {}
 
     @staticmethod
     def _split_qkv_weight_paths(qkv_weight_path: str, layer_id: str) -> tuple[str, str, str]:
@@ -241,6 +269,29 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
             poly_order=CustomMultiHeadAttentionComputeNode._poly_order(poly_coeff_paths),
         )
 
+    @staticmethod
+    def from_bert_onnx_node(x: onnx.NodeProto, features_nodes) -> 'CustomMultiHeadAttentionComputeNode':
+        layer_id = format_id(x.name)
+        attrs = _node_attrs(x)
+        return CustomMultiHeadAttentionComputeNode(
+            layer_id=layer_id,
+            feature_input=[features_nodes[format_id(x.input[0])]],
+            feature_output=[features_nodes[format_id(x.output[0])]],
+            q_weight_path=x.input[1],
+            q_bias_path=x.input[2],
+            k_weight_path=x.input[3],
+            k_bias_path=x.input[4],
+            v_weight_path=x.input[5],
+            v_bias_path=x.input[6],
+            proj_weight_path=x.input[7],
+            proj_bias_path=x.input[8],
+            gamma_path=f'{layer_id}.gamma',
+            poly_weight_path=f'{layer_id}.poly.weight',
+            poly_order=15,
+            model_type='bert',
+            attrs=attrs,
+        )
+
     def to_json(self) -> dict:
         info = {
             'type': self.layer_type,
@@ -254,6 +305,10 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
             'poly_weight_path': self.poly_weight_path,
             'poly_order': self.poly_order,
         }
+        if self.model_type:
+            info['model_type'] = self.model_type
+        for key, value in self.attrs.items():
+            info[key] = value
         if self.q_bias_path:
             info['q_bias_path'] = self.q_bias_path
         if self.k_bias_path:
@@ -265,7 +320,45 @@ class CustomMultiHeadAttentionComputeNode(ComputeNode):
         return info
 
 
-def onnx_to_json(onnx_filename: str, output_filename: str, style: str, mat_pack_style: str = ''):
+class CustomPolyFunctionComputeNode(ComputeNode):
+    def __init__(
+        self,
+        layer_id: str,
+        layer_type: str,
+        feature_input: list[FeatureNode],
+        feature_output: list[FeatureNode],
+        attrs: dict | None = None,
+    ):
+        super().__init__(layer_id, layer_type, feature_input, feature_output)
+        self.attrs = attrs or {}
+
+    @staticmethod
+    def from_onnx_node(x: onnx.NodeProto, features_nodes) -> 'CustomPolyFunctionComputeNode':
+        return CustomPolyFunctionComputeNode(
+            layer_id=format_id(x.name),
+            layer_type=x.op_type,
+            feature_input=[features_nodes[format_id(x.input[0])]],
+            feature_output=[features_nodes[format_id(x.output[0])]],
+            attrs=_node_attrs(x),
+        )
+
+    def to_json(self) -> dict:
+        info = {
+            'type': self.layer_type,
+            'feature_input': [i.node_id for i in self.feature_input],
+            'feature_output': [i.node_id for i in self.feature_output],
+        }
+        info.update(self.attrs)
+        return info
+
+
+def onnx_to_json(
+    onnx_filename: str,
+    output_filename: str,
+    style: str,
+    mat_pack_style: str = '',
+    model_type: str = '',
+):
     """Convert an ONNX model file to the JSON format for encrypted inference.
 
     Args:
@@ -273,6 +366,7 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, mat_pack_
         output_filename: Path to the output ``.json`` file.
         style:          Packing style (``'ordinary'`` or ``'multiplexed'``).
         mat_pack_style:      Data packing type.
+        model_type:          Model family selector for custom ONNX variants.
     """
     if mat_pack_style not in MAT_PACK_STYLES:
         raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
@@ -351,7 +445,7 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, mat_pack_
                 compute_node = ConvTransposeComputeNode.from_onnx_node(n, features_nodes)
             case 'MatMul':
                 compute_node = MatMulComputeNode.from_onnx_node(
-                    n, features_nodes, weight_shapes, mat_pack_style=mat_pack_style
+                    n, features_nodes, weight_shapes, mat_pack_style=mat_pack_style, model_type=model_type
                 )
             case 'Transpose':
                 compute_node = TransposeComputeNode.from_onnx_node(n, features_nodes, mat_pack_style=mat_pack_style)
@@ -367,12 +461,27 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str, mat_pack_
                 compute_node = PolyActRNPolyComputeNode.from_onnx_node(n, features_nodes)
             case 'Linear':
                 compute_node = MatMulComputeNode.from_onnx_node(
-                    n, features_nodes, weight_shapes, mat_pack_style=mat_pack_style
+                    n, features_nodes, weight_shapes, mat_pack_style=mat_pack_style, model_type=model_type
                 )
             case 'CustomLayerNorm':
                 compute_node = LayerNormComputeNode.from_onnx_node(n, features_nodes)
             case 'CustomMultiHeadAttention':
-                compute_node = CustomMultiHeadAttentionComputeNode.from_onnx_node(n, features_nodes)
+                if model_type == 'bert':
+                    compute_node = CustomMultiHeadAttentionComputeNode.from_bert_onnx_node(n, features_nodes)
+                else:
+                    compute_node = CustomMultiHeadAttentionComputeNode.from_onnx_node(n, features_nodes)
+            case 'CustomPositionEmbedding':
+                layer_type = 'pdm_add_pt' if mat_pack_style == 'par_diagonal_pack' else 'pcm_add_pt'
+                compute_node = PcmAddPtComputeNode(
+                    format_id(n.name),
+                    [features_nodes[format_id(n.input[0])]],
+                    [features_nodes[format_id(n.output[0])]],
+                    n.input[1],
+                    layer_type=layer_type,
+                    source_op_type='CustomPositionEmbedding',
+                )
+            case 'CustomGELU' | 'CustomTanh':
+                compute_node = CustomPolyFunctionComputeNode.from_onnx_node(n, features_nodes)
             case 'PolyActRN':
                 compute_node = PolyActRNPolyComputeNode.from_onnx_node(n, features_nodes)
             case _:

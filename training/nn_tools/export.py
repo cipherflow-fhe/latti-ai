@@ -470,6 +470,7 @@ def export_h5_from_onnx(
     h5_path: str,
     verbose: bool = True,
     feature_mat: bool = False,
+    model_type: str = '',
 ) -> str:
     """Export FHE-ready H5 weights from ONNX + JSON, without a PyTorch model.
 
@@ -499,6 +500,7 @@ def export_h5_from_onnx(
             json_path=json_path,
             h5_path=h5_path,
             verbose=verbose,
+            model_type=model_type,
         )
 
     import json as _json
