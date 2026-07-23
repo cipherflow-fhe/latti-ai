@@ -288,6 +288,10 @@ class GlobalConfig:
             cls._instance.bert_softmax_denominator_btp_scale = 16.0
             cls._instance.bert_softmax_scaled_denominator_btp_scale = 16.0
             cls._instance.bert_softmax_inverse_btp_scale = 0.125
+            cls._instance.bert_layernorm_inverse_btp_scale = config_dict.get(
+                'BERT_LAYERNORM_INVERSE_BTP_SCALE',
+                config_dict.get('bert_layernorm_inverse_btp_scale', 0.125),
+            )
             cls._instance.bert_softmax_initial_denominator_scale = 512.0
             cls._instance.bert_softmax_wide_initial_denominator_scale = 65536.0
             cls._instance.bert_softmax_use_wide_inverse_epsilon = 1.0

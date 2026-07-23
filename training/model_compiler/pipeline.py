@@ -355,6 +355,8 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
                         denominator_scale = normalize_denominator_scale_for_btp_node(layer_id)
                         inverse_btp_scale = min(inverse_btp_scale, denominator_guard * denominator_scale)
                     return inverse_btp_scale
+            if 'CustomLayerNorm_y' in layer_id and '_bootstrap' in layer_id:
+                return float(getattr(config, 'bert_layernorm_inverse_btp_scale', btp_scale))
         return btp_scale
 
     for btp_node in list(dag.nodes):
@@ -694,6 +696,7 @@ def run_pipeline(
     bert_softmax_denominator_btp_scale: float | None = None,
     bert_softmax_scaled_denominator_btp_scale: float | None = None,
     bert_softmax_inverse_btp_scale: float | None = None,
+    bert_layernorm_inverse_btp_scale: float | None = None,
     bert_softmax_initial_denominator_scale: float | None = None,
     bert_softmax_wide_initial_denominator_scale: float | None = None,
     bert_softmax_use_wide_inverse_epsilon: float | None = None,
@@ -745,6 +748,8 @@ def run_pipeline(
         config.bert_softmax_scaled_denominator_btp_scale = float(bert_softmax_scaled_denominator_btp_scale)
     if bert_softmax_inverse_btp_scale is not None:
         config.bert_softmax_inverse_btp_scale = float(bert_softmax_inverse_btp_scale)
+    if bert_layernorm_inverse_btp_scale is not None:
+        config.bert_layernorm_inverse_btp_scale = float(bert_layernorm_inverse_btp_scale)
     if bert_softmax_initial_denominator_scale is not None:
         config.bert_softmax_initial_denominator_scale = float(bert_softmax_initial_denominator_scale)
     if bert_softmax_wide_initial_denominator_scale is not None:
@@ -765,6 +770,7 @@ def run_pipeline(
         f'BERT_SOFTMAX_DENOMINATOR_BTP_SCALE={config.bert_softmax_denominator_btp_scale}, '
         f'BERT_SOFTMAX_SCALED_DENOMINATOR_BTP_SCALE={config.bert_softmax_scaled_denominator_btp_scale}, '
         f'BERT_SOFTMAX_INVERSE_BTP_SCALE={config.bert_softmax_inverse_btp_scale}, '
+        f'BERT_LAYERNORM_INVERSE_BTP_SCALE={config.bert_layernorm_inverse_btp_scale}, '
         f'BERT_SOFTMAX_INITIAL_DENOMINATOR_SCALE={config.bert_softmax_initial_denominator_scale}, '
         f'BERT_SOFTMAX_WIDE_INITIAL_DENOMINATOR_SCALE='
         f'{config.bert_softmax_wide_initial_denominator_scale}, '
