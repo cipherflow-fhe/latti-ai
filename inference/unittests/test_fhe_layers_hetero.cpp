@@ -72,6 +72,7 @@
 #include "fhe_layers/par_upper_diagonal_poly.h"
 #include "fhe_layers/par_upper_diagonal_softmax.h"
 #include "data_structs/feature_mat.h"
+#include "fhe_layers/batch_dense_packed_layer.h"
 #include "ut_util.h"
 #include <fhe_ops_lib/utils.h>
 #include <cxx_sdk_v2/cxx_fhe_task.h>
@@ -3362,7 +3363,7 @@ static double e2e_max_rel_error(const Array<double, 2>& expected, const Array<do
 }
 
 static ExecutorFunc make_block_col_major_encode_pt_executor() {
-    return [](ExecutionContext& exec_ctx, const std::unordered_map<NodeIndex, std::any>& inputs, std::any& output,
+    return [](ExecutionContext& exec_ctx, std::unordered_map<NodeIndex, std::any>& local_data,
               const ComputeNode& self) -> void {
         CkksContext* ctx_ptr = exec_ctx.get_arithmetic_context<CkksContext>();
         if (!ctx_ptr)
@@ -3380,7 +3381,7 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
         };
 
         NodeIndex in_idx = self.input_nodes[0]->index;
-        auto cd_ptr = std::any_cast<std::shared_ptr<CustomData>>(inputs.at(in_idx));
+        auto cd_ptr = std::any_cast<std::shared_ptr<CustomData>>(local_data.at(in_idx));
         void* layer_ptr = cd_ptr->get_typed_data<void>();
 
         CkksPlaintextRingt pt = [&]() -> CkksPlaintextRingt {
@@ -3516,7 +3517,7 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
             throw std::runtime_error("encode_pt: unknown op_class: " + op_class);
         }();
 
-        output = std::make_shared<CkksPlaintextRingt>(std::move(pt));
+        local_data[self.output_nodes[0]->index] = std::make_shared<CkksPlaintextRingt>(std::move(pt));
     };
 }
 
@@ -6369,4 +6370,98 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     SECTION("degree=4, level=4") {
         run_generated_polyactrn_poly(4, 4);
     }
+}
+
+TEST_CASE("batch_dense_packed_layer/correctness", "[fhe_layers][batch_dense_packed]") {
+    constexpr uint32_t N = 16384;
+    constexpr uint32_t batch = 9;
+    constexpr uint32_t input_dim = 7;
+    constexpr uint32_t output_dim = 6;
+    constexpr uint32_t block_size = 4;
+    constexpr int level = 5;
+
+    auto param = CkksParameter::create_parameter(N);
+    auto context = CkksContext::create_random_context(param, level);
+    context.gen_rotation_keys();
+
+    Array<double, 2> input({batch, input_dim});
+    Array<double, 2> weight({input_dim, output_dim});
+    Array<double, 1> bias({output_dim});
+    for (uint32_t i = 0; i < batch; i++)
+        for (uint32_t k = 0; k < input_dim; k++)
+            input.set(i, k, 0.01 * static_cast<double>(1 + i * input_dim + k));
+    for (uint32_t k = 0; k < input_dim; k++)
+        for (uint32_t h = 0; h < output_dim; h++)
+            weight.set(k, h, 0.02 * static_cast<double>(1 + k * output_dim + h));
+    for (uint32_t h = 0; h < output_dim; h++)
+        bias.set(h, -0.01 * static_cast<double>(h + 1));
+
+    Feature0DEncrypted input_enc(&context, level);
+    input_enc.batch_pack(input, block_size, false, param.get_default_scale());
+
+    BatchDensePackedLayer layer(param, Duo{batch, input_dim}, Duo{input_dim, output_dim}, weight, block_size, level,
+                                bias.copy());
+    layer.precompute_diagonals();
+    auto output_enc = layer.run(context, input_enc);
+    auto actual = output_enc.batch_unpack(batch, output_dim, block_size);
+    auto expected = layer.run_plaintext(input);
+
+    double max_error = 0.0;
+    for (uint32_t i = 0; i < batch; i++) {
+        for (uint32_t h = 0; h < output_dim; h++)
+            max_error = std::max(max_error, std::abs(actual.get(i, h) - expected.get(i, h)));
+    }
+
+    CAPTURE(max_error);
+    REQUIRE(max_error < 1.0e-2);
+    REQUIRE(output_enc.data.size() == 2);
+    REQUIRE(input_enc.data.size() == 2);
+}
+
+TEST_CASE("batch_dense_packed_layer/multiple_groups_and_padding", "[fhe_layers][batch_dense_packed]") {
+    constexpr uint32_t N = 16384;
+    constexpr uint32_t batch = 2049;
+    constexpr uint32_t input_dim = 1024;
+    constexpr uint32_t output_dim = 64;
+    constexpr uint32_t block_size = 32;
+    constexpr int level = 5;
+
+    auto param = CkksParameter::create_parameter(N);
+    auto context = CkksContext::create_random_context(param, level);
+    context.gen_rotation_keys();
+
+    Array<double, 2> input({batch, input_dim});
+    Array<double, 2> weight({input_dim, output_dim});
+    Array<double, 1> bias({output_dim});
+    for (uint32_t i = 0; i < batch; i++)
+        for (uint32_t k = 0; k < input_dim; k++)
+            input.set(i, k, 0.001 * static_cast<double>(1 + (i + 2 * k) % 17));
+    for (uint32_t k = 0; k < input_dim; k++)
+        for (uint32_t h = 0; h < output_dim; h++)
+            weight.set(k, h, 0.002 * static_cast<double>(1 + (3 * k + h) % 13));
+    for (uint32_t h = 0; h < output_dim; h++)
+        bias.set(h, 0.001 * static_cast<double>(h + 1));
+
+    Feature0DEncrypted input_enc(&context, level);
+    input_enc.batch_pack(input, block_size, false, param.get_default_scale());
+
+    BatchDensePackedLayer layer(param, Duo{batch, input_dim}, Duo{input_dim, output_dim}, weight, block_size, level,
+                                bias.copy());
+    layer.precompute_diagonals();
+    auto output_enc = layer.run(context, input_enc);
+    auto actual = output_enc.batch_unpack(batch, output_dim, block_size);
+    auto expected = layer.run_plaintext(input);
+
+    double max_error = 0.0;
+    for (uint32_t i = 0; i < batch; i++) {
+        for (uint32_t h = 0; h < output_dim; h++)
+            max_error = std::max(max_error, std::abs(actual.get(i, h) - expected.get(i, h)));
+    }
+
+    CAPTURE(max_error);
+    REQUIRE(max_error < 1.0e-2);
+    // N/2=8192, d*d=1024, so one ciphertext has 8 chunks. B=2049 needs
+    // ceil(ceil(2049/32)/8)=9 batch ciphertext groups.
+    REQUIRE(input_enc.data.size() == 288);
+    REQUIRE(output_enc.data.size() == 18);
 }
