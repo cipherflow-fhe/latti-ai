@@ -1198,11 +1198,36 @@ def _int_attr(node: ComputeNode, name: str, default: int) -> int:
     return int(value)
 
 
+def _node_str_attr(node: ComputeNode, name: str, default: str = '') -> str:
+    value = getattr(node, name, default)
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    return str(value)
+
+
 def _bert_softmax_denominator_scale(attn_node: ComputeNode, attr_name: str, config_name: str, default: float) -> float:
-    scale = _float_attr(attn_node, attr_name, float(getattr(config, config_name, default)))
+    if hasattr(attn_node, attr_name):
+        scale = _float_attr(attn_node, attr_name, default)
+    else:
+        scale = float(getattr(config, config_name, default))
+        if attr_name == 'initial_denominator_scale':
+            if _node_str_attr(attn_node, 'softmax_profile').lower() == 'thor-wide':
+                wide_scale = float(getattr(config, 'bert_softmax_wide_initial_denominator_scale', 65536.0))
+                scale = max(scale, wide_scale)
     if scale == 0:
         raise ValueError(f'BERT softmax denominator scale {attr_name} cannot be 0')
     return scale
+
+
+def _bert_softmax_denominator_guard(attn_node: ComputeNode, attr_name: str) -> float:
+    if _node_str_attr(attn_node, 'softmax_profile').lower() != 'thor-wide':
+        return 0.0
+    if float(getattr(config, 'bert_softmax_use_wide_inverse_epsilon', 1.0)) == 0.0:
+        return 0.0
+    guard = _float_attr(attn_node, attr_name, 0.0)
+    if guard < 0:
+        raise ValueError(f'BERT softmax {attr_name} cannot be negative for {attn_node.layer_id}: {guard}')
+    return guard
 
 
 def _layernorm_iterations(node: ComputeNode, default: int) -> int:
@@ -1337,6 +1362,7 @@ def _append_softmax_normalize(
     values: FeatureNode,
     denominator_scale: float,
     max_inverse_iterations: int,
+    denominator_epsilon: float = 0.0,
 ) -> FeatureNode:
     denom = _append_unary_compute(
         graph,
@@ -1345,6 +1371,16 @@ def _append_softmax_normalize(
         f'{base_id}_denominator',
         1,
     )
+    if denominator_epsilon != 0.0:
+        add_epsilon = ComputeNode(f'{base_id}_denominator_epsilon', 'pdmupperaddpt', 1, 1)
+        add_epsilon.value = denominator_epsilon
+        denom = _append_unary_compute(
+            graph,
+            denom,
+            add_epsilon,
+            f'{base_id}_denominator_epsilon_added',
+            0,
+        )
     if denominator_scale != 1.0:
         denom = _append_unary_compute(
             graph,
@@ -1426,6 +1462,7 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
         'bert_softmax_later_refinement_denominator_scale',
         1.0,
     )
+    initial_denominator_guard = _bert_softmax_denominator_guard(attn_node, 'inverse_epsilon')
 
     add_mid_node = ComputeNode(f'{base_id}_softmax_add_mid', 'pdmupperaddpt', 1, 1)
     add_mid_node.value = -mid
@@ -1472,10 +1509,16 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
         values,
         initial_denominator_scale,
         max_inverse_iterations,
+        initial_denominator_guard,
     )
 
     refinement_idx = 0
     delta = max(1, delta_2)
+    refinement_steps = 0
+    refinement_delta = delta
+    while refinement_delta > 1:
+        refinement_steps += 1
+        refinement_delta >>= 1
     while delta > 1:
         squared = _append_unary_compute(
             graph,
@@ -1487,12 +1530,15 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
         denominator_scale = (
             first_refinement_denominator_scale if refinement_idx == 0 else later_refinement_denominator_scale
         )
+        is_final_refinement = refinement_idx == refinement_steps - 1
+        guard_attr = 'final_inverse_alpha' if is_final_refinement else 'inverse_alpha'
         probabilities = _append_softmax_normalize(
             graph,
             f'{base_id}_softmax_normalize_refine_{refinement_idx}',
             squared,
             denominator_scale,
             max_inverse_iterations,
+            _bert_softmax_denominator_guard(attn_node, guard_attr),
         )
         delta >>= 1
         refinement_idx += 1

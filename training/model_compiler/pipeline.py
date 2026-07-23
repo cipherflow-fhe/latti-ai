@@ -282,6 +282,28 @@ def bert_softmax_denominator_scale_for_layer(layer_id: str) -> float:
     return scale
 
 
+def _softmax_normalize_base_id_from_btp_layer(layer_id: str) -> str | None:
+    for marker in (
+        '_denominator_scaled_bootstrap',
+        '_denominator_epsilon_added_bootstrap',
+        '_denominator_bootstrap',
+        '_probabilities_unscaled_bootstrap',
+        '_inverse_scaled_bootstrap',
+    ):
+        if marker in layer_id:
+            return layer_id.split(marker, 1)[0]
+    if '_inverse_iter_' in layer_id and '_out_bootstrap' in layer_id:
+        return layer_id.split('_inverse_iter_', 1)[0]
+    return None
+
+
+def _find_compute_node_by_layer_id(dag, layer_id: str) -> ComputeNode | None:
+    for node in dag.nodes:
+        if isinstance(node, ComputeNode) and node.layer_id == layer_id:
+            return node
+    return None
+
+
 def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
     if config.set_btp_scale is None:
         return
@@ -290,25 +312,51 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
     if btp_scale == 0:
         raise ValueError('set_btp_scale cannot be 0 when inserting BTP scale gamma layers')
 
+    dag = graph.dag
+
+    def normalize_denominator_scale_for_btp_node(layer_id: str) -> float:
+        base_id = _softmax_normalize_base_id_from_btp_layer(layer_id)
+        if base_id is not None:
+            scale_node = _find_compute_node_by_layer_id(dag, f'{base_id}_denominator_scale')
+            if scale_node is not None and getattr(scale_node, 'scalar_value', None) is not None:
+                return float(scale_node.scalar_value)
+        return bert_softmax_denominator_scale_for_layer(layer_id)
+
+    def normalize_denominator_guard_for_btp_node(layer_id: str) -> float:
+        base_id = _softmax_normalize_base_id_from_btp_layer(layer_id)
+        if base_id is None:
+            return 0.0
+        guard_node = _find_compute_node_by_layer_id(dag, f'{base_id}_denominator_epsilon')
+        if guard_node is None or getattr(guard_node, 'value', None) is None:
+            return 0.0
+        return float(guard_node.value)
+
     def pre_btp_scale_for_node(layer_id: str) -> float:
         if getattr(config, 'model_type', '') == 'bert':
-            if '_softmax_delta1_square_' in layer_id and '_out_bootstrap' in layer_id:
+            if ('_softmax_exp_poly_out_bootstrap' in layer_id) or (
+                '_softmax_delta1_square_' in layer_id and '_out_bootstrap' in layer_id
+            ):
                 return float(getattr(config, 'bert_softmax_values_btp_scale', btp_scale))
             if '_softmax_normalize_' in layer_id:
                 if '_probabilities_unscaled_bootstrap' in layer_id:
-                    return bert_softmax_denominator_scale_for_layer(layer_id)
+                    return normalize_denominator_scale_for_btp_node(layer_id)
                 if '_inverse_scaled_bootstrap' in layer_id:
-                    denominator_scale = bert_softmax_denominator_scale_for_layer(layer_id)
+                    denominator_scale = normalize_denominator_scale_for_btp_node(layer_id)
                     return 1.0 / denominator_scale
                 if '_denominator_scaled_bootstrap' in layer_id:
                     return float(getattr(config, 'bert_softmax_scaled_denominator_btp_scale', btp_scale))
-                if '_denominator_bootstrap' in layer_id:
-                    return float(getattr(config, 'bert_softmax_denominator_btp_scale', btp_scale))
+                if '_denominator_epsilon_added_bootstrap' in layer_id or '_denominator_bootstrap' in layer_id:
+                    denominator_btp_scale = float(getattr(config, 'bert_softmax_denominator_btp_scale', btp_scale))
+                    return max(denominator_btp_scale, normalize_denominator_scale_for_btp_node(layer_id))
                 if '_inverse_iter_' in layer_id and '_out_bootstrap' in layer_id:
-                    return float(getattr(config, 'bert_softmax_inverse_btp_scale', btp_scale))
+                    inverse_btp_scale = float(getattr(config, 'bert_softmax_inverse_btp_scale', btp_scale))
+                    denominator_guard = normalize_denominator_guard_for_btp_node(layer_id)
+                    if denominator_guard > 0.0:
+                        denominator_scale = normalize_denominator_scale_for_btp_node(layer_id)
+                        inverse_btp_scale = min(inverse_btp_scale, denominator_guard * denominator_scale)
+                    return inverse_btp_scale
         return btp_scale
 
-    dag = graph.dag
     for btp_node in list(dag.nodes):
         if not isinstance(btp_node, ComputeNode) or btp_node.layer_type != 'bootstrapping':
             continue
@@ -647,6 +695,8 @@ def run_pipeline(
     bert_softmax_scaled_denominator_btp_scale: float | None = None,
     bert_softmax_inverse_btp_scale: float | None = None,
     bert_softmax_initial_denominator_scale: float | None = None,
+    bert_softmax_wide_initial_denominator_scale: float | None = None,
+    bert_softmax_use_wide_inverse_epsilon: float | None = None,
     bert_softmax_first_refinement_denominator_scale: float | None = None,
     bert_softmax_later_refinement_denominator_scale: float | None = None,
     use_gpu: bool = True,
@@ -697,6 +747,10 @@ def run_pipeline(
         config.bert_softmax_inverse_btp_scale = float(bert_softmax_inverse_btp_scale)
     if bert_softmax_initial_denominator_scale is not None:
         config.bert_softmax_initial_denominator_scale = float(bert_softmax_initial_denominator_scale)
+    if bert_softmax_wide_initial_denominator_scale is not None:
+        config.bert_softmax_wide_initial_denominator_scale = float(bert_softmax_wide_initial_denominator_scale)
+    if bert_softmax_use_wide_inverse_epsilon is not None:
+        config.bert_softmax_use_wide_inverse_epsilon = float(bert_softmax_use_wide_inverse_epsilon)
     if bert_softmax_first_refinement_denominator_scale is not None:
         config.bert_softmax_first_refinement_denominator_scale = float(bert_softmax_first_refinement_denominator_scale)
     if bert_softmax_later_refinement_denominator_scale is not None:
@@ -712,6 +766,9 @@ def run_pipeline(
         f'BERT_SOFTMAX_SCALED_DENOMINATOR_BTP_SCALE={config.bert_softmax_scaled_denominator_btp_scale}, '
         f'BERT_SOFTMAX_INVERSE_BTP_SCALE={config.bert_softmax_inverse_btp_scale}, '
         f'BERT_SOFTMAX_INITIAL_DENOMINATOR_SCALE={config.bert_softmax_initial_denominator_scale}, '
+        f'BERT_SOFTMAX_WIDE_INITIAL_DENOMINATOR_SCALE='
+        f'{config.bert_softmax_wide_initial_denominator_scale}, '
+        f'BERT_SOFTMAX_USE_WIDE_INVERSE_EPSILON={config.bert_softmax_use_wide_inverse_epsilon}, '
         f'BERT_SOFTMAX_FIRST_REFINEMENT_DENOMINATOR_SCALE='
         f'{config.bert_softmax_first_refinement_denominator_scale}, '
         f'BERT_SOFTMAX_LATER_REFINEMENT_DENOMINATOR_SCALE='

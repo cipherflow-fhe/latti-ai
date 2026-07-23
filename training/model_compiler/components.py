@@ -289,6 +289,8 @@ class GlobalConfig:
             cls._instance.bert_softmax_scaled_denominator_btp_scale = 16.0
             cls._instance.bert_softmax_inverse_btp_scale = 0.125
             cls._instance.bert_softmax_initial_denominator_scale = 512.0
+            cls._instance.bert_softmax_wide_initial_denominator_scale = 65536.0
+            cls._instance.bert_softmax_use_wide_inverse_epsilon = 1.0
             cls._instance.bert_softmax_first_refinement_denominator_scale = 2.0
             cls._instance.bert_softmax_later_refinement_denominator_scale = 1.0
             cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'polyact']
