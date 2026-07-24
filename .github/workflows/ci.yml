@@ -73,12 +73,13 @@ jobs:
       - name: Restore HEonGPU cache
         run: |
           CUDA_ARCH="${{ steps.cuda-arch.outputs.arch }}"
-          HEONGPU_COMMIT=$(git -C inference/lattisense/HEonGPU rev-parse HEAD)
+          HEONGPU_DIR="inference/lattisense/backends/HEonGPU"
+          HEONGPU_COMMIT=$(git -C "${HEONGPU_DIR}" rev-parse HEAD)
           CACHE_DIR="/opt/heongpu-cache/${HEONGPU_COMMIT}-arch${CUDA_ARCH}"
           if [ -d "${CACHE_DIR}/install/lib" ]; then
             echo "Using cached HEonGPU (${HEONGPU_COMMIT:0:8}, arch=${CUDA_ARCH})"
-            cp -a "${CACHE_DIR}/install" inference/lattisense/HEonGPU/install
-            cp -a "${CACHE_DIR}/build" inference/lattisense/HEonGPU/build
+            cp -a "${CACHE_DIR}/install" "${HEONGPU_DIR}/install"
+            cp -a "${CACHE_DIR}/build" "${HEONGPU_DIR}/build"
           else
             echo "No cache found, HEonGPU will be built automatically during cmake configure"
           fi
@@ -96,13 +97,14 @@ jobs:
       - name: Save HEonGPU cache
         run: |
           CUDA_ARCH="${{ steps.cuda-arch.outputs.arch }}"
-          HEONGPU_COMMIT=$(git -C inference/lattisense/HEonGPU rev-parse HEAD)
+          HEONGPU_DIR="inference/lattisense/backends/HEonGPU"
+          HEONGPU_COMMIT=$(git -C "${HEONGPU_DIR}" rev-parse HEAD)
           CACHE_DIR="/opt/heongpu-cache/${HEONGPU_COMMIT}-arch${CUDA_ARCH}"
-          if [ ! -d "${CACHE_DIR}/install/lib" ] && [ -d "inference/lattisense/HEonGPU/install/lib" ]; then
+          if [ ! -d "${CACHE_DIR}/install/lib" ] && [ -d "${HEONGPU_DIR}/install/lib" ]; then
             echo "Saving HEonGPU build to cache"
             mkdir -p "${CACHE_DIR}"
-            cp -a inference/lattisense/HEonGPU/install "${CACHE_DIR}/"
-            cp -a inference/lattisense/HEonGPU/build "${CACHE_DIR}/"
+            cp -a "${HEONGPU_DIR}/install" "${CACHE_DIR}/"
+            cp -a "${HEONGPU_DIR}/build" "${CACHE_DIR}/"
             # Keep only the 3 most recent caches
             ls -dt /opt/heongpu-cache/*/ 2>/dev/null | tail -n +4 | xargs rm -rf 2>/dev/null || true
           fi
