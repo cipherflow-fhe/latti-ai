@@ -1283,8 +1283,7 @@ Source: `layers/mult_conv_dw.py`
 #### DensePackedLayer
 
 ```python
-DensePackedLayer(n_out_channel, n_in_channel, input_shape, skip, pack,
-                 n_packed_in_feature, n_packed_out_feature)
+DensePackedLayer(n_out_channel, n_in_channel, input_shape, skip, pack, n_packed_in_feature, n_packed_out_feature)
 ```
 
 Source: `layers/dense_pack.py`
@@ -1341,8 +1340,7 @@ Source: `layers/avgpool.py`
 #### PolyReluLayer
 
 ```python
-PolyReluLayer(input_shape, order, skip, n_channel_per_ct,
-              upsample_factor=[1, 1], block_expansion=[1, 1])
+PolyReluLayer(input_shape, order, skip, n_channel_per_ct, upsample_factor=[1, 1], block_expansion=[1, 1])
 ```
 
 Source: `layers/poly_relu.py`
@@ -1466,8 +1464,9 @@ No constructor parameters.
 #### InverseMultiplexedConv2d
 
 ```python
-InverseMultiplexedConv2d(n_out_channel, n_in_channel, input_shape, padding,
-                         kernel_shape, stride, stride_next, skip, block_shape)
+InverseMultiplexedConv2d(
+    n_out_channel, n_in_channel, input_shape, padding, kernel_shape, stride, stride_next, skip, block_shape
+)
 ```
 
 Source: `layers/inverse_multiplexed_conv2d_layer.py`
