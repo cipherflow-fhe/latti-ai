@@ -525,6 +525,42 @@ class IntertwinedWithCoeff(nn.Module):
         return x
 
 
+class WideFanoutStage(nn.Module):
+    def __init__(self, channels: int = 32, fanout: int = 8, branch_depth: int = 3):
+        super().__init__()
+        self.branches = nn.ModuleList()
+        for _ in range(fanout):
+            self.branches.append(
+                nn.Sequential(
+                    *[
+                        nn.Conv2d(channels, channels, kernel_size=3, bias=False, padding=1)
+                        for _ in range(branch_depth)
+                    ]
+                )
+            )
+        self.fuse = nn.Conv2d(channels, channels, kernel_size=1, bias=False)
+
+    def forward(self, x):
+        merged = self.branches[0](x)
+        for branch in self.branches[1:]:
+            merged = merged + branch(x)
+        return self.fuse(merged) + x
+
+
+class WideLongFanoutNet(nn.Module):
+    def __init__(self, channels: int = 32, fanout: int = 8, branch_depth: int = 3, stages: int = 10):
+        super().__init__()
+        self.stages = nn.ModuleList(
+            WideFanoutStage(channels=channels, fanout=fanout, branch_depth=branch_depth)
+            for _ in range(stages)
+        )
+
+    def forward(self, x):
+        for stage in self.stages:
+            x = stage(x)
+        return x
+
+
 class MutipleInputs(nn.Module):
     def __init__(self):
         super().__init__()

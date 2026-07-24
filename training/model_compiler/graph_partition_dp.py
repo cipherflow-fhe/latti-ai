@@ -24,6 +24,8 @@ import pstats
 
 import copy
 import json
+import multiprocessing
+import os
 import shutil
 
 import numpy as np
@@ -224,6 +226,19 @@ class NodeLevel(NamedTuple):
     level: int
 
 
+class FanoutRegion(NamedTuple):
+    entry: FeatureNode
+    exit: FeatureNode
+    merge: ComputeNode
+    nodes: frozenset
+    internal_features: frozenset
+
+
+class RegionPlan(NamedTuple):
+    cost: float
+    feature_levels: dict[FeatureNode, int]
+
+
 # Auxiliary level used to indicate the node is refreshed to max level by a restore node,
 # and can be used for absorbing later nodes without generating new restore nodes.
 AUX_LV = 255
@@ -235,6 +250,7 @@ class GraphPartitioner:
         self.param_dict = generate_param_dict_for_graph()
         self.enable_score_cache = enable_score_cache
         self.compute_score_cache: dict[tuple[ComputeNode, tuple[int, ...], tuple[int, ...]], float] = {}
+        self.region_plan_cache: dict[FanoutRegion, dict[tuple[int, int], RegionPlan]] = {}
 
         if temperature < 0:
             raise ValueError('Temperature must be non-negative. If set to 0, a greedy algorithm will be used.')
@@ -290,6 +306,656 @@ class GraphPartitioner:
                 succs: list[FeatureNode] = list(dag.successors(node))
                 dag.nodes[node]['level_cost'] = dag.nodes[preds[0]]['level'] - dag.nodes[succs[0]]['level']
 
+    def _trace_linear_branch_to_source(
+        self,
+        dag: nx.DiGraph,
+        start_feature: FeatureNode,
+    ) -> tuple[list[FeatureNode], list[ComputeNode]] | None:
+        features = [start_feature]
+        computes = []
+        cur_feature = start_feature
+        seen = {cur_feature}
+
+        while True:
+            producers = [node for node in dag.predecessors(cur_feature) if isinstance(node, ComputeNode)]
+            if not producers:
+                return features, computes
+            if len(producers) != 1:
+                return features, computes
+
+            producer = producers[0]
+            producer_inputs = [node for node in dag.predecessors(producer) if isinstance(node, FeatureNode)]
+            producer_outputs = [node for node in dag.successors(producer) if isinstance(node, FeatureNode)]
+            if len(producer_inputs) != 1 or len(producer_outputs) != 1:
+                return features, computes
+
+            prev_feature = producer_inputs[0]
+            if prev_feature in seen:
+                return None
+
+            computes.append(producer)
+            features.append(prev_feature)
+            seen.add(prev_feature)
+            cur_feature = prev_feature
+
+    def _collect_merge_leaf_features(
+        self,
+        dag: nx.DiGraph,
+        merge: ComputeNode,
+    ) -> tuple[list[FeatureNode], set] | None:
+        if merge.layer_type not in {'add', 'add2d', 'concat2d'}:
+            return None
+
+        merge_outputs = [node for node in dag.successors(merge) if isinstance(node, FeatureNode)]
+        if len(merge_outputs) != 1:
+            return None
+
+        chain_nodes = {merge, merge_outputs[0]}
+        leaf_features: list[FeatureNode] = []
+        seen_adds = set()
+
+        def collect_from_add(add_node: ComputeNode) -> bool:
+            if add_node in seen_adds:
+                return False
+            seen_adds.add(add_node)
+
+            add_inputs = [node for node in dag.predecessors(add_node) if isinstance(node, FeatureNode)]
+            if len(add_inputs) < 2:
+                return False
+
+            for feature in add_inputs:
+                producers = [node for node in dag.predecessors(feature) if isinstance(node, ComputeNode)]
+                producer = producers[0] if len(producers) == 1 else None
+                if (
+                    producer is not None
+                    and producer.layer_type in {'add', 'add2d'}
+                    and len([node for node in dag.successors(producer) if isinstance(node, FeatureNode)]) == 1
+                    and dag.out_degree(feature) == 1
+                ):
+                    chain_nodes.add(feature)
+                    chain_nodes.add(producer)
+                    if not collect_from_add(producer):
+                        return False
+                else:
+                    leaf_features.append(feature)
+            return True
+
+        if merge.layer_type in {'add', 'add2d'}:
+            if not collect_from_add(merge):
+                return None
+        else:
+            leaf_features.extend([node for node in dag.predecessors(merge) if isinstance(node, FeatureNode)])
+
+        deduped_leaf_features = []
+        seen_leaf_features = set()
+        for feature in leaf_features:
+            if feature in seen_leaf_features:
+                continue
+            seen_leaf_features.add(feature)
+            deduped_leaf_features.append(feature)
+
+        if len(deduped_leaf_features) < 2:
+            return None
+
+        return deduped_leaf_features, chain_nodes
+
+    def _try_build_fanout_region(self, dag: nx.DiGraph, merge: ComputeNode) -> FanoutRegion | None:
+        if merge.layer_type not in {'add', 'add2d', 'concat2d'}:
+            return None
+
+        merge_inputs_and_chain = self._collect_merge_leaf_features(dag, merge)
+        if merge_inputs_and_chain is None:
+            return None
+        merge_inputs, chain_nodes = merge_inputs_and_chain
+        merge_outputs = [node for node in dag.successors(merge) if isinstance(node, FeatureNode)]
+        if len(merge_outputs) != 1:
+            return None
+
+        traced_branches = []
+        common_features = None
+        for feature in merge_inputs:
+            traced = self._trace_linear_branch_to_source(dag, feature)
+            if traced is None:
+                return None
+            branch_features, branch_computes = traced
+            traced_branches.append((branch_features, branch_computes))
+            feature_set = set(branch_features)
+            common_features = feature_set if common_features is None else common_features & feature_set
+
+        if not common_features:
+            return None
+
+        topo_rank = {node: index for index, node in enumerate(nx.topological_sort(dag))}
+        entry = min(common_features, key=lambda node: topo_rank[node])
+        if len([node for node in dag.successors(entry) if isinstance(node, ComputeNode)]) < 2:
+            return None
+
+        region_nodes = {entry, *chain_nodes}
+        internal_features = set()
+        internal_features.update(
+            node for node in chain_nodes
+            if isinstance(node, FeatureNode) and node is not entry
+        )
+        for branch_features, branch_computes in traced_branches:
+            if entry not in branch_features:
+                return None
+            entry_pos = branch_features.index(entry)
+            path_features = branch_features[:entry_pos]
+            path_computes = branch_computes[:entry_pos]
+            if not path_features:
+                return None
+            region_nodes.update(path_features)
+            region_nodes.update(path_computes)
+            internal_features.update(path_features)
+
+        exit_feature = merge_outputs[0]
+        internal_features.add(exit_feature)
+
+        for node in region_nodes:
+            if node is entry or node is exit_feature:
+                continue
+            for pred in dag.predecessors(node):
+                if pred not in region_nodes:
+                    return None
+            for succ in dag.successors(node):
+                if succ not in region_nodes:
+                    return None
+
+        return FanoutRegion(
+            entry=entry,
+            exit=exit_feature,
+            merge=merge,
+            nodes=frozenset(region_nodes),
+            internal_features=frozenset(internal_features),
+        )
+
+    def _find_fanout_regions(self, dag: nx.DiGraph) -> list[FanoutRegion]:
+        candidates = []
+        topo_rank = {node: index for index, node in enumerate(nx.topological_sort(dag))}
+        for node in topo_rank:
+            if not isinstance(node, ComputeNode):
+                continue
+            region = self._try_build_fanout_region(dag, node)
+            if region is not None:
+                candidates.append(region)
+
+        candidates.sort(key=lambda region: (-len(region.nodes), topo_rank[region.exit]))
+        regions = []
+        claimed_internal_features = set()
+        for region in candidates:
+            if region.internal_features & claimed_internal_features:
+                continue
+            regions.append(region)
+            claimed_internal_features.update(region.internal_features)
+        return sorted(regions, key=lambda region: topo_rank[region.exit])
+
+    def _internalized_frontier_indices(
+        self,
+        dag: nx.DiGraph,
+        frontier: list[NodeLevel],
+        processed_feature_nodes: set[FeatureNode],
+        idx_to_node: dict[int, FeatureNode],
+    ) -> set[int]:
+        internal = set()
+        for node_max_lv in frontier:
+            feature = idx_to_node[node_max_lv.node_idx]
+            internal_flag = True
+            for comp in dag.successors(feature):
+                for succ in dag.successors(comp):
+                    if succ not in processed_feature_nodes:
+                        internal_flag = False
+            if internal_flag:
+                internal.add(node_max_lv.node_idx)
+        return internal
+
+    def _build_region_plan_table(
+        self,
+        dag: nx.DiGraph,
+        region: FanoutRegion,
+    ) -> dict[tuple[int, int], RegionPlan]:
+        if region in self.region_plan_cache:
+            return self.region_plan_cache[region]
+
+        if region.merge.layer_type in {'add', 'add2d'}:
+            plan_table = self._build_add_chain_region_plan_table(dag, region)
+            self.region_plan_cache[region] = plan_table
+            return plan_table
+
+        region_dag = dag.subgraph(region.nodes).copy()
+        sorted_features = [
+            node for node in nx.topological_sort(region_dag)
+            if isinstance(node, FeatureNode)
+        ]
+        plan_table = self._build_region_plan_table_by_input_levels(region_dag, sorted_features, region)
+        self.region_plan_cache[region] = plan_table
+        return plan_table
+
+    def _build_region_plan_table_for_input_level(
+        self,
+        region_dag: nx.DiGraph,
+        sorted_features: list[FeatureNode],
+        region: FanoutRegion,
+        input_level: int,
+    ) -> dict[tuple[int, int], RegionPlan]:
+        node_to_idx = {node: idx for idx, node in enumerate(sorted_features)}
+        idx_to_node = {idx: node for node, idx in node_to_idx.items()}
+        entry_idx = node_to_idx[region.entry]
+        exit_idx = node_to_idx[region.exit]
+        min_feature_level = get_min_feature_level()
+
+        frontier = [NodeLevel(entry_idx, input_level)]
+        processed_feature_nodes = {region.entry}
+        init_graph_vec = np.zeros(len(node_to_idx), dtype=np.uint8)
+        init_graph_vec[entry_idx] = input_level
+        frontier_solutions = {(NodeLevel(entry_idx, input_level),): (0.0, init_graph_vec)}
+
+        for feature in sorted_features:
+            if feature is region.entry:
+                continue
+            frontier, frontier_solutions = self.generate_solutions(
+                feature,
+                frontier,
+                frontier_solutions,
+                processed_feature_nodes,
+                node_to_idx,
+                idx_to_node,
+                region_dag,
+                leaf_min_only=feature is not region.exit,
+            )
+
+        plan_table: dict[tuple[int, int], RegionPlan] = {}
+        for output_level in range(min_feature_level, config.fhe_param.max_level + 1):
+            final_key = (NodeLevel(exit_idx, output_level),)
+            if final_key not in frontier_solutions:
+                continue
+            cost, graph_vec = frontier_solutions[final_key]
+            feature_levels = {
+                feature: int(graph_vec[node_to_idx[feature]])
+                for feature in sorted_features
+                if feature is not region.entry
+            }
+            plan_table[(input_level, output_level)] = RegionPlan(cost, feature_levels)
+
+        return plan_table
+
+    def _region_input_level_worker_count(self, input_level_count: int, region_feature_count: int) -> int:
+        if input_level_count < 2 or multiprocessing.current_process().name != 'MainProcess':
+            return 1
+
+        configured_workers = os.environ.get('LATTI_REGION_INPUT_LEVEL_WORKERS')
+        if configured_workers is not None:
+            try:
+                return max(1, min(input_level_count, int(configured_workers)))
+            except ValueError:
+                print(f'Ignoring invalid LATTI_REGION_INPUT_LEVEL_WORKERS={configured_workers!r}')
+
+        estimated_feature_steps = input_level_count * max(0, region_feature_count - 1)
+        if estimated_feature_steps < 256:
+            return 1
+
+        return max(1, min(input_level_count, os.cpu_count() or 1, 4))
+
+    def _build_region_plan_table_by_input_levels(
+        self,
+        region_dag: nx.DiGraph,
+        sorted_features: list[FeatureNode],
+        region: FanoutRegion,
+    ) -> dict[tuple[int, int], RegionPlan]:
+        min_feature_level = get_min_feature_level()
+        input_levels = list(range(min_feature_level, config.fhe_param.max_level + 1))
+        worker_count = self._region_input_level_worker_count(len(input_levels), len(sorted_features))
+
+        if worker_count <= 1:
+            plan_table = {}
+            for input_level in input_levels:
+                plan_table.update(
+                    self._build_region_plan_table_for_input_level(region_dag, sorted_features, region, input_level)
+                )
+            return plan_table
+
+        try:
+            tasks = [
+                (region_dag, sorted_features, region, input_level, self.enable_score_cache)
+                for input_level in input_levels
+            ]
+            with ProcessPoolExecutor(max_workers=worker_count) as executor:
+                serialized_tables = list(executor.map(_build_region_input_level_plan_table_worker, tasks))
+        except Exception as exc:
+            print(f'Region input-level parallel precompute failed ({exc}); falling back to serial precompute')
+            plan_table = {}
+            for input_level in input_levels:
+                plan_table.update(
+                    self._build_region_plan_table_for_input_level(region_dag, sorted_features, region, input_level)
+                )
+            return plan_table
+
+        feature_by_id = {node.node_id: node for node in sorted_features}
+        plan_table = {}
+        for serialized_table in serialized_tables:
+            plan_table.update(self._deserialize_region_plan_table(serialized_table, feature_by_id))
+        return plan_table
+
+    def _deserialize_region_plan_table(
+        self,
+        serialized_plan_table: dict[tuple[int, int], tuple[float, dict[str, int]]],
+        feature_by_id: dict[str, FeatureNode],
+    ) -> dict[tuple[int, int], RegionPlan]:
+        plan_table = {}
+        for boundary_levels, (cost, feature_levels_by_id) in serialized_plan_table.items():
+            plan_table[boundary_levels] = RegionPlan(
+                cost,
+                {feature_by_id[node_id]: level for node_id, level in feature_levels_by_id.items()},
+            )
+        return plan_table
+
+    def _region_plan_precompute_worker_count(self, region_count: int) -> int:
+        if region_count < 2:
+            return 1
+
+        configured_workers = os.environ.get('LATTI_FANOUT_REGION_WORKERS')
+        if configured_workers is not None:
+            try:
+                return max(1, min(region_count, int(configured_workers)))
+            except ValueError:
+                print(f'Ignoring invalid LATTI_FANOUT_REGION_WORKERS={configured_workers!r}')
+
+        return max(1, min(region_count, os.cpu_count() or 1, 8))
+
+    def _precompute_region_plan_tables(
+        self,
+        dag: nx.DiGraph,
+        regions: list[FanoutRegion],
+    ):
+        pending_regions = [region for region in regions if region not in self.region_plan_cache]
+        if not pending_regions:
+            return
+
+        worker_count = self._region_plan_precompute_worker_count(len(pending_regions))
+        if worker_count <= 1:
+            for region in pending_regions:
+                self._build_region_plan_table(dag, region)
+            return
+
+        try:
+            tasks = [(dag, region, self.enable_score_cache) for region in pending_regions]
+            with ProcessPoolExecutor(max_workers=worker_count) as executor:
+                serialized_tables = list(executor.map(_build_fanout_region_plan_table_worker, tasks))
+        except Exception as exc:
+            print(f'Fan-out region parallel precompute failed ({exc}); falling back to serial precompute')
+            for region in pending_regions:
+                self._build_region_plan_table(dag, region)
+            return
+
+        feature_by_id = {
+            node.node_id: node
+            for node in dag.nodes
+            if isinstance(node, FeatureNode)
+        }
+        for region, serialized_table in zip(pending_regions, serialized_tables):
+            self.region_plan_cache[region] = self._deserialize_region_plan_table(serialized_table, feature_by_id)
+
+    def _build_linear_branch_plan_table(
+        self,
+        dag: nx.DiGraph,
+        entry: FeatureNode,
+        leaf: FeatureNode,
+    ) -> dict[tuple[int, int], RegionPlan]:
+        traced = self._trace_linear_branch_to_source(dag, leaf)
+        if traced is None:
+            return {}
+        branch_features, branch_computes = traced
+        if entry not in branch_features:
+            return {}
+
+        entry_pos = branch_features.index(entry)
+        path_features = list(reversed(branch_features[: entry_pos + 1]))
+        path_computes = list(reversed(branch_computes[:entry_pos]))
+        branch_nodes = set(path_features) | set(path_computes)
+        branch_dag = dag.subgraph(branch_nodes).copy()
+
+        sorted_features = [
+            node for node in nx.topological_sort(branch_dag)
+            if isinstance(node, FeatureNode)
+        ]
+        node_to_idx = {node: idx for idx, node in enumerate(sorted_features)}
+        idx_to_node = {idx: node for node, idx in node_to_idx.items()}
+        entry_idx = node_to_idx[entry]
+        leaf_idx = node_to_idx[leaf]
+        min_feature_level = get_min_feature_level()
+
+        plan_table: dict[tuple[int, int], RegionPlan] = {}
+        for input_level in range(min_feature_level, config.fhe_param.max_level + 1):
+            frontier = [NodeLevel(entry_idx, input_level)]
+            processed_feature_nodes = {entry}
+            init_graph_vec = np.zeros(len(node_to_idx), dtype=np.uint8)
+            init_graph_vec[entry_idx] = input_level
+            frontier_solutions = {(NodeLevel(entry_idx, input_level),): (0.0, init_graph_vec)}
+
+            for feature in sorted_features:
+                if feature is entry:
+                    continue
+                frontier, frontier_solutions = self.generate_solutions(
+                    feature,
+                    frontier,
+                    frontier_solutions,
+                    processed_feature_nodes,
+                    node_to_idx,
+                    idx_to_node,
+                    branch_dag,
+                    leaf_min_only=feature is not leaf,
+                )
+
+            for output_level in range(min_feature_level, config.fhe_param.max_level + 1):
+                final_key = (NodeLevel(leaf_idx, output_level),)
+                if final_key not in frontier_solutions:
+                    continue
+                cost, graph_vec = frontier_solutions[final_key]
+                feature_levels = {
+                    feature: int(graph_vec[node_to_idx[feature]])
+                    for feature in sorted_features
+                    if feature is not entry
+                }
+                plan_table[(input_level, output_level)] = RegionPlan(cost, feature_levels)
+
+            min_plan = plan_table.get((input_level, min_feature_level))
+            producers = [node for node in dag.predecessors(leaf) if isinstance(node, ComputeNode)]
+            if min_plan is not None and len(producers) == 1:
+                aux_feature_levels = dict(min_plan.feature_levels)
+                aux_feature_levels[leaf] = AUX_LV
+                aux_cost = min_plan.cost + get_restoring_score(dag, producers[0], self.param_dict)
+                plan_table[(input_level, AUX_LV)] = RegionPlan(aux_cost, aux_feature_levels)
+
+        return plan_table
+
+    def _build_add_chain_region_plan_table(
+        self,
+        dag: nx.DiGraph,
+        region: FanoutRegion,
+    ) -> dict[tuple[int, int], RegionPlan]:
+        merge_inputs_and_chain = self._collect_merge_leaf_features(dag, region.merge)
+        if merge_inputs_and_chain is None:
+            return {}
+        _, chain_nodes = merge_inputs_and_chain
+        chain_compute_set = {
+            node for node in chain_nodes
+            if isinstance(node, ComputeNode) and node.layer_type in {'add', 'add2d'}
+        }
+
+        min_feature_level = get_min_feature_level()
+        subtree_cache = {}
+
+        def score_add(add_node: ComputeNode, pred_levels: list[int], output_level: int) -> float:
+            pred_features = [node for node in dag.predecessors(add_node) if isinstance(node, FeatureNode)]
+            succ_feature = next(node for node in dag.successors(add_node) if isinstance(node, FeatureNode))
+            touched = set(pred_features + [succ_feature, add_node])
+            saved = {node: dict(dag.nodes[node]) for node in touched}
+            try:
+                for feature, level in zip(pred_features, pred_levels):
+                    dag.nodes[feature]['level'] = level
+                dag.nodes[succ_feature]['level'] = output_level
+                return self.get_compute_score_cached(dag, add_node)
+            finally:
+                for node, attrs in saved.items():
+                    dag.nodes[node].clear()
+                    dag.nodes[node].update(attrs)
+
+        def producer_add_for_feature(feature: FeatureNode) -> ComputeNode | None:
+            producers = [node for node in dag.predecessors(feature) if isinstance(node, ComputeNode)]
+            if len(producers) != 1:
+                return None
+            producer = producers[0]
+            if producer not in chain_compute_set or dag.out_degree(feature) != 1:
+                return None
+            return producer
+
+        def build_input_table(feature: FeatureNode) -> dict[tuple[int, int], RegionPlan]:
+            producer = producer_add_for_feature(feature)
+            if producer is not None:
+                return build_add_table(producer)
+            return self._build_linear_branch_plan_table(dag, region.entry, feature)
+
+        def candidate_input_levels(output_level: int) -> list[int]:
+            return list(range(output_level, config.fhe_param.max_level + 1)) + [AUX_LV]
+
+        def effective_level(level: int) -> int:
+            return config.fhe_param.max_level if level == AUX_LV else level
+
+        def build_add_table(add_node: ComputeNode) -> dict[tuple[int, int], RegionPlan]:
+            if add_node in subtree_cache:
+                return subtree_cache[add_node]
+
+            inputs = [node for node in dag.predecessors(add_node) if isinstance(node, FeatureNode)]
+            if len(inputs) != 2:
+                subtree_cache[add_node] = {}
+                return subtree_cache[add_node]
+            succ_feature = next(node for node in dag.successors(add_node) if isinstance(node, FeatureNode))
+            left_table = build_input_table(inputs[0])
+            right_table = build_input_table(inputs[1])
+            table: dict[tuple[int, int], RegionPlan] = {}
+
+            for input_level in range(min_feature_level, config.fhe_param.max_level + 1):
+                for output_level in range(min_feature_level, config.fhe_param.max_level + 1):
+                    best_plan = None
+                    best_cost = float('inf')
+                    for left_level in candidate_input_levels(output_level):
+                        left_plan = left_table.get((input_level, left_level))
+                        if left_plan is None:
+                            continue
+                        for right_level in candidate_input_levels(output_level):
+                            right_plan = right_table.get((input_level, right_level))
+                            if right_plan is None:
+                                continue
+                            feature_levels = {}
+                            feature_levels.update(left_plan.feature_levels)
+                            feature_levels.update(right_plan.feature_levels)
+                            feature_levels[succ_feature] = output_level
+                            add_score = score_add(
+                                add_node,
+                                [effective_level(left_level), effective_level(right_level)],
+                                output_level,
+                            )
+                            cost = left_plan.cost + right_plan.cost + add_score
+                            if cost < best_cost:
+                                best_cost = cost
+                                best_plan = RegionPlan(cost, dict(feature_levels))
+                    if best_plan is not None:
+                        table[(input_level, output_level)] = best_plan
+
+                min_plan = table.get((input_level, min_feature_level))
+                if min_plan is not None:
+                    aux_feature_levels = dict(min_plan.feature_levels)
+                    aux_feature_levels[succ_feature] = AUX_LV
+                    aux_cost = min_plan.cost + get_restoring_score(dag, add_node, self.param_dict)
+                    table[(input_level, AUX_LV)] = RegionPlan(aux_cost, aux_feature_levels)
+
+            subtree_cache[add_node] = table
+            return table
+
+        return build_add_table(region.merge)
+
+    def generate_region_solutions(
+        self,
+        region: FanoutRegion,
+        frontier: list[NodeLevel],
+        frontier_solutions: dict[tuple[int], tuple[float, np.ndarray]],
+        processed_feature_nodes: set[FeatureNode],
+        node_to_idx: dict[FeatureNode, int],
+        idx_to_node: dict[int, FeatureNode],
+        dag: nx.DiGraph,
+    ):
+        entry_idx = node_to_idx[region.entry]
+        exit_idx = node_to_idx[region.exit]
+        if entry_idx not in {node.node_idx for node in frontier}:
+            return None
+
+        min_feature_level = get_min_feature_level()
+        plan_table = self._build_region_plan_table(dag, region)
+
+        processed_feature_nodes.update(region.internal_features)
+        internal_indices = self._internalized_frontier_indices(dag, frontier, processed_feature_nodes, idx_to_node)
+        new_frontier = [node for node in frontier if node.node_idx not in internal_indices]
+        new_frontier.append(NodeLevel(exit_idx, min_feature_level))
+
+        new_frontier_solutions = {}
+        frontier_solution_entries = [
+            (
+                {node_lv.node_idx: node_lv.level for node_lv in frontier_key},
+                initial_score,
+                sol_graph_vec,
+            )
+            for frontier_key, (initial_score, sol_graph_vec) in frontier_solutions.items()
+        ]
+
+        for output_level in range(min_feature_level, config.fhe_param.max_level + 1):
+            for frontier_level_by_idx, initial_score, sol_graph_vec in frontier_solution_entries:
+                input_level = frontier_level_by_idx[entry_idx]
+                effective_input_level = config.fhe_param.max_level if input_level == AUX_LV else input_level
+                plan = plan_table.get((effective_input_level, output_level))
+                if plan is None:
+                    continue
+
+                new_frontier_key = []
+                for node_max_lv in frontier:
+                    lv = frontier_level_by_idx[node_max_lv.node_idx]
+                    if node_max_lv.node_idx not in internal_indices:
+                        new_frontier_key.append(NodeLevel(node_max_lv.node_idx, lv))
+                new_frontier_key.append(NodeLevel(exit_idx, output_level))
+                new_frontier_key.sort(key=lambda x: x.node_idx)
+
+                sol_cost = initial_score + plan.cost
+                new_frontier_key_tuple = tuple(new_frontier_key)
+                if (
+                    new_frontier_key_tuple not in new_frontier_solutions
+                    or sol_cost < new_frontier_solutions[new_frontier_key_tuple][0]
+                ):
+                    new_sol_graph_vec = sol_graph_vec.copy()
+                    for feature, level in plan.feature_levels.items():
+                        new_sol_graph_vec[node_to_idx[feature]] = level
+                    new_frontier_solutions[new_frontier_key_tuple] = (sol_cost, new_sol_graph_vec)
+
+            if len(list(dag.successors(region.exit))) == 0:
+                break
+
+            new_frontier[-1] = NodeLevel(exit_idx, output_level)
+            if output_level == min_feature_level:
+                aux_lv_solutions = {}
+                for k, solution in new_frontier_solutions.items():
+                    exit_lv_idx = k.index(NodeLevel(exit_idx, output_level))
+                    sol_key = list(k)
+                    sol_key[exit_lv_idx] = NodeLevel(exit_idx, AUX_LV)
+
+                    sol_graph_vec_aux_lv = solution[1].copy()
+                    sol_graph_vec_aux_lv[exit_idx] = AUX_LV
+                    sol_aux_lv_score = get_restoring_score(dag, region.merge, self.param_dict)
+                    aux_lv_solutions[tuple(sol_key)] = (
+                        solution[0] + sol_aux_lv_score,
+                        sol_graph_vec_aux_lv,
+                    )
+
+                new_frontier_solutions |= aux_lv_solutions
+
+        return new_frontier, new_frontier_solutions
+
     def generate_solutions(
         self,
         new_node: FeatureNode,
@@ -299,6 +965,7 @@ class GraphPartitioner:
         node_to_idx: dict[FeatureNode, int],
         idx_to_node: dict[int, FeatureNode],
         dag: nx.DiGraph,
+        leaf_min_only: bool = True,
     ):
         leading_comp: ComputeNode = next(dag.predecessors(new_node))
         predecessors: list[FeatureNode] = list(dag.predecessors(leading_comp))
@@ -322,44 +989,55 @@ class GraphPartitioner:
                 new_frontier.remove(node_max_lv)
 
         new_frontier_solutions = dict()
+        # Iterate only reachable frontier states; wide fan-out graphs make the raw frontier level product very sparse.
+        frontier_solution_entries = [
+            (
+                {node_lv.node_idx: node_lv.level for node_lv in frontier_key},
+                initial_score,
+                sol_graph_vec,
+            )
+            for frontier_key, (initial_score, sol_graph_vec) in frontier_solutions.items()
+        ]
 
         for terminal_lv in range(min_feature_level, config.fhe_param.max_level + 1):
             if dag.nodes[leading_comp]['level_cost'] + terminal_lv > config.fhe_param.max_level:
                 continue
 
-            frontier_lvs = []
             dag.nodes[new_node]['level'] = terminal_lv
-            for node_max_lv in pred_frontier:
-                frontier_lvs.append(
-                    list(range(dag.nodes[leading_comp]['level_cost'] + terminal_lv, node_max_lv.level + 1)) + [AUX_LV]
-                )
-            for node_max_lv in other_frontier:
-                frontier_lvs.append(list(range(min_feature_level, node_max_lv.level + 1)) + [AUX_LV])
+            min_pred_level = dag.nodes[leading_comp]['level_cost'] + terminal_lv
 
-            frontier_lv_product = product(*frontier_lvs)
-
-            for lv_comb in frontier_lv_product:
-                frontier_key = []
+            for frontier_level_by_idx, initial_score, sol_graph_vec in frontier_solution_entries:
+                valid = True
                 new_frontier_key = []
-                for node_max_lv, lv in zip(frontier, lv_comb):
-                    frontier_key.append(NodeLevel(node_max_lv.node_idx, lv))
+
+                for node_max_lv in pred_frontier:
+                    lv = frontier_level_by_idx[node_max_lv.node_idx]
+                    if lv != AUX_LV and lv < min_pred_level:
+                        valid = False
+                        break
+
+                if not valid:
+                    continue
+
+                for node_max_lv in frontier:
+                    lv = frontier_level_by_idx[node_max_lv.node_idx]
                     if node_max_lv.node_idx not in nodes_became_internal:
                         new_frontier_key.append(NodeLevel(node_max_lv.node_idx, lv))
                 new_frontier_key.append(NodeLevel(node_to_idx[new_node], terminal_lv))
                 new_frontier_key.sort(key=lambda x: x.node_idx)
-                frontier_key.sort(key=lambda x: x.node_idx)
 
-                if tuple(frontier_key) not in frontier_solutions:
-                    continue
-
-                initial_score, sol_graph_vec = frontier_solutions[tuple(frontier_key)]
-
-                for node_max_lv, lv in zip(frontier, lv_comb):
+                for node_max_lv in pred_frontier:
+                    lv = frontier_level_by_idx[node_max_lv.node_idx]
                     dag.nodes[idx_to_node[node_max_lv.node_idx]]['level'] = (
                         lv if lv < AUX_LV else config.fhe_param.max_level
                     )
 
-                sol_cost = initial_score + self.get_compute_score_cached(dag, leading_comp)
+                try:
+                    sol_cost = initial_score + self.get_compute_score_cached(dag, leading_comp)
+                except KeyError as exc:
+                    preds = list(dag.predecessors(leading_comp))
+                    missing = [p.node_id for p in preds if 'level' not in dag.nodes[p]]
+                    raise KeyError(f'{exc} while scoring {leading_comp.layer_id}; missing levels for {missing}') from exc
 
                 new_frontier_key_tuple = tuple(new_frontier_key)
                 if (
@@ -371,12 +1049,13 @@ class GraphPartitioner:
                     new_frontier_solutions[new_frontier_key_tuple] = (sol_cost, new_sol_graph_vec)
 
             # leaf nodes only need the minimum output-level solution.
-            if len(list(dag.successors(new_node))) == 0:
+            is_leaf = len(list(dag.successors(new_node))) == 0
+            if is_leaf and leaf_min_only:
                 break
 
             new_frontier[-1] = NodeLevel(node_to_idx[new_node], terminal_lv)
 
-            if terminal_lv == min_feature_level and not (
+            if (not is_leaf) and terminal_lv == min_feature_level and not (
                 leading_comp.layer_type in {'avgpool1d', 'avgpool2d'}
                 and getattr(leading_comp, 'is_adaptive_avgpool', False)
             ):
@@ -463,6 +1142,17 @@ class GraphPartitioner:
                 node_to_idx[node] = idx
                 idx_to_node[idx] = node
                 idx += 1
+        fanout_regions = [] if is_mpc_flow() else self._find_fanout_regions(H)
+        regions_by_exit = {region.exit: region for region in fanout_regions}
+        region_exit_features = set(regions_by_exit)
+        region_internal_features = set()
+        for region in fanout_regions:
+            region_internal_features.update(region.internal_features)
+        region_internal_features -= region_exit_features
+        if fanout_regions:
+            print(f'Using fan-out region DP summaries: {len(fanout_regions)} regions')
+            self._precompute_region_plan_tables(H, fanout_regions)
+
         frontier: list[NodeLevel] = []
         processed_feature_nodes: set[FeatureNode] = set()
 
@@ -496,9 +1186,25 @@ class GraphPartitioner:
             if node in source_feature_nodes:
                 continue
 
-            frontier, frontier_solutions = self.generate_solutions(
-                node, frontier, frontier_solutions, processed_feature_nodes, node_to_idx, idx_to_node, H
-            )
+            if node in region_internal_features:
+                pbar.update(1)
+                continue
+
+            region = regions_by_exit.get(node)
+            if region is not None:
+                region_result = self.generate_region_solutions(
+                    region, frontier, frontier_solutions, processed_feature_nodes, node_to_idx, idx_to_node, H
+                )
+                if region_result is None:
+                    frontier, frontier_solutions = self.generate_solutions(
+                        node, frontier, frontier_solutions, processed_feature_nodes, node_to_idx, idx_to_node, H
+                    )
+                else:
+                    frontier, frontier_solutions = region_result
+            else:
+                frontier, frontier_solutions = self.generate_solutions(
+                    node, frontier, frontier_solutions, processed_feature_nodes, node_to_idx, idx_to_node, H
+                )
             pbar.update(1)
 
         final_solution_frontier = tuple(
@@ -543,6 +1249,41 @@ def optimize_task_segments(pt_graph, temperature, enable_score_cache: bool = Tru
     """
     graph_partitioner = GraphPartitioner(pt_graph.dag, temperature=temperature, enable_score_cache=enable_score_cache)
     return graph_partitioner.run()
+
+
+def _build_fanout_region_plan_table_worker(
+    args: tuple[nx.DiGraph, FanoutRegion, bool],
+) -> dict[tuple[int, int], tuple[float, dict[str, int]]]:
+    dag, region, enable_score_cache = args
+    graph_partitioner = GraphPartitioner(dag, enable_score_cache=enable_score_cache)
+    plan_table = graph_partitioner._build_region_plan_table(dag, region)
+    return {
+        boundary_levels: (
+            plan.cost,
+            {feature.node_id: level for feature, level in plan.feature_levels.items()},
+        )
+        for boundary_levels, plan in plan_table.items()
+    }
+
+
+def _build_region_input_level_plan_table_worker(
+    args: tuple[nx.DiGraph, list[FeatureNode], FanoutRegion, int, bool],
+) -> dict[tuple[int, int], tuple[float, dict[str, int]]]:
+    region_dag, sorted_features, region, input_level, enable_score_cache = args
+    graph_partitioner = GraphPartitioner(region_dag, enable_score_cache=enable_score_cache)
+    plan_table = graph_partitioner._build_region_plan_table_for_input_level(
+        region_dag,
+        sorted_features,
+        region,
+        input_level,
+    )
+    return {
+        boundary_levels: (
+            plan.cost,
+            {feature.node_id: level for feature, level in plan.feature_levels.items()},
+        )
+        for boundary_levels, plan in plan_table.items()
+    }
 
 
 def restore_node_attributes(G: nx.DiGraph):

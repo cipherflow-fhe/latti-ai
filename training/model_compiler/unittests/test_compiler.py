@@ -19,6 +19,7 @@ import json
 import math
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -997,6 +998,41 @@ class TestSingleLayer(CompilerTestBase):
             json_path=str(output_dir / 'task' / 'server' / 'nn_layers_ct_0.json'),
             h5_path=str(output_dir / 'task' / 'server' / 'model_parameters.h5'),
             verbose=False,
+        )
+
+    def test_btp_wide_long_fanout_performance(self):
+        model = nn_modules.WideLongFanoutNet(channels=32, fanout=8, branch_depth=3, stages=10)
+
+        export_start = time.perf_counter()
+        export_to_onnx(
+            model,
+            save_path=self.temp_onnx_path,
+            input_size=(1, 32, 8, 8),
+            dynamic_batch=False,
+            save_h5=False,
+        )
+        export_elapsed = time.perf_counter() - export_start
+
+        json_start = time.perf_counter()
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'ordinary')
+        json_elapsed = time.perf_counter() - json_start
+
+        output_dir = script_dir / 'task_res' / 'btp_wide_long_fanout_perf'
+        compile_start = time.perf_counter()
+        run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=output_dir,
+            temperature=0.0,
+            num_workers=1,
+            style='ordinary',
+            graph_type='btp',
+            is_use_btp=True,
+        )
+        compile_elapsed = time.perf_counter() - compile_start
+        print(
+            '[Perf] btp_wide_long_fanout: '
+            f'export={export_elapsed:.3f}s, json={json_elapsed:.3f}s, compile={compile_elapsed:.3f}s'
         )
 
 
