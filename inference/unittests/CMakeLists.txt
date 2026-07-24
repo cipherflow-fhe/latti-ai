@@ -18,6 +18,9 @@ configure_file(
 add_executable(test_fhe_layers_hetero test_fhe_layers_hetero.cpp ut_util.cpp)
 target_link_libraries(test_fhe_layers_hetero PUBLIC fhe_layers lattisense)
 
+add_executable(bench_conv2d_packed_direct bench_conv2d_packed_direct.cpp)
+target_link_libraries(bench_conv2d_packed_direct PUBLIC fhe_layers lattisense)
+
 set(INFERENCE_TEST_LIBS
     -Wl,--start-group
     inference_task

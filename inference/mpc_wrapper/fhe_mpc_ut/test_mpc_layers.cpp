@@ -4,6 +4,7 @@
 #include "mpc/mpc_numeric.h"
 #include "mpc_wrapper/enc_share_conversion.h"
 #include "mpc_wrapper/mpc_data_transmission.h"
+#include "mpc_wrapper/mpc_wrapper.h"
 #include "inference_task/inference_process.h"
 #include "mpc/mpc_task_meta_data.h"
 #include "mpc/mpc_session.h"
@@ -148,7 +149,7 @@ class MpcFixture {
 public:
     MpcFixture() {
         srand(time(NULL));
-        ::mpc::init_party(SERVER, kDefaultMpcTestPort);
+        init_mpc_party(MPC_SERVER, kDefaultMpcTestPort);
         data_trans = ::mpc::data_transmission();
         context = MpcDataTransmission(data_trans).recv_public_context();
         parameter = context.get_parameter().copy();
@@ -624,6 +625,64 @@ TEST_CASE_METHOD(MpcFixture, "feature 2d relu: change shape and skip") {
                     cout << "max_erro=" << compare_res.max_error << endl;
                     cout << "rms_erro=" << compare_res.rmse << endl;
                     cout << "default scale=" << context.get_parameter().get_default_scale() << endl;
+                    REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE_METHOD(MpcFixture, "feature 2d seconnds relu: change shape and skip") {
+    srand(time(NULL));
+    int level = 1;
+    uint32_t n_channel = 4;
+    vector<uint32_t> shapes = {32};
+    vector<uint32_t> skips = {1};
+    for (uint32_t s : shapes) {
+        Duo shape = {s, s};
+        SECTION("shape=" + str(shape)) {
+            for (uint32_t sk : skips) {
+                Duo skip = {sk, sk};
+                SECTION("skip=" + str(skip)) {
+                    Array<double, 3> x_mg = gen_random_array<3>({n_channel, shape[0], shape[1]}, 1.0);
+                    x_mg.get_data()[0] = 0.1;
+                    Feature2DEncrypted x_e(&context, level);
+                    x_e.pack_multiple_channel(x_mg, false, mpc::DEFAULT_SCALE);
+
+                    x_e.skip = skip;
+                    x_e.shape = {x_e.shape[0] / skip[0], x_e.shape[1] / skip[1]};
+
+                    PackType pack_type = PackType::MultipleChannelPacking;
+                    MpcTaskMetaData meta_data;
+                    meta_data.append(MpcProtoType::enc_to_share_for_multi_channel_pack, {"u8", "u8", "u8", "u8"},
+                                     (uint8_t)x_e.level, 0, 0, (uint8_t)pack_type);
+                    meta_data.append(MpcProtoType::seconnds_relu, {});
+                    meta_data.append(MpcProtoType::share_to_enc_for_multi_channel_pack, {"u8", "u32", "duo", "u8"},
+                                     (uint8_t)x_e.level, x_e.n_channel, &x_e.skip, (uint8_t)pack_type);
+                    meta_data.append(MpcProtoType::end, {});
+                    data_trans.send_bytes(meta_data.serialize());
+
+                    auto x_share0 = enc_to_share_server().server_enc_to_share_multi_pack(x_e, pack_type);
+
+                    ReluLayerServer act(scale_ord, ring_mod, pt_range);
+
+                    Feature2DShare y_share0(ring_mod, scale_ord);
+                    y_share0.data = to_latti_array(act.run_seconnds(to_mpc_array(x_share0.data)));
+                    y_share0.shape = x_share0.shape;
+
+                    auto y_ct = share_to_enc_server().server_share_to_enc_multi_pack(y_share0, x_e.level, pack_type);
+                    Array<double, 3> y_mg = y_ct.unpack_multiple_channel();
+
+                    Array<double, 3> x_mg_skip = x_mg.apply_skip(skip);
+                    Array<double, 3> y_mg_expected = to_latti_array(act.run_relu_plaintext(to_mpc_array(x_mg_skip)));
+                    print_double_message(y_mg_expected.get_data(), "seconnds_expected", 10);
+                    for (int i = 0; i < y_mg.get_size(); i++) {
+                        y_mg.set(i, y_mg.get_data()[i] / mpc::T_SCALE);
+                    }
+                    print_double_message(y_mg.get_data(), "seconnds_y_mg", 10);
+                    auto compare_res = compare(y_mg_expected, y_mg);
+                    cout << "seconnds max_erro=" << compare_res.max_error << endl;
+                    cout << "seconnds rms_erro=" << compare_res.rmse << endl;
                     REQUIRE(compare_res.max_error < 5.0e-2 * compare_res.max_abs);
                 }
             }

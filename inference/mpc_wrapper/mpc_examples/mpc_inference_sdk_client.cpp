@@ -184,6 +184,15 @@ struct CkksClientRuntime {
             if (param_out.dim == 0) {
                 Feature0DEncrypted output_ct(context.get(), 0);
                 output_ct.deserialize(bytes);
+                cout << "[Client] Output '" << name << "' 0D metadata: n_ct=" << output_ct.data.size()
+                     << ", n_cct=" << output_ct.data_compressed.size()
+                     << ", n_channel=" << output_ct.n_channel
+                     << ", n_channel_per_ct=" << output_ct.n_channel_per_ct
+                     << ", level=" << output_ct.level
+                     << ", skip=" << output_ct.skip << endl;
+                if (output_ct.data.empty()) {
+                    throw runtime_error("[Client] Output '" + name + "' has no CKKS ciphertext data");
+                }
                 output_ct.skip = param_out.skip;
                 auto decrypted = output_ct.unpack();
                 auto dec_1d = decrypted.to_array_1d();

@@ -107,6 +107,9 @@ mpc::Array1DUint InferenceMpcClient::run() {
             } else if (type == MpcProtoType::relu) {
                 ReluLayerClient act(scale_ord_, ring_mod_, pt_range_);
                 assign_share_data_from_mpc_array(im_2d->data, act.run(share_data_to_mpc_array(im_2d->data)));
+            } else if (type == MpcProtoType::seconnds_relu) {
+                ReluLayerClient act(scale_ord_, ring_mod_, pt_range_);
+                assign_share_data_from_mpc_array(im_2d->data, act.run_seconnds(share_data_to_mpc_array(im_2d->data)));
             } else if (type == MpcProtoType::simple_poly_relu) {
                 int size = 0;
                 data_trans.recv_data(&size, sizeof(int));

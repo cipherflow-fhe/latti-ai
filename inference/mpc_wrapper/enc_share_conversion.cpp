@@ -978,6 +978,7 @@ Feature2DShare EncToShareServer::server_enc_to_share_multi_pack(const Feature2DE
 
     split_to_shares_for_multi_channel_pack(x_enc, &x_share1_enc, &x_share0, pack_type);
     data_trans.send_bytes(x_share1_enc.serialize());
+    data_trans.flush();
 
     return x_share0;
 }
@@ -991,6 +992,7 @@ Feature2DShare EncToShareServer::server_enc_to_share_multi_pack_simple(const Fea
 
     split_to_shares_for_multi_channel_pack_simple(x_enc, &x_share1_enc, &x_share0, pack_type);
     data_trans.send_bytes(x_share1_enc.serialize());
+    data_trans.flush();
 
     return x_share0;
 }

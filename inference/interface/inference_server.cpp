@@ -264,6 +264,12 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
     for (auto& [name, param] : output_params_) {
         if (param.dim == 0) {
             auto output_ct = fp_->get_ciphertext_output_feature<Feature0DEncrypted>(name);
+            std::cout << "[Server] Output '" << name << "' 0D metadata: n_ct=" << output_ct.data.size()
+                      << ", n_cct=" << output_ct.data_compressed.size()
+                      << ", n_channel=" << output_ct.n_channel
+                      << ", n_channel_per_ct=" << output_ct.n_channel_per_ct
+                      << ", level=" << output_ct.level
+                      << ", skip=" << output_ct.skip << std::endl;
             encrypted_outputs[name] = output_ct.serialize();
         } else if (param.dim == 1) {
             auto output_ct = fp_->get_ciphertext_output_feature<Feature1DEncrypted>(name);
@@ -327,6 +333,12 @@ std::map<std::string, Bytes> InferenceServer::evaluate_mpc_sdk(const std::map<st
     for (auto& [name, param] : output_params_) {
         if (param.dim == 0) {
             auto output_ct = fp_->get_ciphertext_output_feature<Feature0DEncrypted>(name);
+            std::cout << "[Server] Output '" << name << "' 0D metadata: n_ct=" << output_ct.data.size()
+                      << ", n_cct=" << output_ct.data_compressed.size()
+                      << ", n_channel=" << output_ct.n_channel
+                      << ", n_channel_per_ct=" << output_ct.n_channel_per_ct
+                      << ", level=" << output_ct.level
+                      << ", skip=" << output_ct.skip << std::endl;
             encrypted_outputs[name] = output_ct.serialize();
         } else if (param.dim == 1) {
             auto output_ct = fp_->get_ciphertext_output_feature<Feature1DEncrypted>(name);

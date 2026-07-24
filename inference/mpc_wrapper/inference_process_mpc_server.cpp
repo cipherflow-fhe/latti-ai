@@ -4,6 +4,7 @@
 
 #include "mpc_wrapper/enc_share_conversion.h"
 #include "mpc/fhe_mpc.h"
+#include "mpc/seconnds_relu_config.h"
 #include "mpc_array_bridge.h"
 
 using namespace std;
@@ -14,12 +15,24 @@ namespace {
 const vector<MpcProtoType> REFRESH_MPC = {MpcProtoType::enc_to_share_for_multi_channel_pack_simple,
                                           MpcProtoType::share_to_enc_for_multi_channel_pack_simple};
 
-const vector<MpcProtoType> RELU2D_MPC = {MpcProtoType::enc_to_share_for_multi_channel_pack, MpcProtoType::relu,
-                                         MpcProtoType::share_to_enc_for_multi_channel_pack};
-
 const vector<MpcProtoType> MAXPOOL2D_MPC = {MpcProtoType::enc_to_share_for_multi_channel_pack,
                                             MpcProtoType::max_pool,
                                             MpcProtoType::share_to_enc_for_multi_channel_pack};
+
+const vector<MpcProtoType>& relu2d_mpc_ops() {
+    static const vector<MpcProtoType> relu_ops = {
+        MpcProtoType::enc_to_share_for_multi_channel_pack,
+        MpcProtoType::relu,
+        MpcProtoType::share_to_enc_for_multi_channel_pack};
+    static const vector<MpcProtoType> seconnds_relu_ops = {
+        MpcProtoType::enc_to_share_for_multi_channel_pack,
+        MpcProtoType::seconnds_relu,
+        MpcProtoType::share_to_enc_for_multi_channel_pack};
+    if constexpr (mpc::USE_SECONNDS_RELU) {
+        return seconnds_relu_ops;
+    }
+    return relu_ops;
+}
 
 uint8_t ckks_parameter_id_to_u8(const string& param_id) {
     if (param_id.rfind("param", 0) == 0) {
@@ -53,7 +66,7 @@ void InitMpc::init_mpc_layer(const InitInferenceProcess& init,
                    operation == MpcProtoType::share_to_enc_for_multi_channel_pack_simple) {
             meta_data.append(operation, {"u8", "u32", "duo", "u8"}, (uint8_t)feature_output0.level,
                              feature_output0.channel, &feature_output0.skip, (uint8_t)pack_type);
-        } else if (operation == MpcProtoType::relu) {
+        } else if (operation == MpcProtoType::relu || operation == MpcProtoType::seconnds_relu) {
             meta_data.append(operation, {});
         } else if (operation == MpcProtoType::max_pool) {
             Duo kernel_shape = {layer["kernel_shape"][0], layer["kernel_shape"][1]};
@@ -74,7 +87,7 @@ void InitMpc::init_mpc_refresh_layer(const InitInferenceProcess& init, const str
 
 void InitMpc::init_relu2d_layer(const InitInferenceProcess& init, const string& key, const json& layer) {
     MpcTaskMetaData meta_data;
-    init_mpc_layer(init, RELU2D_MPC, layer, meta_data);
+    init_mpc_layer(init, relu2d_mpc_ops(), layer, meta_data);
     meta_data_map_[key] = MakeU<MpcTaskMetaData>(move(meta_data));
     ckks_relu2d_[key] = MakeU<ReluLayerServer>(mpc::DEFAULT_SCALE_BIT, mpc::RING_MOD, 128.0);
 }
@@ -185,8 +198,12 @@ Feature2DEncrypted InferenceMpcServer::calculate_relu2d(const InitInferenceProce
     Feature2DShare x_share0 = enc_to_share_server.server_enc_to_share_multi_pack(x_enc, pack_type);
     Feature2DShare y_share0(ring_mod, scale_ord);
     y_share0.shape = x_share0.shape;
-    assign_share_data_from_mpc_array(y_share0.data,
-                                     init_mpc.relu2d_layer(key).run(share_data_to_mpc_array(x_share0.data)));
+    auto x_share_mpc = share_data_to_mpc_array(x_share0.data);
+    if constexpr (mpc::USE_SECONNDS_RELU) {
+        assign_share_data_from_mpc_array(y_share0.data, init_mpc.relu2d_layer(key).run_seconnds(x_share_mpc));
+    } else {
+        assign_share_data_from_mpc_array(y_share0.data, init_mpc.relu2d_layer(key).run(x_share_mpc));
+    }
 
     ShareToEncServer share_to_enc_server(context_out, scale_ord, ring_mod, pt_range);
     Feature2DEncrypted y_ct =
