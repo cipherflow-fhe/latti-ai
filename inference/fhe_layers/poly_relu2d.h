@@ -20,21 +20,21 @@
 #include "poly_relu_base.h"
 #include <map>
 
-class PolyRelu : public PolyReluBase {
+class PolyRelu2D : public PolyReluBase {
 public:
-    PolyRelu(const ls::CkksParameter& param_in,
-             const Duo& input_shape_in,
-             const int order_in,
-             const Array<double, 2>& weight_in,
-             const Duo& skip_in,
-             uint32_t n_channel_per_ct_in,
-             uint32_t level_in,
-             const Duo& zero_skip_in = {1, 1},
-             const Duo& block_expansion_in = {1, 1},
-             bool is_ordinary_pack_in = false);
+    PolyRelu2D(const ls::CkksParameter& param_in,
+               const Duo& input_shape_in,
+               const int order_in,
+               Array<double, 2>&& weight_in,
+               const Duo& skip_in,
+               uint32_t n_channel_per_ct_in,
+               uint32_t level_in,
+               const Duo& zero_skip_in = {1, 1},
+               const Duo& block_expansion_in = {1, 1},
+               bool is_ordinary_pack_in = false);
 
-    void prepare_weight();
-    void prepare_weight_lazy();
+    void prepare_weight() override;
+    void prepare_weight_lazy() override;
     void prepare_weight_bsgs();
     void prepare_weight_bsgs_lazy();
     void prepare_weight_hornor();

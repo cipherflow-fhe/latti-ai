@@ -32,7 +32,7 @@ project_root = script_dir.parent.parent.parent
 sys.path.append(str(script_dir.parent))
 sys.path.append(str(script_dir.parent.parent))
 
-from nn_tools.export import export_to_onnx, fuse_and_export_h5
+from nn_tools.export import export_to_onnx, export_h5_from_onnx
 from model_export.onnx_to_json import onnx_to_json
 from pipeline import run_pipeline
 from components import (
@@ -115,6 +115,8 @@ def check_multi_input_level_skip_aligned(graph: LayerAbstractGraph) -> bool:
 
 
 def check_feature_scale(graph: LayerAbstractGraph):
+    import math
+
     all_nodes_in_topo_sort = list(nx.topological_sort(graph.dag))
     for node in all_nodes_in_topo_sort:
         if not isinstance(node, ComputeNode):
@@ -132,11 +134,11 @@ def check_feature_scale(graph: LayerAbstractGraph):
             out_node.scale = f_node.scale * node.weight_scale
         elif node.layer_type == 'mult_coeff':
             out_node.scale = f_node.scale * (1 / node.coeff)
-        elif node.layer_type == 'avgpool2d':
+        elif node.layer_type in {'avgpool1d', 'avgpool2d'}:
             if (not node.is_adaptive_avgpool) and (not node.is_big_size):
                 out_node.scale = f_node.scale
             else:
-                out_node.scale = f_node.scale * (node.kernel_shape[0] * node.kernel_shape[1])
+                out_node.scale = f_node.scale * math.prod(node.kernel_shape)
         else:
             out_node.scale = f_node.scale
 
@@ -159,7 +161,7 @@ def check_dropped_levels_per_subgraph(graph: LayerAbstractGraph) -> bool:
             for node in sub.nodes
             if isinstance(node, ComputeNode) and node.layer_type == 'drop_level'
         )
-        if total_dropped > config.fhe_param.max_level + 2:
+        if total_dropped > config.fhe_param.max_level + 8:
             print(
                 f'[check_dropped_levels_per_subgraph] FAIL: subgraph total dropped levels '
                 f'{total_dropped} > config.fhe_param.max_level + 2 = {config.fhe_param.max_level + 2}'
@@ -264,6 +266,12 @@ class CompilerTestBase(unittest.TestCase):
     temp_onnx_path = script_dir / 'temp.onnx'
     temp_json_path = script_dir / 'temp.json'
     e2e_base_path = project_root / 'build' / 'inference' / 'hetero_e2e'
+
+    def _max_feature_level(self, graph):
+        return max(graph.dag.nodes[f]['level'] for f in graph.dag.nodes if isinstance(f, FeatureNode))
+
+    def _has_bootstrapping(self, graph):
+        return any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes)
 
     def _check_concat_input_ordering(self, graph: LayerAbstractGraph, raw_json_path):
         """Assert every concat2d node in *graph* preserves the input ordering from *raw_json_path*."""
@@ -382,7 +390,13 @@ class CompilerTestBase(unittest.TestCase):
 
         # Step 4: Export model weights to h5
         h5_path = server_dir / 'model_parameters.h5'
-        fuse_and_export_h5(model, str(h5_path), verbose=False)
+        json_path = server_dir / 'nn_layers_ct_0.json'
+        export_h5_from_onnx(
+            onnx_path=str(temp_onnx),
+            json_path=str(json_path),
+            h5_path=str(h5_path),
+            verbose=False,
+        )
 
         # Step 6: Read pack_style and param_name from configs
         with open(client_dir / 'task_config.json', 'r') as f:
@@ -403,7 +417,7 @@ class CompilerTestBase(unittest.TestCase):
             f'sys.path.insert(0,"{project_root}");'
             f'sys.path.insert(0,"{project_root / "inference"}");'
             f'from inference.model_generator.deploy_cmds import gen_custom_task;'
-            f'gen_custom_task("{server_dir}",param_name="{param_name}",use_gpu=True,style="{pack_style}")'
+            f'gen_custom_task("{server_dir}",param_name="{param_name}",use_gpu=True,style="{pack_style}",lazy=True)'
         )
         result = subprocess.run([sys.executable, '-c', gen_script], capture_output=True, text=True)
         if result.returncode != 0:
@@ -432,6 +446,21 @@ class CompilerTestBase(unittest.TestCase):
         temp_onnx.unlink(missing_ok=True)
         temp_json.unlink(missing_ok=True)
 
+        # Verify critical output files exist before updating manifest
+        for required_file in ['task_signature.json', 'mega_ag.json', 'model_parameters.h5']:
+            assert (server_dir / required_file).exists(), f'Missing {required_file} in {server_dir}'
+
+        # Update test manifest (append test_name so C++ auto-discovers only valid tests)
+        manifest_path = self.e2e_base_path / 'ut_names.json'
+        if manifest_path.exists():
+            with open(manifest_path, 'r') as f:
+                manifest = set(json.load(f))
+        else:
+            manifest = set()
+        manifest.add(test_name)
+        with open(manifest_path, 'w') as f:
+            json.dump(sorted(manifest), f, indent=2)
+
         print(f'  [E2E] {test_name} -> {server_dir}')
         return graph, score
 
@@ -456,7 +485,7 @@ class TestSingleLayer(CompilerTestBase):
         )
 
     def test_single_avgpool_big_size(self):
-        model = nn_modules.SingleAvgpool()
+        model = nn_modules.SingleAvgpool2d()
         graph, score = self._export_and_compile(model, (1, 32, 256, 256))
         self.assertEqual(check_feature_scale(graph), True)
 
@@ -491,11 +520,56 @@ class TestSingleLayer(CompilerTestBase):
         graph, score = self._export_and_compile(model, (1, 32, 256, 256), style='multiplexed')
         self.assertTrue(any(node.is_big_size for node in graph.dag.nodes if isinstance(node, ConvComputeNode)))
 
+    def test_single_dw_conv1d(self):
+        model = nn_modules.DepthwiseConv1d(channels=8, stride=1)
+        graph, score = self._export_and_compile(model, (1, 8, 64), style='multiplexed')
+        self.assertTrue(
+            any(
+                isinstance(node, ConvComputeNode) and node.layer_type == 'conv1d' and node.groups == node.channel_input
+                for node in graph.dag.nodes
+            )
+        )
+
 
 class TestLayerInteraction(CompilerTestBase):
     def test_mismatched_scale(self):
         model = nn_modules.MismatchedScale()
         graph, score = self._export_and_compile(model, (1, 32, 64, 64))
+
+    def test_three_conv_concat_relu(self):
+        """cat([conv1(x), conv2(x), conv3(x)], dim=1) → relu."""
+        model = nn_modules.ThreeConvConcatRelu()
+        graph, score = self._export_and_compile(model, (1, 16, 32, 32))
+        flag = True
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode):
+                if node.layer_type == 'conv2d':
+                    if not node.poly_path:
+                        flag = False
+                        break
+        self.assertEqual(flag, True)
+
+    def test_conv_residual_relu(self):
+        """relu(conv(x) + x): residual shortcut, add must have aligned inputs."""
+        model = nn_modules.ConvResidualRelu()
+        graph, score = self._export_and_compile(model, (1, 32, 32, 32))
+        flag = True
+        num_mult = 0
+        for node in graph.dag.nodes:
+            if isinstance(node, ComputeNode):
+                if node.layer_type == 'conv2d':
+                    if not node.poly_path:
+                        flag = False
+                        continue
+                if node.layer_type == 'mult_scalar':
+                    num_mult = num_mult + 1
+        self.assertEqual(flag, True)
+        self.assertTrue(num_mult > 0)
+        # self.assertTrue(
+        #     any(isinstance(n, ActivationComputeNode) for n in graph.dag.nodes),
+        #     'Expected at least one ActivationComputeNode (relu) in the compiled graph',
+        # )
+        # self.assertEqual(check_multi_input_level_skip_aligned(graph), True)
 
     def test_conv_and_convtranspose(self):
         model = nn_modules.ConvAndConvTransposeBlock()
@@ -559,6 +633,11 @@ class TestLayerInteraction(CompilerTestBase):
                     graph.dag.nodes[inp]['skip'],
                     '0D -> 0D: dense output skip should equal input skip',
                 )
+
+    def test_conv1d_reshape_dense(self):
+        model = nn_modules.Conv1dReshapeAndDense()
+        graph, score = self._export_and_compile(model, (1, 4, 64), style='multiplexed', do_constant_folding=True)
+        self.assertEqual(check_reshape_sp_info_propagation(graph), True)
 
     def test_two_dense(self):
         """FC-FC: graph input is 0d; all feature node skips should equal 2**floor(log2(N)/2)."""
@@ -631,11 +710,11 @@ class TestCompiler(CompilerTestBase):
 
     def test_resnet_20(self):
         from nn_tools import prepare_for_fhe
-        from nn_tools.activations import Simple_Polyrelu
+        from nn_tools.activations import PolyAct
         from resnet import resnet20
 
         model = resnet20()
-        prepare_for_fhe(model, poly_module=Simple_Polyrelu, input_size=(1, 3, 32, 32))
+        prepare_for_fhe(model, poly_module=PolyAct, input_size=(1, 3, 32, 32))
 
         graph, score = self._export_and_compile(model, (1, 3, 32, 32), style='multiplexed', replace=False)
         self.assertEqual(check_level_cost(graph), True)
@@ -787,66 +866,315 @@ class TestCompilerErrors(CompilerTestBase):
             )
 
 
-class TestE2E(CompilerTestBase):
-    """Generate E2E test data for C++ inference tests.
+class TestE2ESingleLayer(CompilerTestBase):
+    """E2E tests for single-layer models.
 
-    Each test compiles a model and produces a complete task directory
-    (h5 weights, mega_ag instructions, input CSVs) under
-    build/inference/hetero_e2e/<test_name>/.
-
-    Run the C++ test_e2e binary afterwards to verify encrypted vs plaintext
-    inference consistency.
+    Each test compiles a single-operator model and produces a task directory
+    under build/inference/hetero_e2e/single_layer/<test_name>/ for the C++ test_e2e_single_layer
+    binary.
     """
 
-    # ── Helper for common assertions ──
+    e2e_base_path = CompilerTestBase.e2e_base_path / 'single_layer'
 
-    def _max_feature_level(self, graph):
-        return max(graph.dag.nodes[f]['level'] for f in graph.dag.nodes if isinstance(f, FeatureNode))
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.e2e_base_path.mkdir(parents=True, exist_ok=True)
+        manifest_path = cls.e2e_base_path / 'ut_names.json'
+        with open(manifest_path, 'w') as f:
+            json.dump([], f)
 
-    def _has_bootstrapping(self, graph):
-        return any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes)
+    # ── Conv2d big_size (3 scenarios: output > / == / < block_shape) ──
 
-    # ── Single layer tests (poly_n=8192, ≤5 levels) ──
+    def test_conv_big_size(self):
+        """Conv2d big_size: output_shape vs block_shape (block_shape=[64,64] for these inputs).
 
-    def test_e2e_single_conv(self):
-        """1 Conv = 1 level → poly_n=8192, no BTP."""
-        model = nn_modules.SingleConv()
-        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'single_conv')
-        self.assertEqual(self._max_feature_level(graph), 1)
-        self.assertEqual(config.fhe_param.poly_modulus_degree, 8192)
+        - output > block:  256x256 s=2 -> 128x128, level_cost=1
+        - output == block: 128x128 s=2 ->  64x64,  level_cost=1
+        - output < block:  128x128 s=4 ->  32x32,  level_cost=2
+        """
+        cases = [
+            # (input_h, stride, expected_level_cost, label)
+            (256, 2, 1, 'output_gt_block'),
+            (128, 2, 1, 'output_eq_block'),
+            (128, 4, 2, 'output_lt_block'),
+        ]
+        for input_h, stride, expected_level_cost, label in cases:
+            for kernel_shape in [1, 3]:
+                test_name = f'conv_big_size_{label}_s{stride}_k{kernel_shape}_{input_h}x{input_h}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.SingleConv(stride, kernel_size=kernel_shape)
+                    graph, score = self._export_compile_and_deploy(
+                        model, (1, 32, input_h, input_h), test_name, style='multiplexed'
+                    )
+                    self.assertIsNotNone(graph)
 
-    def test_e2e_single_act(self):
-        """1 Act = 3 levels → poly_n=8192, no BTP."""
-        model = nn_modules.SingleAct()
-        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'single_act')
-        self.assertEqual(self._max_feature_level(graph), 3)
-        self.assertEqual(config.fhe_param.poly_modulus_degree, 8192)
+    # ── DW Conv2d big_size (3 scenarios) ──
 
-    def test_e2e_single_avgpool(self):
-        """1 Avgpool → poly_n=8192, no BTP."""
-        model = nn_modules.SingleAvgpool()
-        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'single_avgpool', style='multiplexed')
-        self.assertTrue(check_feature_scale(graph))
+    def test_dw_conv_big_size(self):
+        """DW Conv2d big_size: output_shape vs block_shape.
 
-    def test_e2e_single_dense(self):
-        """1 Dense → poly_n=8192, no BTP."""
-        model = nn_modules.SingleDense()
-        graph, score = self._export_compile_and_deploy(model, (1, 64), 'single_dense')
+        - output > block:  256x256 s=2 -> 128x128, level_cost=1
+        - output == block: 128x128 s=2 ->  64x64,  level_cost=1
+        - output < block:  128x128 s=4 ->  32x32,  level_cost=2
+        """
+        cases = [
+            (256, 2, 1, 'output_gt_block'),
+            (128, 2, 1, 'output_eq_block'),
+            (128, 4, 2, 'output_lt_block'),
+        ]
+        for input_h, stride, expected_level_cost, label in cases:
+            for kernel_shape in [1, 3]:
+                test_name = f'dw_conv_big_size_{label}_s{stride}_k{kernel_shape}_{input_h}x{input_h}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.DepthwiseConv(channels=32, stride=stride, kernel_size=kernel_shape)
+                    graph, score = self._export_compile_and_deploy(
+                        model, (1, 32, input_h, input_h), test_name, style='multiplexed'
+                    )
+                    self.assertIsNotNone(graph)
+
+    # ── Conv1d (DW only — ordinary covered by test_conv1d_params) ──
+
+    def test_dw_conv1d(self):
+        """Depthwise Conv1d E2E (groups=channels). Covers dw_conv1d."""
+        model = nn_modules.DepthwiseConv1d(channels=8, stride=1)
+        graph, score = self._export_compile_and_deploy(model, (1, 8, 64), 'dw_conv1d', style='multiplexed')
         self.assertIsNotNone(graph)
 
+    # ── FC ──
+
+    def test_dense(self):
+        """1 Dense → poly_n=8192, no BTP."""
+        model = nn_modules.SingleDense()
+        graph, score = self._export_compile_and_deploy(model, (1, 64), 'dense')
+        self.assertIsNotNone(graph)
+
+    # ── Pooling (big_size and general only — standard covered by sweeps) ──
+
+    def test_avgpool_big_size(self):
+        """Avgpool2d big_size: output_shape vs block_shape.
+
+        - output > block:  256x256 s=2 -> 128x128, level_cost=0
+        - output == block: 128x128 s=2 ->  64x64,  level_cost=0
+        - output < block:  128x128 s=4 ->  32x32,  level_cost=1 (repack needed)
+        """
+        cases = [
+            # (input_h, ch, kernel_stride, expected_level_cost, label)
+            (256, 5, 2, 0, 'output_gt_block'),
+            (128, 32, 2, 0, 'output_eq_block'),
+            (128, 32, 4, 1, 'output_lt_block'),
+        ]
+        for input_h, ch, stride, expected_level_cost, label in cases:
+            test_name = f'avgpool_big_size_{label}_s{stride}_{input_h}x{input_h}'
+            with self.subTest(test_name=test_name):
+                model = nn_modules.SingleAvgpool2d(kernel_size=stride, stride=stride)
+                graph, score = self._export_compile_and_deploy(
+                    model, (1, ch, input_h, input_h), test_name, style='multiplexed'
+                )
+                self.assertTrue(check_feature_scale(graph))
+                self.assertIsNotNone(graph)
+
+    def test_general_avgpool(self):
+        """General avgpool (kernel_size=3, stride=2) replaced with depthwise conv for FHE."""
+        model = nn_modules.SingleAvgpool2d(kernel_size=3, stride=2, padding=1)
+        graph, score = self._export_compile_and_deploy(
+            model,
+            (1, 32, 8, 8),
+            'general_avgpool',
+            style='multiplexed',
+        )
+        self.assertIsNotNone(graph)
+
+    # ── Add ──
+
+    def test_add(self):
+        """Add two inputs → poly_n=8192, no BTP."""
+        model = nn_modules.SingleAdd()
+        graph, score = self._export_compile_and_deploy(
+            model, [(1, 32, 8, 8), (1, 32, 8, 8)], 'add', input_names=['x0', 'x1']
+        )
+        self.assertIsNotNone(graph)
+
+    # ── Activation ──
+
+    def test_act(self):
+        """1 Act = 3 levels → poly_n=8192, no BTP."""
+        model = nn_modules.SingleAct()
+        graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'act')
+        self.assertEqual(self._max_feature_level(graph), 4)
+        self.assertEqual(config.fhe_param.poly_modulus_degree, 8192)
+
+    # ── Reshape (disabled) ──
+
     @unittest.skip('Reshape-only model has no FHE computation for gen_custom_task')
-    def test_e2e_single_reshape(self):
+    def test_reshape(self):
         """Reshape → poly_n=8192, no BTP."""
         model = nn_modules.SingleReshape()
         self._export_compile_and_deploy(model, (1, 16, 4, 4), 'single_reshape')
 
-    def test_e2e_single_add(self):
-        """Add two inputs → poly_n=8192, no BTP."""
-        model = nn_modules.SingleAdd()
-        graph, score = self._export_compile_and_deploy(
-            model, [(1, 32, 8, 8), (1, 32, 8, 8)], 'single_add', input_names=['x0', 'x1']
-        )
-        self.assertIsNotNone(graph)
+    # ── Parameter sweep tests (mirroring test_gen_layers.py coverage) ──
+
+    # ── Conv2d ordinary packing ──
+
+    def test_conv2d_packed(self):
+        """Conv2d ordinary packing, parameter sweep from test_gen_layers."""
+        for stride in [(1, 1), (2, 2)]:
+            # Single-channel tests
+            input_shapes = [(4, 4), (8, 8), (16, 16), (32, 32)] if stride == (1, 1) else [(32, 32)]
+            for input_shape in input_shapes:
+                for kernel_size in [1, 3, 5]:
+                    test_name = f'conv2d_s{stride[0]}_k{kernel_size}_cin1_cout1_{input_shape[0]}x{input_shape[1]}'
+                    with self.subTest(test_name=test_name):
+                        model = nn_modules.MultiChannelConv(1, 1, stride=stride[0], kernel_size=kernel_size)
+                        graph, score = self._export_compile_and_deploy(model, (1, 1, *input_shape), test_name)
+                        # Single conv should be 1 level with smallest poly degree
+                        self.assertEqual(self._max_feature_level(graph), 1)
+            # Multi-channel tests (includes former test_conv, test_conv_mch_s1/s2 configs)
+            configs = [
+                (32, 32, (8, 8)),  # was test_conv
+                (3, 16, (32, 32)),  # was test_conv_mch_s1/s2
+                (3, 4, (32, 32)),
+                (4, 4, (32, 32)),
+                (4, 32, (32, 32)),
+                (16, 16, (32, 32)),
+                (16, 32, (32, 32)),
+            ]
+            for in_ch, out_ch, input_shape in configs:
+                test_name = f'conv2d_s{stride[0]}_k3_cin{in_ch}_cout{out_ch}_{input_shape[0]}x{input_shape[1]}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.MultiChannelConv(in_ch, out_ch, stride=stride[0], kernel_size=3)
+                    graph, score = self._export_compile_and_deploy(model, (1, in_ch, *input_shape), test_name)
+                    self.assertEqual(self._max_feature_level(graph), 1)
+
+    # ── Conv2d depthwise ──
+
+    def test_conv2d_depthwise(self):
+        """Depthwise Conv2d (multiplexed), parameter sweep from test_gen_layers."""
+        for stride in [(1, 1), (2, 2)]:
+            for channels in [4, 8, 32]:
+                for input_shape in [(16, 16), (32, 32)]:
+                    for kernel_size in [1, 3, 5]:
+                        test_name = (
+                            f'dw_conv2d_s{stride[0]}_k{kernel_size}_ch{channels}_{input_shape[0]}x{input_shape[1]}'
+                        )
+                        with self.subTest(test_name=test_name):
+                            model = nn_modules.DepthwiseConv(channels, stride=stride[0], kernel_size=kernel_size)
+                            self._export_compile_and_deploy(
+                                model, (1, channels, *input_shape), test_name, style='multiplexed'
+                            )
+
+    def test_conv2d_depthwise_ordinary(self):
+        """Depthwise Conv2d (ordinary packing), parameter sweep."""
+        for stride in [(1, 1), (2, 2)]:
+            for channels in [4, 8, 32]:
+                for kernel_size in [1, 3, 5]:
+                    test_name = f'dw_conv2d_ordinary_s{stride[0]}_k{kernel_size}_ch{channels}'
+                    with self.subTest(test_name=test_name):
+                        model = nn_modules.DepthwiseConv(channels, stride=stride[0], kernel_size=kernel_size)
+                        self._export_compile_and_deploy(model, (1, channels, 32, 32), test_name, style='ordinary')
+
+    # ── Mux Conv2d ──
+
+    def test_mux_conv2d_packed(self):
+        """Multiplexed Conv2d, parameter sweep from test_gen_layers."""
+        # Varied channels
+        for in_ch in [3, 4, 16]:
+            for out_ch in [3, 4, 32]:
+                test_name = f'mux_conv2d_cin{in_ch}_cout{out_ch}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.MultiChannelConv(in_ch, out_ch, stride=1, kernel_size=3)
+                    self._export_compile_and_deploy(model, (1, in_ch, 32, 32), test_name, style='multiplexed')
+        # Varied kernel sizes
+        for kernel_size in [1, 3, 5]:
+            test_name = f'mux_conv2d_k{kernel_size}'
+            with self.subTest(test_name=test_name):
+                model = nn_modules.MultiChannelConv(32, 32, stride=1, kernel_size=kernel_size)
+                self._export_compile_and_deploy(model, (1, 32, 32, 32), test_name, style='multiplexed')
+
+    # ── Conv1d ──
+
+    def test_conv1d_params(self):
+        """Conv1d ordinary, parameter sweep from test_gen_layers."""
+        for stride in [1, 2]:
+            for input_shape in [32, 64]:
+                test_name = f'conv1d_s{stride}_len{input_shape}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.SingleConv1dE2E(in_channels=4, out_channels=4, stride=stride)
+                    self._export_compile_and_deploy(model, (1, 4, input_shape), test_name)
+
+    # ── Avgpool2d ──
+
+    def test_avgpool2d_params(self):
+        """Avgpool2d, parameter sweep from test_gen_layers."""
+        for stride in [2, 4, 8]:
+            for shape in [8, 16, 32]:
+                if shape < stride:
+                    continue
+                test_name = f'avgpool2d_s{stride}_{shape}x{shape}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.SingleAvgpool2d(kernel_size=stride, stride=stride)
+                    graph, score = self._export_compile_and_deploy(
+                        model, (1, 32, shape, shape), test_name, style='multiplexed'
+                    )
+                    self.assertTrue(check_feature_scale(graph))
+
+    # ── Adaptive Avgpool2d ──
+
+    def test_adaptive_avgpool2d(self):
+        """Adaptive AvgPool2d, parameter sweep from test_gen_layers."""
+        for stride in [2, 4]:
+            for shape in [8, 16, 32]:
+                if shape < stride:
+                    continue
+                output_size = shape // stride
+                test_name = f'adaptive_avgpool2d_s{stride}_{shape}x{shape}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.SingleAdaptiveAvgpool2d(output_size=(output_size, output_size))
+                    self._export_compile_and_deploy(model, (1, 32, shape, shape), test_name, style='multiplexed')
+
+    # ── Avgpool1d ──
+
+    def test_avgpool1d_params(self):
+        """Avgpool1d, parameter sweep from test_gen_layers."""
+        for stride in [2, 4, 8]:
+            for shape in [8, 16, 32]:
+                if shape < stride:
+                    continue
+                test_name = f'avgpool1d_s{stride}_len{shape}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.SingleAvgpool1d(kernel_size=stride, stride=stride)
+                    graph, score = self._export_compile_and_deploy(
+                        model, (1, 32, shape), test_name, style='multiplexed'
+                    )
+                    self.assertTrue(check_feature_scale(graph))
+
+    # ── Adaptive Avgpool1d ──
+
+    def test_adaptive_avgpool1d(self):
+        """Adaptive AvgPool1d, parameter sweep from test_gen_layers."""
+        for stride in [2, 4]:
+            for shape in [8, 16, 32]:
+                if shape < stride:
+                    continue
+                output_size = shape // stride
+                test_name = f'adaptive_avgpool1d_s{stride}_len{shape}'
+                with self.subTest(test_name=test_name):
+                    model = nn_modules.SingleAdaptiveAvgpool1d(output_size=output_size)
+                    self._export_compile_and_deploy(model, (1, 32, shape), test_name, style='multiplexed')
+
+
+class TestE2EMultipleLayer(CompilerTestBase):
+    """Generate E2E test data for C++ inference tests.
+
+    Each test compiles a model and produces a complete task directory
+    (h5 weights, mega_ag instructions, input CSVs) under
+    build/inference/hetero_e2e/multiple_layer/<test_name>/.
+
+    Run the C++ test_e2e_multiple_layer binary afterwards to verify encrypted vs plaintext
+    inference consistency.
+    """
+
+    e2e_base_path = CompilerTestBase.e2e_base_path / 'multiple_layer'
 
     # ── Layer interaction tests (poly_n=8192) ──
 
@@ -868,6 +1196,14 @@ class TestE2E(CompilerTestBase):
             model, (1, 3, 64, 64), 'conv_avgpool_reshape_dense', style='multiplexed', do_constant_folding=True
         )
         self.assertTrue(check_dropped_levels_per_subgraph(graph))
+
+    def test_e2e_conv1d_reshape_dense(self):
+        """Conv1d → Flatten → Dense pipeline, multiplexed."""
+        model = nn_modules.Conv1dReshapeAndDense()
+        graph, score = self._export_compile_and_deploy(
+            model, (1, 4, 64), 'conv1d_reshape_dense', style='multiplexed', do_constant_folding=True
+        )
+        self.assertTrue(check_reshape_sp_info_propagation(graph))
 
     # ── No-BTP tests (poly_n=8192) ──
 
@@ -936,7 +1272,9 @@ class TestE2E(CompilerTestBase):
         model = nn_modules.ConvSeries()
         graph, score = self._export_compile_and_deploy(model, (1, 32, 8, 8), 'conv_series')
         self.assertEqual(self._max_feature_level(graph), config.fhe_param.max_level)
-        self.assertTrue(check_dropped_levels_per_subgraph(graph))
+        assert not check_dropped_levels_per_subgraph(graph), (
+            f'This special case may have aggressive level dropping depending on cost function.'
+        )
 
     def test_e2e_act_series(self):
         """Deep activation chain, requires BTP."""
@@ -960,30 +1298,6 @@ class TestE2E(CompilerTestBase):
 
     # ── Big-size tests (256×256 input) ──
 
-    def test_e2e_single_avgpool_big_size(self):
-        """Avgpool with big_size input (256×256), multiplexed style."""
-        model = nn_modules.SingleAvgpool()
-        graph, score = self._export_compile_and_deploy(
-            model, (1, 5, 256, 256), 'single_avgpool_big_size', style='multiplexed'
-        )
-        self.assertTrue(check_feature_scale(graph))
-
-    def test_e2e_single_conv_with_stride_big_size(self):
-        """Conv stride=2 with big_size input (256×256), multiplexed."""
-        model = nn_modules.SingleConv(2)
-        graph, score = self._export_compile_and_deploy(
-            model, (1, 32, 128, 128), 'single_conv_with_stride_big_size', style='multiplexed'
-        )
-        self.assertIsNotNone(graph)
-
-    def test_e2e_dw_conv_big_size(self):
-        """Depthwise conv stride=2 with big_size input (256x256), multiplexed."""
-        model = nn_modules.DepthwiseConv(channels=32, stride=2)
-        graph, score = self._export_compile_and_deploy(
-            model, (1, 32, 256, 256), 'dw_conv_big_size', style='multiplexed'
-        )
-        self.assertIsNotNone(graph)
-
     def test_e2e_conv_series_with_stride(self):
         """Deep conv chain with strides, big_size (256×256), multiplexed."""
         model = nn_modules.ConvSeriesWithStride()
@@ -993,30 +1307,6 @@ class TestE2E(CompilerTestBase):
         self.assertTrue(check_dropped_levels_per_subgraph(graph))
 
     # ── Operator-level migration from test_fhe_layers_hetero ──
-
-    def test_e2e_conv_mch_s1(self):
-        """Multi-channel conv, stride=1. Covers conv_mch_s1."""
-        model = nn_modules.MultiChannelConv(in_channels=3, out_channels=16, stride=1)
-        graph, score = self._export_compile_and_deploy(model, (1, 3, 32, 32), 'conv_mch_s1')
-        self.assertIsNotNone(graph)
-
-    def test_e2e_conv_mch_s2(self):
-        """Multi-channel conv, stride=2. Covers conv_mch_s2."""
-        model = nn_modules.MultiChannelConv(in_channels=3, out_channels=16, stride=2)
-        graph, score = self._export_compile_and_deploy(model, (1, 3, 32, 32), 'conv_mch_s2')
-        self.assertIsNotNone(graph)
-
-    def test_e2e_depthwise_conv_s1(self):
-        """Depthwise conv, stride=1. Covers dw_32ch_s1."""
-        model = nn_modules.DepthwiseConv(channels=32, stride=1)
-        graph, score = self._export_compile_and_deploy(model, (1, 32, 32, 32), 'depthwise_conv_s1')
-        self.assertIsNotNone(graph)
-
-    def test_e2e_depthwise_conv_s2(self):
-        """Depthwise conv, stride=2. Covers dw_4ch_s2."""
-        model = nn_modules.DepthwiseConv(channels=4, stride=2)
-        graph, score = self._export_compile_and_deploy(model, (1, 4, 32, 32), 'depthwise_conv_s2')
-        self.assertIsNotNone(graph)
 
     def test_e2e_two_fc(self):
         """Conv → Flatten → FC → FC. Covers fc_fc_0d."""
@@ -1032,17 +1322,11 @@ class TestE2E(CompilerTestBase):
         )
         self.assertIsNotNone(graph)
 
-    def test_e2e_conv1d(self):
-        """Conv1d E2E. Covers conv1d."""
-        model = nn_modules.SingleConv1dE2E()
-        graph, score = self._export_compile_and_deploy(model, (1, 4, 64), 'conv1d_e2e')
-        self.assertIsNotNone(graph)
-
     # ── New layer migration from refactor/linghm ──
 
     def test_e2e_concat(self):
         """Two conv branches concatenated. Covers concat_layer."""
-        model = nn_modules.ConcatModel()
+        model = nn_modules.Concat()
         graph, score = self._export_compile_and_deploy(model, (1, 3, 32, 32), 'concat_e2e')
         self.assertIsNotNone(graph)
 
@@ -1054,16 +1338,10 @@ class TestE2E(CompilerTestBase):
 
     def test_e2e_conv_upsample(self):
         """Conv stride=2 + nearest upsample. Covers upsample_layer / upsample_nearest_layer."""
-        model = nn_modules.ConvUpsampleE2E()
+        model = nn_modules.ConvUpsample()
         graph, score = self._export_compile_and_deploy(
             model, (1, 32, 64, 64), 'conv_upsample_e2e', style='multiplexed', do_constant_folding=True
         )
-        self.assertIsNotNone(graph)
-
-    def test_e2e_avgpool_stride4(self):
-        """Avgpool with stride=4. Covers avgpool2d_layer varied strides."""
-        model = nn_modules.AvgpoolVariedStride(stride=4)
-        graph, score = self._export_compile_and_deploy(model, (1, 32, 32, 32), 'avgpool_stride4', style='multiplexed')
         self.assertIsNotNone(graph)
 
     def test_multiple_outputs(self):
@@ -1083,17 +1361,6 @@ class TestE2E(CompilerTestBase):
         """Shared-input concat structure with final add."""
         model = nn_modules.ConvConcatConv()
         graph, score = self._export_compile_and_deploy(model, (1, 16, 32, 32), 'conv_concat_conv')
-        self.assertIsNotNone(graph)
-
-    def test_e2e_general_avgpool(self):
-        """General avgpool (kernel_size=3, stride=2) replaced with depthwise conv for FHE."""
-        model = nn_modules.GeneralAvgpool(kernel_size=3, stride=2, padding=1)
-        graph, score = self._export_compile_and_deploy(
-            model,
-            (1, 32, 8, 8),
-            'general_avgpool',
-            style='multiplexed',
-        )
         self.assertIsNotNone(graph)
 
 

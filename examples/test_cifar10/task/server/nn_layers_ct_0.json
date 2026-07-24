@@ -2395,7 +2395,7 @@
             "level_cost": 0
         },
         "_relu_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 16,
             "channel_output": 16,
             "ckks_parameter_id_input": "param0",
@@ -2507,7 +2507,7 @@
             "level_cost": 0
         },
         "_layer1_layer1_0_relu1_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 16,
             "channel_output": 16,
             "ckks_parameter_id_input": "param0",
@@ -2620,7 +2620,7 @@
             "level_cost": 0
         },
         "_layer1_layer1_0_relu2_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 16,
             "channel_output": 16,
             "ckks_parameter_id_input": "param0",
@@ -2718,7 +2718,7 @@
             "level_cost": 0
         },
         "_layer1_layer1_1_relu1_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 16,
             "channel_output": 16,
             "ckks_parameter_id_input": "param0",
@@ -2845,7 +2845,7 @@
             "level_cost": 0
         },
         "_layer1_layer1_1_relu2_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 16,
             "channel_output": 16,
             "ckks_parameter_id_input": "param0",
@@ -2971,7 +2971,7 @@
             "level_cost": 0
         },
         "_layer1_layer1_2_relu1_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 16,
             "channel_output": 16,
             "ckks_parameter_id_input": "param0",
@@ -3070,7 +3070,7 @@
             "level_cost": 0
         },
         "_layer1_layer1_2_relu2_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 16,
             "channel_output": 16,
             "ckks_parameter_id_input": "param0",
@@ -3250,7 +3250,7 @@
             "level_cost": 0
         },
         "_layer2_layer2_0_relu1_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 32,
             "channel_output": 32,
             "ckks_parameter_id_input": "param0",
@@ -3377,7 +3377,7 @@
             "level_cost": 0
         },
         "_layer2_layer2_0_relu2_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 32,
             "channel_output": 32,
             "ckks_parameter_id_input": "param0",
@@ -3503,7 +3503,7 @@
             "level_cost": 0
         },
         "_layer2_layer2_1_relu1_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 32,
             "channel_output": 32,
             "ckks_parameter_id_input": "param0",
@@ -3602,7 +3602,7 @@
             "level_cost": 0
         },
         "_layer2_layer2_1_relu2_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 32,
             "channel_output": 32,
             "ckks_parameter_id_input": "param0",
@@ -3728,7 +3728,7 @@
             "level_cost": 0
         },
         "_layer2_layer2_2_relu1_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 32,
             "channel_output": 32,
             "ckks_parameter_id_input": "param0",
@@ -3855,7 +3855,7 @@
             "level_cost": 0
         },
         "_layer2_layer2_2_relu2_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 32,
             "channel_output": 32,
             "ckks_parameter_id_input": "param0",
@@ -4035,7 +4035,7 @@
             "level_cost": 0
         },
         "_layer3_layer3_0_relu1_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 64,
             "channel_output": 64,
             "ckks_parameter_id_input": "param0",
@@ -4134,7 +4134,7 @@
             "level_cost": 0
         },
         "_layer3_layer3_0_relu2_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 64,
             "channel_output": 64,
             "ckks_parameter_id_input": "param0",
@@ -4260,7 +4260,7 @@
             "level_cost": 0
         },
         "_layer3_layer3_1_relu1_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 64,
             "channel_output": 64,
             "ckks_parameter_id_input": "param0",
@@ -4387,7 +4387,7 @@
             "level_cost": 0
         },
         "_layer3_layer3_1_relu2_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 64,
             "channel_output": 64,
             "ckks_parameter_id_input": "param0",
@@ -4499,7 +4499,7 @@
             "level_cost": 0
         },
         "_layer3_layer3_2_relu1_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 64,
             "channel_output": 64,
             "ckks_parameter_id_input": "param0",
@@ -4598,7 +4598,7 @@
             "level_cost": 0
         },
         "_layer3_layer3_2_relu2_RangeNormPoly2d": {
-            "type": "simple_polyrelu",
+            "type": "polyact",
             "channel_input": 64,
             "channel_output": 64,
             "ckks_parameter_id_input": "param0",

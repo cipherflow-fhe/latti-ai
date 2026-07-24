@@ -23,8 +23,6 @@ import onnx
 
 log = logging.getLogger(__name__)
 
-N = 65536
-
 modules = glob.glob(os.path.join(os.path.dirname(__file__), '*.py'))
 __all__ = [os.path.basename(f)[:-3] for f in modules if os.path.isfile(f) and not f.endswith('__init__.py')] + [
     'get_op_code_generator',
@@ -57,7 +55,6 @@ class FeatureNode(object):
         self.shape = shape
         self.skip = skip
         self.ckks_parameter_id = ckks_parameter_id
-        self.pack_num = None
         self.isvisit = False
         self.level = 0
         self.computer_nodes: list[ComputeNode] = []
@@ -74,22 +71,14 @@ class FeatureNode(object):
         if self.dim == 2:
             info['shape'] = self.shape
             info['skip'] = self.skip
-            try:
-                info['pack_num'] = math.ceil(N / 2 / self.shape[0] / self.shape[1] / self.skip[0] / self.skip[1])
-            except Exception:
-                info['pack_num'] = 1
         if self.dim == 1:
             info['shape'] = self.shape
             info['skip'] = self.skip
-            info['pack_num'] = math.ceil(N / 2 / self.shape[0] / self.skip[0])
         if self.dim == 0:
-            info['virtual_shape'] = [8, 8]
-            info['virtual_skip'] = [1, 1]
             info['skip'] = self.skip[0]
-            info['pack_num'] = math.ceil(N / 2 / info['virtual_shape'][0] / info['virtual_shape'][1])
 
         info['ckks_parameter_id'] = self.ckks_parameter_id
-        info['level'] = 5 + int(self.level)
+        info['level'] = int(self.level)
         return info
 
 
@@ -175,7 +164,7 @@ def get_op_id(op: str):
         output = 'Relu6'
     elif op == 'reshape' or op == 'Reshape' or op == 'Flatten':
         output = 'Reshape'
-    elif op == 'avgpool' or op == 'avgpool2d' or op == 'AveragePool' or op == 'GlobalAveragePool':
+    elif op == 'avgpool' or op == 'avgpool2d' or op == 'avgpool1d' or op == 'AveragePool' or op == 'GlobalAveragePool':
         output = 'AveragePool'
     elif op == 'maxpool' or op == 'MaxPool':
         output = 'MaxPool'
@@ -211,14 +200,8 @@ def get_op_id(op: str):
         output = 'RangeNorm2d'
     elif op == 'RangeNorm' or op == 'range_norm':
         output = 'RangeNorm'
-    elif (
-        op == 'Simple_Polyrelu'
-        or op == 'simple_polyrelu'
-        or op == 'SimplePolyrelu'
-        or op == 'RangeNormPoly2d'
-        or op == 'RangeNormPoly1d'
-    ):
-        output = 'Simple_Polyrelu'
+    elif op == 'PolyAct' or op == 'polyact' or op == 'RangeNormPoly2d' or op == 'RangeNormPoly1d':
+        output = 'PolyAct'
     elif op == 'Split' or op == 'split':
         output = 'Split'
     elif op == 'Resize' or op == 'resize':
@@ -247,7 +230,7 @@ def get_type_id(op: str):
         output = 'relu6'
     elif op == 'reshape' or op == 'Reshape' or op == 'Flatten':
         output = 'reshape'
-    elif op == 'avgpool2d' or op == 'AveragePool' or op == 'avgpool' or op == 'GlobalAveragePool':
+    elif op == 'avgpool2d' or op == 'avgpool1d' or op == 'AveragePool' or op == 'avgpool' or op == 'GlobalAveragePool':
         output = 'avgpool'
     elif op == 'maxpool' or op == 'MaxPool':
         output = 'maxpool'
@@ -275,8 +258,8 @@ def get_type_id(op: str):
         output = 'range_norm2d'
     elif op == 'RangeNorm':
         output = 'range_norm'
-    elif op == 'Simple_Polyrelu':
-        output = 'simple_polyrelu'
+    elif op == 'PolyAct':
+        output = 'polyact'
     elif op == 'Split':
         output = 'split'
     elif op == 'Resize':

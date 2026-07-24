@@ -51,10 +51,10 @@ Supports lazy initialization: pass `num_features=0` to defer buffer creation unt
 
 ---
 
-#### Simple_Polyrelu
+#### PolyAct
 
 ```python
-Simple_Polyrelu(scale_before=1.0, scale_after=1.0, degree=4, activation='relu')
+PolyAct(scale_before=1.0, scale_after=1.0, degree=4, activation='relu')
 ```
 
 Polynomial activation approximating ReLU or SiLU via Hermite expansion.
@@ -142,8 +142,9 @@ replace_activation_with_poly(model, old_cls=nn.SiLU, degree=4)
 #### replace_activation()
 
 ```python
-replace_activation(module, old_cls=nn.ReLU, new_module_factory=RangeNormPoly2d,
-                   upper_bound=3.0, degree=4, activation='relu')
+replace_activation(
+    module, old_cls=nn.ReLU, new_module_factory=RangeNormPoly2d, upper_bound=3.0, degree=4, activation='relu'
+)
 ```
 
 Generic in-place activation replacement. Replace all `old_cls` activations with instances created by `new_module_factory`.
@@ -212,8 +213,16 @@ Count the number of `activation_cls` instances in `module`.
 #### export_to_onnx()
 
 ```python
-export_to_onnx(model, save_path, input_size=(1, 3, 32, 32), opset_version=13,
-               dynamic_batch=True, remove_identity=True, save_h5=True, verbose=True)
+export_to_onnx(
+    model,
+    save_path,
+    input_size=(1, 3, 32, 32),
+    opset_version=13,
+    dynamic_batch=True,
+    remove_identity=True,
+    save_h5=True,
+    verbose=True,
+)
 ```
 
 Export a PyTorch model to ONNX. BatchNorm is kept as a full operator (not folded into Conv).
@@ -402,7 +411,7 @@ Base class for operation nodes in the computation graph.
 | `DenseComputeNode` | `operations/Dense.py` | Gemm |
 | `BatchNormComputeNode` | `operations/BatchNorm.py` | BatchNormalization |
 | `ReluComputeNode` | `operations/Relu.py` | Relu |
-| `Simple_PolyreluComputeNode` | `operations/Simple_Polyrelu.py` | RangeNormPoly2d |
+| `PolyActComputeNode` | `operations/PolyAct.py` | RangeNormPoly2d |
 | `PolyReluComputeNode` | `operations/PolyRelu.py` | PolyReluListIndependent |
 | `AveragePoolComputeNode` | `operations/AveragePool.py` | AveragePool / GlobalAveragePool |
 | `MaxPoolComputeNode` | `operations/MaxPool.py` | MaxPool |
@@ -492,8 +501,7 @@ Initialize compiler configuration. Overrides values from `config.json` with prov
 #### run_parallel()
 
 ```python
-run_parallel(num_experiments, input_file_path,
-             output_dir, temperature, num_workers=16)
+run_parallel(num_experiments, input_file_path, output_dir, temperature, num_workers=16)
 ```
 
 Run multiple compilations in parallel and select the best result.
@@ -517,8 +525,7 @@ Source: `training/model_compiler/components.py`
 #### FeatureNode
 
 ```python
-FeatureNode(key, dim, channel, scale=1.0, ckks_parameter_id='param0',
-            ckks_scale=1, shape=[1, 1])
+FeatureNode(key, dim, channel, scale=1.0, ckks_parameter_id='param0', ckks_scale=1, shape=[1, 1])
 ```
 
 Data node in the compiler graph. Represents an encrypted feature tensor with CKKS parameters.
@@ -538,8 +545,14 @@ Data node in the compiler graph. Represents an encrypted feature tensor with CKK
 #### ComputeNode
 
 ```python
-ComputeNode(layer_id, layer_type, channel_input, channel_output,
-            ckks_parameter_id_input='param0', ckks_parameter_id_output='param0')
+ComputeNode(
+    layer_id,
+    layer_type,
+    channel_input,
+    channel_output,
+    ckks_parameter_id_input='param0',
+    ckks_parameter_id_output='param0',
+)
 ```
 
 Base computation node in the compiler graph.
@@ -558,8 +571,7 @@ Base computation node in the compiler graph.
 #### EncryptParameterNode
 
 ```python
-EncryptParameterNode(poly_modulus_degree, coeff_modulus_bit_length,
-                     special_prime_bit_length)
+EncryptParameterNode(poly_modulus_degree, coeff_modulus_bit_length, special_prime_bit_length)
 ```
 
 CKKS encryption parameter specification.
@@ -662,7 +674,7 @@ The class holds maps of all initialized FHE layer instances:
 - `ckks_avgpool` — `Avgpool2DLayer` instances
 - `ckks_concat` — `ConcatLayer` instances
 - `ckks_upsample` — `UpsampleLayer` instances
-- `ckks_multiplexed_conv2ds` — `ParMultiplexedConv2DPackedLayer` instances
+- `ckks_multiplexed_conv2ds` — `MultiplexedConv2DPackedLayer` instances
 
 ---
 
@@ -741,7 +753,7 @@ Execution device for inference.
 |-------------|--------|-------------|
 | `Conv2DPackedLayer` | `fhe_layers/conv2d_packed_layer.h` | Encrypted Conv2D with channel packing |
 | `Conv2DPackedDepthwiseLayer` | `fhe_layers/conv2d_depthwise.h` | Encrypted depthwise Conv2D |
-| `ParMultiplexedConv2DPackedLayer` | `fhe_layers/multiplexed_conv2d_pack_layer.h` | Multiplexed Conv2D with parallel packing |
+| `MultiplexedConv2DPackedLayer` | `fhe_layers/multiplexed_conv2d_pack_layer.h` | Multiplexed Conv2D with parallel packing |
 | `Avgpool2DLayer` | `fhe_layers/avgpool2d_layer.h` | Encrypted average pooling |
 | `PolyRelu` | `fhe_layers/poly_relu2d.h` | Polynomial activation (Hermite expansion) |
 | `DensePackedLayer` | `fhe_layers/dense_packed_layer.h` | Encrypted fully-connected layer |
@@ -831,10 +843,10 @@ Encrypted depthwise 2D convolution. Each input channel is convolved with its own
 
 ---
 
-#### ParMultiplexedConv2DPackedLayer
+#### MultiplexedConv2DPackedLayer
 
 ```cpp
-ParMultiplexedConv2DPackedLayer(const CkksParameter& param,
+MultiplexedConv2DPackedLayer(const CkksParameter& param,
                                 const Duo& input_shape,
                                 const Array<double, 4>& weight,
                                 const Array<double, 1>& bias,
@@ -980,7 +992,7 @@ Encrypted fully-connected (dense) layer with packed ciphertext layout. Supports 
 - `Feature0DEncrypted run_0d(CkksContext& ctx, const Feature0DEncrypted& x)` — Execute on 0D encrypted input (0D packing with BSGS)
 - `Feature0DEncrypted run_mult_park(CkksContext& ctx, const Feature2DEncrypted& x)` — Execute on 2D encrypted input (mult-pack)
 - `Feature0DEncrypted run_mult_park(CkksContext& ctx, const Feature0DEncrypted& x)` — Execute on 0D encrypted input (mult-pack)
-- `Array<double, 1> plaintext_call(const Array<double, 1>& x, double multiplier = 1.0)` — Execute on plaintext input (for debugging)
+- `Array<double, 1> run_plaintext(const Array<double, 1>& x, double multiplier = 1.0)` — Execute on plaintext input (for debugging)
 
 ---
 
@@ -1176,8 +1188,17 @@ These Python layer classes generate FHE computation instructions (graph nodes) f
 #### Conv2DPackedLayer
 
 ```python
-Conv2DPackedLayer(n_out_channel, n_in_channel, input_shape, kernel_shape,
-                  stride, skip, pack, n_packed_in_channel, n_packed_out_channel)
+Conv2DPackedLayer(
+    n_out_channel,
+    n_in_channel,
+    input_shape,
+    kernel_shape,
+    stride,
+    skip,
+    pack,
+    n_packed_in_channel,
+    n_packed_out_channel,
+)
 ```
 
 Source: `layers/conv_pack.py`
@@ -1208,8 +1229,17 @@ Source: `layers/conv_pack.py`
 #### Conv2DepthwiseLayer
 
 ```python
-Conv2DepthwiseLayer(n_out_channel, n_in_channel, input_shape, kernel_shape,
-                    stride, skip, pack, n_packed_in_channel, n_packed_out_channel)
+Conv2DepthwiseLayer(
+    n_out_channel,
+    n_in_channel,
+    input_shape,
+    kernel_shape,
+    stride,
+    skip,
+    pack,
+    n_packed_in_channel,
+    n_packed_out_channel,
+)
 ```
 
 Source: `layers/conv_dw.py`
@@ -1228,9 +1258,18 @@ Source: `layers/conv_dw.py`
 #### MultConv2DPackedLayer
 
 ```python
-MultConv2DPackedLayer(n_out_channel, n_in_channel, input_shape, kernel_shape,
-                      stride, skip, n_channel_per_ct, n_packed_in_channel,
-                      n_packed_out_channel, upsample_factor=[1, 1])
+MultConv2DPackedLayer(
+    n_out_channel,
+    n_in_channel,
+    input_shape,
+    kernel_shape,
+    stride,
+    skip,
+    n_channel_per_ct,
+    n_packed_in_channel,
+    n_packed_out_channel,
+    upsample_factor=[1, 1],
+)
 ```
 
 Source: `layers/mult_conv.py`
@@ -1262,9 +1301,18 @@ Source: `layers/mult_conv.py`
 #### MultConv2DPackedDepthwiseLayer
 
 ```python
-MultConv2DPackedDepthwiseLayer(n_out_channel, n_in_channel, input_shape, kernel_shape,
-                               stride, skip, n_channel_per_ct, n_packed_in_channel,
-                               n_packed_out_channel, upsample_factor=[1, 1])
+MultConv2DPackedDepthwiseLayer(
+    n_out_channel,
+    n_in_channel,
+    input_shape,
+    kernel_shape,
+    stride,
+    skip,
+    n_channel_per_ct,
+    n_packed_in_channel,
+    n_packed_out_channel,
+    upsample_factor=[1, 1],
+)
 ```
 
 Source: `layers/mult_conv_dw.py`
@@ -1283,8 +1331,7 @@ Source: `layers/mult_conv_dw.py`
 #### DensePackedLayer
 
 ```python
-DensePackedLayer(n_out_channel, n_in_channel, input_shape, skip, pack,
-                 n_packed_in_feature, n_packed_out_feature)
+DensePackedLayer(n_out_channel, n_in_channel, input_shape, skip, pack, n_packed_in_feature, n_packed_out_feature)
 ```
 
 Source: `layers/dense_pack.py`
@@ -1341,8 +1388,7 @@ Source: `layers/avgpool.py`
 #### PolyReluLayer
 
 ```python
-PolyReluLayer(input_shape, order, skip, n_channel_per_ct,
-              upsample_factor=[1, 1], block_expansion=[1, 1])
+PolyReluLayer(input_shape, order, skip, n_channel_per_ct, upsample_factor=[1, 1], block_expansion=[1, 1])
 ```
 
 Source: `layers/poly_relu.py`
@@ -1466,8 +1512,9 @@ No constructor parameters.
 #### InverseMultiplexedConv2d
 
 ```python
-InverseMultiplexedConv2d(n_out_channel, n_in_channel, input_shape, padding,
-                         kernel_shape, stride, stride_next, skip, block_shape)
+InverseMultiplexedConv2d(
+    n_out_channel, n_in_channel, input_shape, padding, kernel_shape, stride, stride_next, skip, block_shape
+)
 ```
 
 Source: `layers/inverse_multiplexed_conv2d_layer.py`

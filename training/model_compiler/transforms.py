@@ -22,6 +22,7 @@ from enum import Enum
 import networkx as nx
 
 from components import *
+from inference.model_generator.layers.poly_relu_base import PolyReluBase
 
 
 class Direction(Enum):
@@ -232,6 +233,62 @@ def add_layer(
     return new_compute_node
 
 
+def add_mult_scalar_between_feature_and_layer(
+    graph: LayerAbstractGraph,
+    f_node: FeatureNode,
+    c_node: ComputeNode,
+) -> MultScalarComputeNode:
+    """Insert a mult_scalar compute node on the edge f_node -> c_node.
+
+    Before: f_node -> c_node
+    After:  f_node -> mult_scalar -> mult_scalar_f_node -> c_node
+
+    Args:
+        graph: the computation graph
+        f_node: the upstream feature node
+        c_node: the downstream compute node
+
+    Returns:
+        The newly created MultScalarComputeNode.
+    """
+    timestamp = int(time.time() * 1000000)
+    layer_id = f'{c_node.layer_id}_mult_scalar_ts{timestamp}'
+
+    mult_scalar = MultScalarComputeNode(layer_id, 'mult_scalar', f_node.channel, f_node.channel)
+
+    mult_scalar_f_node = FeatureNode(
+        f_node.node_id + f'_mult_scalar_out_ts{timestamp}',
+        f_node.dim,
+        f_node.channel,
+        f_node.scale,
+        f_node.ckks_parameter_id,
+        f_node.ckks_scale,
+        list(f_node.shape),
+    )
+    mult_scalar_f_node.sp_info = f_node.sp_info.copy()
+
+    skip = list(graph.dag.nodes[f_node]['skip'])
+    # level = graph.dag.nodes[f_node]['level']
+    pack_num = graph.dag.nodes[f_node]['pack_num']
+
+    _insert_layer_between_feature_and_compute(
+        graph.dag,
+        f_node,
+        c_node,
+        mult_scalar,
+        mult_scalar_f_node,
+        new_compute_args={'name': layer_id, 'level_cost': 1},
+        new_feature_args={
+            'name': mult_scalar_f_node.node_id,
+            'skip': skip,
+            # 'level': level,
+            'pack_num': pack_num,
+        },
+    )
+
+    return mult_scalar
+
+
 def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: dict, restore_lv: int):
     refreshed_feature = copy.deepcopy(upstream_feature)
     base_id = upstream_feature.node_id
@@ -247,7 +304,7 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
 
     refreshed_feature.node_id = new_id
     if config.mpc_refresh:
-        skip = [1, 1]
+        skip = [1] * upstream_feature.dim
     else:
         skip = dag.nodes[upstream_feature]['skip']
 
@@ -291,9 +348,7 @@ def add_mult_scalar_behind_node(graph: LayerAbstractGraph, compute_node: Compute
     )
 
     # Inherit is_big_size from predecessor's shape vs block_shape
-    if old_output_feature.dim == 2 and (
-        old_output_feature.shape[0] > config.block_shape[0] or old_output_feature.shape[1] > config.block_shape[1]
-    ):
+    if any(old_output_feature.shape[i] > config.block_shape[i] for i in range(old_output_feature.dim)):
         mult_scalar_node.is_big_size = True
 
     _insert_layer_after_compute(
@@ -374,7 +429,7 @@ def split_upsampling_layers(graph: LayerAbstractGraph):
                 upsampled_feature,
                 new_feature_args={},
             )
-            conv_node.upsample_factor = [1, 1]
+            conv_node.upsample_factor = [1] * conv_node.dim
 
 
 def process_special_info(
@@ -382,7 +437,9 @@ def process_special_info(
 ):
     """Process sp_info for dim=0 and reshape nodes. Returns True if caller should continue."""
 
-    if preds[0].dim == 2 and succ.dim == 2:
+    # 2d->2d, 1d->1d
+    if preds[0].dim == succ.dim and succ.dim in (1, 2):
+        invalid_fill_default = [1] * succ.dim
         if config.style == 'ordinary':
             succ.invalid_fill = graph.dag.nodes[succ]['skip'].copy()
         else:
@@ -390,14 +447,15 @@ def process_special_info(
                 if compute_node.is_adaptive_avgpool:
                     succ.invalid_fill = compute_node.stride.copy()
                 else:
-                    succ.invalid_fill = [1, 1]
+                    succ.invalid_fill = invalid_fill_default
             elif isinstance(compute_node, ConvComputeNode):
-                succ.invalid_fill = [1, 1]
+                succ.invalid_fill = invalid_fill_default
             else:
                 succ.invalid_fill = preds[0].invalid_fill
         return False
-    # 2d -> 0d: reshape
-    if preds[0].dim == 2 and succ.dim == 0:
+    # 2d -> 0d, 1d->0d: reshape
+    if (preds[0].dim == 2 or preds[0].dim == 1) and succ.dim == 0:
+        succ.has_sp_info = True
         succ.sp_info['skip'] = graph.dag.nodes[preds[0]]['skip'].copy()
         succ.sp_info['shape'] = preds[0].shape
         succ.sp_info['invalid_fill'] = preds[0].invalid_fill
@@ -407,6 +465,15 @@ def process_special_info(
     # 0d -> 0d
     if preds[0].dim == 0 and succ.dim == 0:
         graph.dag.nodes[succ]['skip'] = graph.dag.nodes[preds[0]]['skip'].copy()
+        if len(preds) > 1 and not all(p.has_sp_info == preds[0].has_sp_info for p in preds[1:]):
+            raise ValueError(
+                f'Multi-input 0d->0d: all inputs must share the same has_sp_info, got {[p.has_sp_info for p in preds]}'
+            )
+        if preds[0].has_sp_info and 'fc' not in compute_node.layer_type:
+            succ.has_sp_info = True
+            succ.sp_info = preds[0].sp_info.copy()
+        else:
+            succ.has_sp_info = False
         return True
 
 
@@ -487,11 +554,66 @@ def combine_convs_with_upsamples(graph: LayerAbstractGraph):
             cur_compute_node = next(graph.dag.successors(cur_feature_node))
             if cur_compute_node == upsample_node:
                 break
-            if cur_compute_node.layer_type in ('relu2d', 'simple_polyrelu'):
+            if cur_compute_node.layer_type in ('relu2d', 'polyact'):
                 for i in range(dim):
                     cur_compute_node.zero_skip[i] *= upsample_node.upsample_factor[i]
 
         _delete_layer(graph.dag, upsample_node)
+
+
+def replace_avgpool1d_with_depthwise_conv(graph: LayerAbstractGraph):
+    """Replace non-adaptive AvgPool1d nodes with synthetic depthwise Conv1d nodes.
+
+    The runtime multiplexed avgpool1d path preserves sparse skip layout, while the
+    downstream multiplexed conv1d path expects conv-style packed output. Replacing
+    avgpool1d with an equivalent depthwise conv1d during compilation keeps the
+    packing semantics consistent for subsequent conv1d layers.
+
+    The synthetic conv uses an odd kernel so the existing conv1d implementation's
+    implicit same-padding can reproduce the original left-aligned avgpool window:
+      avgpool window size = k
+      synthetic conv kernel size = 2 * k - 1
+      active taps are the last k positions, each weighted by 1 / k.
+    """
+    for node in list(graph.dag.nodes):
+        if not isinstance(node, PoolComputeNode):
+            continue
+        if node.layer_type != 'avgpool1d' or node.is_adaptive_avgpool:
+            continue
+
+        preds: list[FeatureNode] = list(graph.dag.predecessors(node))
+        succs: list[FeatureNode] = list(graph.dag.successors(node))
+        if len(preds) != 1 or len(succs) != 1:
+            raise ValueError(f'avgpool1d replacement expects single input/output: {node.layer_id}')
+
+        pool_kernel = int(node.kernel_shape[0])
+        synthetic_kernel = 2 * pool_kernel - 1
+        conv_node = ConvComputeNode(
+            node.layer_id,
+            'conv1d',
+            node.channel_input,
+            node.channel_output,
+            dim=1,
+            stride=list(node.stride),
+            groups=node.channel_input,
+            kernel_shape=[synthetic_kernel],
+            parameter_paths={
+                'weight': f'{node.layer_id}.weight',
+                'bias': f'{node.layer_id}.bias',
+            },
+        )
+        conv_node.synthetic_source = 'avgpool1d'
+        conv_node.source_pool_kernel_shape = list(node.kernel_shape)
+        conv_node.source_pool_padding = list(node.padding)
+        conv_node.is_big_size = getattr(node, 'is_big_size', False)
+
+        node_attrs = dict(graph.dag.nodes[node])
+        graph.dag.add_node(conv_node, **node_attrs)
+        for pred in preds:
+            graph.dag.add_edge(pred, conv_node, **dict(graph.dag.edges[pred, node]))
+        for succ in succs:
+            graph.dag.add_edge(conv_node, succ, **dict(graph.dag.edges[node, succ]))
+        graph.dag.remove_node(node)
 
 
 def set_level_costs(graph: LayerAbstractGraph):
@@ -527,11 +649,14 @@ def set_level_costs(graph: LayerAbstractGraph):
             else:
                 raise ValueError('Unsupported config.style')
 
-        elif compute_node.layer_type == 'avgpool2d':
-            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
-                graph.dag.nodes[compute_node]['level_cost'] = 0
+        elif compute_node.layer_type in {'avgpool1d', 'avgpool2d'}:
+            if any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
                 compute_node.is_big_size = True
                 compute_node.is_adaptive_avgpool = False
+                if any(succ.shape[i] < config.block_shape[i] for i in range(succ.dim)):
+                    graph.dag.nodes[compute_node]['level_cost'] = 1  # repack needed
+                else:
+                    graph.dag.nodes[compute_node]['level_cost'] = 0
             else:
                 compute_node.is_big_size = False
                 succs_sub = list(graph.dag.successors(succ))
@@ -542,11 +667,11 @@ def set_level_costs(graph: LayerAbstractGraph):
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                     compute_node.is_adaptive_avgpool = False
         elif compute_node.layer_type == config.approx_poly_type:
-            graph.dag.nodes[compute_node]['level_cost'] = math.ceil(math.log2(compute_node.order)) + 1
+            graph.dag.nodes[compute_node]['level_cost'] = PolyReluBase.compute_bsgs_level_cost(compute_node.order)
             if any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
                 compute_node.is_big_size = True
         elif isinstance(compute_node, UpsampleComputeNode):
-            if compute_node.upsample_factor[0] == 1 and compute_node.upsample_factor[1] == 1:
+            if all(compute_node.upsample_factor[i] == 1 for i in range(compute_node.dim)):
                 graph.dag.nodes[compute_node]['level_cost'] = 0
             else:
                 graph.dag.nodes[compute_node]['level_cost'] = 1
@@ -611,13 +736,13 @@ def handle_valid_poly_subgraph(subgraph: nx.DiGraph, use_mpc_refresh: bool = Fal
     if not use_mpc_refresh:
         for node in subgraph.nodes:
             if isinstance(node, ComputeNode):
-                if node.layer_type == 'simple_polyrelu' or node.layer_type == 'relu2d':
+                if node.layer_type == 'polyact' or node.layer_type == 'relu2d':
                     res_node = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.UP)
                     if res_node is not None:
                         node.up_scale_str.append(res_node.layer_id)
-                elif node.layer_type in {'avgpool2d', 'mult_coeff'}:
+                elif node.layer_type in {'avgpool1d', 'avgpool2d', 'mult_coeff'}:
                     res_node_down = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.DOWN)
-                    if res_node_down is not None and res_node_down.layer_type != 'simple_polyrelu':
+                    if res_node_down is not None and res_node_down.layer_type != 'polyact':
                         node.down_scale_str.append(res_node_down.layer_id)
 
                         continue
@@ -634,7 +759,7 @@ def handle_valid_poly_subgraph(subgraph: nx.DiGraph, use_mpc_refresh: bool = Fal
 
                 candidates[node] = {
                     'down': res_node_down
-                    if (res_node_down is not None and res_node_down.layer_type != 'simple_polyrelu')
+                    if (res_node_down is not None and res_node_down.layer_type != 'polyact')
                     else None,
                     'up': res_node_up,
                 }
@@ -714,15 +839,16 @@ def set_feature_scales(graph: LayerAbstractGraph):
         if compute.layer_type == 'relu2d' or compute.layer_type == 'mpc_refresh':
             scale = mpc_scale
 
-        elif compute.layer_type == 'avgpool2d':
+        elif compute.layer_type in {'avgpool1d', 'avgpool2d'}:
+            kernel_prod = math.prod(compute.kernel_shape)
             if config.graph_type == 'mpc':
-                scale = 1.0 / (compute.kernel_shape[0] * compute.kernel_shape[1])
+                scale = 1.0 / kernel_prod
             elif compute.is_adaptive_avgpool or compute.is_big_size:
-                scale = 1.0 / (compute.kernel_shape[0] * compute.kernel_shape[1])
+                scale = 1.0 / kernel_prod
         elif compute.layer_type == 'mult_coeff':
             scale = compute.coeff
 
-        if compute.layer_type == 'simple_polyrelu':
+        if compute.layer_type == 'polyact':
             while compute.up_scale_str:
                 node_out = set_scale_for_node(graph, compute, 1)
                 node_out.vec_scale_path = compute.layer_id
@@ -736,7 +862,7 @@ def linear_subgraph_can_absorb_scale(subgraph: nx.DiGraph, use_mpc_refresh: bool
     if use_mpc_refresh:
         layers_to_absorb = ['bootstrapping']
     else:
-        layers_to_absorb = ['avgpool2d', 'mult_coeff']
+        layers_to_absorb = ['avgpool1d', 'avgpool2d', 'mult_coeff']
 
     for node in subgraph.nodes:
         if isinstance(node, ComputeNode):
@@ -748,9 +874,7 @@ def linear_subgraph_can_absorb_scale(subgraph: nx.DiGraph, use_mpc_refresh: bool
                 if target_node_down is None and target_node_up is None:
                     return False
                 elif (
-                    target_node_up is None
-                    and target_node_down is not None
-                    and target_node_down.layer_type == 'simple_polyrelu'
+                    target_node_up is None and target_node_down is not None and target_node_down.layer_type == 'polyact'
                 ):
                     return False
                 else:
@@ -776,3 +900,44 @@ def absorb_scale(graph: LayerAbstractGraph, use_mpc_refresh: bool = False):
         insert_mult_scalar_in_linear_subgraph(graph, subgraph)
 
     return graph
+
+
+def miniprocess(graph: LayerAbstractGraph, p: ComputeNode, res_list: list, polyact_id, approve_len: bool = False):
+    value_list: list[FeatureNode] = list(graph.dag.predecessors(p))
+    for value in value_list:
+        # c_list = list(graph.dag.predecessors(value))
+        if graph.dag.out_degree(value) > 1 or graph.dag.in_degree(value) == 0:
+            mult_scalar_node = add_mult_scalar_between_feature_and_layer(graph, value, p)
+            # res_list.append((polyact_id, mult_scalar_node))
+            mult_scalar_node.poly_path = polyact_id
+            continue
+        else:
+            c_value: ComputeNode = list(graph.dag.predecessors(value))[0]
+
+        if 'conv' in c_value.layer_type or 'fc' in c_value.layer_type:
+            # Direct conv/fc predecessor — record it
+            # res_list.append((polyact_id, c_value))
+            c_value.poly_path = polyact_id
+        elif c_value.layer_type == 'polyact' or (not approve_len and graph.dag.in_degree(c_value) > 1):
+            mult_scalar_node = add_mult_scalar_between_feature_and_layer(graph, value, p)
+            # res_list.append((polyact_id, mult_scalar_node))
+            mult_scalar_node.poly_path = polyact_id
+        else:
+            # Single non-conv/fc predecessor — recurse
+            miniprocess(graph, c_value, res_list, polyact_id)
+
+
+def process_polyact(graph: LayerAbstractGraph) -> list:
+    """
+    Traverse the graph in reverse topological order and call miniprocess for
+    every polyact node.
+
+    Returns:
+        res_list: list of (polyact_id, target_node) pairs collected by miniprocess
+    """
+    res_list = []
+    all_nodes_reversed = list(reversed(list(nx.topological_sort(graph.dag))))
+    for p in all_nodes_reversed:
+        if isinstance(p, ComputeNode) and p.layer_type == 'polyact':
+            miniprocess(graph, p, res_list, p.layer_id, True)
+    return res_list

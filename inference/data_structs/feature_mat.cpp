@@ -19,7 +19,7 @@
 #include "feature_mat.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 FeatureMatEncrypted::FeatureMatEncrypted(CkksContext* context_in, int ct_level) {
     dim = 2;
@@ -255,6 +255,58 @@ void FeatureMatEncrypted::decompress() {
         data.push_back(context->compressed_ciphertext_to_ciphertext(data_compress[i]));
     }
     data_compress.clear();
+}
+
+Bytes FeatureMatEncrypted::serialize() const {
+    stringstream ss;
+    ss_write(ss, dim);
+    ss_write(ss, n_channel);
+    ss_write(ss, n_channel_per_ct);
+    ss_write(ss, level);
+    for (int i = 0; i < 2; i++) {
+        ss_write(ss, shape[i]);
+    }
+    ss_write(ss, matmul_block_size);
+    uint32_t n_ct = data.size();
+    ss_write(ss, n_ct);
+    for (const CkksCiphertext& ct : data) {
+        Bytes ct_data = ct.serialize(context->get_parameter());
+        ss_write_vector(ss, ct_data);
+    }
+    uint32_t n_cct = data_compress.size();
+    ss_write(ss, n_cct);
+    for (const CkksCompressedCiphertext& cct : data_compress) {
+        Bytes cct_data = cct.serialize(context->get_parameter());
+        ss_write_vector(ss, cct_data);
+    }
+    return ss_to_bytes(ss);
+}
+
+void FeatureMatEncrypted::deserialize(const Bytes& bytes) {
+    stringstream ss;
+    bytes_to_ss(bytes, ss);
+    ss_read(ss, &dim);
+    ss_read(ss, &n_channel);
+    ss_read(ss, &n_channel_per_ct);
+    ss_read(ss, &level);
+    for (int i = 0; i < 2; i++) {
+        ss_read(ss, &shape[i]);
+    }
+    ss_read(ss, &matmul_block_size);
+    uint32_t n_ct;
+    ss_read(ss, &n_ct);
+    for (uint32_t i = 0; i < n_ct; i++) {
+        Bytes ct_data;
+        ss_read_vector(ss, &ct_data);
+        data.push_back(CkksCiphertext::deserialize(ct_data));
+    }
+    uint32_t n_cct;
+    ss_read(ss, &n_cct);
+    for (uint32_t i = 0; i < n_cct; i++) {
+        Bytes cct_data;
+        ss_read_vector(ss, &cct_data);
+        data_compress.push_back(CkksCompressedCiphertext::deserialize(cct_data));
+    }
 }
 
 FeatureMatEncrypted FeatureMatEncrypted::drop_level(int n_level_to_drop) const {

@@ -122,7 +122,7 @@ def main():
 
     # Poly-ReLU options
     parser.add_argument('--poly_model_convert', action='store_true', help='replace ReLU with RangeNormPoly2d')
-    parser.add_argument('--poly-module', default='RangeNormPoly2d', help='choose RangeNormPoly2d or Simple_Polyrelu')
+    parser.add_argument('--poly-module', default='RangeNormPoly2d', help='choose RangeNormPoly2d or PolyAct')
     parser.add_argument('--upper-bound', type=float, default=3.0, help='normalization upper bound for RangeNormPoly2d')
     parser.add_argument('--degree', type=int, default=4, choices=[2, 4, 8])
     parser.add_argument(
@@ -165,7 +165,7 @@ def main():
             replace_general_avgpool_with_depthwise_conv,
         )
         from training.nn_tools.replace import count_activations
-        from training.nn_tools.activations import RangeNormPoly2d, Simple_Polyrelu
+        from training.nn_tools.activations import RangeNormPoly2d, PolyAct
 
         n_maxpool = count_activations(model, nn.MaxPool2d)
         replace_maxpool_with_avgpool(model)
@@ -181,16 +181,16 @@ def main():
                 degree=args.degree,
             )
             n_poly = count_activations(model, RangeNormPoly2d)
-        elif args.poly_module == 'Simple_Polyrelu':
+        elif args.poly_module == 'PolyAct':
             replace_activation_with_poly(
                 model,
                 old_cls=nn.ReLU,
-                new_module_factory=Simple_Polyrelu,
+                new_module_factory=PolyAct,
                 upper_bound=args.upper_bound,
                 degree=args.degree,
             )
-            n_poly = count_activations(model, Simple_Polyrelu)
-        n_poly = count_activations(model, Simple_Polyrelu)
+            n_poly = count_activations(model, PolyAct)
+        n_poly = count_activations(model, PolyAct)
         log.info(f'Device: {device}  |  ReLU {n_relu} -> Poly {n_poly} (ub={args.upper_bound}, deg={args.degree})')
     else:
         n_params = sum(p.numel() for p in model.parameters())
@@ -247,10 +247,6 @@ def main():
             dynamic_batch=False,
         )
         log.info(f'ONNX saved: {onnx_path}')
-
-        h5_path = os.path.join(export_dir, 'model_parameters.h5')
-        fuse_and_export_h5(model, h5_path=h5_path, upper_bound=args.upper_bound, degree=args.degree, eps=1e-3)
-        log.info(f'Fused H5 saved: {h5_path}')
 
 
 if __name__ == '__main__':

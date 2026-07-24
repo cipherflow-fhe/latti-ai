@@ -30,6 +30,7 @@ from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.deploy_cmds import *  # noqa: E402
 from inference.model_generator.layers.add_pack import AddLayer  # noqa: E402
 from inference.model_generator.layers.avgpool2d_layer import Avgpool2DLayer  # noqa: E402
+from inference.model_generator.layers.avgpool1d_layer import Avgpool1DLayer  # noqa: E402
 from inference.model_generator.layers.mult_scaler import MultScalarLayer  # noqa: E402
 from training.model_export.onnx_to_json import *  # noqa: E402
 
@@ -190,6 +191,7 @@ class TestLayerExport(unittest.TestCase):
                 input_args=input_args,
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / f'CKKS_square_{s}_{s}' / f'level_{n_in_level}' / 'server',
+                fpga_acc=False,
             )
 
     def test_conv2d_packed(self):
@@ -332,19 +334,6 @@ class TestLayerExport(unittest.TestCase):
 
                             input_ct = [CkksCiphertextNode(f'input_0input{k}', level=level) for k in range(n_ct_in)]
 
-                            index = kernel_shape[0] * kernel_shape[1]
-                            weight_pt = [
-                                [
-                                    [
-                                        CkksPlaintextRingtNode(f'convw__conv1_{k}_{n}_{i}')
-                                        for i in range(int(index * next_stride[0] * next_stride[1]))
-                                    ]
-                                    for n in range(n_in_channel)
-                                ]
-                                for k in range(n_out_channel)
-                            ]
-                            bias_pt = [CkksPlaintextRingtNode(f'convb__conv1_{i}') for i in range(n_out_channel)]
-
                             big_conv = InverseMultiplexedConv2DLayer(
                                 n_out_channel,
                                 n_in_channel,
@@ -352,19 +341,18 @@ class TestLayerExport(unittest.TestCase):
                                 padding,
                                 kernel_shape,
                                 stride,
-                                next_stride,
-                                skip,
                                 block_shape,
                             )
 
-                            output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N)
+                            weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes('_conv1')
+                            output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_pt)
 
-                            used_indices = big_conv.get_used_input_indices()
-                            used_input_ct = [input_ct[i] for i in sorted(used_indices)]
                             input_args = list()
-                            input_args.append(Argument('input_0', used_input_ct))
+                            input_args.append(Argument('input_0', input_ct))
                             input_args.append(Argument('convw__conv1', weight_pt))
                             input_args.append(Argument('convb__conv1', bias_pt))
+                            if repack_mask_pt is not None:
+                                input_args.append(Argument('repack_mask__conv1', [repack_mask_pt]))
 
                             process_custom_task(
                                 input_args=input_args,
@@ -377,6 +365,7 @@ class TestLayerExport(unittest.TestCase):
                                 / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                                 / f'level_{init_level}'
                                 / 'server',
+                                fpga_acc=False,
                             )
 
     def test_inverse_mux_conv_repack(self):
@@ -417,13 +406,11 @@ class TestLayerExport(unittest.TestCase):
                         padding,
                         kernel_shape,
                         stride,
-                        next_stride,
-                        skip,
                         block_shape,
                     )
 
                     effective_stride = big_conv.stride
-                    effective_next_stride = big_conv.stride_next
+                    effective_next_stride = big_conv.output_step
 
                     n_block_per_channel = (
                         effective_next_stride[0] * effective_next_stride[1] * effective_stride[0] * effective_stride[1]
@@ -433,30 +420,15 @@ class TestLayerExport(unittest.TestCase):
 
                     input_ct = [CkksCiphertextNode(f'input_0input{k}', level=level) for k in range(n_ct_in)]
 
-                    index = kernel_shape[0] * kernel_shape[1]
-                    weight_pt = [
-                        [
-                            [
-                                CkksPlaintextRingtNode(f'convw__conv1_{k}_{n}_{i}')
-                                for i in range(int(index * effective_next_stride[0] * effective_next_stride[1]))
-                            ]
-                            for n in range(n_in_channel)
-                        ]
-                        for k in range(n_out_channel)
-                    ]
-                    bias_pt = [CkksPlaintextRingtNode(f'convb__conv1_{i}') for i in range(n_out_channel)]
+                    weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes('_conv1')
+                    output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_pt)
 
-                    repack_mask_node = CkksPlaintextRingtNode('repack_mask__conv1') if big_conv.need_repack else None
-                    output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_node)
-
-                    used_indices = big_conv.get_used_input_indices()
-                    used_input_ct = [input_ct[i] for i in sorted(used_indices)]
                     input_args = list()
-                    input_args.append(Argument('input_0', used_input_ct))
+                    input_args.append(Argument('input_0', input_ct))
                     input_args.append(Argument('convw__conv1', weight_pt))
                     input_args.append(Argument('convb__conv1', bias_pt))
-                    if repack_mask_node is not None:
-                        input_args.append(Argument('repack_mask__conv1', [repack_mask_node]))
+                    if repack_mask_pt is not None:
+                        input_args.append(Argument('repack_mask__conv1', [repack_mask_pt]))
 
                     process_custom_task(
                         input_args=input_args,
@@ -469,6 +441,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                         / f'level_{init_level}'
                         / 'server',
+                        fpga_acc=False,
                     )
 
     def test_inverse_mux_dw_conv(self):
@@ -527,8 +500,6 @@ class TestLayerExport(unittest.TestCase):
                                 padding,
                                 kernel_shape,
                                 stride,
-                                next_stride,
-                                skip,
                                 block_shape,
                             )
 
@@ -550,6 +521,7 @@ class TestLayerExport(unittest.TestCase):
                                 / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                                 / f'level_{init_level}'
                                 / 'server',
+                                fpga_acc=False,
                             )
 
     def test_poly_bsgs(self):
@@ -585,6 +557,7 @@ class TestLayerExport(unittest.TestCase):
                 output_instruction_path=base_path
                 / f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order}'
                 / f'level_{level}',
+                fpga_acc=False,
             )
 
     def test_fc_pack_skip_feature0d(self):
@@ -639,6 +612,7 @@ class TestLayerExport(unittest.TestCase):
                 / f'CKKS_fc_prepare_weight1_1D_pack_skip_{s}_{s}'
                 / f'level_{level}'
                 / 'server',
+                fpga_acc=False,
             )
 
     def test_fc_fc_feature0d(self):
@@ -722,6 +696,7 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_fc_fc_{input_channel}_{output_channel}_{output_channel1}'
             / f'level_{init_level}'
             / 'server',
+            fpga_acc=False,
         )
 
     def test_fc_multiplexed_feature2d(self):
@@ -749,8 +724,8 @@ class TestLayerExport(unittest.TestCase):
             n_channel_per_block = valid_skip_0 * valid_skip_1
             n_channel = n_in_channel // (shape[0] * shape[1])
             n_channel_per_ct = int((N / 2) / (shape[0] * shape[1]) / (invalid_fill[0] * invalid_fill[1]))
-            n_input_ct = max(1, int(np.ceil(n_in_channel / n_channel_per_ct)))
-            n_block_input = n_input_ct * n_num_per_ct
+            n_input_ct = max(1, int(np.ceil(n_channel / n_channel_per_block / n_num_per_ct)) * 1)
+            n_block_input = int(np.ceil(n_channel / n_channel_per_block))
 
             input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_input_ct)]
             weight_pt = [
@@ -785,6 +760,7 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
+                fpga_acc=False,
             )
 
     def test_poly_relu_bsgs_feature2d(self):
@@ -797,21 +773,21 @@ class TestLayerExport(unittest.TestCase):
         n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
         order0 = 7
         order1 = 7
-        level_cost0 = PolyRelu.compute_bsgs_level_cost(order0)
-        level_cost1 = PolyRelu.compute_bsgs_level_cost(order1)
+        level_cost0 = PolyRelu2D.compute_bsgs_level_cost(order0)
+        level_cost1 = PolyRelu2D.compute_bsgs_level_cost(order1)
         level = level_cost0 + level_cost1 + 1  # +1 for sign(x)*x multiplication
 
         input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
         weight_pt0 = [
             [CkksPlaintextRingtNode(f'poly0w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order0 + 1)
         ]
-        poly_layer0 = PolyRelu(input_shape, order0, skip, n_in_channel_per_ct)
+        poly_layer0 = PolyRelu2D(input_shape, order0, skip, n_in_channel_per_ct)
         output_ct0 = poly_layer0.call_bsgs_feature2d(input_ct, weight_pt0)
 
         weight_pt1 = [
             [CkksPlaintextRingtNode(f'poly1w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order1 + 1)
         ]
-        poly_layer1 = PolyRelu(input_shape, order1, skip, n_in_channel_per_ct)
+        poly_layer1 = PolyRelu2D(input_shape, order1, skip, n_in_channel_per_ct)
         output_ct1 = poly_layer1.call_bsgs_feature2d(output_ct0, weight_pt1)
 
         output_ct = list()
@@ -837,6 +813,7 @@ class TestLayerExport(unittest.TestCase):
             output_instruction_path=base_path
             / f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order0}_{order1}'
             / f'level_{level}',
+            fpga_acc=False,
         )
 
     def test_poly_bsgs_feature0d(self):
@@ -852,7 +829,7 @@ class TestLayerExport(unittest.TestCase):
             level = 8
 
             for order in orders:
-                level_cost = PolyRelu.compute_bsgs_level_cost(order)
+                level_cost = PolyRelu0D.compute_bsgs_level_cost(order)
                 if level < level_cost:
                     continue
 
@@ -863,7 +840,7 @@ class TestLayerExport(unittest.TestCase):
                     for i in range(order + 1)
                 ]
 
-                poly_layer = PolyRelu.create_for_feature0d(order, skip_val, n_channel_per_ct)
+                poly_layer = PolyRelu0D(order, skip_val, n_channel_per_ct)
                 output_ct = poly_layer.call_bsgs_feature0d(input_ct, weight_pt)
 
                 input_args = list()
@@ -877,7 +854,102 @@ class TestLayerExport(unittest.TestCase):
                     output_instruction_path=base_path
                     / f'CKKS_poly_relu_bsgs_feature0d_{n_in_channel}_channel_order_{order}_skip_{skip_val}'
                     / f'level_{level}',
+                    fpga_acc=False,
                 )
+
+    def test_poly_bsgs_feature1d_skip(self):
+        """PolyRelu1D — skip-pack mode (Feature1DEncrypted::pack).
+
+        Slot layout: channel ch, position i → slot ch * shape * skip + i * skip
+        n_channel_per_ct = N/2 / (shape * skip)
+        """
+        N = 16384
+        set_param('PN14QP438')
+        n_in_channel = 64
+        shapes = [32, 64]
+        skips = [1, 2]
+        orders = [2, 4, 7]
+        level = 8
+
+        for shape in shapes:
+            for skip_val in skips:
+                n_channel_per_ct = N // 2 // shape // skip_val
+                if n_channel_per_ct == 0:
+                    continue
+                n_pack_in_channel = int(np.ceil(n_in_channel / n_channel_per_ct))
+
+                for order in orders:
+                    level_cost = PolyRelu1D.compute_bsgs_level_cost(order)
+                    if level < level_cost:
+                        continue
+
+                    print(f'sub-test skip: shape={shape}, skip={skip_val}, order={order}')
+                    input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+                    weight_pt = [
+                        [CkksPlaintextRingtNode(f'polyw_1d_skip_{i}_{j}') for j in range(n_pack_in_channel)]
+                        for i in range(order + 1)
+                    ]
+
+                    poly_layer = PolyRelu1D(shape, order, skip_val, n_channel_per_ct)
+                    output_ct = poly_layer.call_bsgs_skip(input_ct, weight_pt)
+
+                    input_args = [Argument('input_node', input_ct)]
+                    for i in range(order + 1):
+                        input_args.append(Argument(f'weight_pt{i}', weight_pt[i]))
+
+                    process_custom_task(
+                        input_args=input_args,
+                        output_args=[Argument('output_ct', output_ct)],
+                        output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_skip_{n_in_channel}_channel'
+                        f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
+                        fpga_acc=False,
+                    )
+
+    def test_poly_bsgs_feature1d_mux(self):
+        """PolyRelu1D — multiplexed/interleaved-pack mode (Feature1DEncrypted::pack_multiplexed).
+
+        Slot layout: channel j (CT-local), position i → slot (j/skip)*shape*skip + i*skip + (j%skip)
+        n_channel_per_ct = N/2 / shape   (skip channels share each shape*skip block)
+        """
+        N = 16384
+        set_param('PN14QP438')
+        n_in_channel = 64
+        shapes = [32, 64]
+        skips = [1, 2]
+        orders = [2, 4, 7]
+        level = 8
+
+        for shape in shapes:
+            for skip_val in skips:
+                n_channel_per_ct = N // 2 // shape  # multiplexed: no skip in denominator
+                n_pack_in_channel = int(np.ceil(n_in_channel / n_channel_per_ct))
+
+                for order in orders:
+                    level_cost = PolyRelu1D.compute_bsgs_level_cost(order)
+                    if level < level_cost:
+                        continue
+
+                    print(f'sub-test mux: shape={shape}, skip={skip_val}, order={order}')
+                    input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+                    weight_pt = [
+                        [CkksPlaintextRingtNode(f'polyw_1d_mux_{i}_{j}') for j in range(n_pack_in_channel)]
+                        for i in range(order + 1)
+                    ]
+
+                    poly_layer = PolyRelu1D(shape, order, skip_val, n_channel_per_ct)
+                    output_ct = poly_layer.call_bsgs_mux(input_ct, weight_pt)
+
+                    input_args = [Argument('input_node', input_ct)]
+                    for i in range(order + 1):
+                        input_args.append(Argument(f'weight_pt{i}', weight_pt[i]))
+
+                    process_custom_task(
+                        input_args=input_args,
+                        output_args=[Argument('output_ct', output_ct)],
+                        output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_mux_{n_in_channel}_channel'
+                        f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
+                        fpga_acc=False,
+                    )
 
     def test_conv1d_layer(self):
         N = 16384
@@ -902,16 +974,6 @@ class TestLayerExport(unittest.TestCase):
                         n_pack_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
                         n_packed_out_channel = math.ceil(n_out_channel / (n_channel_per_ct * stride))
                         input_ct = [CkksCiphertextNode(f'input_{k}', init_level) for k in range(n_pack_in_channel)]
-                        rot_n_channel_per_ct = n_in_channel if n_in_channel < n_channel_per_ct else n_channel_per_ct
-                        weight_pt = [
-                            [
-                                [CkksPlaintextRingtNode(f'weight_{i}_{k}_{j}') for k in range(kernel_shape)]
-                                for j in range(rot_n_channel_per_ct)
-                            ]
-                            for i in range(n_packed_out_channel)
-                        ]
-                        bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_channel)]
-
                         conv1d = Conv1DPackedLayer(
                             n_out_channel,
                             n_in_channel,
@@ -923,12 +985,13 @@ class TestLayerExport(unittest.TestCase):
                             n_pack_in_channel,
                             n_packed_out_channel,
                         )
+                        weight_pt, bias_pt = conv1d.make_pt_nodes('_conv1d')
                         output_ct = conv1d.call(input_ct, weight_pt, bias_pt)
 
                         input_args = list()
                         input_args.append(Argument('input_node', input_ct))
-                        input_args.append(Argument(f'weight_pt', weight_pt))
-                        input_args.append(Argument(f'bias_pt', bias_pt))
+                        input_args.append(Argument(f'convw__conv1d', weight_pt))
+                        input_args.append(Argument(f'convb__conv1d', bias_pt))
 
                         process_custom_task(
                             input_args=input_args,
@@ -937,6 +1000,7 @@ class TestLayerExport(unittest.TestCase):
                             / f'conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}'
                             / f'level_{init_level}'
                             / 'server',
+                            fpga_acc=False,
                         )
 
     def test_mux_conv1d_layer(self):
@@ -948,7 +1012,7 @@ class TestLayerExport(unittest.TestCase):
         init_level = 5
 
         input_shapes = [32, 64, 512]
-        kernel_shapes = [1, 3, 5]
+        kernel_shapes = [1, 3, 4, 5]
         skips = [2, 4]
         strides = [1, 2]
 
@@ -973,7 +1037,7 @@ class TestLayerExport(unittest.TestCase):
                             for i in range(n_weight_pt)
                         ]
                         bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_channel)]
-                        conv1d = ParMultiplexedConv1DPackedLayer(
+                        conv1d = MultiplexedConv1DPackedLayer(
                             n_out_channel,
                             n_in_channel,
                             input_shape,
@@ -1002,6 +1066,7 @@ class TestLayerExport(unittest.TestCase):
                             / f'multiplexed_conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}'
                             / f'level_{init_level}'
                             / 'server',
+                            fpga_acc=False,
                         )
 
     def test_add_layer(self):
@@ -1029,6 +1094,7 @@ class TestLayerExport(unittest.TestCase):
                     / f'CKKS_add_layer/ch_{n_channel}_shape_{s}_{s}'
                     / f'level_{level}'
                     / 'server',
+                    fpga_acc=False,
                 )
 
     def test_avgpool2d_layer(self):
@@ -1045,13 +1111,12 @@ class TestLayerExport(unittest.TestCase):
                     if s < stride[0]:
                         continue  # shape must be >= stride
                     print(f'sub-test: stride={stride[0]}, n_channel={n_channel}, s={s}')
-                    n_channel_per_ct = int(np.ceil(N / 2 / (s * s)))
-                    n_ct = int(np.ceil(n_channel / n_channel_per_ct))
+                    n_ct = int(np.ceil(n_channel / int(np.ceil(N / 2 / (s * s)))))
                     input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
-                    out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
-                    n_select_pt = min(n_channel, out_channels_per_ct)
-                    select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
                     avgpool = Avgpool2DLayer(stride=list(stride), shape=[s, s], channel=n_channel, skip=[1, 1])
+                    select_tensor_pt, n_channel_per_ct = avgpool.make_pt_nodes_multiplexed_avgpool(
+                        '_avgpool', n_channel, N
+                    )
                     output_ct = avgpool.call_multiplexed_avgpool(
                         input_ct, select_tensor_pt, n_channel, n_channel_per_ct
                     )
@@ -1066,6 +1131,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}_{s}'
                         / f'level_{level}'
                         / 'server',
+                        fpga_acc=False,
                     )
 
     def test_adaptive_avgpool2d_layer(self):
@@ -1097,6 +1163,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}_{s}'
                         / f'level_{level}'
                         / 'server',
+                        fpga_acc=False,
                     )
 
     def test_interleaved_avgpool2d_layer(self):
@@ -1130,7 +1197,7 @@ class TestLayerExport(unittest.TestCase):
                             channel=n_channel,
                             skip=[1, 1],
                         )
-                        output_ct = avgpool.call_interleaved_avgpool(input_ct, block_expansion)
+                        output_ct = avgpool.call_interleaved_avgpool(input_ct, block_expansion, N)
 
                         input_args = [Argument('input_node', input_ct)]
                         process_custom_task(
@@ -1143,7 +1210,78 @@ class TestLayerExport(unittest.TestCase):
                             / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                             / f'level_{level}'
                             / 'server',
+                            fpga_acc=False,
                         )
+
+    def test_avgpool1d_layer(self):
+        N = 16384
+        set_param('PN14QP438')
+        level = 3
+        skip = 1
+        shapes = [8, 16, 32, 64]
+        channels = [4, 10, 15, 32]
+        strides = [2, 4, 8]
+        for stride in strides:
+            for n_channel in channels:
+                for s in shapes:
+                    if s < stride:
+                        continue
+                    print(f'sub-test: stride={stride}, n_channel={n_channel}, s={s}')
+                    n_channel_per_ct = int(np.ceil(N / 2 / s))
+                    n_ct = int(np.ceil(n_channel / n_channel_per_ct))
+                    input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+                    out_channels_per_ct = n_channel_per_ct * stride
+                    n_select_pt = min(n_channel, out_channels_per_ct)
+                    select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
+                    avgpool = Avgpool1DLayer(stride=stride, shape=s, channel=n_channel, skip=skip)
+                    output_ct = avgpool.call_multiplexed_avgpool(
+                        input_ct, select_tensor_pt, n_channel, n_channel_per_ct
+                    )
+                    input_args = list()
+                    input_args.append(Argument('input_node', input_ct))
+                    input_args.append(Argument('select_tensor_pt', select_tensor_pt))
+                    process_custom_task(
+                        input_args=input_args,
+                        output_args=[Argument('output_ct', output_ct)],
+                        output_instruction_path=base_path
+                        / f'CKKS_avgpool1d/stride_{stride}'
+                        / f'ch_{n_channel}_shape_{s}'
+                        / f'level_{level}'
+                        / 'server',
+                        fpga_acc=False,
+                    )
+
+    def test_adaptive_avgpool1d_layer(self):
+        N = 16384
+        set_param('PN14QP438')
+        level = 3
+        skip = 1
+        shapes = [8, 16, 32, 64]
+        channels = [4, 10, 15, 32]
+        strides = [2, 4, 8]
+        for stride in strides:
+            for n_channel in channels:
+                for s in shapes:
+                    if s < stride:
+                        continue
+                    print(f'sub-test: stride={stride}, n_channel={n_channel}, s={s}')
+                    n_channel_per_ct = int(np.ceil(N / 2 / s))
+                    n_ct = int(np.ceil(n_channel / n_channel_per_ct))
+                    input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+                    avgpool = Avgpool1DLayer(stride=stride, shape=s, channel=n_channel, skip=skip)
+                    output_ct = avgpool.run_adaptive_avgpool(input_ct, n=N)
+                    input_args = list()
+                    input_args.append(Argument('input_node', input_ct))
+                    process_custom_task(
+                        input_args=input_args,
+                        output_args=[Argument('output_ct', output_ct)],
+                        output_instruction_path=base_path
+                        / f'CKKS_adaptive_avgpool1d/stride_{stride}'
+                        / f'ch_{n_channel}_shape_{s}'
+                        / f'level_{level}'
+                        / 'server',
+                        fpga_acc=False,
+                    )
 
     def test_mult_scalar_layer(self):
         N = 16384
@@ -1169,8 +1307,154 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_mult_scalar/ch_{n_channel}_shape_{s}_{s}'
             / f'level_{level}'
             / 'server',
+            fpga_acc=False,
         )
 
+    def test_mux_dw_conv1d_layer(self):
+        N = 16384
+        set_param('PN14QP438')
 
-if __name__ == '__main__':
-    unittest.main()
+        init_level = 5
+
+        channels = [4, 16, 32]
+        input_shapes = [32, 64, 512]
+        kernel_shapes = [1, 3, 5]
+        skips = [2, 4]
+        strides = [1, 2]
+
+        for n_channel in channels:
+            for input_shape in input_shapes:
+                for kernel_shape in kernel_shapes:
+                    for skip in skips:
+                        for stride in strides:
+                            print(
+                                f'sub-test: n_channel={n_channel}, input_shape={input_shape}, '
+                                f'kernel_shape={kernel_shape}, skip={skip}, stride={stride}'
+                            )
+                            n_channel_per_ct = math.ceil(N / 2 / input_shape)
+                            n_packed_ct = math.ceil(n_channel / n_channel_per_ct)
+                            n_block_per_ct = math.ceil(n_channel_per_ct / skip)
+                            n_packed_out = math.ceil(n_channel / n_channel_per_ct)
+
+                            input_ct = [CkksCiphertextNode(f'input_{k}', init_level) for k in range(n_packed_ct)]
+                            # weight_pt[ct_idx][kernel_idx]
+                            weight_pt = [
+                                [CkksPlaintextRingtNode(f'weight_pt_{i}_{k}') for k in range(kernel_shape)]
+                                for i in range(n_packed_ct)
+                            ]
+                            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out)]
+                            n_select_pt = min(n_channel_per_ct, n_channel)
+                            block_select_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
+
+                            conv1d = MultiplexedDWConv1DPackedLayer(
+                                n_channel,
+                                input_shape,
+                                kernel_shape,
+                                stride,
+                                skip,
+                                n_channel_per_ct,
+                                n_packed_ct,
+                            )
+                            output_ct = conv1d.call(input_ct, weight_pt, bias_pt, block_select_pt)
+
+                            input_args = list()
+                            input_args.append(Argument('input_node', input_ct))
+                            input_args.append(Argument('weight_pt', weight_pt))
+                            input_args.append(Argument('bias_pt', bias_pt))
+                            if len(block_select_pt) != 0:
+                                input_args.append(Argument('block_select_pt', block_select_pt))
+
+                            process_custom_task(
+                                input_args=input_args,
+                                output_args=[Argument('output_ct', output_ct)],
+                                output_instruction_path=base_path
+                                / f'mux_dw_conv1d_ch_{n_channel}_input_{input_shape}_kernel_{kernel_shape}_skip_{skip}_stride_{stride}'
+                                / f'level_{init_level}'
+                                / 'server',
+                                fpga_acc=False,
+                            )
+
+    def test_fc_1d_multiplexed(self):
+        """DensePackedLayer — 1D multiplexed mode (call_1d_multiplexed).
+
+        Feature layout: Feature1DEncrypted::pack_multiplexed
+          block_stride  = skip          (skip already contains invalid_fill)
+          block_size    = shape * skip
+          n_block_per_ct = N/2 / block_size
+          valid_sub      = skip / invalid_fill
+          n_valid_per_ct = n_block_per_ct * valid_sub  (channels with actual data)
+          n_ct           = ceil(n_channel / n_valid_per_ct)
+        """
+        N = 16384
+        set_param('PN14QP438')
+        N_half = N // 2
+        level = 2
+
+        # (shape, skip, invalid_fill, n_in_channel, n_out_channel)
+        configs = [
+            (32, 2, 1, 16, 8),
+            (32, 2, 1, 64, 32),
+            (32, 4, 1, 32, 16),
+            (32, 4, 2, 32, 16),
+            (32, 4, 4, 32, 16),
+            (64, 2, 1, 16, 8),
+            (64, 4, 2, 64, 32),
+            (64, 8, 4, 64, 32),
+        ]
+
+        for shape, skip, invalid_fill, n_in_channel, n_out_channel in configs:
+            # Corrected formulas: skip already contains invalid_fill
+            block_size = shape * skip
+            n_block_per_ct = N_half // block_size
+            valid_sub = skip // invalid_fill  # valid sub_pos per block
+            n_valid_per_ct = n_block_per_ct * valid_sub  # channels with data per CT
+            if n_block_per_ct == 0 or n_valid_per_ct == 0:
+                continue
+
+            n_packed_out = math.ceil(n_out_channel / n_block_per_ct)
+            n_block_input = math.ceil(n_in_channel / n_valid_per_ct) * n_block_per_ct
+            n_input_ct = math.ceil(n_in_channel / n_valid_per_ct)
+
+            print(
+                f'sub-test: shape={shape}, skip={skip}, invalid_fill={invalid_fill}, '
+                f'cin={n_in_channel}, cout={n_out_channel}, '
+                f'n_block_per_ct={n_block_per_ct}, n_valid_per_ct={n_valid_per_ct}, '
+                f'n_packed_out={n_packed_out}, n_block_input={n_block_input}'
+            )
+
+            input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_input_ct)]
+            weight_pt = [
+                [CkksPlaintextRingtNode(f'weight_pt_{i}_{j}') for j in range(n_block_input)]
+                for i in range(n_packed_out)
+            ]
+            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out)]
+
+            dense = DensePackedLayer(
+                n_out_channel,
+                n_in_channel,
+                [shape, 1],
+                [skip, 1],
+                n_block_per_ct,
+                n_input_ct,
+                n_packed_out,
+                invalid_fill=[invalid_fill, 1],
+            )
+            output_ct = dense.call_1d_multiplexed(input_ct, weight_pt, bias_pt, N)
+
+            path_name = (
+                f'CKKS_fc_1d_multiplexed'
+                f'_shape{shape}'
+                f'_skip{skip}'
+                f'_inv{invalid_fill}'
+                f'_cin{n_in_channel}_cout{n_out_channel}'
+            )
+            process_custom_task(
+                input_args=[
+                    Argument('input_node', input_ct),
+                    Argument('weight_pt', weight_pt),
+                    Argument('bias_pt', bias_pt),
+                ],
+                output_args=[Argument('output_ct', output_ct)],
+                output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
+                fpga_acc=False,
+            )

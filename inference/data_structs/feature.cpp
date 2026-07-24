@@ -21,7 +21,7 @@
 #include <sstream>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 int32_t bitlength = RING_MOD_BIT;
 
@@ -103,7 +103,7 @@ void parallel_for_with_extra_level_context(int n,
     }
 }
 
-FeatureEncrypted::FeatureEncrypted() : ckks_scale{DEFAULT_SCALE}, multiplier{1.0} {}
+FeatureEncrypted::FeatureEncrypted() {}
 
 FeatureEncrypted::~FeatureEncrypted() {}
 

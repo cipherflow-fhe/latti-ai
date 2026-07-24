@@ -28,7 +28,7 @@
  * Channels are packed sequentially. Within each channel the elements are stored
  * with stride skip (skip-1 zero slots between consecutive elements).
  *
- *   n_channel_per_ct = n_slot / (shape * skip)
+ *   n_channel_per_ct = n_slot / shape
  *   n_ct             = ceil(n_channel / n_channel_per_ct)
  *
  * Pack mapping — for channel k (0-indexed within a ciphertext), element i:
@@ -40,21 +40,23 @@
  * skip channels are interleaved within each block. invalid_fill controls how
  * many slots per spatial position are reserved:
  *
- *   block_stride = skip * invalid_fill    (slots per spatial position)
- *   block_size   = shape * block_stride   (slots per block)
+ *   block_stride = skip                    (slots per spatial position, no invalid_fill)
+ *   block_size   = shape * block_stride   (slots per block = shape * skip)
  *
- *   invalid_fill == 1 : every slot in a block is valid (pure interleaved).
- *   invalid_fill >  1 : the first skip slots per spatial position are valid;
- *                       the remaining skip*(invalid_fill-1) slots are zero.
+ *   invalid_fill == 1 : every sub_pos in a block carries a channel (pure interleaved).
+ *   invalid_fill >  1 : only sub_pos in [0, skip/invalid_fill) carry channels;
+ *                       sub_pos in [skip/invalid_fill, skip) are left as zero.
  *
- *   n_channel_per_ct = n_slot / (shape * invalid_fill)
- *                    = n_slot / block_stride * skip   (must be a multiple of skip)
- *   n_block_per_ct   = n_channel_per_ct / skip
- *   n_ct             = ceil(n_channel / n_channel_per_ct)
+ *   n_channel_per_ct = n_slot / shape
+ *                    = n_block_per_ct * skip   (must be a multiple of skip)
+ *   n_block_per_ct   = n_slot / (shape * skip)
+ *   n_valid_per_ct   = n_block_per_ct * (skip / invalid_fill)   (channels with actual data)
+ *   n_ct             = ceil(n_channel / n_valid_per_ct)
  *
- * Pack mapping — for channel j (0-indexed within a ciphertext), element data_idx:
- *   block_idx = j / skip
- *   sub_pos   = j % skip
+ * Pack mapping — for valid channel j (0-indexed within a ciphertext), element data_idx:
+ *   valid_sub        = skip / invalid_fill
+ *   block_idx        = j / valid_sub
+ *   sub_pos          = j % valid_sub          (in [0, valid_sub))
  *   slot      = block_idx * block_size + data_idx * block_stride + sub_pos
  */
 
@@ -77,7 +79,7 @@ public:
     std::vector<ls::CkksCiphertext> data;
     std::vector<ls::CkksCompressedCiphertext> data_compress;
 
-    Bytes serialize() const;
+    Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;
     Feature1DEncrypted copy() const;
 };

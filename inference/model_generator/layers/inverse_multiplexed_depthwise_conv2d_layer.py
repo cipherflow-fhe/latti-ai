@@ -16,13 +16,16 @@
 
 import math
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
 
-op_class = 'InverseMultiplexedDepthwiseConv2d'
+
+op_class = 'InverseMultiplexedConv2DLayerDepthwise'
 
 
 class InverseMultiplexedDepthwiseConv2DLayer:
@@ -32,14 +35,12 @@ class InverseMultiplexedDepthwiseConv2DLayer:
     rescale_num = 0
     drop_level_num = 0
 
-    def __init__(self, n_channel, input_shape, padding, kernel_shape, stride, stride_next, skip, block_shape):
+    def __init__(self, n_channel, input_shape, padding, kernel_shape, stride, block_shape):
         self.n_out_channel: int = n_channel
         self.n_in_channel: int = n_channel
         self.input_shape: list[int] = input_shape
         self.kernel_shape: list[int] = kernel_shape
         self.stride: list[int] = stride
-        self.stride_next: list[int] = stride_next
-        self.skip: list[int] = skip
         self.padding: list[int] = padding
         self.block_shape: list[int] = block_shape
 
@@ -47,10 +48,6 @@ class InverseMultiplexedDepthwiseConv2DLayer:
             raise ValueError(f'input_shape must be powers of 2, got: [{input_shape[0]}, {input_shape[1]}]')
         if stride[0] & (stride[0] - 1) != 0 or stride[1] & (stride[1] - 1) != 0:
             raise ValueError(f'stride must be powers of 2, got: [{stride[0]}, {stride[1]}]')
-        if stride_next[0] & (stride_next[0] - 1) != 0 or stride_next[1] & (stride_next[1] - 1) != 0:
-            raise ValueError(f'stride_next must be powers of 2, got: [{stride_next[0]}, {stride_next[1]}]')
-        if skip[0] & (skip[0] - 1) != 0 or skip[1] & (skip[1] - 1) != 0:
-            raise ValueError(f'skip must be powers of 2, got: [{skip[0]}, {skip[1]}]')
         if block_shape[0] & (block_shape[0] - 1) != 0 or block_shape[1] & (block_shape[1] - 1) != 0:
             raise ValueError(f'block_shape must be powers of 2, got: [{block_shape[0]}, {block_shape[1]}]')
 
@@ -64,7 +61,10 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         self.need_repack = (output_shape0 < block_shape[0]) or (output_shape1 < block_shape[1])
         if self.need_repack:
             self.stride = [input_shape[0] // block_shape[0], input_shape[1] // block_shape[1]]
-            self.stride_next = [1, 1]
+        self.output_step = [
+            input_shape[0] // (block_shape[0] * self.stride[0]),
+            input_shape[1] // (block_shape[1] * self.stride[1]),
+        ]
 
     def get_used_input_indices(self) -> set:
         """Return the set of input CT indices that are actually used in the convolution."""
@@ -72,14 +72,14 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         pad1 = self.padding[1]
         stride0 = self.stride[0]
         stride1 = self.stride[1]
-        stride_next0 = self.stride_next[0]
-        stride_next1 = self.stride_next[1]
+        output_step0 = self.output_step[0]
+        output_step1 = self.output_step[1]
         used = set()
         # Depthwise: each output channel uses only its own input channel
         for n_ch in range(self.n_in_channel):
-            base = n_ch * stride0 * stride1 * stride_next0 * stride_next1
-            for r_i2 in range(stride_next0):
-                for r_j2 in range(stride_next1):
+            base = n_ch * stride0 * stride1 * output_step0 * output_step1
+            for r_i2 in range(output_step0):
+                for r_j2 in range(output_step1):
                     for row_seg_idx in range(stride0):
                         for col_seg_idx in range(stride1):
                             if row_seg_idx >= self.kernel_shape[0] or col_seg_idx >= self.kernel_shape[1]:
@@ -88,11 +88,11 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                             split_ks1 = (self.kernel_shape[1] - 1 - col_seg_idx) // stride1 + 1
                             for u_s in range(split_ks0):
                                 for v_s in range(split_ks1):
-                                    begin_row = (row_seg_idx - pad0 + stride0 * (u_s + r_i2)) % (stride0 * stride_next0)
-                                    begin_row = (begin_row + stride0 * stride_next0) % (stride0 * stride_next0)
-                                    begin_col = (col_seg_idx - pad1 + stride1 * (v_s + r_j2)) % (stride1 * stride_next1)
-                                    begin_col = (begin_col + stride1 * stride_next1) % (stride1 * stride_next1)
-                                    begin_idx = begin_row * stride1 * stride_next1 + begin_col
+                                    begin_row = (row_seg_idx - pad0 + stride0 * (u_s + r_i2)) % (stride0 * output_step0)
+                                    begin_row = (begin_row + stride0 * output_step0) % (stride0 * output_step0)
+                                    begin_col = (col_seg_idx - pad1 + stride1 * (v_s + r_j2)) % (stride1 * output_step1)
+                                    begin_col = (begin_col + stride1 * output_step1) % (stride1 * output_step1)
+                                    begin_idx = begin_row * stride1 * output_step1 + begin_col
                                     used.add(base + begin_idx)
         return used
 
@@ -101,8 +101,8 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         pad1 = self.padding[1]
         stride0 = self.stride[0]
         stride1 = self.stride[1]
-        stride_next0 = self.stride_next[0]
-        stride_next1 = self.stride_next[1]
+        output_step0 = self.output_step[0]
+        output_step1 = self.output_step[1]
         kernel_shape0 = self.kernel_shape[0]
         kernel_shape1 = self.kernel_shape[1]
         block_shape1 = self.block_shape[1]
@@ -111,9 +111,9 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         rotated_x = [[] for i in range(self.n_out_channel)]
 
         for out_channel_idx in range(0, self.n_out_channel):
-            base_in_ct_idx = int(out_channel_idx * stride0 * stride1 * stride_next0 * stride_next1)
-            for r_i2 in range(0, stride_next0):
-                for r_j2 in range(0, stride_next1):
+            base_in_ct_idx = int(out_channel_idx * stride0 * stride1 * output_step0 * output_step1)
+            for r_i2 in range(0, output_step0):
+                for r_j2 in range(0, output_step1):
                     for row_seg_idx in range(self.stride[0]):
                         for col_seg_idx in range(self.stride[1]):
                             split_kernel_shape0 = (kernel_shape0 - 1 - row_seg_idx) // stride0 + 1
@@ -121,20 +121,20 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                             for u_s in range(split_kernel_shape0):
                                 for v_s in range(split_kernel_shape1):
                                     begin_row_idx = (row_seg_idx - pad0 + stride0 * (u_s + r_i2)) % (
-                                        stride0 * stride_next0
+                                        stride0 * output_step0
                                     )
-                                    begin_row_idx = (begin_row_idx + stride0 * stride_next0) % (stride0 * stride_next0)
+                                    begin_row_idx = (begin_row_idx + stride0 * output_step0) % (stride0 * output_step0)
                                     begin_col_idx = (col_seg_idx - pad1 + stride1 * (v_s + r_j2)) % (
-                                        stride1 * stride_next1
+                                        stride1 * output_step1
                                     )
-                                    begin_col_idx = (begin_col_idx + stride1 * stride_next1) % (stride1 * stride_next1)
-                                    begin_idx = begin_row_idx * stride1 * stride_next1 + begin_col_idx
+                                    begin_col_idx = (begin_col_idx + stride1 * output_step1) % (stride1 * output_step1)
+                                    begin_idx = begin_row_idx * stride1 * output_step1 + begin_col_idx
                                     in_ct_idx = base_in_ct_idx + begin_idx
                                     row_step = (row_seg_idx - pad0 + stride0 * (u_s + r_i2) - begin_row_idx) // (
-                                        stride0 * stride_next0
+                                        stride0 * output_step0
                                     )
                                     col_step = (col_seg_idx - pad1 + stride1 * (v_s + r_j2) - begin_col_idx) // (
-                                        stride1 * stride_next1
+                                        stride1 * output_step1
                                     )
                                     step = int(row_step * block_shape1 + col_step)
                                     if step == 0:
@@ -149,14 +149,14 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         else:
             n_channel_per_ct_out = 1
 
-        temp_res = [0 for i in range(self.n_out_channel * self.stride_next[0] * self.stride_next[1])]
+        temp_res = [0 for i in range(self.n_out_channel * self.output_step[0] * self.output_step[1])]
 
         for ct_idx in range(0, self.n_out_channel):
-            for r_i2 in range(0, stride_next0):
-                for r_j2 in range(0, stride_next1):
+            for r_i2 in range(0, output_step0):
+                for r_j2 in range(0, output_step1):
                     s = 0
-                    out_ct_idx = ct_idx * stride_next0 * stride_next1 + r_i2 * stride_next1 + r_j2
-                    base_idx = (r_i2 * stride_next1 + r_j2) * self.kernel_shape[0] * self.kernel_shape[1]
+                    out_ct_idx = ct_idx * output_step0 * output_step1 + r_i2 * output_step1 + r_j2
+                    base_idx = (r_i2 * output_step1 + r_j2) * self.kernel_shape[0] * self.kernel_shape[1]
                     reference_level = rotated_x[ct_idx][base_idx].level
                     partial_sum: DataNode | None = None
                     x_ct_list = []
@@ -187,6 +187,20 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                         attributes={'op_class': op_class, 'type': 'bias_pt', 'i': ct_idx},
                     )
                     s = add(s, b_pt)
+                    # For the first output, consume unused input CTs so all appear in the graph
+                    if ct_idx == 0 and r_i2 == 0 and r_j2 == 0:
+                        used = self.get_used_input_indices()
+                        total = self.n_in_channel * stride0 * stride1 * output_step0 * output_step1
+                        zero_cts = []
+                        for idx in range(total):
+                            if idx not in used:
+                                zero_cts.append(sub(x[idx], x[idx]))
+                        if zero_cts:
+                            sum_zero = zero_cts[0]
+                            for zc in zero_cts[1:]:
+                                sum_zero = add(sum_zero, zc)
+                            sum_zero = sub(sum_zero, sum_zero)
+                            s = add(s, drop_level(sum_zero, 1))
                     temp_res[out_ct_idx] = s
 
         if self.need_repack:
@@ -199,7 +213,7 @@ class InverseMultiplexedDepthwiseConv2DLayer:
             n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 
-            # Shared mask: select row%skip==0 && col%skip==0
+            # Shared mask: select row%output_skip==0 && col%output_skip==0
             repack_mask = CkksPlaintextRingtNode('repack_mask')
             custom_compute(
                 inputs=[conv_data_source],
@@ -239,7 +253,7 @@ class InverseMultiplexedDepthwiseConv2DLayer:
             return res
 
         res = [
-            0 for i in range(int(math.ceil(self.n_out_channel / n_channel_per_ct_out) * stride_next0 * stride_next1))
+            0 for i in range(int(math.ceil(self.n_out_channel / n_channel_per_ct_out) * output_step0 * output_step1))
         ]
         if n_channel_per_ct_out == 1:
             res = temp_res
@@ -265,6 +279,135 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                     res[pack_out_ct_idx] = add(res[pack_out_ct_idx], s_rot)
         return res
 
+    def make_pt_nodes(self, layer_id):
+        """Return (weight_pt, bias_pt, repack_mask_pt).
+
+        weight_pt[k][i]: k in n_out_channel,
+                         i in kernel_size * output_step[0] * output_step[1]
+        bias_pt[i]: i in n_out_channel
+        repack_mask_pt: CkksPlaintextRingtNode if need_repack, else None
+        """
+        inner = self.kernel_shape[0] * self.kernel_shape[1] * self.output_step[0] * self.output_step[1]
+        weight_pt = [
+            [CkksPlaintextRingtNode(f'convw_{layer_id}_{k}_{i}') for i in range(inner)]
+            for k in range(self.n_out_channel)
+        ]
+        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_out_channel)]
+        repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}') if self.need_repack else None
+        return weight_pt, bias_pt, repack_mask_pt
+
+    def get_fhe_op_count(self, level: int, N: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call(), grouped by level.
+
+        Returns a dict keyed by level:
+          {
+            level:   rotate (stage1) + mult_plain (accumulate) + add (accumulate) + rescale,
+            level-1: add (bias)
+                     [+ mult_plain(mask) + rotate(repack) + add(repack) + rescale(repack)  if need_repack]
+                     [or + rotate(pack) + add(pack)                                         if n_channel_per_ct_out > 1],
+          }
+
+        Stage 1: steps are `row_step * block_shape1 + col_step` — simulated exactly.
+        Stage 3a (repack): rot_step = -(cx*block_shape1 + cy + block_idx*block_shape0*block_shape1) — simulated.
+        Stage 3b (normal pack): step = -k * output_pixels; naf_weight(k * 2^m) == naf_weight(k).
+        """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+
+        pad0 = self.padding[0]
+        pad1 = self.padding[1]
+        stride0 = self.stride[0]
+        stride1 = self.stride[1]
+        output_step0 = self.output_step[0]
+        output_step1 = self.output_step[1]
+        kernel_shape0 = self.kernel_shape[0]
+        kernel_shape1 = self.kernel_shape[1]
+        block_shape1 = self.block_shape[1]
+        kernel_size = kernel_shape0 * kernel_shape1
+        n_groups = self.n_out_channel * output_step0 * output_step1
+
+        # Stage 1: simulate nested loops (no level change)
+        for out_channel_idx in range(self.n_out_channel):
+            for r_i2 in range(output_step0):
+                for r_j2 in range(output_step1):
+                    for row_seg_idx in range(stride0):
+                        for col_seg_idx in range(stride1):
+                            split_ks0 = (kernel_shape0 - 1 - row_seg_idx) // stride0 + 1
+                            split_ks1 = (kernel_shape1 - 1 - col_seg_idx) // stride1 + 1
+                            for u_s in range(split_ks0):
+                                for v_s in range(split_ks1):
+                                    begin_row = (row_seg_idx - pad0 + stride0 * (u_s + r_i2)) % (stride0 * output_step0)
+                                    begin_row = (begin_row + stride0 * output_step0) % (stride0 * output_step0)
+                                    begin_col = (col_seg_idx - pad1 + stride1 * (v_s + r_j2)) % (stride1 * output_step1)
+                                    begin_col = (begin_col + stride1 * output_step1) % (stride1 * output_step1)
+                                    row_step = (row_seg_idx - pad0 + stride0 * (u_s + r_i2) - begin_row) // (
+                                        stride0 * output_step0
+                                    )
+                                    col_step = (col_seg_idx - pad1 + stride1 * (v_s + r_j2) - begin_col) // (
+                                        stride1 * output_step1
+                                    )
+                                    step = int(row_step * block_shape1 + col_step)
+                                    if step != 0:
+                                        ops[lv]['rotate'] += naf_weight(step)
+
+        # Accumulate phase at lv: mult_plain + add(accumulate) + rescale  [lv -> lv-1]
+        ops[lv]['mult_plain'] += n_groups * kernel_size
+        ops[lv]['add'] += n_groups * (kernel_size - 1)
+        ops[lv]['rescale'] += n_groups
+        lv -= 1
+
+        # Bias add at lv (= level-1)
+        ops[lv]['add'] += n_groups
+
+        if self.need_repack:
+            output_shape0 = self.input_shape[0] // self.orig_stride[0]
+            output_shape1 = self.input_shape[1] // self.orig_stride[1]
+            out_skip0 = self.block_shape[0] // output_shape0
+            out_skip1 = self.block_shape[1] // output_shape1
+            n_channel_per_block = out_skip0 * out_skip1
+            n_block_per_ct = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
+            n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
+
+            # Stage 3a: mask mult for all n_groups items at lv (= level-1)
+            ops[lv]['mult_plain'] += n_groups
+
+            # simulate rot_steps and accumulate adds at lv
+            for out_ct_idx in range(n_out_ct):
+                for ch_in_ct in range(n_channel_per_ct_out_repack):
+                    c = out_ct_idx * n_channel_per_ct_out_repack + ch_in_ct
+                    if c >= self.n_out_channel:
+                        break
+                    block_idx = ch_in_ct // n_channel_per_block
+                    ch_in_block = ch_in_ct % n_channel_per_block
+                    cx = ch_in_block // out_skip1
+                    cy = ch_in_block % out_skip1
+                    rot_step = -(cx * self.block_shape[1] + cy + block_idx * self.block_shape[0] * self.block_shape[1])
+                    if rot_step != 0:
+                        ops[lv]['rotate'] += naf_weight(rot_step)
+                    if ch_in_ct > 0 and c < self.n_out_channel:
+                        ops[lv]['add'] += 1
+
+            ops[lv]['rescale'] += n_out_ct
+            return dict(ops)
+
+        # Stage 3b: normal packing at lv (= level-1)
+        output_pixels = (self.input_shape[0] // stride0) * (self.input_shape[1] // stride1)
+        n_channel_per_ct_out = 1
+        if 2 * output_pixels < N:
+            n_channel_per_ct_out = int(N / (2 * output_pixels))
+
+        if n_channel_per_ct_out <= 1:
+            return dict(ops)
+
+        # step = -k * output_pixels; naf_weight(k * 2^m) == naf_weight(k)
+        n_out_ct_normal = math.ceil(self.n_out_channel / n_channel_per_ct_out) * output_step0 * output_step1
+        ops[lv]['rotate'] += sum(
+            naf_weight(k % n_channel_per_ct_out) for k in range(n_groups) if k % n_channel_per_ct_out != 0
+        )
+        ops[lv]['add'] += n_groups - n_out_ct_normal
+        return dict(ops)
+
     def call(
         self, x: list[CkksCiphertextNode], weight_pt, bias_pt, N: int, conv_data_source=None, repack_mask_pt=None
     ) -> list[CkksCiphertextNode]:
@@ -272,8 +415,8 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         pad1 = self.padding[1]
         stride0 = self.stride[0]
         stride1 = self.stride[1]
-        stride_next0 = self.stride_next[0]
-        stride_next1 = self.stride_next[1]
+        output_step0 = self.output_step[0]
+        output_step1 = self.output_step[1]
         kernel_shape0 = self.kernel_shape[0]
         kernel_shape1 = self.kernel_shape[1]
         block_shape1 = self.block_shape[1]
@@ -282,9 +425,9 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         rotated_x = [[] for i in range(self.n_out_channel)]
 
         for out_channel_idx in range(0, self.n_out_channel):
-            base_in_ct_idx = int(out_channel_idx * stride0 * stride1 * stride_next0 * stride_next1)
-            for r_i2 in range(0, stride_next0):
-                for r_j2 in range(0, stride_next1):
+            base_in_ct_idx = int(out_channel_idx * stride0 * stride1 * output_step0 * output_step1)
+            for r_i2 in range(0, output_step0):
+                for r_j2 in range(0, output_step1):
                     for row_seg_idx in range(self.stride[0]):
                         for col_seg_idx in range(self.stride[1]):
                             split_kernel_shape0 = (kernel_shape0 - 1 - row_seg_idx) // stride0 + 1
@@ -292,20 +435,20 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                             for u_s in range(split_kernel_shape0):
                                 for v_s in range(split_kernel_shape1):
                                     begin_row_idx = (row_seg_idx - pad0 + stride0 * (u_s + r_i2)) % (
-                                        stride0 * stride_next0
+                                        stride0 * output_step0
                                     )
-                                    begin_row_idx = (begin_row_idx + stride0 * stride_next0) % (stride0 * stride_next0)
+                                    begin_row_idx = (begin_row_idx + stride0 * output_step0) % (stride0 * output_step0)
                                     begin_col_idx = (col_seg_idx - pad1 + stride1 * (v_s + r_j2)) % (
-                                        stride1 * stride_next1
+                                        stride1 * output_step1
                                     )
-                                    begin_col_idx = (begin_col_idx + stride1 * stride_next1) % (stride1 * stride_next1)
-                                    begin_idx = begin_row_idx * stride1 * stride_next1 + begin_col_idx
+                                    begin_col_idx = (begin_col_idx + stride1 * output_step1) % (stride1 * output_step1)
+                                    begin_idx = begin_row_idx * stride1 * output_step1 + begin_col_idx
                                     in_ct_idx = base_in_ct_idx + begin_idx
                                     row_step = (row_seg_idx - pad0 + stride0 * (u_s + r_i2) - begin_row_idx) // (
-                                        stride0 * stride_next0
+                                        stride0 * output_step0
                                     )
                                     col_step = (col_seg_idx - pad1 + stride1 * (v_s + r_j2) - begin_col_idx) // (
-                                        stride1 * stride_next1
+                                        stride1 * output_step1
                                     )
                                     step = int(row_step * block_shape1 + col_step)
                                     if step == 0:
@@ -320,16 +463,16 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         else:
             n_channel_per_ct_out = 1
 
-        temp_res = [0 for i in range(len(weight_pt) * self.stride_next[0] * self.stride_next[1])]
+        temp_res = [0 for i in range(len(weight_pt) * self.output_step[0] * self.output_step[1])]
 
         for ct_idx in range(0, len(weight_pt)):
-            for r_i2 in range(0, stride_next0):
-                for r_j2 in range(0, stride_next1):
+            for r_i2 in range(0, output_step0):
+                for r_j2 in range(0, output_step1):
                     partial_sum: DataNode | None = None
                     x_ct_list = list()
                     w_pt_list = list()
-                    out_ct_idx = ct_idx * stride_next0 * stride_next1 + r_i2 * stride_next1 + r_j2
-                    base_idx = (r_i2 * stride_next1 + r_j2) * self.kernel_shape[0] * self.kernel_shape[1]
+                    out_ct_idx = ct_idx * output_step0 * output_step1 + r_i2 * output_step1 + r_j2
+                    base_idx = (r_i2 * output_step1 + r_j2) * self.kernel_shape[0] * self.kernel_shape[1]
                     # Depthwise: no inner j loop, weight_pt[ct_idx] is 1D [kernel], not 2D [in_ch][kernel]
                     for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
                         x_ct_list.append(rotated_x[ct_idx][k + base_idx])
@@ -337,6 +480,20 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                     partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
                     s = rescale(partial_sum)
                     s = add(s, bias_pt[ct_idx])
+                    # For the first output, consume unused input CTs so all appear in the graph
+                    if ct_idx == 0 and r_i2 == 0 and r_j2 == 0:
+                        used = self.get_used_input_indices()
+                        total = self.n_in_channel * stride0 * stride1 * output_step0 * output_step1
+                        zero_cts = []
+                        for idx in range(total):
+                            if idx not in used:
+                                zero_cts.append(sub(x[idx], x[idx]))
+                        if zero_cts:
+                            sum_zero = zero_cts[0]
+                            for zc in zero_cts[1:]:
+                                sum_zero = add(sum_zero, zc)
+                            sum_zero = sub(sum_zero, sum_zero)
+                            s = add(s, drop_level(sum_zero, 1))
                     temp_res[out_ct_idx] = s
 
         if self.need_repack:
@@ -381,7 +538,7 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                 res[out_ct_idx] = rescale(packed)
             return res
 
-        res = [0 for i in range(int(math.ceil(len(weight_pt) / n_channel_per_ct_out) * stride_next0 * stride_next1))]
+        res = [0 for i in range(int(math.ceil(len(weight_pt) / n_channel_per_ct_out) * output_step0 * output_step1))]
         if n_channel_per_ct_out == 1:
             res = temp_res
         else:

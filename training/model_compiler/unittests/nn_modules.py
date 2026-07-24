@@ -19,9 +19,12 @@ import torch.nn as nn
 
 
 class SingleConv(nn.Module):
-    def __init__(self, stride=1):
+    def __init__(self, stride=1, kernel_size=3):
         super().__init__()
-        self.conv0 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, bias=False, padding=1, stride=stride)
+        padding = kernel_size // 2
+        self.conv0 = nn.Conv2d(
+            in_channels=32, out_channels=32, kernel_size=kernel_size, bias=True, padding=padding, stride=stride
+        )
 
     def forward(self, x):
         x = self.conv0(x)
@@ -58,10 +61,22 @@ class SingleAct1d(nn.Module):
         return x
 
 
-class SingleAvgpool(nn.Module):
-    def __init__(self):
+class SingleAvgpool2d(nn.Module):
+    """AvgPool2d with configurable kernel_size, stride, and padding."""
+
+    def __init__(self, kernel_size=2, stride=None, padding=0):
         super().__init__()
-        self.pool0 = nn.AvgPool2d(kernel_size=2, padding=0)
+        self.pool = nn.AvgPool2d(kernel_size=kernel_size, stride=stride, padding=padding)
+
+    def forward(self, x):
+        x = self.pool(x)
+        return x
+
+
+class SingleAvgpool1d(nn.Module):
+    def __init__(self, kernel_size=2, stride=None, padding=0):
+        super().__init__()
+        self.pool0 = nn.AvgPool1d(kernel_size=kernel_size, stride=stride, padding=padding)
 
     def forward(self, x):
         x = self.pool0(x)
@@ -254,6 +269,33 @@ class MismatchedScale(nn.Module):
         y = x * 5
         x = x + y
         return x
+
+
+class ConvResidualRelu(nn.Module):
+    """relu(conv(x) + x): residual shortcut with relu on the sum."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        return self.relu(self.conv(x) + x)
+
+
+class ThreeConvConcatRelu(nn.Module):
+    """cat([conv1, conv2, conv3], dim=1) → relu."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(16, 8, kernel_size=3, padding=1, bias=False)
+        self.conv2 = nn.Conv2d(16, 8, kernel_size=3, padding=1, bias=False)
+        self.conv3 = nn.Conv2d(16, 8, kernel_size=3, padding=1, bias=False)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        s = torch.cat([self.conv1(x), self.conv2(x), self.conv3(x)], dim=1)
+        return self.relu(s)
 
 
 class Unit(nn.Module):
@@ -591,9 +633,12 @@ class ConvAvgpoolReshapeAndDense(nn.Module):
 class MultiChannelConv(nn.Module):
     """Conv2d with different input/output channels. Covers conv_mch_s1/s2."""
 
-    def __init__(self, in_channels=3, out_channels=16, stride=1):
+    def __init__(self, in_channels=3, out_channels=16, stride=1, kernel_size=3):
         super().__init__()
-        self.conv0 = nn.Conv2d(in_channels, out_channels, kernel_size=3, bias=True, padding=1, stride=stride)
+        padding = kernel_size // 2
+        self.conv0 = nn.Conv2d(
+            in_channels, out_channels, kernel_size=kernel_size, bias=True, padding=padding, stride=stride
+        )
 
     def forward(self, x):
         x = self.conv0(x)
@@ -603,9 +648,12 @@ class MultiChannelConv(nn.Module):
 class DepthwiseConv(nn.Module):
     """Depthwise Conv2d (groups=in_channels). Covers dw_*ch_s*."""
 
-    def __init__(self, channels=32, stride=1):
+    def __init__(self, channels=32, stride=1, kernel_size=3):
         super().__init__()
-        self.conv0 = nn.Conv2d(channels, channels, kernel_size=3, bias=True, padding=1, stride=stride, groups=channels)
+        padding = kernel_size // 2
+        self.conv0 = nn.Conv2d(
+            channels, channels, kernel_size=kernel_size, bias=True, padding=padding, stride=stride, groups=channels
+        )
 
     def forward(self, x):
         x = self.conv0(x)
@@ -644,16 +692,45 @@ class MuxConvLargeChannel(nn.Module):
 class SingleConv1dE2E(nn.Module):
     """Conv1d for E2E test. Covers conv1d."""
 
-    def __init__(self):
+    def __init__(self, in_channels=4, out_channels=4, stride=1):
         super().__init__()
-        self.conv0 = nn.Conv1d(in_channels=4, out_channels=4, kernel_size=3, bias=True, padding=1)
+        self.conv0 = nn.Conv1d(
+            in_channels=in_channels, out_channels=out_channels, kernel_size=3, bias=True, padding=1, stride=stride
+        )
 
     def forward(self, x):
         x = self.conv0(x)
         return x
 
 
-class ConcatModel(nn.Module):
+class DepthwiseConv1d(nn.Module):
+    """Depthwise Conv1d (groups=in_channels). Covers dw_conv1d."""
+
+    def __init__(self, channels=8, stride=1):
+        super().__init__()
+        self.conv0 = nn.Conv1d(channels, channels, kernel_size=3, bias=True, padding=1, stride=stride, groups=channels)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        return x
+
+
+class Conv1dReshapeAndDense(nn.Module):
+    """Conv1d → Flatten → Dense pipeline."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv0 = nn.Conv1d(in_channels=4, out_channels=4, kernel_size=3, bias=True, padding=1)
+        self.dense0 = nn.Linear(in_features=256, out_features=32, bias=True)
+
+    def forward(self, x):
+        x = self.conv0(x)
+        x = x.view(x.size(0), -1)
+        x = self.dense0(x)
+        return x
+
+
+class Concat(nn.Module):
     """Two conv branches concatenated. Covers concat_layer."""
 
     def __init__(self):
@@ -710,7 +787,7 @@ class UnevenConcatModel(nn.Module):
         return self.conv3(d)
 
 
-class ConvUpsampleE2E(nn.Module):
+class ConvUpsample(nn.Module):
     """Conv with stride=2 followed by nearest upsample. Covers upsample_layer / upsample_nearest_layer."""
 
     def __init__(self):
@@ -724,25 +801,23 @@ class ConvUpsampleE2E(nn.Module):
         return x
 
 
-class AvgpoolVariedStride(nn.Module):
-    """Avgpool with configurable stride. Covers avgpool2d_layer varied strides."""
+class SingleAdaptiveAvgpool2d(nn.Module):
+    """AdaptiveAvgPool2d for E2E test. Covers adaptive_avgpool2d_layer."""
 
-    def __init__(self, stride=2):
+    def __init__(self, output_size=(1, 1)):
         super().__init__()
-        self.pool = nn.AvgPool2d(kernel_size=stride, stride=stride)
+        self.pool = nn.AdaptiveAvgPool2d(output_size=output_size)
 
     def forward(self, x):
-        x = self.pool(x)
-        return x
+        return self.pool(x)
 
 
-class GeneralAvgpool(nn.Module):
-    """General avgpool where kernel_size != stride (replaced with depthwise conv for FHE)."""
+class SingleAdaptiveAvgpool1d(nn.Module):
+    """AdaptiveAvgPool1d for E2E test. Covers adaptive_avgpool1d_layer."""
 
-    def __init__(self, kernel_size=3, stride=2, padding=1):
+    def __init__(self, output_size=1):
         super().__init__()
-        self.pool = nn.AvgPool2d(kernel_size=kernel_size, stride=stride, padding=padding)
+        self.pool = nn.AdaptiveAvgPool1d(output_size=output_size)
 
     def forward(self, x):
-        x = self.pool(x)
-        return x
+        return self.pool(x)

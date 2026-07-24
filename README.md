@@ -48,7 +48,7 @@ cd latti-ai
 #### Step 2: Build and install HEonGPU (GPU Acceleration Library)
 
 ```bash
-cd inference/lattisense/HEonGPU
+cd inference/lattisense/backends/HEonGPU
 cmake -B build \
   -DCMAKE_CUDA_ARCHITECTURES=<arch> \
   -DCMAKE_CUDA_COMPILER=<path/to/cuda>/bin/nvcc \
@@ -59,8 +59,10 @@ cmake --build build --parallel $(nproc) --target install
 #### Step 3: Build Project
 
 ```bash
-cd ../../..  # Return to project root
-cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=<arch>
+cd ../../../..  # Return to project root
+cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON\
+      -DLATTISENSE_CUDA_ARCH=<arch>\
+      -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 
@@ -160,7 +162,7 @@ if args.poly_model_convert:
 - `--export-dir`: directory for the H5 weight file, corresponding to the server-side model weights.
 - `--upper-bound`: normalization upper bound for RangeNormPoly2d (default: `3.0`). Controls the input range for polynomial approximation.
 - `--degree`: degree of the polynomial activation (choices: `2`, `4`, `8`; default: `4`). Higher degree gives better approximation but increases FHE computational depth.
-- `--poly-module`: type of polynomial activation to replace ReLU (choices: `RangeNormPoly2d`, `Simple_Polyrelu`).
+- `--poly-module`: type of polynomial activation to replace ReLU (choices: `RangeNormPoly2d`, `PolyAct`).
 
 **Output:**
 

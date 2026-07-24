@@ -108,7 +108,7 @@ def compute_coefficients(func, max_n=5, tol=1e-8, limit=20, **func_kwargs):
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', category=RuntimeWarning)
             I_n, _ = quad(
-                lambda x: np.array(integrand(x)),  # ensure output is array
+                lambda x: float(np.asarray(integrand(x)).flat[0]),
                 -limit,
                 limit,
                 epsabs=tol,
@@ -177,7 +177,7 @@ def get_hermite_coeffs_for_module(module_cls, degree=4, **kwargs):
 
     Returns:
         Tuple of (degree+1) floats: (a_0, a_1, ..., a_degree),
-        ready to use as hermite_coeffs in Simple_Polyrelu.
+        ready to use as hermite_coeffs in PolyAct.
     """
     module = module_cls()
     module.eval()

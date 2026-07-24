@@ -42,7 +42,7 @@ public:
     Array<uint64_t, 1> encrypt_from_share(const Feature0DShare& share, int n_channel);
     void split_to_shares(Feature0DEncrypted* share0, Feature0DShare* share1) const;
     void split_to_shares_reshape(Feature0DEncrypted* share0, Feature0DShare* share1) const;
-    Bytes serialize() const;
+    Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;
     void decompress();
     Feature0DEncrypted combine_with_share(const Feature0DShare& share) const;

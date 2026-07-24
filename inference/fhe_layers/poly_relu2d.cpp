@@ -23,19 +23,19 @@
 #include <functional>
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
-PolyRelu::PolyRelu(const CkksParameter& param_in,
-                   const Duo& input_shape_in,
-                   const int order_in,
-                   const Array<double, 2>& weight_in,
-                   const Duo& skip_in,
-                   uint32_t n_channel_per_ct_in,
-                   uint32_t level_in,
-                   const Duo& zero_skip_in,
-                   const Duo& block_expansion_in,
-                   bool is_ordinary_pack_in)
-    : PolyReluBase(param_in, weight_in, n_channel_per_ct_in, level_in, order_in), input_shape(input_shape_in),
+PolyRelu2D::PolyRelu2D(const CkksParameter& param_in,
+                       const Duo& input_shape_in,
+                       const int order_in,
+                       Array<double, 2>&& weight_in,
+                       const Duo& skip_in,
+                       uint32_t n_channel_per_ct_in,
+                       uint32_t level_in,
+                       const Duo& zero_skip_in,
+                       const Duo& block_expansion_in,
+                       bool is_ordinary_pack_in)
+    : PolyReluBase(param_in, move(weight_in), n_channel_per_ct_in, level_in, order_in), input_shape(input_shape_in),
       skip(skip_in) {
     if ((input_shape[0] & (input_shape[0] - 1)) != 0 || (input_shape[1] & (input_shape[1] - 1)) != 0) {
         throw std::invalid_argument("input_shape must be powers of 2, got: [" + std::to_string(input_shape[0]) + ", " +
@@ -66,14 +66,13 @@ PolyRelu::PolyRelu(const CkksParameter& param_in,
     is_ordinary_pack = is_ordinary_pack_in;
 }
 
-void PolyRelu::prepare_weight() {
+void PolyRelu2D::prepare_weight() {
     int skip_prod = skip[0] * skip[1];
     int channel = weight.get_shape()[1];
     int n_packed_out_channel = div_ceil(channel, n_channel_per_ct) * block_expansion[0] * block_expansion[1];
     weight_pt.resize(order);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(order);
     parallel_for(order, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int n_packed_out_channel_idx = 0; n_packed_out_channel_idx < n_packed_out_channel;
              n_packed_out_channel_idx++) {
@@ -108,12 +107,12 @@ void PolyRelu::prepare_weight() {
     });
 }
 
-void PolyRelu::prepare_weight_lazy() {
+void PolyRelu2D::prepare_weight_lazy() {
     weight_pt.clear();
 }
 
 CkksPlaintextRingt
-PolyRelu::generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
+PolyRelu2D::generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
     vector<double> feature_tmp_pack(N / 2, 0.0);
 
     for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
@@ -144,7 +143,7 @@ PolyRelu::generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_packed
 }
 
 CkksPlaintextRingt
-PolyRelu::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
+PolyRelu2D::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
     vector<double> feature_tmp_pack(N / 2, 0.0);
     if (is_ordinary_pack) {
         for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
@@ -192,14 +191,14 @@ PolyRelu::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, i
             }
         }
     } else {
-        pack_scale = cached_coeff_scale.at(idx);
-        target_level = cached_level_order.at(idx);
+        pack_scale = cached_bsgs_coeff_scale.at(idx);
+        target_level = cached_bsgs_level_order.at(idx);
     }
     auto result = ctx.encode_ringt(feature_tmp_pack, pack_scale);
     return result;
 }
 
-std::vector<CkksCiphertext> PolyRelu::run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
+std::vector<CkksCiphertext> PolyRelu2D::run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
     vector<CkksCiphertext> result(x.size());
 
     parallel_for(x.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int x_idx) {
@@ -227,7 +226,7 @@ std::vector<CkksCiphertext> PolyRelu::run_core(CkksContext& ctx, const std::vect
     return result;
 }
 
-Feature2DEncrypted PolyRelu::run(CkksContext& ctx, const Feature2DEncrypted& x) {
+Feature2DEncrypted PolyRelu2D::run(CkksContext& ctx, const Feature2DEncrypted& x) {
     Feature2DEncrypted result(&ctx, x.level);
     result.shape[0] = x.shape[0];
     result.shape[1] = x.shape[1];
@@ -244,9 +243,12 @@ Feature2DEncrypted PolyRelu::run(CkksContext& ctx, const Feature2DEncrypted& x) 
     return result;
 }
 
-Array<double, 3> PolyRelu::run_plaintext_absorb_case(const Array<double, 3>& x) {
+Array<double, 3> PolyRelu2D::run_plaintext_absorb_case(const Array<double, 3>& x) {
     int n_out_channel = x.get_shape()[0];
     Array<double, 3> result({x.get_shape()[0], x.get_shape()[1], x.get_shape()[2]});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int in_channel_idx = 0; in_channel_idx < n_out_channel; in_channel_idx++) {
         for (int i = 0; i < input_shape[0]; i++) {
             for (int j = 0; j < input_shape[1]; j++) {
@@ -262,16 +264,22 @@ Array<double, 3> PolyRelu::run_plaintext_absorb_case(const Array<double, 3>& x) 
     return result;
 }
 
-Array<double, 3> PolyRelu::run_plaintext_for_non_absorb_case(const Array<double, 3>& x) {
+Array<double, 3> PolyRelu2D::run_plaintext_for_non_absorb_case(const Array<double, 3>& x) {
     int n_out_channel = x.get_shape()[0];
     Array<double, 3> result({x.get_shape()[0], x.get_shape()[1], x.get_shape()[2]});
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
     for (int in_channel_idx = 0; in_channel_idx < n_out_channel; in_channel_idx++) {
         for (int i = 0; i < input_shape[0]; i++) {
             for (int j = 0; j < input_shape[1]; j++) {
                 if (i % zero_skip[0] == 0 && j % zero_skip[1] == 0) {
-                    auto p = weight.get(0, in_channel_idx);
-                    for (int k = 1; k < order + 1; k++) {
-                        p += weight.get(k, in_channel_idx) * pow(x.get(in_channel_idx, i, j), k);
+                    // Horner: w[order] * x^order + ... + w[1]*x + w[0]
+                    // = ((...(w[order] * x + w[order-1]) * x + ...) * x + w[1]) * x + w[0]
+                    double xv = x.get(in_channel_idx, i, j);
+                    double p = weight.get(order, in_channel_idx);
+                    for (int k = order - 1; k >= 0; k--) {
+                        p = p * xv + weight.get(k, in_channel_idx);
                     }
                     result.set(in_channel_idx, i, j, p);
                 }
@@ -281,7 +289,7 @@ Array<double, 3> PolyRelu::run_plaintext_for_non_absorb_case(const Array<double,
     return result;
 }
 
-void PolyRelu::prepare_weight_bsgs() {
+void PolyRelu2D::prepare_weight_bsgs() {
     init_bsgs();
 
     int skip_prod = skip[0] * skip[1];
@@ -290,7 +298,6 @@ void PolyRelu::prepare_weight_bsgs() {
     weight_pt.resize(order + 1);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(order + 1);
 
     parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int n_packed_out_channel_idx = 0; n_packed_out_channel_idx < n_packed_out_channel;
@@ -337,12 +344,12 @@ void PolyRelu::prepare_weight_bsgs() {
     });
 }
 
-void PolyRelu::prepare_weight_bsgs_lazy() {
+void PolyRelu2D::prepare_weight_bsgs_lazy() {
     init_bsgs();
     weight_pt.clear();
 }
 
-void PolyRelu::prepare_weight_hornor() {
+void PolyRelu2D::prepare_weight_hornor() {
     int skip_prod = skip[0] * skip[1];
     int channel = weight.get_shape()[1];
     int n_packed_out_channel = div_ceil(channel, n_channel_per_ct) * block_expansion[0] * block_expansion[1];
@@ -403,12 +410,12 @@ void PolyRelu::prepare_weight_hornor() {
     });
 }
 
-void PolyRelu::prepare_weight_hornor_lazy() {
+void PolyRelu2D::prepare_weight_hornor_lazy() {
     weight_pt.clear();
 }
 
 CkksPlaintextRingt
-PolyRelu::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
+PolyRelu2D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
     vector<double> feature_tmp_pack(N / 2, 0.0);
 
     if (is_ordinary_pack) {
@@ -445,7 +452,7 @@ PolyRelu::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int n_packed_ou
     return ctx.encode_ringt(feature_tmp_pack, pack_scale);
 }
 
-Feature2DEncrypted PolyRelu::run_bsgs(CkksContext& ctx, const Feature2DEncrypted& x) {
+Feature2DEncrypted PolyRelu2D::run_bsgs(CkksContext& ctx, const Feature2DEncrypted& x) {
     Feature2DEncrypted result(&ctx, x.level);
     result.shape[0] = x.shape[0];
     result.shape[1] = x.shape[1];
@@ -458,7 +465,7 @@ Feature2DEncrypted PolyRelu::run_bsgs(CkksContext& ctx, const Feature2DEncrypted
     return result;
 }
 
-Feature2DEncrypted PolyRelu::run_horner(CkksContext& ctx, const Feature2DEncrypted& x) {
+Feature2DEncrypted PolyRelu2D::run_horner(CkksContext& ctx, const Feature2DEncrypted& x) {
     Feature2DEncrypted result(&ctx, x.level);
     result.shape[0] = x.shape[0];
     result.shape[1] = x.shape[1];
@@ -471,7 +478,7 @@ Feature2DEncrypted PolyRelu::run_horner(CkksContext& ctx, const Feature2DEncrypt
     return result;
 }
 
-std::vector<CkksCiphertext> PolyRelu::run_core_horner(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
+std::vector<CkksCiphertext> PolyRelu2D::run_core_horner(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
     vector<CkksCiphertext> result(x.size());
     parallel_for(x.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int x_idx) {
         if (weight_pt.empty()) {

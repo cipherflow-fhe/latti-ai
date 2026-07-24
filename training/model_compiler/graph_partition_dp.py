@@ -28,6 +28,8 @@ import shutil
 
 import numpy as np
 import random
+
+from itertools import product
 from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
@@ -35,7 +37,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 import networkx as nx
 from tqdm import tqdm
-from typing import Final
+from typing import Final, NamedTuple
 
 from components import LayerAbstractGraph, ComputeNode, FeatureNode, config
 import components
@@ -96,13 +98,64 @@ def calculate_compute_score_for_graph(
     for compute in grow.nodes:
         if not isinstance(compute, ComputeNode):
             continue
-        if compute.layer_type in ['conv2d', 'fc0', 'add2d', 'simple_polyrelu', 'avgpool2d']:
-            pred = next(enclosing_graph.predecessors(compute))
-            s_param = FheScoreParam(enclosing_graph, compute, param_dict, enclosing_graph.nodes[pred]['level'])
-            score = s_param.get_score()
-            enclosing_graph.nodes[compute]['score'] = score
-            compute_score += score
+        compute_score += get_compute_score(enclosing_graph, compute, param_dict)
     return compute_score
+
+
+def get_compute_score(
+    enclosing_graph: nx.DiGraph,
+    compute: ComputeNode,
+    param_dict: dict[str, FheParameter],
+) -> float:
+    if compute.layer_type in ['conv2d', 'fc0', 'add2d', 'polyact', 'avgpool1d', 'avgpool2d']:
+        preds = list(enclosing_graph.predecessors(compute))
+        level = min(enclosing_graph.nodes[p]['level'] for p in preds)
+        s_param = FheScoreParam(enclosing_graph, compute, param_dict, level)
+        score = s_param.get_score()
+        return score
+    else:
+        return 0.0
+
+
+def get_restoring_score(dag, restore_node, param_dict):
+    if not config.mpc_refresh:
+        s_param = BtpScoreParam(dag, restore_node, param_dict)
+    else:
+        s_param = MpcScoreParam(dag, restore_node, param_dict)
+    return s_param.get_score()
+
+
+def restore_level_at(new_graph: nx.DiGraph, node: FeatureNode, param_dict):
+    restore_node = transforms.add_btp_layer(
+        new_graph, node, param_dict, config.fhe_param.max_level - new_graph.nodes[node]['level']
+    )
+    score = get_restoring_score(new_graph, restore_node, param_dict)
+    new_graph.nodes[restore_node]['score'] = score
+    succ = list(new_graph.successors(restore_node))[0]
+    new_graph.nodes[succ]['level'] = config.fhe_param.max_level
+    return score
+
+
+def reconstruct_graph_from_vec(
+    graph_vec: np.ndarray,
+    template_graph: nx.DiGraph,
+    node_to_idx: dict[FeatureNode, int],
+    param_dict: dict[str, FheParameter],
+) -> nx.DiGraph:
+    new_graph = template_graph.copy()
+    for node in template_graph.nodes:
+        if not isinstance(node, FeatureNode):
+            continue
+
+        node_idx = node_to_idx[node]
+        lv = int(graph_vec[node_idx])
+        if lv < AUX_LV:
+            new_graph.nodes[node]['level'] = lv
+        else:
+            new_graph.nodes[node]['level'] = 0
+            restore_level_at(new_graph, node, param_dict)
+
+    return new_graph
 
 
 def update_btp_to_mpc_refresh(graph: LayerAbstractGraph):
@@ -110,6 +163,16 @@ def update_btp_to_mpc_refresh(graph: LayerAbstractGraph):
         if isinstance(node, ComputeNode):
             if node.layer_type == 'bootstrapping':
                 node.layer_type = 'mpc_refresh'
+
+
+class NodeLevel(NamedTuple):
+    node_idx: int
+    level: int
+
+
+# Auxiliary level used to indicate the node is refreshed to max level by a restore node,
+# and can be used for absorbing later nodes without generating new restore nodes.
+AUX_LV = 255
 
 
 class GraphPartitioner:
@@ -120,7 +183,6 @@ class GraphPartitioner:
         if temperature < 0:
             raise ValueError('Temperature must be non-negative. If set to 0, a greedy algorithm will be used.')
         self.temperature = temperature
-        self.pbar = tqdm(desc=f'Subgraph explorations (temperature={self.temperature})', unit='it')
 
     def inspect_level_backward(self, subgraph: nx.DiGraph):
         max_level = -1
@@ -153,138 +215,6 @@ class GraphPartitioner:
             max_level = max(max_level, level_dict[node])
         return True, max_level, level_dict
 
-    def split_graph_and_set_level(self, graph_with_btp: nx.DiGraph):
-        splitted_graph = LayerAbstractGraph()
-        splitted_graph.dag = graph_with_btp.copy()
-        btp_nodes = list()
-        for compute in splitted_graph.dag.nodes:
-            if isinstance(compute, ComputeNode):
-                if compute.layer_type == 'bootstrapping':
-                    btp_nodes.append(compute)
-        splitted_graph.dag.remove_nodes_from(btp_nodes)
-
-        weak_components = list(nx.weakly_connected_components(splitted_graph.dag))
-        subgraphs: list[LayerAbstractGraph] = list()
-        for component in weak_components:
-            if len(component) > 1:
-                sub = LayerAbstractGraph()
-                sub.dag = splitted_graph.dag.subgraph(component).copy()
-                subgraphs.append(sub)
-        res_dict = dict()
-        for sub in subgraphs:
-            res = self.inspect_level_backward(sub.dag)
-            if not res[0]:
-                return False, dict()
-            res_dict.update(res[2])
-        return True, res_dict
-
-    def remove_small_subgraphs(self, subgraphs: set[frozenset], H: nx.DiGraph) -> list[frozenset]:
-        def boltzmann_weighted_probabilities(depths: list[int], temperature: float = 1.0) -> list[float]:
-            depths = np.asarray(depths, dtype=float)
-
-            scaled = depths / temperature
-            scaled -= np.max(scaled)
-
-            weights = np.exp(scaled)
-            probs = weights / np.sum(weights)
-            return probs.tolist()
-
-        subgraphs_in_depths: dict[int, list[frozenset]] = {}
-        for subgraph in subgraphs:
-            subgraph_depth = self.inspect_level_backward(H.subgraph(subgraph))[1]
-            if subgraph_depth not in subgraphs_in_depths:
-                subgraphs_in_depths[subgraph_depth] = []
-            subgraphs_in_depths[subgraph_depth].append(subgraph)
-
-        max_depth = max(subgraphs_in_depths.keys())
-
-        level_threshold = max_depth - 4
-        depths = []
-        for i, depth in enumerate(sorted(list(subgraphs_in_depths.keys()), reverse=True)):
-            if i > 0 and depth < level_threshold:
-                break
-            depths.append(depth)
-
-        if self.temperature > 1e-6:
-            chosen_depth = random.choices(
-                depths, weights=boltzmann_weighted_probabilities(depths, self.temperature), k=1
-            )[0]
-            candidates = sorted(subgraphs_in_depths[chosen_depth], key=lambda x: len(x), reverse=True)[:8]
-            result = [
-                random.choices(
-                    candidates,
-                    weights=boltzmann_weighted_probabilities([len(c) for c in candidates], self.temperature),
-                    k=1,
-                )[0]
-            ]
-        else:
-            result = []
-            for d in depths[:2]:
-                result.append(max(subgraphs_in_depths[d], key=lambda x: len(x)))
-
-        return result
-
-    def grow_connected_until_maximal(
-        self,
-        curr_nodes: frozenset,
-        dag: frozenset,
-        le_maximal_subg_memo: dict[frozenset, set[frozenset]],
-        H: nx.DiGraph,
-        memsize=8192,
-    ) -> frozenset:
-        """
-        Starting from curr_nodes, keep adding upstream neighboring compute nodes
-        until the subgraph is maximal under the level constraint.
-        """
-
-        def retrieve_boundary_compute_candidates(nodes: set, subgraph: nx.DiGraph) -> set:
-            boundary_candidates = set()
-            for u in nodes:
-                for nbr in list(subgraph.predecessors(u)):
-                    if nbr not in nodes and isinstance(nbr, ComputeNode):
-                        boundary_candidates.add(nbr)
-
-            return boundary_candidates
-
-        curr_sub = H.subgraph(curr_nodes)
-        update_subgraph_node_param(curr_sub, self.param_dict, 'param0')
-        level_is_below_max, max_level, _ = self.inspect_level_backward(curr_sub)
-        if not level_is_below_max:
-            return frozenset()
-
-        results: list[frozenset] = [curr_nodes]
-
-        new_curr_nodes = set(curr_nodes)
-        boundary_candidates = retrieve_boundary_compute_candidates(curr_nodes, H)
-
-        while boundary_candidates:
-            v = boundary_candidates.pop()
-            assert v not in new_curr_nodes
-            frozen_nodes_to_inspect = frozenset(
-                list(new_curr_nodes) + [v] + list(H.successors(v)) + list(H.predecessors(v))
-            )
-
-            if frozen_nodes_to_inspect in le_maximal_subg_memo:
-                return le_maximal_subg_memo[frozen_nodes_to_inspect]
-
-            frozen_nodes_sub = H.subgraph(frozen_nodes_to_inspect)
-            update_subgraph_node_param(frozen_nodes_sub, self.param_dict, 'param0')
-            level_is_below_max, _, _ = self.inspect_level_backward(frozen_nodes_sub)
-            if not level_is_below_max:
-                continue
-
-            new_curr_nodes |= set([v]) | set(H.successors(v)) | set(H.predecessors(v))
-            results.append(frozen_nodes_to_inspect)
-            if len(results) >= memsize:
-                results.pop(0)
-            boundary_candidates |= retrieve_boundary_compute_candidates(new_curr_nodes, H)
-
-        le_maximal_subgs = frozenset(results)
-        for res in le_maximal_subgs:
-            le_maximal_subg_memo[res] = le_maximal_subgs
-
-        return le_maximal_subgs
-
     def process_btp_level_cost(self, dag: nx.DiGraph):
         for node in dag.nodes:
             if isinstance(node, ComputeNode) and node.layer_type == 'bootstrapping':
@@ -292,108 +222,222 @@ class GraphPartitioner:
                 succs: list[FeatureNode] = list(dag.successors(node))
                 dag.nodes[node]['level_cost'] = dag.nodes[preds[0]]['level'] - dag.nodes[succs[0]]['level']
 
-    def solve(self, H: nx.DiGraph, recursion_depth: int = 0) -> tuple[float, nx.DiGraph]:
-        self.pbar.update(1)
+    def generate_solutions(
+        self,
+        new_node: FeatureNode,
+        frontier: list[NodeLevel],
+        frontier_solutions: dict[tuple[int], tuple[float, np.ndarray]],
+        processed_feature_nodes: set[FeatureNode],
+        node_to_idx: dict[FeatureNode, int],
+        idx_to_node: dict[int, FeatureNode],
+        dag: nx.DiGraph,
+    ):
+        leading_comp: ComputeNode = next(dag.predecessors(new_node))
+        predecessors: list[FeatureNode] = list(dag.predecessors(leading_comp))
+        pred_frontier = [f for f in frontier if idx_to_node[f.node_idx] in predecessors]
+        other_frontier = [f for f in frontier if idx_to_node[f.node_idx] not in predecessors]
+        frontier = pred_frontier + other_frontier
+
+        new_frontier = frontier.copy()
+        new_frontier.append(NodeLevel(node_to_idx[new_node], 0))
+        processed_feature_nodes.add(new_node)
+        nodes_became_internal: list[int] = []
+        for node_max_lv in frontier:
+            internal_flag = True
+            for comp in dag.successors(idx_to_node[node_max_lv.node_idx]):
+                for succ in dag.successors(comp):
+                    if succ not in processed_feature_nodes:
+                        internal_flag = False
+            if internal_flag:
+                nodes_became_internal.append(node_max_lv.node_idx)
+                new_frontier.remove(node_max_lv)
+
+        new_frontier_solutions = dict()
+
+        for terminal_lv in range(config.fhe_param.max_level + 1):
+            if dag.nodes[leading_comp]['level_cost'] + terminal_lv > config.fhe_param.max_level:
+                continue
+
+            frontier_lvs = []
+            dag.nodes[new_node]['level'] = terminal_lv
+            for node_max_lv in pred_frontier:
+                frontier_lvs.append(
+                    list(range(dag.nodes[leading_comp]['level_cost'] + terminal_lv, node_max_lv.level + 1)) + [AUX_LV]
+                )
+            for node_max_lv in other_frontier:
+                frontier_lvs.append(list(range(node_max_lv.level + 1)) + [AUX_LV])
+
+            frontier_lv_product = product(*frontier_lvs)
+
+            for lv_comb in frontier_lv_product:
+                frontier_key = []
+                new_frontier_key = []
+                for node_max_lv, lv in zip(frontier, lv_comb):
+                    frontier_key.append(NodeLevel(node_max_lv.node_idx, lv))
+                    if node_max_lv.node_idx not in nodes_became_internal:
+                        new_frontier_key.append(NodeLevel(node_max_lv.node_idx, lv))
+                new_frontier_key.append(NodeLevel(node_to_idx[new_node], terminal_lv))
+                new_frontier_key.sort(key=lambda x: x.node_idx)
+                frontier_key.sort(key=lambda x: x.node_idx)
+
+                if tuple(frontier_key) not in frontier_solutions:
+                    continue
+
+                initial_score, sol_graph_vec = frontier_solutions[tuple(frontier_key)]
+
+                for node_max_lv, lv in zip(frontier, lv_comb):
+                    dag.nodes[idx_to_node[node_max_lv.node_idx]]['level'] = (
+                        lv if lv < AUX_LV else config.fhe_param.max_level
+                    )
+
+                sol_cost = initial_score + get_compute_score(dag, leading_comp, self.param_dict)
+
+                new_frontier_key_tuple = tuple(new_frontier_key)
+                if (
+                    new_frontier_key_tuple not in new_frontier_solutions
+                    or sol_cost < new_frontier_solutions[new_frontier_key_tuple][0]
+                ):
+                    new_sol_graph_vec = sol_graph_vec.copy()
+                    new_sol_graph_vec[node_to_idx[new_node]] = terminal_lv
+                    new_frontier_solutions[new_frontier_key_tuple] = (sol_cost, new_sol_graph_vec)
+
+            # leaf nodes only need lv=0 solutions.
+            if len(list(dag.successors(new_node))) == 0:
+                break
+
+            new_frontier[-1] = NodeLevel(node_to_idx[new_node], terminal_lv)
+
+            if terminal_lv == 0:
+                aux_lv_solutions = {}
+                for k, solution in new_frontier_solutions.items():
+                    new_node_lv_idx = k.index(NodeLevel(node_to_idx[new_node], terminal_lv))
+                    assert k[new_node_lv_idx].level == 0
+                    sol_key = list(k)
+                    sol_key[new_node_lv_idx] = NodeLevel(node_to_idx[new_node], AUX_LV)
+
+                    sol_graph_vec_aux_lv = solution[1].copy()
+                    sol_graph_vec_aux_lv[node_to_idx[new_node]] = AUX_LV
+                    sol_aux_lv_score = get_restoring_score(dag, leading_comp, self.param_dict)
+                    aux_lv_solutions[tuple(sol_key)] = (
+                        solution[0] + sol_aux_lv_score,
+                        sol_graph_vec_aux_lv,
+                    )
+
+                new_frontier_solutions |= aux_lv_solutions
+
+        return new_frontier, new_frontier_solutions
+
+    def solve(self, H: nx.DiGraph) -> tuple[float, nx.DiGraph]:
         if len(H.nodes) == 0:
             return 0.0, nx.DiGraph()
 
-        leaf_nodes = [node for node in H.nodes if H.out_degree(node) == 0]
-        H_nodes = H.nodes
-        le_maximal_subg_memo: dict[frozenset, set[frozenset]] = {}
-        all_subgraphs_less_than_capacity: set[frozenset] = set()
-        for leaf_data in leaf_nodes:
-            assert isinstance(leaf_data, FeatureNode)
-            immediate_comp_nodes = H.predecessors(leaf_data)
-            for comp in immediate_comp_nodes:
-                end = list(H.predecessors(comp)) + list(H.successors(comp)) + [comp]
-                new_components = self.grow_connected_until_maximal(
-                    frozenset(end), frozenset(H_nodes), le_maximal_subg_memo, H
-                )
-                all_subgraphs_less_than_capacity |= new_components
-            assert len(all_subgraphs_less_than_capacity) > 0
+        topo_nodes = list(nx.topological_sort(H))
+        topo_rank = {node: idx for idx, node in enumerate(topo_nodes)}
 
-        subgraphs = self.remove_small_subgraphs(all_subgraphs_less_than_capacity, H)
+        source_feature_nodes = sorted(
+            [node for node in H.nodes if isinstance(node, FeatureNode) and len(list(H.predecessors(node))) == 0],
+            key=lambda node: topo_rank[node],
+        )
+        all_feature_nodes = [node for node in topo_nodes if isinstance(node, FeatureNode)]
 
-        best_cost = float('inf')
-        best_graph = None
-        for subgraph_nodes in subgraphs:
-            remaining_H_nodes = set(H_nodes) - set(subgraph_nodes)
-            for node in remaining_H_nodes.copy():
-                if isinstance(node, ComputeNode):
-                    remaining_H_nodes |= set(H.successors(node)) | set(H.predecessors(node))
+        sorted_nodes: list[FeatureNode] = []
+        activated_feature_nodes: set[FeatureNode] = set()
 
-            refresh_boundary = remaining_H_nodes & subgraph_nodes
-            subgraph = H.subgraph(subgraph_nodes).copy()
+        def activate_feature_node(node: FeatureNode):
+            if node in activated_feature_nodes:
+                return
 
-            rest_cost, remaining_modifed_graph = self.solve(H.subgraph(remaining_H_nodes), recursion_depth + 1)
+            activated_feature_nodes.add(node)
+            sorted_nodes.append(node)
 
-            if remaining_modifed_graph is None:
+            ready_successors = sorted(list(H.successors(node)), key=lambda comp: topo_rank[comp])
+            for comp in ready_successors:
+                leading_features = list(H.predecessors(comp))
+                if not all(pred in activated_feature_nodes for pred in leading_features):
+                    continue
+
+                output_features = list(H.successors(comp))
+                activate_feature_node(output_features[0])
+
+        for node in source_feature_nodes:
+            activate_feature_node(node)
+
+        while len(sorted_nodes) < len(all_feature_nodes):
+            progressed = False
+            for node in all_feature_nodes:
+                if node in activated_feature_nodes:
+                    continue
+
+                leading_computes = list(H.predecessors(node))
+                if len(leading_computes) == 0:
+                    activate_feature_node(node)
+                    progressed = True
+                    break
+
+                leading_features = list(H.predecessors(leading_computes[0]))
+                if all(pred in activated_feature_nodes for pred in leading_features):
+                    activate_feature_node(node)
+                    progressed = True
+                    break
+
+            if not progressed:
+                raise RuntimeError('Failed to construct a depth-first feature traversal order for the DAG')
+
+        idx = 0
+        node_to_idx = {}
+        idx_to_node = {}
+        for node in sorted_nodes:
+            if isinstance(node, FeatureNode):
+                node_to_idx[node] = idx
+                idx_to_node[idx] = node
+                idx += 1
+        frontier: list[NodeLevel] = []
+        processed_feature_nodes: set[FeatureNode] = set()
+
+        # the frontier_solutions dict stores the best solution for each combination of levels (plus an auxiliary lv) of the frontier nodes,
+        # e.g. {(node1_index, level2, node2_index, level3, node3_index, level1): (cost, graph_vec)},
+        # where the nodes are sorted by their id to ensure unique representation of the frontier state.
+        frontier_solutions: dict[tuple, float] = {}
+        for node in source_feature_nodes:
+            frontier.append(NodeLevel(node_to_idx[node], config.fhe_param.max_level))
+            processed_feature_nodes.add(node)
+
+        frontier_indices = [x.node_idx for x in frontier]
+        for lv_comb in product(range(config.fhe_param.max_level + 1), repeat=len(frontier)):
+            init_graph_vec = np.zeros(len(node_to_idx), dtype=np.uint8)
+            node_lv: list[NodeLevel] = []
+            for idx, lv in zip(frontier_indices, lv_comb):
+                node_lv.append(NodeLevel(idx, lv))
+                init_graph_vec[idx] = lv
+
+            node_lv.sort(key=lambda x: x.node_idx)
+            frontier_solutions[tuple(node_lv)] = (0.0, init_graph_vec)
+
+        pbar = tqdm(
+            desc=f'Traversing through graph',
+            unit='nodes',
+            total=len(sorted_nodes) - len(source_feature_nodes),
+        )
+
+        for idx, node in enumerate(sorted_nodes):
+            if node in source_feature_nodes:
                 continue
 
-            btp_score = 0.0
+            frontier, frontier_solutions = self.generate_solutions(
+                node, frontier, frontier_solutions, processed_feature_nodes, node_to_idx, idx_to_node, H
+            )
+            pbar.update(1)
 
-            for bd_node in list(refresh_boundary):
-                is_refreshed = update_bd_node_in_sub(bd_node, subgraph, remaining_modifed_graph)
-                if is_refreshed:
-                    refresh_boundary.remove(bd_node)
+        final_solution_frontier = tuple(sorted((NodeLevel(x.node_idx, 0) for x in frontier), key=lambda x: x.node_idx))
+        final_score, final_dag_vec = frontier_solutions[final_solution_frontier]
 
-            # For the subgraph, i.e. the smaller part later to be joined to the remaining graph,
-            # we consider the minimal multiplicative depth allowed for each node.
-            _, _, level_info = self.inspect_level_backward(subgraph)
-            for node in level_info.keys():
-                subgraph.nodes[node]['level'] = level_info[node]
+        final_dag = reconstruct_graph_from_vec(final_dag_vec, H, node_to_idx, self.param_dict)
 
-            new_graph = nx.compose(subgraph, remaining_modifed_graph)
-            btp_node_list = list()
-            for bd_node in refresh_boundary:
-                # inspect the level difference for the boundary node in the two graphs, and insert restoring nodes if needed
-                upstream_graph = (
-                    remaining_modifed_graph if list(remaining_modifed_graph.predecessors(bd_node)) else subgraph
-                )
-                downstream_graph = subgraph if upstream_graph is remaining_modifed_graph else remaining_modifed_graph
+        temp_ab = LayerAbstractGraph()
+        temp_ab.dag = final_dag
+        transforms.insert_drop_level_layers(temp_ab)
 
-                lv_to_restore = downstream_graph.nodes[bd_node]['level'] - upstream_graph.nodes[bd_node]['level']
-                if lv_to_restore > 0:
-                    btp_node = transforms.add_btp_layer(new_graph, bd_node, self.param_dict, lv_to_restore)
-                    btp_node_list.append(btp_node)
-
-            new_graph_ab = LayerAbstractGraph()
-            new_graph_ab.dag = new_graph
-
-            if config.mpc_refresh:
-                transforms.absorb_scale(new_graph_ab, config.mpc_refresh)
-                update_subgraph_node_param(new_graph_ab.dag, self.param_dict, 'param0')
-                change_skip_for_graph(new_graph_ab)
-                update_subgraph_node_param(new_graph_ab.dag, self.param_dict, 'param0', True)
-            level_below_max, level_info = self.split_graph_and_set_level((new_graph_ab.dag))
-
-            for node in level_info.keys():
-                new_graph_ab.dag.nodes[node]['level'] = level_info[node]
-            if not level_below_max:
-                print('over level ')
-                continue
-            self.process_btp_level_cost(new_graph_ab.dag)
-            transforms.insert_drop_level_layers(new_graph_ab)
-            subgraph_cost = calculate_compute_score_for_graph(new_graph, subgraph, self.param_dict)
-            for node in btp_node_list:
-                if not config.mpc_refresh:
-                    s_param = BtpScoreParam(new_graph_ab.dag, node, self.param_dict)
-                else:
-                    s_param = MpcScoreParam(new_graph_ab.dag, node, self.param_dict)
-                score = s_param.get_score()
-                new_graph.nodes[node]['score'] = score
-                btp_score += score
-
-            total_cost = rest_cost + subgraph_cost + btp_score
-            if total_cost < best_cost:
-                best_cost = total_cost
-                best_graph = new_graph
-
-        if best_graph is None:
-            print('All subgraphs exceeded level limit, no valid solution found')
-            return float('inf'), None
-
-        return best_cost, best_graph
+        return final_score, temp_ab.dag
 
     def run(self):
         """
@@ -401,14 +445,20 @@ class GraphPartitioner:
         Returns (segments, min_cost).
         """
 
-        optimal_cost, optimal_graph = self.solve(self.entire_graph)
+        result = []
+        optimal_cost = 0.0
+        for sub in nx.weakly_connected_components(self.entire_graph):
+            sub = self.entire_graph.subgraph(sub).copy()
+            cost, graph = self.solve(sub)
+            optimal_cost += cost
+            result.append(graph)
 
-        if optimal_graph is None:
-            print('Failed to find valid graph partition (all attempts exceeded level limit)')
-            return None, None
+            if graph is None:
+                print('Failed to find valid graph partition (all attempts exceeded level limit)')
+                return None, None
 
         print(f'Best cost: {optimal_cost}')
-        return optimal_cost, optimal_graph
+        return optimal_cost, nx.compose_all(result)
 
 
 def optimize_task_segments(pt_graph, temperature):

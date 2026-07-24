@@ -32,7 +32,7 @@ jobs:
             --error-exitcode=1 \
             --inline-suppr \
             --language=c++ \
-            --std=c++20 \
+            --std=c++17 \
             -i inference/lattisense \
             -i inference/lib \
             -i build \

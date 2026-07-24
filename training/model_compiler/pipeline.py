@@ -42,9 +42,11 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     # update_skip_for_btp(pt_graph)
     # update_level_cost_for_btp(pt_graph)
     set_is_adaptive_avgpool(pt_graph)
+    transforms.replace_avgpool1d_with_depthwise_conv(pt_graph)
     transforms.split_upsampling_layers(pt_graph)
     transforms.infer_shapes_skips_and_pack_num(pt_graph)
     transforms.combine_convs_with_upsamples(pt_graph)
+    transforms.process_polyact(pt_graph)
     transforms.set_level_costs(pt_graph)
 
     transforms.absorb_scale(pt_graph)
@@ -63,19 +65,20 @@ def set_block_shape(params, raw_graph: LayerAbstractGraph):
     """
     slot_num = params.poly_modulus_degree // 2
     leading_nodes = raw_graph.get_leading_feature_nodes()
-    if not leading_nodes or len(leading_nodes[0].shape) < 2:
+    if not leading_nodes or len(leading_nodes[0].shape) == 0:
         side = 1 << (slot_num.bit_length() // 2)
         config.block_shape = [side, side]
         return
-    shape0, shape1 = leading_nodes[0].shape[0], leading_nodes[0].shape[1]
+    leading_shape = leading_nodes[0].shape
+    block = list(leading_shape)
     slot_num = params.poly_modulus_degree // 2
     # threshold = N / 2
-    while shape0 * shape1 > slot_num:
-        s0, s1 = shape0 // 2, shape1 // 2
-        shape0, shape1 = s0, s1
+    import math
 
-    # params.block_shape = [shape0, shape1]
-    config.block_shape = [shape0, shape1]
+    while math.prod(block) > slot_num:
+        block = [s // 2 for s in block]
+
+    config.block_shape = block
     print('block_shape=', config.block_shape)
 
 
@@ -171,43 +174,28 @@ def run_btp_compilation(
     Returns:
         (best_graph, best_score): best_graph is None if all runs failed
     """
-    print(f'Step 4: Starting {num_experiments} parallel BTP compilations with {num_workers} processes...')
-
-    # Prepare arguments for each run
-    args_list = [(copy.deepcopy(pt_graph), temperature) for _ in range(num_experiments)]
-
-    # Run compilations in parallel
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        results = list(executor.map(run_single_compile, args_list))
-
-    # Filter out failed results
-    valid_results = [(score, graph) for score, graph in results if graph is not None]
-    failed_count = num_experiments - len(valid_results)
-
-    print(f'\n=== Summary ===')
-    print(f'Total runs: {num_experiments}')
-    print(f'Successful: {len(valid_results)}')
-    print(f'Failed (level limit exceeded): {failed_count}')
-
-    if not valid_results:
-        print('ERROR: All runs failed! No valid results to save.')
-        return None, float('inf')
+    print(f'Step 4: Starting DP compilation of pt_graph with temperature={temperature}')
 
     # Find the best result
-    best_score, best_graph = min(valid_results, key=lambda x: x[0])
+    score, graph = run_single_compile((pt_graph, temperature))
 
     print(f'\n=== Results ===')
-    print(f'Best score: {best_score}')
-    return best_graph, best_score
+    print(f'Final score: {score}')
+    return graph, score
 
 
 def post_process(graph: LayerAbstractGraph):
     slot_num = config.fhe_param.poly_modulus_degree / 2
-    for node in graph.dag.nodes:
+    for node in list(graph.dag.nodes):
         if isinstance(node, ComputeNode):
             node.up_scale_str = list()
             node.down_scale_str = list()
             transforms.populate_pack_num(graph.dag, node, slot_num)
+            if node.layer_type == 'reshape':
+                f_node = list(graph.dag.successors(node))[0]
+                if graph.dag.out_degree(f_node) == 0:
+                    graph.dag.remove_node(f_node)
+                    graph.dag.remove_node(node)
 
     transforms.set_graph_scale(graph)
     process_levels(graph)
@@ -242,7 +230,7 @@ def dump_graph(
     if server_task_config.exists():
         shutil.copy(str(server_task_config), str(client_task_config))
 
-    ckks_param = {'param0': {**config.fhe_param.to_dict(), 'pack_num': 4.0}}
+    ckks_param = {'param0': {**config.fhe_param.to_dict()}}
 
     with open(server_dir / 'ckks_parameter.json', 'w') as f:
         json.dump(ckks_param, f, indent=4)
@@ -251,12 +239,15 @@ def dump_graph(
         json.dump(ckks_param, f, indent=4)
 
 
+import os
+
+
 def run_pipeline(
     num_experiments: int,
     input_file_path: Path,
     output_dir: Path,
     temperature: float = 0.0,
-    num_workers: int = 16,
+    num_workers: int = os.cpu_count(),
     style: str | None = None,
     graph_type: str | None = None,
 ):

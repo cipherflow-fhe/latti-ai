@@ -15,18 +15,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+import numpy as np
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
-
-import numpy as np
-
-op_class = 'MultConv2DPackedDepthwiseLayer'
+from inference.model_generator.layers.fhe_op_utils import naf_weight
 
 
-class ParMultiplexedConv2DPackedLayerDepthwise:
+op_class = 'MultiplexedConv2DPackedLayerDepthwise'
+
+
+class MultiplexedConv2DPackedLayerDepthwise:
     rotate_num = 0
     add_num = 0
     mult_num = 0
@@ -73,6 +75,98 @@ class ParMultiplexedConv2DPackedLayerDepthwise:
         self.zero_inserted_skip[0] = self.skip[0] * self.stride[0] / self.upsample_factor[0]
         self.zero_inserted_skip[1] = self.skip[1] * self.stride[1] / self.upsample_factor[1]
 
+    def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call(), grouped by level.
+
+        Returns a dict keyed by level:
+          {
+            level:   rotate_kernel + mult_plain + add_accum + rescale_base,
+            level-1: add(bias)  [stride=1]  or  mult_plain(select)+rescale  [stride>1],
+            level-2: rotate_stride + add(bias+accum)  [stride>1 only],
+          }
+
+        Depthwise: no block-direction rotation step (each ct is processed independently).
+        gen_rotated_x over n_packed_in_channel cts:
+          input_rotate_units[0] = skip[0]*input_shape[1]*skip[1] (power of 2)
+          input_rotate_units[1] = skip[1] (power of 2)
+          row direction: populate_rotations_2_sides(c, kh, unit_0), fc0=kh//2
+            primitive rotates per ct = sum(naf_weight(i) for i in range(-fc0,kh-fc0) if i!=0)
+          col direction: kh calls of populate_rotations_2_sides(r, kw, unit_1), fc1=kw//2
+            primitive rotates per ct = kh * sum(naf_weight(j) for j in range(-fc1,kw-fc1) if j!=0)
+
+        Per input ct (= n_packed_in_channel):
+          mult_plain: kernel_size, add: kernel_size-1, rescale: 1  [level → level-1]
+
+        stride=1 path (at level-1): n_packed_in_channel add (bias).
+        stride>1 path (at level-1): simulate rot_step per (ct_idx, i) with naf_weight;
+          valid_n mult_plain + valid_n rescale;  [level-1 → level-2]
+          (at level-2): rotate_stride + accumulate + bias adds.
+        """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+
+        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
+        kh, kw = self.kernel_shape
+
+        # Kernel rotations: units are powers of 2
+        fc0 = kh // 2
+        fc1 = kw // 2
+        rots_row = sum(naf_weight(i) for i in range(-fc0, kh - fc0) if i != 0)
+        rots_col = kh * sum(naf_weight(j) for j in range(-fc1, kw - fc1) if j != 0)
+        ops[lv]['rotate'] += self.n_packed_in_channel * (rots_row + rots_col)
+
+        ops[lv]['mult_plain'] += self.n_packed_in_channel * kernel_size
+        ops[lv]['add'] += self.n_packed_in_channel * (kernel_size - 1)
+        ops[lv]['rescale'] += self.n_packed_in_channel
+        lv -= 1
+
+        if self.stride[0] == 1 and self.stride[1] == 1:
+            # stride=1: just add bias per ct
+            ops[lv]['add'] += self.n_packed_in_channel
+        else:
+            # Simulate rot_step for each (ct_idx, i)
+            rotate_stride = 0
+            for ct_idx in range(self.n_packed_in_channel):
+                steps = []
+                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[0]):
+                    if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
+                        r_n_block = int(
+                            (ct_idx * self.n_channel_per_ct + i)
+                            / int(self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1])
+                        )
+                        r_n_block_residue = (ct_idx * self.n_channel_per_ct + i) % int(
+                            self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1]
+                        )
+                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[0] * self.skip[0])))
+                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[0] * self.skip[0])
+                        n_block = int(np.floor((ct_idx * self.n_channel_per_ct + i) / int(self.skip[0] * self.skip[1])))
+                        n_block_residue = int(
+                            np.floor((ct_idx * self.n_channel_per_ct + i)) % int(self.skip[0] * self.skip[1])
+                        )
+                        n_stride_skip = int(np.floor(n_block_residue / self.skip[0]))
+                        n_stride_skip_residue = n_block_residue % self.skip[0]
+                        rot_step = (
+                            (r_n_block - n_block)
+                            * self.skip[0]
+                            * self.skip[1]
+                            * self.input_shape[0]
+                            * self.input_shape[1]
+                            + (r_n_stride_skip - n_stride_skip) * self.skip[0] * self.input_shape[0]
+                            + (r_n_stride_skip_residue - n_stride_skip_residue)
+                        )
+                        steps.append(-rot_step)
+                rotate_stride += sum(naf_weight(s) for s in steps)
+            n_packed_out = self.n_packed_out_channel
+            valid_n_total = self.n_out_channel
+            ops[lv]['mult_plain'] += valid_n_total
+            ops[lv]['rescale'] += valid_n_total
+            lv -= 1
+
+            ops[lv]['rotate'] += rotate_stride
+            ops[lv]['add'] += n_packed_out + (valid_n_total - n_packed_out)  # bias + accumulate
+
+        return dict(ops)
+
     @staticmethod
     def populate_rotations_1_side(x: CkksCiphertextNode, n_rotation: int, unit: int) -> list[DataNode]:
         result: list[CkksCiphertextNode] = [x]
@@ -107,6 +201,29 @@ class ParMultiplexedConv2DPackedLayerDepthwise:
             rotated_x.append(row)
         return rotated_x
 
+    def make_pt_nodes(self, layer_id):
+        """Return (weight_pt, bias_pt, mask_pt).
+
+        weight_pt[j][k]: j in n_packed_in_channel, k in kernel_size
+        bias_pt[i]: i in n_packed_out_channel
+        mask_pt[i]: i in n_out_channel (each (ct_idx, channel_in_ct) needs its own
+                    source-position mask; empty list if stride==1)
+        """
+        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
+        weight_pt = [
+            [CkksPlaintextRingtNode(f'convw_{layer_id}_{j}_{k}') for k in range(kernel_size)]
+            for j in range(self.n_packed_in_channel)
+        ]
+        import math as _math
+
+        n_bias = _math.ceil(self.n_out_channel / (self.stride[0] * self.stride[1] * self.n_channel_per_ct))
+        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_bias)]
+        if self.stride[0] != 1 or self.stride[1] != 1:
+            mask_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(self.n_out_channel)]
+        else:
+            mask_pt = []
+        return weight_pt, bias_pt, mask_pt
+
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mast_pt) -> list[CkksCiphertextNode]:
         # 1. Kernel direction rotation
         kernel_rotations = self.gen_rotated_x(x)
@@ -123,7 +240,7 @@ class ParMultiplexedConv2DPackedLayerDepthwise:
                 w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             s = rescale(partial_sum)
-            if self.stride[0] == 1:
+            if self.stride[0] == 1 and self.stride[1] == 1:
                 res.append(s)
             else:
                 steps = []
@@ -156,11 +273,11 @@ class ParMultiplexedConv2DPackedLayerDepthwise:
                             + (r_n_stride_skip_residue - n_stride_skip_residue)
                         )
                         steps.append(-rot_step)
-                s_rots = rotate_cols(s, steps)
                 for i in range(self.n_channel_per_ct):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
-                        c_m_s = mult(s_rots[int(i / self.skip[0])], mast_pt[ct_idx * self.n_channel_per_ct + i])
-                        result_ct.append(rescale(c_m_s))
+                        c_m = mult(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
+                        c_m = rescale(c_m)
+                        result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
         if self.stride[0] == 1:
             for i in range(len(res)):
                 res[i] = add(res[i], bias_pt[i])
@@ -206,7 +323,7 @@ class ParMultiplexedConv2DPackedLayerDepthwise:
                 w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             s = rescale(partial_sum)
-            if self.stride[0] == 1:
+            if self.stride[0] == 1 and self.stride[1] == 1:
                 res.append(s)
             else:
                 steps = []
@@ -240,26 +357,18 @@ class ParMultiplexedConv2DPackedLayerDepthwise:
                         )
                         steps.append(-rot_step)
 
-                # Generate all rotations (maintain original order and count, even if duplicates)
-                if steps:
-                    s_rots = rotate_cols(s, steps)
-                else:
-                    s_rots = []
-
                 for i in range(self.n_channel_per_ct):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
-                        # Calculate corresponding rotation index
-                        rot_idx = int(i / self.skip[0])
-                        rot_ct = s_rots[rot_idx]
-                        m_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}_{i}')
+                        m_pt = CkksPlaintextRingtNode(f'encode_pt_mask_{ct_idx}_{i}')
                         custom_compute(
                             inputs=[conv_data_source],
                             output=m_pt,
                             type='encode_pt',
                             attributes={'op_class': op_class, 'type': 'mask_pt', 'i': ct_idx, 'j': i},
                         )
-                        c_m_s = mult(rot_ct, m_pt)
-                        result_ct.append(rescale(c_m_s))
+                        c_m = mult(s, m_pt)
+                        c_m = rescale(c_m)
+                        result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
         if self.stride[0] == 1:
             for i in range(len(res)):
                 b_pt = CkksPlaintextRingtNode(f'encode_pt_{i}')

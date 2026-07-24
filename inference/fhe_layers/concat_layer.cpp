@@ -19,7 +19,7 @@
 #include "concat_layer.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 ConcatLayer::ConcatLayer() {}
 
@@ -271,6 +271,97 @@ void ConcatLayer::prepare_mask_data(const CkksParameter& param,
     }
 }
 
+void ConcatLayer::prepare_mask_data_1d(const CkksParameter& param,
+                                       const std::vector<uint32_t>& input_n_channels,
+                                       const std::vector<uint32_t>& input_packs,
+                                       const std::vector<uint32_t>& input_lengths,
+                                       const std::vector<uint32_t>& input_skips,
+                                       const std::vector<uint32_t>& input_invalid_fills,
+                                       int level) {
+    CkksContext ctx = CkksContext::create_empty_context(param);
+    uint32_t N = param.get_n();
+
+    uint64_t total_channels = 0;
+    for (auto n_ch : input_n_channels)
+        total_channels += n_ch;
+
+    mask_pt.clear();
+    mask_pt.resize(total_channels);
+
+    for (uint64_t global_ch = 0; global_ch < total_channels; ++global_ch) {
+        size_t input_idx = 0;
+        uint64_t local_ch = global_ch;
+        for (size_t i = 0; i < input_n_channels.size(); ++i) {
+            if (local_ch < input_n_channels[i]) {
+                input_idx = i;
+                break;
+            }
+            local_ch -= input_n_channels[i];
+        }
+
+        uint32_t pack_i = input_packs[input_idx];
+        uint32_t L_i = input_lengths[input_idx];
+        uint32_t skip_i = input_skips[input_idx];
+        uint32_t inv_i = input_invalid_fills[input_idx] > 0 ? input_invalid_fills[input_idx] : 1;
+
+        uint32_t block_stride = skip_i;
+        uint64_t block_size = (uint64_t)L_i * block_stride;
+        uint32_t n_channel_per_block = skip_i / inv_i;
+
+        uint32_t j_in_ct = local_ch % pack_i;
+        uint32_t block_idx = n_channel_per_block > 0 ? j_in_ct / n_channel_per_block : 0;
+        uint32_t sub_pos = n_channel_per_block > 0 ? j_in_ct % n_channel_per_block : j_in_ct;
+
+        std::vector<double> mask_vec(N / 2, 0.0);
+        for (uint32_t l = 0; l < L_i; ++l) {
+            uint64_t slot = (uint64_t)block_idx * block_size + (uint64_t)l * block_stride + sub_pos;
+            if (slot < mask_vec.size()) {
+                mask_vec[slot] = 1.0;
+            }
+        }
+        mask_pt[global_ch] = ctx.encode_ringt(mask_vec, ctx.get_parameter().get_q(level));
+    }
+}
+
+void ConcatLayer::prepare_mask_data_0d(const CkksParameter& param,
+                                       const std::vector<uint32_t>& input_n_channels,
+                                       const std::vector<uint32_t>& input_packs,
+                                       const std::vector<uint32_t>& input_skip_scalars,
+                                       int level) {
+    CkksContext ctx = CkksContext::create_empty_context(param);
+    uint32_t N = param.get_n();
+
+    uint64_t total_channels = 0;
+    for (auto n_ch : input_n_channels)
+        total_channels += n_ch;
+
+    mask_pt.clear();
+    mask_pt.resize(total_channels);
+
+    for (uint64_t global_ch = 0; global_ch < total_channels; ++global_ch) {
+        // Locate (input_idx, local_ch) within the input whose channel range contains global_ch.
+        size_t input_idx = 0;
+        uint64_t local_ch = global_ch;
+        for (size_t i = 0; i < input_n_channels.size(); ++i) {
+            if (local_ch < input_n_channels[i]) {
+                input_idx = i;
+                break;
+            }
+            local_ch -= input_n_channels[i];
+        }
+
+        uint32_t pack_i = input_packs[input_idx];
+        uint32_t skip_i = input_skip_scalars[input_idx];
+        uint64_t src_slot = (uint64_t)(local_ch % pack_i) * skip_i;
+
+        std::vector<double> mask_vec(N / 2, 0.0);
+        if (src_slot < mask_vec.size()) {
+            mask_vec[src_slot] = 1.0;
+        }
+        mask_pt[global_ch] = ctx.encode_ringt(mask_vec, ctx.get_parameter().get_q(level));
+    }
+}
+
 Array<double, 3> ConcatLayer::concatenate_channels(const Array<double, 3>& x1, const Array<double, 3>& x2) {
     auto shape_x1 = x1.get_shape();
     uint64_t C1 = shape_x1[0];
@@ -348,5 +439,51 @@ Array<double, 3> ConcatLayer::concatenate_channels_multiple_inputs(const std::ve
         channel_offset += C;
     }
 
+    return result;
+}
+
+Array<double, 2> ConcatLayer::concatenate_channels_multiple_inputs_1d(const std::vector<Array<double, 2>>& inputs) {
+    if (inputs.empty()) {
+        throw std::invalid_argument("Empty input vector in concatenate_channels_multiple_inputs_1d");
+    }
+    auto first_shape = inputs[0].get_shape();
+    uint64_t L = first_shape[1];
+
+    uint64_t total_channels = 0;
+    for (const auto& input : inputs) {
+        auto shape = input.get_shape();
+        if (shape[1] != L) {
+            throw std::invalid_argument("Arrays must have same length dimension in 1d concat");
+        }
+        total_channels += shape[0];
+    }
+
+    Array<double, 2> result({total_channels, L});
+    uint64_t channel_offset = 0;
+    for (const auto& input : inputs) {
+        uint64_t C = input.get_shape()[0];
+        for (uint64_t c = 0; c < C; ++c) {
+            for (uint64_t l = 0; l < L; ++l) {
+                result.set(channel_offset + c, l, input.get(c, l));
+            }
+        }
+        channel_offset += C;
+    }
+    return result;
+}
+
+std::vector<double>
+ConcatLayer::concatenate_channels_multiple_inputs_0d(const std::vector<std::vector<double>>& inputs) {
+    if (inputs.empty()) {
+        throw std::invalid_argument("Empty input vector in concatenate_channels_multiple_inputs_0d");
+    }
+    std::vector<double> result;
+    size_t total = 0;
+    for (const auto& v : inputs)
+        total += v.size();
+    result.reserve(total);
+    for (const auto& v : inputs) {
+        result.insert(result.end(), v.begin(), v.end());
+    }
     return result;
 }

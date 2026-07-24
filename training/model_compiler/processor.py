@@ -30,7 +30,7 @@ import json
 import transforms
 
 
-order = 4
+from inference.model_generator.layers.poly_relu_base import PolyReluBase
 
 
 def process_levels(graph: LayerAbstractGraph):
@@ -102,9 +102,8 @@ def substitute_layers_for_btp(subgraph: LayerAbstractGraph):
     for compute in all_nodes_in_topo_sort:
         if not isinstance(compute, ComputeNode):
             continue
-        if compute.layer_type == 'relu2d' or compute.layer_type == 'simple_polyrelu':
+        if compute.layer_type == 'relu2d' or compute.layer_type == 'polyact':
             compute.layer_type = config.approx_poly_type
-            subgraph.dag.nodes[compute]['level_cost'] = math.ceil(math.log2(compute.order)) + 1
 
 
 def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = True):
@@ -207,11 +206,9 @@ def change_conv_transpose_shape(graph: LayerAbstractGraph):
 def check_conv_upsample_factor(graph: LayerAbstractGraph, c_node: ConvComputeNode):
     if c_node.upsample_factor_in[0] != 1:
         f_in = list(graph.dag.predecessors(c_node))[0]
-        if f_in.shape[0] * c_node.upsample_factor_in[0] > config.block_shape[0] or (
-            f_in.shape[1] * c_node.upsample_factor_in[1] > config.block_shape[1]
-        ):
-            c_node.upsample_factor_in[0] = 1
-            c_node.upsample_factor_in[1] = 1
+        if any(f_in.shape[i] * c_node.upsample_factor_in[i] > config.block_shape[i] for i in range(c_node.dim)):
+            for i in range(c_node.dim):
+                c_node.upsample_factor_in[i] = 1
             return True
     return False
 
@@ -289,8 +286,8 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
                     else:
                         graph.dag.nodes[compute_node]['level_cost'] = 2
 
-        elif compute_node.layer_type == 'avgpool2d':
-            if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
+        elif compute_node.layer_type in {'avgpool1d', 'avgpool2d'}:
+            if any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
                 graph.dag.nodes[compute_node]['level_cost'] = 0
                 compute_node.is_big_size = True
                 compute_node.is_adaptive_avgpool = False
@@ -304,7 +301,7 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
                     graph.dag.nodes[compute_node]['level_cost'] = 1
                     compute_node.is_adaptive_avgpool = False
         elif compute_node.layer_type == config.approx_poly_type:
-            graph.dag.nodes[compute_node]['level_cost'] = math.ceil(math.log2(compute_node.order)) + 1
+            graph.dag.nodes[compute_node]['level_cost'] = PolyReluBase.compute_bsgs_level_cost(compute_node.order)
             if preds[0].shape[0] > config.block_shape[0] or preds[0].shape[1] > config.block_shape[1]:
                 compute_node.is_big_size = True
 

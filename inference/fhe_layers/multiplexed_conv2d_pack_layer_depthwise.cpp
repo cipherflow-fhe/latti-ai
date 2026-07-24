@@ -18,233 +18,115 @@
 
 #include <math.h>
 #include "conv2d_layer.h"
+#include "layer_util.h"
 #include "../util.h"
 #include "multiplexed_conv2d_pack_layer.h"
 #include "multiplexed_conv2d_pack_layer_depthwise.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
-ParMultiplexedConv2DPackedLayerDepthwise::ParMultiplexedConv2DPackedLayerDepthwise(const CkksParameter& param_in,
-                                                                                   const Duo& input_shape_in,
-                                                                                   const Array<double, 4>& weight_in,
-                                                                                   const Array<double, 1>& bias_in,
-                                                                                   const Duo& stride_in,
-                                                                                   const Duo& skip_in,
-                                                                                   uint32_t n_channel_per_ct_in,
-                                                                                   uint32_t level_in,
-                                                                                   double residual_scale)
-    : Conv2DLayer(param_in, input_shape_in, weight_in, bias_in, stride_in, skip_in) {
+MultiplexedConv2DPackedLayerDepthwise::MultiplexedConv2DPackedLayerDepthwise(const CkksParameter& param_in,
+                                                                             const Duo& input_shape_in,
+                                                                             Array<double, 4>&& weight_in,
+                                                                             Array<double, 1>&& bias_in,
+                                                                             const Duo& stride_in,
+                                                                             const Duo& skip_in,
+                                                                             uint32_t n_channel_per_ct_in,
+                                                                             uint32_t level_in,
+                                                                             double residual_scale)
+    : Conv2DLayer(param_in, input_shape_in, move(weight_in), move(bias_in), stride_in) {
+    skip_ = skip_in;
+    if ((skip_[0] & (skip_[0] - 1)) != 0 || (skip_[1] & (skip_[1] - 1)) != 0) {
+        throw std::invalid_argument("skip must be powers of 2, got: " + str(skip_));
+    }
+    n_groups_ = n_out_channel_;
+    n_in_channel_ = n_out_channel_;
+    const uint32_t output_channels_per_ct = n_channel_per_ct_in * prod(stride_);
+
     n_channel_per_ct = n_channel_per_ct_in;
     n_packed_in_channel = div_ceil(n_out_channel_, n_channel_per_ct);
-    n_packed_out_channel = div_ceil(n_out_channel_, n_channel_per_ct * stride_[0] * stride_[1]);
-    n_block_per_ct = std::ceil(n_channel_per_ct / (skip_[0] * skip_[1]));
+    n_packed_out_channel = div_ceil(n_out_channel_, output_channels_per_ct);
+    n_block_per_ct = div_ceil(n_channel_per_ct, prod(skip_));
+    need_repack_ = (stride_ != Duo{1, 1});
     level_ = level_in;
     weight_scale = param_.get_q(level_) * residual_scale;
 }
 
-void ParMultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
-    uint32_t pad0 = std::floor(kernel_shape_[0] / 2);
-    uint32_t pad1 = std::floor(kernel_shape_[1] / 2);
+void MultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
+    prepare_weight_lazy();
 
-    uint32_t padding_shape[] = {pad0, pad1};
-    uint32_t input_shape_ct[2];
-    input_shape_ct[0] = input_shape_[0] * skip_[0];
-    input_shape_ct[1] = input_shape_[1] * skip_[1];
-    kernel_masks_.clear();
-    double scale_new = 0;
-    double bias_scale = 0;
-
-    for (int i = 0; i < kernel_shape_[0]; i++) {
-        for (int j = 0; j < kernel_shape_[1]; j++) {
-            vector<double> mask;
-            mask.reserve(input_shape_ct[0] * input_shape_ct[1]);
-            for (int i_s = 0; i_s < input_shape_ct[0]; i_s++) {
-                for (int j_s = 0; j_s < input_shape_ct[1]; j_s++) {
-                    if (i * skip_[0] + i_s - padding_shape[0] * skip_[0] >= 0 &&
-                        i * skip_[0] + i_s - padding_shape[0] * skip_[0] < input_shape_ct[0] &&
-                        j * skip_[1] + j_s - padding_shape[1] * skip_[1] >= 0 &&
-                        j * skip_[1] + j_s - padding_shape[1] * skip_[1] < input_shape_ct[1]) {
-                        mask.push_back(1.0);
-                    } else {
-                        mask.push_back(0.0);
-                    }
-                }
-            }
-            kernel_masks_.push_back(mask);
-        }
-    }
-
-    input_rotate_units_.clear();
-    input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
-    input_rotate_units_.push_back(skip_[0] * 1);
+    int kernel_size = cached_kernel_size;
     weight_pt.clear();
     bias_pt.clear();
-
     weight_pt.resize(n_packed_in_channel);
     bias_pt.resize(n_packed_out_channel);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    ctx.resize_copies(n_packed_in_channel);
 
-    int kernel_size = kernel_shape_[0] * kernel_shape_[1];
-    int input_block_size = input_shape_ct[0] * input_shape_ct[1];
-    int skip_prod = skip_[0] * skip_[1];
     parallel_for(n_packed_in_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int n_packed_out_channel_idx) {
-        for (int packed_in_channel_idx = 0; packed_in_channel_idx < n_packed_in_channel; ++packed_in_channel_idx) {
-            int base_channel_in = packed_in_channel_idx * n_channel_per_ct;
-            vector<CkksPlaintextRingt> a1(kernel_size);
-            for (int kernel_idx = 0; kernel_idx < kernel_size; ++kernel_idx) {
-                auto& mask = kernel_masks_[kernel_idx];
-                vector<double> w(n_block_per_ct * input_block_size);
-
-                for (int linear_idx = 0; linear_idx < n_block_per_ct * input_block_size; ++linear_idx) {
-                    int t = linear_idx / input_block_size;
-                    int shape_linear = linear_idx % input_block_size;
-                    int shapei = shape_linear / input_shape_ct[1];
-                    int shapej = shape_linear % input_shape_ct[1];
-
-                    int channel_in = 0;
-                    int channel_out = n_packed_out_channel_idx * n_channel_per_ct + t * skip_prod +
-                                      (skip_[0] * (shapei % skip_[0]) + shapej % skip_[0]);
-
-                    w[linear_idx] = (channel_in >= n_in_channel_ || channel_out >= n_out_channel_) ?
-                                        0 :
-                                        weight_.get(channel_out, channel_in, kernel_idx / kernel_shape_[1],
-                                                    kernel_idx % kernel_shape_[1]) *
-                                            mask[shapei * input_shape_ct[1] + shapej];
-                }
-                a1[kernel_idx] = move(ctx_copy.encode_ringt(w, weight_scale));
-            }
-            weight_pt[n_packed_out_channel_idx] = move(a1);
+        weight_pt[n_packed_out_channel_idx].resize(kernel_size);
+        for (int kernel_idx = 0; kernel_idx < kernel_size; ++kernel_idx) {
+            weight_pt[n_packed_out_channel_idx][kernel_idx] =
+                generate_weight_pt_for_indices(ctx_copy, n_packed_out_channel_idx, kernel_idx);
         }
     });
-    vector<vector<double>> feature_tmp_pack(n_packed_out_channel);
 
-    Duo bias_shape;
-    Duo bias_skip;
-    bias_shape[0] = input_shape_[0] / stride_[0];
-    bias_shape[1] = input_shape_[1] / stride_[1];
-    bias_skip[0] = skip_[0] * stride_[0];
-    bias_skip[1] = skip_[1] * stride_[1];
-    int bis_skip_prod = bias_skip[0] * bias_skip[1];
-    int bias_n_channel_per_ct = n_channel_per_ct * stride_[0] * stride_[1];
-    int bias_level_down = 2;
-    if (stride_[0] == 1) {
-        bias_level_down = 1;
-    }
     parallel_for(n_packed_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int n_packed_out_channel_idx) {
-        const int total_block_size = n_block_per_ct * bias_shape[0] * bias_skip[0] * bias_shape[1] * bias_skip[1];
-        feature_tmp_pack[n_packed_out_channel_idx].resize(ctx_copy.get_parameter().get_n() / 2);
-
-        for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
-            int j = linear_idx / (bias_shape[0] * bias_skip[0] * bias_shape[1] * bias_skip[1]);
-            int residual = linear_idx % (bias_shape[0] * bias_skip[0] * bias_shape[1] * bias_skip[1]);
-            int h = residual / (bias_shape[1] * bias_skip[1]);
-            int k = residual % (bias_shape[1] * bias_skip[1]);
-
-            int channel = n_packed_out_channel_idx * bias_n_channel_per_ct + j * bis_skip_prod +
-                          (bias_skip[0] * (h % bias_skip[0]) + k % bias_skip[0]);
-            if (channel >= n_out_channel_)
-                continue;
-
-            int index = j * (bias_shape[0] * bias_skip[0] * bias_shape[1] * bias_skip[1]) +
-                        (h * bias_shape[0] * bias_skip[0] + k);
-            feature_tmp_pack[n_packed_out_channel_idx][index] = bias_.get(channel);
-        }
-        bias_pt[n_packed_out_channel_idx] =
-            ctx_copy.encode_ringt(feature_tmp_pack[n_packed_out_channel_idx], param_.get_default_scale());
+        bias_pt[n_packed_out_channel_idx] = generate_bias_pt_for_index(ctx_copy, n_packed_out_channel_idx);
     });
-    mask_pt.resize(n_out_channel_);
-    parallel_for(n_packed_in_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        if (stride_[0] == 1) {
-        } else {
-            for (int i = 0; i < n_channel_per_ct; i++) {
-                if ((ct_idx * n_channel_per_ct + i) < n_out_channel_) {
-                    auto si =
-                        select_tensor((ct_idx * n_channel_per_ct + i) % (n_channel_per_ct * stride_[0] * stride_[1]));
-                    mask_pt[ct_idx * n_channel_per_ct + i] =
-                        ctx_copy.encode_ringt(si, ctx_copy.get_parameter().get_q(level_ - 1));
+
+    if (stride_[0] != 1) {
+        mask_pt.resize(n_out_channel_);
+        parallel_for(n_packed_in_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
+            for (int i = 0; i < static_cast<int>(n_channel_per_ct); ++i) {
+                const int channel_global = ct_idx * static_cast<int>(n_channel_per_ct) + i;
+                if (channel_global >= static_cast<int>(n_out_channel_)) {
+                    break;
                 }
+                mask_pt[channel_global] = generate_mask_pt_for_indices(ctx_copy, ct_idx, i);
             }
-        }
-    });
+        });
+    }
 }
 
-void ParMultiplexedConv2DPackedLayerDepthwise::prepare_weight_lazy() {
-    uint32_t pad0 = std::floor(kernel_shape_[0] / 2);
-    uint32_t pad1 = std::floor(kernel_shape_[1] / 2);
-
-    uint32_t padding_shape[] = {pad0, pad1};
-    uint32_t input_shape_ct[2];
-    input_shape_ct[0] = input_shape_[0] * skip_[0];
-    input_shape_ct[1] = input_shape_[1] * skip_[1];
+void MultiplexedConv2DPackedLayerDepthwise::prepare_weight_lazy() {
+    const Duo input_shape_ct = input_shape_ * skip_;
     kernel_masks_.clear();
-
-    for (int i = 0; i < kernel_shape_[0]; i++) {
-        for (int j = 0; j < kernel_shape_[1]; j++) {
-            vector<double> mask;
-            mask.reserve(input_shape_ct[0] * input_shape_ct[1]);
-            for (int i_s = 0; i_s < input_shape_ct[0]; i_s++) {
-                for (int j_s = 0; j_s < input_shape_ct[1]; j_s++) {
-                    if (i * skip_[0] + i_s - padding_shape[0] * skip_[0] >= 0 &&
-                        i * skip_[0] + i_s - padding_shape[0] * skip_[0] < input_shape_ct[0] &&
-                        j * skip_[1] + j_s - padding_shape[1] * skip_[1] >= 0 &&
-                        j * skip_[1] + j_s - padding_shape[1] * skip_[1] < input_shape_ct[1]) {
-                        mask.push_back(1.0);
-                    } else {
-                        mask.push_back(0.0);
-                    }
-                }
-            }
-            kernel_masks_.push_back(mask);
-        }
-    }
 
     input_rotate_units_.clear();
     input_rotate_units_.push_back(skip_[0] * input_shape_ct[1]);
-    input_rotate_units_.push_back(skip_[0] * 1);
-
-    int kernel_size = kernel_shape_[0] * kernel_shape_[1];
-    int input_block_size = input_shape_ct[0] * input_shape_ct[1];
-    int skip_prod = skip_[0] * skip_[1];
-    int N = param_.get_n();
+    input_rotate_units_.push_back(skip_[0]);
 
     // Cache commonly used values for on-demand generation
-    cached_input_shape_ct[0] = input_shape_ct[0];
-    cached_input_shape_ct[1] = input_shape_ct[1];
-    cached_input_block_size = input_block_size;
-    cached_kernel_size = kernel_size;
-    cached_skip_prod = skip_prod;
+    this->cached_input_shape_ct = input_shape_ct;
+    cached_input_block_size = prod(input_shape_ct);
+    cached_kernel_size = prod(kernel_shape_);
+    cached_skip_prod = prod(skip_);
 
     // Cache bias-related values
-    Duo bias_shape;
-    Duo bias_skip;
-    bias_shape[0] = input_shape_[0] / stride_[0];
-    bias_shape[1] = input_shape_[1] / stride_[1];
-    bias_skip[0] = skip_[0] * stride_[0];
-    bias_skip[1] = skip_[1] * stride_[1];
-    cached_bias_skip = bias_skip;
-    int bis_skip_prod = bias_skip[0] * bias_skip[1];
-    cached_bias_n_channel_per_ct = n_channel_per_ct * stride_[0] * stride_[1];
-    cached_total_block_size = n_block_per_ct * bias_shape[0] * bias_skip[0] * bias_shape[1] * bias_skip[1];
+    const Duo bias_shape = input_shape_ / stride_;
+    cached_bias_skip = skip_ * stride_;
+    cached_bias_n_channel_per_ct = n_channel_per_ct * prod(stride_);
+    cached_total_block_size = n_block_per_ct * prod(bias_shape * cached_bias_skip);
 
-    // Note: weight_rearranged, bias_rearranged, and mask_rearranged are no longer generated here.
-    // They will be generated on-demand in run_core using helper functions.
+    mask_pt.clear();
 }
 
-vector<double> ParMultiplexedConv2DPackedLayerDepthwise::select_tensor(int num) const {
+vector<double> MultiplexedConv2DPackedLayerDepthwise::select_tensor(int num) const {
+    const Duo input_shape_ct = input_shape_ * skip_;
+    const Duo stride_skip = stride_ * skip_;
+    const uint32_t stride_skip_prod = prod(stride_skip);
+
     vector<double> tensor;
-    for (int k = 0; k < n_block_per_ct; k++) {
-        for (int i = 0; i < input_shape_[0] * skip_[0]; i++) {
-            for (int j = 0; j < input_shape_[1] * skip_[1]; j++) {
-                if (k * skip_[0] * stride_[0] * skip_[1] * stride_[0] +
-                        skip_[0] * stride_[0] * (i % (skip_[0] * stride_[0])) + (j % (stride_[0] * skip_[0])) ==
-                    num) {
-                    tensor.push_back(1);
-                } else {
-                    tensor.push_back(0);
-                }
+    for (int block_idx = 0; block_idx < n_block_per_ct; ++block_idx) {
+        for (const Duo& input_pos : duo_range(input_shape_ct)) {
+            if (block_idx * stride_skip_prod + stride_skip[0] * (input_pos[0] % stride_skip[0]) +
+                    (input_pos[1] % stride_skip[0]) ==
+                num) {
+                tensor.push_back(1.0);
+            } else {
+                tensor.push_back(0.0);
             }
         }
     }
@@ -252,79 +134,116 @@ vector<double> ParMultiplexedConv2DPackedLayerDepthwise::select_tensor(int num) 
     return tensor;
 }
 
-CkksPlaintextRingt
-ParMultiplexedConv2DPackedLayerDepthwise::generate_weight_pt_for_indices(CkksContext& ctx,
-                                                                         int n_packed_out_channel_idx,
-                                                                         int kernel_idx) const {
-    auto& mask = kernel_masks_[kernel_idx];
+CkksPlaintextRingt MultiplexedConv2DPackedLayerDepthwise::generate_weight_pt_for_indices(CkksContext& ctx,
+                                                                                         int n_packed_out_channel_idx,
+                                                                                         int kernel_idx) const {
+    const Duo padding_shape = kernel_shape_ / 2;
+    const Duo kernel_pos = div_mod(static_cast<uint32_t>(kernel_idx), kernel_shape_[1]);
+
     vector<double> w(n_block_per_ct * cached_input_block_size, 0.0);
 
-    for (int linear_idx = 0; linear_idx < n_block_per_ct * cached_input_block_size; ++linear_idx) {
-        int t = linear_idx / cached_input_block_size;
-        int shape_linear = linear_idx % cached_input_block_size;
-        int shapei = shape_linear / cached_input_shape_ct[1];
-        int shapej = shape_linear % cached_input_shape_ct[1];
+    for (uint32_t linear_idx = 0; linear_idx < n_block_per_ct * cached_input_block_size; ++linear_idx) {
+        const Duo block_pos = div_mod(linear_idx, cached_input_block_size);
+        const Duo input_pos = div_mod(block_pos[1], cached_input_shape_ct[1]);
 
-        int channel_in = 0;
-        int channel_out = n_packed_out_channel_idx * n_channel_per_ct + t * cached_skip_prod +
-                          (skip_[0] * (shapei % skip_[0]) + shapej % skip_[0]);
+        // Inline boundary check (replaces pre-computed kernel_masks_)
+        int64_t shifted_i = (int64_t)(kernel_pos[0] * skip_[0] + input_pos[0]) - (int64_t)(padding_shape[0] * skip_[0]);
+        int64_t shifted_j = (int64_t)(kernel_pos[1] * skip_[1] + input_pos[1]) - (int64_t)(padding_shape[1] * skip_[1]);
+        if (shifted_i < 0 || shifted_i >= cached_input_shape_ct[0] || shifted_j < 0 ||
+            shifted_j >= cached_input_shape_ct[1]) {
+            continue;
+        }
 
-        w[linear_idx] =
-            (channel_in >= n_in_channel_ || channel_out >= n_out_channel_) ?
-                0 :
-                weight_.get(channel_out, channel_in, kernel_idx / kernel_shape_[1], kernel_idx % kernel_shape_[1]) *
-                    mask[shapei * cached_input_shape_ct[1] + shapej];
+        const uint32_t channel_in = 0;
+        const uint32_t channel_out = static_cast<uint32_t>(n_packed_out_channel_idx) * n_channel_per_ct +
+                                     block_pos[0] * cached_skip_prod +
+                                     (skip_[0] * (input_pos[0] % skip_[0]) + input_pos[1] % skip_[0]);
+
+        if (channel_in < n_in_channel_ && channel_out < n_out_channel_) {
+            w[linear_idx] = weight_.get(channel_out, channel_in, kernel_pos[0], kernel_pos[1]);
+        }
     }
     return ctx.encode_ringt(w, weight_scale);
 }
 
-CkksPlaintextRingt ParMultiplexedConv2DPackedLayerDepthwise::generate_bias_pt_for_index(CkksContext& ctx,
-                                                                                        int bpt_idx) const {
-    int N = param_.get_n();
+CkksPlaintextRingt MultiplexedConv2DPackedLayerDepthwise::generate_bias_pt_for_index(CkksContext& ctx,
+                                                                                     int bpt_idx) const {
+    const int N = param_.get_n();
+    const Duo bias_shape = input_shape_ / stride_;
+    const Duo bias_block_shape = bias_shape * cached_bias_skip;
+    const uint32_t bias_block_size = prod(bias_block_shape);
+    const uint32_t bias_skip_prod = prod(cached_bias_skip);
     vector<double> bias_vec(N / 2, 0.0);
 
-    // Compute bias_shape locally
-    Duo bias_shape;
-    bias_shape[0] = input_shape_[0] / stride_[0];
-    bias_shape[1] = input_shape_[1] / stride_[1];
-    int bis_skip_prod = cached_bias_skip[0] * cached_bias_skip[1];
+    for (uint32_t linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
+        const Duo block_pos = div_mod(linear_idx, bias_block_size);
+        const Duo output_pos = div_mod(block_pos[1], bias_block_shape[1]);
+        const Duo channel_offset = output_pos % cached_bias_skip;
 
-    for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
-        int j = linear_idx / (bias_shape[0] * cached_bias_skip[0] * bias_shape[1] * cached_bias_skip[1]);
-        int residual = linear_idx % (bias_shape[0] * cached_bias_skip[0] * bias_shape[1] * cached_bias_skip[1]);
-        int h = residual / (bias_shape[1] * cached_bias_skip[1]);
-        int k = residual % (bias_shape[1] * cached_bias_skip[1]);
-
-        int channel = bpt_idx * cached_bias_n_channel_per_ct + j * bis_skip_prod +
-                      (cached_bias_skip[0] * (h % cached_bias_skip[0]) + k % cached_bias_skip[0]);
-        if (channel >= n_out_channel_)
+        const uint32_t channel = static_cast<uint32_t>(bpt_idx) * cached_bias_n_channel_per_ct +
+                                 block_pos[0] * bias_skip_prod + cached_bias_skip[0] * channel_offset[0] +
+                                 channel_offset[1];
+        if (channel >= n_out_channel_) {
             continue;
+        }
 
-        int index = j * (bias_shape[0] * cached_bias_skip[0] * bias_shape[1] * cached_bias_skip[1]) +
-                    (h * bias_shape[0] * cached_bias_skip[0] + k);
-        bias_vec[index] = bias_.get(channel);
-    }
-    int bias_level_down = 2;
-    if (stride_[0] == 1 && stride_[1] == 1) {
-        bias_level_down = 1;
+        bias_vec[linear_idx] = bias_.get(channel);
     }
     return ctx.encode_ringt(bias_vec, ctx.get_parameter().get_default_scale());
 }
 
 CkksPlaintextRingt
-ParMultiplexedConv2DPackedLayerDepthwise::generate_mask_pt_for_indices(CkksContext& ctx, int ct_idx, int i) const {
-    auto si = select_tensor((ct_idx * n_channel_per_ct + i) % (n_channel_per_ct * stride_[0] * stride_[1]));
-    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_ - 1));
+MultiplexedConv2DPackedLayerDepthwise::generate_mask_pt_for_indices(CkksContext& ctx, int ct_idx, int i) const {
+    const uint32_t output_channels_per_ct = n_channel_per_ct * prod(stride_);
+    const uint32_t stride_skip_prod = prod(skip_ * stride_);
+    const uint32_t skip_prod = prod(skip_);
+    const uint32_t input_feature_size = prod(input_shape_);
+
+    // Recompute step_k for the aligned channel index (matches run_core's steps[i/skip_[0]]).
+    const int32_t i_aligned = (i / static_cast<int>(skip_[0])) * static_cast<int>(skip_[0]);
+    const int32_t channel_idx = ct_idx * static_cast<int>(n_channel_per_ct) + i_aligned;
+    const int32_t rotated_block = channel_idx / static_cast<int32_t>(stride_skip_prod);
+    const int32_t rotated_residual = channel_idx % static_cast<int32_t>(stride_skip_prod);
+    const int32_t rotated_row = rotated_residual / static_cast<int32_t>(stride_[0] * skip_[0]);
+    const int32_t rotated_col = rotated_residual % static_cast<int32_t>(stride_[0] * skip_[0]);
+    const int32_t base_block = channel_idx / static_cast<int32_t>(skip_prod);
+    const int32_t base_residual = channel_idx % static_cast<int32_t>(skip_prod);
+    const int32_t base_row = base_residual / static_cast<int32_t>(skip_[0]);
+    const int32_t base_col = base_residual % static_cast<int32_t>(skip_[0]);
+    const int32_t rot_step = (rotated_block - base_block) * static_cast<int32_t>(skip_prod * input_feature_size) +
+                             (rotated_row - base_row) * static_cast<int32_t>(skip_[0] * input_shape_[0]) +
+                             (rotated_col - base_col);
+    const int32_t step_k = -rot_step;
+
+    // Target-position mask (legacy select_tensor layout).
+    auto target = select_tensor((ct_idx * n_channel_per_ct + i) % output_channels_per_ct);
+
+    // Source-position mask = vec_rotate(target, -step_k) on the full slot vector:
+    //   source[(j + step_k) mod slots] = target[j]
+    // matches the SDK convention rotate(c, k)[j] = c[(j+k) mod slots], so that
+    // rotate(source * s, step_k) reproduces target * rotate(s, step_k).
+    const int32_t slots = static_cast<int32_t>(param_.get_n() / 2);
+    const int32_t shift = ((step_k % slots) + slots) % slots;
+    vector<double> source(static_cast<size_t>(slots), 0.0);
+    for (size_t j = 0; j < target.size(); ++j) {
+        if (target[j] != 0.0) {
+            source[(static_cast<int32_t>(j) + shift) % slots] = target[j];
+        }
+    }
+    return ctx.encode_ringt(source, ctx.get_parameter().get_q(level_ - 1));
 }
 
-vector<CkksCiphertext> ParMultiplexedConv2DPackedLayerDepthwise::run_core(CkksContext& ctx,
-                                                                          const std::vector<CkksCiphertext>& x) {
+vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksContext& ctx,
+                                                                       const std::vector<CkksCiphertext>& x) {
+    const uint32_t output_channels_per_ct = n_channel_per_ct * prod(stride_);
+    const uint32_t input_feature_size = prod(input_shape_);
+
     vector<CkksCiphertext> result_ct;
     result_ct.resize(n_out_channel_);
 
     // 1. rotation of kernel direction
     int rotated_size = x.size();
-    std::vector<std::vector<cxx_sdk_v2::CkksCiphertext>> rotated_x(rotated_size);
+    std::vector<std::vector<lattisense::CkksCiphertext>> rotated_x(rotated_size);
     parallel_for(rotated_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<CkksCiphertext> rotations =
             populate_rotations_2_sides(ctx_copy, x[ct_idx], kernel_shape_[0], input_rotate_units_[0]);
@@ -336,7 +255,7 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayerDepthwise::run_core(CkksCo
 
     vector<CkksCiphertext> res;
     uint32_t n_weight = weight_pt.empty() ? n_packed_in_channel : weight_pt.size();
-    if (stride_[0] == 1) {
+    if (!need_repack_) {
         res.resize(n_weight);
     }
     parallel_for(n_weight, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
@@ -360,128 +279,79 @@ vector<CkksCiphertext> ParMultiplexedConv2DPackedLayerDepthwise::run_core(CkksCo
             }
         }
         s = ctx_copy.rescale(s, ctx_copy.get_parameter().get_default_scale());
-        if (stride_[0] == 1) {
+        if (!need_repack_) {
             res[ct_idx] = move(s);
         } else {
             vector<int32_t> steps;
+            const uint32_t stride_skip_prod = prod(skip_ * stride_);
+            const uint32_t skip_prod = prod(skip_);
             for (int i = 0; i < n_channel_per_ct; i += skip_[0]) {
-                int32_t r_n_block = floor((ct_idx * n_channel_per_ct + i) / int(pow(skip_[0] * stride_[0], 2)));
-                int32_t r_n_block_residue = (ct_idx * n_channel_per_ct + i) % int(pow(skip_[0] * stride_[0], 2));
-                int32_t r_n_stride_skip = floor(r_n_block_residue / (stride_[0] * skip_[0]));
-                int32_t r_n_stride_skip_residue = r_n_block_residue % (stride_[0] * skip_[0]);
+                const int32_t channel_idx = ct_idx * n_channel_per_ct + i;
+                const int32_t rotated_block = floor(channel_idx / stride_skip_prod);
+                const int32_t rotated_residual = channel_idx % stride_skip_prod;
+                const int32_t rotated_row = floor(rotated_residual / (stride_[0] * skip_[0]));
+                const int32_t rotated_col = rotated_residual % (stride_[0] * skip_[0]);
 
-                int32_t n_block = floor((ct_idx * n_channel_per_ct + i) / int(pow(skip_[0], 2)));
-                int32_t n_block_residue = (ct_idx * n_channel_per_ct + i) % int(pow(skip_[0], 2));
-                int32_t n_stride_skip = floor(n_block_residue / skip_[0]);
-                int32_t n_stride_skip_residue = n_block_residue % skip_[0];
-                int32_t rot_step = (r_n_block - n_block) * int(pow(skip_[0], 2)) * (input_shape_[0] * input_shape_[1]) +
-                                   (r_n_stride_skip - n_stride_skip) * (skip_[0] * input_shape_[0]) +
-                                   (r_n_stride_skip_residue - n_stride_skip_residue);
+                const int32_t base_block = floor(channel_idx / skip_prod);
+                const int32_t base_residual = channel_idx % skip_prod;
+                const int32_t base_row = floor(base_residual / skip_[0]);
+                const int32_t base_col = base_residual % skip_[0];
+                const int32_t rot_step = (rotated_block - base_block) * skip_prod * input_feature_size +
+                                         (rotated_row - base_row) * (skip_[0] * input_shape_[0]) +
+                                         (rotated_col - base_col);
                 steps.push_back(-rot_step);
             }
-            auto s_rots = ctx_copy.rotate(s, steps);
+            const bool lazy_mask = mask_pt.empty();
             for (int i = 0; i < n_channel_per_ct; i++) {
-                if (mask_pt.empty()) {
-                    if ((ct_idx * n_channel_per_ct + i) < n_out_channel_) {
-                        auto m_pt_rt = generate_mask_pt_for_indices(ctx_copy, ct_idx, i);
-                        auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level_ - 1);
-                        auto c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[int(i / skip_[0])]], m_pt);
-                        result_ct[ct_idx * n_channel_per_ct + i] =
-                            move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
-                    }
-                } else {
-                    if ((ct_idx * n_channel_per_ct + i) < n_out_channel_) {
-                        auto& m_pt_rt = mask_pt[ct_idx * n_channel_per_ct + i];
-                        auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level_ - 1);
-                        auto c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[int(i / skip_[0])]], m_pt);
-                        result_ct[ct_idx * n_channel_per_ct + i] =
-                            move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
-                    }
+                if ((ct_idx * n_channel_per_ct + i) >= n_out_channel_) {
+                    continue;
                 }
+                CkksPlaintextRingt gen_m_pt;
+                if (lazy_mask) {
+                    gen_m_pt = generate_mask_pt_for_indices(ctx_copy, ct_idx, i);
+                }
+                const CkksPlaintextRingt& m_pt_rt = lazy_mask ? gen_m_pt : mask_pt[ct_idx * n_channel_per_ct + i];
+                auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level_ - 1);
+                auto c_m = ctx_copy.mult_plain_mul(s, m_pt);
+                c_m = ctx_copy.rescale(c_m, ctx_copy.get_parameter().get_default_scale());
+                result_ct[ct_idx * n_channel_per_ct + i] = ctx_copy.rotate(c_m, steps[i / skip_[0]]);
             }
         }
     });
-    if (stride_[0] == 1) {
-        for (int i = 0; i < res.size(); i++) {
-            if (bias_pt.empty()) {
-                auto b_pt = generate_bias_pt_for_index(ctx, i);
-                res[i] = ctx.add_plain_ringt(res[i], b_pt);
+    if (need_repack_) {
+        CkksCiphertext sp;
+        for (int i = 0; i < (int)result_ct.size(); i++) {
+            int p = i % output_channels_per_ct;
+            auto c_m_s = move(result_ct[i]);
+            if (p == 0) {
+                sp = move(c_m_s);
             } else {
-                res[i] = ctx.add_plain_ringt(res[i], bias_pt[i]);
+                sp = ctx.add(sp, c_m_s);
+            }
+            if ((i + 1) % output_channels_per_ct == 0 || i == (int)result_ct.size() - 1) {
+                res.push_back(move(sp));
             }
         }
-        return res;
     }
-
-    CkksCiphertext sp;
-    for (int i = 0; i < result_ct.size(); i++) {
-        int p = i % (stride_[0] * stride_[1] * n_channel_per_ct);
-        auto c_m_s = move(result_ct[i]);
-        if (p == 0) {
-            sp = move(c_m_s);
-            int bias_idx = i / (stride_[0] * stride_[1] * n_channel_per_ct);
-            if (bias_pt.empty()) {
-                auto b_pt = generate_bias_pt_for_index(ctx, bias_idx);
-                sp = ctx.add_plain_ringt(sp, b_pt);
-            } else {
-                sp = ctx.add_plain_ringt(sp, bias_pt[bias_idx]);
-            }
+    for (int i = 0; i < (int)res.size(); i++) {
+        if (bias_pt.empty()) {
+            auto b_pt = generate_bias_pt_for_index(ctx, i);
+            res[i] = ctx.add_plain_ringt(res[i], b_pt);
         } else {
-            sp = ctx.add(sp, c_m_s);
-        }
-        if ((i + 1) % (stride_[0] * stride_[1] * n_channel_per_ct) == 0 || i == result_ct.size() - 1) {
-            res.push_back(move(sp));
+            res[i] = ctx.add_plain_ringt(res[i], bias_pt[i]);
         }
     }
     return res;
 }
 
-Feature2DEncrypted ParMultiplexedConv2DPackedLayerDepthwise::run(CkksContext& ctx, const Feature2DEncrypted& x) {
+Feature2DEncrypted MultiplexedConv2DPackedLayerDepthwise::run(CkksContext& ctx, const Feature2DEncrypted& x) {
     Feature2DEncrypted result(&ctx, x.level);
-    int bias_level_down = 2;
-    if (stride_[0] == 1) {
-        bias_level_down = 1;
-    }
-    result.shape[0] = x.shape[0] / stride_[0];
-    result.shape[1] = x.shape[1] / stride_[1];
-    result.skip[0] = x.skip[0] * stride_[0];
-    result.skip[1] = x.skip[1] * stride_[1];
+    int bias_level_down = need_repack_ ? 2 : 1;
+    result.shape = x.shape / stride_;
+    result.skip = x.skip * stride_;
     result.n_channel = n_out_channel_;
-    result.n_channel_per_ct = x.n_channel_per_ct * stride_[0] * stride_[1];
+    result.n_channel_per_ct = x.n_channel_per_ct * prod(stride_);
     result.level = x.level - bias_level_down;
     result.data = run_core(ctx, x.data);
-    return result;
-}
-
-Array<double, 3> ParMultiplexedConv2DPackedLayerDepthwise::run_plaintext(const Array<double, 3>& x, double multiplier) {
-    double value = 1.0 / multiplier;
-    uint32_t padding_shape[]{kernel_shape_[0] / 2, kernel_shape_[1] / 2};
-    Array<double, 3> padded_input(
-        {n_out_channel_, input_shape_[0] + padding_shape[0] * 2, input_shape_[1] + padding_shape[1] * 2}, 0.0);
-    for (int in_channel_idx = 0; in_channel_idx < n_out_channel_; in_channel_idx++) {
-        for (int i = 0; i < input_shape_[0]; i++) {
-            for (int j = 0; j < input_shape_[1]; j++) {
-                padded_input.set(in_channel_idx, i + padding_shape[0], j + padding_shape[1],
-                                 x.get(in_channel_idx, i, j));
-            }
-        }
-    }
-
-    uint32_t output_shape[]{input_shape_[0] / stride_[0], input_shape_[1] / stride_[1]};
-    Array<double, 3> result({n_out_channel_, output_shape[0], output_shape[1]});
-    for (int out_channel_idx = 0; out_channel_idx < n_out_channel_; out_channel_idx++) {
-        for (int i = 0; i < output_shape[0]; i++) {
-            for (int j = 0; j < output_shape[1]; j++) {
-                double r = bias_[out_channel_idx];
-                for (int ki = 0; ki < kernel_shape_[0]; ki++) {
-                    for (int kj = 0; kj < kernel_shape_[1]; kj++) {
-                        r += padded_input.get(out_channel_idx, i * stride_[0] + ki, j * stride_[1] + kj) *
-                             (weight_.get(out_channel_idx, 0, ki, kj) * value);
-                    }
-                }
-                result.set(out_channel_idx, i, j, r);
-            }
-        }
-    }
     return result;
 }

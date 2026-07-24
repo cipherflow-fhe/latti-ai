@@ -1,5 +1,7 @@
-add_library(fhe_layers 
-  conv2d_layer.cpp 
+add_library(fhe_layers
+  layer.cpp
+  layer_util.cpp
+  conv2d_layer.cpp
   upsample_layer.cpp
   upsample_nearest_layer.cpp
   inverse_multiplexed_conv2d_layer.cpp
@@ -12,13 +14,16 @@ add_library(fhe_layers
   add_layer.cpp
   conv2d_depthwise.cpp
   avgpool2d_layer.cpp
+  avgpool1d_layer.cpp
   multiplexed_conv2d_pack_layer.cpp
   multiplexed_conv2d_pack_layer_depthwise.cpp
   poly_relu2d.cpp
+  poly_relu1d.cpp
   poly_relu_base.cpp
   mult_scaler.cpp
   conv1d_packed_layer.cpp
   multiplexed_conv1d_pack_layer.cpp
+  multiplexed_conv1d_depthwise_pack_layer.cpp
   block_col_major_ccmm.cpp
   block_col_major_cpmm.cpp
   block_col_major_transpose.cpp
@@ -35,4 +40,14 @@ add_library(fhe_layers
 target_include_directories(fhe_layers PUBLIC 
   ${CMAKE_SOURCE_DIR}/data_structs/
 )
-target_link_libraries(fhe_layers PUBLIC lattisense)
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(fhe_layers PUBLIC lattisense OpenMP::OpenMP_CXX)
+else()
+  target_link_libraries(fhe_layers PUBLIC lattisense)
+endif()
+
+target_precompile_headers(fhe_layers PRIVATE
+  <nlohmann/json.hpp>
+  <cxx_sdk_v2/cxx_fhe_task.h>
+)

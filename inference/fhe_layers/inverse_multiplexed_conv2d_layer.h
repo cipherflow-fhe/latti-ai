@@ -18,32 +18,30 @@
 
 #pragma once
 #include "layer.h"
+#include "conv2d_layer.h"
 #include "../data_structs/feature.h"
 
-class InverseMultiplexedConv2DLayer : public Layer {
+class InverseMultiplexedConv2DLayer : public Conv2DLayer {
 public:
     InverseMultiplexedConv2DLayer(const ls::CkksParameter& param_in,
                                   const Duo& input_shape_in,
-                                  const Array<double, 4>& weight_in,
-                                  const Array<double, 1>& bias_in,
+                                  Array<double, 4>&& weight_in,
+                                  Array<double, 1>&& bias_in,
                                   const Array<int, 1>& padding_in,
                                   const Duo& stride_in,
-                                  const Duo& stride_next_in,
-                                  const Duo& skip_in,
                                   const Duo& block_shape_in,
                                   uint32_t level_in,
                                   double residual_scale = 1.0);
-    virtual void prepare_weight();
-    virtual void prepare_weight_lazy();
+    void prepare_weight() override;
+    void prepare_weight_lazy() override;
 
     virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
-
-    virtual Array<double, 3> run_plaintext(const Array<double, 3>& x, double multiplier = 1.0);
 
     std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> weight_pt;
     std::vector<ls::CkksPlaintextRingt> bias_pt;
     ls::CkksPlaintextRingt repack_mask_pt;
     bool normal_conv = true;
+    bool need_repack = false;
     // Helper functions to generate weights/bias on-demand
     ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx,
                                                           int out_channel_idx,
@@ -57,20 +55,11 @@ private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
 
     int N;
-    uint32_t n_out_channel;
-    uint32_t n_in_channel;
-    Duo input_shape;
-    Duo kernel_shape;
     Duo block_shape;
-    Duo stride;
-    Duo stride_next;
-    Duo skip;
-    Duo padding_shape;
-    Duo orig_stride;
-    bool need_repack = false;
-    Array<double, 4> weight;
-    Array<double, 1> bias;
-    std::vector<std::vector<double>> kernel_masks;
+    Duo output_step;
+    Duo input_step;
+    DuoInt pad_;
+    Duo ct_stride_;
     std::vector<int32_t> input_rotate_steps;
     std::vector<int> input_rotate_units;
     std::vector<int> input_rotate_ranges;

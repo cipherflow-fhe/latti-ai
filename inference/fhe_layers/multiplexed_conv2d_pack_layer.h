@@ -21,20 +21,26 @@
 #include "conv2d_layer.h"
 #include "../data_structs/feature.h"
 
-class ParMultiplexedConv2DPackedLayer : public Conv2DLayer {
+class MultiplexedConv2DPackedLayer : public Conv2DLayer {
 public:
-    ParMultiplexedConv2DPackedLayer(const ls::CkksParameter& param_in,
-                                    const Duo& input_shape_in,
-                                    const Array<double, 4>& weight_in,
-                                    const Array<double, 1>& bias_in,
-                                    const Duo& stride_in,
-                                    const Duo& skip_in,
-                                    uint32_t n_channel_per_ct_in,
-                                    uint32_t level_in,
-                                    double residual_scale = 1.0,
-                                    const Duo& upsample_factor_in = {1, 1});
+    MultiplexedConv2DPackedLayer(const ls::CkksParameter& param_in,
+                                 const Duo& input_shape_in,
+                                 Array<double, 4>&& weight_in,
+                                 Array<double, 1>&& bias_in,
+                                 const Duo& stride_in,
+                                 const Duo& skip_in,
+                                 uint32_t n_channel_per_ct_in,
+                                 uint32_t level_in,
+                                 double residual_scale = 1.0,
+                                 const Duo& external_upsample_factor_in = {1, 1});
 
-    virtual void prepare_weight_for_reduct_rot();
+    void prepare_weight() override {
+        prepare_weight_for_post_skip_rotation();
+    }
+    void prepare_weight_lazy() override {
+        prepare_weight_for_post_skip_rotation_lazy();
+    }
+    // virtual void prepare_weight_for_reduct_rot();
     virtual void prepare_weight_for_post_skip_rotation();
     virtual void prepare_weight_for_post_skip_rotation_lazy();
 
@@ -45,16 +51,26 @@ public:
 
     std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> weight_pt;
     std::vector<ls::CkksPlaintextRingt> bias_pt;
-    std::vector<std::vector<ls::CkksPlaintextRingt>> mask_pt;
+    // post_skip_rotation: block-i masks (one per block position in output CT),
+    // shared across all ct_idx. Size = min(n_block_per_ct, n_out_channel_).
+    std::vector<ls::CkksPlaintextRingt> mask_pt;
 
     std::vector<std::vector<double>> mask_channel;
 
     bool normal_conv = true;
 
-    // Helper functions to generate weights/bias/mask on-demand
+    // Helper functions to generate weights/bias/mask on-demand (post_skip_rotation path)
     ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
     ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
-    ls::CkksPlaintextRingt generate_mask_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int i) const;
+    ls::CkksPlaintextRingt generate_mask_pt_for_indices(ls::CkksContext& ctx, int i) const;
+
+    // Helper functions to generate weights/bias/mask on-demand (reduct_rot path)
+    ls::CkksPlaintextRingt
+    generate_weight_pt_for_indices_reduct_rot(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
+    ls::CkksPlaintextRingt generate_bias_pt_for_index_reduct_rot(ls::CkksContext& ctx, int bpt_idx) const;
+    ls::CkksPlaintextRingt generate_mask_pt_for_indices_reduct_rot(ls::CkksContext& ctx, int ct_idx, int i) const;
+
+    bool use_reduct_rot = false;
 
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
@@ -69,12 +85,16 @@ private:
     uint32_t n_packed_out_channel;
     uint32_t n_block_per_ct;
     int bias_level_down = 0;
+    bool need_repack_;
     double weight_scale;
-    Duo upsample_factor;
+    Duo skip_;
+    Duo external_upsample_factor;
     Duo zero_inserted_skip;
+    std::vector<std::vector<double>> kernel_masks_;
+    std::vector<int> input_rotate_units_;
 
     // Cached values for on-demand generation
-    uint32_t cached_input_shape_ct[2] = {0, 0};
+    Duo cached_input_shape_ct = {0, 0};
     int cached_input_block_size = 0;
     int cached_kernel_size = 0;
     int cached_total_skip = 0;
@@ -83,6 +103,8 @@ private:
     int cached_skip_prod = 0;
     int cached_bias_n_channel_per_ct = 0;
     int cached_total_block_size = 0;
+    // For reduct_rot
+    uint32_t cached_skip_out_prod = 0;
 };
 
 ls::CkksCiphertext sum_slot(ls::CkksContext& ctx, ls::CkksCiphertext& x, uint32_t m, uint32_t p);

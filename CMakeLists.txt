@@ -14,25 +14,33 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.26.4)
 
 option(INFERENCE_SDK_ENABLE_GPU "Enable GPU acceleration support" OFF)
 message(STATUS "INFERENCE_SDK_ENABLE_GPU: ${INFERENCE_SDK_ENABLE_GPU}")
 
 # Configure lattisense options before add_subdirectory
 set(LATTISENSE_ENABLE_GPU ${INFERENCE_SDK_ENABLE_GPU} CACHE BOOL "Enable GPU in lattisense" FORCE)
+
+# Forward HEONGPU_CCCL_GIT_URL to lattisense (optional CCCL mirror for faster downloads)
+if(DEFINED HEONGPU_CCCL_GIT_URL)
+    set(HEONGPU_CCCL_GIT_URL "${HEONGPU_CCCL_GIT_URL}" CACHE STRING "CCCL git mirror URL for HEonGPU" FORCE)
+endif()
 set(LATTISENSE_BUILD_MODE "SHARED" CACHE STRING "Lattisense build mode" FORCE)
 set(LATTISENSE_BUILD_TESTS OFF CACHE BOOL "Build lattisense unit tests" FORCE)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(CMAKE_C_COMPILER "/usr/bin/gcc-12")
-set(CMAKE_CXX_COMPILER "/usr/bin/g++-12")
-
 project(latti-ai)
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "9.0")
+    message(FATAL_ERROR "GCC >= 9 is required for C++17 support. Found: ${CMAKE_CXX_COMPILER_VERSION}")
+  endif()
+endif()
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -maes")
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 

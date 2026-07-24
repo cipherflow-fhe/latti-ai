@@ -37,11 +37,12 @@ def export_to_onnx(
     verbose: bool = True,
     input_names: Optional[List[str]] = None,
     output_names: Optional[List[str]] = None,
-    do_constant_folding=False,
+    do_constant_folding=True,
 ) -> str:
-    """Export a PyTorch model to ONNX.
+    """Export a PyTorch model to ONNX with Conv+BN fusion.
 
-    BatchNorm is kept as a full operator (not folded into Conv).
+    BatchNorm operators are fused into the preceding Conv in-place after
+    export, so the saved ONNX contains no standalone BatchNormalization nodes.
 
     Args:
         model:           PyTorch model.
@@ -353,7 +354,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
     import numpy as np
     import h5py
     from .activations import RangeNormPoly2d as _RangeNormPoly2d
-    from .activations import Simple_Polyrelu as _Simple_Polyrelu
+    from .activations import PolyAct as _PolyAct
 
     sd = model.state_dict()
 
@@ -361,7 +362,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
         return sd[key].detach().cpu().numpy()
 
     # Collect leaf modules in traversal order
-    target_types = (nn.Conv2d, nn.Conv1d, nn.BatchNorm2d, _RangeNormPoly2d, _Simple_Polyrelu, nn.Linear)
+    target_types = (nn.Conv2d, nn.Conv1d, nn.BatchNorm2d, _RangeNormPoly2d, _PolyAct, nn.Linear)
     modules_list = [(name, mod) for name, mod in model.named_modules() if isinstance(mod, target_types)]
 
     fused = {}
@@ -406,7 +407,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
                 log.info('Poly coeffs:  %s  (%d coeffs x %d ch)', name, coeffs.shape[0], coeffs.shape[1])
             i += 1
 
-        elif isinstance(mod, _Simple_Polyrelu):
+        elif isinstance(mod, _PolyAct):
             # Determine channel count from preceding Conv/BN layer
             num_channels = 1
             for j in range(i - 1, -1, -1):
@@ -417,7 +418,7 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
                 elif isinstance(prev_mod, nn.Conv2d):
                     num_channels = prev_mod.out_channels
                     break
-            # Simple_Polyrelu has no per-channel normalization, equivalent to s = 1
+            # PolyAct has no per-channel normalization, equivalent to s = 1
             s = np.ones(num_channels)
             coeffs = _compute_poly_coeffs(s, 1.0, 0.0, mod.hermite_coeffs)
             fused[f'{name}.weight'] = coeffs.flatten()
@@ -449,5 +450,244 @@ def fuse_and_export_h5(model, h5_path, upper_bound=3.0, degree=4, eps=1e-3, verb
     if verbose:
         total_params = sum(d.size for d in fused.values())
         log.info('Fused H5: %s  (%d tensors, %s params)', h5_path, len(fused), f'{total_params:,}')
+
+    return h5_path
+
+
+def _resolve_activation_cls(name: str):
+    import torch.nn as nn
+
+    _map = {
+        'relu': nn.ReLU,
+        'silu': nn.SiLU,
+        'gelu': nn.GELU,
+    }
+    cls = _map.get(name.lower())
+    if cls is None:
+        raise ValueError(f'Unknown activation "{name}". Add it to _resolve_activation_cls.')
+    return cls
+
+
+def export_h5_from_onnx(
+    onnx_path: str,
+    json_path: str,
+    h5_path: str,
+    verbose: bool = True,
+) -> str:
+    """Export FHE-ready H5 weights from ONNX + JSON, without a PyTorch model.
+
+    Conv+BN fusion is already present in the ONNX. This function:
+
+    - Absorbs RangeNorm scale ``1/s`` into conv/fc weights and biases.
+    - Computes per-channel polynomial coefficients for each polyact layer,
+      using the activation type from the JSON ``activation`` field
+      (defaults to ``relu`` if absent).
+    - Computes ``1/s`` weights for mult_scalar (skip-connection scaling) layers.
+
+    Args:
+        onnx_path: Path to the BN-fused ``.onnx`` model.
+        json_path: Path to the FHE layer JSON (``nn_layers_ct_*.json``).
+        h5_path:   Output H5 file path.
+        verbose:   Log progress information.
+
+    Returns:
+        Path to the saved H5 file.
+    """
+    import json as _json
+
+    import numpy as np
+    import h5py
+    import onnx
+    from onnx import numpy_helper
+    from .eval_fn_hat_for_aespa import get_hermite_coeffs_for_module
+
+    # ------------------------------------------------------------------ #
+    # 1. Load ONNX weights                                                #
+    # ------------------------------------------------------------------ #
+    onnx_model = onnx.load(onnx_path)
+    onnx_weights = {init.name: numpy_helper.to_array(init).astype('float64') for init in onnx_model.graph.initializer}
+
+    # ------------------------------------------------------------------ #
+    # 2. Parse RangeNormPoly2d node attributes                           #
+    #    key: running_max initializer name -> {degree, upper_bound, eps} #
+    # ------------------------------------------------------------------ #
+    poly_node_attrs = {}
+    for node in onnx_model.graph.node:
+        if node.op_type != 'RangeNormPoly2d':
+            continue
+        rm_key = next((inp for inp in node.input if inp.endswith('rangenorm.running_max')), None)
+        if rm_key is None:
+            continue
+        attr = {a.name: a for a in node.attribute}
+        poly_node_attrs[rm_key] = {
+            'degree': attr['degree_i'].i if 'degree_i' in attr else 4,
+            'upper_bound': attr['upper_bound'].f if 'upper_bound' in attr else 3.0,
+            'eps': attr['eps_f'].f if 'eps_f' in attr else 1e-3,
+            'activation_name': attr['activation_s'].s.decode() if 'activation_s' in attr else 'relu',
+        }
+
+    # ------------------------------------------------------------------ #
+    # 3. Load JSON layer dict                                             #
+    # ------------------------------------------------------------------ #
+    with open(json_path) as f:
+        json_data = _json.load(f)
+    layers = json_data['layer']
+
+    # ------------------------------------------------------------------ #
+    # 4. Build polyact_info: JSON layer key -> running_max + node attrs  #
+    #    Mapping: weight_path "a.b.relu.weight"                          #
+    #          -> rm_key      "a.b.relu.rangenorm.running_max"           #
+    # ------------------------------------------------------------------ #
+    def _rm_key(weight_path: str) -> str:
+        if weight_path.endswith('.weight'):
+            return weight_path[: -len('.weight')] + '.rangenorm.running_max'
+        return ''
+
+    polyact_info = {}
+    for layer_key, layer in layers.items():
+        if layer.get('type') != 'polyact':
+            continue
+        wp = layer.get('weight_path', '')
+        rk = _rm_key(wp)
+        if rk not in onnx_weights:
+            log.warning('polyact running_max not found in ONNX: %s (key: %s)', layer_key, rk)
+            continue
+        running_max = onnx_weights[rk].flatten()
+        info = poly_node_attrs.get(rk, {'degree': 4, 'upper_bound': 3.0, 'eps': 1e-3, 'activation_name': 'relu'})
+        polyact_info[layer_key] = {
+            'running_max': running_max,
+            'activation_cls': _resolve_activation_cls(info['activation_name']),
+            **info,
+        }
+
+    # ------------------------------------------------------------------ #
+    # 5. Process each JSON layer                                          #
+    # ------------------------------------------------------------------ #
+    out = {}
+
+    for layer_key, layer in layers.items():
+        ltype = layer.get('type')
+
+        if ltype in ('conv2d', 'conv1d', 'fc0', 'fc1'):
+            wp = layer.get('weight_path', '')
+            bp = layer.get('bias_path', '')
+            absorb_paths = layer.get('absorb_path', [])
+            absorb_types = layer.get('absorb_type', [])
+            synthetic_source = layer.get('synthetic_source', '')
+
+            if synthetic_source == 'avgpool1d':
+                channels = int(layer['channel_output'])
+                pool_kernel = int(layer.get('source_pool_kernel_shape', layer['kernel_shape'])[0])
+                conv_kernel = int(layer['kernel_shape'][0])
+                start = conv_kernel // 2
+
+                w = np.zeros((channels, 1, conv_kernel), dtype=np.float64)
+                w[:, 0, start : start + pool_kernel] = 1.0 / float(pool_kernel)
+                b = np.zeros((channels,), dtype=np.float64)
+
+                out[wp] = w
+                if bp:
+                    out[bp] = b
+                if verbose:
+                    log.info(
+                        'Synthetic AvgPool1d->DWConv1d: %s  pool_kernel=%d conv_kernel=%d channels=%d',
+                        wp,
+                        pool_kernel,
+                        conv_kernel,
+                        channels,
+                    )
+                continue
+
+            if wp not in onnx_weights:
+                log.warning('layer weight not in ONNX: %s', wp)
+                continue
+
+            w = onnx_weights[wp].copy()
+            b = onnx_weights[bp].copy() if bp and bp in onnx_weights else np.zeros(w.shape[0])
+
+            for apath, atype in zip(absorb_paths, absorb_types):
+                if atype == 'polyact':
+                    if apath not in polyact_info:
+                        log.warning('absorb_path not in polyact_info: %s', apath)
+                        continue
+                    pinfo = polyact_info[apath]
+                    s = pinfo['running_max'] / pinfo['upper_bound'] + pinfo['eps']
+                    w = w / s.reshape(-1, *([1] * (w.ndim - 1)))
+                    b = b / s
+                    if verbose:
+                        log.info('Layer (absorb %s): %s  <- %s', atype, wp, apath)
+                else:
+                    log.warning('unknown absorb_type "%s" for %s', atype, wp)
+
+            if not absorb_paths and verbose:
+                log.info('Layer (no absorb):        %s', wp)
+
+            out[wp] = w
+            if bp:
+                out[bp] = b
+
+        elif ltype == 'polyact':
+            wp = layer.get('weight_path', '')
+            if layer_key not in polyact_info:
+                log.warning('polyact info missing: %s', layer_key)
+                continue
+            pinfo = polyact_info[layer_key]
+            hermite_coeffs = get_hermite_coeffs_for_module(pinfo['activation_cls'], pinfo['degree'])
+            s = pinfo['running_max'] / pinfo['upper_bound'] + pinfo['eps']
+            # Conv absorbed 1/s, so polyact receives x' = x/s and must output s*poly(x').
+            # Expand s*Σaₙ*Heₙ(x') as standard polynomial in x':
+            #   all coefficients = s * base, where base = _compute_poly_coeffs with s_eff=1.
+            base = _compute_poly_coeffs(
+                np.full(len(s), pinfo['upper_bound']), pinfo['upper_bound'], 0.0, hermite_coeffs
+            )
+            coeffs = base * s  # [degree+1, C]
+            out[wp] = coeffs.flatten()
+            if verbose:
+                log.info(
+                    'Polyact:                  %s  act=%s  (%dx%d)',
+                    wp,
+                    layer.get('activation', 'relu'),
+                    coeffs.shape[0],
+                    coeffs.shape[1],
+                )
+
+        elif ltype == 'mult_scalar':
+            wp = layer.get('weight_path', '')
+            absorb_paths = layer.get('absorb_path', [])
+            absorb_types = layer.get('absorb_type', [])
+            if not absorb_paths:
+                log.warning('mult_scalar has no absorb_path: %s', layer_key)
+                continue
+            # mult_scalar compounds all rangenorm scales into a single 1/s weight
+            s_combined = np.ones(1)
+            for apath, atype in zip(absorb_paths, absorb_types):
+                if atype == 'polyact':
+                    if apath not in polyact_info:
+                        log.warning('absorb_path not in polyact_info: %s', apath)
+                        continue
+                    pinfo = polyact_info[apath]
+                    s_combined = s_combined * (pinfo['running_max'] / pinfo['upper_bound'] + pinfo['eps'])
+                else:
+                    log.warning('unknown absorb_type "%s" for mult_scalar %s', atype, layer_key)
+            out[wp] = 1.0 / s_combined
+            if verbose:
+                log.info('MultScalar:               %s  <- %s', wp, absorb_paths)
+
+        # bootstrapping / drop_level / add2d / avgpool2d / reshape -> no weights
+
+    # ------------------------------------------------------------------ #
+    # 6. Write H5                                                         #
+    # ------------------------------------------------------------------ #
+    h5_dir = os.path.dirname(h5_path)
+    if h5_dir:
+        os.makedirs(h5_dir, exist_ok=True)
+
+    with h5py.File(h5_path, 'w') as f:
+        for name, data in out.items():
+            f.create_dataset(name, data=data.flatten())
+
+    if verbose:
+        total_params = sum(d.size for d in out.values())
+        log.info('ONNX→H5: %s  (%d tensors, %s params)', h5_path, len(out), f'{total_params:,}')
 
     return h5_path

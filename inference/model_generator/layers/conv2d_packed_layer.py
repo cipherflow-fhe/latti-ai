@@ -16,10 +16,13 @@
 
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.fhe_op_utils import naf_weight
+
 
 op_class = 'Conv2DPackedLayer'
 
@@ -147,6 +150,78 @@ class Conv2DPackedLayer:
             result_ct = add(partial_sum, b_pt)
             result.append(result_ct)
         return result
+
+    def make_pt_nodes(self, layer_id):
+        """Return (weight_pt, bias_pt) with shapes matching call()."""
+        index = self.kernel_shape[0] * self.kernel_shape[1]
+        weight_pt = [
+            [
+                [CkksPlaintextRingtNode(f'convw_{layer_id}_{n}_{m}_{i}') for i in range(index)]
+                for m in range(self.n_packed_in_channel * self.pack)
+            ]
+            for n in range(self.n_packed_out_channel)
+        ]
+        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_packed_out_channel)]
+        return weight_pt, bias_pt
+
+    def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
+        """Count FHE primitive operations in call(), grouped by level.
+
+        Returns a dict keyed by level:
+          {
+            level:   rotate(step1+step2) + mult_plain + add(accum) + rescale,
+            level-1: add(bias),
+          }
+
+        'rotate' is the total primitive RotateColUnit count via NAF decomposition.
+
+        step 1 - populate_rotations_1_side per input ct (n_packed_in_channel cts):
+          unit = input_shape[0]*skip[0]*input_shape[1]*skip[1]  (power of 2)
+          steps: [1*unit, 2*unit, ..., (pack-1)*unit]
+          naf_weight(i*unit) == naf_weight(i) since unit is a power of 2
+          primitive rotates = n_packed_in_channel * sum(naf_weight(i) for i in 1..pack-1)
+
+        step 2 - gen_rotated_x over the expanded list (length n_packed_in_channel*pack):
+          unit_0 = skip[0]*input_shape_ct[1]  (power of 2)
+          unit_1 = skip[0]                    (power of 2)
+          row direction: populate_rotations_2_sides(c, range_h, unit_0) — 1 call per ct
+            primitive rotates per ct = 2 * sum(naf_weight(i) for i in 1..range_h)
+          col direction: populate_rotations_2_sides(r, range_w, unit_1) — (2*range_h+1) calls per ct
+            primitive rotates per ct = (2*range_h+1) * 2 * sum(naf_weight(i) for i in 1..range_w)
+
+        mult_plain / add / rescale per output packed channel:
+          mult_plain: n_packed_in_channel*pack * kernel_h*kernel_w
+          add(accum): n_packed_in_channel*pack * kernel_h*kernel_w - 1  [at level]
+          rescale:    1                                                   [level → level-1]
+          add(bias):  1                                                   [at level-1]
+        """
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        lv = level
+
+        n_in_packed = self.n_packed_in_channel
+        pack = self.pack
+        kh, kw = self.kernel_shape
+        range_h, range_w = self.input_rotate_ranges
+
+        # step 1: naf_weight(i * unit), unit is power of 2 so naf_weight(i*unit) == naf_weight(i)
+        ops[lv]['rotate'] += n_in_packed * sum(naf_weight(i) for i in range(1, pack))
+
+        # step 2: gen_rotated_x over n_in_packed*pack cts
+        n_expanded = n_in_packed * pack
+        rots_row = 2 * sum(naf_weight(i) for i in range(1, range_h + 1))
+        rots_col = (2 * range_h + 1) * 2 * sum(naf_weight(i) for i in range(1, range_w + 1))
+        ops[lv]['rotate'] += n_expanded * (rots_row + rots_col)
+
+        # per output packed channel
+        terms_per_out = n_in_packed * pack * kh * kw
+        ops[lv]['mult_plain'] += self.n_packed_out_channel * terms_per_out
+        ops[lv]['add'] += self.n_packed_out_channel * (terms_per_out - 1)  # accumulate
+        ops[lv]['rescale'] += self.n_packed_out_channel
+        lv -= 1
+
+        ops[lv]['add'] += self.n_packed_out_channel  # bias
+
+        return dict(ops)
 
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt) -> list[CkksCiphertextNode]:
         rotated_x: list[CkksCiphertextNode] = list()

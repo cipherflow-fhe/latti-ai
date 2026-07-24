@@ -21,13 +21,16 @@
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include "util.h"
 
-namespace ls = cxx_sdk_v2;
+namespace ls = lattisense;
 
 class Layer {
 public:
     Layer() = default;
     explicit Layer(const ls::CkksParameter& param) : param_(param.copy()) {}
     virtual ~Layer() = default;
+
+    virtual void prepare_weight() {}
+    virtual void prepare_weight_lazy() {}
 
     Layer(const Layer&) = delete;
     Layer& operator=(const Layer&) = delete;

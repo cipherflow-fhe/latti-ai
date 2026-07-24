@@ -26,20 +26,18 @@ class Conv2DPackedDepthwiseLayer : public Conv2DLayer {
 public:
     Conv2DPackedDepthwiseLayer(const ls::CkksParameter& param,
                                const Duo& input_shape,
-                               const Array<double, 4>& weight,
-                               const Array<double, 1>& bias,
+                               Array<double, 4>&& weight,
+                               Array<double, 1>&& bias,
                                const Duo& stride,
                                const Duo& skip,
                                uint32_t n_channel_per_ct,
                                uint32_t level,
                                double residual_scale = 1.0);
 
-    void prepare_weight();
-    void prepare_weight_lazy();
+    void prepare_weight() override;
+    void prepare_weight_lazy() override;
 
     virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
-
-    virtual Array<double, 3> run_plaintext(const Array<double, 3>& x, double multiplier = 1.0);
 
     std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt_;
 
@@ -72,11 +70,11 @@ private:
 
     double modified_scale_;
 
+    Duo skip_;
+
     // Cached values for on-demand generation (lazy mode)
     int N = 0;
     uint32_t cached_input_block_size = 0;
-    // cppcheck-suppress duplInheritedMember
     std::vector<std::vector<double>> kernel_masks_;
-    // cppcheck-suppress duplInheritedMember
     std::vector<int> input_rotate_units_;
 };

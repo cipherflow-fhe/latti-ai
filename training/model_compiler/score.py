@@ -15,8 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import sys
+from pathlib import Path
 
 import networkx as nx
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from components import (
     ComputeNode,
@@ -25,6 +29,29 @@ from components import (
     LayerAbstractGraph,
     config,
 )
+from inference.model_generator.layers.activation_layer import SquareLayer
+from inference.model_generator.layers.add_pack import AddLayer
+from inference.model_generator.layers.avgpool1d_layer import Avgpool1DLayer
+from inference.model_generator.layers.avgpool2d_layer import Avgpool2DLayer
+from inference.model_generator.layers.conv1d_packed_layer import Conv1DPackedLayer
+from inference.model_generator.layers.conv2d_depthwise import Conv2DPackedDepthwiseLayer
+from inference.model_generator.layers.conv2d_packed_layer import Conv2DPackedLayer
+from inference.model_generator.layers.dense_packed_layer import DensePackedLayer
+from inference.model_generator.layers.inverse_multiplexed_conv2d_layer import InverseMultiplexedConv2DLayer
+from inference.model_generator.layers.inverse_multiplexed_depthwise_conv2d_layer import (
+    InverseMultiplexedDepthwiseConv2DLayer,
+)
+from inference.model_generator.layers.mult_scaler import MultScalarLayer
+from inference.model_generator.layers.multiplexed_conv1d_pack_layer import MultiplexedConv1DPackedLayer
+from inference.model_generator.layers.multiplexed_conv2d_pack_layer import MultiplexedConv2DPackedLayer
+from inference.model_generator.layers.multiplexed_conv2d_pack_layer_depthwise import (
+    MultiplexedConv2DPackedLayerDepthwise,
+)
+from inference.model_generator.layers.multiplexed_dw_conv1d_pack_layer import MultiplexedDWConv1DPackedLayer
+from inference.model_generator.layers.poly_relu0d import PolyRelu0D
+from inference.model_generator.layers.poly_relu1d import PolyRelu1D
+from inference.model_generator.layers.poly_relu2d import PolyRelu2D
+from inference.model_generator.layers.upsample_layer import UpsampleNearestLayer
 
 
 def get_multithread_rate_for_btp(task_num: int):
@@ -110,136 +137,353 @@ def get_multithread_rate_for_weight_ops(task_num: int):
 
 mult_plain_time = {
     65536: {
-        1: 0.00279,
-        2: 0.00428,
-        3: 0.00582,
-        4: 0.00726,
-        5: 0.00732,
-        6: 0.00849,
-        7: 0.00982,
-        8: 0.0112,
-        9: 0.0119,
+        1: 0.000645,
+        2: 0.000955,
+        3: 0.001286,
+        4: 0.001693,
+        5: 0.002071,
+        6: 0.002533,
+        7: 0.002927,
+        8: 0.003312,
+        9: 0.003672,
+        10: 0.004072,
+        11: 0.004483,
+        12: 0.004946,
+        13: 0.005378,
+        14: 0.005794,
+        15: 0.006245,
+        16: 0.006750,
+        17: 0.008039,
+        18: 0.011034,
+        19: 0.011939,
+        20: 0.009225,
+        21: 0.009596,
+        22: 0.009506,
+        23: 0.010015,
+        24: 0.010616,
+        25: 0.011239,
+        26: 0.011462,
+        27: 0.011907,
+        28: 0.012331,
+        29: 0.012847,
+        30: 0.013183,
+        31: 0.013643,
+        32: 0.014365,
+        33: 0.014539,
+    },
+    32768: {
+        1: 0.000319,
+        2: 0.000480,
+        3: 0.000627,
+        4: 0.000797,
+        5: 0.000978,
+        6: 0.001150,
+        7: 0.001307,
+        8: 0.001460,
+        9: 0.001656,
+        10: 0.001841,
+        11: 0.002021,
+        12: 0.002223,
+        13: 0.002441,
+        14: 0.002637,
+        15: 0.002836,
+        16: 0.003077,
+        17: 0.003261,
     },
     16384: {
-        1: 0.000686,
-        2: 0.001037,
-        3: 0.001333,
-        4: 0.001670,
-        5: 0.002007,
-        6: 0.002378,
-        7: 0.002809,
-        8: 0.003,
-        9: 0.003,
+        1: 0.000159,
+        2: 0.000240,
+        3: 0.000323,
+        4: 0.000438,
+        5: 0.000493,
+        6: 0.000577,
+        7: 0.000651,
+        8: 0.000748,
+        9: 0.000799,
     },
-    8192: {1: 0.000261, 2: 0.000362, 3: 0.000465, 4: 0.000596, 5: 0.000833},
+    8192: {1: 0.000079, 2: 0.000125, 3: 0.000164, 4: 0.000204, 5: 0.000240},
 }
 
 mult_time = {
     65536: {
-        1: 0.004064,
-        2: 0.004677,
-        3: 0.005629,
-        4: 0.006466,
-        5: 0.009199,
-        6: 0.010248,
-        7: 0.011975,
-        8: 0.013173,
-        9: 0.014370,
+        1: 0.001297,
+        2: 0.002067,
+        3: 0.002840,
+        4: 0.003725,
+        5: 0.004631,
+        6: 0.005665,
+        7: 0.006471,
+        8: 0.007276,
+        9: 0.008332,
+        10: 0.009225,
+        11: 0.010151,
+        12: 0.011048,
+        13: 0.011926,
+        14: 0.012798,
+        15: 0.013509,
+        16: 0.014298,
+        17: 0.015058,
+        18: 0.015949,
+        19: 0.016687,
+        20: 0.017589,
+        21: 0.018701,
+        22: 0.019610,
+        23: 0.020542,
+        24: 0.021369,
+        25: 0.022213,
+        26: 0.023056,
+        27: 0.023901,
+        28: 0.024989,
+        29: 0.025529,
+        30: 0.026570,
+        31: 0.027370,
+        32: 0.028111,
+        33: 0.029033,
+    },
+    32768: {
+        1: 0.000650,
+        2: 0.000964,
+        3: 0.001296,
+        4: 0.001625,
+        5: 0.001986,
+        6: 0.002336,
+        7: 0.002718,
+        8: 0.003106,
+        9: 0.003599,
+        10: 0.003988,
+        11: 0.004415,
+        12: 0.004836,
+        13: 0.005362,
+        14: 0.005774,
+        15: 0.006279,
+        16: 0.006776,
+        17: 0.007212,
     },
     16384: {
-        1: 0.003216,
-        2: 0.004368,
-        3: 0.005244,
-        4: 0.007070,
-        5: 0.008787,
-        6: 0.011128,
-        7: 0.012594,
-        8: 0.013,
-        9: 0.013,
+        1: 0.000336,
+        2: 0.000484,
+        3: 0.000649,
+        4: 0.000823,
+        5: 0.000992,
+        6: 0.001159,
+        7: 0.001301,
+        8: 0.001488,
+        9: 0.001653,
     },
-    8192: {1: 0.001429, 2: 0.002002, 3: 0.002831, 4: 0.003705, 5: 0.004831},
+    8192: {1: 0.000165, 2: 0.000252, 3: 0.000335, 4: 0.000411, 5: 0.000506},
 }
 
 rotate_time = {
     65536: {
-        0: 0.0186,
-        1: 0.0214,
-        2: 0.0235,
-        3: 0.0257,
-        4: 0.029,
-        5: 0.0315,
-        6: 0.0402,
-        7: 0.0444,
-        8: 0.0551,
-        9: 0.0599,
+        0: 0.031820,
+        1: 0.037018,
+        2: 0.041868,
+        3: 0.047295,
+        4: 0.065352,
+        5: 0.074927,
+        6: 0.082575,
+        7: 0.090344,
+        8: 0.115303,
+        9: 0.127408,
+        10: 0.137189,
+        11: 0.147268,
+        12: 0.179777,
+        13: 0.194373,
+        14: 0.205742,
+        15: 0.234848,
+        16: 0.268079,
+        17: 0.290697,
+        18: 0.300496,
+        19: 0.316836,
+        20: 0.363635,
+        21: 0.381708,
+        22: 0.396155,
+        23: 0.419812,
+        24: 0.474806,
+        25: 0.493998,
+        26: 0.514810,
+        27: 0.534185,
+        28: 0.593950,
+        29: 0.622960,
+        30: 0.680312,
+        31: 0.664419,
+        32: 0.729720,
+        33: 0.761393,
+    },
+    32768: {
+        0: 0.010012,
+        1: 0.012742,
+        2: 0.015201,
+        3: 0.021951,
+        4: 0.025976,
+        5: 0.029408,
+        6: 0.039015,
+        7: 0.044234,
+        8: 0.048706,
+        9: 0.061113,
+        10: 0.067824,
+        11: 0.102140,
+        12: 0.123991,
+        13: 0.096738,
+        14: 0.102584,
+        15: 0.120680,
+        16: 0.130158,
+        17: 0.138828,
     },
     16384: {
-        0: 0.00283,
-        1: 0.003980,
-        2: 0.006282,
-        3: 0.007841,
-        4: 0.011171,
-        5: 0.013181,
-        6: 0.017956,
-        7: 0.020501,
-        8: 0.02,
-        9: 0.02,
+        0: 0.006910,
+        1: 0.008187,
+        2: 0.008420,
+        3: 0.011797,
+        4: 0.021814,
+        5: 0.014901,
+        6: 0.019477,
+        7: 0.022309,
+        8: 0.027749,
+        9: 0.030840,
     },
-    8192: {0: 0.000582, 1: 0.000981, 2: 0.001466, 3: 0.00222, 4: 0.00276, 5: 0.003626},
+    8192: {0: 0.002134, 1: 0.003607, 2: 0.005506, 3: 0.007264, 4: 0.007383, 5: 0.008279},
 }
 
 rescale_time = {
-    8192: {1: 0.00027, 2: 0.0004, 3: 0.00055, 4: 0.00065, 5: 0.00082},
+    8192: {1: 0.000501, 2: 0.001168, 3: 0.001894, 4: 0.002176, 5: 0.001463},
     16384: {
-        1: 0.00056,
-        2: 0.00085143,
-        3: 0.00113714,
-        4: 0.00144699,
-        5: 0.00172215,
-        6: 0.00202571,
-        7: 0.00231143,
-        8: 0.002,
-        9: 0.002,
+        1: 0.001013,
+        2: 0.001526,
+        3: 0.002033,
+        4: 0.002663,
+        5: 0.003210,
+        6: 0.003679,
+        7: 0.004089,
+        8: 0.004560,
+        9: 0.005095,
+    },
+    32768: {
+        1: 0.002139,
+        2: 0.003221,
+        3: 0.007748,
+        4: 0.005414,
+        5: 0.006890,
+        6: 0.007664,
+        7: 0.008777,
+        8: 0.010601,
+        9: 0.010815,
+        10: 0.012363,
+        11: 0.013190,
+        12: 0.014246,
+        13: 0.015366,
+        14: 0.016245,
+        15: 0.017305,
+        16: 0.018369,
+        17: 0.019983,
     },
     65536: {
-        1: 0.00196,
-        2: 0.00298,
-        3: 0.00398,
-        4: 0.00506446,
-        5: 0.00602752,
-        6: 0.00709,
-        7: 0.00809,
-        8: 0.00913,
-        9: 0.0101,
+        1: 0.004522,
+        2: 0.006801,
+        3: 0.009051,
+        4: 0.011359,
+        5: 0.013644,
+        6: 0.015940,
+        7: 0.018223,
+        8: 0.021073,
+        9: 0.022900,
+        10: 0.025219,
+        11: 0.027528,
+        12: 0.030182,
+        13: 0.032181,
+        14: 0.034526,
+        15: 0.037818,
+        16: 0.041075,
+        17: 0.041716,
+        18: 0.045078,
+        19: 0.046434,
+        20: 0.048902,
+        21: 0.051305,
+        22: 0.053533,
+        23: 0.057005,
+        24: 0.061400,
+        25: 0.067001,
+        26: 0.070472,
+        27: 0.069801,
+        28: 0.068217,
+        29: 0.070632,
+        30: 0.073058,
+        31: 0.075488,
+        32: 0.077856,
+        33: 0.081414,
     },
 }
 
 add_time = {
     65536: {
-        0: 0.000086,
-        1: 0.000183,
-        2: 0.000276,
-        3: 0.000367,
-        4: 0.000471,
-        5: 0.00106,
-        6: 0.00184,
-        7: 0.0019,
-        8: 0.002,
-        9: 0.0021,
+        0: 0.000234,
+        1: 0.000373,
+        2: 0.000559,
+        3: 0.000951,
+        4: 0.002018,
+        5: 0.001937,
+        6: 0.001690,
+        7: 0.002032,
+        8: 0.002653,
+        9: 0.002711,
+        10: 0.003243,
+        11: 0.003291,
+        12: 0.003596,
+        13: 0.004107,
+        14: 0.004233,
+        15: 0.004581,
+        16: 0.005133,
+        17: 0.005336,
+        18: 0.005533,
+        19: 0.005759,
+        20: 0.006218,
+        21: 0.006780,
+        22: 0.007028,
+        23: 0.006955,
+        24: 0.007138,
+        25: 0.007521,
+        26: 0.007867,
+        27: 0.008269,
+        28: 0.008604,
+        29: 0.008866,
+        30: 0.009031,
+        31: 0.009339,
+        32: 0.009601,
+        33: 0.009969,
+    },
+    32768: {
+        0: 0.000162,
+        1: 0.000191,
+        2: 0.000274,
+        3: 0.000696,
+        4: 0.000496,
+        5: 0.000636,
+        6: 0.000646,
+        7: 0.000778,
+        8: 0.000959,
+        9: 0.001006,
+        10: 0.001156,
+        11: 0.001341,
+        12: 0.001464,
+        13: 0.001620,
+        14: 0.001820,
+        15: 0.001969,
+        16: 0.002224,
+        17: 0.002303,
     },
     16384: {
-        0: 0.00002,
-        1: 0.00004,
-        2: 0.00007,
-        3: 0.00009,
-        4: 0.0001,
-        5: 0.00025,
-        6: 0.0004,
-        7: 0.0005,
-        8: 0.0002,
-        9: 0.0002,
+        0: 0.000086,
+        1: 0.000108,
+        2: 0.000186,
+        3: 0.000314,
+        4: 0.000362,
+        5: 0.000343,
+        6: 0.000443,
+        7: 0.000554,
+        8: 0.000670,
+        9: 0.000658,
     },
-    8192: {0: 0.00009, 1: 0.001021, 2: 0.001466, 3: 0.002185, 4: 0.003026, 5: 0.003026},
+    8192: {0: 0.000081, 1: 0.000094, 2: 0.000176, 3: 0.000208, 4: 0.000224, 5: 0.000241},
 }
 
 btp_time = {'8192': 7, '16384': 12, '65536': 24}
@@ -260,21 +504,21 @@ class FheScoreParam:
         self.output_mult_level = dag.nodes[succs[0]]['level']
         self.input_degree = param[preds[0].ckks_parameter_id].poly_modulus_degree
         self.output_degree = param[succs[0].ckks_parameter_id].poly_modulus_degree
-        if compute_node.layer_type == 'conv2d':
+        if 'conv' in compute_node.layer_type:
             self.stride = compute_node.stride
             self.kernel_shape = compute_node.kernel_shape
-        if compute_node.layer_type == 'avgpool2d':
+        if compute_node.layer_type in {'avgpool1d', 'avgpool2d'}:
             self.stride = compute_node.stride
-        if preds[0].dim == 2:
+        if preds[0].dim != 0:
             self.input_shape = preds[0].shape
             self.output_shape = succs[0].shape
             self.input_skip = dag.nodes[preds[0]]['skip']
             self.output_skip = dag.nodes[succs[0]]['skip']
-        else:
-            self.input_shape = preds[0].sp_info['shape']
-            self.output_shape = succs[0].sp_info['shape']
-            self.input_skip = preds[0].sp_info['skip']
-            self.output_skip = succs[0].sp_info['skip']
+        # else:
+        #     self.input_shape = preds[0].sp_info['shape']
+        #     self.output_shape = succs[0].sp_info['shape']
+        #     self.input_skip = preds[0].sp_info['skip']
+        #     self.output_skip = succs[0].sp_info['skip']
 
         self.pack = dag.nodes[preds[0]]['pack_num']
         self.pack_out = dag.nodes[succs[0]]['pack_num']
@@ -283,156 +527,385 @@ class FheScoreParam:
         self.output_channel = compute_node.channel_output
         self.n_packed_in = math.ceil(self.input_channel / self.pack)
         self.n_packed_out = math.ceil(self.output_channel / self.pack_out)
+        # self.level = level
         if level > 0:
             self.mult_score = mult_time[self.input_degree][level]
             self.mult_plain_score = mult_plain_time[self.input_degree][level]
             self.rescale_score = rescale_time[self.input_degree][level]
+        else:
+            self.mult_score = 0
+            self.mult_plain_score = 0
+            self.rescale_score = 0
         self.rotate_score = rotate_time[self.input_degree][level]
         self.add_score = add_time[self.input_degree][level]
 
     def get_score(self) -> float:
-        compute_score = 0.0
-        if 'conv' in self.compute_node.layer_type:
-            if config.style == 'ordinary':
-                if self.compute_node.groups == 1:
-                    n_mult_and_add_score = (
-                        (self.n_packed_in * self.pack * self.n_packed_out * self.kernel_shape[0] * self.kernel_shape[1])
-                        * (self.mult_plain_score + self.add_score)
-                        / get_multithread_rate(self.n_packed_out)
-                    ) + self.n_packed_out * self.rescale_score / get_multithread_rate(self.n_packed_out)
-                else:
-                    n_mult_and_add_score = (
-                        (self.n_packed_out * self.kernel_shape[0] * self.kernel_shape[1])
-                        * (self.mult_plain_score + self.add_score)
-                        / get_multithread_rate(self.n_packed_out)
-                    ) + self.n_packed_out * self.rescale_score / get_multithread_rate(self.n_packed_out)
+        """Compute layer latency score by instantiating the exact inference layer class,
+        calling get_fhe_op_count() to get primitive op counts, then multiplying by per-op
+        timing constants.
 
-                if self.compute_node.groups == 1:
-                    n_rotate_step_1 = self.n_packed_in * (self.pack - 1)
-                    n_rotate_step_2 = (
-                        self.n_packed_in
-                        * self.pack
-                        * (self.kernel_shape[0] - 1 + self.kernel_shape[0] * (self.kernel_shape[1] - 1))
-                    )
-                    n_rotate_score = (
-                        n_rotate_step_1 / get_multithread_rate(self.n_packed_in)
-                        + n_rotate_step_2 / get_multithread_rate(self.n_packed_in * self.pack)
-                    ) * self.rotate_score
-                else:
-                    n_rotate_step = self.n_packed_in * (
-                        self.kernel_shape[0] - 1 + self.kernel_shape[0] * (self.kernel_shape[1] - 1)
-                    )
-                    n_rotate_score = n_rotate_step / get_multithread_rate(self.n_packed_in) * self.rotate_score
-            else:
-                x_size = (
-                    math.ceil(self.input_channel / self.pack)
-                    * math.ceil(self.input_shape[0] / config.block_shape[0])
-                    * math.ceil(self.input_shape[1] / config.block_shape[1])
+        op_counts keys: 'rotate', 'mult_plain', 'mult', 'add', 'rescale'
+        """
+        preds: list[FeatureNode] = list(self.dag.predecessors(self.compute_node))
+        n = self.input_degree  # poly_modulus_degree = 2*N_slots
+        layer_type = self.compute_node.layer_type
+        style = config.style
+
+        op_counts = self._build_layer_and_get_op_count(preds, n, layer_type, style)
+        # op_counts may be a flat dict {str: int} (single level) or a level-grouped
+        # dict {int: {str: int}} when ops span multiple levels (e.g. MultiplexedConv1D).
+        if op_counts and isinstance(next(iter(op_counts)), int):
+            score = 0.0
+            for lv, ops in op_counts.items():
+                r_score = rotate_time[self.input_degree][lv]
+                mp_score = mult_plain_time[self.input_degree][lv] if lv > 0 else 0
+                m_score = mult_time[self.input_degree][lv] if lv > 0 else 0
+                a_score = add_time[self.input_degree][lv]
+                rs_score = rescale_time[self.input_degree][lv] if lv > 0 else 0
+                score += (
+                    ops['rotate'] * r_score
+                    + ops['mult_plain'] * mp_score
+                    + ops['mult'] * m_score
+                    + ops['add'] * a_score
+                    + ops['rescale'] * rs_score
                 )
-
-                n_block_per_ct = math.ceil(self.pack / (self.input_skip[0] * self.input_skip[1]))
-                rotate_num1 = x_size / get_multithread_rate_for_block_rotation(x_size) * (n_block_per_ct - 1)
-                rotated_size = x_size * n_block_per_ct
-                rotate_num2 = (
-                    rotated_size
-                    / get_multithread_rate_for_kernel_rotation(rotated_size)
-                    * (self.kernel_shape[0] * self.kernel_shape[1] - 1)
-                )
-                weight_size = math.ceil(self.output_channel / n_block_per_ct)
-
-                if self.stride[0] != 1 and self.input_skip[0] != 1:
-                    rotate_num3 = (
-                        weight_size
-                        / get_multithread_rate_for_weight_ops(weight_size)
-                        * (math.log2(self.input_skip[0]) * 2 + n_block_per_ct)
-                    )
-                else:
-                    rotate_num3 = (
-                        weight_size
-                        / get_multithread_rate_for_weight_ops(weight_size)
-                        * (math.log2(self.input_skip[0]))
-                        * 2
-                    )
-
-                n_in_ct = math.ceil(self.input_channel / self.pack)
-                n_out_ct = math.ceil(self.output_channel / self.pack_out)
-                if self.stride[0] != 1:
-                    mult_num = weight_size * (
-                        n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1] + n_block_per_ct
-                    )
-                else:
-                    mult_num = weight_size * (n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1])
-                mult_num = mult_num / get_multithread_rate_for_weight_ops(weight_size)
-                add_num = (
-                    weight_size
-                    / get_multithread_rate_for_weight_ops(weight_size)
-                    * (
-                        (math.log2(self.input_skip[0])) * 2
-                        + n_in_ct * n_block_per_ct * self.kernel_shape[0] * self.kernel_shape[1]
-                    )
-                    + n_out_ct
-                )
-
-                n_rescale_score = (
-                    weight_size / get_multithread_rate_for_weight_ops(weight_size) * n_block_per_ct * self.rescale_score
-                )
-                n_mult_and_add_score = mult_num * self.mult_plain_score + add_num * self.add_score + n_rescale_score
-                n_rotate_score = (rotate_num1 + rotate_num2 + rotate_num3) * self.rotate_score
-            compute_score = n_mult_and_add_score + n_rotate_score
-
-            return compute_score * self.acc_rate
-        elif 'fc' in self.compute_node.layer_type:
-            if config.style == 'ordinary':
-                pred_node = list(self.dag.predecessors(self.compute_node))[0]
-                num = math.log2(self.dag.nodes[pred_node]['skip'][0])
-                n_mult_plain_score = (self.n_packed_in * self.pack * self.n_packed_out) * self.mult_plain_score
-                n_add_score = (self.n_packed_in * (self.pack - 1) + self.n_packed_out * num) * self.add_score
-                n_rotate_score = (
-                    self.n_packed_in * (self.pack - 1) / get_multithread_rate(self.n_packed_in)
-                    + self.n_packed_out * num
-                ) * self.rotate_score
-                compute_score = n_mult_plain_score + n_add_score + n_rotate_score
-                return compute_score * self.acc_rate
-            else:
-                n_block_input = math.ceil(self.input_channel / (self.input_skip[0] * self.input_skip[1]))
-                n_num_pre_ct = (
-                    self.input_degree
-                    / 2
-                    / (self.input_skip[0] * self.input_skip[1] * self.input_shape[0] * self.input_shape[1])
-                )
-
-                n_packed_out_feature_for_mult_pack = math.ceil(self.output_channel / n_num_pre_ct)
-                x_size = math.ceil(self.input_channel / self.pack)
-                acc_rate = get_multithread_rate(n_packed_out_feature_for_mult_pack)
-                rot_time = (n_block_input - 1) * x_size + n_packed_out_feature_for_mult_pack / acc_rate * (
-                    math.log2(self.input_shape[0] * self.input_shape[1] * self.input_skip[0] * self.input_skip[1])
-                )
-                mult_time = n_packed_out_feature_for_mult_pack / acc_rate * (x_size * n_block_input)
-
-                add_time = n_packed_out_feature_for_mult_pack / acc_rate * (x_size * n_block_input + 1)
-
-                rescale_time = n_packed_out_feature_for_mult_pack / acc_rate
-                return (
-                    rot_time * self.rotate_score
-                    + mult_time * self.mult_plain_score
-                    + add_time * self.add_score
-                    + rescale_time * self.rescale_score
-                )
-        elif 'simple_polyrelu' in self.compute_node.layer_type:
-            compute_score = (self.n_packed_in * (self.mult_score + self.add_score)) * (
-                math.ceil(math.log2(self.compute_node.order)) + 1
+        else:
+            score = (
+                op_counts['rotate'] * self.rotate_score
+                + op_counts['mult_plain'] * self.mult_plain_score
+                + op_counts['mult'] * self.mult_score
+                + op_counts['add'] * self.add_score
+                + op_counts['rescale'] * self.rescale_score
             )
-            return compute_score * self.acc_rate
-        elif 'avgpool2d' == self.compute_node.layer_type:
-            num = self.n_packed_in * (self.stride[0] - 1 + math.log2(self.stride[0]))
-            n_add_score = num * self.add_score
-            n_rotate_score = num * self.rotate_score
-            compute_score = n_add_score + n_rotate_score
-            return compute_score * self.acc_rate
-        elif 'add2d' == self.compute_node.layer_type:
-            n_add_score = self.n_packed_in * self.add_score
-            compute_score = n_add_score
-            return compute_score * self.acc_rate
+        return score * self.acc_rate
+
+    def _build_layer_and_get_op_count(self, preds, n, layer_type, style):
+        """Instantiate the matching inference layer and return its get_fhe_op_count() dict.
+        Returns None if the layer type is not handled here.
+        """
+        node = self.compute_node
+        n_in = self.input_channel
+        n_out = self.output_channel
+        pack = self.pack
+        n_packed_in = self.n_packed_in  # ceil(n_in / pack)
+        n_packed_out = self.n_packed_out  # ceil(n_out / pack_out)
+
+        # ── conv2d ──────────────────────────────────────────────────────────
+        if layer_type == 'conv2d' and node.dim == 2:
+            input_shape = self.input_shape
+            kernel_shape = node.kernel_shape
+            stride = node.stride
+            skip = self.input_skip
+            groups = node.groups
+            is_depthwise = groups == n_out and groups != 1
+            is_big_size = getattr(node, 'is_big_size', False)
+
+            if is_big_size:
+                block_shape = config.block_shape
+                padding = [-1, -1]
+                next_stride = [
+                    math.ceil(input_shape[0] / block_shape[0]) // stride[0],
+                    math.ceil(input_shape[1] / block_shape[1]) // stride[1],
+                ]
+                if is_depthwise:
+                    layer = InverseMultiplexedDepthwiseConv2DLayer(
+                        n_out,
+                        input_shape,
+                        padding,
+                        kernel_shape,
+                        stride,
+                        block_shape,
+                    )
+                else:
+                    layer = InverseMultiplexedConv2DLayer(
+                        n_out,
+                        n_in,
+                        input_shape,
+                        padding,
+                        kernel_shape,
+                        stride,
+                        block_shape,
+                    )
+                return layer.get_fhe_op_count(self.input_mult_level, n)
+
+            if style == 'ordinary':
+                if is_depthwise:
+                    layer = Conv2DPackedDepthwiseLayer(
+                        n_out,
+                        n_in,
+                        input_shape,
+                        kernel_shape,
+                        stride,
+                        skip,
+                        pack,
+                        n_packed_in,
+                        n_packed_out,
+                    )
+                else:
+                    layer = Conv2DPackedLayer(
+                        n_out,
+                        n_in,
+                        input_shape,
+                        kernel_shape,
+                        stride,
+                        skip,
+                        pack,
+                        n_packed_in,
+                        n_packed_out,
+                    )
+                return layer.get_fhe_op_count(self.input_mult_level)
+
+            # style == 'multiplexed'
+            n_in_channel_per_ct = pack
+            if is_depthwise:
+                layer = MultiplexedConv2DPackedLayerDepthwise(
+                    n_out,
+                    n_in,
+                    input_shape,
+                    kernel_shape,
+                    stride,
+                    skip,
+                    n_in_channel_per_ct,
+                    n_packed_in,
+                    n_packed_out,
+                )
+            else:
+                layer = MultiplexedConv2DPackedLayer(
+                    n_out,
+                    n_in,
+                    input_shape,
+                    kernel_shape,
+                    stride,
+                    skip,
+                    pack,
+                    n_packed_in,
+                    n_packed_out,
+                )
+            return layer.get_fhe_op_count(self.input_mult_level)
+
+        # ── conv1d ──────────────────────────────────────────────────────────
+        elif layer_type == 'conv1d' and node.dim == 1:
+            input_shape_1d = self.input_shape[0]
+            kernel_shape_1d = node.kernel_shape[0]
+            stride_1d = node.stride[0]
+            skip_1d = self.input_skip[0] if isinstance(self.input_skip, list) else self.input_skip
+            groups = node.groups
+            is_depthwise = groups == n_out and groups != 1
+
+            if style == 'multiplexed':
+                n_channel_per_ct = math.ceil(n // 2 / input_shape_1d)
+                n_packed_in_ch = math.ceil(n_in / n_channel_per_ct)
+                n_packed_out_ch = math.ceil(n_out / n_channel_per_ct)
+                if is_depthwise:
+                    n_packed_ct = math.ceil(n_out / n_channel_per_ct)
+                    layer = MultiplexedDWConv1DPackedLayer(
+                        n_out,
+                        input_shape_1d,
+                        kernel_shape_1d,
+                        stride_1d,
+                        skip_1d,
+                        n_channel_per_ct,
+                        n_packed_ct,
+                    )
+                else:
+                    layer = MultiplexedConv1DPackedLayer(
+                        n_out,
+                        n_in,
+                        input_shape_1d,
+                        kernel_shape_1d,
+                        stride_1d,
+                        skip_1d,
+                        n_channel_per_ct,
+                        n_packed_in_ch,
+                        n_packed_out_ch,
+                    )
+                return layer.get_fhe_op_count(self.input_mult_level)
+
+            # style == 'ordinary'
+            n_channel_per_ct = int(n // 2 // input_shape_1d // skip_1d)
+            n_pack_in = math.ceil(n_in / n_channel_per_ct)
+            n_packed_out_ch = math.ceil(n_out / (n_channel_per_ct * stride_1d))
+            layer = Conv1DPackedLayer(
+                n_out,
+                n_in,
+                input_shape_1d,
+                kernel_shape_1d,
+                stride_1d,
+                skip_1d,
+                n_channel_per_ct,
+                n_pack_in,
+                n_packed_out_ch,
+            )
+            return layer.get_fhe_op_count(self.input_mult_level)
+
+        # ── fc0 (dense) ──────────────────────────────────────────────────────
+        elif 'fc' in layer_type:
+            from components import ReshapeComputeNode
+
+            pred = preds[0]
+            # pred_node = next(self.dag.predecessors(self.compute_node), None)
+            pred_com = next(self.dag.predecessors(pred), None)
+
+            if pred.dim == 0:
+                sp_info = pred.sp_info
+                special_shape = sp_info.get('shape', [1, 1])
+                if not (pred_com and pred.has_sp_info):
+                    # call_skip_0d path
+                    skip_0d = sp_info['skip'][0] if isinstance(sp_info.get('skip'), list) else 1
+                    n_channel_per_ct = int(n // 2 // skip_0d)
+                    pack_0d = n_channel_per_ct
+                    n_packed_in_feat = math.ceil(n_in / n_channel_per_ct)
+                    n_packed_out_feat = math.ceil(n_out / n_channel_per_ct)
+                    layer = DensePackedLayer(
+                        n_out,
+                        n_in,
+                        [1, 1],
+                        [1, 1],
+                        pack_0d,
+                        n_packed_in_feat,
+                        n_packed_out_feat,
+                    )
+                    return layer.get_fhe_op_count_skip_0d(n_packed_in_feat, skip_0d, self.input_mult_level)
+
+                elif len(special_shape) == 1:
+                    # 1D multiplexed
+                    shape_1d = int(special_shape[0])
+                    skip_list = sp_info.get('skip', [1])
+                    skip_1d = int(skip_list[0]) if isinstance(skip_list, list) else int(skip_list)
+                    invalid_fill = sp_info.get('invalid_fill', [1])
+                    invalid_fill_1d = int(invalid_fill[0]) if isinstance(invalid_fill, list) else int(invalid_fill)
+                    block_size = shape_1d * skip_1d
+                    n_block_per_ct = int(n // 2) // block_size
+                    valid_sub = skip_1d // invalid_fill_1d
+                    n_channel_per_ct_1d = n_block_per_ct * valid_sub
+                    layer = DensePackedLayer(
+                        n_out,
+                        n_in,
+                        [shape_1d, 1],
+                        [skip_1d, 1],
+                        n_channel_per_ct_1d,
+                        math.ceil(n_in / n_channel_per_ct_1d),
+                        math.ceil(n_out / n_block_per_ct),
+                        invalid_fill=[invalid_fill_1d, 1],
+                    )
+                    n_input_ct = math.ceil(n_in / n_channel_per_ct_1d)
+                    return layer.get_fhe_op_count_1d_multiplexed(n_input_ct, n, self.input_mult_level)
+
+                else:
+                    # 2D multiplexed
+                    special_skip = sp_info.get('skip', [1, 1])
+                    invalid_fill = sp_info.get('invalid_fill', [1, 1])
+                    n_ct_mult = math.ceil(
+                        n // 2 / (special_shape[0] * special_skip[0] * special_shape[1] * special_skip[1])
+                    )
+                    layer = DensePackedLayer(
+                        n_out,
+                        n_in,
+                        special_shape,
+                        special_skip,
+                        n_ct_mult,
+                        n_in,
+                        n_out,
+                        invalid_fill=invalid_fill,
+                    )
+                    n_input_ct = math.ceil(n_in / pack)
+                    return layer.get_fhe_op_count_multiplexed(n_input_ct, n, self.input_mult_level)
+            return None
+
+        # ── avgpool ──────────────────────────────────────────────────────────
+        elif layer_type == 'avgpool2d':
+            input_shape = self.input_shape
+            stride = node.stride
+            skip = self.input_skip
+            n_input_ct = n_packed_in
+            layer = Avgpool2DLayer(stride, input_shape, channel=n_in, skip=skip)
+            is_adaptive = getattr(node, 'is_adaptive_avgpool', True)
+            is_big_size = getattr(node, 'is_big_size', False)
+            if is_big_size:
+                block_shape = config.block_shape
+                block_expansion = [
+                    math.ceil(input_shape[0] / block_shape[0]),
+                    math.ceil(input_shape[1] / block_shape[1]),
+                ]
+                return layer.get_fhe_op_count_interleaved(n_input_ct, n, self.input_mult_level)
+            if is_adaptive:
+                if style == 'ordinary':
+                    return layer.get_fhe_op_count(n_input_ct, n, self.input_mult_level)
+                else:
+                    return layer.get_fhe_op_count_adaptive(n_input_ct, n_in, self.input_mult_level)
+            else:
+                # non-adaptive multiplexed
+                return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack, self.input_mult_level)
+
+        elif layer_type == 'avgpool1d':
+            input_shape = self.input_shape
+            stride = node.stride
+            n_input_ct = n_packed_in
+            skip_1d = self.input_skip[0] if isinstance(self.input_skip, list) else self.input_skip
+            layer = Avgpool1DLayer(stride[0], input_shape[0], channel=n_in, skip=skip_1d)
+            is_adaptive = getattr(node, 'is_adaptive_avgpool', True)
+            is_big_size = getattr(node, 'is_big_size', False)
+            if is_big_size:
+                raise ('unsuport avgpool1d in big_size')
+            if is_adaptive:
+                if style == 'ordinary':
+                    raise ('unsuport avgpool1d in ordinary and is_adaptive')
+                else:
+                    return layer.get_fhe_op_count_adaptive(n_input_ct, n, self.input_mult_level)
+            else:
+                return layer.get_fhe_op_count_multiplexed(n_input_ct, n_in, pack, self.input_mult_level)
+
+        # ── polyact / activation ─────────────────────────────────────────────
+        elif layer_type == 'polyact':
+            pred = preds[0]
+            order = getattr(node, 'order', 0)
+            if pred.dim == 0:
+                skip_0d = pred.sp_info['skip'][0] if isinstance(pred.sp_info.get('skip'), list) else 1
+                n_channel_per_ct_0d = int(n // 2 // skip_0d)
+                layer = PolyRelu0D(order, skip_0d, n_channel_per_ct_0d)
+                n_input_ct = n_packed_in
+                return layer.get_fhe_op_count_bsgs_feature0d(n_input_ct, self.input_mult_level)
+            if pred.dim == 1:
+                shape_1d = pred.shape[0]
+                skip_1d = pred.sp_info['skip'][0] if isinstance(pred.sp_info.get('skip'), list) else 1
+                if style == 'multiplexed':
+                    n_channel_per_ct_1d = int(n // 2 // shape_1d)
+                    layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
+                    return layer.get_fhe_op_count_bsgs_mux(n_packed_in, self.input_mult_level)
+                n_channel_per_ct_1d = int(n // 2 // shape_1d // skip_1d)
+                layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
+                return layer.get_fhe_op_count_bsgs_skip(n_packed_in, self.input_mult_level)
+            # dim == 2
+            input_shape = self.input_shape
+            skip = self.input_skip
+            layer = PolyRelu2D(input_shape, order, skip, pack)
+            return layer.get_fhe_op_count_bsgs_feature2d(n_packed_in, self.input_mult_level)
+
+        # ── mult_scalar ──────────────────────────────────────────────────────
+        elif layer_type == 'mult_scalar':
+            layer = MultScalarLayer()
+            return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
+
+        # ── add / add2d ──────────────────────────────────────────────────────
+        elif layer_type in ('add', 'add2d'):
+            layer = AddLayer()
+            return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
+
+        # ── upsample_nearest ────────────────────────────────────────────────
+        elif layer_type in ('upsample_nearest', 'resize'):
+            input_shape = self.input_shape
+            skip = self.input_skip
+            upsample_factor = getattr(node, 'upsample_factor', [1, 1])
+            layer = UpsampleNearestLayer(
+                shape=input_shape,
+                skip=skip,
+                upsample_factor=upsample_factor,
+                n_channel_per_ct=pack,
+                level=self.input_mult_level,
+            )
+            return layer.get_fhe_op_count(n_in, self.input_mult_level)
+        else:
+            raise NotImplementedError(f"Unsupported layer type: '{layer_type}'")
 
 
 class MpcScoreParam:

@@ -25,28 +25,28 @@
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include "../util.h"
 
-namespace ls = cxx_sdk_v2;
+namespace ls = lattisense;
 
 enum class PackType { MultipleChannelPacking, MultiplexedPacking, InterleavedPacking };
 
-enum class DecryptType { RESHAPE, SPARSE };
-enum class ExecuteType { FPGA, SDK };
-
 class FeatureEncrypted {
 public:
+    FeatureEncrypted();
+    virtual ~FeatureEncrypted();
+
+    FeatureEncrypted(const FeatureEncrypted&) = delete;
+    FeatureEncrypted& operator=(const FeatureEncrypted&) = delete;
+    FeatureEncrypted(FeatureEncrypted&&) noexcept = default;
+    FeatureEncrypted& operator=(FeatureEncrypted&&) noexcept = default;
+
+    virtual Bytes serialize() const = 0;
+    virtual void deserialize(const Bytes& bytes) = 0;
+
     ls::CkksContext* context = nullptr;
     uint32_t dim = 0;
     uint32_t n_channel = 0;
     uint32_t n_channel_per_ct = 0;
     uint32_t level = 0;
-    uint32_t matmul_block_size = 0;
-    double ckks_scale = 0;
-    double multiplier = 0;
-
-    FeatureEncrypted();
-    virtual ~FeatureEncrypted();
-
-    virtual void deserialize(const Bytes& bytes) {};
 };
 
 class FeatureShare {

@@ -19,7 +19,7 @@
 #include "feature1d.h"
 
 using namespace std;
-using namespace cxx_sdk_v2;
+using namespace lattisense;
 
 Feature1DEncrypted::Feature1DEncrypted(CkksContext* context_in,
                                        int ct_level,
@@ -92,19 +92,14 @@ void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, bo
 
     int n_slot = context->get_parameter().get_n() / 2;
 
-    // block_stride: slots per spatial position (first skip valid, rest invalid)
-    // block_size:   total slots per block (shape spatial positions)
-    uint32_t block_stride = skip * invalid_fill;
-    uint32_t block_size = shape * block_stride;
+    // skip already contains invalid_fill: block_stride = skip (not skip*invalid_fill)
+    // valid channels per block = skip / invalid_fill
+    uint32_t block_stride = skip;
+    uint32_t block_size = shape * block_stride;  // = shape * skip
     n_channel_per_ct = n_slot / (shape * invalid_fill);
-
-    int n_mult_pack_per_ct = std::min((int)n_channel_per_ct, (int)n_channel);
-
-    if (n_channel > n_channel_per_ct) {
-        throw std::runtime_error("over slot!");
-    }
-
-    int f_ct_num = div_ceil(n_channel, n_mult_pack_per_ct);
+    int n_channel_per_block = skip / invalid_fill;
+    int n_block_per_ct = n_channel_per_ct / n_channel_per_block;
+    int f_ct_num = div_ceil(n_channel, n_channel_per_ct);
 
     data.clear();
     data_compress.clear();
@@ -115,18 +110,17 @@ void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, bo
     }
 
     parallel_for(f_ct_num, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
-        vector<double> image_flat;
-        image_flat.resize(n_slot, 0.0);
+        vector<double> image_flat(n_slot, 0.0);
 
-        for (int j = 0; j < n_mult_pack_per_ct; j++) {
-            int channel = ct_idx * n_mult_pack_per_ct + j;
+        for (int j = 0; j < n_channel_per_ct; j++) {
+            int channel = ct_idx * n_channel_per_ct + j;
 
             if (channel >= n_channel) {
                 continue;
             }
 
-            int block_idx = j / skip;
-            int sub_pos = j % skip;
+            int block_idx = j / n_channel_per_block;
+            int sub_pos = j % n_channel_per_block;
             for (int data_idx = 0; data_idx < shape; data_idx++) {
                 int slot_idx = block_idx * (int)block_size + data_idx * (int)block_stride + sub_pos;
                 image_flat[slot_idx] = feature_mg.get(channel, data_idx);
@@ -148,9 +142,10 @@ Array<double, 2> Feature1DEncrypted::unpack_multiplexed() const {
     const int N_THREAD = 4;
     int n_ct = data.size();
 
-    uint32_t block_stride = skip * invalid_fill;
-    uint32_t block_size = shape * block_stride;
-    int n_mult_pack_per_ct = std::min((int)n_channel_per_ct, (int)n_channel);
+    // Mirror pack_multiplexed exactly
+    uint32_t block_stride = skip;
+    uint32_t block_size = shape * block_stride;               // = shape * skip
+    int n_channel_per_block = (int)skip / (int)invalid_fill;  // valid sub_pos per block
 
     Array<double, 2> result({n_channel, shape});
 
@@ -158,16 +153,14 @@ Array<double, 2> Feature1DEncrypted::unpack_multiplexed() const {
         CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_idx]);
         Array1D x_mg = ctx_copy.decode(x_pt);
 
-        for (int j = 0; j < n_mult_pack_per_ct; j++) {
-            int channel = ct_idx * n_mult_pack_per_ct + j;
-
-            if (channel >= n_channel) {
+        for (int j = 0; j < (int)n_channel_per_ct; j++) {
+            int channel = ct_idx * (int)n_channel_per_ct + j;
+            if (channel >= (int)n_channel) {
                 continue;
             }
-
-            int block_idx = j / skip;
-            int sub_pos = j % skip;
-            for (int data_idx = 0; data_idx < shape; data_idx++) {
+            int block_idx = j / n_channel_per_block;
+            int sub_pos = j % n_channel_per_block;
+            for (int data_idx = 0; data_idx < (int)shape; data_idx++) {
                 int slot_idx = block_idx * (int)block_size + data_idx * (int)block_stride + sub_pos;
                 result.set(channel, data_idx, x_mg[slot_idx]);
             }

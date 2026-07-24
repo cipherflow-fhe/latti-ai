@@ -33,7 +33,7 @@ class AveragePoolComputeNode(ComputeNode):
         layer_type: str,
         feature_input: list[FeatureNode],
         feature_output: list[FeatureNode],
-        kernel_shape: list = [8, 8],
+        kernel_shape: list,
         stride: list = [1, 1],
         pads: list = [1, 1],
     ):
@@ -43,17 +43,15 @@ class AveragePoolComputeNode(ComputeNode):
         self.padding = pads
         feature_output[0].level = feature_input[0].level
         feature_output[0].channel = feature_input[0].channel
-        if stride[0] > 0 and stride[1] > 0 and feature_input[0].shape[0] > 0:
-            feature_output[0].skip[0] = feature_input[0].skip[0] * stride[0]
-            feature_output[0].skip[1] = feature_input[0].skip[1] * stride[1]
-            feature_output[0].shape[0] = feature_input[0].shape[0] // stride[0]
-            feature_output[0].shape[1] = feature_input[0].shape[1] // stride[1]
+        spatial_dims = len(stride)
+        if all(stride[i] > 0 for i in range(spatial_dims)) and feature_input[0].shape[0] > 0:
+            for i in range(spatial_dims):
+                feature_output[0].skip[i] = feature_input[0].skip[i] * stride[i]
+                feature_output[0].shape[i] = feature_input[0].shape[i] // stride[i]
         else:
-            # GlobalAveragePool: 1x1
-            feature_output[0].shape[0] = 1
-            feature_output[0].shape[1] = 1
-            feature_output[0].skip[0] = feature_input[0].skip[0]
-            feature_output[0].skip[1] = feature_input[0].skip[1]
+            for i in range(spatial_dims):
+                feature_output[0].shape[i] = 1
+                feature_output[0].skip[i] = feature_input[0].skip[i]
 
     @override
     def to_json(self):
@@ -75,13 +73,16 @@ class AveragePoolComputeNode(ComputeNode):
     @staticmethod
     def from_onnx_node(x: NodeProto, features_nodes) -> 'AveragePoolComputeNode':
         layer_id = format_id(x.name)
-        layer_type = 'avgpool2d'
         feature_input = [features_nodes[format_id(x.input[0])]]
         feature_output = [features_nodes[format_id(x.output[0])]]
         attrs = ComputeNode.get_attr_value_dict(x)
         stride = attrs['strides']
         kernel_shape = attrs['kernel_shape']
-        pads = attrs['pads'][2::]
+        pads_raw = attrs.get('pads', [0] * len(kernel_shape) * 2)
+        pads = pads_raw[len(kernel_shape) : :]
+
+        spatial_dims = len(kernel_shape)
+        layer_type = f'avgpool{spatial_dims}d'
 
         return AveragePoolComputeNode(layer_id, layer_type, feature_input, feature_output, kernel_shape, stride, pads)
 
@@ -94,6 +95,8 @@ class AveragePoolComputeNode(ComputeNode):
         params_str['stride'] = self.stride
         params_str['kernel_size'] = self.kernel_shape
         params = dict_to_args(params_str)
-        init_str.append(f'self.{self.layer_id} = nn.AvgPool2d({params})')
+        spatial_dims = len(self.stride)
+        pool_class = f'nn.AvgPool{spatial_dims}d'
+        init_str.append(f'self.{self.layer_id} = {pool_class}({params})')
         forward_str.append(f'{str(self.feature_output[0])} = self.{self.layer_id}({str(self.feature_input[0])})')
         return {'init': init_str, 'forward': forward_str}

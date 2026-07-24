@@ -21,20 +21,20 @@
 #include "conv2d_layer.h"
 #include "../data_structs/feature.h"
 
-class ParMultiplexedConv2DPackedLayerDepthwise : public Conv2DLayer {
+class MultiplexedConv2DPackedLayerDepthwise : public Conv2DLayer {
 public:
-    ParMultiplexedConv2DPackedLayerDepthwise(const ls::CkksParameter& param_in,
-                                             const Duo& input_shape_in,
-                                             const Array<double, 4>& weight_in,
-                                             const Array<double, 1>& bias_in,
-                                             const Duo& stride_in,
-                                             const Duo& skip_in,
-                                             uint32_t n_channel_per_ct_in,
-                                             uint32_t level_in,
-                                             double residual_scale = 1.0);
+    MultiplexedConv2DPackedLayerDepthwise(const ls::CkksParameter& param_in,
+                                          const Duo& input_shape_in,
+                                          Array<double, 4>&& weight_in,
+                                          Array<double, 1>&& bias_in,
+                                          const Duo& stride_in,
+                                          const Duo& skip_in,
+                                          uint32_t n_channel_per_ct_in,
+                                          uint32_t level_in,
+                                          double residual_scale = 1.0);
 
-    virtual void prepare_weight();
-    virtual void prepare_weight_lazy();
+    void prepare_weight() override;
+    void prepare_weight_lazy() override;
 
     virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     virtual std::vector<double> select_tensor(int num) const;
@@ -43,8 +43,6 @@ public:
     std::vector<ls::CkksPlaintextRingt> bias_pt;
     std::vector<ls::CkksPlaintextRingt> mask_pt;
     bool normal_conv = true;
-
-    virtual Array<double, 3> run_plaintext(const Array<double, 3>& x, double multiplier = 1);
 
     // Helper functions to generate weights/bias/mask on-demand
     ls::CkksPlaintextRingt
@@ -63,10 +61,14 @@ private:
     uint32_t n_packed_in_channel;
     uint32_t n_packed_out_channel;
     uint32_t n_block_per_ct;
+    bool need_repack_;
     double weight_scale;
+    Duo skip_;
+    std::vector<std::vector<double>> kernel_masks_;
+    std::vector<int> input_rotate_units_;
 
     // Cached values for on-demand generation
-    uint32_t cached_input_shape_ct[2] = {0, 0};
+    Duo cached_input_shape_ct = {0, 0};
     int cached_input_block_size = 0;
     int cached_kernel_size = 0;
     int cached_skip_prod = 0;
