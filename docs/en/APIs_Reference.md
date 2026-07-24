@@ -142,8 +142,9 @@ replace_activation_with_poly(model, old_cls=nn.SiLU, degree=4)
 #### replace_activation()
 
 ```python
-replace_activation(module, old_cls=nn.ReLU, new_module_factory=RangeNormPoly2d,
-                   upper_bound=3.0, degree=4, activation='relu')
+replace_activation(
+    module, old_cls=nn.ReLU, new_module_factory=RangeNormPoly2d, upper_bound=3.0, degree=4, activation='relu'
+)
 ```
 
 Generic in-place activation replacement. Replace all `old_cls` activations with instances created by `new_module_factory`.
@@ -212,8 +213,16 @@ Count the number of `activation_cls` instances in `module`.
 #### export_to_onnx()
 
 ```python
-export_to_onnx(model, save_path, input_size=(1, 3, 32, 32), opset_version=13,
-               dynamic_batch=True, remove_identity=True, save_h5=True, verbose=True)
+export_to_onnx(
+    model,
+    save_path,
+    input_size=(1, 3, 32, 32),
+    opset_version=13,
+    dynamic_batch=True,
+    remove_identity=True,
+    save_h5=True,
+    verbose=True,
+)
 ```
 
 Export a PyTorch model to ONNX. BatchNorm is kept as a full operator (not folded into Conv).
@@ -492,8 +501,7 @@ Initialize compiler configuration. Overrides values from `config.json` with prov
 #### run_parallel()
 
 ```python
-run_parallel(num_experiments, input_file_path,
-             output_dir, temperature, num_workers=16)
+run_parallel(num_experiments, input_file_path, output_dir, temperature, num_workers=16)
 ```
 
 Run multiple compilations in parallel and select the best result.
@@ -517,8 +525,7 @@ Source: `training/model_compiler/components.py`
 #### FeatureNode
 
 ```python
-FeatureNode(key, dim, channel, scale=1.0, ckks_parameter_id='param0',
-            ckks_scale=1, shape=[1, 1])
+FeatureNode(key, dim, channel, scale=1.0, ckks_parameter_id='param0', ckks_scale=1, shape=[1, 1])
 ```
 
 Data node in the compiler graph. Represents an encrypted feature tensor with CKKS parameters.
@@ -538,8 +545,14 @@ Data node in the compiler graph. Represents an encrypted feature tensor with CKK
 #### ComputeNode
 
 ```python
-ComputeNode(layer_id, layer_type, channel_input, channel_output,
-            ckks_parameter_id_input='param0', ckks_parameter_id_output='param0')
+ComputeNode(
+    layer_id,
+    layer_type,
+    channel_input,
+    channel_output,
+    ckks_parameter_id_input='param0',
+    ckks_parameter_id_output='param0',
+)
 ```
 
 Base computation node in the compiler graph.
@@ -558,8 +571,7 @@ Base computation node in the compiler graph.
 #### EncryptParameterNode
 
 ```python
-EncryptParameterNode(poly_modulus_degree, coeff_modulus_bit_length,
-                     special_prime_bit_length)
+EncryptParameterNode(poly_modulus_degree, coeff_modulus_bit_length, special_prime_bit_length)
 ```
 
 CKKS encryption parameter specification.
@@ -1176,8 +1188,17 @@ These Python layer classes generate FHE computation instructions (graph nodes) f
 #### Conv2DPackedLayer
 
 ```python
-Conv2DPackedLayer(n_out_channel, n_in_channel, input_shape, kernel_shape,
-                  stride, skip, pack, n_packed_in_channel, n_packed_out_channel)
+Conv2DPackedLayer(
+    n_out_channel,
+    n_in_channel,
+    input_shape,
+    kernel_shape,
+    stride,
+    skip,
+    pack,
+    n_packed_in_channel,
+    n_packed_out_channel,
+)
 ```
 
 Source: `layers/conv_pack.py`
@@ -1208,8 +1229,17 @@ Source: `layers/conv_pack.py`
 #### Conv2DepthwiseLayer
 
 ```python
-Conv2DepthwiseLayer(n_out_channel, n_in_channel, input_shape, kernel_shape,
-                    stride, skip, pack, n_packed_in_channel, n_packed_out_channel)
+Conv2DepthwiseLayer(
+    n_out_channel,
+    n_in_channel,
+    input_shape,
+    kernel_shape,
+    stride,
+    skip,
+    pack,
+    n_packed_in_channel,
+    n_packed_out_channel,
+)
 ```
 
 Source: `layers/conv_dw.py`
@@ -1228,9 +1258,18 @@ Source: `layers/conv_dw.py`
 #### MultConv2DPackedLayer
 
 ```python
-MultConv2DPackedLayer(n_out_channel, n_in_channel, input_shape, kernel_shape,
-                      stride, skip, n_channel_per_ct, n_packed_in_channel,
-                      n_packed_out_channel, upsample_factor=[1, 1])
+MultConv2DPackedLayer(
+    n_out_channel,
+    n_in_channel,
+    input_shape,
+    kernel_shape,
+    stride,
+    skip,
+    n_channel_per_ct,
+    n_packed_in_channel,
+    n_packed_out_channel,
+    upsample_factor=[1, 1],
+)
 ```
 
 Source: `layers/mult_conv.py`
@@ -1262,9 +1301,18 @@ Source: `layers/mult_conv.py`
 #### MultConv2DPackedDepthwiseLayer
 
 ```python
-MultConv2DPackedDepthwiseLayer(n_out_channel, n_in_channel, input_shape, kernel_shape,
-                               stride, skip, n_channel_per_ct, n_packed_in_channel,
-                               n_packed_out_channel, upsample_factor=[1, 1])
+MultConv2DPackedDepthwiseLayer(
+    n_out_channel,
+    n_in_channel,
+    input_shape,
+    kernel_shape,
+    stride,
+    skip,
+    n_channel_per_ct,
+    n_packed_in_channel,
+    n_packed_out_channel,
+    upsample_factor=[1, 1],
+)
 ```
 
 Source: `layers/mult_conv_dw.py`
