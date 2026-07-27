@@ -12,11 +12,16 @@
 
 FROM ubuntu:22.04
 
+USER root
+
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install system dependencies and add deadsnakes PPA for Python 3.12
-RUN apt-get update && apt-get install -y \
+RUN rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources \
+    && mkdir -p /var/lib/apt/lists/partial \
+    && chmod -R 755 /var/lib/apt/lists \
+    && apt-get update && apt-get install -y \
     software-properties-common \
     && add-apt-repository -y ppa:deadsnakes/ppa \
     && apt-get update && apt-get install -y \

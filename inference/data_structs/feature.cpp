@@ -18,10 +18,28 @@
 
 #include "feature.h"
 #include "util.h"
+#include <atomic>
+#include <iostream>
+#include <omp.h>
 #include <sstream>
 
 using namespace std;
 using namespace cxx_sdk_v2;
+
+namespace {
+
+std::atomic<int> max_reported_openmp_threads{0};
+
+void report_openmp_threads(int actual_threads) {
+    int previous = max_reported_openmp_threads.load();
+    while (actual_threads > previous && !max_reported_openmp_threads.compare_exchange_weak(previous, actual_threads)) {
+    }
+    if (actual_threads > previous) {
+        cerr << "latti_ai_openmp_actual_threads=" << actual_threads << endl;
+    }
+}
+
+}  // namespace
 
 int32_t bitlength = RING_MOD_BIT;
 
@@ -52,15 +70,20 @@ int64_t gen_random_for_share(int r_bitlength) {
 void parallel_for(int n, int n_thread, CkksContext& context, const function<void(CkksContext&, int)>& fn) {
     int n_group = div_ceil(n, n_thread);
     context.resize_copies(n_thread);
-#pragma omp parallel for num_threads(n_thread)
-    for (int thread_idx = 0; thread_idx < n_thread; thread_idx++) {
-        CkksContext& context_copy = context.get_copy(thread_idx);
-        for (int group_idx = 0; group_idx < n_group; group_idx++) {
-            int i = group_idx * n_thread + thread_idx;
-            if (i >= n) {
-                continue;
+#pragma omp parallel num_threads(n_thread)
+    {
+#pragma omp single
+        report_openmp_threads(omp_get_num_threads());
+#pragma omp for
+        for (int thread_idx = 0; thread_idx < n_thread; thread_idx++) {
+            CkksContext& context_copy = context.get_copy(thread_idx);
+            for (int group_idx = 0; group_idx < n_group; group_idx++) {
+                int i = group_idx * n_thread + thread_idx;
+                if (i >= n) {
+                    continue;
+                }
+                fn(context_copy, i);
             }
-            fn(context_copy, i);
         }
     }
 }
@@ -68,15 +91,20 @@ void parallel_for(int n, int n_thread, CkksContext& context, const function<void
 void parallel_for(int n, int n_thread, CkksBtpContext& context, const function<void(CkksBtpContext&, int)>& fn) {
     int n_group = div_ceil(n, n_thread);
     context.resize_copies(n_thread);
-#pragma omp parallel for num_threads(n_thread)
-    for (int thread_idx = 0; thread_idx < n_thread; thread_idx++) {
-        CkksBtpContext& context_copy = context.get_copy(thread_idx);
-        for (int group_idx = 0; group_idx < n_group; group_idx++) {
-            int i = group_idx * n_thread + thread_idx;
-            if (i >= n) {
-                continue;
+#pragma omp parallel num_threads(n_thread)
+    {
+#pragma omp single
+        report_openmp_threads(omp_get_num_threads());
+#pragma omp for
+        for (int thread_idx = 0; thread_idx < n_thread; thread_idx++) {
+            CkksBtpContext& context_copy = context.get_copy(thread_idx);
+            for (int group_idx = 0; group_idx < n_group; group_idx++) {
+                int i = group_idx * n_thread + thread_idx;
+                if (i >= n) {
+                    continue;
+                }
+                fn(context_copy, i);
             }
-            fn(context_copy, i);
         }
     }
 }
@@ -89,16 +117,21 @@ void parallel_for_with_extra_level_context(int n,
     context.resize_copies(n_thread);
     CkksContext& extra_level_context = context.get_extra_level_context();
     extra_level_context.resize_copies(n_thread);
-#pragma omp parallel for num_threads(n_thread)
-    for (int thread_idx = 0; thread_idx < n_thread; thread_idx++) {
-        CkksContext& context_copy = context.get_copy(thread_idx);
-        CkksContext& extra_level_context_copy = extra_level_context.get_copy(thread_idx);
-        for (int group_idx = 0; group_idx < n_group; group_idx++) {
-            int i = group_idx * n_thread + thread_idx;
-            if (i >= n) {
-                continue;
+#pragma omp parallel num_threads(n_thread)
+    {
+#pragma omp single
+        report_openmp_threads(omp_get_num_threads());
+#pragma omp for
+        for (int thread_idx = 0; thread_idx < n_thread; thread_idx++) {
+            CkksContext& context_copy = context.get_copy(thread_idx);
+            CkksContext& extra_level_context_copy = extra_level_context.get_copy(thread_idx);
+            for (int group_idx = 0; group_idx < n_group; group_idx++) {
+                int i = group_idx * n_thread + thread_idx;
+                if (i >= n) {
+                    continue;
+                }
+                fn(context_copy, extra_level_context_copy, i);
             }
-            fn(context_copy, extra_level_context_copy, i);
         }
     }
 }
