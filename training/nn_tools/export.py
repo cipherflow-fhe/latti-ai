@@ -618,14 +618,38 @@ def export_h5_from_onnx(
     for layer_key, layer in layers.items():
         ltype = layer.get('type')
 
-        if ltype in ('conv2d', 'fc0'):
+        if ltype in ('conv2d', 'conv1d', 'fc0', 'fc1'):
             wp = layer.get('weight_path', '')
             bp = layer.get('bias_path', '')
             absorb_paths = layer.get('absorb_path', [])
             absorb_types = layer.get('absorb_type', [])
+            synthetic_source = layer.get('synthetic_source', '')
+
+            if synthetic_source == 'avgpool1d':
+                channels = int(layer['channel_output'])
+                pool_kernel = int(layer.get('source_pool_kernel_shape', layer['kernel_shape'])[0])
+                conv_kernel = int(layer['kernel_shape'][0])
+                start = conv_kernel // 2
+
+                w = np.zeros((channels, 1, conv_kernel), dtype=np.float64)
+                w[:, 0, start : start + pool_kernel] = 1.0 / float(pool_kernel)
+                b = np.zeros((channels,), dtype=np.float64)
+
+                out[wp] = w
+                if bp:
+                    out[bp] = b
+                if verbose:
+                    log.info(
+                        'Synthetic AvgPool1d->DWConv1d: %s  pool_kernel=%d conv_kernel=%d channels=%d',
+                        wp,
+                        pool_kernel,
+                        conv_kernel,
+                        channels,
+                    )
+                continue
 
             if wp not in onnx_weights:
-                log.warning('conv weight not in ONNX: %s', wp)
+                log.warning('layer weight not in ONNX: %s', wp)
                 continue
 
             w = onnx_weights[wp].copy()
@@ -641,12 +665,12 @@ def export_h5_from_onnx(
                     w = w / s.reshape(-1, *([1] * (w.ndim - 1)))
                     b = b / s
                     if verbose:
-                        log.info('Conv (absorb %s): %s  <- %s', atype, wp, apath)
+                        log.info('Layer (absorb %s): %s  <- %s', atype, wp, apath)
                 else:
                     log.warning('unknown absorb_type "%s" for %s', atype, wp)
 
             if not absorb_paths and verbose:
-                log.info('Conv (no absorb):         %s', wp)
+                log.info('Layer (no absorb):        %s', wp)
 
             out[wp] = w
             if bp:

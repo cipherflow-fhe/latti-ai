@@ -265,16 +265,9 @@ Feature1DEncrypted MultiplexedConv1DPackedLayer::run(CkksContext& ctx, Feature1D
     result.n_channel = n_channel_out;
     result.shape = x.shape / stride;
     result.skip = x.skip * stride;
-
     bool needs_rearrange = (skip > 1 || stride > 1);
-
-    if (!needs_rearrange) {
-        result.n_channel_per_ct = n_channel_per_ct;
-        result.level = x.level - 1;
-    } else {
-        result.n_channel_per_ct = n_channel_per_ct;
-        result.level = x.level - 2;
-    }
+    result.n_channel_per_ct = n_channel_per_ct;
+    result.level = x.level - (needs_rearrange ? 2 : 1);
     return result;
 }
 
@@ -383,7 +376,7 @@ vector<CkksCiphertext> MultiplexedConv1DPackedLayer::run_core(CkksContext& ctx, 
             CkksCiphertext masked;
             if (block_select_pt.empty()) {
                 auto bs_pt = generate_select_tensor_pt_for_index(ctx_copy, t);
-                auto bs_pt_rt = ctx.ringt_to_mul(bs_pt, level_ - 1);
+                auto bs_pt_rt = ctx_copy.ringt_to_mul(bs_pt, level_ - 1);
                 masked = ctx_copy.mult_plain_mul(result[wg], bs_pt_rt);
             } else {
                 auto bs_pt = ctx_copy.ringt_to_mul(block_select_pt[t], level_ - 1);

@@ -74,6 +74,7 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     transforms.expand_bert_custom_poly_functions(pt_graph)
     transforms.expand_poly_act_rn(pt_graph)
     transforms.expand_parcpmm_add_pt(pt_graph)
+    transforms.replace_avgpool1d_with_depthwise_conv(pt_graph)
     transforms.split_upsampling_layers(pt_graph)
     transforms.infer_shapes_skips_and_pack_num(pt_graph)
     transforms.set_pcm_K(pt_graph)

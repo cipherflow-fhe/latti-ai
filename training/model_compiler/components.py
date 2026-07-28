@@ -1219,6 +1219,11 @@ class LayerAbstractGraph:
                     'absorb_path': absorb_path,
                     'is_big_size': layer.is_big_size,
                 }
+                if hasattr(layer, 'synthetic_source'):
+                    layers[layer_id]['synthetic_source'] = layer.synthetic_source
+                    if layer.synthetic_source == 'avgpool1d':
+                        layers[layer_id]['source_pool_kernel_shape'] = layer.source_pool_kernel_shape
+                        layers[layer_id]['source_pool_padding'] = layer.source_pool_padding
             if 'pool' in layer_type:
                 if 'avgpool' in layer_type:
                     spatial_dims = len(stride)

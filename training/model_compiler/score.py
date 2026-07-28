@@ -1295,9 +1295,11 @@ class FheScoreParam:
         elif layer_type == 'avgpool1d':
             input_shape = self.input_shape
             stride = node.stride
+            n_input_ct = n_packed_in
             skip_1d = self.input_skip[0] if isinstance(self.input_skip, list) else self.input_skip
             layer = Avgpool1DLayer(stride[0], input_shape[0], channel=n_in, skip=skip_1d)
             is_adaptive = getattr(node, 'is_adaptive_avgpool', True)
+            is_big_size = getattr(node, 'is_big_size', False)
             if is_big_size:
                 raise ('unsuport avgpool1d in big_size')
             if is_adaptive:

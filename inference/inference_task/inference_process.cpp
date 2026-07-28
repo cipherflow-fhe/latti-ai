@@ -3277,8 +3277,8 @@ void InferenceProcess::prepare_task() {
 void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorFunc>& executors) {
     auto* fp_ptr = this->fp;
 
-    executors["encode_pt"] = [fp_ptr](ExecutionContext& exec_ctx, unordered_map<NodeIndex, any>& local_data,
-                                      const ComputeNode& self) -> void {
+    executors["encode_pt"] = [fp_ptr](ExecutionContext& exec_ctx, const unordered_map<NodeIndex, any>& inputs,
+                                      any& output, const ComputeNode& self) -> void {
         CkksContext* ckks_ctx_ptr = exec_ctx.get_arithmetic_context<CkksContext>();
         if (!ckks_ctx_ptr) {
             ckks_ctx_ptr = exec_ctx.get_arithmetic_context<CkksBtpContext>();
@@ -3300,7 +3300,7 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         int l = attrs.value("l", 0);
 
         NodeIndex input_node_idx = self.input_nodes[0]->index;
-        auto raw_ptr = any_cast<shared_ptr<fhe_ops_lib::CustomData>>(local_data.at(input_node_idx));
+        auto raw_ptr = any_cast<shared_ptr<fhe_ops_lib::CustomData>>(inputs.at(input_node_idx));
         auto* custom_data = raw_ptr.get();
         void* layer_ptr = custom_data->get_typed_data<void>();
 
@@ -3595,7 +3595,7 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             throw runtime_error("encode_pt: unknown op_class: " + op_class);
         }
 
-        local_data[self.output_nodes[0]->index] = make_shared<CkksPlaintextRingt>(move(pt));
+        output = make_shared<CkksPlaintextRingt>(move(pt));
     };
 }
 

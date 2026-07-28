@@ -113,12 +113,12 @@ def set_param(param_name):
     if param_name == 'N16QP1546H192H32':
         param = CkksBtpParam.create_default_param()
     else:
-        param = Param.create_ckks_custom_param(
+        param = CkksParam.create_custom_param(
             n=fhe.poly_modulus_degree,
             q=fhe.q,
             p=fhe.p,
+            scale=1 << fhe.log_default_scale,
         )
-        param.scale = 1 << fhe.log_default_scale
     set_fhe_param(param)
 
 
@@ -1325,6 +1325,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         n_channel_per_ct_1d,
                         math.ceil(n_in_channel / n_channel_per_ct_1d),
                         math.ceil(n_out_channel / n_block_per_ct),
+                        invalid_fill=[invalid_fill_1d, 1],
                     )
                     if lazy:
                         dense_data_source = CustomDataNode(type='fc_data_source', id=f'{layer_id}')

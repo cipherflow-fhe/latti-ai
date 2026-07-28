@@ -31,6 +31,9 @@ import json
 import transforms
 
 
+from inference.model_generator.layers.poly_relu_base import PolyReluBase
+
+
 def process_levels(graph: LayerAbstractGraph):
     if config.set_max_level:
         for node in graph.dag.nodes:
