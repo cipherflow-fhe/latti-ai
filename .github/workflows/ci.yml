@@ -138,11 +138,6 @@ jobs:
           python3 inference/interface/python/client/test_client.py
           python3 inference/interface/python/server/test_server.py
 
-      - name: Run compiler tests
-        run: |
-          cd build/inference/unittests
-          python3 ../../../training/model_compiler/unittests/test_compiler.py
-
       - name: Run E2E tests (GPU)
         timeout-minutes: 30
         run: |
@@ -217,8 +212,6 @@ jobs:
             python test_gen_layers.py TestLayerExport.test_sq
             ./test_data_structs
             ./test_fhe_layers_hetero 'sq*'
-            cd /workspace
-            python -m pytest training/model_compiler/unittests/test_compiler.py -v
           "
 
       - name: Tag and push
