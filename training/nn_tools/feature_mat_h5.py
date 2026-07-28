@@ -61,6 +61,12 @@ class PolyActRNSource:
     eps: float
 
 
+@dataclass(frozen=True)
+class PolyActRNPolySource:
+    degree: int
+    activation_name: str
+
+
 def export_feature_mat_h5_from_onnx(
     onnx_path: str,
     json_path: str,
@@ -81,7 +87,7 @@ def export_feature_mat_h5_from_onnx(
     """
     onnx_model = onnx.load(onnx_path)
     onnx_weights = {init.name: numpy_helper.to_array(init).astype('float64') for init in onnx_model.graph.initializer}
-    attention_sources, polyact_sources = _index_onnx_sources(onnx_model)
+    attention_sources, polyact_sources, pcmpoly_sources = _index_onnx_sources(onnx_model)
 
     with open(json_path, 'r', encoding='utf-8') as f:
         graph = json.load(f)
@@ -116,6 +122,7 @@ def export_feature_mat_h5_from_onnx(
                 onnx_weights,
                 attention_sources,
                 polyact_sources,
+                pcmpoly_sources,
                 standalone_gamma_paths,
                 out,
                 model_type=model_type,
@@ -128,6 +135,7 @@ def export_feature_mat_h5_from_onnx(
                 onnx_weights,
                 attention_sources,
                 polyact_sources,
+                pcmpoly_sources,
                 standalone_gamma_paths,
                 out,
                 model_type=model_type,
@@ -156,9 +164,12 @@ def export_feature_mat_h5_from_onnx(
     return h5_path
 
 
-def _index_onnx_sources(onnx_model: onnx.ModelProto) -> tuple[dict[str, AttentionSource], dict[str, PolyActRNSource]]:
+def _index_onnx_sources(
+    onnx_model: onnx.ModelProto,
+) -> tuple[dict[str, AttentionSource], dict[str, PolyActRNSource], dict[str, PolyActRNPolySource]]:
     attention_sources: dict[str, AttentionSource] = {}
     polyact_sources: dict[str, PolyActRNSource] = {}
+    pcmpoly_sources: dict[str, PolyActRNPolySource] = {}
 
     for node in onnx_model.graph.node:
         attrs = _attrs(node)
@@ -197,7 +208,16 @@ def _index_onnx_sources(onnx_model: onnx.ModelProto) -> tuple[dict[str, Attentio
                 eps=float(attrs.get('eps', 1e-3)),
             )
 
-    return attention_sources, polyact_sources
+        elif node.op_type == 'PolyActRNPoly':
+            source = PolyActRNPolySource(
+                degree=int(attrs.get('degree', attrs.get('degree_i', 4))),
+                activation_name=str(attrs.get('activation', attrs.get('activation_s', 'gelu'))),
+            )
+            node_id = _format_id(node.name)
+            pcmpoly_sources[node_id] = source
+            pcmpoly_sources[f'{node_id}.weight'] = source
+
+    return attention_sources, polyact_sources, pcmpoly_sources
 
 
 def _standalone_pcmgamma_paths(layers: dict[str, dict[str, Any]]) -> set[str]:
@@ -317,6 +337,7 @@ def _export_pdmpoly(
     onnx_weights: dict[str, np.ndarray],
     attention_sources: dict[str, AttentionSource],
     polyact_sources: dict[str, PolyActRNSource],
+    pcmpoly_sources: dict[str, PolyActRNPolySource],
     standalone_gamma_paths: set[str],
     out: dict[str, np.ndarray],
     model_type: str = '',
@@ -352,6 +373,9 @@ def _export_pdmpoly(
                 onnx_weights,
                 absorb_input_gamma=gamma_path not in standalone_gamma_paths,
             )
+        elif layer_key in pcmpoly_sources or dst_path in pcmpoly_sources:
+            source = pcmpoly_sources[layer_key] if layer_key in pcmpoly_sources else pcmpoly_sources[dst_path]
+            coeffs = _polyactrnpoly_coeff_matrix(source, expected_shape[1])
         elif dst_path in onnx_weights:
             coeffs = onnx_weights[dst_path].copy()
         else:
@@ -480,6 +504,7 @@ def _export_pcmpoly(
     onnx_weights: dict[str, np.ndarray],
     attention_sources: dict[str, AttentionSource],
     polyact_sources: dict[str, PolyActRNSource],
+    pcmpoly_sources: dict[str, PolyActRNPolySource],
     standalone_gamma_paths: set[str],
     out: dict[str, np.ndarray],
     model_type: str = '',
@@ -515,6 +540,9 @@ def _export_pcmpoly(
                 onnx_weights,
                 absorb_input_gamma=gamma_path not in standalone_gamma_paths,
             )
+        elif layer_key in pcmpoly_sources or dst_path in pcmpoly_sources:
+            source = pcmpoly_sources[layer_key] if layer_key in pcmpoly_sources else pcmpoly_sources[dst_path]
+            coeffs = _polyactrnpoly_coeff_matrix(source, expected_shape[1])
         elif dst_path in onnx_weights:
             coeffs = onnx_weights[dst_path].copy()
         else:
@@ -697,6 +725,52 @@ def _coeff_matrix(
     else:
         scale_factor = scale.reshape(1, -1)
     return coeff.reshape(-1, 1) * scale_factor
+
+
+def _polyactrnpoly_coeff_matrix(source: PolyActRNPolySource, n_cols: int) -> np.ndarray:
+    from .eval_fn_hat_for_aespa import get_hermite_coeffs_for_module
+
+    hermite_coeffs = get_hermite_coeffs_for_module(_resolve_activation_cls(source.activation_name), source.degree)
+    return _standard_poly_coeff_matrix(np.ones(n_cols, dtype='float64'), 1.0, 0.0, hermite_coeffs)
+
+
+def _standard_poly_coeff_matrix(
+    running_max: np.ndarray,
+    upper_bound: float,
+    eps: float,
+    hermite_coeffs: tuple[float, ...],
+) -> np.ndarray:
+    scale = np.asarray(running_max, dtype='float64').reshape(-1) / upper_bound + eps
+    degree = len(hermite_coeffs) - 1
+
+    hermite_power = [np.array([1.0], dtype='float64')]
+    if degree >= 1:
+        hermite_power.append(np.array([0.0, 1.0], dtype='float64'))
+    for n in range(2, degree + 1):
+        x_he_prev = np.concatenate(([0.0], hermite_power[n - 1]))
+        he_prev2 = np.pad(hermite_power[n - 2], (0, len(x_he_prev) - len(hermite_power[n - 2])))
+        hermite_power.append(x_he_prev - (n - 1) * he_prev2)
+
+    coeffs = np.zeros((degree + 1, len(scale)), dtype='float64')
+    for n, a_n in enumerate(hermite_coeffs):
+        for power, he_coeff in enumerate(hermite_power[n]):
+            if he_coeff != 0:
+                coeffs[power] += float(a_n) * float(he_coeff) * np.power(scale, 1 - power)
+    return coeffs
+
+
+def _resolve_activation_cls(name: str):
+    import torch.nn as nn
+
+    activations = {
+        'relu': nn.ReLU,
+        'silu': nn.SiLU,
+        'gelu': nn.GELU,
+    }
+    activation_cls = activations.get(name.lower())
+    if activation_cls is None:
+        raise ValueError(f'Unknown activation "{name}". Add it to _resolve_activation_cls.')
+    return activation_cls
 
 
 def _coeff_index(path: str) -> int | None:
