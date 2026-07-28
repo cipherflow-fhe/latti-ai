@@ -28,6 +28,8 @@
 #include <sstream>
 #include <filesystem>
 #include <iomanip>
+#include <utility>
+#include <limits>
 
 #include "data_structs/feature.h"
 #include "fhe_layers/conv2d_packed_layer.h"
@@ -40,12 +42,14 @@
 #include "fhe_layers/conv2d_depthwise.h"
 #include "fhe_layers/dense_packed_layer.h"
 #include "fhe_layers/reshape_layer.h"
-#include "fhe_layers/block_col_major_ccmm.h"
-#include "fhe_layers/block_col_major_cpmm.h"
-#include "fhe_layers/block_col_major_transpose.h"
 #include "fhe_layers/par_block_col_major_transpose.h"
 #include "fhe_layers/par_block_col_major_ccmm.h"
 #include "fhe_layers/par_block_col_major_cpmm.h"
+#include "fhe_layers/par_lower_diag_pcmm.h"
+#include "fhe_layers/par_lower_diag_ccmm.h"
+#include "fhe_layers/par_lower_diag_transpose.h"
+#include "fhe_layers/par_block_col_major_add_pt.h"
+#include "fhe_layers/par_lower_diagonal_add_pt.h"
 #include "fhe_layers/conv1d_packed_layer.h"
 #include "fhe_layers/multiplexed_conv1d_pack_layer.h"
 #include "fhe_layers/multiplexed_conv1d_depthwise_pack_layer.h"
@@ -58,13 +62,29 @@
 #include "fhe_layers/mult_scaler.h"
 #include "fhe_layers/upsample_layer.h"
 #include "fhe_layers/upsample_nearest_layer.h"
-#include "fhe_ops_lib/utils.h"
+#include "fhe_layers/block_col_major_layernorm.h"
+#include "fhe_layers/par_block_col_major_layernorm.h"
+#include "fhe_layers/par_upper_diagonal_layernorm.h"
+#include "fhe_layers/block_col_major_polyactrn.h"
+#include "fhe_layers/par_block_col_major_polyactrn.h"
+#include "fhe_layers/par_upper_diagonal_polyact.h"
+#include "fhe_layers/par_upper_diagonal_poly_mult_ct.h"
+#include "fhe_layers/par_upper_diagonal_poly.h"
+#include "fhe_layers/par_upper_diagonal_softmax.h"
+#include "data_structs/feature_mat.h"
+#include "fhe_layers/batch_dense_packed_layer.h"
 #include "ut_util.h"
+#include <fhe_ops_lib/utils.h>
 #include <cxx_sdk_v2/cxx_fhe_task.h>
+#include <cxx_sdk_v2/cxx_argument.h>
 #include <lattisense/lib/nlohmann/json.hpp>
+#include <any>
+#include <algorithm>
+#include <unordered_map>
 
 using namespace std;
 using namespace lattisense;
+using namespace fhe_ops_lib;
 namespace fs = std::filesystem;
 
 fs::path base_path = "../hetero";
@@ -152,6 +172,25 @@ private:
     SharedHeteroResources& operator=(const SharedHeteroResources&) = delete;
 };
 
+struct UpperDiagonalHeteroResources {
+    static UpperDiagonalHeteroResources& get() {
+        static UpperDiagonalHeteroResources instance;
+        return instance;
+    }
+    const int N = 8192;
+    const int n_slot = N / 2;
+    CkksParameter param;
+    CkksContext context;
+
+private:
+    UpperDiagonalHeteroResources()
+        : param(CkksParameter::create_parameter(N)), context(CkksContext::create_random_context(param)) {
+        context.gen_rotation_keys();
+    }
+    UpperDiagonalHeteroResources(const UpperDiagonalHeteroResources&) = delete;
+    UpperDiagonalHeteroResources& operator=(const UpperDiagonalHeteroResources&) = delete;
+};
+
 template <typename T> class HeteroFixture {
 public:
     HeteroFixture()
@@ -213,6 +252,7 @@ using HeteroProcessors = tuple<ProcessorCpu, ProcessorGpu>;
 #else
 using HeteroProcessors = tuple<ProcessorCpu>;
 #endif
+using UpperDiagonalGraphProcessors = tuple<ProcessorCpu>;
 
 #define FOR_EACH_SECTION(var_decl, range, section_name)                                                                \
     for (var_decl : range)                                                                                             \
@@ -223,6 +263,1809 @@ using HeteroProcessors = tuple<ProcessorCpu>;
         if (!(condition)) {                                                                                            \
         } else                                                                                                         \
             SECTION(section_name)
+
+static uint32_t next_pow2_u32(uint32_t x) {
+    uint32_t p = 1;
+    while (p < x)
+        p <<= 1;
+    return p;
+}
+
+static uint32_t
+par_diagonal_total_cts(const CkksParameter& param, Duo shape, Duo head_shape, uint32_t n_heads, bool is_transposed) {
+    uint32_t n_prepad = is_transposed ? head_shape[1] : head_shape[0];
+    uint32_t m_prepad = is_transposed ? head_shape[0] : head_shape[1];
+    uint32_t H = next_pow2_u32(n_heads);
+    uint32_t m = next_pow2_u32(m_prepad);
+    uint32_t n = next_pow2_u32(n_prepad);
+    uint32_t segment_len = H * n;
+    uint32_t c = (param.get_n() / 2) / segment_len;
+    uint32_t cts_per_mb = m / c;
+    uint32_t packed_extent = n_heads * m_prepad;
+    uint32_t packed_total = is_transposed ? shape[0] : shape[1];
+    return div_ceil(packed_total, packed_extent) * cts_per_mb;
+}
+
+static Array<double, 2> unpack_par_diagonal_output(CkksContext& context,
+                                                   int level,
+                                                   const vector<CkksCiphertext>& out_cts,
+                                                   Duo shape,
+                                                   Duo head_shape,
+                                                   uint32_t n_heads,
+                                                   bool is_lower,
+                                                   bool is_transposed) {
+    FeatureMatEncrypted out_enc(&context, level);
+    out_enc.shape = shape;
+    out_enc.head_shape = head_shape;
+    out_enc.matmul_block_size = next_pow2_u32(is_transposed ? head_shape[0] : head_shape[1]);
+    for (const auto& ct : out_cts)
+        out_enc.data.push_back(ct.copy());
+    return out_enc.par_diagonal_unpack(n_heads, head_shape, is_lower, is_transposed);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_lower_diag_transpose_roundtrip",
+                               "[fhe_layers][par_lower_diag_transpose]",
+                               HeteroProcessors) {
+    int init_level = 2;
+    uint32_t n_heads = 3;
+    uint32_t head_dim = 64;
+    vector<uint32_t> n_prepads = {65, 128};
+
+    FOR_EACH_SECTION(uint32_t n_prepad, n_prepads, "n_prepad=" + to_string(n_prepad)) {
+        fs::path project_path = base_path / "CKKS_par_lower_diag_transpose" / ("n_prepad_" + to_string(n_prepad)) /
+                                ("level_" + to_string(init_level)) / "server";
+        if (!fs::exists(project_path / "mega_ag.json"))
+            return;
+
+        Array<double, 2> X_T = gen_random_array<2>({n_heads * head_dim, n_prepad}, 1.0);
+
+        FeatureMatEncrypted input_enc(&this->context, init_level);
+        input_enc.par_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, true, true, false,
+                                    this->param.get_default_scale());
+
+        ParLowerDiagTranspose layer(this->param, Duo{head_dim, n_prepad}, n_heads, head_dim, init_level);
+        layer.prepare_weight();
+        Array<double, 2> expected = layer.run_plaintext(X_T);
+
+        vector<CkksCiphertext> in_cts, out_cts;
+        for (auto& ct : input_enc.data)
+            in_cts.push_back(ct.copy());
+        uint32_t n_out =
+            par_diagonal_total_cts(this->param, {n_prepad, n_heads * head_dim}, {n_prepad, head_dim}, n_heads, false);
+        for (uint32_t i = 0; i < n_out; i++)
+            out_cts.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input")
+                cxx_args.push_back({name, &in_cts});
+            else if (name == "transpose_mask_pt")
+                cxx_args.push_back({name, &layer.transpose_mask_pt_});
+            else if (name == "output")
+                cxx_args.push_back({name, &out_cts});
+        }
+        this->run(project_path, cxx_args);
+
+        Array<double, 2> actual =
+            unpack_par_diagonal_output(this->context, init_level - 1, out_cts, {n_prepad, n_heads * head_dim},
+                                       {n_prepad, head_dim}, n_heads, true, false);
+        print_double_message(actual.to_array_1d().data(), "actual", 10);
+        print_double_message(expected.to_array_1d().data(), "expected", 10);
+        auto comparison = compare(expected, actual);
+        REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+        REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_lower_diag_pcmm_roundtrip",
+                               "[fhe_layers][par_lower_diag_pcmm]",
+                               HeteroProcessors) {
+    int init_level = 3;
+    uint32_t n_prepad = 65;
+    uint32_t n_heads = 3;
+    uint32_t head_dim = 64;
+    uint32_t d_prepad = n_heads * head_dim;
+
+    struct Case {
+        uint32_t w_rows;
+        uint32_t w_cols;
+        const char* mode;
+    };
+
+    vector<Case> cases = {
+        {d_prepad, d_prepad, "SQUARE"},
+        {d_prepad, 4 * d_prepad, "EXPAND"},
+        {4 * d_prepad, d_prepad, "REDUCE"},
+    };
+
+    for (const auto& cfg : cases) {
+        INFO(cfg.mode);
+        std::string mode_dir = cfg.mode == std::string("SQUARE") ? "square" :
+                               cfg.mode == std::string("EXPAND") ? "expand" :
+                                                                   "reduce";
+        fs::path project_path =
+            base_path / "CKKS_par_lower_diag_pcmm" / mode_dir / ("level_" + to_string(init_level)) / "server";
+        if (!fs::exists(project_path / "mega_ag.json"))
+            return;
+
+        Array<double, 2> X_T = gen_random_array<2>({cfg.w_rows, n_prepad}, 1.0);
+        Array<double, 2> W_T = gen_random_array<2>({cfg.w_cols, cfg.w_rows}, 0.1);
+        Array<double, 1> bias = gen_random_array<1>({cfg.w_cols}, 0.1);
+
+        FeatureMatEncrypted X_enc(&this->context, init_level);
+        X_enc.par_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
+
+        ParLowerDiagPCMM layer(this->param, Duo{cfg.w_rows, n_prepad}, n_heads, head_dim, W_T, init_level, bias.copy());
+        layer.prepare_weight();
+        Array<double, 2> expected = layer.run_plaintext(X_T);
+
+        vector<CkksCiphertext> in_cts, out_cts;
+        for (auto& ct : X_enc.data)
+            in_cts.push_back(ct.copy());
+        uint32_t n_out =
+            par_diagonal_total_cts(this->param, {cfg.w_cols, n_prepad}, {head_dim, n_prepad}, n_heads, true);
+        for (uint32_t i = 0; i < n_out; i++)
+            out_cts.push_back(this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
+
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input")
+                cxx_args.push_back({name, &in_cts});
+            else if (name == "pt_A")
+                cxx_args.push_back({name, &layer.pt_A_});
+            else if (name == "mask_wrap_pt")
+                cxx_args.push_back({name, &layer.mask_wrap_pt_});
+            else if (name == "bias_pt")
+                cxx_args.push_back({name, &layer.bias_pt_});
+            else if (name == "output")
+                cxx_args.push_back({name, &out_cts});
+        }
+        this->run(project_path, cxx_args);
+
+        Array<double, 2> actual = unpack_par_diagonal_output(
+            this->context, init_level - 2, out_cts, {cfg.w_cols, n_prepad}, {head_dim, n_prepad}, n_heads, true, true);
+        print_double_message(actual.to_array_1d().data(), "actual", 10);
+        print_double_message(expected.to_array_1d().data(), "expected", 10);
+        auto comparison = compare(expected, actual);
+        REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+        REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_lower_diag_ccmm_kqt_roundtrip",
+                               "[fhe_layers][par_lower_diag_ccmm][kqt]",
+                               HeteroProcessors) {
+    int ccmm_level = 3;
+    uint32_t n_heads = 3;
+    uint32_t head_dim = 64;
+    uint32_t n_prepad = 97;
+    fs::path project_path =
+        base_path / "CKKS_par_lower_diag_ccmm" / "kqt" / ("level_" + to_string(ccmm_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
+
+    Array<double, 2> A = gen_random_array<2>({n_prepad, n_heads * head_dim}, 0.5);
+    Array<double, 2> B = gen_random_array<2>({n_heads * head_dim, n_prepad}, 0.5);
+
+    FeatureMatEncrypted A_enc(&this->context, ccmm_level);
+    FeatureMatEncrypted B_enc(&this->context, ccmm_level);
+    A_enc.par_diagonal_pack(A, n_heads, {n_prepad, head_dim}, true, false, false, this->param.get_default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
+
+    ParLowerDiagCCMM layer(this->param, Duo{n_prepad, head_dim}, Duo{head_dim, n_prepad}, n_heads, head_dim,
+                           ccmm_level);
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(A, B);
+
+    vector<CkksCiphertext> A_cts, B_cts, out_cts;
+    for (auto& ct : A_enc.data)
+        A_cts.push_back(ct.copy());
+    for (auto& ct : B_enc.data)
+        B_cts.push_back(ct.copy());
+    uint32_t n_out =
+        par_diagonal_total_cts(this->param, {n_heads * n_prepad, n_prepad}, {n_prepad, n_prepad}, n_heads, true);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(ccmm_level - 3, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "A_input")
+            cxx_args.push_back({name, &A_cts});
+        else if (name == "B_input")
+            cxx_args.push_back({name, &B_cts});
+        else if (name == "replication_mask_pt")
+            cxx_args.push_back({name, &layer.replication_mask_pt_});
+        else if (name == "kqt_route_pt")
+            cxx_args.push_back({name, &layer.kqt_route_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, ccmm_level - 3, out_cts, {n_heads * n_prepad, n_prepad},
+                                   {n_prepad, n_prepad}, n_heads, true, true);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_lower_diag_ccmm_ordinary_roundtrip",
+                               "[fhe_layers][par_lower_diag_ccmm][ordinary]",
+                               HeteroProcessors) {
+    int init_level = 3;
+    uint32_t n_heads = 3;
+    uint32_t head_dim = 64;
+    uint32_t n_prepad = 97;
+    fs::path project_path =
+        base_path / "CKKS_par_lower_diag_ccmm" / "ordinary" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
+
+    Array<double, 2> A = gen_random_array<2>({n_heads * head_dim, n_prepad}, 0.5);
+    Array<double, 2> B = gen_random_array<2>({n_heads * n_prepad, n_prepad}, 0.5);
+
+    FeatureMatEncrypted A_enc(&this->context, init_level);
+    FeatureMatEncrypted B_enc(&this->context, init_level);
+    A_enc.par_diagonal_pack(A, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, {n_prepad, n_prepad}, true, true, false, this->param.get_default_scale());
+
+    ParLowerDiagCCMM layer(this->param, Duo{head_dim, n_prepad}, Duo{n_prepad, n_prepad}, n_heads, head_dim,
+                           init_level);
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(A, B);
+
+    vector<CkksCiphertext> A_cts, B_cts, out_cts;
+    for (auto& ct : A_enc.data)
+        A_cts.push_back(ct.copy());
+    for (auto& ct : B_enc.data)
+        B_cts.push_back(ct.copy());
+    uint32_t n_out =
+        par_diagonal_total_cts(this->param, {n_heads * head_dim, n_prepad}, {head_dim, n_prepad}, n_heads, true);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(init_level - 3, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "A_input")
+            cxx_args.push_back({name, &A_cts});
+        else if (name == "B_input")
+            cxx_args.push_back({name, &B_cts});
+        else if (name == "replication_mask_pt")
+            cxx_args.push_back({name, &layer.replication_mask_pt_});
+        else if (name == "ordinary_route_pt")
+            cxx_args.push_back({name, &layer.ordinary_route_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, init_level - 3, out_cts, {n_heads * head_dim, n_prepad},
+                                   {head_dim, n_prepad}, n_heads, true, true);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_lower_diagonal_add_pt_cpp_roundtrip",
+                               "[fhe_layers][par_lower_diagonal_add_pt]",
+                               HeteroProcessors) {
+    const uint32_t total_rows = 137;
+    const uint32_t n_prepad = 197;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const uint32_t init_level = 2;
+    Duo shape = {total_rows, n_prepad};
+    Duo head_shape = {m_prepad, n_prepad};
+    fs::path project_path =
+        base_path / "CKKS_par_lower_diagonal_add_pt" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
+
+    auto A = gen_random_array<2>({total_rows, n_prepad}, 0.5);
+    auto B = gen_random_array<2>({total_rows, n_prepad}, 0.5);
+
+    FeatureMatEncrypted A_enc(&this->context, init_level);
+    A_enc.par_diagonal_pack(A, n_heads, head_shape, true, true, false, this->param.get_default_scale());
+
+    ParLowerDiagonalAddPt layer(this->param, shape, head_shape, n_heads, init_level, B.copy());
+    layer.precompute_pts();
+    Array<double, 2> expected = layer.run_plaintext(A);
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    for (auto& ct : A_enc.data)
+        in_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, true);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(init_level, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "input")
+            cxx_args.push_back({name, &in_cts});
+        else if (name == "add_pt")
+            cxx_args.push_back({name, &layer.pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, init_level, out_cts, shape, head_shape, n_heads, true, true);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_ln_stats_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_layernorm][stats]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const int init_level = 4;
+    const double eps = 1e-5;
+    const double var_std_bound = 4.0;
+    const double inv_var = 1.0 / (var_std_bound * var_std_bound);
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    fs::path project_path =
+        base_path / "CKKS_par_upper_diagonal_layernorm" / "stats" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
+    auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
+    FeatureMatEncrypted X_enc(&this->context, init_level);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalLNStats layer(this->param, shape, head_shape, n_heads, init_level, eps, inv_var);
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(X_mat);
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(init_level - 3, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "input")
+            cxx_args.push_back({name, &in_cts});
+        else if (name == "h0_mask_pt")
+            cxx_args.push_back({name, &layer.h0_mask_pt_});
+        else if (name == "inv_n_pt")
+            cxx_args.push_back({name, &layer.inv_n_pt_});
+        else if (name == "iv_pt")
+            cxx_args.push_back({name, &layer.iv_pt_});
+        else if (name == "eps_add_pt")
+            cxx_args.push_back({name, &layer.eps_add_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, init_level - 3, out_cts, shape, head_shape, n_heads, false, false);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_ln_xcentered_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_layernorm][xcentered]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const int init_level = 2;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    fs::path project_path =
+        base_path / "CKKS_par_upper_diagonal_layernorm" / "xcentered" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
+    auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
+    FeatureMatEncrypted X_enc(&this->context, init_level);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalLNXCentered layer(this->param, shape, head_shape, n_heads, init_level);
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(X_mat);
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "input")
+            cxx_args.push_back({name, &in_cts});
+        else if (name == "h0_mask_pt")
+            cxx_args.push_back({name, &layer.h0_mask_pt_});
+        else if (name == "inv_n_pt")
+            cxx_args.push_back({name, &layer.inv_n_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, init_level - 2, out_cts, shape, head_shape, n_heads, false, false);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_ln_minimax_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_layernorm][minimax]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const int input_level = 2;
+    const double c0 = 6.19067182;
+    const double c1 = -16.15885111;
+    const double c2 = 11.52830778;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    fs::path project_path =
+        base_path / "CKKS_par_upper_diagonal_layernorm" / "minimax" / ("level_" + to_string(input_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
+    auto a_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
+    FeatureMatEncrypted a_input(&this->context, input_level);
+    a_input.par_diagonal_pack(a_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalLNMinimaxInit layer(this->param, shape, head_shape, n_heads, input_level, c0, c1, c2);
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(a_mat);
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    for (auto& ct : a_input.data)
+        in_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(input_level - 2, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "input")
+            cxx_args.push_back({name, &in_cts});
+        else if (name == "c0_add_pt")
+            cxx_args.push_back({name, &layer.c0_add_pt_});
+        else if (name == "c1_pt")
+            cxx_args.push_back({name, &layer.c1_pt_});
+        else if (name == "c2_norm_pt")
+            cxx_args.push_back({name, &layer.c2_norm_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, input_level - 2, out_cts, shape, head_shape, n_heads, false, false);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_ln_goldschmidt_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_layernorm][goldschmidt]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const int input_level = 3;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    fs::path project_path = base_path / "CKKS_par_upper_diagonal_layernorm" / "goldschmidt" /
+                            ("level_" + to_string(input_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
+    auto y_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
+    auto a_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
+    FeatureMatEncrypted y_input(&this->context, input_level);
+    FeatureMatEncrypted a_input(&this->context, input_level);
+    y_input.par_diagonal_pack(y_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+    a_input.par_diagonal_pack(a_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalLNGoldschmidt layer(this->param, shape, head_shape, n_heads, input_level);
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(y_mat, a_mat);
+
+    vector<CkksCiphertext> y_cts, a_cts, out_cts;
+    for (auto& ct : y_input.data)
+        y_cts.push_back(ct.copy());
+    for (auto& ct : a_input.data)
+        a_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(input_level - 3, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "y_input")
+            cxx_args.push_back({name, &y_cts});
+        else if (name == "a_input")
+            cxx_args.push_back({name, &a_cts});
+        else if (name == "three_pt")
+            cxx_args.push_back({name, &layer.three_pt_});
+        else if (name == "half_norm_pt")
+            cxx_args.push_back({name, &layer.half_norm_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, input_level - 3, out_cts, shape, head_shape, n_heads, false, false);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_ln_affine_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_layernorm][affine]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const int y_level = 2;
+    const double inv_std = 0.25;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    fs::path project_path =
+        base_path / "CKKS_par_upper_diagonal_layernorm" / "affine" / ("level_" + to_string(y_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
+
+    auto x_centered_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
+    auto y_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
+    auto gamma = gen_random_array<1>({total_cols}, 0.5);
+    auto beta = gen_random_array<1>({total_cols}, 0.1);
+    FeatureMatEncrypted x_centered_input(&this->context, y_level - 1);
+    FeatureMatEncrypted y_input(&this->context, y_level);
+    x_centered_input.par_diagonal_pack(x_centered_mat, n_heads, head_shape, false, false, false,
+                                       this->param.get_default_scale());
+    y_input.par_diagonal_pack(y_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalLNAffine layer(this->param, shape, head_shape, n_heads, y_level, inv_std, gamma.copy(),
+                                   beta.copy());
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(x_centered_mat, y_mat);
+
+    vector<CkksCiphertext> x_cts, y_cts, out_cts;
+    for (auto& ct : x_centered_input.data)
+        x_cts.push_back(ct.copy());
+    for (auto& ct : y_input.data)
+        y_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(y_level - 2, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "x_centered")
+            cxx_args.push_back({name, &x_cts});
+        else if (name == "y_input")
+            cxx_args.push_back({name, &y_cts});
+        else if (name == "gamma_pt")
+            cxx_args.push_back({name, &layer.gamma_pt_});
+        else if (name == "beta_add_pt")
+            cxx_args.push_back({name, &layer.beta_add_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, y_level - 2, out_cts, shape, head_shape, n_heads, false, false);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_polyact_gamma_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_polyact][gamma]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const uint32_t init_level = 1;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    fs::path project_path =
+        base_path / "CKKS_par_upper_diagonal_polyact" / "gamma" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
+
+    auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
+    auto gamma_vals = gen_random_array<1>({total_cols}, 0.5);
+    FeatureMatEncrypted X_enc(&this->context, init_level);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalPolyActRNGamma layer(this->param, shape, head_shape, n_heads, init_level, gamma_vals.copy());
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(X_mat);
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "input")
+            cxx_args.push_back({name, &in_cts});
+        else if (name == "gamma_pt")
+            cxx_args.push_back({name, &layer.gamma_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, init_level - 1, out_cts, shape, head_shape, n_heads, false, false);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_polyact_poly_cpp_roundtrip",
+                               "[fhe_layers][par_upper_diagonal_polyact][poly]",
+                               HeteroProcessors) {
+    const uint32_t n_prepad = 65;
+    const uint32_t total_cols = 73;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 20;
+    const uint32_t init_level = 3;
+    const uint32_t degree = 4;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    fs::path project_path = base_path / "CKKS_par_upper_diagonal_polyact" / "poly" / ("degree_" + to_string(degree)) /
+                            ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(project_path / "mega_ag.json"))
+        return;
+
+    auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
+    auto coeffs = gen_random_array<2>({degree + 1, total_cols}, 0.2);
+    FeatureMatEncrypted X_enc(&this->context, init_level);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+
+    ParUpperDiagonalPolyActRNPoly layer(this->param, shape, head_shape, n_heads, init_level, coeffs.copy(), degree);
+    layer.prepare_weight();
+    Array<double, 2> expected = layer.run_plaintext(X_mat);
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(init_level - 3, this->param.get_default_scale()));
+
+    auto arg_names = read_arg_names(project_path);
+    vector<CxxVectorArgument> cxx_args;
+    for (const auto& name : arg_names) {
+        if (name == "input")
+            cxx_args.push_back({name, &in_cts});
+        else if (name == "c0_add_pt")
+            cxx_args.push_back({name, &layer.c0_add_pt_});
+        else if (name == "c1_pt")
+            cxx_args.push_back({name, &layer.c1_pt_});
+        else if (name == "c2_pt")
+            cxx_args.push_back({name, &layer.c2_pt_});
+        else if (name == "c3_pt")
+            cxx_args.push_back({name, &layer.c3_pt_});
+        else if (name == "c4_pt")
+            cxx_args.push_back({name, &layer.c4_pt_});
+        else if (name == "output")
+            cxx_args.push_back({name, &out_cts});
+    }
+    this->run(project_path, cxx_args);
+
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(this->context, init_level - 3, out_cts, shape, head_shape, n_heads, false, false);
+    print_double_message(actual.to_array_1d().data(), "actual", 10);
+    print_double_message(expected.to_array_1d().data(), "expected", 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
+
+TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_upper_diagonal_poly][stockmeyer]") {
+    const uint32_t N = 65536;
+    CkksParameter param = CkksParameter::create_parameter(N);
+    const int init_level = 17;
+    CkksContext context = CkksContext::create_random_context(param, init_level);
+
+    const uint32_t n_slot = param.get_n() / 2;
+    const uint32_t n_prepad = 128;
+    const uint32_t n_heads = 2;
+    const uint32_t m_prepad = 128;
+    const uint32_t total_cols = 256;
+    const uint32_t order = 15;
+    const double scale = 64.0;
+    const double f2_input_scale = 0.5;
+    const double f3_input_scale = 0.5;
+    const double default_scale = param.get_default_scale();
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+
+    REQUIRE(n_slot == n_prepad * total_cols);
+    REQUIRE(init_level >= 17);
+
+    const vector<double> p1_desc = {
+        -0.029080343483084341, 2.3066773634990557e-17,  0.45471038861073326, -2.8078925777913385e-16,
+        -2.8915411182152724,   1.2572521416511905e-15,  9.6019913623544397,  -2.3997776216928771e-15,
+        -17.785134844150317,   1.4296496501542554e-15,  18.198630605563167,  5.618746855114301e-16,
+        -9.6389986430588284,   -2.7157761908506778e-16, 2.6150871121857149,  -2.1483406699330675e-17,
+    };
+    const vector<double> p2_desc = {
+        -22.772929128163085, -9.9238473151061153e-13, 133.52575642060197, 5.1885599061549671e-12,
+        -322.28293092520312, -1.057124065245549e-11,  412.46567940639022, 1.0572474934837157e-11,
+        -300.32201839910158, -5.3476054574106177e-12, 124.10645061245243, 1.2506387010969551e-12,
+        -27.696116404655168, -1.0228470304160076e-13, 3.4795291737254996, 9.2762077723673713e-16,
+    };
+    const vector<double> p3_desc = {
+        -3.2153402192444749,  -1.9791353470822114e-13, 17.416597794210833,  5.9631920964000009e-13,
+        -36.618586273953056,  -6.1161725269934055e-13, 38.03096482489083,   2.6665573637468773e-13,
+        -20.470163356627168,  -1.136498515409159e-13,  5.5037834886270582,  8.0623177269952888e-14,
+        -0.86849898556709171, -1.9246732444228731e-14, 0.72131651367427774, -1.0400333128983701e-15,
+    };
+
+    auto to_increasing = [](const vector<double>& desc) { return vector<double>(desc.rbegin(), desc.rend()); };
+    const vector<double> p1 = to_increasing(p1_desc);
+    const vector<double> p2 = to_increasing(p2_desc);
+    const vector<double> p3 = to_increasing(p3_desc);
+
+    auto eval_poly = [](double x, const vector<double>& coeffs) {
+        double result = 0.0;
+        for (auto it = coeffs.rbegin(); it != coeffs.rend(); ++it) {
+            result = result * x + *it;
+        }
+        return result;
+    };
+
+    auto make_coeff_matrix = [&](const vector<double>& coeffs) {
+        Array<double, 2> result({static_cast<uint64_t>(coeffs.size()), static_cast<uint64_t>(total_cols)});
+        for (uint32_t k = 0; k < coeffs.size(); k++) {
+            for (uint32_t j = 0; j < total_cols; j++) {
+                result.set(k, j, coeffs[k]);
+            }
+        }
+        return result;
+    };
+
+    Array<double, 2> X_mat({n_prepad, total_cols});
+    for (uint32_t idx = 0; idx < n_slot; idx++) {
+        double x = -128.0 + 256.0 * static_cast<double>(idx) / static_cast<double>(n_slot - 1);
+        X_mat.set(idx / total_cols, idx % total_cols, x);
+    }
+
+    Array<double, 2> expected({n_prepad, total_cols});
+    for (uint32_t i = 0; i < n_prepad; i++) {
+        for (uint32_t j = 0; j < total_cols; j++) {
+            double x = X_mat.get(i, j);
+            double f1 = eval_poly(x / scale, p1);
+            double half_tanh = eval_poly(f1 / f2_input_scale, p2);
+            double refined = eval_poly(half_tanh / f3_input_scale, p3);
+            expected.set(i, j, x * (0.5 + refined));
+        }
+    }
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, default_scale);
+
+    auto make_scalar_gamma = [&](double scalar) {
+        Array<double, 1> gamma({total_cols});
+        for (uint32_t col = 0; col < total_cols; col++) {
+            gamma.set(col, scalar);
+        }
+        return gamma;
+    };
+
+    auto multiply_by_scalar = [&](const FeatureMatEncrypted& input, double scalar) {
+        ParUpperDiagonalPolyActRNGamma scalar_layer(param, shape, head_shape, n_heads, input.level,
+                                                    make_scalar_gamma(scalar));
+        scalar_layer.prepare_weight();
+        return scalar_layer.run(context, input);
+    };
+
+    FeatureMatEncrypted X_scaled = multiply_by_scalar(X_enc, 1.0 / scale);
+    REQUIRE(X_scaled.level == init_level - 1);
+
+    ParUpperDiagonalPoly poly1(param, shape, head_shape, n_heads, X_scaled.level, make_coeff_matrix(p1), order);
+    poly1.prepare_weight_stockmeyer();
+    FeatureMatEncrypted f1_enc = poly1.run_stockmeyer(context, X_scaled);
+    REQUIRE(f1_enc.level == init_level - 5);
+
+    FeatureMatEncrypted f1_scaled_for_poly2 = multiply_by_scalar(f1_enc, 1.0 / f2_input_scale);
+    REQUIRE(f1_scaled_for_poly2.level == init_level - 6);
+
+    ParUpperDiagonalPoly poly2(param, shape, head_shape, n_heads, f1_scaled_for_poly2.level, make_coeff_matrix(p2),
+                               order);
+    poly2.prepare_weight_stockmeyer();
+    FeatureMatEncrypted half_tanh_enc = poly2.run_stockmeyer(context, f1_scaled_for_poly2);
+    REQUIRE(half_tanh_enc.level == init_level - 10);
+
+    FeatureMatEncrypted half_tanh_scaled_for_poly3 = multiply_by_scalar(half_tanh_enc, 1.0 / f3_input_scale);
+    REQUIRE(half_tanh_scaled_for_poly3.level == init_level - 11);
+
+    ParUpperDiagonalPoly poly3(param, shape, head_shape, n_heads, half_tanh_scaled_for_poly3.level,
+                               make_coeff_matrix(p3), order);
+    poly3.prepare_weight_stockmeyer();
+    FeatureMatEncrypted half_tanh_refined = poly3.run_stockmeyer(context, half_tanh_scaled_for_poly3);
+    REQUIRE(half_tanh_refined.level == init_level - 15);
+
+    FeatureMatEncrypted X_for_gelu = X_enc.drop_level(X_enc.level - half_tanh_refined.level);
+    REQUIRE(X_for_gelu.level == half_tanh_refined.level);
+    ParUpperDiagonalPolyMultCt gelu_layer(param, shape, head_shape, n_heads, half_tanh_refined.level);
+    gelu_layer.prepare_weight();
+    FeatureMatEncrypted gelu_enc = gelu_layer.run(context, half_tanh_refined, X_for_gelu);
+    REQUIRE(gelu_enc.level == init_level - 17);
+    CAPTURE(gelu_enc.data[0].get_scale(), default_scale);
+    REQUIRE(fabs(gelu_enc.data[0].get_scale() - default_scale) <= default_scale * 1.0e-12);
+
+    Array<double, 2> output_mg = gelu_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
+    Array<double, 2> plain_output = expected.copy();
+    auto output_mg_1d = output_mg.to_array_1d();
+    auto plain_output_1d = plain_output.to_array_1d();
+    print_double_message(output_mg_1d.data(), "output_mg", 10);
+    print_double_message(plain_output_1d.data(), "plain_output", 10);
+    print_double_message(output_mg_1d.data() + output_mg_1d.size() - 10, "output_mg_last", 10);
+    print_double_message(plain_output_1d.data() + plain_output_1d.size() - 10, "plain_output_last", 10);
+
+    auto compare_result = compare(plain_output, output_mg);
+    std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+              << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+    CAPTURE(compare_result.max_error, compare_result.max_abs, compare_result.rmse, compare_result.rms);
+    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+}
+
+TEST_CASE("par_upper_diagonal_poly_stockmeyer_polytanh_cpp", "[fhe_layers][par_upper_diagonal_poly][stockmeyer]") {
+    const uint32_t N = 65536;
+    CkksParameter param = CkksParameter::create_parameter(N);
+    const int init_level = 9;
+    CkksContext context = CkksContext::create_random_context(param, init_level);
+
+    const uint32_t n_slot = param.get_n() / 2;
+    const uint32_t n_prepad = 128;
+    const uint32_t n_heads = 2;
+    const uint32_t m_prepad = 128;
+    const uint32_t total_cols = 256;
+    const uint32_t order = 15;
+    const int stockmeyer_level_cost = MatPolyBase::compute_stockmeyer_level_cost(order);
+    const double input_scale = 40.0;
+    const double default_scale = param.get_default_scale();
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+
+    REQUIRE(n_slot == n_prepad * total_cols);
+    REQUIRE(init_level >= 1 + 2 * stockmeyer_level_cost);
+
+    const vector<double> p1_desc = {
+        -7.14529052e+03, -7.76519925e+01, 2.74279201e+04,  2.45150249e+02,  -4.25793697e+04, -3.01953016e+02,
+        3.42189880e+04,  1.82989351e+02,  -1.51158283e+04, -5.64098990e+01, 3.58757327e+03,  8.17596753e+00,
+        -4.13341496e+02, -4.29024545e-01, 1.95056729e+01,  2.06201784e-03,
+    };
+    const vector<double> p2_desc = {
+        -9.02573450e-03, -1.12320034e-04, 1.08762008e-01,  7.96793166e-04,  -5.41327356e-01, -1.42873183e-03,
+        1.46476749e+00,  -2.22416152e-03, -2.43259032e+00, 1.17381072e-02,  2.74974898e+00,  -1.77631073e-02,
+        -2.38934873e+00, 1.30194294e-02,  2.02874846e+00,  -4.08442578e-03,
+    };
+
+    auto to_increasing = [](const vector<double>& desc) { return vector<double>(desc.rbegin(), desc.rend()); };
+    auto rescale_coeffs_for_input_multiplier = [](vector<double> coeffs, double input_multiplier) {
+        double degree_scale = 1.0;
+        for (double& coeff : coeffs) {
+            coeff *= degree_scale;
+            degree_scale /= input_multiplier;
+        }
+        return coeffs;
+    };
+    const vector<double> p1 = rescale_coeffs_for_input_multiplier(to_increasing(p1_desc), 2.0);
+    const vector<double> p2 = to_increasing(p2_desc);
+
+    auto make_coeff_matrix = [&](const vector<double>& coeffs) {
+        Array<double, 2> result({static_cast<uint64_t>(coeffs.size()), static_cast<uint64_t>(total_cols)});
+        for (uint32_t k = 0; k < coeffs.size(); k++) {
+            for (uint32_t j = 0; j < total_cols; j++) {
+                result.set(k, j, coeffs[k]);
+            }
+        }
+        return result;
+    };
+
+    auto make_scalar_gamma = [&](double scalar) {
+        Array<double, 1> gamma({total_cols});
+        for (uint32_t col = 0; col < total_cols; col++) {
+            gamma.set(col, scalar);
+        }
+        return gamma;
+    };
+
+    Array<double, 2> X_mat({n_prepad, total_cols});
+    for (uint32_t idx = 0; idx < n_slot; idx++) {
+        double x = -40.0 + 80.0 * static_cast<double>(idx) / static_cast<double>(n_slot - 1);
+        X_mat.set(idx / total_cols, idx % total_cols, x);
+    }
+
+    ParUpperDiagonalPolyActRNGamma input_scale_layer(param, shape, head_shape, n_heads, init_level,
+                                                     make_scalar_gamma(2.0 / input_scale));
+    ParUpperDiagonalPoly poly1(param, shape, head_shape, n_heads, init_level - 1, make_coeff_matrix(p1), order);
+    ParUpperDiagonalPoly poly2(param, shape, head_shape, n_heads, init_level - 1 - stockmeyer_level_cost,
+                               make_coeff_matrix(p2), order);
+
+    Array<double, 2> X_scaled_plain = input_scale_layer.run_plaintext(X_mat);
+    Array<double, 2> f1_plain = poly1.run_plaintext(X_scaled_plain);
+    Array<double, 2> expected = poly2.run_plaintext(f1_plain);
+    Array<double, 2> ground_truth({n_prepad, total_cols});
+    for (uint32_t i = 0; i < n_prepad; i++) {
+        for (uint32_t j = 0; j < total_cols; j++) {
+            ground_truth.set(i, j, tanh(X_mat.get(i, j)));
+        }
+    }
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, default_scale);
+
+    input_scale_layer.prepare_weight();
+    FeatureMatEncrypted X_scaled = input_scale_layer.run(context, X_enc);
+    REQUIRE(X_scaled.level == init_level - 1);
+
+    poly1.prepare_weight_stockmeyer();
+    FeatureMatEncrypted f1_enc = poly1.run_stockmeyer(context, X_scaled);
+    REQUIRE(f1_enc.level == X_scaled.level - stockmeyer_level_cost);
+
+    poly2.prepare_weight_stockmeyer();
+    FeatureMatEncrypted tanh_enc = poly2.run_stockmeyer(context, f1_enc);
+    REQUIRE(tanh_enc.level == f1_enc.level - stockmeyer_level_cost);
+    CAPTURE(tanh_enc.data[0].get_scale(), default_scale);
+    REQUIRE(fabs(tanh_enc.data[0].get_scale() - default_scale) <= default_scale * 1.0e-12);
+
+    Array<double, 2> output_mg = tanh_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
+    Array<double, 2> plain_output = expected.copy();
+    Array<double, 2> ground_truth_output = ground_truth.copy();
+    auto output_mg_1d = output_mg.to_array_1d();
+    auto plain_output_1d = plain_output.to_array_1d();
+    auto ground_truth_1d = ground_truth_output.to_array_1d();
+    print_double_message(output_mg_1d.data(), "output_mg", 10);
+    print_double_message(plain_output_1d.data(), "plain_output", 10);
+    print_double_message(ground_truth_1d.data(), "ground_truth", 10);
+    print_double_message(output_mg_1d.data() + output_mg_1d.size() - 10, "output_mg_last", 10);
+    print_double_message(plain_output_1d.data() + plain_output_1d.size() - 10, "plain_output_last", 10);
+    print_double_message(ground_truth_1d.data() + ground_truth_1d.size() - 10, "ground_truth_last", 10);
+
+    auto compare_result = compare(plain_output, output_mg);
+    auto ground_truth_compare_result = compare(ground_truth_output, output_mg);
+    std::cout << "tanh max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+              << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+    std::cout << "tanh ground_truth max_error=" << ground_truth_compare_result.max_error
+              << " max_abs=" << ground_truth_compare_result.max_abs << " rmse=" << ground_truth_compare_result.rmse
+              << " rms=" << ground_truth_compare_result.rms << std::endl;
+    CAPTURE(compare_result.max_error, compare_result.max_abs, compare_result.rmse, compare_result.rms);
+    CAPTURE(ground_truth_compare_result.max_error, ground_truth_compare_result.max_abs,
+            ground_truth_compare_result.rmse, ground_truth_compare_result.rms);
+    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+}
+
+TEST_CASE("par_upper_diagonal_poly_stockmeyer_horner_polygelu_cpp",
+          "[fhe_layers][par_upper_diagonal_poly][stockmeyer][horner]") {
+    const uint32_t N = 65536;
+    CkksParameter param = CkksParameter::create_parameter(N);
+
+    const uint32_t n_slot = param.get_n() / 2;
+    const uint32_t n_prepad = 128;
+    const uint32_t n_heads = 2;
+    const uint32_t m_prepad = 128;
+    const uint32_t total_cols = 256;
+    const uint32_t order = 15;
+    const int horner_baby_steps = 8;
+    const int horner_level_cost = MatPolyBase::compute_stockmeyer_horner_level_cost(order, horner_baby_steps);
+    const int init_level = 3 * horner_level_cost + 5;
+    CkksContext context = CkksContext::create_random_context(param, init_level);
+
+    const double scale = 64.0;
+    const double f2_input_scale = 0.5;
+    const double f3_input_scale = 0.5;
+    const double default_scale = param.get_default_scale();
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+
+    REQUIRE(n_slot == n_prepad * total_cols);
+    REQUIRE(horner_baby_steps == 8);
+    REQUIRE(horner_level_cost == 4);
+
+    const vector<double> p1_desc = {
+        -0.029080343483084341, 2.3066773634990557e-17,  0.45471038861073326, -2.8078925777913385e-16,
+        -2.8915411182152724,   1.2572521416511905e-15,  9.6019913623544397,  -2.3997776216928771e-15,
+        -17.785134844150317,   1.4296496501542554e-15,  18.198630605563167,  5.618746855114301e-16,
+        -9.6389986430588284,   -2.7157761908506778e-16, 2.6150871121857149,  -2.1483406699330675e-17,
+    };
+    const vector<double> p2_desc = {
+        -22.772929128163085, -9.9238473151061153e-13, 133.52575642060197, 5.1885599061549671e-12,
+        -322.28293092520312, -1.057124065245549e-11,  412.46567940639022, 1.0572474934837157e-11,
+        -300.32201839910158, -5.3476054574106177e-12, 124.10645061245243, 1.2506387010969551e-12,
+        -27.696116404655168, -1.0228470304160076e-13, 3.4795291737254996, 9.2762077723673713e-16,
+    };
+    const vector<double> p3_desc = {
+        -3.2153402192444749,  -1.9791353470822114e-13, 17.416597794210833,  5.9631920964000009e-13,
+        -36.618586273953056,  -6.1161725269934055e-13, 38.03096482489083,   2.6665573637468773e-13,
+        -20.470163356627168,  -1.136498515409159e-13,  5.5037834886270582,  8.0623177269952888e-14,
+        -0.86849898556709171, -1.9246732444228731e-14, 0.72131651367427774, -1.0400333128983701e-15,
+    };
+
+    auto to_increasing = [](const vector<double>& desc) { return vector<double>(desc.rbegin(), desc.rend()); };
+    const vector<double> p1 = to_increasing(p1_desc);
+    const vector<double> p2 = to_increasing(p2_desc);
+    const vector<double> p3 = to_increasing(p3_desc);
+
+    auto eval_poly = [](double x, const vector<double>& coeffs) {
+        double result = 0.0;
+        for (auto it = coeffs.rbegin(); it != coeffs.rend(); ++it) {
+            result = result * x + *it;
+        }
+        return result;
+    };
+
+    auto make_coeff_matrix = [&](const vector<double>& coeffs) {
+        Array<double, 2> result({static_cast<uint64_t>(coeffs.size()), static_cast<uint64_t>(total_cols)});
+        for (uint32_t k = 0; k < coeffs.size(); k++) {
+            for (uint32_t j = 0; j < total_cols; j++) {
+                result.set(k, j, coeffs[k]);
+            }
+        }
+        return result;
+    };
+
+    Array<double, 2> X_mat({n_prepad, total_cols});
+    for (uint32_t idx = 0; idx < n_slot; idx++) {
+        double x = -128.0 + 256.0 * static_cast<double>(idx) / static_cast<double>(n_slot - 1);
+        X_mat.set(idx / total_cols, idx % total_cols, x);
+    }
+
+    Array<double, 2> expected({n_prepad, total_cols});
+    for (uint32_t i = 0; i < n_prepad; i++) {
+        for (uint32_t j = 0; j < total_cols; j++) {
+            double x = X_mat.get(i, j);
+            double f1 = eval_poly(x / scale, p1);
+            double half_tanh = eval_poly(f1 / f2_input_scale, p2);
+            double refined = eval_poly(half_tanh / f3_input_scale, p3);
+            expected.set(i, j, x * (0.5 + refined));
+        }
+    }
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, default_scale);
+
+    auto make_scalar_gamma = [&](double scalar) {
+        Array<double, 1> gamma({total_cols});
+        for (uint32_t col = 0; col < total_cols; col++) {
+            gamma.set(col, scalar);
+        }
+        return gamma;
+    };
+
+    auto multiply_by_scalar = [&](const FeatureMatEncrypted& input, double scalar) {
+        ParUpperDiagonalPolyActRNGamma scalar_layer(param, shape, head_shape, n_heads, input.level,
+                                                    make_scalar_gamma(scalar));
+        scalar_layer.prepare_weight();
+        return scalar_layer.run(context, input);
+    };
+
+    FeatureMatEncrypted X_scaled = multiply_by_scalar(X_enc, 1.0 / scale);
+    REQUIRE(X_scaled.level == init_level - 1);
+
+    ParUpperDiagonalPoly poly1(param, shape, head_shape, n_heads, X_scaled.level, make_coeff_matrix(p1), order);
+    poly1.prepare_weight_stockmeyer_horner(horner_baby_steps);
+    FeatureMatEncrypted f1_enc = poly1.run_stockmeyer_horner(context, X_scaled, horner_baby_steps);
+    REQUIRE(f1_enc.level == X_scaled.level - horner_level_cost);
+
+    FeatureMatEncrypted f1_scaled_for_poly2 = multiply_by_scalar(f1_enc, 1.0 / f2_input_scale);
+    REQUIRE(f1_scaled_for_poly2.level == f1_enc.level - 1);
+
+    ParUpperDiagonalPoly poly2(param, shape, head_shape, n_heads, f1_scaled_for_poly2.level, make_coeff_matrix(p2),
+                               order);
+    poly2.prepare_weight_stockmeyer_horner(horner_baby_steps);
+    FeatureMatEncrypted half_tanh_enc = poly2.run_stockmeyer_horner(context, f1_scaled_for_poly2, horner_baby_steps);
+    REQUIRE(half_tanh_enc.level == f1_scaled_for_poly2.level - horner_level_cost);
+
+    FeatureMatEncrypted half_tanh_scaled_for_poly3 = multiply_by_scalar(half_tanh_enc, 1.0 / f3_input_scale);
+    REQUIRE(half_tanh_scaled_for_poly3.level == half_tanh_enc.level - 1);
+
+    ParUpperDiagonalPoly poly3(param, shape, head_shape, n_heads, half_tanh_scaled_for_poly3.level,
+                               make_coeff_matrix(p3), order);
+    poly3.prepare_weight_stockmeyer_horner(horner_baby_steps);
+    FeatureMatEncrypted half_tanh_refined =
+        poly3.run_stockmeyer_horner(context, half_tanh_scaled_for_poly3, horner_baby_steps);
+    REQUIRE(half_tanh_refined.level == half_tanh_scaled_for_poly3.level - horner_level_cost);
+
+    FeatureMatEncrypted X_for_gelu = X_enc.drop_level(X_enc.level - half_tanh_refined.level);
+    REQUIRE(X_for_gelu.level == half_tanh_refined.level);
+    ParUpperDiagonalPolyMultCt gelu_layer(param, shape, head_shape, n_heads, half_tanh_refined.level);
+    gelu_layer.prepare_weight();
+    FeatureMatEncrypted gelu_enc = gelu_layer.run(context, half_tanh_refined, X_for_gelu);
+    REQUIRE(gelu_enc.level == init_level - (3 * horner_level_cost + 5));
+    CAPTURE(gelu_enc.data[0].get_scale(), default_scale);
+    REQUIRE(fabs(gelu_enc.data[0].get_scale() - default_scale) <= default_scale * 1.0e-12);
+
+    Array<double, 2> output_mg = gelu_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
+    auto compare_result = compare(expected, output_mg);
+    std::cout << "horner max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+              << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+    CAPTURE(compare_result.max_error, compare_result.max_abs, compare_result.rmse, compare_result.rms);
+    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+}
+
+TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal_softmax]") {
+    CkksBtpParameter btp_param = CkksBtpParameter::create_parameter();
+    CkksParameter& param = btp_param.get_ckks_parameter();
+    const double default_scale = param.get_default_scale();
+    const uint32_t plaintext_level = static_cast<uint32_t>(param.get_max_level());
+    const uint32_t n_prepad = 96;
+    const uint32_t n_heads = 2;
+    const uint32_t total_cols = n_prepad * n_heads;
+    const uint32_t max_inverse_iterations = 15;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, n_prepad};
+
+    struct SoftmaxProfile {
+        string name;
+        double range_min;
+        double range_max;
+        double exp_divisor;
+        double initial_denominator_scale;
+        double first_refinement_denominator_scale;
+        double later_refinement_denominator_scale;
+        uint32_t delta_2;
+        vector<double> coeffs;
+    };
+
+    const vector<SoftmaxProfile> profiles = {
+        {"thor-small",
+         -27.2493,
+         21.72692,
+         32.0,
+         16.0,
+         2.0,
+         1.0,
+         2,
+         {0.0006522770224130905, 0.005218196900295354, 0.020873931555133732, 0.05566510463488879, 0.11128698173597897,
+          0.1780344447042791, 0.2379982262906916, 0.27220647178765545, 0.26787311936472025, 0.23721029007596767,
+          0.20618261949210986, 0.15202099984697098, 0.0670090353368128, 0.03881607331549499, 0.05948672763856172,
+          0.032855468333339584}},
+        {"thor-wide",
+         -70.0,
+         70.0,
+         64.0,
+         16.0,
+         2.0,
+         1.0,
+         4,
+         {8.615994668877663e-05, 0.0006877176070101981, 0.0027930565779849003, 0.00749909544008294,
+          0.014216636671807894, 0.022268203231858744, 0.03517495704921328, 0.04217318306400685, 0.02336452059478656,
+          0.016604320800445653, 0.04817928878801878, 0.0397324053296174, -0.009262268572236316, -0.008386712802267769,
+          0.014226972463907047, 0.008201736399899691}},
+    };
+
+    auto make_coeff_matrix = [&](const vector<double>& coeffs) {
+        Array<double, 2> result({static_cast<uint64_t>(coeffs.size()), static_cast<uint64_t>(total_cols)});
+        for (uint32_t k = 0; k < coeffs.size(); k++) {
+            for (uint32_t j = 0; j < total_cols; j++) {
+                result.set(k, j, coeffs[k]);
+            }
+        }
+        return result;
+    };
+
+    auto make_scalar_gamma = [&](double scalar) {
+        Array<double, 1> gamma({total_cols});
+        for (uint32_t col = 0; col < total_cols; col++) {
+            gamma.set(col, scalar);
+        }
+        return gamma;
+    };
+
+    auto run_ground_truth = [&](const Array<double, 2>& input) {
+        Array<double, 2> result({n_prepad, total_cols});
+        for (uint32_t row = 0; row < n_prepad; row++) {
+            for (uint32_t h = 0; h < n_heads; h++) {
+                uint32_t base = h * n_prepad;
+                double row_max = input.get(row, base);
+                for (uint32_t col = 0; col < n_prepad; col++) {
+                    row_max = std::max(row_max, input.get(row, base + col));
+                }
+                double denominator = 0.0;
+                for (uint32_t col = 0; col < n_prepad; col++) {
+                    denominator += exp(input.get(row, base + col) - row_max);
+                }
+                for (uint32_t col = 0; col < n_prepad; col++) {
+                    result.set(row, base + col, exp(input.get(row, base + col) - row_max) / denominator);
+                }
+            }
+        }
+        return result;
+    };
+
+    auto run_normalize_plain = [&](const Array<double, 2>& values, double denominator_scale) {
+        ParUpperDiagonalHeadColSum sum_layer(param, shape, head_shape, n_heads, plaintext_level);
+        Array<double, 2> denominator = sum_layer.run_plaintext(values);
+        if (denominator_scale != 1.0) {
+            ParUpperDiagonalPolyActRNGamma denom_scale_layer(param, shape, head_shape, n_heads, plaintext_level,
+                                                             make_scalar_gamma(denominator_scale));
+            denominator = denom_scale_layer.run_plaintext(denominator);
+        }
+
+        ParUpperDiagonalInverseInit inv_init(param, shape, head_shape, n_heads, plaintext_level);
+        Array<double, 2> inv_denominator = inv_init.run_plaintext(denominator);
+
+        for (uint32_t iter = 1; iter < max_inverse_iterations; iter++) {
+            ParUpperDiagonalInverseIter inv_iter(param, shape, head_shape, n_heads, plaintext_level);
+            inv_denominator = inv_iter.run_plaintext(inv_denominator, denominator);
+        }
+
+        if (denominator_scale != 1.0) {
+            ParUpperDiagonalPolyActRNGamma inv_scale_layer(param, shape, head_shape, n_heads, plaintext_level,
+                                                           make_scalar_gamma(denominator_scale));
+            inv_denominator = inv_scale_layer.run_plaintext(inv_denominator);
+        }
+
+        ParUpperDiagonalGELU mult_layer(param, shape, head_shape, n_heads, plaintext_level);
+        return mult_layer.run_plaintext(values, inv_denominator);
+    };
+
+    auto run_expected = [&](const Array<double, 2>& input, const SoftmaxProfile& profile) {
+        double mid = (profile.range_min + profile.range_max) / 2.0;
+        ParUpperDiagonalAddPt add_mid(param, shape, head_shape, n_heads, plaintext_level, -mid);
+        Array<double, 2> centered = add_mid.run_plaintext(input);
+
+        ParUpperDiagonalPolyActRNGamma gamma_layer(param, shape, head_shape, n_heads, plaintext_level,
+                                                   make_scalar_gamma(1.0 / profile.exp_divisor));
+        Array<double, 2> exp_arg = gamma_layer.run_plaintext(centered);
+
+        uint32_t order = static_cast<uint32_t>(profile.coeffs.size() - 1);
+        ParUpperDiagonalPoly exp_poly(param, shape, head_shape, n_heads, plaintext_level,
+                                      make_coeff_matrix(profile.coeffs), order);
+        Array<double, 2> exp_poly_out = exp_poly.run_plaintext(exp_arg);
+
+        ParUpperDiagonalMultipleSquare delta1_square(param, shape, head_shape, n_heads, plaintext_level);
+        Array<double, 2> values = delta1_square.run_plaintext(exp_poly_out);
+
+        Array<double, 2> probabilities = run_normalize_plain(values, profile.initial_denominator_scale);
+        uint32_t refinement_steps = 0;
+        for (uint32_t delta = profile.delta_2; delta > 1; delta >>= 1) {
+            refinement_steps++;
+        }
+        for (uint32_t step = 0; step < refinement_steps; step++) {
+            ParUpperDiagonalGELU square_layer(param, shape, head_shape, n_heads, plaintext_level);
+            Array<double, 2> squared = square_layer.run_plaintext(probabilities, probabilities);
+            double denominator_scale =
+                (step == 0) ? profile.first_refinement_denominator_scale : profile.later_refinement_denominator_scale;
+            probabilities = run_normalize_plain(squared, denominator_scale);
+        }
+        return probabilities;
+    };
+
+    auto refresh_to_min_level = [&](FeatureMatEncrypted&& x, uint32_t min_level) {
+        if (x.level < min_level) {
+            if (x.level > 0) {
+                x = x.drop_level(x.level);
+            }
+            x = x.refresh_ciphertext();
+        }
+        REQUIRE(x.level >= min_level);
+        return std::move(x);
+    };
+
+    auto align_to_level = [&](FeatureMatEncrypted&& x, uint32_t target_level) {
+        if (x.level < target_level) {
+            if (x.level > 0) {
+                x = x.drop_level(x.level);
+            }
+            x = x.refresh_ciphertext();
+        }
+        REQUIRE(x.level >= target_level);
+        if (x.level > target_level) {
+            x = x.drop_level(static_cast<int>(x.level - target_level));
+        }
+        REQUIRE(x.level == target_level);
+        return std::move(x);
+    };
+
+    auto multiply_scalar = [&](CkksBtpContext& context, FeatureMatEncrypted&& x, double scalar) {
+        REQUIRE(x.level >= 1);
+        ParUpperDiagonalPolyActRNGamma gamma_layer(param, shape, head_shape, n_heads, x.level,
+                                                   make_scalar_gamma(scalar));
+        gamma_layer.prepare_weight();
+        return gamma_layer.run(context, x);
+    };
+
+    auto refresh_inverse_to_min_level = [&](CkksBtpContext& context, FeatureMatEncrypted&& x, uint32_t min_level) {
+        if (x.level < min_level) {
+            constexpr double inverse_refresh_scale = 8.0;
+            x = multiply_scalar(context, std::move(x), 1.0 / inverse_refresh_scale);
+            if (x.level > 0) {
+                x = x.drop_level(x.level);
+            }
+            x = x.refresh_ciphertext();
+            x = multiply_scalar(context, std::move(x), inverse_refresh_scale);
+        }
+        REQUIRE(x.level >= min_level);
+        return std::move(x);
+    };
+
+    auto run_normalize_encrypt = [&](CkksBtpContext& context, const FeatureMatEncrypted& values_in,
+                                     double denominator_scale) {
+        FeatureMatEncrypted values = refresh_to_min_level(values_in.drop_level(0), 1);
+        ParUpperDiagonalHeadColSum sum_layer(param, shape, head_shape, n_heads, values.level);
+        sum_layer.prepare_weight();
+        FeatureMatEncrypted denominator = sum_layer.run(context, values);
+        if (denominator_scale != 1.0) {
+            // THOR scales small inverse denominators before bootstrap; direct low-level bootstrap
+            // of tiny sums is noisy.
+            if (denominator.level < 2) {
+                constexpr double denominator_refresh_scale = 16.0;
+                denominator = multiply_scalar(context, std::move(denominator), denominator_refresh_scale);
+                if (denominator.level > 0) {
+                    denominator = denominator.drop_level(denominator.level);
+                }
+                denominator = denominator.refresh_ciphertext();
+                denominator = multiply_scalar(context, std::move(denominator), 1.0 / denominator_refresh_scale);
+            } else {
+                denominator = refresh_to_min_level(std::move(denominator), 2);
+            }
+            denominator = multiply_scalar(context, std::move(denominator), denominator_scale);
+        }
+
+        ParUpperDiagonalInverseInit inv_init(param, shape, head_shape, n_heads, denominator.level);
+        inv_init.prepare_weight();
+        FeatureMatEncrypted inv_denominator = inv_init.run(context, denominator);
+        FeatureMatEncrypted denominator_work = denominator.drop_level(0);
+
+        for (uint32_t iter = 1; iter < max_inverse_iterations; iter++) {
+            inv_denominator = refresh_inverse_to_min_level(context, std::move(inv_denominator), 4);
+            denominator_work = align_to_level(std::move(denominator_work), inv_denominator.level);
+            ParUpperDiagonalInverseIter inv_iter(param, shape, head_shape, n_heads, inv_denominator.level);
+            inv_iter.prepare_weight();
+            inv_denominator = inv_iter.run(context, inv_denominator, denominator_work);
+        }
+
+        if (denominator_scale != 1.0) {
+            inv_denominator = refresh_inverse_to_min_level(context, std::move(inv_denominator), 3);
+            inv_denominator = multiply_scalar(context, std::move(inv_denominator), denominator_scale);
+        } else {
+            inv_denominator = refresh_inverse_to_min_level(context, std::move(inv_denominator), 2);
+        }
+        FeatureMatEncrypted values_dropped = align_to_level(std::move(values), inv_denominator.level);
+        ParUpperDiagonalGELU mult_layer(param, shape, head_shape, n_heads, inv_denominator.level);
+        mult_layer.prepare_weight();
+        return mult_layer.run(context, values_dropped, inv_denominator);
+    };
+
+    auto run_encrypted = [&](CkksBtpContext& context, const Array<double, 2>& input, const SoftmaxProfile& profile,
+                             int init_level) {
+        FeatureMatEncrypted input_enc(&context, init_level);
+        input_enc.par_diagonal_pack(input, n_heads, head_shape, false, false, false, default_scale);
+
+        double mid = (profile.range_min + profile.range_max) / 2.0;
+        ParUpperDiagonalAddPt add_mid(param, shape, head_shape, n_heads, input_enc.level, -mid);
+        add_mid.prepare_weight();
+        FeatureMatEncrypted centered = add_mid.run(context, input_enc);
+
+        ParUpperDiagonalPolyActRNGamma gamma_layer(param, shape, head_shape, n_heads, centered.level,
+                                                   make_scalar_gamma(1.0 / profile.exp_divisor));
+        gamma_layer.prepare_weight();
+        FeatureMatEncrypted exp_arg = gamma_layer.run(context, centered);
+
+        uint32_t order = static_cast<uint32_t>(profile.coeffs.size() - 1);
+        exp_arg = refresh_to_min_level(std::move(exp_arg),
+                                       MatPolyBase::compute_stockmeyer_level_cost(static_cast<int>(order)));
+        ParUpperDiagonalPoly exp_poly(param, shape, head_shape, n_heads, exp_arg.level,
+                                      make_coeff_matrix(profile.coeffs), order);
+        exp_poly.prepare_weight_stockmeyer();
+        FeatureMatEncrypted exp_poly_out = exp_poly.run_stockmeyer(context, exp_arg);
+
+        exp_poly_out = refresh_to_min_level(std::move(exp_poly_out), 2);
+        ParUpperDiagonalMultipleSquare delta1_square(param, shape, head_shape, n_heads, exp_poly_out.level);
+        delta1_square.prepare_weight();
+        FeatureMatEncrypted values = delta1_square.run(context, exp_poly_out);
+
+        FeatureMatEncrypted probabilities = run_normalize_encrypt(context, values, profile.initial_denominator_scale);
+        uint32_t refinement_step = 0;
+        for (uint32_t delta = profile.delta_2; delta > 1; delta >>= 1) {
+            probabilities = refresh_to_min_level(std::move(probabilities), 3);
+            ParUpperDiagonalGELU square_layer(param, shape, head_shape, n_heads, probabilities.level);
+            square_layer.prepare_weight();
+            FeatureMatEncrypted squared = square_layer.run(context, probabilities, probabilities);
+            double denominator_scale = (refinement_step == 0) ? profile.first_refinement_denominator_scale :
+                                                                profile.later_refinement_denominator_scale;
+            probabilities = run_normalize_encrypt(context, squared, denominator_scale);
+            refinement_step++;
+        }
+        return probabilities;
+    };
+
+    for (const auto& profile : profiles) {
+        DYNAMIC_SECTION(profile.name) {
+            uint32_t refinement_steps = 0;
+            for (uint32_t delta = profile.delta_2; delta > 1; delta >>= 1) {
+                refinement_steps++;
+            }
+            (void)refinement_steps;
+            int init_level = 9;
+            REQUIRE(init_level <= param.get_max_level());
+            CkksBtpContext context = CkksBtpContext::create_random_context(btp_param);
+            context.gen_rotation_keys();
+
+            Array<double, 2> input({n_prepad, total_cols});
+            double width = profile.range_max - profile.range_min;
+            for (uint32_t row = 0; row < n_prepad; row++) {
+                for (uint32_t h = 0; h < n_heads; h++) {
+                    for (uint32_t col = 0; col < n_prepad; col++) {
+                        uint32_t mixed = (row * 17 + h * 23 + col * 7) % 101;
+                        double u = static_cast<double>(mixed) / 100.0;
+                        double value = profile.range_min + width * (0.1 + 0.8 * u);
+                        input.set(row, h * n_prepad + col, value);
+                    }
+                }
+            }
+
+            Array<double, 2> expected = run_expected(input, profile);
+            Array<double, 2> ground_truth = run_ground_truth(input);
+            FeatureMatEncrypted encrypted = run_encrypted(context, input, profile, init_level);
+            CAPTURE(encrypted.data[0].get_scale(), default_scale);
+            REQUIRE(fabs(encrypted.data[0].get_scale() - default_scale) <= default_scale * 1.0e-10);
+
+            Array<double, 2> output_mg = encrypted.par_diagonal_unpack(n_heads, head_shape, false, false);
+            Array<double, 2> plain_output = expected.copy();
+            Array<double, 2> ground_truth_output = ground_truth.copy();
+            auto output_mg_1d = output_mg.to_array_1d();
+            auto plain_output_1d = plain_output.to_array_1d();
+            auto ground_truth_1d = ground_truth_output.to_array_1d();
+            print_double_message(output_mg_1d.data(), "output_mg", 20);
+            print_double_message(plain_output_1d.data(), "plain_output", 20);
+            print_double_message(ground_truth_1d.data(), "ground_truth", 20);
+            print_double_message(output_mg_1d.data() + output_mg_1d.size() - 20, "output_mg_last", 20);
+            print_double_message(plain_output_1d.data() + plain_output_1d.size() - 20, "plain_output_last", 20);
+            print_double_message(ground_truth_1d.data() + ground_truth_1d.size() - 20, "ground_truth_last", 20);
+
+            auto compare_result = compare(plain_output, output_mg);
+            auto ground_truth_compare_result = compare(ground_truth_output, output_mg);
+            cout << profile.name << " softmax max_error=" << compare_result.max_error
+                 << " max_abs=" << compare_result.max_abs << " rmse=" << compare_result.rmse
+                 << " rms=" << compare_result.rms << endl;
+            cout << profile.name << " softmax ground_truth max_error=" << ground_truth_compare_result.max_error
+                 << " max_abs=" << ground_truth_compare_result.max_abs << " rmse=" << ground_truth_compare_result.rmse
+                 << " rms=" << ground_truth_compare_result.rms << endl;
+            CAPTURE(profile.name, compare_result.max_error, compare_result.max_abs, compare_result.rmse,
+                    compare_result.rms);
+            CAPTURE(profile.name, ground_truth_compare_result.max_error, ground_truth_compare_result.max_abs,
+                    ground_truth_compare_result.rmse, ground_truth_compare_result.rms);
+            REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+            REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+            REQUIRE(ground_truth_compare_result.max_error < 5.0e-2 * ground_truth_compare_result.max_abs);
+            REQUIRE(ground_truth_compare_result.rmse < 1.0e-2 * ground_truth_compare_result.rms);
+        }
+    }
+}
+
+TEST_CASE("par_upper_diagonal_polylayernorm_ln3_cpp", "[fhe_layers][par_upper_diagonal_layernorm][polylayernorm]") {
+    CkksBtpParameter btp_param = CkksBtpParameter::create_parameter();
+    CkksParameter& param = btp_param.get_ckks_parameter();
+    const double default_scale = param.get_default_scale();
+    const uint32_t plaintext_level = static_cast<uint32_t>(param.get_max_level());
+    const uint32_t n_prepad = 65;
+    const uint32_t n_heads = 3;
+    const uint32_t m_prepad = 64;
+    const uint32_t total_cols = n_heads * m_prepad;
+    const uint32_t max_inverse_sqrt_iterations = 7;
+    const int init_level = 9;
+    REQUIRE(init_level <= param.get_max_level());
+
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+
+    const double eps = 1.0e-5;
+    const double min_var = 0.75;
+    const double max_var = 2500.0;
+    const double w_buffer = 1.05;
+    const double input_scale = 1.0;
+    const double max_denominator = (max_var * w_buffer + eps) * input_scale * input_scale;
+    const double epsilon = (min_var + eps) / max_denominator;
+    const double inv_var = 1.0 / max_denominator;
+    const double inv_std = sqrt(inv_var);
+    const double c0 = 6.19067182;
+    const double c1 = -16.15885111;
+    const double c2 = 11.52830778;
+
+    auto make_gamma = [&]() {
+        Array<double, 1> gamma({total_cols});
+        for (uint32_t col = 0; col < total_cols; col++) {
+            gamma.set(col, 0.8 + 0.002 * static_cast<double>(col % 17) - 0.001 * static_cast<double>(col / m_prepad));
+        }
+        return gamma;
+    };
+
+    auto make_beta = [&]() {
+        Array<double, 1> beta({total_cols});
+        for (uint32_t col = 0; col < total_cols; col++) {
+            beta.set(col, 0.03 * sin(static_cast<double>(col + 1) * 0.1));
+        }
+        return beta;
+    };
+
+    auto make_input = [&]() {
+        Array<double, 2> input({n_prepad, total_cols});
+        for (uint32_t row = 0; row < n_prepad; row++) {
+            double amplitude = 54.0 + 1.4 * static_cast<double>(row % 7);
+            for (uint32_t col = 0; col < total_cols; col++) {
+                double centered_col = static_cast<double>(col % m_prepad) - (static_cast<double>(m_prepad) - 1.0) / 2.0;
+                double wave = sin(static_cast<double>((row + 1) * (col + 3)) * 0.03125) +
+                              0.35 * cos(static_cast<double>((row + 5) * (col + 11)) * 0.017);
+                double trend = 0.015 * centered_col;
+                double head_offset = 0.2 * (static_cast<double>(col / m_prepad) - 1.0);
+                input.set(row, col, amplitude * wave + trend + head_offset);
+            }
+        }
+        return input;
+    };
+
+    auto run_expected = [&](const Array<double, 2>& input, const Array<double, 1>& gamma,
+                            const Array<double, 1>& beta) {
+        ParUpperDiagonalLNStats stats(param, shape, head_shape, n_heads, plaintext_level, eps, inv_var);
+        Array<double, 2> a = stats.run_plaintext(input);
+
+        ParUpperDiagonalLNXCentered xcentered(param, shape, head_shape, n_heads, plaintext_level);
+        Array<double, 2> centered = xcentered.run_plaintext(input);
+
+        ParUpperDiagonalLNMinimaxInit minimax(param, shape, head_shape, n_heads, plaintext_level, c0, c1, c2);
+        Array<double, 2> y = minimax.run_plaintext(a);
+
+        for (uint32_t iter = 0; iter < max_inverse_sqrt_iterations; iter++) {
+            ParUpperDiagonalLNGoldschmidt gold(param, shape, head_shape, n_heads, plaintext_level);
+            y = gold.run_plaintext(y, a);
+        }
+
+        ParUpperDiagonalLNAffine affine(param, shape, head_shape, n_heads, plaintext_level, inv_std, gamma.copy(),
+                                        beta.copy());
+        return affine.run_plaintext(centered, y);
+    };
+
+    auto run_ground_truth = [&](const Array<double, 2>& input, const Array<double, 1>& gamma,
+                                const Array<double, 1>& beta) {
+        Array<double, 2> result({n_prepad, total_cols});
+        double min_observed_var = numeric_limits<double>::max();
+        double max_observed_var = 0.0;
+        for (uint32_t row = 0; row < n_prepad; row++) {
+            double sum = 0.0;
+            for (uint32_t col = 0; col < total_cols; col++) {
+                sum += input.get(row, col);
+            }
+            double mean = sum / static_cast<double>(total_cols);
+
+            double sum_sq = 0.0;
+            for (uint32_t col = 0; col < total_cols; col++) {
+                double centered = input.get(row, col) - mean;
+                sum_sq += centered * centered;
+            }
+            double variance = sum_sq / static_cast<double>(total_cols);
+            min_observed_var = std::min(min_observed_var, variance);
+            max_observed_var = std::max(max_observed_var, variance);
+            double denominator = sqrt(variance + eps);
+
+            for (uint32_t col = 0; col < total_cols; col++) {
+                double normalized = (input.get(row, col) - mean) / denominator;
+                result.set(row, col, normalized * gamma.get(col) + beta.get(col));
+            }
+        }
+        CAPTURE(epsilon, min_observed_var, max_observed_var);
+        REQUIRE(min_observed_var >= min_var);
+        REQUIRE(max_observed_var <= max_var);
+        return result;
+    };
+
+    auto cts_level = [](const vector<CkksCiphertext>& cts) {
+        REQUIRE_FALSE(cts.empty());
+        int level = cts[0].get_level();
+        for (const auto& ct : cts) {
+            REQUIRE(ct.get_level() == level);
+        }
+        return static_cast<uint32_t>(level);
+    };
+
+    auto require_default_scale = [&](const vector<CkksCiphertext>& cts, const string& label) {
+        REQUIRE_FALSE(cts.empty());
+        for (const auto& ct : cts) {
+            INFO(label);
+            CAPTURE(ct.get_scale(), default_scale);
+            REQUIRE(fabs(ct.get_scale() - default_scale) <= default_scale * 1.0e-10);
+        }
+    };
+
+    auto make_feature = [&](CkksBtpContext& context, vector<CkksCiphertext>&& cts) {
+        int level = cts.empty() ? 0 : cts[0].get_level();
+        FeatureMatEncrypted feature(&context, level);
+        feature.shape = shape;
+        feature.head_shape = head_shape;
+        feature.matmul_block_size = next_pow2_u32(m_prepad);
+        feature.data = std::move(cts);
+        return feature;
+    };
+
+    auto refresh_cts_to_min_level = [&](CkksBtpContext& context, vector<CkksCiphertext>&& cts, uint32_t min_level) {
+        FeatureMatEncrypted feature = make_feature(context, std::move(cts));
+        if (feature.level < static_cast<int>(min_level)) {
+            if (feature.level > 0) {
+                feature = feature.drop_level(feature.level);
+            }
+            feature = feature.refresh_ciphertext();
+        }
+        REQUIRE(feature.level >= static_cast<int>(min_level));
+        return std::move(feature.data);
+    };
+
+    auto align_cts_to_level = [&](CkksBtpContext& context, vector<CkksCiphertext>&& cts, uint32_t target_level) {
+        FeatureMatEncrypted feature = make_feature(context, std::move(cts));
+        if (feature.level < static_cast<int>(target_level)) {
+            if (feature.level > 0) {
+                feature = feature.drop_level(feature.level);
+            }
+            feature = feature.refresh_ciphertext();
+        }
+        REQUIRE(feature.level >= static_cast<int>(target_level));
+        if (feature.level > static_cast<int>(target_level)) {
+            feature = feature.drop_level(feature.level - static_cast<int>(target_level));
+        }
+        REQUIRE(feature.level == static_cast<int>(target_level));
+        return std::move(feature.data);
+    };
+
+    auto run_encrypted = [&](CkksBtpContext& context, const Array<double, 2>& input, const Array<double, 1>& gamma,
+                             const Array<double, 1>& beta) {
+        FeatureMatEncrypted input_enc(&context, init_level);
+        input_enc.par_diagonal_pack(input, n_heads, head_shape, false, false, false, default_scale);
+
+        ParUpperDiagonalLNStats stats(param, shape, head_shape, n_heads, input_enc.level, eps, inv_var);
+        stats.prepare_weight();
+        vector<CkksCiphertext> a_cts = stats.run(context, input_enc);
+        require_default_scale(a_cts, "ParUpperDiagonalLNStats");
+
+        ParUpperDiagonalLNXCentered xcentered(param, shape, head_shape, n_heads, input_enc.level);
+        xcentered.prepare_weight();
+        vector<CkksCiphertext> x_centered_cts = xcentered.run(context, input_enc);
+        require_default_scale(x_centered_cts, "ParUpperDiagonalLNXCentered");
+
+        uint32_t a_level = cts_level(a_cts);
+        ParUpperDiagonalLNMinimaxInit minimax(param, shape, head_shape, n_heads, a_level, c0, c1, c2);
+        minimax.prepare_weight();
+        vector<CkksCiphertext> y_cts = minimax.run(context, a_cts);
+
+        for (uint32_t iter = 0; iter < max_inverse_sqrt_iterations; iter++) {
+            y_cts = refresh_cts_to_min_level(context, std::move(y_cts), 3);
+            uint32_t y_level = cts_level(y_cts);
+            a_cts = refresh_cts_to_min_level(context, std::move(a_cts), y_level);
+            ParUpperDiagonalLNGoldschmidt gold(param, shape, head_shape, n_heads, y_level);
+            gold.prepare_weight();
+            y_cts = gold.run(context, y_cts, a_cts);
+        }
+
+        const uint32_t affine_y_level = 3;
+        y_cts = align_cts_to_level(context, std::move(y_cts), affine_y_level);
+        x_centered_cts = refresh_cts_to_min_level(context, std::move(x_centered_cts), affine_y_level - 1);
+
+        ParUpperDiagonalLNAffine affine(param, shape, head_shape, n_heads, affine_y_level, inv_std, gamma.copy(),
+                                        beta.copy());
+        affine.prepare_weight();
+        return affine.run(context, x_centered_cts, y_cts);
+    };
+
+    CkksBtpContext context = CkksBtpContext::create_random_context(btp_param);
+    context.gen_rotation_keys();
+
+    Array<double, 2> input = make_input();
+    Array<double, 1> gamma = make_gamma();
+    Array<double, 1> beta = make_beta();
+    Array<double, 2> expected = run_expected(input, gamma, beta);
+    Array<double, 2> ground_truth = run_ground_truth(input, gamma, beta);
+
+    FeatureMatEncrypted encrypted = run_encrypted(context, input, gamma, beta);
+    CAPTURE(encrypted.data[0].get_scale(), default_scale, encrypted.level);
+    REQUIRE(fabs(encrypted.data[0].get_scale() - default_scale) <= default_scale * 1.0e-10);
+
+    Array<double, 2> output_mg = encrypted.par_diagonal_unpack(n_heads, head_shape, false, false);
+    Array<double, 2> plain_output = expected.copy();
+    Array<double, 2> ground_truth_output = ground_truth.copy();
+    auto output_mg_1d = output_mg.to_array_1d();
+    auto plain_output_1d = plain_output.to_array_1d();
+    auto ground_truth_1d = ground_truth_output.to_array_1d();
+    print_double_message(output_mg_1d.data(), "output_mg", 20);
+    print_double_message(plain_output_1d.data(), "plain_output", 20);
+    print_double_message(ground_truth_1d.data(), "ground_truth", 20);
+    print_double_message(output_mg_1d.data() + output_mg_1d.size() - 20, "output_mg_last", 20);
+    print_double_message(plain_output_1d.data() + plain_output_1d.size() - 20, "plain_output_last", 20);
+    print_double_message(ground_truth_1d.data() + ground_truth_1d.size() - 20, "ground_truth_last", 20);
+
+    auto compare_result = compare(plain_output, output_mg);
+    auto ground_truth_compare_result = compare(ground_truth_output, output_mg);
+    cout << "ln3 use_aSOR=false max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+         << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << endl;
+    cout << "ln3 use_aSOR=false ground_truth max_error=" << ground_truth_compare_result.max_error
+         << " max_abs=" << ground_truth_compare_result.max_abs << " rmse=" << ground_truth_compare_result.rmse
+         << " rms=" << ground_truth_compare_result.rms << endl;
+
+    CAPTURE(compare_result.max_error, compare_result.max_abs, compare_result.rmse, compare_result.rms);
+    CAPTURE(ground_truth_compare_result.max_error, ground_truth_compare_result.max_abs,
+            ground_truth_compare_result.rmse, ground_truth_compare_result.rms);
+    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    REQUIRE(ground_truth_compare_result.max_error < 5.0e-2 * ground_truth_compare_result.max_abs);
+    REQUIRE(ground_truth_compare_result.rmse < 1.0e-2 * ground_truth_compare_result.rms);
+}
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "sq", "", HeteroProcessors) {
     int init_level = 2;
@@ -261,8 +2104,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "sq", "", HeteroProcessors) {
         SquareLayer square_layer(this->param);
         auto plain_output = square_layer.run_plaintext(input_array);
 
-        print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
-        print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
+        // print_double_message(output_mg.to_array_1d().data(), "output_mg", 10);
+        // print_double_message(plain_output.to_array_1d().data(), "plain_output", 10);
 
         auto compare_result = compare(plain_output, output_mg);
         REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
@@ -1503,153 +3346,1189 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature1d_mux", "", Het
     }
 }
 
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_ccmm_matmul", "", HeteroProcessors) {
-    vector<uint32_t> ds = {16};
-    vector<uint32_t> dims = {16, 20};
-    vector<int> levels = {3};
+// ── BlockColMajor / ParBlockColMajor E2E tests ──────────────────────────────
+//
+// These tests exercise the mega_ag pipeline generated by the Python test_gen_layers.py.
+// They use FheTask with a custom encode_pt executor to lazily generate plaintext
+// diagonals during task execution.
 
-    FOR_EACH_SECTION(uint32_t d, ds, "d=" + to_string(d)) {
-        FOR_EACH_SECTION(int init_level, levels, "level=" + to_string(init_level)) {
-            FOR_EACH_SECTION(uint32_t m, dims, "m=" + to_string(m)) {
-                FOR_EACH_SECTION(uint32_t n, dims, "n=" + to_string(n)) {
-                    FOR_EACH_SECTION(uint32_t p, dims, "p=" + to_string(p)) {
-                        Array<double, 2> A_mat = gen_random_array<2>({m, n}, 1.0);
-                        Array<double, 2> B_mat = gen_random_array<2>({n, p}, 1.0);
-
-                        FeatureMatEncrypted A_enc(&this->context, init_level);
-                        A_enc.shape = {m, n};
-                        A_enc.matmul_block_size = d;
-                        A_enc.block_col_major_pack(A_mat, d, false, this->context.get_parameter().get_default_scale());
-
-                        FeatureMatEncrypted B_enc(&this->context, init_level);
-                        B_enc.shape = {n, p};
-                        B_enc.matmul_block_size = d;
-                        B_enc.block_col_major_pack(B_mat, d, false, this->context.get_parameter().get_default_scale());
-
-                        BlockColMajorCCMM ccmm(this->context.get_parameter(), A_enc.shape, B_enc.shape,
-                                               A_enc.matmul_block_size, B_enc.matmul_block_size, A_enc.level,
-                                               B_enc.level);
-                        ccmm.precompute_diagonals();
-                        FeatureMatEncrypted C_enc = ccmm.run(this->context, A_enc, B_enc);
-
-                        auto C_result =
-                            C_enc.block_col_major_unpack(C_enc.shape[0], C_enc.shape[1], C_enc.matmul_block_size);
-
-                        Array<double, 2> C_expected({m, p});
-                        for (uint32_t i = 0; i < m; i++) {
-                            for (uint32_t j = 0; j < p; j++) {
-                                double sum = 0.0;
-                                for (uint32_t l = 0; l < n; l++) {
-                                    sum += A_mat.get(i, l) * B_mat.get(l, j);
-                                }
-                                C_expected.set(i, j, sum);
-                            }
-                        }
-
-                        print_double_message(C_result.to_array_1d().data(), "output_mg", 10);
-                        print_double_message(C_expected.to_array_1d().data(), "output_mg_expected", 10);
-
-                        auto compare_result = compare(C_expected, C_result);
-                        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
-                        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
-                    }
-                }
-            }
+static double e2e_max_rel_error(const Array<double, 2>& expected, const Array<double, 2>& actual) {
+    double max_abs = 0, max_err = 0;
+    for (uint32_t i = 0; i < expected.get_shape()[0]; i++)
+        for (uint32_t j = 0; j < expected.get_shape()[1]; j++) {
+            max_abs = std::max(max_abs, std::abs(expected.get(i, j)));
+            max_err = std::max(max_err, std::abs(expected.get(i, j) - actual.get(i, j)));
         }
+    return max_abs > 0 ? max_err / max_abs : max_err;
+}
+
+static ExecutorFunc make_block_col_major_encode_pt_executor() {
+    return [](ExecutionContext& exec_ctx, const std::unordered_map<NodeIndex, std::any>& inputs, std::any& output,
+              const ComputeNode& self) -> void {
+        CkksContext* ctx_ptr = exec_ctx.get_arithmetic_context<CkksContext>();
+        if (!ctx_ptr)
+            ctx_ptr = exec_ctx.get_arithmetic_context<CkksBtpContext>();
+        if (!ctx_ptr)
+            throw std::runtime_error("encode_pt: cannot get CkksContext");
+        if (!self.custom_prop.has_value())
+            throw std::runtime_error("encode_pt: missing custom_prop");
+
+        const auto& attrs = self.custom_prop->attributes;
+        const std::string op_class = attrs.at("op_class").get<std::string>();
+        const std::string type = attrs.at("type").get<std::string>();
+        auto attr_u32 = [&](const std::string& key, uint32_t fallback) -> uint32_t {
+            return attrs.contains(key) ? attrs.at(key).get<uint32_t>() : fallback;
+        };
+
+        NodeIndex in_idx = self.input_nodes[0]->index;
+        auto cd_ptr = std::any_cast<std::shared_ptr<CustomData>>(inputs.at(in_idx));
+        void* layer_ptr = cd_ptr->get_typed_data<void>();
+
+        CkksPlaintextRingt pt = [&]() -> CkksPlaintextRingt {
+            if (op_class == "ParBlockColMajorCPMM") {
+                auto* layer = static_cast<ParBlockColMajorCPMM*>(layer_ptr);
+                if (type == "diag_pt")
+                    return layer->generate_diag_pt(*ctx_ptr, attrs.value("mb", 0), attrs.value("g", 0),
+                                                   attrs.value("bp", 0), attrs.value("k", 0));
+                if (type == "mask_h0_pt")
+                    return layer->generate_mask_h0_pt(*ctx_ptr);
+                if (type == "bias_pt")
+                    return layer->generate_bias_pt(*ctx_ptr, attrs.value("mb", 0), attrs.value("bi", 0),
+                                                   attrs.value("g", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParBlockColMajorCPMM: " + type);
+            }
+            if (op_class == "ParBlockColMajorTranspose") {
+                auto* layer = static_cast<ParBlockColMajorTranspose*>(layer_ptr);
+                if (type == "transpose_diag_pt")
+                    return layer->generate_transpose_diag_pt(
+                        *ctx_ptr, (attrs.contains("k_idx") ? attrs.at("k_idx").get<uint32_t>() : attrs.value("i", 0u)));
+                throw std::runtime_error("encode_pt: unknown type for ParBlockColMajorTranspose: " + type);
+            }
+            if (op_class == "ParBlockColMajorAddPt") {
+                auto* layer = static_cast<ParBlockColMajorAddPt*>(layer_ptr);
+                return layer->generate_pt(*ctx_ptr, attrs.value("bi", 0), attrs.value("bj", 0), attrs.value("g", 0));
+            }
+            if (op_class == "ParBlockColMajorCCMM") {
+                auto* layer = static_cast<ParBlockColMajorCCMM*>(layer_ptr);
+                if (type == "sigma_pt")
+                    return layer->generate_sigma_pt(*ctx_ptr, attrs.value("k", 0));
+                if (type == "tau_pt")
+                    return layer->generate_tau_pt(*ctx_ptr, attrs.value("offset_idx", 0));
+                if (type == "psi_k0_pt")
+                    return layer->generate_psi_k0_pt(*ctx_ptr);
+                if (type == "psi_wk_pt")
+                    return layer->generate_psi_wk_pt(*ctx_ptr, attrs.value("i", 1));
+                if (type == "psi_wkd_pt")
+                    return layer->generate_psi_wkd_pt(*ctx_ptr, attrs.value("i", 1));
+                throw std::runtime_error("encode_pt: unknown type for ParBlockColMajorCCMM: " + type);
+            }
+            if (op_class == "ParBlockColMajorPolyActRNGamma") {
+                auto* layer = static_cast<ParBlockColMajorPolyActRNGamma*>(layer_ptr);
+                return layer->generate_gamma_pt(*ctx_ptr, attrs.value("mb", 0), attrs.value("bi", 0),
+                                                attrs.value("bj", 0), attrs.value("g", 0));
+            }
+            if (op_class == "ParBlockColMajorPolyActRNPoly") {
+                auto* layer = static_cast<ParBlockColMajorPolyActRNPoly*>(layer_ptr);
+                return layer->generate_coeff_pt(*ctx_ptr, attrs.value("coeff_idx", 0), attrs.value("mb", 0),
+                                                attrs.value("bi", 0), attrs.value("bj", 0), attrs.value("g", 0));
+            }
+            if (op_class == "ParBlockColMajorLNStats") {
+                auto* layer = static_cast<ParBlockColMajorLNStats*>(layer_ptr);
+                return layer->generate_pt(*ctx_ptr, attrs.value("pt_idx", 0), attrs.value("bi", 0),
+                                          attrs.value("bj", 0), attrs.value("g", 0));
+            }
+            if (op_class == "ParBlockColMajorLNXCentered") {
+                auto* layer = static_cast<ParBlockColMajorLNXCentered*>(layer_ptr);
+                return layer->generate_pt(*ctx_ptr, attrs.value("pt_idx", 0), attrs.value("bi", 0),
+                                          attrs.value("bj", 0), attrs.value("g", 0));
+            }
+            if (op_class == "ParBlockColMajorLNMinimaxInit") {
+                auto* layer = static_cast<ParBlockColMajorLNMinimaxInit*>(layer_ptr);
+                return layer->generate_pt(*ctx_ptr, attrs.value("pt_idx", 0), attrs.value("bi", 0),
+                                          attrs.value("bj", 0), attrs.value("g", 0));
+            }
+            if (op_class == "ParBlockColMajorLNGoldschmidt") {
+                auto* layer = static_cast<ParBlockColMajorLNGoldschmidt*>(layer_ptr);
+                return layer->generate_pt(*ctx_ptr, attrs.value("pt_idx", 0), attrs.value("bi", 0),
+                                          attrs.value("bj", 0), attrs.value("g", 0));
+            }
+            if (op_class == "ParBlockColMajorLNAffine") {
+                auto* layer = static_cast<ParBlockColMajorLNAffine*>(layer_ptr);
+                return layer->generate_pt(*ctx_ptr, attrs.value("pt_idx", 0), attrs.value("bi", 0),
+                                          attrs.value("bj", 0), attrs.value("g", 0));
+            }
+            if (op_class == "ParUpperDiagonalPoly") {
+                auto* layer = static_cast<ParUpperDiagonalPoly*>(layer_ptr);
+                if (type == "stockmeyer_coeff_pt")
+                    return layer->generate_weight_pt_for_stockmeyer(*ctx_ptr, attrs.value("coeff_idx", 0),
+                                                                    attrs.value("ct_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalPoly: " + type);
+            }
+            if (op_class == "ParUpperDiagonalPolyMultCt") {
+                auto* layer = static_cast<ParUpperDiagonalPolyMultCt*>(layer_ptr);
+                uint32_t mb = attr_u32("mb", 0);
+                uint32_t ct_local = attr_u32("ct_local", attr_u32("ct_idx", 0));
+                uint32_t g = attr_u32("g", 0);
+                if (type == "one_pt")
+                    return layer->generate_one_pt(*ctx_ptr, mb, ct_local, g);
+                if (type == "half_pt")
+                    return layer->generate_half_pt(*ctx_ptr, mb, ct_local, g);
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalPolyMultCt: " + type);
+            }
+            if (op_class == "ParUpperDiagonalAddPt") {
+                auto* layer = static_cast<ParUpperDiagonalAddPt*>(layer_ptr);
+                if (type == "pt")
+                    return layer->generate_pt(*ctx_ptr, attr_u32("ct_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalAddPt: " + type);
+            }
+            if (op_class == "ParUpperDiagonalMultipleSquare") {
+                auto* layer = static_cast<ParUpperDiagonalMultipleSquare*>(layer_ptr);
+                if (type == "mask_pt")
+                    return layer->generate_mask_pt(*ctx_ptr, attr_u32("ct_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalMultipleSquare: " + type);
+            }
+            if (op_class == "ParUpperDiagonalHeadColSum") {
+                auto* layer = static_cast<ParUpperDiagonalHeadColSum*>(layer_ptr);
+                if (type == "mask_pt")
+                    return layer->generate_mask_pt(*ctx_ptr, attr_u32("ct_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalHeadColSum: " + type);
+            }
+            if (op_class == "ParUpperDiagonalInverseInit") {
+                auto* layer = static_cast<ParUpperDiagonalInverseInit*>(layer_ptr);
+                if (type == "two_pt")
+                    return layer->generate_two_pt(*ctx_ptr, attr_u32("ct_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalInverseInit: " + type);
+            }
+            if (op_class == "ParUpperDiagonalInverseIter") {
+                auto* layer = static_cast<ParUpperDiagonalInverseIter*>(layer_ptr);
+                uint32_t ct_idx = attr_u32("ct_idx", 0);
+                if (type == "one_pt")
+                    return layer->generate_one_pt(*ctx_ptr, ct_idx);
+                if (type == "two_pt")
+                    return layer->generate_two_pt(*ctx_ptr, ct_idx);
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalInverseIter: " + type);
+            }
+            if (op_class == "ParUpperDiagonalGELU") {
+                auto* layer = static_cast<ParUpperDiagonalGELU*>(layer_ptr);
+                if (type == "mask_pt")
+                    return layer->generate_mask_pt(*ctx_ptr, attr_u32("ct_idx", 0));
+                throw std::runtime_error("encode_pt: unknown type for ParUpperDiagonalGELU: " + type);
+            }
+            throw std::runtime_error("encode_pt: unknown op_class: " + op_class);
+        }();
+
+        output = std::make_shared<CkksPlaintextRingt>(std::move(pt));
+    };
+}
+
+template <typename ProcessorT>
+static void run_generated_encode_pt_task(FheContext* context,
+                                         const fs::path& server_dir,
+                                         const vector<CxxVectorArgument>& cxx_args) {
+    std::unordered_map<std::string, ExecutorFunc> executors;
+    executors["encode_pt"] = make_block_col_major_encode_pt_executor();
+
+    if constexpr (is_same_v<ProcessorT, ProcessorCpu>) {
+        FheTaskCpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        task.run(context, cxx_args);
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    } else if constexpr (is_same_v<ProcessorT, ProcessorGpu>) {
+        FheTaskGpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        task.run(context, cxx_args);
+#endif
     }
 }
 
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_cpmm_matmul", "", HeteroProcessors) {
-    vector<uint32_t> ds = {16};
-    vector<uint32_t> dims = {16, 20};
-    vector<int> levels = {1};
+static void require_upper_diagonal_close(CkksContext& context,
+                                         int output_level,
+                                         const vector<CkksCiphertext>& out_cts,
+                                         const Array<double, 2>& expected,
+                                         Duo shape,
+                                         Duo head_shape,
+                                         uint32_t n_heads,
+                                         const string& label) {
+    Array<double, 2> actual =
+        unpack_par_diagonal_output(context, output_level, out_cts, shape, head_shape, n_heads, false, false);
+    print_double_message(actual.to_array_1d().data(), (label + "_actual").c_str(), 10);
+    print_double_message(expected.to_array_1d().data(), (label + "_expected").c_str(), 10);
+    auto comparison = compare(expected, actual);
+    CAPTURE(label, comparison.max_error, comparison.max_abs, comparison.rmse, comparison.rms);
+    REQUIRE(comparison.max_error < 5.0e-2 * comparison.max_abs);
+    REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
+}
 
-    FOR_EACH_SECTION(uint32_t d, ds, "d=" + to_string(d)) {
-        FOR_EACH_SECTION(int init_level, levels, "level=" + to_string(init_level)) {
-            FOR_EACH_SECTION(uint32_t m, dims, "m=" + to_string(m)) {
-                FOR_EACH_SECTION(uint32_t n, dims, "n=" + to_string(n)) {
-                    FOR_EACH_SECTION(uint32_t p, dims, "p=" + to_string(p)) {
-                        Array<double, 2> A_mat = gen_random_array<2>({m, n}, 1.0);
-                        Array<double, 2> B_mat = gen_random_array<2>({n, p}, 1.0);
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_poly_stockmeyer_hetero",
+                               "[fhe_layers][par_upper_diagonal_poly][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64;
+    const uint32_t n_heads = 2;
+    const uint32_t m_prepad = 64;
+    const uint32_t total_cols = n_heads * m_prepad;
+    const uint32_t order = 7;
+    const int init_level = 4;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
 
-                        FeatureMatEncrypted A_enc(&this->context, init_level);
-                        A_enc.shape = {m, n};
-                        A_enc.matmul_block_size = d;
-                        A_enc.block_col_major_pack(A_mat, d, false, this->context.get_parameter().get_default_scale());
+    fs::path server_dir = base_path / "CKKS_par_upper_diagonal_poly" / "stockmeyer" / ("order_" + to_string(order)) /
+                          ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
 
-                        BlockColMajorCPMM cpmm(this->context.get_parameter(), A_enc.shape, {n, p}, B_mat, d,
-                                               A_enc.level);
-                        cpmm.precompute_diagonals();
-                        FeatureMatEncrypted C_enc = cpmm.run(this->context, A_enc);
+    auto X = gen_random_array<2>({n_prepad, total_cols}, 0.35);
+    auto coeffs = gen_random_array<2>({static_cast<uint64_t>(order) + 1, static_cast<uint64_t>(total_cols)}, 0.08);
 
-                        auto C_result =
-                            C_enc.block_col_major_unpack(C_enc.shape[0], C_enc.shape[1], C_enc.matmul_block_size);
+    auto layer =
+        std::make_shared<ParUpperDiagonalPoly>(param, shape, head_shape, n_heads, init_level, coeffs.copy(), order);
+    layer->prepare_weight_stockmeyer_lazy();
+    Array<double, 2> expected = layer->run_plaintext(X);
 
-                        Array<double, 2> C_expected({m, p});
-                        for (uint32_t i = 0; i < m; i++) {
-                            for (uint32_t j = 0; j < p; j++) {
-                                double sum = 0.0;
-                                for (uint32_t l = 0; l < n; l++) {
-                                    sum += A_mat.get(i, l) * B_mat.get(l, j);
-                                }
-                                C_expected.set(i, j, sum);
-                            }
-                        }
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
 
-                        print_double_message(C_result.to_array_1d().data(), "output_mg", 10);
-                        print_double_message(C_expected.to_array_1d().data(), "output_mg_expected", 10);
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
 
-                        auto compare_result = compare(C_expected, C_result);
-                        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
-                        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
-                    }
-                }
-            }
+    const int output_level = init_level - MatPolyBase::compute_stockmeyer_level_cost(static_cast<int>(order));
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_upper_poly_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, output_level, out_cts, expected, shape, head_shape, n_heads,
+                                 "upper_poly_stockmeyer");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_poly_mult_ct_hetero",
+                               "[fhe_layers][par_upper_diagonal_poly_mult_ct][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64;
+    const uint32_t n_heads = 2;
+    const uint32_t m_prepad = 64;
+    const uint32_t total_cols = n_heads * m_prepad;
+    const int init_level = 2;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+
+    fs::path server_dir =
+        base_path / "CKKS_par_upper_diagonal_poly_mult_ct" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto half_tanh = gen_random_array<2>({n_prepad, total_cols}, 0.25);
+    auto X = gen_random_array<2>({n_prepad, total_cols}, 0.35);
+
+    auto layer = std::make_shared<ParUpperDiagonalPolyMultCt>(param, shape, head_shape, n_heads, init_level);
+    Array<double, 2> expected = layer->run_plaintext(half_tanh, X);
+
+    FeatureMatEncrypted half_tanh_enc(&context, init_level);
+    FeatureMatEncrypted X_enc(&context, init_level);
+    half_tanh_enc.par_diagonal_pack(half_tanh, n_heads, head_shape, false, false, false, param.get_default_scale());
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+
+    vector<CkksCiphertext> half_tanh_cts, x_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : half_tanh_enc.data)
+        half_tanh_cts.push_back(ct.copy());
+    for (auto& ct : X_enc.data)
+        x_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+
+    const int output_level = init_level - 2;
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"half_tanh_input", &half_tanh_cts},
+        {"x_input", &x_cts},
+        {"_poly_mult_ct_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, output_level, out_cts, expected, shape, head_shape, n_heads,
+                                 "upper_poly_mult_ct");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_add_pt_hetero",
+                               "[fhe_layers][par_upper_diagonal_softmax][add_pt][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64, n_heads = 2, m_prepad = 64, total_cols = n_heads * m_prepad;
+    const int init_level = 1;
+    const double value = -0.125;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+    fs::path server_dir =
+        base_path / "CKKS_par_upper_diagonal_softmax" / "add_pt" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto X = gen_random_array<2>({n_prepad, total_cols}, 0.5);
+    auto layer = std::make_shared<ParUpperDiagonalAddPt>(param, shape, head_shape, n_heads, init_level, value);
+    Array<double, 2> expected = layer->run_plaintext(X);
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(init_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_upper_add_pt_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, init_level, out_cts, expected, shape, head_shape, n_heads, "upper_add_pt");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_multiple_square_hetero",
+                               "[fhe_layers][par_upper_diagonal_softmax][multiple_square][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64, n_heads = 2, m_prepad = 64, total_cols = n_heads * m_prepad;
+    const int init_level = 2;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+    fs::path server_dir = base_path / "CKKS_par_upper_diagonal_softmax" / "multiple_square" /
+                          ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto X = gen_random_array<2>({n_prepad, total_cols}, 0.35);
+    auto layer = std::make_shared<ParUpperDiagonalMultipleSquare>(param, shape, head_shape, n_heads, init_level);
+    Array<double, 2> expected = layer->run_plaintext(X);
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+    const int output_level = init_level - 2;
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_upper_multiple_square_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, output_level, out_cts, expected, shape, head_shape, n_heads,
+                                 "upper_multiple_square");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_head_col_sum_hetero",
+                               "[fhe_layers][par_upper_diagonal_softmax][head_col_sum][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64, n_heads = 2, m_prepad = 64, total_cols = n_heads * m_prepad;
+    const int init_level = 1;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+    fs::path server_dir =
+        base_path / "CKKS_par_upper_diagonal_softmax" / "head_col_sum" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto X = gen_random_array<2>({n_prepad, total_cols}, 0.2);
+    auto layer = std::make_shared<ParUpperDiagonalHeadColSum>(param, shape, head_shape, n_heads, init_level);
+    Array<double, 2> expected = layer->run_plaintext(X);
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+    const int output_level = init_level - 1;
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_upper_head_col_sum_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, output_level, out_cts, expected, shape, head_shape, n_heads,
+                                 "upper_head_col_sum");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_inverse_init_hetero",
+                               "[fhe_layers][par_upper_diagonal_softmax][inverse_init][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64, n_heads = 2, m_prepad = 64, total_cols = n_heads * m_prepad;
+    const int init_level = 1;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+    fs::path server_dir =
+        base_path / "CKKS_par_upper_diagonal_softmax" / "inverse_init" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto B = gen_random_array<2>({n_prepad, total_cols}, 0.35);
+    auto layer = std::make_shared<ParUpperDiagonalInverseInit>(param, shape, head_shape, n_heads, init_level);
+    Array<double, 2> expected = layer->run_plaintext(B);
+
+    FeatureMatEncrypted B_enc(&context, init_level);
+    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, false, param.get_default_scale());
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : B_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(init_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_upper_inverse_init_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, init_level, out_cts, expected, shape, head_shape, n_heads,
+                                 "upper_inverse_init");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_inverse_iter_hetero",
+                               "[fhe_layers][par_upper_diagonal_softmax][inverse_iter][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64, n_heads = 2, m_prepad = 64, total_cols = n_heads * m_prepad;
+    const int init_level = 2;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+    fs::path server_dir =
+        base_path / "CKKS_par_upper_diagonal_softmax" / "inverse_iter" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto A = gen_random_array<2>({n_prepad, total_cols}, 0.25);
+    auto B = gen_random_array<2>({n_prepad, total_cols}, 0.2);
+    auto layer = std::make_shared<ParUpperDiagonalInverseIter>(param, shape, head_shape, n_heads, init_level);
+    Array<double, 2> expected = layer->run_plaintext(A, B);
+
+    FeatureMatEncrypted A_enc(&context, init_level);
+    FeatureMatEncrypted B_enc(&context, init_level);
+    A_enc.par_diagonal_pack(A, n_heads, head_shape, false, false, false, param.get_default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, false, param.get_default_scale());
+    vector<CkksCiphertext> a_cts, b_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : A_enc.data)
+        a_cts.push_back(ct.copy());
+    for (auto& ct : B_enc.data)
+        b_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+    const int output_level = init_level - 2;
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"a_input", &a_cts},
+        {"b_input", &b_cts},
+        {"_upper_inverse_iter_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, output_level, out_cts, expected, shape, head_shape, n_heads,
+                                 "upper_inverse_iter");
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_upper_diagonal_gelu_hetero",
+                               "[fhe_layers][par_upper_diagonal_softmax][gelu][hetero]",
+                               UpperDiagonalGraphProcessors) {
+    const uint32_t n_prepad = 64, n_heads = 2, m_prepad = 64, total_cols = n_heads * m_prepad;
+    const int init_level = 2;
+    Duo shape = {n_prepad, total_cols};
+    Duo head_shape = {n_prepad, m_prepad};
+    auto& small_resources = UpperDiagonalHeteroResources::get();
+    auto& param = small_resources.param;
+    auto& context = small_resources.context;
+    fs::path server_dir =
+        base_path / "CKKS_par_upper_diagonal_softmax" / "gelu" / ("level_" + to_string(init_level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto A = gen_random_array<2>({n_prepad, total_cols}, 0.3);
+    auto B = gen_random_array<2>({n_prepad, total_cols}, 0.25);
+    auto layer = std::make_shared<ParUpperDiagonalGELU>(param, shape, head_shape, n_heads, init_level);
+    Array<double, 2> expected = layer->run_plaintext(A, B);
+
+    FeatureMatEncrypted A_enc(&context, init_level);
+    FeatureMatEncrypted B_enc(&context, init_level);
+    A_enc.par_diagonal_pack(A, n_heads, head_shape, false, false, false, param.get_default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, false, param.get_default_scale());
+    vector<CkksCiphertext> a_cts, b_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : A_enc.data)
+        a_cts.push_back(ct.copy());
+    for (auto& ct : B_enc.data)
+        b_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer.get()));
+    const int output_level = init_level - 2;
+    uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"a_input", &a_cts},
+        {"b_input", &b_cts},
+        {"_upper_gelu_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_generated_encode_pt_task<TestType>(&context, server_dir, cxx_args);
+    require_upper_diagonal_close(context, output_level, out_cts, expected, shape, head_shape, n_heads, "upper_gelu");
+}
+
+template <typename T>
+static void run_block_col_major_e2e_test(HeteroFixture<T>& fixture,
+                                         const fs::path& server_dir,
+                                         const vector<CxxVectorArgument>& cxx_args,
+                                         const Array<double, 2>& ref_output,
+                                         Duo out_shape,
+                                         uint32_t out_d,
+                                         uint32_t out_n_heads,
+                                         bool is_par,
+                                         vector<CkksCiphertext>& out_cts) {
+    auto& res = SharedHeteroResources::get();
+
+    std::unordered_map<std::string, ExecutorFunc> executors;
+    executors["encode_pt"] = make_block_col_major_encode_pt_executor();
+
+    auto t0 = std::chrono::high_resolution_clock::now();
+    if constexpr (is_same_v<T, ProcessorCpu>) {
+        FheTaskCpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        task.run(&res.context, cxx_args);
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    } else if constexpr (is_same_v<T, ProcessorGpu>) {
+        FheTaskGpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        task.run(&res.context, cxx_args);
+#endif
+    }
+    auto t1 = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    std::cout << "\n[block_col_major_e2e] elapsed=" << std::fixed << std::setprecision(2) << ms << " ms\n";
+
+    FeatureMatEncrypted out_enc(&res.context, 0);
+    out_enc.data.clear();
+    for (auto& ct : out_cts)
+        out_enc.data.push_back(std::move(ct));
+    out_enc.head_shape = out_shape;
+    out_enc.shape = {out_shape[0], static_cast<uint32_t>(ref_output.get_shape()[1])};
+    out_enc.matmul_block_size = out_d;
+    Array<double, 2> actual({1, 1});
+    if (is_par) {
+        actual = out_enc.par_block_col_major_unpack(out_shape[0], out_shape[1], out_d, out_n_heads);
+    } else {
+        actual = out_enc.block_col_major_unpack(out_shape[0], out_shape[1], out_d);
+    }
+
+    double rel_err = e2e_max_rel_error(ref_output, actual);
+    std::cout << "  max_rel_error = " << std::scientific << rel_err << "\n";
+    REQUIRE(rel_err < 0.05);
+}
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_cpmm_square", "[block_col_major_e2e]", HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+
+    struct Cfg {
+        uint32_t m, n_heads, head_dim;
+        int level;
+    };
+    vector<Cfg> configs = {
+        {53, 3, 16, 2},
+        {83, 3, 64, 2},
+    };
+
+    FOR_EACH_SECTION(auto& cfg, configs,
+                     "m=" + to_string(cfg.m) + "_heads=" + to_string(cfg.n_heads) + "_dim=" + to_string(cfg.head_dim)) {
+        uint32_t d = cfg.head_dim;
+        uint32_t total_dim = cfg.n_heads * cfg.head_dim;
+
+        fs::path server_dir =
+            base_path / "CKKS_par_cpmm_square" /
+            ("m_" + to_string(cfg.m) + "_heads_" + to_string(cfg.n_heads) + "_dim_" + to_string(cfg.head_dim)) /
+            ("level_" + to_string(cfg.level)) / "server";
+        if (!fs::exists(server_dir / "mega_ag.json"))
+            return;
+
+        auto W = gen_random_array<2>({total_dim, total_dim}, 0.1);
+        auto A = gen_random_array<2>({cfg.m, total_dim}, 0.5);
+
+        auto layer_ptr =
+            std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{cfg.m, cfg.head_dim}, W, d, cfg.n_heads, cfg.level);
+        layer_ptr->precompute_diagonals();
+        auto ref_output = layer_ptr->run_plaintext(A);
+
+        FeatureMatEncrypted A_enc(&res.context, cfg.level);
+        A_enc.par_block_col_major_pack(A, d, cfg.n_heads, d, false, res.param.get_default_scale());
+
+        static vector<CkksCiphertext> in_cts, out_cts;
+        static vector<CustomData> layer_data;
+        in_cts.clear();
+        out_cts.clear();
+        layer_data.clear();
+
+        for (auto& ct : A_enc.data)
+            in_cts.push_back(ct.copy());
+        layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+        uint32_t num_block_rows_A = div_ceil(cfg.m, d);
+        uint32_t n_h_padded = 1;
+        while (n_h_padded < cfg.n_heads)
+            n_h_padded <<= 1;
+        uint32_t n_slot = res.param.get_n() / 2;
+        if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+            n_h_padded = cfg.n_heads;
         }
+        uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+        uint32_t n_out = num_block_rows_A * G;
+
+        for (uint32_t i = 0; i < n_out; i++)
+            out_cts.push_back(res.context.new_ciphertext(cfg.level - 2, res.param.get_default_scale()));
+
+        vector<CxxVectorArgument> cxx_args = {
+            {"input", &in_cts},
+            {"_cpmm_layer", &layer_data},
+            {"output", &out_cts},
+        };
+        run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {cfg.m, cfg.head_dim}, d, cfg.n_heads,
+                                     true, out_cts);
     }
 }
 
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_transpose", "", HeteroProcessors) {
-    vector<uint32_t> ds = {16};
-    vector<uint32_t> dims = {16, 20};
-    vector<int> levels = {1};
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "single_par_cpmm_square_with_bias",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
 
-    FOR_EACH_SECTION(uint32_t d, ds, "d=" + to_string(d)) {
-        FOR_EACH_SECTION(int init_level, levels, "level=" + to_string(init_level)) {
-            FOR_EACH_SECTION(uint32_t m, dims, "m=" + to_string(m)) {
-                FOR_EACH_SECTION(uint32_t n, dims, "n=" + to_string(n)) {
-                    Array<double, 2> A_mat = gen_random_array<2>({m, n}, 1.0);
+    struct Cfg {
+        uint32_t m, n_heads, head_dim, W_cols;
+        int level;
+    };
+    vector<Cfg> configs = {
+        {53, 3, 16, 35, 2},  // W_cols=35 < total_dim=48, non-square but K_row=K_col=1
+    };
 
-                    FeatureMatEncrypted A_enc(&this->context, init_level);
-                    A_enc.shape = {m, n};
-                    A_enc.matmul_block_size = d;
-                    A_enc.block_col_major_pack(A_mat, d, false, this->context.get_parameter().get_default_scale());
+    FOR_EACH_SECTION(auto& cfg, configs,
+                     "m=" + to_string(cfg.m) + "_heads=" + to_string(cfg.n_heads) + "_dim=" + to_string(cfg.head_dim) +
+                         "_wcols=" + to_string(cfg.W_cols)) {
+        uint32_t d = cfg.head_dim;
+        uint32_t total_dim = cfg.n_heads * cfg.head_dim;
 
-                    BlockColMajorTranspose bt(this->context.get_parameter(), A_enc.shape, A_enc.matmul_block_size,
-                                              A_enc.level);
-                    bt.precompute_diagonals();
-                    FeatureMatEncrypted AT_enc = bt.run(this->context, A_enc);
+        fs::path server_dir = base_path / "CKKS_par_cpmm_square_with_bias" /
+                              ("m_" + to_string(cfg.m) + "_heads_" + to_string(cfg.n_heads) + "_dim_" +
+                               to_string(cfg.head_dim) + "_wcols_" + to_string(cfg.W_cols)) /
+                              ("level_" + to_string(cfg.level)) / "server";
+        if (!fs::exists(server_dir / "mega_ag.json"))
+            return;
 
-                    auto AT_result =
-                        AT_enc.block_col_major_unpack(AT_enc.shape[0], AT_enc.shape[1], AT_enc.matmul_block_size);
+        auto W = gen_random_array<2>({total_dim, cfg.W_cols}, 0.1);
+        auto A = gen_random_array<2>({cfg.m, total_dim}, 0.5);
+        auto bias = gen_random_array<1>({cfg.W_cols}, 0.3);
 
-                    Array<double, 2> AT_expected({n, m});
-                    for (uint32_t i = 0; i < m; i++) {
-                        for (uint32_t j = 0; j < n; j++) {
-                            AT_expected.set(j, i, A_mat.get(i, j));
-                        }
-                    }
+        auto layer_ptr = std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{cfg.m, cfg.head_dim}, W, d, cfg.n_heads,
+                                                                cfg.level, std::move(bias));
+        layer_ptr->precompute_diagonals();
+        auto ref_output = layer_ptr->run_plaintext(A);
 
-                    print_double_message(AT_result.to_array_1d().data(), "output_mg", 10);
-                    print_double_message(AT_expected.to_array_1d().data(), "output_mg_expected", 10);
+        FeatureMatEncrypted A_enc(&res.context, cfg.level);
+        A_enc.par_block_col_major_pack(A, d, cfg.n_heads, d, false, res.param.get_default_scale());
 
-                    auto compare_result = compare(AT_expected, AT_result);
-                    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
-                    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
-                }
-            }
+        static vector<CkksCiphertext> in_cts, out_cts;
+        static vector<CustomData> layer_data;
+        in_cts.clear();
+        out_cts.clear();
+        layer_data.clear();
+
+        for (auto& ct : A_enc.data)
+            in_cts.push_back(ct.copy());
+        layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+        uint32_t num_block_rows_A = div_ceil(cfg.m, d);
+        uint32_t n_h_padded = 1;
+        while (n_h_padded < cfg.n_heads)
+            n_h_padded <<= 1;
+        uint32_t n_slot = res.param.get_n() / 2;
+        if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+            n_h_padded = cfg.n_heads;
         }
+        uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+        uint32_t n_out = num_block_rows_A * G;
+
+        for (uint32_t i = 0; i < n_out; i++)
+            out_cts.push_back(res.context.new_ciphertext(cfg.level - 2, res.param.get_default_scale()));
+
+        vector<CxxVectorArgument> cxx_args = {
+            {"input", &in_cts},
+            {"_cpmm_layer", &layer_data},
+            {"output", &out_cts},
+        };
+        run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {cfg.m, cfg.head_dim}, d, cfg.n_heads,
+                                     true, out_cts);
     }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "single_par_cpmm_expand_with_bias",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+
+    // m=53, n_heads=3, head_dim=16, total_dim=48, W_cols=100 (non-divisible, K_col=ceil(100/48)=3)
+    const uint32_t m = 53, n_heads = 3, head_dim = 16, d = head_dim;
+    const uint32_t total_dim = n_heads * head_dim;
+    const uint32_t W_cols = 100;
+    const int level = 2;
+    const uint32_t K_col = div_ceil(W_cols, total_dim);  // 3
+
+    fs::path server_dir = base_path / "CKKS_par_cpmm_expand_with_bias" /
+                          ("m_" + to_string(m) + "_heads_" + to_string(n_heads) + "_dim_" + to_string(head_dim) +
+                           "_wcols_" + to_string(W_cols)) /
+                          ("level_" + to_string(level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto W = gen_random_array<2>({total_dim, W_cols}, 0.1);
+    auto A = gen_random_array<2>({m, total_dim}, 0.5);
+    auto bias = gen_random_array<1>({W_cols}, 0.3);
+
+    auto layer_ptr =
+        std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{m, head_dim}, W, d, n_heads, level, std::move(bias));
+    layer_ptr->precompute_diagonals();
+    auto ref_output = layer_ptr->run_plaintext(A);
+
+    FeatureMatEncrypted A_enc(&res.context, level);
+    A_enc.par_block_col_major_pack(A, d, n_heads, head_dim, false, res.param.get_default_scale());
+
+    static vector<CkksCiphertext> in_cts, out_cts;
+    static vector<CustomData> layer_data;
+    in_cts.clear();
+    out_cts.clear();
+    layer_data.clear();
+
+    for (auto& ct : A_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+    uint32_t num_block_rows_A = div_ceil(m, d);
+    uint32_t n_h_padded = 1;
+    while (n_h_padded < n_heads)
+        n_h_padded <<= 1;
+    uint32_t n_slot = res.param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
+    uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+    uint32_t n_out = K_col * num_block_rows_A * G;
+
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(res.context.new_ciphertext(level - 2, res.param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_cpmm_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {m, head_dim}, d, n_heads, true, out_cts);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "single_par_cpmm_reduce_with_bias",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+
+    // m=53, n_heads=3, head_dim=16, total_dim=48, W_rows=100 (non-divisible, K_row=ceil(100/48)=3)
+    const uint32_t m = 53, n_heads = 3, head_dim = 16, d = head_dim;
+    const uint32_t total_dim = n_heads * head_dim;
+    const uint32_t W_rows = 100;
+    const int level = 2;
+    const uint32_t K_row = div_ceil(W_rows, total_dim);  // 3
+
+    fs::path server_dir = base_path / "CKKS_par_cpmm_reduce_with_bias" /
+                          ("m_" + to_string(m) + "_heads_" + to_string(n_heads) + "_dim_" + to_string(head_dim) +
+                           "_wrows_" + to_string(W_rows)) /
+                          ("level_" + to_string(level)) / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto W = gen_random_array<2>({W_rows, total_dim}, 0.1);
+    // REDUCE input has K_row megablocks: m × (K_row * total_dim) padded columns
+    auto A = gen_random_array<2>({m, W_rows}, 0.5);
+    auto bias = gen_random_array<1>({total_dim}, 0.3);
+
+    auto layer_ptr =
+        std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{m, head_dim}, W, d, n_heads, level, std::move(bias));
+    layer_ptr->precompute_diagonals();
+    auto ref_output = layer_ptr->run_plaintext(A);
+
+    FeatureMatEncrypted A_enc(&res.context, level);
+    A_enc.par_block_col_major_pack(A, d, n_heads, head_dim, false, res.param.get_default_scale());
+
+    static vector<CkksCiphertext> in_cts, out_cts;
+    static vector<CustomData> layer_data;
+    in_cts.clear();
+    out_cts.clear();
+    layer_data.clear();
+
+    for (auto& ct : A_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+    uint32_t num_block_rows_A = div_ceil(m, d);
+    uint32_t n_h_padded = 1;
+    while (n_h_padded < n_heads)
+        n_h_padded <<= 1;
+    uint32_t n_slot = res.param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
+    uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+    uint32_t n_out = num_block_rows_A * G;  // REDUCE: single output megablock
+
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(res.context.new_ciphertext(level - 2, res.param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_cpmm_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {m, head_dim}, d, n_heads, true, out_cts);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_attention", "[block_col_major_e2e]", HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+    const uint32_t seq_len = 53, n_heads = 3, head_dim = 16, d = head_dim;
+    const int init_level = 7;
+
+    fs::path server_dir = base_path / ("CKKS_par_attention_seq53_heads3_dim16") / "level_7" / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    uint32_t total_dim = n_heads * head_dim;
+    auto Q_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
+    auto K_mat = gen_random_array<2>({seq_len, total_dim}, 0.1);
+    auto V_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
+
+    // Reference: per-head Q * K^T * V
+    Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
+    for (uint32_t h = 0; h < n_heads; h++)
+        for (uint32_t i = 0; i < seq_len; i++)
+            for (uint32_t j = 0; j < head_dim; j++) {
+                double sum = 0.0;
+                for (uint32_t k1 = 0; k1 < seq_len; k1++) {
+                    double attn = 0.0;
+                    for (uint32_t k2 = 0; k2 < head_dim; k2++)
+                        attn += Q_mat.get(i, h * head_dim + k2) * K_mat.get(k1, h * head_dim + k2);
+                    sum += attn * V_mat.get(k1, h * head_dim + j);
+                }
+                expected.set(i, h * head_dim + j, sum);
+            }
+
+    // Create layers
+    auto kt_transpose =
+        std::make_shared<ParBlockColMajorTranspose>(res.param, Duo{seq_len, head_dim}, d, n_heads, init_level);
+
+    auto ccmm_qkt = std::make_shared<ParBlockColMajorCCMM>(res.param, Duo{seq_len, head_dim}, Duo{head_dim, seq_len}, d,
+                                                           n_heads, init_level - 1);
+    ccmm_qkt->precompute_diagonals();
+
+    auto ccmm_attnv = std::make_shared<ParBlockColMajorCCMM>(res.param, Duo{seq_len, seq_len}, Duo{seq_len, head_dim},
+                                                             d, n_heads, init_level - 4);
+    ccmm_attnv->precompute_diagonals();
+
+    // Pack Q, K, V
+    FeatureMatEncrypted Q_enc(&res.context, init_level);
+    Q_enc.par_block_col_major_pack(Q_mat, d, n_heads, d, false, res.param.get_default_scale());
+    FeatureMatEncrypted K_enc(&res.context, init_level);
+    K_enc.par_block_col_major_pack(K_mat, d, n_heads, d, false, res.param.get_default_scale());
+    FeatureMatEncrypted V_enc(&res.context, init_level);
+    V_enc.par_block_col_major_pack(V_mat, d, n_heads, d, false, res.param.get_default_scale());
+
+    static vector<CkksCiphertext> Q_cts, K_cts, V_cts, out_cts;
+    static vector<CustomData> kt_data, qkt_data, attnv_data;
+    Q_cts.clear();
+    K_cts.clear();
+    V_cts.clear();
+    out_cts.clear();
+    kt_data.clear();
+    qkt_data.clear();
+    attnv_data.clear();
+
+    for (auto& ct : Q_enc.data)
+        Q_cts.push_back(ct.copy());
+    for (auto& ct : K_enc.data)
+        K_cts.push_back(ct.copy());
+    for (auto& ct : V_enc.data)
+        V_cts.push_back(ct.copy());
+
+    kt_data.emplace_back(static_cast<void*>(kt_transpose.get()));
+    qkt_data.emplace_back(static_cast<void*>(ccmm_qkt.get()));
+    attnv_data.emplace_back(static_cast<void*>(ccmm_attnv.get()));
+
+    // Output: seq_len × head_dim per head, level = init_level - 7 = 0
+    uint32_t n_out = div_ceil(seq_len, d) * div_ceil(head_dim, d);
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(res.context.new_ciphertext(init_level - 7, res.param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"Q", &Q_cts},
+        {"K", &K_cts},
+        {"V", &V_cts},
+        {"_kt_transpose", &kt_data},
+        {"_qkt_ccmm", &qkt_data},
+        {"_attnv_ccmm", &attnv_data},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, expected, {seq_len, head_dim}, d, n_heads, true, out_cts);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_full_attention", "[block_col_major_e2e]", HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+    const uint32_t seq_len = 197, n_heads = 3, head_dim = 64, d = head_dim;
+    const uint32_t total_dim = n_heads * head_dim;
+    const int init_level = 9;
+
+    fs::path server_dir = base_path / "CKKS_par_full_attention_seq197_heads3_dim64" / "level_9" / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    // Random input and weight matrices
+    auto X_mat = gen_random_array<2>({seq_len, total_dim}, 0.5);
+    auto W_Q = gen_random_array<2>({total_dim, total_dim}, 0.1);
+    auto W_K = gen_random_array<2>({total_dim, total_dim}, 0.1);
+    auto W_V = gen_random_array<2>({total_dim, total_dim}, 0.1);
+
+    // Create 7 layer objects (3 CPMM + 1 Transpose + 2 CCMM)
+    auto cpmm_q =
+        std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{seq_len, head_dim}, W_Q, d, n_heads, init_level);
+    cpmm_q->precompute_diagonals();
+    auto cpmm_k =
+        std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{seq_len, head_dim}, W_K, d, n_heads, init_level);
+    cpmm_k->precompute_diagonals();
+    auto cpmm_v =
+        std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{seq_len, head_dim}, W_V, d, n_heads, init_level);
+    cpmm_v->precompute_diagonals();
+
+    // Reference: Q=X*W_Q, K=X*W_K, V=X*W_V, then per-head Q*K^T*V
+    auto Q_mat = cpmm_q->run_plaintext(X_mat);
+    auto K_mat = cpmm_k->run_plaintext(X_mat);
+    auto V_mat = cpmm_v->run_plaintext(X_mat);
+
+    Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
+    for (uint32_t h = 0; h < n_heads; h++)
+        for (uint32_t i = 0; i < seq_len; i++)
+            for (uint32_t j = 0; j < head_dim; j++) {
+                double sum = 0.0;
+                for (uint32_t k1 = 0; k1 < seq_len; k1++) {
+                    double attn = 0.0;
+                    for (uint32_t k2 = 0; k2 < head_dim; k2++)
+                        attn += Q_mat.get(i, h * head_dim + k2) * K_mat.get(k1, h * head_dim + k2);
+                    sum += attn * V_mat.get(k1, h * head_dim + j);
+                }
+                expected.set(i, h * head_dim + j, sum);
+            }
+
+    auto kt_transpose = std::make_shared<ParBlockColMajorTranspose>(res.param, Duo{seq_len, head_dim}, d, n_heads,
+                                                                    init_level - 2);  // K at level 7
+
+    auto ccmm_qkt =
+        std::make_shared<ParBlockColMajorCCMM>(res.param, Duo{seq_len, head_dim}, Duo{head_dim, seq_len}, d, n_heads,
+                                               init_level - 3);  // Q',K^T at level 6
+    ccmm_qkt->precompute_diagonals();
+
+    auto ccmm_attnv =
+        std::make_shared<ParBlockColMajorCCMM>(res.param, Duo{seq_len, seq_len}, Duo{seq_len, head_dim}, d, n_heads,
+                                               init_level - 6);  // attn,V' at level 3
+    ccmm_attnv->precompute_diagonals();
+
+    // Pack input X
+    FeatureMatEncrypted X_enc(&res.context, init_level);
+    X_enc.par_block_col_major_pack(X_mat, d, n_heads, d, false, res.param.get_default_scale());
+
+    static vector<CkksCiphertext> X_cts, out_cts;
+    static vector<CustomData> q_data, k_data, v_data, kt_data, qkt_data, attnv_data;
+    X_cts.clear();
+    out_cts.clear();
+    q_data.clear();
+    k_data.clear();
+    v_data.clear();
+    kt_data.clear();
+    qkt_data.clear();
+    attnv_data.clear();
+
+    for (auto& ct : X_enc.data)
+        X_cts.push_back(ct.copy());
+
+    q_data.emplace_back(static_cast<void*>(cpmm_q.get()));
+    k_data.emplace_back(static_cast<void*>(cpmm_k.get()));
+    v_data.emplace_back(static_cast<void*>(cpmm_v.get()));
+    kt_data.emplace_back(static_cast<void*>(kt_transpose.get()));
+    qkt_data.emplace_back(static_cast<void*>(ccmm_qkt.get()));
+    attnv_data.emplace_back(static_cast<void*>(ccmm_attnv.get()));
+
+    // Output: seq_len × head_dim per head, level = 0
+    uint32_t num_block_rows_out = div_ceil(seq_len, d);
+    uint32_t n_h_padded = 1;
+    while (n_h_padded < n_heads)
+        n_h_padded <<= 1;
+    uint32_t n_slot = res.param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
+    uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+    uint32_t n_out = num_block_rows_out * G;
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(res.context.new_ciphertext(0, res.param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"X", &X_cts},
+        {"_cpmm_q", &q_data},
+        {"_cpmm_k", &k_data},
+        {"_cpmm_v", &v_data},
+        {"_kt_transpose", &kt_data},
+        {"_qkt_ccmm", &qkt_data},
+        {"_attnv_ccmm", &attnv_data},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, expected, {seq_len, head_dim}, d, n_heads, true, out_cts);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "single_par_cpmm_expand_reduce",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    const uint32_t m = 53, n_heads = 3, head_dim = 16, K_factor = 4, d = head_dim;
+    const uint32_t total_dim = n_heads * head_dim;
+    const uint32_t expanded_dim = K_factor * total_dim;
+    const int init_level = 4;
+
+    fs::path server_dir = base_path / "CKKS_par_cpmm_expand_reduce_m53_heads3_dim16_K4" / "level_4" / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    auto A_mat = gen_random_array<2>({m, total_dim}, 0.5);
+    auto W1_mat = gen_random_array<2>({total_dim, expanded_dim}, 0.1);
+    auto W2_mat = gen_random_array<2>({expanded_dim, total_dim}, 0.1);
+
+    // Reference: (A @ W1) @ W2
+    Array<double, 2> expected({(uint64_t)m, (uint64_t)total_dim});
+    std::vector<double> mid(m * expanded_dim, 0.0);
+    for (uint32_t i = 0; i < m; i++)
+        for (uint32_t j = 0; j < expanded_dim; j++) {
+            double s = 0;
+            for (uint32_t k = 0; k < total_dim; k++)
+                s += A_mat.get(i, k) * W1_mat.get(k, j);
+            mid[i * expanded_dim + j] = s;
+        }
+    for (uint32_t i = 0; i < m; i++)
+        for (uint32_t j = 0; j < total_dim; j++) {
+            double s = 0;
+            for (uint32_t k = 0; k < expanded_dim; k++)
+                s += mid[i * expanded_dim + k] * W2_mat.get(k, j);
+            expected.set(i, j, s);
+        }
+
+    // Create layers
+    auto expand_ptr =
+        std::make_shared<ParBlockColMajorCPMM>(this->param, Duo{m, head_dim}, W1_mat, d, n_heads, init_level);
+    expand_ptr->precompute_diagonals();
+
+    int mid_level = init_level - 2;
+    auto reduce_ptr =
+        std::make_shared<ParBlockColMajorCPMM>(this->param, Duo{m, head_dim}, W2_mat, d, n_heads, mid_level);
+    reduce_ptr->precompute_diagonals();
+
+    // Pack input
+    FeatureMatEncrypted A_enc(&this->context, init_level);
+    A_enc.par_block_col_major_pack(A_mat, d, n_heads, d, false, this->param.get_default_scale());
+
+    static vector<CkksCiphertext> in_cts, out_cts;
+    static vector<CustomData> expand_data, reduce_data;
+    in_cts.clear();
+    out_cts.clear();
+    expand_data.clear();
+    reduce_data.clear();
+
+    for (auto& ct : A_enc.data)
+        in_cts.push_back(ct.copy());
+    expand_data.emplace_back(static_cast<void*>(expand_ptr.get()));
+    reduce_data.emplace_back(static_cast<void*>(reduce_ptr.get()));
+
+    // Output: same shape as input, level = init_level - 4
+    uint32_t num_block_rows_A = div_ceil(m, d);
+    uint32_t n_h_padded = 1;
+    while (n_h_padded < n_heads)
+        n_h_padded <<= 1;
+    uint32_t n_slot = this->param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
+    uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+    uint32_t n_out = num_block_rows_A * G;
+
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(this->context.new_ciphertext(init_level - 4, this->param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_expand_cpmm", &expand_data},
+        {"_reduce_cpmm", &reduce_data},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, expected, {m, head_dim}, d, n_heads, true, out_cts);
 }
 
 static Array<double, 2> make_uniform_coeff(const vector<double>& c, uint32_t n_channel) {
@@ -1903,236 +4782,6 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
         }
     }
 }
-
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_block_qkt_v_attention", "", HeteroProcessors) {
-    double default_scale = this->context.get_parameter().get_default_scale();
-
-    auto run_attention_test = [&](uint32_t seq_len, uint32_t n_heads, uint32_t head_dim, int init_level) {
-        uint32_t d = head_dim;
-        uint32_t total_dim = n_heads * head_dim;
-
-        // Use small scale to keep values manageable through two multiplications
-        Array<double, 2> Q_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
-        Array<double, 2> K_mat = gen_random_array<2>({seq_len, total_dim}, 0.1);
-        Array<double, 2> V_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
-
-        // Pack Q, K, V using par_block_col_major_pack
-        FeatureMatEncrypted Q_enc(&this->context, init_level);
-        Q_enc.shape = {seq_len, head_dim};
-        Q_enc.matmul_block_size = d;
-        Q_enc.par_block_col_major_pack(Q_mat, d, n_heads, false, default_scale);
-
-        FeatureMatEncrypted K_enc(&this->context, init_level);
-        K_enc.shape = {seq_len, head_dim};
-        K_enc.matmul_block_size = d;
-        K_enc.par_block_col_major_pack(K_mat, d, n_heads, false, default_scale);
-
-        FeatureMatEncrypted V_enc(&this->context, init_level);
-        V_enc.shape = {seq_len, head_dim};
-        V_enc.matmul_block_size = d;
-        V_enc.par_block_col_major_pack(V_mat, d, n_heads, false, default_scale);
-
-        // Step 1: Transpose K -> K^T (per head: seq_len x head_dim -> head_dim x seq_len)
-        ParBlockColMajorTranspose kt_transpose(this->context.get_parameter(), {seq_len, head_dim}, d, n_heads,
-                                               init_level);
-        kt_transpose.precompute_diagonals();
-        FeatureMatEncrypted KT_enc = kt_transpose.run(this->context, K_enc);
-        // KT_enc at level init_level - 1, shape = {head_dim, seq_len}
-
-        // Step 2: Drop Q to match K^T level
-        FeatureMatEncrypted Q_dropped = Q_enc.drop_level(1);
-        Q_dropped.matmul_block_size = d;
-
-        // Step 3: Q * K^T  (per head: seq_len x head_dim @ head_dim x seq_len = seq_len x seq_len)
-        ParBlockColMajorCCMM qkt_ccmm(this->context.get_parameter(), {seq_len, head_dim}, {head_dim, seq_len}, d,
-                                      n_heads, init_level - 1);
-        qkt_ccmm.precompute_diagonals();
-        FeatureMatEncrypted attn_enc = qkt_ccmm.run(this->context, Q_dropped, KT_enc);
-        // attn_enc at level init_level - 4, shape = {seq_len, seq_len}
-
-        // Step 4: Drop V to match attention scores level
-        FeatureMatEncrypted V_dropped = V_enc.drop_level(4);
-        V_dropped.matmul_block_size = d;
-
-        // Step 5: attn_scores * V  (per head: seq_len x seq_len @ seq_len x head_dim = seq_len x head_dim)
-        ParBlockColMajorCCMM attnv_ccmm(this->context.get_parameter(), {seq_len, seq_len}, {seq_len, head_dim}, d,
-                                        n_heads, init_level - 4);
-        attnv_ccmm.precompute_diagonals();
-        FeatureMatEncrypted result_enc = attnv_ccmm.run(this->context, attn_enc, V_dropped);
-        // result_enc at level init_level - 7 = 0, shape = {seq_len, head_dim}
-
-        // Unpack result
-        auto result = result_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
-
-        // Compute expected: per head, Q_h @ K_h^T @ V_h
-        Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
-        for (uint32_t h = 0; h < n_heads; h++) {
-            for (uint32_t i = 0; i < seq_len; i++) {
-                for (uint32_t j = 0; j < head_dim; j++) {
-                    double sum = 0.0;
-                    for (uint32_t k1 = 0; k1 < seq_len; k1++) {
-                        double attn_score = 0.0;
-                        for (uint32_t k2 = 0; k2 < head_dim; k2++) {
-                            attn_score += Q_mat.get(i, h * head_dim + k2) * K_mat.get(k1, h * head_dim + k2);
-                        }
-                        sum += attn_score * V_mat.get(k1, h * head_dim + j);
-                    }
-                    expected.set(i, h * head_dim + j, sum);
-                }
-            }
-        }
-
-        print_double_message(result.to_array_1d().data(), "output_mg", 10);
-        print_double_message(expected.to_array_1d().data(), "output_mg_expected", 10);
-
-        auto compare_result = compare(expected, result);
-        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
-                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
-        REQUIRE(compare_result.max_error < 0.05 * compare_result.max_abs);
-        REQUIRE(compare_result.rmse < 0.01 * compare_result.rms);
-    };
-
-    SECTION("G=1: seq_len=53, n_heads=3, head_dim=16") {
-        // Level budget: transpose(1) + CCMM(3) + CCMM(3) = 7
-        run_attention_test(53, 3, 16, 7);
-    }
-
-    // G=2 disabled: head_dim=64 causes n_h_padded*d^2 > n_slot, requires larger N
-    // SECTION("G=2: seq_len=83, n_heads=3, head_dim=64") {
-    //     // n_slot=8192, d=64, d^2=4096, n_h_padded=4, n_h_padded*d^2=16384 > 8192
-    //     // S=8192/4096=2, G=4/2=2
-    //     // Level budget: transpose(1) + CCMM(3) + CCMM(3) = 7
-    //     run_attention_test(83, 3, 64, 7);
-    // }
-}
-
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_cpmm_square", "", HeteroProcessors) {
-    double default_scale = this->context.get_parameter().get_default_scale();
-
-    auto run_square_test = [&](uint32_t m, uint32_t n_heads, uint32_t head_dim, int init_level) {
-        uint32_t d = head_dim;
-        uint32_t total_dim = n_heads * head_dim;
-
-        Array<double, 2> A_mat = gen_random_array<2>({m, total_dim}, 0.5);
-        Array<double, 2> W_mat = gen_random_array<2>({total_dim, total_dim}, 0.1);
-
-        FeatureMatEncrypted A_enc(&this->context, init_level);
-        A_enc.shape = {m, head_dim};
-        A_enc.matmul_block_size = d;
-        A_enc.par_block_col_major_pack(A_mat, d, n_heads, false, default_scale);
-
-        ParBlockColMajorCPMM cpmm(this->context.get_parameter(), {m, head_dim}, W_mat, d, n_heads, init_level);
-        cpmm.precompute_diagonals();
-        FeatureMatEncrypted result_enc = cpmm.run(this->context, A_enc);
-
-        auto result = result_enc.par_block_col_major_unpack(m, head_dim, d, n_heads);
-
-        Array<double, 2> expected({(uint64_t)m, (uint64_t)total_dim});
-        for (uint32_t i = 0; i < m; i++) {
-            for (uint32_t j = 0; j < total_dim; j++) {
-                double sum = 0.0;
-                for (uint32_t k = 0; k < total_dim; k++) {
-                    sum += A_mat.get(i, k) * W_mat.get(k, j);
-                }
-                expected.set(i, j, sum);
-            }
-        }
-
-        print_double_message(result.to_array_1d().data(), "cpmm_output", 10);
-        print_double_message(expected.to_array_1d().data(), "cpmm_expected", 10);
-
-        auto compare_result = compare(expected, result);
-        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
-                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
-        REQUIRE(compare_result.max_error < 0.05 * compare_result.max_abs);
-        REQUIRE(compare_result.rmse < 0.01 * compare_result.rms);
-    };
-
-    SECTION("G=1: m=53, n_heads=3, head_dim=16") {
-        run_square_test(53, 3, 16, 2);
-    }
-
-    SECTION("G=2: m=83, n_heads=3, head_dim=64") {
-        // n_slot=8192, d=64, d^2=4096, n_h_padded=4, n_h_padded*d^2=16384 > 8192
-        // S=8192/4096=2, G=4/2=2
-        run_square_test(83, 3, 64, 2);
-    }
-}
-
-TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "par_cpmm_expand_reduce", "", HeteroProcessors) {
-    double default_scale = this->context.get_parameter().get_default_scale();
-
-    auto run_expand_reduce_test = [&](uint32_t m, uint32_t n_heads, uint32_t head_dim, uint32_t K, int init_level) {
-        uint32_t d = head_dim;
-        uint32_t total_dim = n_heads * head_dim;
-        uint32_t expanded_dim = K * total_dim;
-
-        Array<double, 2> A_mat = gen_random_array<2>({m, total_dim}, 0.5);
-        Array<double, 2> W1_mat = gen_random_array<2>({total_dim, expanded_dim}, 0.1);
-        Array<double, 2> W2_mat = gen_random_array<2>({expanded_dim, total_dim}, 0.1);
-
-        FeatureMatEncrypted A_enc(&this->context, init_level);
-        A_enc.shape = {m, head_dim};
-        A_enc.matmul_block_size = d;
-        A_enc.par_block_col_major_pack(A_mat, d, n_heads, false, default_scale);
-
-        // Expand: A @ W1
-        ParBlockColMajorCPMM expand_cpmm(this->context.get_parameter(), {m, head_dim}, W1_mat, d, n_heads, init_level);
-        expand_cpmm.precompute_diagonals();
-        FeatureMatEncrypted mid_enc = expand_cpmm.run(this->context, A_enc);
-
-        // Reduce: (A @ W1) @ W2
-        ParBlockColMajorCPMM reduce_cpmm(this->context.get_parameter(), {m, head_dim}, W2_mat, d, n_heads,
-                                         mid_enc.level);
-        reduce_cpmm.precompute_diagonals();
-        FeatureMatEncrypted result_enc = reduce_cpmm.run(this->context, mid_enc);
-
-        auto result = result_enc.par_block_col_major_unpack(m, head_dim, d, n_heads);
-
-        // Expected: (A @ W1) @ W2
-        Array<double, 2> expected({(uint64_t)m, (uint64_t)total_dim});
-        std::vector<double> mid(m * expanded_dim, 0.0);
-        for (uint32_t i = 0; i < m; i++) {
-            for (uint32_t j = 0; j < expanded_dim; j++) {
-                double sum = 0.0;
-                for (uint32_t k = 0; k < total_dim; k++) {
-                    sum += A_mat.get(i, k) * W1_mat.get(k, j);
-                }
-                mid[i * expanded_dim + j] = sum;
-            }
-        }
-        for (uint32_t i = 0; i < m; i++) {
-            for (uint32_t j = 0; j < total_dim; j++) {
-                double sum = 0.0;
-                for (uint32_t k = 0; k < expanded_dim; k++) {
-                    sum += mid[i * expanded_dim + k] * W2_mat.get(k, j);
-                }
-                expected.set(i, j, sum);
-            }
-        }
-
-        print_double_message(result.to_array_1d().data(), "mlp_output", 10);
-        print_double_message(expected.to_array_1d().data(), "mlp_expected", 10);
-
-        auto compare_result = compare(expected, result);
-        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
-                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
-        REQUIRE(compare_result.max_error < 0.05 * compare_result.max_abs);
-        REQUIRE(compare_result.rmse < 0.01 * compare_result.rms);
-    };
-
-    SECTION("G=1: m=53, n_heads=3, head_dim=16, K=4") {
-        run_expand_reduce_test(53, 3, 16, 4, 4);
-    }
-
-    // G=2 disabled: head_dim=64 causes n_h_padded*d^2 > n_slot, requires larger N
-    // SECTION("G=2: m=83, n_heads=3, head_dim=64, K=4") {
-    //     // n_slot=8192, d=64, d^2=4096, n_h_padded=4, n_h_padded*d^2=16384 > 8192
-    //     // S=8192/4096=2, G=4/2=2
-    //     run_expand_reduce_test(83, 3, 64, 4, 4);
-    // }
-}
-
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "add_layer", "", HeteroProcessors) {
     int init_level = 2;
     Duo skip = {1, 1};
@@ -2204,6 +4853,84 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "add_layer", "", HeteroProcessors)
     SECTION("n_channel=32, shape=32x32") {
         run_add_test(32, 32);
     }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_block_col_major_add_generated",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+    fs::path server_dir = base_path / "CKKS_par_block_col_major_add" / "par_block_col_major" / "level_2" / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    const int init_level = 2;
+    const uint32_t m = 8, n_heads = 2, head_dim = 4, d = 4;
+    const uint32_t total_dim = n_heads * head_dim;
+    auto x0 = gen_random_array<2>({m, total_dim}, 1.0);
+    auto x1 = gen_random_array<2>({m, total_dim}, 1.0);
+
+    FeatureMatEncrypted x0_enc(&res.context, init_level);
+    x0_enc.par_block_col_major_pack(x0, d, n_heads, d, false, res.param.get_default_scale());
+    FeatureMatEncrypted x1_enc(&res.context, init_level);
+    x1_enc.par_block_col_major_pack(x1, d, n_heads, d, false, res.param.get_default_scale());
+
+    ParBlockColMajorAdd add_layer(res.param);
+    auto expected = add_layer.run_plaintext(x0, x1);
+
+    vector<CkksCiphertext> x0_cts, x1_cts, out_cts;
+    for (auto& ct : x0_enc.data)
+        x0_cts.push_back(ct.copy());
+    for (auto& ct : x1_enc.data)
+        x1_cts.push_back(ct.copy());
+    for (size_t i = 0; i < x0_enc.data.size(); i++)
+        out_cts.push_back(res.context.new_ciphertext(init_level, res.param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input0", &x0_cts},
+        {"input1", &x1_cts},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, expected, {m, head_dim}, d, n_heads, true, out_cts);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_block_col_major_add_pt_generated",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+    fs::path server_dir = base_path / "CKKS_par_block_col_major_add_pt" / "par_block_col_major" / "level_2" / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    const int init_level = 2;
+    const uint32_t m = 8, n_heads = 2, head_dim = 4, d = 4;
+    const uint32_t total_dim = n_heads * head_dim;
+    auto A = gen_random_array<2>({m, total_dim}, 1.0);
+    auto B = gen_random_array<2>({m, total_dim}, 0.5);
+
+    auto layer_ptr =
+        std::make_shared<ParBlockColMajorAddPt>(res.param, Duo{m, total_dim}, d, n_heads, init_level, std::move(B));
+    layer_ptr->precompute_pts();
+    auto expected = layer_ptr->run_plaintext(A);
+
+    FeatureMatEncrypted A_enc(&res.context, init_level);
+    A_enc.par_block_col_major_pack(A, d, n_heads, d, false, res.param.get_default_scale());
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> layer_data;
+    for (auto& ct : A_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+    for (size_t i = 0; i < A_enc.data.size(); i++)
+        out_cts.push_back(res.context.new_ciphertext(init_level, res.param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input0", &in_cts},
+        {"add_pt_0", &layer_data},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, expected, {m, head_dim}, d, n_heads, true, out_cts);
 }
 
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "avgpool2d_layer", "", HeteroProcessors) {
@@ -2439,8 +5166,30 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool1d_layer", "", He
 
         Avgpool1DLayer avgpool(s, stride);
 
-        Feature1DEncrypted output_feature = avgpool.run_adaptive_avgpool(this->context, input_feature);
+        Feature1DEncrypted output_feature(&this->context, init_level, skip * stride, stride);
+        for (uint32_t i = 0; i < n_ct; i++) {
+            output_feature.data.push_back(this->context.new_ciphertext(init_level, this->param.get_default_scale()));
+        }
 
+        fs::path project_path = base_path / ("CKKS_adaptive_avgpool1d/stride_" + to_string(stride)) /
+                                ("ch_" + to_string(n_channel) + "_shape_" + to_string(s)) /
+                                ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_feature.data});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output_feature.data});
+        }
+        this->run(project_path, cxx_args);
+
+        output_feature.skip = skip * stride;
+        output_feature.invalid_fill = stride;
+        output_feature.n_channel = n_channel;
+        output_feature.n_channel_per_ct = n_channel_per_ct;
+        output_feature.shape = s / stride;
         auto result_mg = output_feature.unpack_multiplexed();
 
         auto result_expected = avgpool.run_plaintext(input_array);
@@ -2472,7 +5221,6 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_avgpool1d_layer", "",
 
     auto run_multiplexed_avgpool1d_test = [&](uint32_t n_channel, uint32_t s, uint32_t stride) {
         uint32_t n_channel_per_ct = div_ceil(this->n_slot, s);
-        uint32_t n_ct = div_ceil(n_channel, n_channel_per_ct);
 
         Array<double, 2> input_array = gen_random_array<2>({n_channel, s}, 1.0);
 
@@ -2482,8 +5230,34 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_avgpool1d_layer", "",
         Avgpool1DLayer avgpool(s, stride);
         avgpool.prepare_weight(this->param, n_channel_per_ct, n_channel, init_level, skip, s);
 
-        Feature1DEncrypted output_feature = avgpool.run_multiplexed_avgpool(this->context, input_feature);
+        uint32_t out_channels_per_ct = n_channel_per_ct * stride;
+        uint32_t n_packed_out_channel = div_ceil(n_channel, out_channels_per_ct);
+        Feature1DEncrypted output_feature(&this->context, init_level - 1, skip * stride);
+        for (uint32_t i = 0; i < n_packed_out_channel; i++) {
+            output_feature.data.push_back(
+                this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+        }
 
+        fs::path project_path = base_path / ("CKKS_avgpool1d/stride_" + to_string(stride)) /
+                                ("ch_" + to_string(n_channel) + "_shape_" + to_string(s)) /
+                                ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_feature.data});
+            else if (name == "select_tensor_pt")
+                cxx_args.push_back({name, &avgpool.select_tensor_pt});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output_feature.data});
+        }
+        this->run(project_path, cxx_args);
+
+        output_feature.skip = skip * stride;
+        output_feature.n_channel = n_channel;
+        output_feature.n_channel_per_ct = n_channel_per_ct * stride;
+        output_feature.shape = s / stride;
         auto result_mg = output_feature.unpack_multiplexed();
 
         auto result_expected = avgpool.run_plaintext_multiplexed(input_array);
@@ -2717,7 +5491,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_1d_multiplexed", "", HeteroPro
         uint32_t n_out;
     };
     vector<Cfg> configs = {
-        {4, 2, 1, 8, 4}, {4, 4, 1, 8, 4}, {4, 4, 2, 8, 4}, {8, 2, 1, 16, 8}, {8, 4, 2, 16, 8}, {8, 8, 4, 8, 4},
+        {32, 2, 1, 16, 8},  {32, 2, 1, 64, 32}, {32, 4, 1, 32, 16}, {32, 4, 2, 32, 16},
+        {32, 4, 4, 32, 16}, {64, 2, 1, 16, 8},  {64, 4, 2, 64, 32}, {64, 8, 4, 64, 32},
     };
 
     FOR_EACH_SECTION(auto& cfg, configs,
@@ -2756,8 +5531,33 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_1d_multiplexed", "", HeteroPro
         DensePackedLayer dense(this->context.get_parameter(), move(weight), move(bias), n_block_per_ct, init_level, 0);
         dense.prepare_weight_for_1d_multiplexed(cfg.shape, cfg.skip, cfg.invalid_fill);
 
-        // Run
-        Feature0DEncrypted output = dense.run_1d_multiplexed(this->context, input_0d);
+        Feature0DEncrypted output(&this->context, init_level - 1);
+        output.skip = block_size;
+        output.n_channel = cfg.n_out;
+        output.n_channel_per_ct = n_block_per_ct;
+        for (uint32_t i = 0; i < n_packed_out; i++) {
+            output.data.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+        }
+
+        fs::path project_path =
+            base_path /
+            ("CKKS_fc_1d_multiplexed_shape" + to_string(cfg.shape) + "_skip" + to_string(cfg.skip) + "_inv" +
+             to_string(cfg.invalid_fill) + "_cin" + to_string(cfg.n_channel) + "_cout" + to_string(cfg.n_out)) /
+            ("level_" + to_string(init_level)) / "server";
+        cout << "project_path=" << project_path << endl;
+        auto arg_names = read_arg_names(project_path);
+        vector<CxxVectorArgument> cxx_args;
+        for (const auto& name : arg_names) {
+            if (name == "input_node")
+                cxx_args.push_back({name, &input_0d.data});
+            else if (name == "weight_pt")
+                cxx_args.push_back({name, &dense.weight_pt});
+            else if (name == "bias_pt")
+                cxx_args.push_back({name, &dense.bias_pt});
+            else if (name == "output_ct")
+                cxx_args.push_back({name, &output.data});
+        }
+        this->run(project_path, cxx_args);
 
         // Unpack and compare
         Array<double, 1> output_mg = output.unpack();
@@ -2846,4 +5646,822 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "upsample_nearest_layer", "", Hete
     SECTION("n_channel=4, shape=8x8") {
         run_upsample_nearest_test(4, 8);
     }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", HeteroProcessors) {
+    // LayerNorm needs higher levels; use local context with N=32768
+    const int N = 32768;
+    CkksParameter param = CkksParameter::create_parameter(N);
+    CkksContext context = CkksContext::create_random_context(param);
+    context.gen_rotation_keys();
+    double default_scale = param.get_default_scale();
+
+    auto run_ln_test = [&](uint32_t d, uint32_t m, uint32_t n, uint32_t num_iters, int init_level) {
+        double eps = 1e-5;
+        double var_std_bound = 4.0;
+        double inv_var = 1.0 / (var_std_bound * var_std_bound);
+        double inv_std = 1.0 / var_std_bound;
+        double c0 = 6.19067182, c1 = -16.15885111, c2 = 11.52830778;
+
+        // Generate random data
+        Array<double, 2> X_mat = gen_random_array<2>({m, n}, 1.0);
+        Array<double, 1> gamma = gen_random_array<1>({n}, 0.5);
+        Array<double, 1> beta = gen_random_array<1>({n}, 0.1);
+
+        // Encrypt
+        FeatureMatEncrypted X_enc(&context, init_level);
+        X_enc.shape = {m, n};
+        X_enc.matmul_block_size = d;
+        X_enc.block_col_major_pack(X_mat, d, false, default_scale);
+
+        // Phase 1a: Stats (a_cts only)
+        BlockColMajorLNStats stats(param, {m, n}, d, init_level, eps, inv_var);
+        stats.prepare_weight();
+        auto a_cts = stats.run(context, X_enc);
+
+        // Phase 1b: XCentered
+        BlockColMajorLNXCentered xc(param, {m, n}, d, init_level);
+        xc.prepare_weight();
+        auto x_centered = xc.run(context, X_enc);
+
+        // Phase 2: Minimax Init, 2 levels consumpsion
+        BlockColMajorLNMinimaxInit minimax(param, d, init_level - 3, c0, c1, c2);
+        minimax.prepare_weight();
+        auto y_cts = minimax.run(context, a_cts);
+
+        // Phase 3: Goldschmidt (3 levels per iteration)
+        for (uint32_t k = 0; k < num_iters; k++) {
+            uint32_t y_level = init_level - 5 - 3 * k;
+            BlockColMajorLNGoldschmidt gold(param, d, y_level);
+            gold.prepare_weight();
+            y_cts = gold.run(context, y_cts, a_cts);
+        }
+
+        // Phase 4: Affine
+        uint32_t y_final_level = init_level - 5 - 3 * num_iters;
+        BlockColMajorLNAffine affine(param, {m, n}, d, y_final_level, inv_std, gamma.copy(), beta.copy());
+        affine.prepare_weight();
+        FeatureMatEncrypted result_enc = affine.run(context, x_centered, y_cts);
+
+        // Unpack
+        auto result = result_enc.block_col_major_unpack(m, n, d);
+
+        // Compute expected (same algorithm: biased var E[x^2]-E[x]^2, minimax, goldschmidt)
+        Array<double, 2> expected({(uint64_t)m, (uint64_t)n});
+        for (uint32_t i = 0; i < m; i++) {
+            double sum_x = 0.0, sum_x2 = 0.0;
+            for (uint32_t j = 0; j < n; j++) {
+                double v = X_mat.get(i, j);
+                sum_x += v;
+                sum_x2 += v * v;
+            }
+            double mean = sum_x / n;
+            double var = sum_x2 / n - mean * mean;
+            double a = (var + eps) * inv_var;
+
+            double y = c0 + c1 * a + c2 * a * a;
+            for (uint32_t k = 0; k < num_iters; k++) {
+                y = 0.5 * y * (3.0 - a * y * y);
+            }
+
+            for (uint32_t j = 0; j < n; j++) {
+                double x_norm = (X_mat.get(i, j) - mean) * inv_std * y;
+                expected.set(i, j, x_norm * gamma.get(j) + beta.get(j));
+            }
+        }
+
+        print_double_message(result.to_array_1d().data(), "output_mg", 10);
+        print_double_message(expected.to_array_1d().data(), "output_expected", 10);
+
+        auto compare_result = compare(expected, result);
+        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    };
+
+    SECTION("d=64, m=197, n=192, iters=1") {
+        run_ln_test(64, 197, 192, 1, 10);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_block_col_major_layernorm",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    fs::path server_dir =
+        base_path / "CKKS_par_block_col_major_layernorm" / "seq_197_heads_3_dim_64" / "level_11" / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    const int N = 32768;
+    CkksParameter param = CkksParameter::create_parameter(N);
+    CkksContext context = CkksContext::create_random_context(param);
+    context.gen_rotation_keys();
+
+    const uint32_t seq_len = 197, n_heads = 3, head_dim = 64, d = 64, num_iters = 1;
+    const uint32_t total_dim = n_heads * head_dim;
+    const int init_level = 11;
+    const double eps = 1e-5;
+    const double var_std_bound = 4.0;
+    const double inv_var = 1.0 / (var_std_bound * var_std_bound);
+    const double inv_std = 1.0 / var_std_bound;
+    const double c0 = 6.19067182, c1 = -16.15885111, c2 = 11.52830778;
+
+    auto X_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
+    auto gamma = gen_random_array<1>({total_dim}, 0.5);
+    auto beta = gen_random_array<1>({total_dim}, 0.1);
+
+    Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
+    for (uint32_t i = 0; i < seq_len; i++) {
+        double sum_x = 0.0, sum_x2 = 0.0;
+        for (uint32_t j = 0; j < total_dim; j++) {
+            double v = X_mat.get(i, j);
+            sum_x += v;
+            sum_x2 += v * v;
+        }
+        double mean = sum_x / total_dim;
+        double var = sum_x2 / total_dim - mean * mean;
+        double a = (var + eps) * inv_var;
+        double y = c0 + c1 * a + c2 * a * a;
+        for (uint32_t k = 0; k < num_iters; k++) {
+            y = 0.5 * y * (3.0 - a * y * y);
+        }
+        for (uint32_t j = 0; j < total_dim; j++) {
+            double x_norm = (X_mat.get(i, j) - mean) * inv_std * y;
+            expected.set(i, j, x_norm * gamma.get(j) + beta.get(j));
+        }
+    }
+
+    auto stats_layer =
+        std::make_shared<ParBlockColMajorLNStats>(param, Duo{seq_len, total_dim}, d, n_heads, init_level, eps, inv_var);
+    auto xcenter_layer =
+        std::make_shared<ParBlockColMajorLNXCentered>(param, Duo{seq_len, total_dim}, d, n_heads, init_level);
+    auto minimax_layer = std::make_shared<ParBlockColMajorLNMinimaxInit>(param, d, init_level - 4, c0, c1, c2);
+    auto gold_layer = std::make_shared<ParBlockColMajorLNGoldschmidt>(param, d, init_level - 6);
+    auto affine_layer = std::make_shared<ParBlockColMajorLNAffine>(param, Duo{seq_len, total_dim}, d, n_heads,
+                                                                   init_level - 9, inv_std, gamma.copy(), beta.copy());
+
+    FeatureMatEncrypted X_enc(&context, init_level);
+    X_enc.shape = {seq_len, head_dim};
+    X_enc.matmul_block_size = d;
+    X_enc.par_block_col_major_pack(X_mat, d, n_heads, d, false, param.get_default_scale());
+
+    vector<CkksCiphertext> in_cts, out_cts;
+    vector<CustomData> stats_data, xcenter_data, minimax_data, gold_data, affine_data;
+    for (auto& ct : X_enc.data)
+        in_cts.push_back(ct.copy());
+    stats_data.emplace_back(static_cast<void*>(stats_layer.get()));
+    xcenter_data.emplace_back(static_cast<void*>(xcenter_layer.get()));
+    minimax_data.emplace_back(static_cast<void*>(minimax_layer.get()));
+    gold_data.emplace_back(static_cast<void*>(gold_layer.get()));
+    affine_data.emplace_back(static_cast<void*>(affine_layer.get()));
+
+    uint32_t num_block_rows = div_ceil(seq_len, d);
+    uint32_t num_block_cols = div_ceil(head_dim, d);
+    uint32_t n_h_padded = 1;
+    while (n_h_padded < n_heads)
+        n_h_padded <<= 1;
+    uint32_t n_slot = param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
+    uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+    uint32_t n_out = num_block_rows * num_block_cols * G;
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(context.new_ciphertext(0, param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_ln_stats_layer", &stats_data},
+        {"_ln_xcenter_layer", &xcenter_data},
+        {"_ln_minimax_layer", &minimax_data},
+        {"_ln_gold_layer", &gold_data},
+        {"_ln_affine_layer", &affine_data},
+        {"output", &out_cts},
+    };
+
+    std::unordered_map<std::string, ExecutorFunc> executors;
+    executors["encode_pt"] = make_block_col_major_encode_pt_executor();
+    if constexpr (is_same_v<TestType, ProcessorCpu>) {
+        FheTaskCpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        task.run(&context, cxx_args);
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    } else if constexpr (is_same_v<TestType, ProcessorGpu>) {
+        FheTaskGpu task(server_dir.string());
+        task.bind_custom_executors(executors);
+        task.run(&context, cxx_args);
+#endif
+    }
+
+    FeatureMatEncrypted out_enc(&context, 0);
+    for (auto& ct : out_cts)
+        out_enc.data.push_back(std::move(ct));
+    out_enc.head_shape = {seq_len, head_dim};
+    out_enc.shape = {seq_len, total_dim};
+    out_enc.matmul_block_size = d;
+    auto result = out_enc.par_block_col_major_unpack(seq_len, head_dim, d, n_heads);
+
+    print_double_message(result.to_array_1d().data(), "output_mg", 10);
+    print_double_message(expected.to_array_1d().data(), "output_expected", 10);
+
+    auto compare_result = compare(expected, result);
+    std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+              << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_polyactrn", "", HeteroProcessors) {
+    auto run_polyactrn_test = [&](uint32_t d, uint32_t m, uint32_t n, uint32_t degree, int init_level) {
+        // Generate random data
+        Array<double, 2> X_mat = gen_random_array<2>({m, n}, 1.0);
+        Array<double, 1> gamma = gen_random_array<1>({n}, 0.5);
+        Array<double, 2> coeffs = gen_random_array<2>({degree + 1, n}, 0.3);
+
+        // Encrypt
+        FeatureMatEncrypted X_enc(&this->context, init_level);
+        X_enc.shape = {m, n};
+        X_enc.matmul_block_size = d;
+        X_enc.block_col_major_pack(X_mat, d, false, this->default_scale);
+
+        // Phase 1: Gamma scaling
+        BlockColMajorPolyActRNGamma gamma_layer(this->param, {m, n}, d, init_level, gamma.copy());
+        gamma_layer.prepare_weight();
+        auto gamma_result = gamma_layer.run(this->context, X_enc);
+
+        // Phase 2: Polynomial
+        uint32_t poly_level = init_level - 1;
+        BlockColMajorPolyActRNPoly poly(this->param, {m, n}, d, poly_level, coeffs.copy(), degree);
+        poly.prepare_weight();
+        auto result_enc = poly.run(this->context, gamma_result);
+
+        // Unpack
+        auto result = result_enc.block_col_major_unpack(m, n, d);
+
+        // Compute expected: poly(gamma * x)
+        Array<double, 2> expected({(uint64_t)m, (uint64_t)n});
+        for (uint32_t i = 0; i < m; i++) {
+            for (uint32_t j = 0; j < n; j++) {
+                double gx = gamma.get(j) * X_mat.get(i, j);
+                double poly_val = 0.0;
+                double gx_pow = 1.0;
+                for (uint32_t k = 0; k <= degree; k++) {
+                    poly_val += coeffs.get(k, j) * gx_pow;
+                    gx_pow *= gx;
+                }
+                expected.set(i, j, poly_val);
+            }
+        }
+
+        print_double_message(result.to_array_1d().data(), "output_mg", 10);
+        print_double_message(expected.to_array_1d().data(), "output_expected", 10);
+
+        auto compare_result = compare(expected, result);
+        std::cout << "max_error=" << compare_result.max_error << " max_abs=" << compare_result.max_abs
+                  << " rmse=" << compare_result.rmse << " rms=" << compare_result.rms << std::endl;
+        REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+        REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+    };
+
+    SECTION("degree=2, d=64, m=197, n=192") {
+        run_polyactrn_test(64, 197, 192, 2, 3);
+    }
+    SECTION("degree=4, d=64, m=197, n=192") {
+        run_polyactrn_test(64, 197, 192, 4, 4);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_block_col_major_polyactrn",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+
+    auto run_par_polyactrn_test = [&](uint32_t degree, int init_level) {
+        fs::path server_dir = base_path / "CKKS_par_block_col_major_polyactrn" / ("degree_" + to_string(degree)) /
+                              ("level_" + to_string(init_level)) / "server";
+        if (!fs::exists(server_dir / "mega_ag.json"))
+            return;
+
+        const uint32_t d = 64, seq_len = 197, n_heads = 3, head_dim = 64;
+        const uint32_t total_dim = n_heads * head_dim;
+
+        Array<double, 2> X_mat = gen_random_array<2>({seq_len, total_dim}, 1.0);
+        Array<double, 1> gamma = gen_random_array<1>({total_dim}, 0.5);
+        Array<double, 2> coeffs = gen_random_array<2>({degree + 1, total_dim}, 0.3);
+        // Compute expected: poly(gamma * x)
+        Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
+        for (uint32_t i = 0; i < seq_len; i++) {
+            for (uint32_t j = 0; j < total_dim; j++) {
+                double gx = gamma.get(j) * X_mat.get(i, j);
+                double poly_val = 0.0;
+                double gx_pow = 1.0;
+                for (uint32_t k = 0; k <= degree; k++) {
+                    poly_val += coeffs.get(k, j) * gx_pow;
+                    gx_pow *= gx;
+                }
+                expected.set(i, j, poly_val);
+            }
+        }
+
+        auto gamma_layer = std::make_shared<ParBlockColMajorPolyActRNGamma>(res.param, Duo{seq_len, total_dim}, d,
+                                                                            n_heads, 1, init_level, gamma.copy());
+        auto poly_layer = std::make_shared<ParBlockColMajorPolyActRNPoly>(
+            res.param, Duo{seq_len, total_dim}, d, n_heads, 1, init_level - 1, coeffs.copy(), degree);
+
+        FeatureMatEncrypted X_enc(&res.context, init_level);
+        X_enc.shape = {seq_len, head_dim};
+        X_enc.matmul_block_size = d;
+        X_enc.par_block_col_major_pack(X_mat, d, n_heads, d, false, res.param.get_default_scale());
+
+        vector<CkksCiphertext> in_cts, out_cts;
+        vector<CustomData> gamma_data, poly_data;
+        for (auto& ct : X_enc.data)
+            in_cts.push_back(ct.copy());
+        gamma_data.emplace_back(static_cast<void*>(gamma_layer.get()));
+        poly_data.emplace_back(static_cast<void*>(poly_layer.get()));
+
+        uint32_t num_block_rows = div_ceil(seq_len, d);
+        uint32_t num_block_cols = div_ceil(head_dim, d);
+        uint32_t n_h_padded = 1;
+        while (n_h_padded < n_heads)
+            n_h_padded <<= 1;
+        uint32_t n_slot = res.param.get_n() / 2;
+        if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+            n_h_padded = n_heads;
+        }
+        uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+        uint32_t n_out = num_block_rows * num_block_cols * G;
+        int out_level = init_level - 1 - (degree == 4 ? 3 : 2);
+        for (uint32_t i = 0; i < n_out; i++)
+            out_cts.push_back(res.context.new_ciphertext(out_level, res.param.get_default_scale()));
+
+        string gamma_layer_id = "_gamma_layer_deg" + to_string(degree);
+        string poly_layer_id = "_poly_layer_deg" + to_string(degree);
+        vector<CxxVectorArgument> cxx_args = {
+            {"input", &in_cts},
+            {gamma_layer_id, &gamma_data},
+            {poly_layer_id, &poly_data},
+            {"output", &out_cts},
+        };
+        run_block_col_major_e2e_test(*this, server_dir, cxx_args, expected, {seq_len, head_dim}, d, n_heads, true,
+                                     out_cts);
+    };
+
+    SECTION("degree=2, d=64, seq=197, heads=3, head_dim=64") {
+        run_par_polyactrn_test(2, 3);
+    }
+    SECTION("degree=4, d=64, seq=197, heads=3, head_dim=64") {
+        run_par_polyactrn_test(4, 4);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "par_cpmm_expand_polyactrn_reduce",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+
+    auto run_test = [&](uint32_t d, uint32_t seq_len, uint32_t n_heads, uint32_t head_dim, uint32_t K, uint32_t degree,
+                        int init_level) {
+        fs::path server_dir = base_path /
+                              ("CKKS_par_cpmm_expand_polyactrn_reduce_m" + to_string(seq_len) + "_heads" +
+                               to_string(n_heads) + "_dim" + to_string(head_dim) + "_K" + to_string(K)) /
+                              ("degree_" + to_string(degree)) / ("level_" + to_string(init_level)) / "server";
+        if (!fs::exists(server_dir / "mega_ag.json"))
+            return;
+
+        uint32_t total_dim = n_heads * head_dim;
+        uint32_t expanded_dim = K * total_dim;
+
+        Array<double, 2> A_mat = gen_random_array<2>({seq_len, total_dim}, 0.5);
+        Array<double, 2> W_expand = gen_random_array<2>({total_dim, expanded_dim}, 0.1);
+        Array<double, 1> gamma = gen_random_array<1>({expanded_dim}, 0.3);
+        Array<double, 2> coeffs = gen_random_array<2>({degree + 1, expanded_dim}, 0.2);
+        Array<double, 2> W_reduce = gen_random_array<2>({expanded_dim, total_dim}, 0.1);
+
+        std::vector<double> mid(seq_len * expanded_dim, 0.0);
+        for (uint32_t i = 0; i < seq_len; i++)
+            for (uint32_t j = 0; j < expanded_dim; j++) {
+                double s = 0;
+                for (uint32_t k = 0; k < total_dim; k++)
+                    s += A_mat.get(i, k) * W_expand.get(k, j);
+                mid[i * expanded_dim + j] = s;
+            }
+
+        std::vector<double> poly_out(seq_len * expanded_dim, 0.0);
+        for (uint32_t i = 0; i < seq_len; i++)
+            for (uint32_t j = 0; j < expanded_dim; j++) {
+                double gx = gamma.get(j) * mid[i * expanded_dim + j];
+                double val = 0.0, gx_pow = 1.0;
+                for (uint32_t c = 0; c <= degree; c++) {
+                    val += coeffs.get(c, j) * gx_pow;
+                    gx_pow *= gx;
+                }
+                poly_out[i * expanded_dim + j] = val;
+            }
+
+        Array<double, 2> expected({(uint64_t)seq_len, (uint64_t)total_dim});
+        for (uint32_t i = 0; i < seq_len; i++)
+            for (uint32_t j = 0; j < total_dim; j++) {
+                double s = 0;
+                for (uint32_t k = 0; k < expanded_dim; k++)
+                    s += poly_out[i * expanded_dim + k] * W_reduce.get(k, j);
+                expected.set(i, j, s);
+            }
+
+        auto expand_ptr =
+            std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{seq_len, head_dim}, W_expand, d, n_heads, init_level);
+        expand_ptr->precompute_diagonals();
+
+        int gamma_level = init_level - 2;
+        auto gamma_ptr = std::make_shared<ParBlockColMajorPolyActRNGamma>(res.param, Duo{seq_len, expanded_dim}, d,
+                                                                          n_heads, K, gamma_level, gamma.copy());
+
+        int poly_level = init_level - 3;
+        auto poly_ptr = std::make_shared<ParBlockColMajorPolyActRNPoly>(res.param, Duo{seq_len, expanded_dim}, d,
+                                                                        n_heads, K, poly_level, coeffs.copy(), degree);
+
+        int reduce_level = (degree == 2) ? init_level - 5 : init_level - 6;
+        auto reduce_ptr = std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{seq_len, head_dim}, W_reduce, d,
+                                                                 n_heads, reduce_level);
+        reduce_ptr->precompute_diagonals();
+
+        FeatureMatEncrypted A_enc(&res.context, init_level);
+        A_enc.shape = {seq_len, head_dim};
+        A_enc.matmul_block_size = d;
+        A_enc.par_block_col_major_pack(A_mat, d, n_heads, d, false, res.param.get_default_scale());
+
+        vector<CkksCiphertext> in_cts, out_cts;
+        vector<CustomData> expand_data, gamma_data, poly_data, reduce_data;
+        for (auto& ct : A_enc.data)
+            in_cts.push_back(ct.copy());
+        expand_data.emplace_back(static_cast<void*>(expand_ptr.get()));
+        gamma_data.emplace_back(static_cast<void*>(gamma_ptr.get()));
+        poly_data.emplace_back(static_cast<void*>(poly_ptr.get()));
+        reduce_data.emplace_back(static_cast<void*>(reduce_ptr.get()));
+
+        uint32_t num_block_rows_A = div_ceil(seq_len, d);
+        uint32_t n_h_padded = 1;
+        while (n_h_padded < n_heads)
+            n_h_padded <<= 1;
+        uint32_t n_slot = res.param.get_n() / 2;
+        if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+            n_h_padded = n_heads;
+        }
+        uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+        uint32_t n_out = num_block_rows_A * G;
+        int out_level = reduce_level - 2;
+        for (uint32_t i = 0; i < n_out; i++)
+            out_cts.push_back(res.context.new_ciphertext(out_level, res.param.get_default_scale()));
+
+        vector<CxxVectorArgument> cxx_args = {
+            {"input", &in_cts},          {"_expand_cpmm", &expand_data}, {"_gamma_layer", &gamma_data},
+            {"_poly_layer", &poly_data}, {"_reduce_cpmm", &reduce_data}, {"output", &out_cts},
+        };
+        run_block_col_major_e2e_test(*this, server_dir, cxx_args, expected, {seq_len, head_dim}, d, n_heads, true,
+                                     out_cts);
+    };
+
+    SECTION("degree=2, K=2, d=16, seq=53, heads=3, head_dim=16") {
+        run_test(16, 53, 3, 16, 2, 2, 7);
+    }
+    SECTION("degree=4, K=2, d=16, seq=53, heads=3, head_dim=16") {
+        run_test(16, 53, 3, 16, 2, 4, 8);
+    }
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "single_par_block_col_major_cpmm",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+    fs::path server_dir = base_path / "CKKS_par_block_col_major_cpmm" / "level_5" / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    const uint32_t m = 8, n_per_head = 4, n_heads = 2, d = 4;
+    const uint32_t n_total = n_heads * n_per_head;
+    const int level = 5;
+
+    auto W = gen_random_array<2>({n_total, n_total}, 0.1);
+    auto A = gen_random_array<2>({m, n_total}, 1.0);
+
+    auto layer_ptr = std::make_shared<ParBlockColMajorCPMM>(res.param, Duo{m, n_per_head}, W, d, n_heads, level);
+    layer_ptr->precompute_diagonals();
+    auto ref_output = layer_ptr->run_plaintext(A);
+
+    FeatureMatEncrypted A_enc(&res.context, level);
+    A_enc.par_block_col_major_pack(A, d, n_heads, d, false, res.param.get_default_scale());
+
+    static vector<CkksCiphertext> in_cts, out_cts;
+    static vector<CustomData> layer_data;
+    in_cts.clear();
+    out_cts.clear();
+    layer_data.clear();
+
+    for (auto& ct : A_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+    uint32_t num_block_rows_A = div_ceil(m, d);
+    uint32_t n_h_padded = 1;
+    while (n_h_padded < n_heads)
+        n_h_padded <<= 1;
+    uint32_t n_slot = res.param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
+    uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+    uint32_t n_out = num_block_rows_A * G;
+
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(res.context.new_ciphertext(level - 2, res.param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_cpmm_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {m, n_per_head}, d, n_heads, true, out_cts);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "single_par_block_col_major_transpose",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+    fs::path server_dir = base_path / "CKKS_par_block_col_major_transpose" / "level_5" / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    const uint32_t M = 8, K = 8, d = 4, n_heads = 2;
+    const int level = 5;
+
+    auto A = gen_random_array<2>({M, n_heads * K}, 1.0);
+
+    auto layer_ptr = std::make_shared<ParBlockColMajorTranspose>(res.param, Duo{M, K}, d, n_heads, level);
+    auto ref_output = layer_ptr->run_plaintext(A);
+
+    FeatureMatEncrypted A_enc(&res.context, level);
+    A_enc.par_block_col_major_pack(A, d, n_heads, K, false, res.param.get_default_scale());
+
+    static vector<CkksCiphertext> in_cts, out_cts;
+    static vector<CustomData> layer_data;
+    in_cts.clear();
+    out_cts.clear();
+    layer_data.clear();
+
+    for (auto& ct : A_enc.data)
+        in_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+    for (uint32_t i = 0; i < in_cts.size(); i++)
+        out_cts.push_back(res.context.new_ciphertext(level - 1, res.param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"input", &in_cts},
+        {"_transpose_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {K, M}, d, n_heads, true, out_cts);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "single_par_block_col_major_ccmm",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+    fs::path server_dir = base_path / "CKKS_par_block_col_major_ccmm" / "level_7" / "server";
+    if (!fs::exists(server_dir / "mega_ag.json"))
+        return;
+
+    const uint32_t M = 8, N_dim = 8, P = 8, d = 4, n_heads = 2;
+    const int level = 7;
+
+    auto A = gen_random_array<2>({M, n_heads * N_dim}, 1.0);
+    auto B = gen_random_array<2>({N_dim, n_heads * P}, 0.1);
+
+    auto layer_ptr = std::make_shared<ParBlockColMajorCCMM>(res.param, Duo{M, N_dim}, Duo{N_dim, P}, d, n_heads, level);
+    layer_ptr->precompute_diagonals();
+    auto ref_output = layer_ptr->run_plaintext(A, B);
+
+    FeatureMatEncrypted A_enc(&res.context, level);
+    A_enc.par_block_col_major_pack(A, d, n_heads, N_dim, false, res.param.get_default_scale());
+    FeatureMatEncrypted B_enc(&res.context, level);
+    B_enc.par_block_col_major_pack(B, d, n_heads, P, false, res.param.get_default_scale());
+
+    static vector<CkksCiphertext> A_cts, B_cts, out_cts;
+    static vector<CustomData> layer_data;
+    A_cts.clear();
+    B_cts.clear();
+    out_cts.clear();
+    layer_data.clear();
+
+    for (auto& ct : A_enc.data)
+        A_cts.push_back(ct.copy());
+    for (auto& ct : B_enc.data)
+        B_cts.push_back(ct.copy());
+    layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+    uint32_t n_out = div_ceil(M, d) * div_ceil(P, d);
+    uint32_t n_h_padded = 1;
+    while (n_h_padded < n_heads)
+        n_h_padded <<= 1;
+    uint32_t n_slot = res.param.get_n() / 2;
+    if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+        n_h_padded = n_heads;
+    }
+    uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+    n_out *= G;
+
+    for (uint32_t i = 0; i < n_out; i++)
+        out_cts.push_back(res.context.new_ciphertext(level - 3, res.param.get_default_scale()));
+
+    vector<CxxVectorArgument> cxx_args = {
+        {"A_input", &A_cts},
+        {"B_input", &B_cts},
+        {"_ccmm_layer", &layer_data},
+        {"output", &out_cts},
+    };
+    run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {M, P}, d, n_heads, true, out_cts);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
+                               "single_par_block_col_major_polyactrn_poly",
+                               "[block_col_major_e2e]",
+                               HeteroProcessors) {
+    auto& res = SharedHeteroResources::get();
+
+    auto run_generated_polyactrn_poly = [&](uint32_t degree, int level) {
+        fs::path server_dir = base_path / "CKKS_par_block_col_major_polyactrn_poly" / ("degree_" + to_string(degree)) /
+                              ("level_" + to_string(level)) / "server";
+        if (!fs::exists(server_dir / "mega_ag.json"))
+            return;
+
+        const uint32_t seq_len = 8, n_heads = 2, head_dim = 4, d = 4;
+        const uint32_t total_dim = n_heads * head_dim;
+
+        auto X = gen_random_array<2>({seq_len, total_dim}, 0.5);
+        auto coeffs = gen_random_array<2>({degree + 1, total_dim}, 0.2);
+
+        Array<double, 2> ref_output({(uint64_t)seq_len, (uint64_t)total_dim});
+        for (uint32_t i = 0; i < seq_len; i++) {
+            for (uint32_t j = 0; j < total_dim; j++) {
+                double x_pow = 1.0;
+                double y = 0.0;
+                for (uint32_t k = 0; k <= degree; k++) {
+                    y += coeffs.get(k, j) * x_pow;
+                    x_pow *= X.get(i, j);
+                }
+                ref_output.set(i, j, y);
+            }
+        }
+
+        auto layer_ptr = std::make_shared<ParBlockColMajorPolyActRNPoly>(res.param, Duo{seq_len, total_dim}, d, n_heads,
+                                                                         1, level, coeffs.copy(), degree);
+
+        FeatureMatEncrypted X_enc(&res.context, level);
+        X_enc.shape = {seq_len, head_dim};
+        X_enc.matmul_block_size = d;
+        X_enc.par_block_col_major_pack(X, d, n_heads, d, false, res.param.get_default_scale());
+
+        static vector<CkksCiphertext> in_cts, out_cts;
+        static vector<CustomData> layer_data;
+        in_cts.clear();
+        out_cts.clear();
+        layer_data.clear();
+
+        for (auto& ct : X_enc.data)
+            in_cts.push_back(ct.copy());
+        layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
+
+        uint32_t num_block_rows = div_ceil(seq_len, d);
+        uint32_t num_block_cols = div_ceil(head_dim, d);
+        uint32_t n_h_padded = 1;
+        while (n_h_padded < n_heads)
+            n_h_padded <<= 1;
+        uint32_t n_slot = res.param.get_n() / 2;
+        if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
+            n_h_padded = n_heads;
+        }
+        uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
+        uint32_t n_out = num_block_rows * num_block_cols * G;
+        int out_level = level - (degree == 4 ? 3 : 2);
+
+        for (uint32_t i = 0; i < n_out; i++)
+            out_cts.push_back(res.context.new_ciphertext(out_level, res.param.get_default_scale()));
+
+        string layer_id = "_poly_layer_deg" + to_string(degree);
+        vector<CxxVectorArgument> cxx_args = {
+            {"input", &in_cts},
+            {layer_id, &layer_data},
+            {"output", &out_cts},
+        };
+        run_block_col_major_e2e_test(*this, server_dir, cxx_args, ref_output, {seq_len, head_dim}, d, n_heads, true,
+                                     out_cts);
+    };
+
+    SECTION("degree=2, level=3") {
+        run_generated_polyactrn_poly(2, 3);
+    }
+    SECTION("degree=4, level=4") {
+        run_generated_polyactrn_poly(4, 4);
+    }
+}
+
+TEST_CASE("batch_dense_packed_layer/correctness", "[fhe_layers][batch_dense_packed]") {
+    constexpr uint32_t N = 16384;
+    constexpr uint32_t batch = 9;
+    constexpr uint32_t input_dim = 7;
+    constexpr uint32_t output_dim = 6;
+    constexpr uint32_t block_size = 4;
+    constexpr int level = 5;
+
+    auto param = CkksParameter::create_parameter(N);
+    auto context = CkksContext::create_random_context(param, level);
+    context.gen_rotation_keys();
+
+    Array<double, 2> input({batch, input_dim});
+    Array<double, 2> weight({input_dim, output_dim});
+    Array<double, 1> bias({output_dim});
+    for (uint32_t i = 0; i < batch; i++)
+        for (uint32_t k = 0; k < input_dim; k++)
+            input.set(i, k, 0.01 * static_cast<double>(1 + i * input_dim + k));
+    for (uint32_t k = 0; k < input_dim; k++)
+        for (uint32_t h = 0; h < output_dim; h++)
+            weight.set(k, h, 0.02 * static_cast<double>(1 + k * output_dim + h));
+    for (uint32_t h = 0; h < output_dim; h++)
+        bias.set(h, -0.01 * static_cast<double>(h + 1));
+
+    Feature0DEncrypted input_enc(&context, level);
+    input_enc.batch_pack(input, block_size, false, param.get_default_scale());
+
+    BatchDensePackedLayer layer(param, Duo{batch, input_dim}, Duo{input_dim, output_dim}, weight, block_size, level,
+                                bias.copy());
+    layer.precompute_diagonals();
+    auto output_enc = layer.run(context, input_enc);
+    auto actual = output_enc.batch_unpack(batch, output_dim, block_size);
+    auto expected = layer.run_plaintext(input);
+
+    double max_error = 0.0;
+    for (uint32_t i = 0; i < batch; i++) {
+        for (uint32_t h = 0; h < output_dim; h++)
+            max_error = std::max(max_error, std::abs(actual.get(i, h) - expected.get(i, h)));
+    }
+
+    CAPTURE(max_error);
+    REQUIRE(max_error < 1.0e-2);
+    REQUIRE(output_enc.data.size() == 2);
+    REQUIRE(input_enc.data.size() == 2);
+}
+
+TEST_CASE("batch_dense_packed_layer/multiple_groups_and_padding", "[fhe_layers][batch_dense_packed]") {
+    constexpr uint32_t N = 16384;
+    constexpr uint32_t batch = 2049;
+    constexpr uint32_t input_dim = 1024;
+    constexpr uint32_t output_dim = 64;
+    constexpr uint32_t block_size = 32;
+    constexpr int level = 5;
+
+    auto param = CkksParameter::create_parameter(N);
+    auto context = CkksContext::create_random_context(param, level);
+    context.gen_rotation_keys();
+
+    Array<double, 2> input({batch, input_dim});
+    Array<double, 2> weight({input_dim, output_dim});
+    Array<double, 1> bias({output_dim});
+    for (uint32_t i = 0; i < batch; i++)
+        for (uint32_t k = 0; k < input_dim; k++)
+            input.set(i, k, 0.001 * static_cast<double>(1 + (i + 2 * k) % 17));
+    for (uint32_t k = 0; k < input_dim; k++)
+        for (uint32_t h = 0; h < output_dim; h++)
+            weight.set(k, h, 0.002 * static_cast<double>(1 + (3 * k + h) % 13));
+    for (uint32_t h = 0; h < output_dim; h++)
+        bias.set(h, 0.001 * static_cast<double>(h + 1));
+
+    Feature0DEncrypted input_enc(&context, level);
+    input_enc.batch_pack(input, block_size, false, param.get_default_scale());
+
+    BatchDensePackedLayer layer(param, Duo{batch, input_dim}, Duo{input_dim, output_dim}, weight, block_size, level,
+                                bias.copy());
+    layer.precompute_diagonals();
+    auto output_enc = layer.run(context, input_enc);
+    auto actual = output_enc.batch_unpack(batch, output_dim, block_size);
+    auto expected = layer.run_plaintext(input);
+
+    double max_error = 0.0;
+    for (uint32_t i = 0; i < batch; i++) {
+        for (uint32_t h = 0; h < output_dim; h++)
+            max_error = std::max(max_error, std::abs(actual.get(i, h) - expected.get(i, h)));
+    }
+
+    CAPTURE(max_error);
+    REQUIRE(max_error < 1.0e-2);
+    // N/2=8192, d*d=1024, so one ciphertext has 8 chunks. B=2049 needs
+    // ceil(ceil(2049/32)/8)=9 batch ciphertext groups.
+    REQUIRE(input_enc.data.size() == 288);
+    REQUIRE(output_enc.data.size() == 18);
 }

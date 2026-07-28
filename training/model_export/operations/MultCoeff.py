@@ -16,11 +16,38 @@
 
 import logging
 
+import numpy as np
 from typing_extensions import override
 from . import ComputeNode, FeatureNode, format_id
 from onnx import NodeProto
 
 log = logging.getLogger(__name__)
+
+
+class PCMGammaComputeNode(ComputeNode):
+    """Compute node for feature_mat column-wise gamma scaling."""
+
+    def __init__(
+        self,
+        layer_id: str,
+        feature_input: list[FeatureNode],
+        feature_output: list[FeatureNode],
+        weight_path: str,
+        layer_type: str = 'pcmgamma',
+    ):
+        super().__init__(layer_id, layer_type, feature_input, feature_output)
+        feature_output[0].shape = feature_input[0].shape
+        feature_output[0].skip = feature_input[0].skip
+        self.weight_path = weight_path
+
+    @override
+    def to_json(self):
+        return {
+            'type': self.layer_type,
+            'feature_input': [i.node_id for i in self.feature_input],
+            'feature_output': [i.node_id for i in self.feature_output],
+            'weight_path': self.weight_path,
+        }
 
 
 class MultCoeffComputeNode(ComputeNode):
@@ -41,19 +68,31 @@ class MultCoeffComputeNode(ComputeNode):
         self.coeff = coeff
 
     @staticmethod
-    def from_onnx_node(x: NodeProto, features_nodes, constant_nodes) -> 'MultCoeffComputeNode':
+    def from_onnx_node(
+        x: NodeProto, features_nodes, constant_nodes, mat_pack_style: str = ''
+    ) -> 'MultCoeffComputeNode | PCMGammaComputeNode':
         layer_id = format_id(x.name)
         layer_type = 'mult_coeff'
         log.debug('%s', x)
         if format_id(x.input[0]) in features_nodes:
             variable_input_name = format_id(x.input[0])
             const_input_name = format_id(x.input[1])
+            weight_path = x.input[1]
         elif format_id(x.input[1]) in features_nodes:
             variable_input_name = format_id(x.input[1])
             const_input_name = format_id(x.input[0])
+            weight_path = x.input[0]
+        else:
+            raise ValueError(f'Mul node {x.name} has no feature input')
         feature_input = [features_nodes[variable_input_name]]
         feature_output = [features_nodes[format_id(x.output[0])]]
-        coeff = round(float(constant_nodes[const_input_name][0]), 5)
+        const_value = constant_nodes[const_input_name][0]
+        const_array = np.asarray(const_value)
+        if feature_input[0].data_type == 'feature_mat' and const_array.size > 1:
+            gamma_type = 'pdmgamma' if mat_pack_style == 'par_diagonal_pack' else 'pcmgamma'
+            return PCMGammaComputeNode(layer_id, feature_input, feature_output, weight_path, layer_type=gamma_type)
+
+        coeff = round(float(const_array.reshape(-1)[0]), 5)
 
         return MultCoeffComputeNode(layer_id, layer_type, feature_input, feature_output, coeff)
 

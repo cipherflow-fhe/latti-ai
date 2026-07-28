@@ -20,6 +20,7 @@
 #include "layer_util.h"
 #include <cassert>
 #include <cmath>
+#include <stdexcept>
 
 using namespace std;
 using namespace lattisense;
@@ -29,7 +30,8 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
                                            const Array<double, 2>& W_mat,
                                            uint32_t block_size,
                                            uint32_t n_heads,
-                                           uint32_t level_A)
+                                           uint32_t level_A,
+                                           Array<double, 1>&& bias)
     : Layer(param_in) {
     level_ = level_A;
     d_ = block_size;
@@ -39,9 +41,13 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
     n_per_head_ = shape_A[1];
     n_total_per_mb_ = n_heads_ * n_per_head_;
 
-    assert(n_per_head_ <= d_ && "per-head width must fit in one block column");
+    if (d_ == 0 || n_per_head_ > d_) {
+        throw runtime_error("ParBlockColMajorCPMM requires block_size >= per-head width");
+    }
 
     n_slot_ = param_.get_n() / 2;
+    assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
+    assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
     n_h_padded_ = next_pow2(n_heads);
 
     // Determine chunk sizing (same logic as ParBlockColMajorTranspose/CCMM)
@@ -52,6 +58,9 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
     } else {
         n_blocks_per_chunk_ = n_slot_ / (d_ * d_);
         chunk_size_ = n_slot_;
+        if (n_blocks_per_chunk_ == 1) {
+            n_h_padded_ = n_heads_;
+        }
         n_cts_per_block_idx_ = n_h_padded_ / n_blocks_per_chunk_;
     }
 
@@ -60,42 +69,61 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
 
     num_block_rows_A_ = div_ceil(m_, d_);
 
-    // Auto-detect mode from W dimensions
+    bsgs_bs_ = (uint32_t)ceil(sqrt((double)d_));
+    bsgs_gs_ = div_ceil(d_, bsgs_bs_);
+
+    // Auto-detect mode from W dimensions.
+    // Pad both dimensions to multiples of n_total_per_mb_ using ceil, then
+    // compare to determine mode.  Exactly one of K_row, K_col must be 1.
     uint32_t W_rows = W_mat.get_shape()[0];
     uint32_t W_cols = W_mat.get_shape()[1];
+    uint32_t n = n_total_per_mb_;
 
-    if (W_rows == W_cols) {
+    K_row_ = div_ceil(W_rows, n);
+    K_col_ = div_ceil(W_cols, n);
+
+    if (K_row_ == K_col_) {
         mode_ = Mode::SQUARE;
-        K_ = 1;
-        assert(W_rows == n_total_per_mb_);
-    } else if (W_cols > W_rows) {
+        assert(K_row_ == 1 && "SQUARE mode requires K_row == K_col == 1");
+    } else if (K_col_ > K_row_) {
         mode_ = Mode::EXPAND;
-        assert(W_rows == n_total_per_mb_ && W_cols % W_rows == 0);
-        K_ = W_cols / W_rows;
+        assert(K_row_ == 1 && "EXPAND mode requires K_row == 1");
     } else {
         mode_ = Mode::REDUCE;
-        assert(W_cols == n_total_per_mb_ && W_rows % W_cols == 0);
-        K_ = W_rows / W_cols;
+        assert(K_col_ == 1 && "REDUCE mode requires K_col == 1");
     }
+    K_ = std::max(K_row_, K_col_);
 
-    // Split and pad K sub-weights
+    // Actual output column count (before ceil-padding)
+    out_cols_ = W_cols;
+    W_rows_ = W_rows;
+    W_cols_ = W_cols;
+
+    // Split and pad K sub-weights.
+    // For EXPAND: K sub-weights along columns, last one zero-padded if W_cols % n != 0.
+    // For REDUCE: K sub-weights along rows, last one zero-padded if W_rows % n != 0.
     uint32_t padded_dim = n_h_padded_ * d_;
     W_padded_.resize(K_);
     for (uint32_t mb = 0; mb < K_; mb++) {
         Array<double, 2> W_sub({padded_dim, padded_dim});
-        for (uint32_t i = 0; i < n_total_per_mb_; i++) {
-            for (uint32_t j = 0; j < n_total_per_mb_; j++) {
-                double val;
-                if (mode_ == Mode::EXPAND)
-                    val = W_mat.get(i, mb * n_total_per_mb_ + j);
-                else if (mode_ == Mode::REDUCE)
-                    val = W_mat.get(mb * n_total_per_mb_ + i, j);
-                else
-                    val = W_mat.get(i, j);
+        for (uint32_t i = 0; i < n; i++) {
+            for (uint32_t j = 0; j < n; j++) {
+                uint32_t src_row = (mode_ == Mode::REDUCE) ? mb * n + i : i;
+                uint32_t src_col = (mode_ == Mode::EXPAND) ? mb * n + j : j;
+                double val = 0.0;
+                if (src_row < W_rows && src_col < W_cols)
+                    val = W_mat.get(src_row, src_col);
                 W_sub.set(i, j, val);
             }
         }
         W_padded_[mb] = std::move(W_sub);
+    }
+
+    // Bias support — bias length matches the actual output columns, not the padded K_col*n
+    if (bias.get_size() > 0) {
+        has_bias_ = true;
+        assert(bias.get_size() == out_cols_);
+        bias_vals_ = std::move(bias);
     }
 }
 
@@ -109,19 +137,22 @@ int ParBlockColMajorCPMM::get_block_index(int bi, int bj, int num_block_rows) {
 // element at (row=i, col=j).  For the CPMM diagonal multiply, head h uses
 // weight block W_{h, bp}, so:
 //
-//   diag[(i + d*j) * S + h] = W_padded[megablock][h*d + (j+k)%d,  bp*d + j]
+//   diag[(i + d*j) * S + h] = W_padded[megablock][(g_input *S + h)*d + (j+k)%d,  bp*d + j]
 //
 // The value is constant across row index i (same as standard CPMM) but
 // differs across head index h (unlike standard CPMM which replicates).
 std::vector<double>
 ParBlockColMajorCPMM::build_block_diagonal(uint32_t megablock, uint32_t g_input, int bp, int k) const {
     uint32_t S = n_blocks_per_chunk_;
+    uint32_t g_bsgs = k / bsgs_bs_;
+    uint32_t b = k % bsgs_bs_;
 
     vector<double> diag_chunk(chunk_size_, 0.0);
     for (uint32_t j = 0; j < d_; j++) {
+        uint32_t j_col = (j + d_ - g_bsgs * bsgs_bs_ % d_) % d_;
         for (uint32_t h = 0; h < S; h++) {
-            uint32_t row = (g_input * S + h) * d_ + (j + k) % d_;
-            uint32_t col = bp * d_ + j;
+            uint32_t row = (g_input * S + h) * d_ + (j + b) % d_;
+            uint32_t col = bp * d_ + j_col;
             double val = W_padded_[megablock].get(row, col);
             for (uint32_t i = 0; i < d_; i++) {
                 diag_chunk[(i + d_ * j) * S + h] = val;
@@ -159,6 +190,35 @@ std::vector<double> ParBlockColMajorCPMM::build_head0_mask() const {
     return mask;
 }
 
+// Note: CPMM requires n_per_head_ <= d_ (each head fits in a single block column),
+// so there is only one block column per head (num_block_cols = 1).  Therefore `col`
+// here is already the actual column index within the head — no bj offset is needed.
+std::vector<double> ParBlockColMajorCPMM::build_bias_vec(uint32_t mb, uint32_t bi, uint32_t g) const {
+    uint32_t S = n_blocks_per_chunk_;
+
+    vector<double> bias_vec(n_slot_, 0.0);
+    for (uint32_t h_local = 0; h_local < S; h_local++) {
+        uint32_t h = g * S + h_local;
+        // col is the actual per-head column index (no bj offset) because
+        // n_per_head_ <= d_ guarantees num_block_cols == 1 for each head.
+        for (uint32_t col = 0; col < d_; col++) {
+            for (uint32_t row = 0; row < d_; row++) {
+                uint32_t actual_row = bi * d_ + row;
+                uint32_t base_slot = (row + d_ * col) * S + h_local;
+                for (uint32_t ci = 0; ci < num_chunks_; ci++) {
+                    uint32_t slot = ci * chunk_size_ + base_slot;
+                    if (actual_row < m_ && h < n_heads_ && col < n_per_head_) {
+                        uint32_t global_col = mb * n_total_per_mb_ + h * n_per_head_ + col;
+                        if (global_col < out_cols_)
+                            bias_vec[slot] = bias_vals_.get(global_col);
+                    }
+                }
+            }
+        }
+    }
+    return bias_vec;
+}
+
 void ParBlockColMajorCPMM::precompute_diagonals() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
 
@@ -185,11 +245,39 @@ void ParBlockColMajorCPMM::precompute_diagonals() {
     // Mask for selecting h=0 after cross-head sum
     auto mask_vec = build_head0_mask();
     mask_h0_pt_ = ctx.encode_ringt(mask_vec, mask_scale);
+
+    // Bias plaintexts (encoded at default scale, matching output CT scale at level L-2)
+    if (has_bias_) {
+        double D = param_.get_default_scale();
+        uint32_t total_bias_pts = K_col_ * num_block_rows_A_ * n_cts_per_block_idx_;
+        bias_pt_.resize(total_bias_pts);
+        for (uint32_t mb = 0; mb < K_col_; mb++) {
+            for (uint32_t bi = 0; bi < num_block_rows_A_; bi++) {
+                for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
+                    uint32_t idx = mb * num_block_rows_A_ * n_cts_per_block_idx_ + bi * n_cts_per_block_idx_ + g;
+                    bias_pt_[idx] = ctx.encode_ringt(build_bias_vec(mb, bi, g), D);
+                }
+            }
+        }
+    }
 }
 
-// block_mult_cpmm: d rotations + d pt_muls + (d-1) adds + 1 rescale
-// Computes a ciphertext's all interleaved heads' contributions to output block column bp in parallel.
-// Input level L -> Output level L-1
+CkksPlaintextRingt
+ParBlockColMajorCPMM::generate_diag_pt(CkksContext& ctx, uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const {
+    return ctx.encode_ringt(build_block_diagonal(mb, g, bp, k), param_.get_q(level_));
+}
+
+CkksPlaintextRingt ParBlockColMajorCPMM::generate_mask_h0_pt(CkksContext& ctx) const {
+    return ctx.encode_ringt(build_head0_mask(), param_.get_q(level_ - 1));
+}
+
+CkksPlaintextRingt
+ParBlockColMajorCPMM::generate_bias_pt(CkksContext& ctx, uint32_t mb, uint32_t bi, uint32_t g) const {
+    return ctx.encode_ringt(build_bias_vec(mb, bi, g), param_.get_default_scale());
+}
+
+// block_mult_cpmm with BSGS: (bsgs_bs-1) baby rotations + (bsgs_gs-1) giant rotations
+// + d pt_muls + (d-1) adds + 1 rescale.  Level L -> L-1.
 CkksCiphertext ParBlockColMajorCPMM::block_mult_cpmm(CkksContext& ctx,
                                                      const CkksCiphertext& a,
                                                      uint32_t megablock,
@@ -197,20 +285,40 @@ CkksCiphertext ParBlockColMajorCPMM::block_mult_cpmm(CkksContext& ctx,
                                                      int bp) const {
     double default_scale = param_.get_default_scale();
     uint32_t S = n_blocks_per_chunk_;
+    int unit = (int)(d_ * S);
+
+    auto baby_rots = populate_rotations_1_side(ctx, a, bsgs_bs_ - 1, unit);
+
     CkksCiphertext result(0);
+    bool result_init = false;
 
-    for (uint32_t k = 0; k < d_; k++) {
-        // Rotation scaled by S (same as par CCMM sigma)
-        int rot_amount = ((int)(d_ * k) * (int)S) % (int)chunk_size_;
-        CkksCiphertext rotated = (rot_amount == 0) ? a.copy() : ctx.rotate(a, rot_amount);
+    for (uint32_t g = 0; g < bsgs_gs_; g++) {
+        CkksCiphertext inner(0);
+        bool inner_init = false;
+        uint32_t b_end = std::min(bsgs_bs_, d_ - g * bsgs_bs_);
 
-        auto diag_mul = ctx.ringt_to_mul(diag_pt_[megablock][g_input][bp][k], level_);
-        auto product = ctx.mult_plain_mul(rotated, diag_mul);
+        for (uint32_t b = 0; b < b_end; b++) {
+            uint32_t k = g * bsgs_bs_ + b;
+            auto diag_mul = ctx.ringt_to_mul(diag_pt_[megablock][g_input][bp][k], level_);
+            auto product = ctx.mult_plain_mul(baby_rots[b], diag_mul);
 
-        if (k == 0) {
-            result = move(product);
+            if (!inner_init) {
+                inner = move(product);
+                inner_init = true;
+            } else {
+                inner = ctx.add(inner, product);
+            }
+        }
+
+        if (g > 0) {
+            inner = ctx.rotate(inner, (int)(g * bsgs_bs_) * unit);
+        }
+
+        if (!result_init) {
+            result = move(inner);
+            result_init = true;
         } else {
-            result = ctx.add(result, product);
+            result = ctx.add(result, inner);
         }
     }
     return ctx.rescale(result, default_scale);
@@ -298,7 +406,8 @@ std::vector<CkksCiphertext> ParBlockColMajorCPMM::run_core(CkksContext& ctx,
 FeatureMatEncrypted ParBlockColMajorCPMM::run(CkksContext& ctx, const FeatureMatEncrypted& A) {
     FeatureMatEncrypted result(&ctx, A.level);
     result.level = A.level - 2;  // block_mult (1 level) + mask (1 level)
-    result.shape = {m_, n_per_head_};
+    result.head_shape = A.head_shape;
+    result.shape = {m_, out_cols_};
     result.matmul_block_size = d_;
 
     if (mode_ == Mode::EXPAND) {
@@ -314,5 +423,31 @@ FeatureMatEncrypted ParBlockColMajorCPMM::run(CkksContext& ctx, const FeatureMat
             all_mbs[i] = i;
         result.data = run_core(ctx, A.data, all_mbs);
     }
+
+    // Add bias if present (plaintext addition, no level consumed)
+    if (has_bias_) {
+        for (size_t i = 0; i < result.data.size(); i++) {
+            result.data[i] = ctx.add_plain_ringt(result.data[i], bias_pt_[i]);
+        }
+    }
+
     return result;
+}
+
+Array<double, 2> ParBlockColMajorCPMM::run_plaintext(const Array<double, 2>& A) const {
+    uint32_t n = n_total_per_mb_;
+    uint32_t A_rows = A.get_shape()[0];
+    Array<double, 2> C({(uint64_t)A_rows, (uint64_t)W_cols_});
+    for (uint32_t i = 0; i < A_rows; i++)
+        for (uint32_t j = 0; j < W_cols_; j++) {
+            double s = 0;
+            for (uint32_t k = 0; k < W_rows_; k++) {
+                uint32_t mb = k / n + j / n;
+                s += A.get(i, k) * W_padded_[mb].get(k % n, j % n);
+            }
+            if (has_bias_)
+                s += bias_vals_.get(j);
+            C.set(i, j, s);
+        }
+    return C;
 }

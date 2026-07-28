@@ -107,22 +107,80 @@ def get_compute_score(
     compute: ComputeNode,
     param_dict: dict[str, FheParameter],
 ) -> float:
-    if compute.layer_type in ['conv2d', 'fc0', 'add2d', 'polyact', 'avgpool1d', 'avgpool2d']:
+    supported_fhe_score_layers = {
+        'conv1d',
+        'conv2d',
+        'fc0',
+        'avgpool1d',
+        'avgpool2d',
+        'polyact',
+        'mult_scalar',
+        'add',
+        'add2d',
+        'add_pt',
+        'pcm_add_pt',
+        'pdm_add_pt',
+        'parcpmm',
+        'partranspose',
+        'parccmm',
+        'pdmpcmm',
+        'pdmtranspose',
+        'pdmccmm',
+        'pcmgamma',
+        'pcmpoly',
+        'pcmstats',
+        'pcmcenter',
+        'pcminit',
+        'pcmgs',
+        'pcmaffine',
+        'pdmgamma',
+        'pdmpoly',
+        'pdmupperaddpt',
+        'pdmupperpoly',
+        'pdmmulsquare',
+        'pdmheadcolsum',
+        'pdminvinit',
+        'pdminviter',
+        'pdmctmul',
+        'pdmupperpolymultct',
+        'pdmstats',
+        'pdmcenter',
+        'pdminit',
+        'pdmgs',
+        'pdmaffine',
+        'upsample_nearest',
+        'resize',
+    }
+    if compute.layer_type in supported_fhe_score_layers:
         preds = list(enclosing_graph.predecessors(compute))
         level = min(enclosing_graph.nodes[p]['level'] for p in preds)
-        s_param = FheScoreParam(enclosing_graph, compute, param_dict, level)
+        s_param = FheScoreParam(
+            enclosing_graph,
+            compute,
+            param_dict,
+            level,
+            use_gpu=getattr(config, 'use_gpu', True),
+        )
         score = s_param.get_score()
         return score
-    else:
-        return 0.0
+    return 0.0
 
 
 def get_restoring_score(dag, restore_node, param_dict):
     if not config.mpc_refresh:
-        s_param = BtpScoreParam(dag, restore_node, param_dict)
+        s_param = BtpScoreParam(
+            dag,
+            restore_node,
+            param_dict,
+            use_gpu=getattr(config, 'use_gpu', True),
+        )
     else:
         s_param = MpcScoreParam(dag, restore_node, param_dict)
     return s_param.get_score()
+
+
+def get_min_feature_level() -> int:
+    return 1 if config.mpc_refresh or config.graph_type == 'mpc' or config.set_btp_scale is not None else 0
 
 
 def restore_level_at(new_graph: nx.DiGraph, node: FeatureNode, param_dict):
@@ -152,7 +210,7 @@ def reconstruct_graph_from_vec(
         if lv < AUX_LV:
             new_graph.nodes[node]['level'] = lv
         else:
-            new_graph.nodes[node]['level'] = 0
+            new_graph.nodes[node]['level'] = get_min_feature_level()
             restore_level_at(new_graph, node, param_dict)
 
     return new_graph
@@ -176,13 +234,30 @@ AUX_LV = 255
 
 
 class GraphPartitioner:
-    def __init__(self, entire_graph: nx.DiGraph, temperature: float = 1.0):
+    def __init__(self, entire_graph: nx.DiGraph, temperature: float = 1.0, enable_score_cache: bool = True):
         self.entire_graph = entire_graph
         self.param_dict = generate_param_dict_for_graph()
+        self.enable_score_cache = enable_score_cache
+        self.compute_score_cache: dict[tuple[ComputeNode, tuple[int, ...], tuple[int, ...]], float] = {}
 
         if temperature < 0:
             raise ValueError('Temperature must be non-negative. If set to 0, a greedy algorithm will be used.')
         self.temperature = temperature
+
+    def get_compute_score_cached(self, enclosing_graph: nx.DiGraph, compute: ComputeNode) -> float:
+        if not self.enable_score_cache:
+            return get_compute_score(enclosing_graph, compute, self.param_dict)
+
+        preds = tuple(enclosing_graph.predecessors(compute))
+        succs = tuple(enclosing_graph.successors(compute))
+        pred_levels = tuple(int(enclosing_graph.nodes[p]['level']) for p in preds)
+        succ_levels = tuple(int(enclosing_graph.nodes[s]['level']) for s in succs)
+        cache_key = (compute, pred_levels, succ_levels)
+
+        if cache_key not in self.compute_score_cache:
+            self.compute_score_cache[cache_key] = get_compute_score(enclosing_graph, compute, self.param_dict)
+
+        return self.compute_score_cache[cache_key]
 
     def inspect_level_backward(self, subgraph: nx.DiGraph):
         max_level = -1
@@ -194,10 +269,7 @@ class GraphPartitioner:
 
             succ_c = list(subgraph.successors(node))
             if len(succ_c) == 0:
-                if config.mpc_refresh or config.graph_type == 'mpc':
-                    level_dict[node] = 1
-                elif config.graph_type == 'btp' and not config.mpc_refresh:
-                    level_dict[node] = 0
+                level_dict[node] = get_min_feature_level()
             else:
                 successing_subg_compute_nodes = [c for c in succ_c if c in subg_nodes]
                 input_feature_lv: list[int] = []
@@ -238,8 +310,9 @@ class GraphPartitioner:
         other_frontier = [f for f in frontier if idx_to_node[f.node_idx] not in predecessors]
         frontier = pred_frontier + other_frontier
 
+        min_feature_level = get_min_feature_level()
         new_frontier = frontier.copy()
-        new_frontier.append(NodeLevel(node_to_idx[new_node], 0))
+        new_frontier.append(NodeLevel(node_to_idx[new_node], min_feature_level))
         processed_feature_nodes.add(new_node)
         nodes_became_internal: list[int] = []
         for node_max_lv in frontier:
@@ -254,7 +327,7 @@ class GraphPartitioner:
 
         new_frontier_solutions = dict()
 
-        for terminal_lv in range(config.fhe_param.max_level + 1):
+        for terminal_lv in range(min_feature_level, config.fhe_param.max_level + 1):
             if dag.nodes[leading_comp]['level_cost'] + terminal_lv > config.fhe_param.max_level:
                 continue
 
@@ -265,7 +338,7 @@ class GraphPartitioner:
                     list(range(dag.nodes[leading_comp]['level_cost'] + terminal_lv, node_max_lv.level + 1)) + [AUX_LV]
                 )
             for node_max_lv in other_frontier:
-                frontier_lvs.append(list(range(node_max_lv.level + 1)) + [AUX_LV])
+                frontier_lvs.append(list(range(min_feature_level, node_max_lv.level + 1)) + [AUX_LV])
 
             frontier_lv_product = product(*frontier_lvs)
 
@@ -290,7 +363,7 @@ class GraphPartitioner:
                         lv if lv < AUX_LV else config.fhe_param.max_level
                     )
 
-                sol_cost = initial_score + get_compute_score(dag, leading_comp, self.param_dict)
+                sol_cost = initial_score + self.get_compute_score_cached(dag, leading_comp)
 
                 new_frontier_key_tuple = tuple(new_frontier_key)
                 if (
@@ -301,17 +374,20 @@ class GraphPartitioner:
                     new_sol_graph_vec[node_to_idx[new_node]] = terminal_lv
                     new_frontier_solutions[new_frontier_key_tuple] = (sol_cost, new_sol_graph_vec)
 
-            # leaf nodes only need lv=0 solutions.
+            # leaf nodes only need the minimum output-level solution.
             if len(list(dag.successors(new_node))) == 0:
                 break
 
             new_frontier[-1] = NodeLevel(node_to_idx[new_node], terminal_lv)
 
-            if terminal_lv == 0:
+            if terminal_lv == min_feature_level and not (
+                leading_comp.layer_type in {'avgpool1d', 'avgpool2d'}
+                and getattr(leading_comp, 'is_adaptive_avgpool', False)
+            ):
                 aux_lv_solutions = {}
                 for k, solution in new_frontier_solutions.items():
                     new_node_lv_idx = k.index(NodeLevel(node_to_idx[new_node], terminal_lv))
-                    assert k[new_node_lv_idx].level == 0
+                    assert k[new_node_lv_idx].level == min_feature_level
                     sol_key = list(k)
                     sol_key[new_node_lv_idx] = NodeLevel(node_to_idx[new_node], AUX_LV)
 
@@ -402,8 +478,9 @@ class GraphPartitioner:
             frontier.append(NodeLevel(node_to_idx[node], config.fhe_param.max_level))
             processed_feature_nodes.add(node)
 
+        min_feature_level = get_min_feature_level()
         frontier_indices = [x.node_idx for x in frontier]
-        for lv_comb in product(range(config.fhe_param.max_level + 1), repeat=len(frontier)):
+        for lv_comb in product(range(min_feature_level, config.fhe_param.max_level + 1), repeat=len(frontier)):
             init_graph_vec = np.zeros(len(node_to_idx), dtype=np.uint8)
             node_lv: list[NodeLevel] = []
             for idx, lv in zip(frontier_indices, lv_comb):
@@ -428,14 +505,16 @@ class GraphPartitioner:
             )
             pbar.update(1)
 
-        final_solution_frontier = tuple(sorted((NodeLevel(x.node_idx, 0) for x in frontier), key=lambda x: x.node_idx))
+        final_solution_frontier = tuple(
+            sorted((NodeLevel(x.node_idx, min_feature_level) for x in frontier), key=lambda x: x.node_idx)
+        )
         final_score, final_dag_vec = frontier_solutions[final_solution_frontier]
 
         final_dag = reconstruct_graph_from_vec(final_dag_vec, H, node_to_idx, self.param_dict)
 
         temp_ab = LayerAbstractGraph()
         temp_ab.dag = final_dag
-        transforms.insert_drop_level_layers(temp_ab)
+        # transforms.insert_drop_level_layers(temp_ab)
 
         return final_score, temp_ab.dag
 
@@ -461,12 +540,12 @@ class GraphPartitioner:
         return optimal_cost, nx.compose_all(result)
 
 
-def optimize_task_segments(pt_graph, temperature):
+def optimize_task_segments(pt_graph, temperature, enable_score_cache: bool = True):
     """
     Split a task graph into segments with the given capacity and fixed cost.
     Returns (segments, min_cost).
     """
-    graph_partitioner = GraphPartitioner(pt_graph.dag, temperature=temperature)
+    graph_partitioner = GraphPartitioner(pt_graph.dag, temperature=temperature, enable_score_cache=enable_score_cache)
     return graph_partitioner.run()
 
 
@@ -480,8 +559,11 @@ def restore_node_attributes(G: nx.DiGraph):
 def compile_graph(
     pt_graph: LayerAbstractGraph | None = None,
     temperature=1.0,
+    enable_score_cache: bool = True,
 ):
-    score, compiled_graph = optimize_task_segments(pt_graph, temperature=temperature)
+    score, compiled_graph = optimize_task_segments(
+        pt_graph, temperature=temperature, enable_score_cache=enable_score_cache
+    )
 
     if compiled_graph is None:
         return None, None
@@ -505,6 +587,7 @@ def compile_model_btp(
     pt_graph_prepared: LayerAbstractGraph | None = None,
     temperature=1.0,
     stdout=False,
+    enable_score_cache: bool = True,
 ) -> tuple[float, LayerAbstractGraph]:
     """
     Compile model with bootstrapping
@@ -520,6 +603,7 @@ def compile_model_btp(
     score, compiled_graph = compile_graph(
         pt_graph=pt_graph_prepared,
         temperature=temperature,
+        enable_score_cache=enable_score_cache,
     )
 
     if compiled_graph is None:
@@ -535,8 +619,9 @@ def compile_model_btp(
 
 def run_single_compile(args):
     """Wrapper function for multiprocessing - runs a single compilation"""
-    pt_graph_prepared, temperature = args
-    score, graph = compile_model_btp(pt_graph_prepared, temperature, stdout=True)
+    pt_graph_prepared, temperature, *rest = args
+    enable_score_cache = rest[0] if rest else True
+    score, graph = compile_model_btp(pt_graph_prepared, temperature, stdout=True, enable_score_cache=enable_score_cache)
     return score, graph
 
 

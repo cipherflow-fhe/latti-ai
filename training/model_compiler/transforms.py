@@ -23,11 +23,96 @@ import networkx as nx
 
 from components import *
 from inference.model_generator.layers.poly_relu_base import PolyReluBase
+from inference.model_generator.layers.mat_poly_base import MatPolyBase
 
 
 class Direction(Enum):
     UP = 'up'
     DOWN = 'down'
+
+
+PCM_TO_PDM_TYPES = {
+    'pcm_add_pt': 'pdm_add_pt',
+    'pcmgamma': 'pdmgamma',
+    'pcmpoly': 'pdmpoly',
+    'pcmstats': 'pdmstats',
+    'pcmcenter': 'pdmcenter',
+    'pcminit': 'pdminit',
+    'pcmgs': 'pdmgs',
+    'pcmaffine': 'pdmaffine',
+}
+
+
+def _is_diagonal_mat_pack() -> bool:
+    return getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack'
+
+
+def _positive_int_attr(value, attr_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return None
+        return _positive_int_attr(value[0], attr_name)
+
+    result = int(value)
+    if result <= 0:
+        raise ValueError(f'{attr_name} must be positive, got {value}')
+    return result
+
+
+def get_bert_l_prepad_seq_len(graph: LayerAbstractGraph) -> int | None:
+    seq_lens = []
+    for node in graph.dag.nodes:
+        if not (isinstance(node, ComputeNode) and node.layer_type == 'CustomMultiHeadAttention'):
+            continue
+        if getattr(config, 'model_type', '') != 'bert' and getattr(node, 'model_type', '') != 'bert':
+            continue
+        seq_len = _positive_int_attr(getattr(node, 'L_prepad', None), f'{node.layer_id}.L_prepad')
+        if seq_len is not None:
+            seq_lens.append(seq_len)
+
+    if not seq_lens:
+        return None
+    seq_len = seq_lens[0]
+    if any(item != seq_len for item in seq_lens[1:]):
+        raise ValueError(f'Conflicting BERT L_prepad values: {seq_lens}')
+    return seq_len
+
+
+def apply_bert_l_prepad_to_feature_mat_shapes(graph: LayerAbstractGraph) -> int | None:
+    seq_len = get_bert_l_prepad_seq_len(graph)
+    if seq_len is None:
+        return None
+
+    for node in graph.dag.nodes:
+        if not (
+            isinstance(node, FeatureNode) and node.data_type == 'feature_mat' and node.dim == 2 and len(node.shape) >= 2
+        ):
+            continue
+        node.shape[0] = seq_len
+    return seq_len
+
+
+def _pack_pcm_type(layer_type: str) -> str:
+    if _is_diagonal_mat_pack():
+        return PCM_TO_PDM_TYPES.get(layer_type, layer_type)
+    return layer_type
+
+
+def sort_preds_by_input_index(dag: nx.DiGraph, node, preds: list[FeatureNode]) -> list[FeatureNode]:
+    if len(preds) <= 1:
+        return preds
+    edge_indices = {pred: dag.edges[pred, node].get('input_index') for pred in preds}
+    if all(idx is not None for idx in edge_indices.values()):
+        return sorted(preds, key=lambda pred: edge_indices[pred])
+    return preds
 
 
 def _calc_pack_num(dag: nx.DiGraph, feature_node, slot_num: int, use_skip: bool = True) -> int:
@@ -198,6 +283,10 @@ def add_layer(
         shape,
     )
     feature_node_out.sp_info = feature_node_in.sp_info.copy()
+    feature_node_out.data_type = feature_node_in.data_type
+
+    if feature_node_in.head_shape is not None:
+        feature_node_out.head_shape = list(feature_node_in.head_shape)
 
     if insert_node:
         new_compute_node = insert_node
@@ -432,6 +521,81 @@ def split_upsampling_layers(graph: LayerAbstractGraph):
             conv_node.upsample_factor = [1] * conv_node.dim
 
 
+def expand_parcpmm_add_pt(graph: LayerAbstractGraph):
+    used_ids = set()
+    for node in graph.dag.nodes:
+        if hasattr(node, 'node_id'):
+            used_ids.add(node.node_id)
+        if hasattr(node, 'layer_id'):
+            used_ids.add(node.layer_id)
+
+    def make_unique_id(base_id: str) -> str:
+        if base_id not in used_ids:
+            used_ids.add(base_id)
+            return base_id
+        idx = 1
+        while f'{base_id}_{idx}' in used_ids:
+            idx += 1
+        unique_id = f'{base_id}_{idx}'
+        used_ids.add(unique_id)
+        return unique_id
+
+    for parcpmm_node in list(graph.dag.nodes):
+        if not isinstance(parcpmm_node, ComputeNode):
+            continue
+        if parcpmm_node.layer_type not in ('parcpmm', 'pdmpcmm') or not getattr(parcpmm_node, 'to_expand', False):
+            continue
+
+        bias_path = getattr(parcpmm_node, 'bias_path', '')
+        if not bias_path:
+            raise ValueError(
+                f'{parcpmm_node.layer_type} layer {parcpmm_node.layer_id} has to_expand=True but no bias_path'
+            )
+
+        old_feature_list = list(graph.dag.successors(parcpmm_node))
+        if len(old_feature_list) != 1:
+            raise ValueError(
+                f'Expected exactly one output feature for {parcpmm_node.layer_type} layer {parcpmm_node.layer_id}, '
+                f'got {len(old_feature_list)}'
+            )
+        old_feature = old_feature_list[0]
+
+        new_feature = FeatureNode(
+            key=make_unique_id(f'{parcpmm_node.layer_id}_add_pt_input'),
+            dim=old_feature.dim,
+            channel=old_feature.channel,
+            scale=old_feature.scale,
+            ckks_parameter_id=old_feature.ckks_parameter_id,
+            ckks_scale=old_feature.ckks_scale,
+            shape=list(old_feature.shape),
+        )
+        new_feature.invalid_fill = list(old_feature.invalid_fill)
+        new_feature.sp_info = copy.deepcopy(old_feature.sp_info)
+        new_feature.has_sp_info = old_feature.has_sp_info
+        new_feature.data_type = old_feature.data_type
+        if old_feature.head_shape is not None:
+            new_feature.head_shape = list(old_feature.head_shape)
+
+        add_pt_id = make_unique_id(f'{parcpmm_node.layer_id}_add_pt')
+        add_pt_node = ComputeNode(
+            add_pt_id, _pack_pcm_type('pcm_add_pt'), parcpmm_node.channel_output, parcpmm_node.channel_output
+        )
+        add_pt_node.path = bias_path
+
+        new_feature_args = copy.deepcopy(graph.dag.nodes[old_feature])
+        new_feature_args['name'] = new_feature.node_id
+        _insert_layer_after_compute(
+            graph.dag,
+            parcpmm_node,
+            new_feature,
+            add_pt_node,
+            new_feature_args=new_feature_args,
+            new_compute_args={'name': add_pt_id, 'level_cost': 0},
+        )
+        parcpmm_node.bias_path = ''
+        parcpmm_node.to_expand = False
+
+
 def process_special_info(
     graph: LayerAbstractGraph, compute_node: ComputeNode, preds: list[FeatureNode], succ: FeatureNode
 ):
@@ -488,8 +652,28 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
         if isinstance(node, FeatureNode) and graph.dag.in_degree(node) == 0 and node.dim == 0:
             graph.dag.nodes[node]['skip'] = [leading_skip]
 
+    # Initialize head_shape for feature_mat input nodes.
+    n_heads = getattr(config, 'n_heads', 1)
+    head_dim = getattr(config, 'head_dim', 0)
+    for node in sorted_nodes:
+        if isinstance(node, FeatureNode) and graph.dag.in_degree(node) == 0:
+            if node.data_type == 'feature_mat' and node.head_shape is None and n_heads > 1:
+                if head_dim <= 0:
+                    raise ValueError('HEAD_DIM must be set when N_HEADS > 1 for feature_mat inputs')
+                if _is_diagonal_mat_pack():
+                    if len(node.shape) < 2:
+                        raise ValueError(f'feature_mat input {node.node_id} must be rank-2 for par_diagonal_pack')
+                    seq_len, total_dim = node.shape[0], node.shape[1]
+                    node.shape[0] = total_dim
+                    node.shape[1] = seq_len
+                    node.head_shape = [head_dim, seq_len]
+                    node.is_transposed = True
+                else:
+                    node.head_shape = [node.shape[0], head_dim]
+
     for compute_node in sorted_compute_nodes:
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
+        preds = sort_preds_by_input_index(graph.dag, compute_node, preds)
         succ: FeatureNode = next(graph.dag.successors(compute_node))
         # init skip,
         if succ.dim != 0:
@@ -515,9 +699,64 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                     )
 
             else:
-                for i in range(preds[0].dim):
-                    succ.shape[i] = preds[0].shape[i]
-                    graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
+                if compute_node.layer_type == 'parcpmm':
+                    succ.shape[0] = preds[0].shape[0]
+                    weight_shape = getattr(compute_node, 'weight_shape', [])
+                    if len(weight_shape) >= 2:
+                        succ.shape[1] = weight_shape[-1]
+                    if preds[0].head_shape is not None:
+                        succ.head_shape = list(preds[0].head_shape)
+                elif compute_node.layer_type == 'pdmpcmm':
+                    weight_shape = getattr(compute_node, 'weight_shape', [])
+                    if preds[0].head_shape is not None:
+                        succ.head_shape = list(preds[0].head_shape)
+                    if len(weight_shape) >= 1:
+                        succ.shape[0] = weight_shape[0]
+                    else:
+                        succ.shape[0] = preds[0].shape[0]
+                    if len(preds[0].shape) > 1:
+                        succ.shape[1] = preds[0].shape[1]
+                elif compute_node.layer_type == 'partranspose':
+                    if preds[0].head_shape is not None:
+                        succ.head_shape = [preds[0].head_shape[1], preds[0].head_shape[0]]
+                        succ.shape[0] = succ.head_shape[0]
+                        succ.shape[1] = succ.head_shape[1] * n_heads
+                    else:
+                        succ.shape[0] = preds[0].shape[1]
+                        succ.shape[1] = preds[0].shape[0]
+                elif compute_node.layer_type == 'pdmtranspose':
+                    if preds[0].head_shape is not None:
+                        succ.head_shape = [preds[0].head_shape[1], preds[0].head_shape[0]]
+                        succ.shape[0] = succ.head_shape[0]
+                        succ.shape[1] = succ.head_shape[1] * n_heads
+                        succ.is_transposed = False
+                    else:
+                        succ.shape[0] = preds[0].shape[1]
+                        succ.shape[1] = preds[0].shape[0]
+                        succ.is_transposed = False
+                elif compute_node.layer_type == 'parccmm':
+                    succ.shape[0] = preds[0].shape[0]
+                    if preds[0].head_shape is not None and len(preds) > 1 and preds[1].head_shape is not None:
+                        succ.head_shape = [preds[0].head_shape[0], preds[1].head_shape[1]]
+                        succ.shape[1] = succ.head_shape[1] * n_heads
+                    elif len(preds) > 1 and len(preds[1].shape) > 1:
+                        succ.shape[1] = preds[1].shape[1]
+                elif compute_node.layer_type == 'pdmccmm':
+                    if preds[0].head_shape is not None and len(preds) > 1 and preds[1].head_shape is not None:
+                        succ.head_shape = [preds[0].head_shape[0], preds[1].head_shape[1]]
+                        succ.shape[0] = succ.head_shape[0] * n_heads
+                        succ.shape[1] = succ.head_shape[1]
+                    else:
+                        succ.shape[0] = preds[0].shape[0]
+                        if len(preds) > 1 and len(preds[1].shape) > 1:
+                            succ.shape[1] = preds[1].shape[1]
+                else:
+                    for i in range(preds[0].dim):
+                        succ.shape[i] = preds[0].shape[i]
+                        graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
+                # Propagate head_shape for feature_mat pass-through layers
+                if succ.head_shape is None and preds[0].head_shape is not None:
+                    succ.head_shape = list(preds[0].head_shape)
         if preds[0].dim >= 1 and any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
             graph.dag.nodes[succ]['skip'] = [1] * preds[0].dim
             if any(succ.shape[i] < config.block_shape[i] for i in range(succ.dim)):
@@ -684,6 +923,44 @@ def set_level_costs(graph: LayerAbstractGraph):
         elif compute_node.layer_type == 'concat2d':
             has_uneven = any(p.channel % graph.dag.nodes[p]['pack_num'] != 0 for p in preds)
             graph.dag.nodes[compute_node]['level_cost'] = 1 if has_uneven else 0
+        elif compute_node.layer_type in ('parcpmm', 'pdmpcmm'):
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type in {'add_pt', 'pcm_add_pt', 'pdm_add_pt'}:
+            graph.dag.nodes[compute_node]['level_cost'] = 0
+        elif compute_node.layer_type in ('partranspose', 'pdmtranspose'):
+            graph.dag.nodes[compute_node]['level_cost'] = 1
+        elif compute_node.layer_type in ('parccmm', 'pdmccmm'):
+            graph.dag.nodes[compute_node]['level_cost'] = 3
+        elif compute_node.layer_type in ('pcmgamma', 'pdmgamma'):
+            graph.dag.nodes[compute_node]['level_cost'] = 1
+        elif compute_node.layer_type == 'pdmupperaddpt':
+            graph.dag.nodes[compute_node]['level_cost'] = 0
+        elif compute_node.layer_type == 'pdmupperpoly':
+            graph.dag.nodes[compute_node]['level_cost'] = MatPolyBase.compute_stockmeyer_level_cost(compute_node.order)
+        elif compute_node.layer_type == 'pdmmulsquare':
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type == 'pdmheadcolsum':
+            graph.dag.nodes[compute_node]['level_cost'] = 1
+        elif compute_node.layer_type == 'pdminvinit':
+            graph.dag.nodes[compute_node]['level_cost'] = 0
+        elif compute_node.layer_type == 'pdminviter':
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type in ('pdmctmul', 'pdmupperpolymultct'):
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type in ('pcmpoly', 'pdmpoly'):
+            graph.dag.nodes[compute_node]['level_cost'] = 2 if compute_node.order == 2 else 3
+        elif compute_node.layer_type == 'pcmstats':
+            graph.dag.nodes[compute_node]['level_cost'] = 4
+        elif compute_node.layer_type == 'pdmstats':
+            graph.dag.nodes[compute_node]['level_cost'] = 3
+        elif compute_node.layer_type in ('pcmcenter', 'pdmcenter'):
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type in ('pcminit', 'pdminit'):
+            graph.dag.nodes[compute_node]['level_cost'] = 2
+        elif compute_node.layer_type in ('pcmgs', 'pdmgs'):
+            graph.dag.nodes[compute_node]['level_cost'] = 3
+        elif compute_node.layer_type in ('pcmaffine', 'pdmaffine'):
+            graph.dag.nodes[compute_node]['level_cost'] = 2
         else:
             graph.dag.nodes[compute_node]['level_cost'] = 0
 
@@ -941,3 +1218,975 @@ def process_polyact(graph: LayerAbstractGraph) -> list:
         if isinstance(p, ComputeNode) and p.layer_type == 'polyact':
             miniprocess(graph, p, res_list, p.layer_id, True)
     return res_list
+
+
+PDM_UPPER_PASS_THROUGH_TYPES = {
+    'pdmupperaddpt',
+    'pdmupperpoly',
+    'pdmmulsquare',
+    'pdmheadcolsum',
+    'pdminvinit',
+    'pdminviter',
+    'pdmctmul',
+    'pdmupperpolymultct',
+}
+
+
+def _parse_float_list(value) -> list[float]:
+    if value is None:
+        return []
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    if isinstance(value, str):
+        return [float(item.strip()) for item in value.split(',') if item.strip()]
+    return [float(item) for item in value]
+
+
+def _float_attr(node: ComputeNode, name: str, default: float) -> float:
+    value = getattr(node, name, default)
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    return float(value)
+
+
+def _int_attr(node: ComputeNode, name: str, default: int) -> int:
+    value = getattr(node, name, default)
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    return int(value)
+
+
+def _node_str_attr(node: ComputeNode, name: str, default: str = '') -> str:
+    value = getattr(node, name, default)
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    return str(value)
+
+
+def _bert_softmax_denominator_scale(attn_node: ComputeNode, attr_name: str, config_name: str, default: float) -> float:
+    if hasattr(attn_node, attr_name):
+        scale = _float_attr(attn_node, attr_name, default)
+    else:
+        scale = float(getattr(config, config_name, default))
+        if attr_name == 'initial_denominator_scale':
+            if _node_str_attr(attn_node, 'softmax_profile').lower() == 'thor-wide':
+                wide_scale = float(getattr(config, 'bert_softmax_wide_initial_denominator_scale', 65536.0))
+                scale = max(scale, wide_scale)
+    if scale == 0:
+        raise ValueError(f'BERT softmax denominator scale {attr_name} cannot be 0')
+    return scale
+
+
+def _bert_softmax_denominator_guard(attn_node: ComputeNode, attr_name: str) -> float:
+    if _node_str_attr(attn_node, 'softmax_profile').lower() != 'thor-wide':
+        return 0.0
+    if float(getattr(config, 'bert_softmax_use_wide_inverse_epsilon', 1.0)) == 0.0:
+        return 0.0
+    guard = _float_attr(attn_node, attr_name, 0.0)
+    if guard < 0:
+        raise ValueError(f'BERT softmax {attr_name} cannot be negative for {attn_node.layer_id}: {guard}')
+    return guard
+
+
+def _layernorm_iterations(node: ComputeNode, default: int) -> int:
+    return _int_attr(
+        node,
+        'max_inverse_sqrt_iterations',
+        _int_attr(node, 'max_inverse_sqrt_iteration', _int_attr(node, 'num_iters', default)),
+    )
+
+
+def _bert_layernorm_runtime_attrs(ln_node: ComputeNode, default_n_iter: int) -> dict:
+    eps = _float_attr(ln_node, 'epsilon', 1.0e-5)
+    min_var = _float_attr(ln_node, 'min_var', 0.75)
+    max_var = _float_attr(ln_node, 'max_var', 2500.0)
+    w_buffer = _float_attr(ln_node, 'w_buffer', 1.05)
+    input_scale = _float_attr(ln_node, 'input_scale', 1.0)
+    max_denominator = (max_var * w_buffer + eps) * input_scale * input_scale
+    if max_denominator <= 0:
+        raise ValueError(f'BERT LayerNorm node {ln_node.layer_id} has non-positive max_denominator={max_denominator}')
+    inv_var = 1.0 / max_denominator
+    inv_std = math.sqrt(inv_var)
+    normalized_epsilon = (min_var + eps) / max_denominator
+    use_asor = _int_attr(ln_node, 'use_asor', 0)
+    if use_asor != 0:
+        raise ValueError(
+            f'BERT LayerNorm node {ln_node.layer_id} requests use_asor={use_asor}, but only use_asor=0 is supported'
+        )
+
+    return {
+        'epsilon': eps,
+        'min_var': min_var,
+        'max_var': max_var,
+        'w_buffer': w_buffer,
+        'input_scale': input_scale,
+        'max_denominator': max_denominator,
+        'normalized_epsilon': normalized_epsilon,
+        'inv_var': inv_var,
+        'inv_std': inv_std,
+        'c0': _float_attr(ln_node, 'c0', config.layernorm_c0),
+        'c1': _float_attr(ln_node, 'c1', config.layernorm_c1),
+        'c2': _float_attr(ln_node, 'c2', config.layernorm_c2),
+        'num_iters': _layernorm_iterations(ln_node, default_n_iter),
+        'profile': getattr(ln_node, 'profile', ''),
+        'use_asor': use_asor,
+    }
+
+
+def _new_feature_like(source: FeatureNode, name: str, shape: list[int] | None = None) -> FeatureNode:
+    feature = FeatureNode(
+        key=name,
+        dim=source.dim,
+        channel=source.channel,
+        scale=source.scale,
+        ckks_parameter_id=source.ckks_parameter_id,
+        ckks_scale=source.ckks_scale,
+        shape=list(shape if shape is not None else source.shape),
+    )
+    feature.data_type = source.data_type
+    feature.invalid_fill = list(source.invalid_fill)
+    feature.sp_info = copy.deepcopy(source.sp_info)
+    feature.has_sp_info = source.has_sp_info
+    if source.head_shape is not None:
+        feature.head_shape = list(source.head_shape)
+    return feature
+
+
+def _feature_attrs_like(graph: LayerAbstractGraph, source: FeatureNode, feature: FeatureNode) -> dict:
+    source_attrs = graph.dag.nodes[source]
+    return {
+        'name': feature.node_id,
+        'skip': list(source_attrs.get('skip', [1] * source.dim)),
+        'level': source_attrs.get('level', 0),
+        'pack_num': source_attrs.get('pack_num', 1),
+    }
+
+
+def _compute_attrs(level_cost: int, name: str) -> dict:
+    return {'name': name, 'level_cost': level_cost}
+
+
+def _append_unary_compute(
+    graph: LayerAbstractGraph,
+    input_feature: FeatureNode,
+    compute_node: ComputeNode,
+    output_id: str,
+    level_cost: int,
+) -> FeatureNode:
+    output_feature = _new_feature_like(input_feature, output_id)
+    graph.dag.add_node(compute_node, **_compute_attrs(level_cost, compute_node.layer_id))
+    graph.dag.add_node(output_feature, **_feature_attrs_like(graph, input_feature, output_feature))
+    graph.dag.add_edge(input_feature, compute_node)
+    graph.dag.add_edge(compute_node, output_feature)
+    return output_feature
+
+
+def _append_binary_compute(
+    graph: LayerAbstractGraph,
+    lhs: FeatureNode,
+    rhs: FeatureNode,
+    compute_node: ComputeNode,
+    output_id: str,
+    level_cost: int,
+) -> FeatureNode:
+    output_feature = _new_feature_like(lhs, output_id)
+    graph.dag.add_node(compute_node, **_compute_attrs(level_cost, compute_node.layer_id))
+    graph.dag.add_node(output_feature, **_feature_attrs_like(graph, lhs, output_feature))
+    graph.dag.add_edge(lhs, compute_node, input_index=0)
+    graph.dag.add_edge(rhs, compute_node, input_index=1)
+    graph.dag.add_edge(compute_node, output_feature)
+    return output_feature
+
+
+def _make_scalar_gamma(layer_id: str, scalar: float) -> ComputeNode:
+    node = ComputeNode(layer_id, _pack_pcm_type('pcmgamma'), 1, 1)
+    node.path = f'{layer_id}.weight'
+    node.scalar_value = float(scalar)
+    return node
+
+
+def _make_upper_poly(layer_id: str, coefficients: list[float]) -> ComputeNode:
+    node = ComputeNode(layer_id, 'pdmupperpoly', 1, 1)
+    node.path = f'{layer_id}.weight'
+    node.coeffs_path = node.path
+    node.coefficients = list(coefficients)
+    node.order = len(coefficients) - 1
+    return node
+
+
+def _append_softmax_normalize(
+    graph: LayerAbstractGraph,
+    base_id: str,
+    values: FeatureNode,
+    denominator_scale: float,
+    max_inverse_iterations: int,
+    denominator_epsilon: float = 0.0,
+) -> FeatureNode:
+    denom = _append_unary_compute(
+        graph,
+        values,
+        ComputeNode(f'{base_id}_head_col_sum', 'pdmheadcolsum', 1, 1),
+        f'{base_id}_denominator',
+        1,
+    )
+    if denominator_epsilon != 0.0:
+        add_epsilon = ComputeNode(f'{base_id}_denominator_epsilon', 'pdmupperaddpt', 1, 1)
+        add_epsilon.value = denominator_epsilon
+        denom = _append_unary_compute(
+            graph,
+            denom,
+            add_epsilon,
+            f'{base_id}_denominator_epsilon_added',
+            0,
+        )
+    if denominator_scale != 1.0:
+        denom = _append_unary_compute(
+            graph,
+            denom,
+            _make_scalar_gamma(f'{base_id}_denominator_scale', denominator_scale),
+            f'{base_id}_denominator_scaled',
+            1,
+        )
+
+    inv = _append_unary_compute(
+        graph,
+        denom,
+        ComputeNode(f'{base_id}_inverse_init', 'pdminvinit', 1, 1),
+        f'{base_id}_inverse_init_out',
+        0,
+    )
+    for idx in range(1, max_inverse_iterations):
+        inv = _append_binary_compute(
+            graph,
+            inv,
+            denom,
+            ComputeNode(f'{base_id}_inverse_iter_{idx}', 'pdminviter', 1, 1),
+            f'{base_id}_inverse_iter_{idx}_out',
+            2,
+        )
+
+    probabilities_output_id = (
+        f'{base_id}_probabilities_unscaled' if denominator_scale != 1.0 else f'{base_id}_probabilities'
+    )
+    probabilities = _append_binary_compute(
+        graph,
+        values,
+        inv,
+        ComputeNode(f'{base_id}_multiply', 'pdmctmul', 1, 1),
+        probabilities_output_id,
+        2,
+    )
+    if denominator_scale != 1.0:
+        probabilities = _append_unary_compute(
+            graph,
+            probabilities,
+            _make_scalar_gamma(f'{base_id}_probabilities_scale', denominator_scale),
+            f'{base_id}_probabilities',
+            1,
+        )
+    return probabilities
+
+
+def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: FeatureNode, attn_node: ComputeNode):
+    range_min = _float_attr(attn_node, 'range_min', -3.0)
+    range_max = _float_attr(attn_node, 'range_max', 3.0)
+    mid = (range_min + range_max) / 2.0
+    exp_divisor = _float_attr(attn_node, 'exp_divisor', 1.0)
+    coefficients = _parse_float_list(getattr(attn_node, 'exp_coefficients', []))
+    if not coefficients:
+        raise ValueError(f'BERT attention node {attn_node.layer_id} is missing exp_coefficients')
+    max_inverse_iterations = _int_attr(
+        attn_node,
+        'max_inverse_iterations',
+        _int_attr(attn_node, 'max_inverse_iteration', 15),
+    )
+    delta_1 = _int_attr(attn_node, 'delta_1', 2)
+    delta_2 = _int_attr(attn_node, 'delta_2', 1)
+    initial_denominator_scale = _bert_softmax_denominator_scale(
+        attn_node,
+        'initial_denominator_scale',
+        'bert_softmax_initial_denominator_scale',
+        16.0,
+    )
+    first_refinement_denominator_scale = _bert_softmax_denominator_scale(
+        attn_node,
+        'first_refinement_denominator_scale',
+        'bert_softmax_first_refinement_denominator_scale',
+        2.0,
+    )
+    later_refinement_denominator_scale = _bert_softmax_denominator_scale(
+        attn_node,
+        'later_refinement_denominator_scale',
+        'bert_softmax_later_refinement_denominator_scale',
+        1.0,
+    )
+    initial_denominator_guard = _bert_softmax_denominator_guard(attn_node, 'inverse_epsilon')
+
+    add_mid_node = ComputeNode(f'{base_id}_softmax_add_mid', 'pdmupperaddpt', 1, 1)
+    add_mid_node.value = -mid
+    centered = _append_unary_compute(
+        graph,
+        scores,
+        add_mid_node,
+        f'{base_id}_softmax_centered',
+        0,
+    )
+
+    exp_arg = _append_unary_compute(
+        graph,
+        centered,
+        _make_scalar_gamma(f'{base_id}_softmax_exp_gamma', 1.0 / exp_divisor),
+        f'{base_id}_softmax_exp_arg',
+        1,
+    )
+    exp_poly = _append_unary_compute(
+        graph,
+        exp_arg,
+        _make_upper_poly(f'{base_id}_softmax_exp_poly', coefficients),
+        f'{base_id}_softmax_exp_poly_out',
+        MatPolyBase.compute_stockmeyer_level_cost(len(coefficients) - 1),
+    )
+
+    values = exp_poly
+    delta = max(1, delta_1)
+    square_idx = 0
+    while delta > 1:
+        values = _append_unary_compute(
+            graph,
+            values,
+            ComputeNode(f'{base_id}_softmax_delta1_square_{square_idx}', 'pdmmulsquare', 1, 1),
+            f'{base_id}_softmax_delta1_square_{square_idx}_out',
+            2,
+        )
+        delta >>= 1
+        square_idx += 1
+
+    probabilities = _append_softmax_normalize(
+        graph,
+        f'{base_id}_softmax_normalize_initial',
+        values,
+        initial_denominator_scale,
+        max_inverse_iterations,
+        initial_denominator_guard,
+    )
+
+    refinement_idx = 0
+    delta = max(1, delta_2)
+    refinement_steps = 0
+    refinement_delta = delta
+    while refinement_delta > 1:
+        refinement_steps += 1
+        refinement_delta >>= 1
+    while delta > 1:
+        squared = _append_unary_compute(
+            graph,
+            probabilities,
+            ComputeNode(f'{base_id}_softmax_refine_square_{refinement_idx}', 'pdmmulsquare', 1, 1),
+            f'{base_id}_softmax_refine_square_{refinement_idx}_out',
+            2,
+        )
+        denominator_scale = (
+            first_refinement_denominator_scale if refinement_idx == 0 else later_refinement_denominator_scale
+        )
+        is_final_refinement = refinement_idx == refinement_steps - 1
+        guard_attr = 'final_inverse_alpha' if is_final_refinement else 'inverse_alpha'
+        probabilities = _append_softmax_normalize(
+            graph,
+            f'{base_id}_softmax_normalize_refine_{refinement_idx}',
+            squared,
+            denominator_scale,
+            max_inverse_iterations,
+            _bert_softmax_denominator_guard(attn_node, guard_attr),
+        )
+        delta >>= 1
+        refinement_idx += 1
+
+    return probabilities
+
+
+def _add_ccmm_inputs(graph: LayerAbstractGraph, lhs: FeatureNode, rhs: FeatureNode, node: ComputeNode):
+    if node.layer_type == 'pdmccmm':
+        graph.dag.add_edge(lhs, node, input_index=1)
+        graph.dag.add_edge(rhs, node, input_index=0)
+    else:
+        graph.dag.add_edge(lhs, node, input_index=0)
+        graph.dag.add_edge(rhs, node, input_index=1)
+
+
+def _expand_bert_multi_head_attention(graph: LayerAbstractGraph, attn_node: ComputeNode):
+    if not _is_diagonal_mat_pack():
+        raise ValueError('BERT CustomMultiHeadAttention expansion currently supports only par_diagonal_pack')
+
+    preds = list(graph.dag.predecessors(attn_node))
+    succs = list(graph.dag.successors(attn_node))
+    if len(preds) != 1 or len(succs) != 1:
+        raise ValueError(
+            f'BERT attention node {attn_node.layer_id} must have exactly 1 input and 1 output, '
+            f'got {len(preds)} inputs and {len(succs)} outputs'
+        )
+    x_in: FeatureNode = preds[0]
+    out: FeatureNode = succs[0]
+
+    base_id = attn_node.layer_id
+    m = x_in.shape[0]
+    n = x_in.shape[1]
+    n_heads = max(1, int(getattr(attn_node, 'num_heads', config.n_heads)))
+    scaling = _float_attr(attn_node, 'scaling', 1.0 / math.sqrt(max(1, config.head_dim)))
+
+    def make_feature(name: str, shape: list[int] | None = None) -> FeatureNode:
+        return _new_feature_like(x_in, name, shape)
+
+    q = make_feature(f'{base_id}_q')
+    k = make_feature(f'{base_id}_k')
+    v = make_feature(f'{base_id}_v')
+    kt = make_feature(f'{base_id}_kt', [n // n_heads, m * n_heads])
+    qkt = make_feature(f'{base_id}_qkt', [m, m * n_heads])
+    qktv = make_feature(f'{base_id}_qktv', list(out.shape))
+
+    pcmm_type = 'pdmpcmm'
+    transpose_type = 'pdmtranspose'
+    ccmm_type = 'pdmccmm'
+
+    q_node = ComputeNode(f'{base_id}_q_layer', pcmm_type, 1, 1)
+    q_node.path = getattr(attn_node, 'q_weight_path', f'{base_id}.q.weight')
+    q_node.bias_path = getattr(attn_node, 'q_bias_path', '')
+    q_node.weight_shape = [n, n]
+    q_node.weight_multiplier = scaling
+    q_node.bias_multiplier = scaling
+
+    k_node = ComputeNode(f'{base_id}_k_layer', pcmm_type, 1, 1)
+    k_node.path = getattr(attn_node, 'k_weight_path', f'{base_id}.k.weight')
+    k_node.bias_path = getattr(attn_node, 'k_bias_path', '')
+    k_node.weight_shape = [n, n]
+
+    v_node = ComputeNode(f'{base_id}_v_layer', pcmm_type, 1, 1)
+    v_node.path = getattr(attn_node, 'v_weight_path', f'{base_id}.v.weight')
+    v_node.bias_path = getattr(attn_node, 'v_bias_path', '')
+    v_node.weight_shape = [n, n]
+
+    kt_node = ComputeNode(f'{base_id}_kt_layer', transpose_type, 1, 1)
+    qkt_node = ComputeNode(f'{base_id}_qkt_layer', ccmm_type, 1, 1)
+    qktv_node = ComputeNode(f'{base_id}_qktv_layer', ccmm_type, 1, 1)
+
+    out_node = ComputeNode(f'{base_id}_out', pcmm_type, 1, 1)
+    out_node.weight_shape = [n, n]
+    out_node.path = getattr(attn_node, 'proj_weight_path', f'{base_id}.proj.weight')
+    out_node.bias_path = getattr(attn_node, 'proj_bias_path', '')
+
+    graph.dag.remove_node(attn_node)
+
+    for node in (q_node, k_node, v_node):
+        graph.dag.add_node(node, **_compute_attrs(2, node.layer_id))
+    graph.dag.add_node(kt_node, **_compute_attrs(1, kt_node.layer_id))
+    graph.dag.add_node(qkt_node, **_compute_attrs(3, qkt_node.layer_id))
+    graph.dag.add_node(qktv_node, **_compute_attrs(3, qktv_node.layer_id))
+    graph.dag.add_node(out_node, **_compute_attrs(2, out_node.layer_id))
+
+    for feature in (q, k, v, kt, qkt, qktv):
+        graph.dag.add_node(feature, **_feature_attrs_like(graph, x_in, feature))
+
+    graph.dag.add_edge(x_in, q_node)
+    graph.dag.add_edge(q_node, q)
+    graph.dag.add_edge(x_in, k_node)
+    graph.dag.add_edge(k_node, k)
+    graph.dag.add_edge(x_in, v_node)
+    graph.dag.add_edge(v_node, v)
+
+    graph.dag.add_edge(k, kt_node)
+    graph.dag.add_edge(kt_node, kt)
+
+    _add_ccmm_inputs(graph, q, kt, qkt_node)
+    graph.dag.add_edge(qkt_node, qkt)
+
+    softmax_out = _append_bert_softmax(graph, base_id, qkt, attn_node)
+
+    _add_ccmm_inputs(graph, softmax_out, v, qktv_node)
+    graph.dag.add_edge(qktv_node, qktv)
+
+    graph.dag.add_edge(qktv, out_node)
+    graph.dag.add_edge(out_node, out)
+
+
+def expand_multi_head_attention(graph: LayerAbstractGraph):
+    for vit_node in list(graph.dag.nodes):
+        if not (isinstance(vit_node, ComputeNode) and vit_node.layer_type == 'CustomMultiHeadAttention'):
+            continue
+
+        if getattr(vit_node, 'model_type', '') == 'bert' or getattr(config, 'model_type', '') == 'bert':
+            _expand_bert_multi_head_attention(graph, vit_node)
+            continue
+
+        preds = list(graph.dag.predecessors(vit_node))
+        succs = list(graph.dag.successors(vit_node))
+        if len(preds) != 1 or len(succs) != 1:
+            raise ValueError(
+                f'ViT node {vit_node.layer_id} must have exactly 1 input and 1 output, '
+                f'got {len(preds)} inputs and {len(succs)} outputs'
+            )
+        x_in: FeatureNode = preds[0]
+        out: FeatureNode = succs[0]
+
+        base_id = vit_node.layer_id
+        x_in_attrs = graph.dag.nodes[x_in]
+        skip = list(x_in_attrs.get('skip', [1] * x_in.dim))
+        level = x_in_attrs.get('level', 0)
+        pack_num = x_in_attrs.get('pack_num', 1)
+        m = x_in.shape[0]
+        n = x_in.shape[1]
+        n_heads = max(1, config.n_heads)
+
+        def make_feature(name: str, shape: list[int] | None = None) -> FeatureNode:
+            f = FeatureNode(
+                key=name,
+                dim=x_in.dim,
+                channel=x_in.channel,
+                scale=x_in.scale,
+                ckks_parameter_id=x_in.ckks_parameter_id,
+                ckks_scale=x_in.ckks_scale,
+                shape=list(shape if shape is not None else x_in.shape),
+            )
+            f.data_type = x_in.data_type
+            return f
+
+        def f_attrs(f: FeatureNode) -> dict:
+            return {'name': f.node_id, 'skip': list(skip), 'level': level, 'pack_num': pack_num}
+
+        def c_attrs(level_cost: int, name: str) -> dict:
+            return {'name': name, 'level_cost': level_cost}
+
+        q = make_feature(f'{base_id}_q')
+        k = make_feature(f'{base_id}_k')
+        v = make_feature(f'{base_id}_v')
+        kt = make_feature(f'{base_id}_kt', [n // n_heads, m * n_heads])
+        qkt = make_feature(f'{base_id}_qkt', [m, m * n_heads])
+        qkt_poly = make_feature(f'{base_id}_qkt_polyact', [m, m * n_heads])
+        qktv = make_feature(f'{base_id}_qktv', list(out.shape))
+
+        pcmm_type = 'pdmpcmm' if _is_diagonal_mat_pack() else 'parcpmm'
+        transpose_type = 'pdmtranspose' if _is_diagonal_mat_pack() else 'partranspose'
+        ccmm_type = 'pdmccmm' if _is_diagonal_mat_pack() else 'parccmm'
+
+        q_node = ComputeNode(f'{base_id}_q_layer', pcmm_type, 1, 1)
+        q_node.path = getattr(vit_node, 'q_weight_path', f'{base_id}.q.weight')
+        q_node.bias_path = getattr(vit_node, 'q_bias_path', '')
+        q_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
+        k_node = ComputeNode(f'{base_id}_k_layer', pcmm_type, 1, 1)
+        k_node.path = getattr(vit_node, 'k_weight_path', f'{base_id}.k.weight')
+        k_node.bias_path = getattr(vit_node, 'k_bias_path', '')
+        k_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
+        v_node = ComputeNode(f'{base_id}_v_layer', pcmm_type, 1, 1)
+        v_node.path = getattr(vit_node, 'v_weight_path', f'{base_id}.v.weight')
+        v_node.bias_path = getattr(vit_node, 'v_bias_path', '')
+        v_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
+        kt_node = ComputeNode(f'{base_id}_kt_layer', transpose_type, 1, 1)
+        qkt_node = ComputeNode(f'{base_id}_qkt_layer', ccmm_type, 1, 1)
+        poly_node = ComputeNode(f'{base_id}_poly', _pack_pcm_type('pcmpoly'), 1, 1)
+        poly_node.path = getattr(vit_node, 'poly_weight_path', f'{base_id}.poly.weight')
+        poly_node.coeffs_path = poly_node.path
+        poly_node.gamma_path = getattr(vit_node, 'gamma_path', f'{base_id}.gamma')
+        poly_node.order = getattr(vit_node, 'poly_order', 4)
+        qktv_node = ComputeNode(f'{base_id}_qktv_layer', ccmm_type, 1, 1)
+        out_node = ComputeNode(f'{base_id}_out', pcmm_type, 1, 1)
+        out_node.weight_shape = [n, config.base_feat_dim] if config.base_feat_dim > 0 else [n, n]
+        out_node.path = getattr(vit_node, 'proj_weight_path', f'{base_id}.proj.weight')
+        out_node.bias_path = getattr(vit_node, 'proj_bias_path', '')
+
+        graph.dag.remove_node(vit_node)
+
+        for node in (q_node, k_node, v_node):
+            graph.dag.add_node(node, **c_attrs(2, node.layer_id))
+        graph.dag.add_node(kt_node, **c_attrs(1, kt_node.layer_id))
+        graph.dag.add_node(qkt_node, **c_attrs(3, qkt_node.layer_id))
+        graph.dag.add_node(poly_node, **c_attrs(3, poly_node.layer_id))
+        graph.dag.add_node(qktv_node, **c_attrs(3, qktv_node.layer_id))
+        graph.dag.add_node(out_node, **c_attrs(2, out_node.layer_id))
+
+        for f in (q, k, v, kt, qkt, qkt_poly, qktv):
+            graph.dag.add_node(f, **f_attrs(f))
+
+        graph.dag.add_edge(x_in, q_node)
+        graph.dag.add_edge(q_node, q)
+        graph.dag.add_edge(x_in, k_node)
+        graph.dag.add_edge(k_node, k)
+        graph.dag.add_edge(x_in, v_node)
+        graph.dag.add_edge(v_node, v)
+
+        graph.dag.add_edge(k, kt_node)
+        graph.dag.add_edge(kt_node, kt)
+
+        def add_ccmm_inputs(lhs: FeatureNode, rhs: FeatureNode, node: ComputeNode):
+            if node.layer_type == 'pdmccmm':
+                graph.dag.add_edge(lhs, node, input_index=1)
+                graph.dag.add_edge(rhs, node, input_index=0)
+            else:
+                graph.dag.add_edge(lhs, node, input_index=0)
+                graph.dag.add_edge(rhs, node, input_index=1)
+
+        add_ccmm_inputs(q, kt, qkt_node)
+        graph.dag.add_edge(qkt_node, qkt)
+
+        graph.dag.add_edge(qkt, poly_node)
+        graph.dag.add_edge(poly_node, qkt_poly)
+
+        add_ccmm_inputs(qkt_poly, v, qktv_node)
+        graph.dag.add_edge(qktv_node, qktv)
+
+        graph.dag.add_edge(qktv, out_node)
+        graph.dag.add_edge(out_node, out)
+
+
+def _expand_custom_gelu(graph: LayerAbstractGraph, node: ComputeNode):
+    preds = list(graph.dag.predecessors(node))
+    succs = list(graph.dag.successors(node))
+    if len(preds) != 1 or len(succs) != 1:
+        raise ValueError(
+            f'CustomGELU node {node.layer_id} must have exactly 1 input and 1 output, '
+            f'got {len(preds)} inputs and {len(succs)} outputs'
+        )
+    x_in: FeatureNode = preds[0]
+    out: FeatureNode = succs[0]
+    base_id = node.layer_id
+
+    scale = _float_attr(node, 'scale', 64.0)
+    f2_input_scale = _float_attr(node, 'f2_input_scale', 0.5)
+    f3_input_scale = _float_attr(node, 'f3_input_scale', 0.5)
+    p1 = _parse_float_list(getattr(node, 'p1_coefficients', []))
+    p2 = _parse_float_list(getattr(node, 'p2_coefficients', []))
+    p3 = _parse_float_list(getattr(node, 'p3_coefficients', []))
+    if not p1 or not p2 or not p3:
+        raise ValueError(f'CustomGELU node {node.layer_id} is missing polynomial coefficients')
+
+    input_edge_attrs = copy.deepcopy(graph.dag.edges[x_in, node])
+    input_edge_attrs.pop('input_index', None)
+    output_edge_attrs = copy.deepcopy(graph.dag.edges[node, out])
+    graph.dag.remove_node(node)
+
+    x_scaled = _append_unary_compute(
+        graph,
+        x_in,
+        _make_scalar_gamma(f'{base_id}_gelu_input_scale', 1.0 / scale),
+        f'{base_id}_gelu_x_scaled',
+        1,
+    )
+    f1 = _append_unary_compute(
+        graph,
+        x_scaled,
+        _make_upper_poly(f'{base_id}_gelu_poly1', p1),
+        f'{base_id}_gelu_f1',
+        MatPolyBase.compute_stockmeyer_level_cost(len(p1) - 1),
+    )
+    f1_scaled = _append_unary_compute(
+        graph,
+        f1,
+        _make_scalar_gamma(f'{base_id}_gelu_f2_input_scale', 1.0 / f2_input_scale),
+        f'{base_id}_gelu_f1_scaled',
+        1,
+    )
+    half_tanh = _append_unary_compute(
+        graph,
+        f1_scaled,
+        _make_upper_poly(f'{base_id}_gelu_poly2', p2),
+        f'{base_id}_gelu_half_tanh',
+        MatPolyBase.compute_stockmeyer_level_cost(len(p2) - 1),
+    )
+    half_tanh_scaled = _append_unary_compute(
+        graph,
+        half_tanh,
+        _make_scalar_gamma(f'{base_id}_gelu_f3_input_scale', 1.0 / f3_input_scale),
+        f'{base_id}_gelu_half_tanh_scaled',
+        1,
+    )
+    refined = _append_unary_compute(
+        graph,
+        half_tanh_scaled,
+        _make_upper_poly(f'{base_id}_gelu_poly3', p3),
+        f'{base_id}_gelu_refined',
+        MatPolyBase.compute_stockmeyer_level_cost(len(p3) - 1),
+    )
+
+    gelu_node = ComputeNode(f'{base_id}_gelu_mult_ct', 'pdmupperpolymultct', 1, 1)
+    graph.dag.add_node(gelu_node, **_compute_attrs(2, gelu_node.layer_id))
+    graph.dag.add_edge(refined, gelu_node, input_index=0)
+    graph.dag.add_edge(x_in, gelu_node, input_index=1, **input_edge_attrs)
+    graph.dag.add_edge(gelu_node, out, **output_edge_attrs)
+
+
+def _expand_custom_tanh(graph: LayerAbstractGraph, node: ComputeNode):
+    preds = list(graph.dag.predecessors(node))
+    succs = list(graph.dag.successors(node))
+    if len(preds) != 1 or len(succs) != 1:
+        raise ValueError(
+            f'CustomTanh node {node.layer_id} must have exactly 1 input and 1 output, '
+            f'got {len(preds)} inputs and {len(succs)} outputs'
+        )
+    x_in: FeatureNode = preds[0]
+    out: FeatureNode = succs[0]
+    base_id = node.layer_id
+
+    scale = _float_attr(node, 'scale', 40.0)
+    f1_input_scale = _float_attr(node, 'f1_input_scale', 1.0)
+    f2_input_scale = _float_attr(node, 'f2_input_scale', 1.0)
+    p1 = _parse_float_list(getattr(node, 'p1_coefficients', []))
+    p2 = _parse_float_list(getattr(node, 'p2_coefficients', []))
+    if not p1 or not p2:
+        raise ValueError(f'CustomTanh node {node.layer_id} is missing polynomial coefficients')
+
+    output_edge_attrs = copy.deepcopy(graph.dag.edges[node, out])
+    graph.dag.remove_node(node)
+
+    x_scaled = _append_unary_compute(
+        graph,
+        x_in,
+        _make_scalar_gamma(f'{base_id}_tanh_input_scale', 1.0 / (scale * f1_input_scale)),
+        f'{base_id}_tanh_x_scaled',
+        1,
+    )
+    f1 = _append_unary_compute(
+        graph,
+        x_scaled,
+        _make_upper_poly(f'{base_id}_tanh_poly1', p1),
+        f'{base_id}_tanh_f1',
+        MatPolyBase.compute_stockmeyer_level_cost(len(p1) - 1),
+    )
+    f1_scaled = _append_unary_compute(
+        graph,
+        f1,
+        _make_scalar_gamma(f'{base_id}_tanh_f2_input_scale', 1.0 / f2_input_scale),
+        f'{base_id}_tanh_f1_scaled',
+        1,
+    )
+    tanh_node = _make_upper_poly(f'{base_id}_tanh_poly2', p2)
+    graph.dag.add_node(
+        tanh_node,
+        **_compute_attrs(MatPolyBase.compute_stockmeyer_level_cost(len(p2) - 1), tanh_node.layer_id),
+    )
+    graph.dag.add_edge(f1_scaled, tanh_node)
+    graph.dag.add_edge(tanh_node, out, **output_edge_attrs)
+
+
+def expand_bert_custom_poly_functions(graph: LayerAbstractGraph):
+    if getattr(config, 'model_type', '') != 'bert':
+        return
+    for node in list(graph.dag.nodes):
+        if not isinstance(node, ComputeNode):
+            continue
+        if node.layer_type == 'CustomGELU':
+            _expand_custom_gelu(graph, node)
+        elif node.layer_type == 'CustomTanh':
+            _expand_custom_tanh(graph, node)
+
+
+def expand_poly_act_rn(graph: LayerAbstractGraph):
+    for node in list(graph.dag.nodes):
+        if not (isinstance(node, ComputeNode) and node.layer_type == 'PolyActRN'):
+            continue
+
+        preds = list(graph.dag.predecessors(node))
+        succs = list(graph.dag.successors(node))
+        if len(preds) != 1 or len(succs) != 1:
+            raise ValueError(
+                f'PolyActRN node {node.layer_id} must have exactly 1 input and 1 output, '
+                f'got {len(preds)} inputs and {len(succs)} outputs'
+            )
+        x_in: FeatureNode = preds[0]
+        out: FeatureNode = succs[0]
+
+        base_id = node.layer_id
+        running_max_path = getattr(node, 'running_max_path', '') or node.path
+        gamma_path = getattr(node, 'gamma_path', '')
+        coeffs_path = getattr(node, 'coeffs_path', '')
+        rn_suffix = '.rangenorm.running_max'
+        if running_max_path.endswith(rn_suffix):
+            prefix = running_max_path[: -len(rn_suffix)]
+            gamma_path = gamma_path or f'{prefix}.gamma'
+            coeffs_path = coeffs_path or f'{prefix}.weight'
+        order = node.order
+
+        input_edge_attrs = copy.deepcopy(graph.dag.edges[x_in, node])
+        output_edge_attrs = copy.deepcopy(graph.dag.edges[node, out])
+
+        poly_node = ComputeNode(base_id, _pack_pcm_type('pcmpoly'), node.channel_input, node.channel_output)
+        poly_node.depth = node.depth
+        poly_node.path = coeffs_path or running_max_path
+        poly_node.running_max_path = running_max_path
+        poly_node.gamma_path = gamma_path
+        poly_node.coeffs_path = coeffs_path
+        poly_node.order = order
+
+        graph.dag.remove_node(node)
+
+        graph.dag.add_node(poly_node, name=poly_node.layer_id)
+        graph.dag.add_edge(x_in, poly_node, **input_edge_attrs)
+        graph.dag.add_edge(poly_node, out, **output_edge_attrs)
+
+
+def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
+    for ln_node in list(graph.dag.nodes):
+        if not isinstance(ln_node, LayerNormComputeNode):
+            continue
+
+        preds = list(graph.dag.predecessors(ln_node))
+        succs = list(graph.dag.successors(ln_node))
+        if len(preds) != 1 or len(succs) != 1:
+            raise ValueError(
+                f'LayerNorm node {ln_node.layer_id} must have exactly 1 input and 1 output, '
+                f'got {len(preds)} inputs and {len(succs)} outputs'
+            )
+        x_in: FeatureNode = preds[0]
+        out: FeatureNode = succs[0]
+
+        base_id = ln_node.layer_id
+        weight_path = ln_node.weight_path
+        bias_path = ln_node.bias_path
+        if getattr(config, 'model_type', '') == 'bert':
+            layernorm_param_attrs = _bert_layernorm_runtime_attrs(ln_node, n_iter)
+            epsilon = layernorm_param_attrs['epsilon']
+            node_n_iter = int(layernorm_param_attrs['num_iters'])
+        else:
+            epsilon = ln_node.epsilon
+            node_n_iter = int(getattr(ln_node, 'num_iters', n_iter))
+            layernorm_param_attrs = {
+                'epsilon': epsilon,
+                'inv_std_scale': getattr(ln_node, 'inv_std_scale', config.layernorm_inv_std_scale),
+                'inv_var_scale': getattr(ln_node, 'inv_var_scale', config.layernorm_inv_var_scale),
+                'c0': getattr(ln_node, 'c0', config.layernorm_c0),
+                'c1': getattr(ln_node, 'c1', config.layernorm_c1),
+                'c2': getattr(ln_node, 'c2', config.layernorm_c2),
+                'num_iters': node_n_iter,
+            }
+
+        x_in_attrs = graph.dag.nodes[x_in]
+        skip = list(x_in_attrs.get('skip', [1] * x_in.dim))
+        level = x_in_attrs.get('level', 0)
+        pack_num = x_in_attrs.get('pack_num', 1)
+
+        def make_feature(name: str) -> FeatureNode:
+            f = FeatureNode(
+                key=name,
+                dim=x_in.dim,
+                channel=x_in.channel,
+                scale=x_in.scale,
+                ckks_parameter_id=x_in.ckks_parameter_id,
+                ckks_scale=x_in.ckks_scale,
+                shape=list(x_in.shape),
+            )
+            f.data_type = x_in.data_type
+            return f
+
+        def f_attrs(f: FeatureNode) -> dict:
+            return {'name': f.node_id, 'skip': list(skip), 'level': level, 'pack_num': pack_num}
+
+        def c_attrs(level_cost: int, name: str) -> dict:
+            return {'name': name, 'level_cost': level_cost}
+
+        # Intermediate feature nodes
+        a = make_feature(f'{base_id}_a')
+        x_c = make_feature(f'{base_id}_x_c')
+        y0 = make_feature(f'{base_id}_y0')
+        y_nodes = [y0] + [make_feature(f'{base_id}_y{i + 1}') for i in range(node_n_iter)]
+
+        # Sub-compute nodes
+        stats_type = _pack_pcm_type('pcmstats')
+        center_type = _pack_pcm_type('pcmcenter')
+        init_type = _pack_pcm_type('pcminit')
+        gs_type = _pack_pcm_type('pcmgs')
+        affine_type = _pack_pcm_type('pcmaffine')
+
+        pcmstats = ComputeNode(f'{base_id}_{stats_type}', stats_type, 1, 1)
+        pcmstats.epsilon = epsilon
+        pcmcenter = ComputeNode(f'{base_id}_{center_type}', center_type, 1, 1)
+        pcminit = ComputeNode(f'{base_id}_{init_type}', init_type, 1, 1)
+        pcmgs_nodes = [ComputeNode(f'{base_id}_{gs_type}_{i}', gs_type, 1, 1) for i in range(node_n_iter)]
+        pcmaffine = ComputeNode(f'{base_id}_{affine_type}', affine_type, 1, 1)
+        pcmaffine.weight_path = weight_path
+        pcmaffine.bias_path = bias_path
+        for stage_node in (pcmstats, pcmcenter, pcminit, *pcmgs_nodes, pcmaffine):
+            for attr_key, attr_value in layernorm_param_attrs.items():
+                setattr(stage_node, attr_key, attr_value)
+
+        # Remove the original layernorm node (keeps x_in and out in the graph)
+        graph.dag.remove_node(ln_node)
+
+        stats_level_cost = 3 if stats_type == 'pdmstats' else 4
+        # 1a. x_in → stats → a  (computes mean/variance stats)
+        graph.dag.add_node(pcmstats, **c_attrs(stats_level_cost, pcmstats.layer_id))
+        graph.dag.add_node(a, **f_attrs(a))
+        graph.dag.add_edge(x_in, pcmstats)
+        graph.dag.add_edge(pcmstats, a)
+
+        # 1b. x_in → pcmcenter → x_c  (centers x, costs 1 level)
+        graph.dag.add_node(pcmcenter, **c_attrs(1, pcmcenter.layer_id))
+        graph.dag.add_node(x_c, **f_attrs(x_c))
+        graph.dag.add_edge(x_in, pcmcenter)
+        graph.dag.add_edge(pcmcenter, x_c)
+
+        # 2. a → pcminit → y0
+        graph.dag.add_node(pcminit, **c_attrs(2, pcminit.layer_id))
+        graph.dag.add_node(y0, **f_attrs(y0))
+        graph.dag.add_edge(a, pcminit)
+        graph.dag.add_edge(pcminit, y0)
+
+        # 3. [y_prev, a] → pcmgs_i → y_next  (repeated n_iter times)
+        for i, (pcmgs_i, y_next) in enumerate(zip(pcmgs_nodes, y_nodes[1:])):
+            y_prev = y_nodes[i]
+            graph.dag.add_node(pcmgs_i, **c_attrs(3, pcmgs_i.layer_id))
+            graph.dag.add_node(y_next, **f_attrs(y_next))
+            graph.dag.add_edge(y_prev, pcmgs_i, input_index=0)
+            graph.dag.add_edge(a, pcmgs_i, input_index=1)
+            graph.dag.add_edge(pcmgs_i, y_next)
+
+        # 4. [x_c, y_final] → pcmaffine → out
+        y_final = y_nodes[-1]
+        graph.dag.add_node(pcmaffine, **c_attrs(2, pcmaffine.layer_id))
+        graph.dag.add_edge(x_c, pcmaffine, input_index=0)
+        graph.dag.add_edge(y_final, pcmaffine, input_index=1)
+        graph.dag.add_edge(pcmaffine, out)
+
+
+def set_pcm_K(graph: LayerAbstractGraph):
+    """Set K attribute on pcmgamma/pcmpoly nodes and their pdm aliases."""
+    base_feat_dim = config.n_heads * config.matmul_block_size
+    gamma_types = ('pcmgamma', 'pdmgamma')
+    poly_types = ('pcmpoly', 'pdmpoly')
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode):
+            continue
+        if node.layer_type not in gamma_types + poly_types:
+            continue
+        preds = list(graph.dag.predecessors(node))
+        if not preds:
+            continue
+        in_shape = preds[0].shape
+        if base_feat_dim > 0 and len(in_shape) >= 2:
+            node.K = math.ceil(in_shape[1] / base_feat_dim)
+        else:
+            node.K = 1
+
+    def get_prev_compute(feature_node: FeatureNode) -> ComputeNode | None:
+        prev_compute_nodes = [p for p in graph.dag.predecessors(feature_node) if isinstance(p, ComputeNode)]
+        if not prev_compute_nodes:
+            return None
+        return prev_compute_nodes[0]
+
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode) or node.layer_type not in gamma_types + poly_types:
+            continue
+        preds = list(graph.dag.predecessors(node))
+        if not preds:
+            continue
+        prev_compute = get_prev_compute(preds[0])
+        if (
+            node.layer_type in gamma_types
+            and prev_compute is not None
+            and prev_compute.layer_type in ('parccmm', 'pdmccmm')
+        ):
+            node.K = 1
+        elif node.layer_type in poly_types and prev_compute is not None:
+            if prev_compute.layer_type in ('parccmm', 'pdmccmm'):
+                node.K = 1
+            elif prev_compute.layer_type in gamma_types:
+                prev_preds = list(graph.dag.predecessors(prev_compute))
+                if prev_preds:
+                    prev_prev_compute = get_prev_compute(prev_preds[0])
+                    if prev_prev_compute is not None and prev_prev_compute.layer_type in ('parccmm', 'pdmccmm'):
+                        node.K = 1

@@ -61,6 +61,15 @@ class SingleAct1d(nn.Module):
         return x
 
 
+class SingleGelu(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.gelu0 = nn.GELU()
+
+    def forward(self, x):
+        return self.gelu0(x)
+
+
 class SingleAvgpool2d(nn.Module):
     """AvgPool2d with configurable kernel_size, stride, and padding."""
 
@@ -143,6 +152,16 @@ class SingleAdd(nn.Module):
 
     def forward(self, x0, x1):
         return x0 + x1
+
+
+class SingleAddPt(nn.Module):
+    def __init__(self, rows=32, cols=64):
+        super().__init__()
+        bias = torch.linspace(-0.5, 0.5, steps=rows * cols, dtype=torch.float32).reshape(1, rows, cols)
+        self.register_buffer('bias', bias)
+
+    def forward(self, x):
+        return x + self.bias
 
 
 class ConvWithBatchNorms(nn.Module):
@@ -821,3 +840,77 @@ class SingleAdaptiveAvgpool1d(nn.Module):
 
     def forward(self, x):
         return self.pool(x)
+
+
+class QKVTest(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.qkv = nn.Linear(192, 1, False)
+
+    def forward(self, x):
+        return self.qkv(x)
+
+
+class PCMGammaTest(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.gamma = nn.Parameter(torch.ones(192))
+
+    def forward(self, x):
+        return x * self.gamma
+
+
+class TransposeTest(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return x.transpose(-2, -1)
+
+
+class CCMMTest(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x0, x1):
+        return x0 @ x1
+
+
+class HeadWiseAKTTest(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x0, x1):
+        return x0 @ x1.transpose(-2, -1)
+
+
+class CPMMSquareTest(nn.Module):
+    """Linear with output_dim == input_dim (SQUARE mode for par CPMM)."""
+
+    def __init__(self, dim=64):
+        super().__init__()
+        self.linear = nn.Linear(dim, dim, bias=False)
+
+    def forward(self, x):
+        return self.linear(x)
+
+
+class LayerNorm(nn.Module):
+    def __init__(self, normalized_shape=192):
+        super().__init__()
+        self.ln = nn.LayerNorm(normalized_shape)
+
+    def forward(self, x):
+        return self.ln(x)
+
+
+class LinearGelu(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.cpmm = nn.Linear(192, 384, False)
+        self.gelu = nn.GELU()
+
+    def forward(self, x):
+        cpmm_res = self.cpmm(x)
+        res = self.gelu(cpmm_res)
+        return res

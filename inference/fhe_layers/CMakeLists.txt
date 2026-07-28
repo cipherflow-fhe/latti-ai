@@ -20,16 +20,29 @@ add_library(fhe_layers
   poly_relu2d.cpp
   poly_relu1d.cpp
   poly_relu_base.cpp
+  mat_poly_base.cpp
   mult_scaler.cpp
   conv1d_packed_layer.cpp
   multiplexed_conv1d_pack_layer.cpp
   multiplexed_conv1d_depthwise_pack_layer.cpp
-  block_col_major_ccmm.cpp
-  block_col_major_cpmm.cpp
-  block_col_major_transpose.cpp
   par_block_col_major_transpose.cpp
   par_block_col_major_ccmm.cpp
   par_block_col_major_cpmm.cpp
+  par_lower_diag_pcmm.cpp
+  par_lower_diag_ccmm.cpp
+  par_lower_diag_transpose.cpp
+  par_block_col_major_add_pt.cpp
+  par_lower_diagonal_add_pt.cpp
+  block_col_major_layernorm.cpp
+  batch_dense_packed_layer.cpp
+  par_block_col_major_layernorm.cpp
+  par_upper_diagonal_layernorm.cpp
+  block_col_major_polyactrn.cpp
+  par_block_col_major_polyactrn.cpp
+  par_upper_diagonal_polyact.cpp
+  par_upper_diagonal_poly_mult_ct.cpp
+  par_upper_diagonal_poly.cpp
+  par_upper_diagonal_softmax.cpp
   ../data_structs/feature.cpp
   ../data_structs/feature1d.cpp
   ../data_structs/feature2d.cpp

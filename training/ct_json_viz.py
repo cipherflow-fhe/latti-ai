@@ -29,9 +29,10 @@ def main(input_filename, output_folder, output_name='graph.gv'):
     graph.attr(ranksep='0.2')
 
     for feature_id, feature_p in ct_json['feature'].items():
-        label_str = f'{feature_p["channel"]}'
+        channel = feature_p.get('channel', '')
+        label_str = f'{channel}' if channel != '' else ''
         if 'shape' in feature_p.keys():
-            label_str += f', {feature_p["shape"]}'
+            label_str += (', ' if label_str else '') + f'{feature_p["shape"]}'
         label_str += f', lv{feature_p["level"]}'
         feature_scale = float(feature_p['scale'])
         if abs(feature_scale - 1.0) > 0.00001:
@@ -43,6 +44,13 @@ def main(input_filename, output_folder, output_name='graph.gv'):
         scale = float(layer_p.get('weight_scale', 1.0))
         if abs(scale - 1.0) > 0.00001:
             label_str += f', scale:{scale:4g}'
+        if 'btp_scale' in layer_p:
+            label_str += f', btp_scale:{float(layer_p["btp_scale"]):4g}'
+        fuse_info = layer_p.get('fuse_gama_info') or layer_p.get('fuse_info') or {}
+        if fuse_info:
+            fuse_btp_scale = fuse_info[0].get('btp_scale', '')
+            if fuse_btp_scale != '':
+                label_str += f', fuse_btp_scale:{float(fuse_btp_scale):4g}'
         if layer_p['type'] in ('relu2d', 'maxpool', 'bootstrapping', 'mpc_refresh'):
             graph.node(name=layer_id, label=label_str, style='filled', fillcolor='cornflowerblue')
         elif layer_p['type'] == 'mult_scalar':

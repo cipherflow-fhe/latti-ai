@@ -42,6 +42,46 @@ from inference.model_generator.layers.poly_relu0d import *
 from inference.model_generator.layers.poly_relu1d import *
 from inference.model_generator.layers.poly_relu2d import *
 from inference.model_generator.layers.upsample_layer import *
+from inference.model_generator.layers.par_block_col_major_ccmm import ParBlockColMajorCCMM
+from inference.model_generator.layers.par_block_col_major_cpmm import ParBlockColMajorCPMM
+from inference.model_generator.layers.par_block_col_major_add_pt import ParBlockColMajorAddPt
+from inference.model_generator.layers.par_block_col_major_layernorm import (
+    ParBlockColMajorLNAffine,
+    ParBlockColMajorLNGoldschmidt,
+    ParBlockColMajorLNMinimaxInit,
+    ParBlockColMajorLNStats,
+    ParBlockColMajorLNXCentered,
+)
+from inference.model_generator.layers.par_block_col_major_polyactrn import (
+    ParBlockColMajorPolyActRNGamma,
+    ParBlockColMajorPolyActRNPoly,
+)
+from inference.model_generator.layers.par_block_col_major_transpose import ParBlockColMajorTranspose
+from inference.model_generator.layers.par_lower_diag_ccmm import ParLowerDiagCCMM
+from inference.model_generator.layers.par_lower_diag_pcmm import ParLowerDiagPCMM
+from inference.model_generator.layers.par_lower_diag_transpose import ParLowerDiagTranspose
+from inference.model_generator.layers.par_lower_diagonal_add_pt import ParLowerDiagonalAddPt
+from inference.model_generator.layers.par_upper_diagonal_layernorm import (
+    ParUpperDiagonalLNAffine,
+    ParUpperDiagonalLNGoldschmidt,
+    ParUpperDiagonalLNMinimaxInit,
+    ParUpperDiagonalLNStats,
+    ParUpperDiagonalLNXCentered,
+)
+from inference.model_generator.layers.par_upper_diagonal_polyact import (
+    ParUpperDiagonalPolyActRNGamma,
+    ParUpperDiagonalPolyActRNPoly,
+)
+from inference.model_generator.layers.par_upper_diagonal_poly import ParUpperDiagonalPoly
+from inference.model_generator.layers.par_upper_diagonal_poly_mult_ct import ParUpperDiagonalPolyMultCt
+from inference.model_generator.layers.par_upper_diagonal_softmax import (
+    ParUpperDiagonalAddPt,
+    ParUpperDiagonalGELU,
+    ParUpperDiagonalHeadColSum,
+    ParUpperDiagonalInverseInit,
+    ParUpperDiagonalInverseIter,
+    ParUpperDiagonalMultipleSquare,
+)
 from training.model_compiler.components import (
     N16QP1546H192H32,
     PN13QP218,
@@ -73,7 +113,12 @@ def set_param(param_name):
     if param_name == 'N16QP1546H192H32':
         param = CkksBtpParam.create_default_param()
     else:
-        param = CkksParam.create_custom_param(n=fhe.poly_modulus_degree, p=fhe.p, q=fhe.q)
+        param = CkksParam.create_custom_param(
+            n=fhe.poly_modulus_degree,
+            q=fhe.q,
+            p=fhe.p,
+            scale=1 << fhe.log_default_scale,
+        )
     set_fhe_param(param)
 
 
@@ -88,7 +133,281 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     config_info = read_config(os.path.join(task_path, 'nn_layers_ct_0.json'))
     input_args = list()
     feature_id_to_nodes_map = {}
+    par_feature_shapes = {}
+    pdm_feature_head_shapes = {}
     task_output_feature_ids = config_info['output_feature']
+    feature_consumers = {}
+    for consumer_layer_id, lyr in config_info['layer'].items():
+        for fid in lyr.get('feature_input', []):
+            feature_consumers.setdefault(fid, []).append((consumer_layer_id, lyr))
+
+    def _require_positive_task_config_int(field_name, layer_id, layer_type):
+        if field_name not in task_config_info:
+            raise ValueError(f"Layer '{layer_id}' ({layer_type}) requires '{field_name}' in task_config.json")
+        try:
+            value = int(task_config_info[field_name])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Layer '{layer_id}' ({layer_type}) requires positive integer '{field_name}' in task_config.json, "
+                f'got {task_config_info[field_name]!r}'
+            ) from exc
+        if value <= 0:
+            raise ValueError(
+                f"Layer '{layer_id}' ({layer_type}) requires positive '{field_name}' in task_config.json, got {value}"
+            )
+        return value
+
+    def _matmul_block_size():
+        return _require_positive_task_config_int('matmul_block_size', 'par block-col-major', 'task')
+
+    def _par_input_shape(feat, n_heads, split_rows=False, feature_id=None):
+        if 'head_shape' in feat:
+            return tuple(feat['head_shape'])
+        if feat.get('data_type') == 'feature_mat':
+            name = f" '{feature_id}'" if feature_id is not None else ''
+            raise ValueError(f'feature_mat{name} must define head_shape for par block-col-major layers')
+        rows, cols = feat['shape']
+        rows_per_head = rows // n_heads if split_rows else rows
+        return (rows_per_head, cols // n_heads)
+
+    def _par_ct_count(shape_per_head, block_size, G):
+        return math.ceil(shape_per_head[0] / block_size) * math.ceil(shape_per_head[1] / block_size) * G
+
+    def _par_group_count(block_size, n_heads, n_slot):
+        n_h_padded = 1
+        while n_h_padded < n_heads:
+            n_h_padded <<= 1
+        if n_slot >= n_h_padded * block_size * block_size:
+            return 1
+        S = n_slot // (block_size * block_size)
+        if S == 1:
+            n_h_padded = n_heads
+        return n_h_padded // S
+
+    def _feature_mat_ct_info(feat, n_heads, n_slot, split_rows=False, block_size=None, feature_id=None):
+        shape_per_head = _par_input_shape(feat, n_heads, split_rows=split_rows, feature_id=feature_id)
+        block_size = int(block_size or _matmul_block_size())
+        G = _par_group_count(block_size, n_heads, n_slot)
+        return shape_per_head, block_size, G, _par_ct_count(shape_per_head, block_size, G)
+
+    def _head_dim(layer_id, layer_type):
+        return _require_positive_task_config_int('head_dim', layer_id, layer_type)
+
+    def _normalize_pdm_head_shape(head_shape):
+        head_shape = tuple(int(v) for v in head_shape)
+        if len(head_shape) != 2:
+            return head_shape
+        if task_config_info.get('mat_pack_style') != 'par_diagonal_pack':
+            return head_shape
+        try:
+            head_dim = int(task_config_info.get('head_dim', 0))
+        except (TypeError, ValueError):
+            return head_shape
+        if head_dim > 0 and head_shape[0] == head_dim and head_shape[1] != head_dim:
+            return (head_shape[1], head_shape[0])
+        return head_shape
+
+    def _pdm_head_shape(feat, feature_id, layer_id, layer_type):
+        if feature_id in pdm_feature_head_shapes:
+            return pdm_feature_head_shapes[feature_id]
+        if 'head_shape' not in feat:
+            raise ValueError(f"feature_mat '{feature_id}' must define head_shape for {layer_type} layer '{layer_id}'")
+        head_shape = _normalize_pdm_head_shape(feat['head_shape'])
+        if len(head_shape) != 2 or head_shape[0] <= 0 or head_shape[1] <= 0:
+            raise ValueError(
+                f"feature_mat '{feature_id}' has invalid head_shape for {layer_type} layer '{layer_id}': "
+                f'{feat["head_shape"]!r}'
+            )
+        pdm_feature_head_shapes[feature_id] = head_shape
+        return head_shape
+
+    def _register_feature_nodes(feature_id, count, level):
+        count = int(count)
+        if count <= 0:
+            raise ValueError(f"feature '{feature_id}' requires positive ciphertext count, got {count}")
+        if feature_id in feature_id_to_nodes_map:
+            nodes = feature_id_to_nodes_map[feature_id]
+            if len(nodes) != count:
+                raise ValueError(
+                    f"feature '{feature_id}' is already registered with {len(nodes)} ciphertexts, expected {count}"
+                )
+            return nodes
+        nodes = [CkksCiphertextNode(feature_id + f'input{k}', level=level) for k in range(count)]
+        feature_id_to_nodes_map[feature_id] = nodes
+        input_args.append(Argument(feature_id, nodes))
+        return nodes
+
+    def _remember_pdm_output_head_shape(feature_id):
+        feat = config_info['feature'][feature_id]
+        if 'head_shape' in feat:
+            pdm_feature_head_shapes[feature_id] = _normalize_pdm_head_shape(feat['head_shape'])
+
+    def _pdm_upper_layer(layer_type, shape, head_shape, n_heads, layer_id, layer_config):
+        if layer_type == 'pdmstats':
+            return ParUpperDiagonalLNStats(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdmcenter':
+            return ParUpperDiagonalLNXCentered(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdminit':
+            return ParUpperDiagonalLNMinimaxInit(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdmgs':
+            return ParUpperDiagonalLNGoldschmidt(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdmaffine':
+            return ParUpperDiagonalLNAffine(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdmgamma':
+            return ParUpperDiagonalPolyActRNGamma(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdmpoly':
+            degree = int(layer_config.get('degree', layer_config.get('order', 2)))
+            if degree not in (2, 4):
+                raise ValueError(f"pdmpoly layer '{layer_id}' only supports degree 2 or 4, got {degree}")
+            return ParUpperDiagonalPolyActRNPoly(shape, head_shape, n_heads, n // 2, degree)
+        if layer_type == 'pdmupperaddpt':
+            return ParUpperDiagonalAddPt(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdmupperpoly':
+            return ParUpperDiagonalPoly(shape, head_shape, n_heads, n // 2, int(layer_config.get('order', 15)))
+        if layer_type == 'pdmmulsquare':
+            return ParUpperDiagonalMultipleSquare(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdmheadcolsum':
+            return ParUpperDiagonalHeadColSum(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdminvinit':
+            return ParUpperDiagonalInverseInit(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdminviter':
+            return ParUpperDiagonalInverseIter(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdmctmul':
+            return ParUpperDiagonalGELU(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdmupperpolymultct':
+            return ParUpperDiagonalPolyMultCt(shape, head_shape, n_heads, n // 2)
+        raise ValueError(f'Unsupported PDM upper layer type: {layer_type}')
+
+    def _pdm_upper_shape(feat, head_shape):
+        return (head_shape[0], int(feat['shape'][0]))
+
+    def _pdm_lower_shape_and_head(feat, feature_id, layer_id, layer_type):
+        head_shape = _pdm_head_shape(feat, feature_id, layer_id, layer_type)
+        return (int(feat['shape'][0]), head_shape[0]), (head_shape[1], head_shape[0])
+
+    def _pdm_transpose_shape(feat, feature_id, layer_id, layer_type):
+        head_shape = _pdm_head_shape(feat, feature_id, layer_id, layer_type)
+        return (head_shape[1], head_shape[0])
+
+    def _pdm_single_input_total_ct_layer(layer_type, feat, feature_id, layer_id, layer_config):
+        n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_type)
+        head_shape = _pdm_head_shape(feat, feature_id, layer_id, layer_type)
+        if layer_type == 'pdm_add_pt':
+            shape, lower_head_shape = _pdm_lower_shape_and_head(feat, feature_id, layer_id, layer_type)
+            return ParLowerDiagonalAddPt(shape, lower_head_shape, n_heads, n // 2)
+        return _pdm_upper_layer(
+            layer_type, _pdm_upper_shape(feat, head_shape), head_shape, n_heads, layer_id, layer_config
+        )
+
+    def _pdm_feature_ct_count(feat, feature_id, layer_id, layer_type):
+        n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_type)
+        head_shape = _pdm_head_shape(feat, feature_id, layer_id, layer_type)
+        layer = ParUpperDiagonalPolyActRNGamma(_pdm_upper_shape(feat, head_shape), head_shape, n_heads, n // 2)
+        return layer.total_cts
+
+    def _pdmpcmm_shapes(layer_config, feat_in, feat_out, input_fid, layer_id):
+        head_shape = _pdm_head_shape(feat_in, input_fid, layer_id, layer_config['type'])
+        weight_shape = layer_config.get('weight_shape')
+        if weight_shape:
+            W_T_shape = tuple(int(v) for v in weight_shape)
+            if len(W_T_shape) != 2 or W_T_shape[0] <= 0 or W_T_shape[1] <= 0:
+                raise ValueError(f"pdmpcmm layer '{layer_id}' has invalid weight_shape: {weight_shape!r}")
+        else:
+            W_T_shape = (int(feat_out['shape'][0]), int(feat_in['shape'][0]))
+        shape_X_T = (W_T_shape[1], head_shape[0])
+        return shape_X_T, W_T_shape
+
+    def _make_pdmccmm_layer(layer_id, layer_type, fid0, fid1, feat0, feat1, n_heads):
+        head0 = _pdm_head_shape(feat0, fid0, layer_id, layer_type)
+        head1 = _pdm_head_shape(feat1, fid1, layer_id, layer_type)
+        lower0 = (head0[1], head0[0])
+        lower1 = (head1[1], head1[0])
+        candidates = [
+            (fid0, head0, fid1, head1),
+            (fid1, head1, fid0, head0),
+            (fid0, lower0, fid1, head1),
+            (fid1, lower1, fid0, head0),
+            (fid0, head0, fid1, lower1),
+            (fid1, head1, fid0, lower0),
+            (fid0, lower0, fid1, lower1),
+            (fid1, lower1, fid0, lower0),
+        ]
+        errors = []
+        for fid_A, shape_A, fid_B, shape_B in candidates:
+            try:
+                layer = ParLowerDiagCCMM(shape_A, shape_B, n_heads, _head_dim(layer_id, layer_type), n // 2)
+                return layer, fid_A, fid_B
+            except (AssertionError, ValueError) as exc:
+                errors.append(f'{shape_A} @ {shape_B}: {exc}')
+        raise ValueError(f"pdmccmm layer '{layer_id}' has unsupported input head shapes: {errors}")
+
+    def _pdm_consumer_input_ct_count(feature_id, consumer_layer_id, consumer):
+        consumer_type = consumer['type']
+        feat = config_info['feature'][feature_id]
+        n_heads = _require_positive_task_config_int('n_heads', consumer_layer_id, consumer_type)
+        if consumer_type == 'pdmtranspose':
+            shape = _pdm_transpose_shape(feat, feature_id, consumer_layer_id, consumer_type)
+            layer = ParLowerDiagTranspose(shape, n_heads, _head_dim(consumer_layer_id, consumer_type), n // 2)
+            return layer.m_c
+        if consumer_type == 'pdmpcmm':
+            feat_out = config_info['feature'][consumer['feature_output'][0]]
+            shape_X_T, W_T_shape = _pdmpcmm_shapes(consumer, feat, feat_out, feature_id, consumer_layer_id)
+            layer = ParLowerDiagPCMM(
+                shape_X_T,
+                W_T_shape,
+                n_heads,
+                _head_dim(consumer_layer_id, consumer_type),
+                n // 2,
+                has_bias='bias_path' in consumer,
+            )
+            return layer.K_col * layer.m_c
+        if consumer_type == 'pdmccmm':
+            fid0, fid1 = consumer['feature_input'][:2]
+            feat0 = config_info['feature'][fid0]
+            feat1 = config_info['feature'][fid1]
+            layer, fid_A, fid_B = _make_pdmccmm_layer(
+                consumer_layer_id, consumer_type, fid0, fid1, feat0, feat1, n_heads
+            )
+            if feature_id == fid_A:
+                return layer.m_c
+            if feature_id == fid_B:
+                return layer.m_c if layer.is_kqt else layer.n_c
+            return None
+        if consumer_type in {
+            'pdm_add_pt',
+            'pdmstats',
+            'pdmcenter',
+            'pdminit',
+            'pdmgs',
+            'pdmaffine',
+            'pdmgamma',
+            'pdmpoly',
+            'pdmupperaddpt',
+            'pdmupperpoly',
+            'pdmmulsquare',
+            'pdmheadcolsum',
+            'pdminvinit',
+        }:
+            return _pdm_single_input_total_ct_layer(
+                consumer_type, feat, feature_id, consumer_layer_id, consumer
+            ).total_cts
+        if consumer_type in {'pdminviter', 'pdmctmul', 'pdmupperpolymultct'}:
+            return _pdm_single_input_total_ct_layer(
+                consumer_type, feat, feature_id, consumer_layer_id, consumer
+            ).total_cts
+        if consumer_type in {'add', 'add2d'}:
+            return _pdm_feature_ct_count(feat, feature_id, consumer_layer_id, consumer_type)
+        return None
+
+    def _pdm_consumed_ct_count(feature_id, default_count):
+        counts = []
+        for consumer_layer_id, consumer in feature_consumers.get(feature_id, []):
+            count = _pdm_consumer_input_ct_count(feature_id, consumer_layer_id, consumer)
+            if count is not None:
+                counts.append(int(count))
+        if not counts:
+            return default_count
+        return max(counts)
 
     # Pre-add all graph-level input ciphertexts first so they precede weights in input_args.
     # This ensures the C++ signature position-matching works correctly for multi-input models.
@@ -96,78 +415,219 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     # correctly by the lazy-loading in the main loop (which also computes the right CT count
     # for big_size layers).
     if len(config_info['input_feature']) > 1:
-        # First-use lookup: {input_fid: first consumer layer config}
+        # First-use lookup: {input_fid: (first consumer layer id, first consumer layer config)}
         first_use = {}
-        for lyr in config_info['layer'].values():
+        for consumer_layer_id, lyr in config_info['layer'].items():
             for fid in lyr.get('feature_input', []):
                 if fid in config_info['input_feature'] and fid not in first_use:
-                    first_use[fid] = lyr
+                    first_use[fid] = (consumer_layer_id, lyr)
 
         for input_fid in config_info['input_feature']:
             feat = config_info['feature'][input_fid]
-            pack = int(feat['pack_num'])
             level = int(feat['level'])
-            n_in_channel_fid = int(feat['channel'])
-            n_packed = math.ceil(n_in_channel_fid / pack)
-            # Mirror the big_size expansion logic from the per-layer loop below:
-            # big_size conv2d / avgpool / mult_scalar consume inputs as
-            #   n_in_channel * block_expansion[0] * block_expansion[1]
-            # ciphertexts, not the default ceil(channel / pack_num).
-            consumer = first_use.get(input_fid)
-            if (
-                consumer is not None
-                and consumer.get('is_big_size', False)
-                and (consumer['type'] == 'conv2d' or 'avgpool' in consumer['type'] or consumer['type'] == 'mult_scalar')
-            ):
-                input_shape = feat['shape']
-                be0 = math.ceil(input_shape[0] / block_shape[0])
-                be1 = math.ceil(input_shape[1] / block_shape[1])
-                n_packed = n_in_channel_fid * be0 * be1
-            x = [CkksCiphertextNode(input_fid + f'input{k}', level=level) for k in range(n_packed)]
-            feature_id_to_nodes_map[input_fid] = x
-            input_args.append(Argument(input_fid, x))
+            consumer_info = first_use.get(input_fid)
+            consumer_layer_id = None
+            consumer = None
+            if consumer_info is not None:
+                consumer_layer_id, consumer = consumer_info
+            if feat.get('data_type') == 'feature_mat':
+                if consumer is None:
+                    continue
+                consumer_type = consumer['type']
+                n_heads = _require_positive_task_config_int('n_heads', consumer_layer_id, consumer_type)
+                if consumer_type in {'partranspose', 'parccmm', 'parcpmm'} and n_heads <= 1:
+                    raise ValueError(f"feature_mat input '{input_fid}' only supports par matrix ops with n_heads > 1")
+                if consumer_type == 'partranspose':
+                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=False, feature_id=input_fid)
+                    par_feature_shapes[input_fid] = shape_per_head
+                    block_size = _matmul_block_size()
+                    G = _par_group_count(block_size, n_heads, n // 2)
+                    n_packed = _par_ct_count(shape_per_head, block_size, G)
+                elif consumer_type == 'parccmm':
+                    idx = consumer['feature_input'].index(input_fid)
+                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=(idx == 1), feature_id=input_fid)
+                    par_feature_shapes[input_fid] = shape_per_head
+                    block_size = _matmul_block_size()
+                    G = _par_group_count(block_size, n_heads, n // 2)
+                    n_packed = _par_ct_count(shape_per_head, block_size, G)
+                elif consumer_type == 'parcpmm':
+                    shape_per_head = _par_input_shape(feat, n_heads, split_rows=False, feature_id=input_fid)
+                    par_feature_shapes[input_fid] = shape_per_head
+                    block_size = _matmul_block_size()
+                    if shape_per_head[1] > block_size:
+                        raise ValueError(f"parcpmm input '{input_fid}' per-head width exceeds matmul_block_size")
+                    G = _par_group_count(block_size, n_heads, n // 2)
+                    n_packed = math.ceil(shape_per_head[0] / block_size) * G
+                elif consumer_type == 'pdmtranspose':
+                    shape = _pdm_transpose_shape(feat, input_fid, consumer_layer_id, consumer_type)
+                    layer = ParLowerDiagTranspose(shape, n_heads, _head_dim(consumer_layer_id, consumer_type), n // 2)
+                    n_packed = layer.m_c
+                elif consumer_type == 'pdmpcmm':
+                    feat_out = config_info['feature'][consumer['feature_output'][0]]
+                    shape_X_T, W_T_shape = _pdmpcmm_shapes(consumer, feat, feat_out, input_fid, consumer_layer_id)
+                    layer = ParLowerDiagPCMM(
+                        shape_X_T,
+                        W_T_shape,
+                        n_heads,
+                        _head_dim(consumer_layer_id, consumer_type),
+                        n // 2,
+                        has_bias='bias_path' in consumer,
+                    )
+                    n_packed = layer.K_col * layer.m_c
+                elif consumer_type == 'pdmccmm':
+                    fid0, fid1 = consumer['feature_input'][:2]
+                    feat0 = config_info['feature'][fid0]
+                    feat1 = config_info['feature'][fid1]
+                    layer, fid_A, fid_B = _make_pdmccmm_layer(
+                        consumer_layer_id,
+                        consumer_type,
+                        fid0,
+                        fid1,
+                        feat0,
+                        feat1,
+                        n_heads,
+                    )
+                    if input_fid == fid_A:
+                        n_packed = layer.m_c
+                    elif input_fid == fid_B:
+                        n_packed = layer.m_c if layer.is_kqt else layer.n_c
+                    else:
+                        raise ValueError(f"pdmccmm layer '{consumer_layer_id}' does not consume input '{input_fid}'")
+                elif consumer_type in {
+                    'pdm_add_pt',
+                    'pdmstats',
+                    'pdmcenter',
+                    'pdminit',
+                    'pdmgs',
+                    'pdmaffine',
+                    'pdmgamma',
+                    'pdmpoly',
+                    'pdmupperaddpt',
+                    'pdmupperpoly',
+                    'pdmmulsquare',
+                    'pdmheadcolsum',
+                    'pdminvinit',
+                    'pdminviter',
+                    'pdmctmul',
+                    'pdmupperpolymultct',
+                }:
+                    layer = _pdm_single_input_total_ct_layer(
+                        consumer_type, feat, input_fid, consumer_layer_id, consumer
+                    )
+                    n_packed = layer.total_cts
+                elif consumer_type in {'pcmstats', 'pcmcenter', 'pcmgamma', 'pcmpoly', 'add', 'add2d', 'pcm_add_pt'}:
+                    shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n // 2, feature_id=input_fid)
+                    par_feature_shapes[input_fid] = shape_per_head
+                else:
+                    raise ValueError(
+                        f"feature_mat input '{input_fid}' is consumed by unsupported matrix layer "
+                        f"'{consumer_type}'; use parcpmm/parccmm/partranspose, pdmpcmm/pdmccmm/pdmtranspose, "
+                        'PCM/PDM stages, or add2d'
+                    )
+            else:
+                pack = int(feat['pack_num'])
+                n_in_channel_fid = int(feat['channel'])
+                n_packed = math.ceil(n_in_channel_fid / pack)
+                # Mirror the big_size expansion logic from the per-layer loop below:
+                # big_size conv2d / avgpool / mult_scalar (2D only) consume inputs as
+                #   n_in_channel * block_expansion[0] * block_expansion[1]
+                # ciphertexts, not the default ceil(channel / pack_num).
+                if (
+                    consumer is not None
+                    and consumer.get('is_big_size', False)
+                    and feat.get('dim', 2) == 2
+                    and (
+                        consumer['type'] == 'conv2d'
+                        or 'avgpool' in consumer['type']
+                        or consumer['type'] == 'mult_scalar'
+                    )
+                ):
+                    input_shape = feat['shape']
+                    be0 = math.ceil(input_shape[0] / block_shape[0])
+                    be1 = math.ceil(input_shape[1] / block_shape[1])
+                    n_packed = n_in_channel_fid * be0 * be1
+            _register_feature_nodes(input_fid, n_packed, level)
+
+    _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose', 'pcm_add_pt'}
+    _PCM_LAYER_TYPES = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine', 'pcmgamma', 'pcmpoly'}
+    _PDM_MATRIX_LAYER_TYPES = {'pdmpcmm', 'pdmccmm', 'pdmtranspose', 'pdm_add_pt'}
+    _PDM_LAYER_TYPES = {
+        'pdmstats',
+        'pdmcenter',
+        'pdminit',
+        'pdmgs',
+        'pdmaffine',
+        'pdmgamma',
+        'pdmpoly',
+        'pdmupperaddpt',
+        'pdmupperpoly',
+        'pdmmulsquare',
+        'pdmheadcolsum',
+        'pdminvinit',
+        'pdminviter',
+        'pdmctmul',
+        'pdmupperpolymultct',
+    }
+    _FEATURE_MAT_LAYER_TYPES = _PAR_MATRIX_LAYER_TYPES | _PCM_LAYER_TYPES | _PDM_MATRIX_LAYER_TYPES | _PDM_LAYER_TYPES
+    _UNSUPPORTED_MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose'}
 
     for layer_id, layer_config in config_info['layer'].items():
         if layer_config['type'] == 'relu2d':
             continue
         layer_input_feature_ids = layer_config['feature_input']
         layer_output_feature_ids = layer_config['feature_output']
-        groups = 1
-        n_in_channel = int(layer_config['channel_input'])
-        n_out_channel = int(layer_config['channel_output'])
 
-        skip = config_info['feature'][layer_input_feature_ids[0]]['skip']
-        pack = int(config_info['feature'][layer_input_feature_ids[0]]['pack_num'])
-        level = int(config_info['feature'][layer_input_feature_ids[0]]['level'])
-        n_packed_in_channel = math.ceil(n_in_channel / pack)
-        n_packed_out_channel = math.ceil(n_out_channel / pack)
-
-        # For big_conv/big_avgpool/big_mult_scalar, input CT count differs from the default n_packed_in_channel
-        if (
-            layer_config['type'] == 'conv2d'
-            or 'avgpool' in layer_config['type']
-            or layer_config['type'] == 'mult_scalar'
-        ) and layer_config.get('is_big_size', False):
-            input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
-            block_expansion = (
-                math.ceil(input_shape[0] / block_shape[0]),
-                math.ceil(input_shape[1] / block_shape[1]),
+        # Matrix layer types have no channel_input/skip/pack. Non-par matrix ops are unsupported;
+        # par input registration is deferred to their own elif branches below.
+        if layer_config['type'] in _UNSUPPORTED_MATRIX_LAYER_TYPES:
+            raise ValueError(
+                f"Layer '{layer_id}' has unsupported non-par matrix type '{layer_config['type']}'; "
+                'use parcpmm/parccmm/partranspose or pdmpcmm/pdmccmm/pdmtranspose'
             )
-            n_packed_in_channel = n_in_channel * block_expansion[0] * block_expansion[1]
+        input_feat0 = config_info['feature'][layer_input_feature_ids[0]]
+        if layer_config['type'] in _FEATURE_MAT_LAYER_TYPES or input_feat0.get('data_type') == 'feature_mat':
+            level = int(input_feat0['level'])
+        else:
+            groups = 1
+            n_in_channel = int(layer_config['channel_input'])
+            n_out_channel = int(layer_config['channel_output'])
 
-        if layer_config['type'] == 'conv1d':
-            _input_shape_1d = config_info['feature'][layer_input_feature_ids[0]]['shape'][0]
-            _skip_1d = skip[0] if isinstance(skip, list) else skip
-            if style == 'multiplexed':
-                n_packed_in_channel = math.ceil(n_in_channel / math.ceil(n // 2 / _input_shape_1d))
-            else:
-                n_packed_in_channel = math.ceil(n_in_channel / int(n // 2 // _input_shape_1d // _skip_1d))
+            skip = input_feat0['skip']
+            pack = int(input_feat0['pack_num'])
+            level = int(input_feat0['level'])
+            n_packed_in_channel = math.ceil(n_in_channel / pack)
+            n_packed_out_channel = math.ceil(n_out_channel / pack)
 
-        for input_node in layer_input_feature_ids:
-            if input_node not in feature_id_to_nodes_map.keys():
-                x = [CkksCiphertextNode(input_node + f'input{k}', level=level) for k in range(n_packed_in_channel)]
-                feature_id_to_nodes_map.update({input_node: x})
-                input_args.append(Argument(input_node, x))
+            # For big_conv/big_avgpool/big_mult_scalar (2D only)
+            if (
+                (
+                    layer_config['type'] == 'conv2d'
+                    or 'avgpool' in layer_config['type']
+                    or layer_config['type'] == 'mult_scalar'
+                )
+                and layer_config.get('is_big_size', False)
+                and config_info['feature'][layer_input_feature_ids[0]].get('dim', 2) == 2
+            ):
+                input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
+                block_expansion = (
+                    math.ceil(input_shape[0] / block_shape[0]),
+                    math.ceil(input_shape[1] / block_shape[1]),
+                )
+                n_packed_in_channel = n_in_channel * block_expansion[0] * block_expansion[1]
+
+            if layer_config['type'] == 'conv1d':
+                _input_shape_1d = config_info['feature'][layer_input_feature_ids[0]]['shape'][0]
+                _skip_1d = skip[0] if isinstance(skip, list) else skip
+                if style == 'multiplexed':
+                    n_packed_in_channel = math.ceil(n_in_channel / math.ceil(n // 2 / _input_shape_1d))
+                else:
+                    n_packed_in_channel = math.ceil(n_in_channel / int(n // 2 // _input_shape_1d // _skip_1d))
+
+            for input_node in layer_input_feature_ids:
+                if input_node not in feature_id_to_nodes_map.keys():
+                    x = [CkksCiphertextNode(input_node + f'input{k}', level=level) for k in range(n_packed_in_channel)]
+                    feature_id_to_nodes_map.update({input_node: x})
+                    input_args.append(Argument(input_node, x))
 
         if layer_config['type'] == 'reshape':
             layer_output_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
@@ -516,13 +976,25 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             )
 
         elif layer_config['type'] == 'drop_level':
-            level_in = config_info['feature'][layer_input_feature_ids[0]]['level']
-            level_out = config_info['feature'][layer_output_feature_ids[0]]['level']
+            input_fid = layer_input_feature_ids[0]
+            output_fid = layer_output_feature_ids[0]
+            level_in = config_info['feature'][input_fid]['level']
+            level_out = config_info['feature'][output_fid]['level']
             drop_level_n = level_in - level_out
-            layer_output_nodes = [
-                drop_level(node, drop_level_n) for node in feature_id_to_nodes_map[layer_input_feature_ids[0]]
-            ]
-            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+            input_nodes = feature_id_to_nodes_map[input_fid]
+            if (
+                task_config_info.get('mat_pack_style') == 'par_diagonal_pack'
+                and config_info['feature'][output_fid].get('data_type') == 'feature_mat'
+            ):
+                consumed_count = _pdm_consumed_ct_count(output_fid, len(input_nodes))
+                if consumed_count > len(input_nodes):
+                    raise ValueError(
+                        f"drop_level layer '{layer_id}' output '{output_fid}' needs {consumed_count} ciphertexts, "
+                        f'but input has only {len(input_nodes)}'
+                    )
+                input_nodes = input_nodes[:consumed_count]
+            layer_output_nodes = [drop_level(node, drop_level_n) for node in input_nodes]
+            feature_id_to_nodes_map.update({output_fid: layer_output_nodes})
 
         elif layer_config['type'] == 'bootstrapping':
             layer_output_nodes = []
@@ -533,13 +1005,66 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif layer_config['type'] in ('add', 'add2d'):
-            layer_output_nodes = [
-                add(
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]][i],
-                    feature_id_to_nodes_map[layer_input_feature_ids[1]][i],
+            is_feature_mat_add = any(
+                config_info['feature'][fid].get('data_type') == 'feature_mat' for fid in layer_input_feature_ids
+            )
+            if is_feature_mat_add:
+                if not all(
+                    config_info['feature'][fid].get('data_type') == 'feature_mat' for fid in layer_input_feature_ids
+                ):
+                    raise ValueError('feature_mat add expects all inputs to be feature_mat')
+                n_heads = task_config_info.get('n_heads', 1)
+                if n_heads <= 1:
+                    raise ValueError('feature_mat add expects matrix-packed inputs with n_heads > 1')
+
+                is_pdm_add = task_config_info.get('mat_pack_style') == 'par_diagonal_pack'
+                block_size = None if is_pdm_add else _matmul_block_size()
+                shape_per_head = None
+                if not is_pdm_add:
+                    shape_per_head = par_feature_shapes.get(layer_input_feature_ids[0])
+                    if shape_per_head is None:
+                        shape_per_head, _, _, _ = _feature_mat_ct_info(
+                            input_feat0, n_heads, n // 2, feature_id=layer_input_feature_ids[0]
+                        )
+                        par_feature_shapes[layer_input_feature_ids[0]] = shape_per_head
+
+                for input_fid in layer_input_feature_ids:
+                    if input_fid not in feature_id_to_nodes_map:
+                        feat = config_info['feature'][input_fid]
+                        if is_pdm_add:
+                            n_cts = _pdm_feature_ct_count(feat, input_fid, layer_id, layer_config['type'])
+                            _register_feature_nodes(input_fid, n_cts, int(feat['level']))
+                        else:
+                            input_shape, _, _, n_cts = _feature_mat_ct_info(
+                                feat, n_heads, n // 2, block_size=block_size, feature_id=input_fid
+                            )
+                            par_feature_shapes[input_fid] = input_shape
+                            _register_feature_nodes(input_fid, n_cts, int(feat['level']))
+
+                lhs = feature_id_to_nodes_map[layer_input_feature_ids[0]]
+                rhs = feature_id_to_nodes_map[layer_input_feature_ids[1]]
+                if len(lhs) == len(rhs):
+                    add_layer = AddLayer()
+                    layer_output_nodes = add_layer.call(lhs, rhs)
+                elif is_pdm_add and len(lhs) > len(rhs) and len(lhs) % len(rhs) == 0:
+                    layer_output_nodes = [add(ct, rhs[i % len(rhs)]) for i, ct in enumerate(lhs)]
+                elif is_pdm_add and len(rhs) > len(lhs) and len(rhs) % len(lhs) == 0:
+                    layer_output_nodes = [add(lhs[i % len(lhs)], ct) for i, ct in enumerate(rhs)]
+                else:
+                    raise ValueError(
+                        f"feature_mat add layer '{layer_id}' input ciphertext counts do not match: "
+                        f'{len(lhs)} vs {len(rhs)}'
+                    )
+                if is_pdm_add:
+                    _remember_pdm_output_head_shape(layer_output_feature_ids[0])
+                else:
+                    par_feature_shapes[layer_output_feature_ids[0]] = shape_per_head
+            else:
+                add_layer = AddLayer()
+                layer_output_nodes = add_layer.call(
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                    feature_id_to_nodes_map[layer_input_feature_ids[1]],
                 )
-                for i in range(len(feature_id_to_nodes_map[layer_input_feature_ids[0]]))
-            ]
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif 'concat2d' in layer_config['type']:
@@ -841,6 +1366,424 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                             feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, n
                         )
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+
+        elif layer_config['type'] == 'partranspose':
+            n_heads = task_config_info.get('n_heads', 1)
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            shape_per_head = par_feature_shapes.get(input_fid)
+            if shape_per_head is None:
+                shape_per_head = _par_input_shape(feat_in, n_heads, split_rows=False, feature_id=input_fid)
+                par_feature_shapes[input_fid] = shape_per_head
+            block_size = _matmul_block_size()
+
+            partranspose_layer = ParBlockColMajorTranspose(shape_per_head, block_size, n_heads, n // 2)
+            G = partranspose_layer.G
+            n_cts_in = partranspose_layer.num_blocks * G
+
+            # Register par-type input (deferred from the top of the loop)
+            if input_fid not in feature_id_to_nodes_map:
+                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='partranspose_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = partranspose_layer.call_custom_compute(
+                feature_id_to_nodes_map[input_fid],
+                data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape_per_head[1], shape_per_head[0])
+
+        elif layer_config['type'] == 'pcm_add_pt':
+            n_heads = task_config_info.get('n_heads', 1)
+            feat_in = config_info['feature'][layer_input_feature_ids[0]]
+            shape_full = tuple(feat_in['shape'])
+            block_size = _matmul_block_size()
+
+            add_pt_layer = ParBlockColMajorAddPt(shape_full, block_size, n_heads, n // 2)
+
+            n_cts_in = add_pt_layer.total_cts
+
+            input_fid = layer_input_feature_ids[0]
+            if input_fid not in feature_id_to_nodes_map:
+                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='pcm_add_pt_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = add_pt_layer.call_custom_compute(
+                feature_id_to_nodes_map[input_fid],
+                data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+
+        elif layer_config['type'] == 'pdmtranspose':
+            n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_config['type'])
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            shape = _pdm_transpose_shape(feat_in, input_fid, layer_id, layer_config['type'])
+            layer = ParLowerDiagTranspose(shape, n_heads, _head_dim(layer_id, layer_config['type']), n // 2)
+
+            if input_fid not in feature_id_to_nodes_map:
+                _register_feature_nodes(input_fid, layer.m_c, level)
+
+            data_source = CustomDataNode(type='pdmtranspose_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            _remember_pdm_output_head_shape(layer_output_feature_ids[0])
+
+        elif layer_config['type'] == 'pdm_add_pt':
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            layer = _pdm_single_input_total_ct_layer(layer_config['type'], feat_in, input_fid, layer_id, layer_config)
+
+            if input_fid not in feature_id_to_nodes_map:
+                _register_feature_nodes(input_fid, layer.total_cts, level)
+
+            data_source = CustomDataNode(type='pdm_add_pt_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            _remember_pdm_output_head_shape(layer_output_feature_ids[0])
+
+        elif layer_config['type'] == 'pdmpcmm':
+            n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_config['type'])
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            feat_out = config_info['feature'][layer_output_feature_ids[0]]
+            shape_X_T, W_T_shape = _pdmpcmm_shapes(layer_config, feat_in, feat_out, input_fid, layer_id)
+
+            layer = ParLowerDiagPCMM(
+                shape_X_T,
+                W_T_shape,
+                n_heads,
+                _head_dim(layer_id, layer_config['type']),
+                n // 2,
+                has_bias='bias_path' in layer_config,
+            )
+            n_cts_in = layer.K_col * layer.m_c
+
+            if input_fid not in feature_id_to_nodes_map:
+                _register_feature_nodes(input_fid, n_cts_in, level)
+
+            data_source = CustomDataNode(type='pdmpcmm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            _remember_pdm_output_head_shape(layer_output_feature_ids[0])
+
+        elif layer_config['type'] == 'pdmccmm':
+            n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_config['type'])
+            fid0 = layer_input_feature_ids[0]
+            fid1 = layer_input_feature_ids[1]
+            feat0 = config_info['feature'][fid0]
+            feat1 = config_info['feature'][fid1]
+            layer, fid_A, fid_B = _make_pdmccmm_layer(layer_id, layer_config['type'], fid0, fid1, feat0, feat1, n_heads)
+
+            feat_A = config_info['feature'][fid_A]
+            feat_B = config_info['feature'][fid_B]
+            if fid_A not in feature_id_to_nodes_map:
+                _register_feature_nodes(fid_A, layer.m_c, int(feat_A['level']))
+            if fid_B not in feature_id_to_nodes_map:
+                _register_feature_nodes(fid_B, layer.m_c if layer.is_kqt else layer.n_c, int(feat_B['level']))
+
+            data_source = CustomDataNode(type='pdmccmm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(
+                feature_id_to_nodes_map[fid_A],
+                feature_id_to_nodes_map[fid_B],
+                data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            _remember_pdm_output_head_shape(layer_output_feature_ids[0])
+
+        elif layer_config['type'] == 'parcpmm':
+            n_heads = task_config_info.get('n_heads', 1)
+            feat_in = config_info['feature'][layer_input_feature_ids[0]]
+            feat_out = config_info['feature'][layer_output_feature_ids[0]]
+            shape_A_full = tuple(feat_in['shape'])
+            block_size = _matmul_block_size()
+            shape_A = _par_input_shape(feat_in, n_heads, split_rows=False, feature_id=layer_input_feature_ids[0])
+            if shape_A[1] > block_size:
+                raise ValueError(f"parcpmm layer '{layer_id}' input per-head width exceeds matmul_block_size")
+            W_shape = (shape_A_full[1], feat_out['shape'][1])
+
+            has_bias = 'bias_path' in layer_config
+            parcpmm_layer = ParBlockColMajorCPMM(shape_A, W_shape, block_size, n_heads, n // 2, has_bias=has_bias)
+
+            # Compute input CT count based on mode
+            if parcpmm_layer.mode == 'REDUCE':
+                n_cts_in = parcpmm_layer.K * parcpmm_layer.num_block_rows_A * parcpmm_layer.G
+            else:
+                n_cts_in = parcpmm_layer.num_block_rows_A * parcpmm_layer.G
+
+            # Register par-type input (deferred from the top of the loop)
+            input_fid = layer_input_feature_ids[0]
+            if input_fid not in feature_id_to_nodes_map:
+                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='parcpmm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = parcpmm_layer.call_custom_compute(
+                feature_id_to_nodes_map[input_fid],
+                data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+
+        elif layer_config['type'] == 'parccmm':
+            n_heads = task_config_info.get('n_heads', 1)
+            fid_A = layer_input_feature_ids[0]
+            fid_B = layer_input_feature_ids[1]
+            feat_A = config_info['feature'][fid_A]
+            feat_B = config_info['feature'][fid_B]
+
+            shape_A = par_feature_shapes.get(fid_A)
+            if shape_A is None:
+                shape_A = _par_input_shape(feat_A, n_heads, split_rows=False, feature_id=fid_A)
+                par_feature_shapes[fid_A] = shape_A
+            block_size = _matmul_block_size()
+
+            shape_B = par_feature_shapes.get(fid_B)
+            if shape_B is None:
+                # Raw parccmm RHS is stored as [H*N, H*P]; if it is produced by
+                # partranspose, par_feature_shapes already contains [N, P].
+                shape_B = _par_input_shape(feat_B, n_heads, split_rows=True, feature_id=fid_B)
+                par_feature_shapes[fid_B] = shape_B
+
+            parccmm_layer = ParBlockColMajorCCMM(shape_A, shape_B, block_size, n_heads, n // 2)
+            G = parccmm_layer.G
+
+            # Register par-type inputs (deferred from the top of the loop)
+            for idx, input_fid in enumerate(layer_input_feature_ids):
+                if input_fid not in feature_id_to_nodes_map:
+                    feat = config_info['feature'][input_fid]
+                    shape_per_head = par_feature_shapes.get(input_fid)
+                    if shape_per_head is None:
+                        shape_per_head = _par_input_shape(feat, n_heads, split_rows=(idx == 1), feature_id=input_fid)
+                        par_feature_shapes[input_fid] = shape_per_head
+                    n_cts = _par_ct_count(shape_per_head, block_size, G)
+                    x = [CkksCiphertextNode(input_fid + f'input{j}', level=int(feat['level'])) for j in range(n_cts)]
+                    feature_id_to_nodes_map[input_fid] = x
+                    input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='parccmm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = parccmm_layer.call_custom_compute(
+                feature_id_to_nodes_map[fid_A],
+                feature_id_to_nodes_map[fid_B],
+                data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape_A[0], shape_B[1])
+
+        elif layer_config['type'] == 'pcmstats':
+            n_heads = task_config_info.get('n_heads', 1)
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            shape = tuple(feat_in['shape'])
+            block_size = _matmul_block_size()
+            layer = ParBlockColMajorLNStats(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
+
+            if input_fid not in feature_id_to_nodes_map:
+                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], 1)
+
+        elif layer_config['type'] == 'pcmcenter':
+            n_heads = task_config_info.get('n_heads', 1)
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            shape = tuple(feat_in['shape'])
+            block_size = _matmul_block_size()
+            layer = ParBlockColMajorLNXCentered(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
+
+            if input_fid not in feature_id_to_nodes_map:
+                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], shape[1] // n_heads)
+
+        elif layer_config['type'] == 'pcminit':
+            n_heads = task_config_info.get('n_heads', 1)
+            feat_in = config_info['feature'][layer_input_feature_ids[0]]
+            block_size = _matmul_block_size()
+            layer = ParBlockColMajorLNMinimaxInit(block_size=block_size, n_slot=n // 2)
+
+            data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(
+                feature_id_to_nodes_map[layer_input_feature_ids[0]], data_source
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = par_feature_shapes.get(layer_input_feature_ids[0])
+
+        elif layer_config['type'] == 'pcmgs':
+            n_heads = task_config_info.get('n_heads', 1)
+            feat_in = config_info['feature'][layer_input_feature_ids[0]]
+            block_size = _matmul_block_size()
+            layer = ParBlockColMajorLNGoldschmidt(block_size=block_size, n_slot=n // 2)
+
+            data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(
+                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                feature_id_to_nodes_map[layer_input_feature_ids[1]],
+                data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = par_feature_shapes.get(layer_input_feature_ids[0])
+
+        elif layer_config['type'] == 'pcmaffine':
+            n_heads = task_config_info.get('n_heads', 1)
+            feat_in = config_info['feature'][layer_input_feature_ids[0]]
+            shape = tuple(feat_in['shape'])
+            block_size = _matmul_block_size()
+            layer = ParBlockColMajorLNAffine(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
+
+            data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(
+                feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                feature_id_to_nodes_map[layer_input_feature_ids[1]],
+                data_source,
+            )
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], shape[1] // n_heads)
+
+        elif layer_config['type'] == 'pcmgamma':
+            n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_config['type'])
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            shape = tuple(feat_in['shape'])
+            K = int(layer_config.get('K', layer_config.get('k', 1)))
+            block_size = _matmul_block_size()
+            if shape[1] % (K * n_heads) != 0:
+                raise ValueError(
+                    f"pcmgamma layer '{layer_id}' expects full feature shape with cols divisible by K * n_heads"
+                )
+            layer = ParBlockColMajorPolyActRNGamma(
+                shape=shape,
+                block_size=block_size,
+                n_heads=n_heads,
+                n_slot=n // 2,
+                K=K,
+            )
+
+            if input_fid not in feature_id_to_nodes_map:
+                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='polyactrn_gamma_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = par_feature_shapes.get(
+                input_fid, (shape[0], shape[1] // (K * n_heads))
+            )
+
+        elif layer_config['type'] == 'pcmpoly':
+            n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_config['type'])
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            shape = tuple(feat_in['shape'])
+            K = int(layer_config.get('K', layer_config.get('k', 1)))
+            degree = layer_config.get('degree', layer_config.get('order', 2))
+            block_size = _matmul_block_size()
+            if shape[1] % (K * n_heads) != 0:
+                raise ValueError(
+                    f"pcmpoly layer '{layer_id}' expects full feature shape with cols divisible by K * n_heads"
+                )
+            layer = ParBlockColMajorPolyActRNPoly(
+                shape=shape,
+                block_size=block_size,
+                n_heads=n_heads,
+                n_slot=n // 2,
+                degree=degree,
+                K=K,
+            )
+
+            if input_fid not in feature_id_to_nodes_map:
+                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                feature_id_to_nodes_map[input_fid] = x
+                input_args.append(Argument(input_fid, x))
+
+            data_source = CustomDataNode(type='polyactrn_poly_data_source', id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            par_feature_shapes[layer_output_feature_ids[0]] = par_feature_shapes.get(
+                input_fid, (shape[0], shape[1] // (K * n_heads))
+            )
+
+        elif layer_config['type'] in {
+            'pdmstats',
+            'pdmcenter',
+            'pdminit',
+            'pdmgs',
+            'pdmaffine',
+            'pdmgamma',
+            'pdmpoly',
+            'pdmupperaddpt',
+            'pdmupperpoly',
+            'pdmmulsquare',
+            'pdmheadcolsum',
+            'pdminvinit',
+            'pdminviter',
+            'pdmctmul',
+            'pdmupperpolymultct',
+        }:
+            layer_type = layer_config['type']
+            n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_type)
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            head_shape = _pdm_head_shape(feat_in, input_fid, layer_id, layer_type)
+            shape = _pdm_upper_shape(feat_in, head_shape)
+            layer = _pdm_upper_layer(layer_type, shape, head_shape, n_heads, layer_id, layer_config)
+
+            for fid in layer_input_feature_ids:
+                feat = config_info['feature'][fid]
+                if fid not in feature_id_to_nodes_map:
+                    _register_feature_nodes(fid, layer.total_cts, int(feat['level']))
+
+            if layer_type in {'pdmstats', 'pdmcenter', 'pdminit', 'pdmgs', 'pdmaffine'}:
+                data_source_type = 'layernorm_data_source'
+            elif layer_type == 'pdmgamma':
+                data_source_type = 'polyactrn_gamma_data_source'
+            elif layer_type == 'pdmpoly':
+                data_source_type = 'polyactrn_poly_data_source'
+            else:
+                data_source_type = 'pdmupper_data_source'
+
+            data_source = CustomDataNode(type=data_source_type, id=f'{layer_id}')
+            input_args.append(Argument(f'{layer_id}', [data_source]))
+            if layer_type in {'pdmgs', 'pdmaffine', 'pdminviter', 'pdmctmul', 'pdmupperpolymultct'}:
+                layer_output_nodes = layer.call_custom_compute(
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                    feature_id_to_nodes_map[layer_input_feature_ids[1]],
+                    data_source,
+                )
+            else:
+                layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            _remember_pdm_output_head_shape(layer_output_feature_ids[0])
 
         else:
             raise ValueError(f'Unsupported layer type: {layer_config["type"]}')

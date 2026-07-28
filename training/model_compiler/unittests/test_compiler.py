@@ -307,6 +307,10 @@ class CompilerTestBase(unittest.TestCase):
         style='ordinary',
         graph_type='btp',
         replace=True,
+        mat_pack_style='',
+        n_heads=0,
+        head_dim=0,
+        matmul_block_size=0,
         **export_kwargs,
     ):
         if replace:
@@ -322,7 +326,7 @@ class CompilerTestBase(unittest.TestCase):
             save_h5=False,
             **export_kwargs,
         )
-        onnx_to_json(self.temp_onnx_path, self.temp_json_path, style)
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, style, mat_pack_style=mat_pack_style)
         graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=self.temp_json_path,
@@ -331,6 +335,10 @@ class CompilerTestBase(unittest.TestCase):
             num_workers=1,
             style=style,
             graph_type=graph_type,
+            n_heads=n_heads if n_heads else None,
+            head_dim=head_dim if head_dim else None,
+            matmul_block_size=matmul_block_size if matmul_block_size else None,
+            mat_pack_style=mat_pack_style,
         )
         return graph, score
 
@@ -341,6 +349,10 @@ class CompilerTestBase(unittest.TestCase):
         test_name,
         style='ordinary',
         replace=True,
+        mat_pack_style='',
+        n_heads=0,
+        head_dim=0,
+        matmul_block_size=0,
         **export_kwargs,
     ):
         """Full E2E pipeline: compile model and generate all files for C++ inference test.
@@ -372,9 +384,14 @@ class CompilerTestBase(unittest.TestCase):
         )
 
         # Step 2: ONNX → JSON
-        onnx_to_json(temp_onnx, temp_json, style)
+        onnx_to_json(temp_onnx, temp_json, style, mat_pack_style=mat_pack_style)
 
         # Step 3: Compile (produces task/server/ and task/client/)
+        if n_heads:
+            if head_dim <= 0:
+                raise ValueError('head_dim must be provided when n_heads is set')
+            if matmul_block_size <= 0:
+                raise ValueError('matmul_block_size must be provided when n_heads is set')
         graph, score = run_pipeline(
             num_experiments=1,
             input_file_path=temp_json,
@@ -383,6 +400,10 @@ class CompilerTestBase(unittest.TestCase):
             num_workers=1,
             style=style,
             graph_type='btp',
+            n_heads=n_heads if n_heads else None,
+            head_dim=head_dim if head_dim else None,
+            matmul_block_size=matmul_block_size if matmul_block_size else None,
+            mat_pack_style=mat_pack_style,
         )
 
         server_dir = output_dir / 'task' / 'server'
@@ -396,6 +417,7 @@ class CompilerTestBase(unittest.TestCase):
             json_path=str(json_path),
             h5_path=str(h5_path),
             verbose=False,
+            feature_mat=mat_pack_style != '',
         )
 
         # Step 6: Read pack_style and param_name from configs
@@ -426,17 +448,23 @@ class CompilerTestBase(unittest.TestCase):
         # Step 8: Generate random input CSV(s)
         for input_name, input_param in task_config['task_input_param'].items():
             dim = input_param['dim']
-            channel = input_param['channel']
             csv_path = client_dir / f'{input_name}.csv'
-            if dim == 2:
+            if input_param.get('data_type') == 'feature_mat':
+                h, w = input_param['shape']
+                data = np.random.uniform(-1, 1, (h, w))
+                np.savetxt(csv_path, data, delimiter=',', fmt='%.6f')
+            elif dim == 2:
+                channel = input_param['channel']
                 h, w = input_param['shape']
                 data = np.random.uniform(-1, 1, (channel, h * w))
                 np.savetxt(csv_path, data, delimiter=',', fmt='%.6f')
             elif dim == 1:
+                channel = input_param['channel']
                 (length,) = input_param['shape']
                 data = np.random.uniform(-1, 1, (channel, length))
                 np.savetxt(csv_path, data, delimiter=',', fmt='%.6f')
             elif dim == 0:
+                channel = input_param['channel']
                 data = np.random.uniform(-1, 1, (channel,))
                 np.savetxt(csv_path, data.reshape(1, -1), delimiter=',', fmt='%.6f')
             else:
@@ -529,6 +557,158 @@ class TestSingleLayer(CompilerTestBase):
                 for node in graph.dag.nodes
             )
         )
+
+    def test_qkv(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
+        model = nn_modules.QKVTest()
+        self._export_and_compile(
+            model,
+            (1, 197, 192),
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
+
+    def test_transpose(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
+        model = nn_modules.TransposeTest()
+        self._export_and_compile(
+            model,
+            (1, 32, 64),
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
+
+    def test_ccmm(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
+        model = nn_modules.CCMMTest()
+        self._export_and_compile(
+            model,
+            [(32, 64), (64, 64)],
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
+
+    def test_layernorm(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
+        model = nn_modules.LayerNorm()
+        self._export_and_compile(
+            model,
+            (1, 197, 192),
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
+
+    def test_pcmgamma(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
+        model = nn_modules.PCMGammaTest()
+        graph, _ = self._export_and_compile(
+            model,
+            (1, 197, 192),
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
+        self.assertTrue(any(node.layer_type == 'pcmgamma' for node in graph.dag.nodes if isinstance(node, ComputeNode)))
+
+    def test_gelu(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
+        model = nn_modules.SingleGelu()
+        graph, _ = self._export_and_compile(
+            model,
+            (1, 197, 192),
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
+        self.assertTrue(any(node.layer_type == 'pcmpoly' for node in graph.dag.nodes if isinstance(node, ComputeNode)))
+
+    def test_multi_head_attention(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
+        self.temp_json_path = 'training/model_compiler/unittests/pt_graphs/multi_head_attention.json'
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+            style='multiplexed',
+            graph_type='btp',
+            is_use_btp=True,
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+            mat_pack_style=compile_config['mat_pack_style'],
+        )
+        return graph, score
+
+    def test_linear_gelu(self):
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
+        model = nn_modules.LinearGelu()
+        graph, _ = self._export_and_compile(
+            model,
+            (197, 192),
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+        )
+
+    def test_vit_from_onnx(self):
+        self.temp_onnx_path = 'runs/poly_deit_tiny_patch16_224.onnx'
+        # self.temp_onnx_path = 'runs/deit_tiny_patch16_224_until_block0_after_mlp_add.onnx'
+        onnx_to_json(self.temp_onnx_path, self.temp_json_path, 'multiplexed', mat_pack_style='par_block_col_major')
+        with open(project_root / 'training' / 'config' / 'config.json', 'r', encoding='utf8') as f:
+            compile_config = json.load(f)
+
+        graph, score = run_pipeline(
+            num_experiments=1,
+            input_file_path=self.temp_json_path,
+            output_dir=script_dir,
+            temperature=0.0,
+            num_workers=1,
+            style='multiplexed',
+            graph_type='btp',
+            is_use_btp=True,
+            n_heads=int(compile_config['n_heads']),
+            head_dim=int(compile_config['head_dim']),
+            matmul_block_size=int(compile_config['matmul_block_size']),
+            set_btp_scale=None,
+        )
+
+        server_dir = script_dir / 'task' / 'server'
+        # export_h5_from_onnx(
+        #     onnx_path=str(self.temp_onnx_path),
+        #     json_path=str(server_dir / 'nn_layers_ct_0.json'),
+        #     h5_path=str(server_dir / 'model_parameters.h5'),
+        #     verbose=False,
+        #     feature_mat=compile_config['mat_pack_style'] != '',
+        # )
+        return graph, score
 
 
 class TestLayerInteraction(CompilerTestBase):
@@ -884,6 +1064,9 @@ class TestE2ESingleLayer(CompilerTestBase):
         with open(manifest_path, 'w') as f:
             json.dump([], f)
 
+    def _assert_has_layer_type(self, graph: LayerAbstractGraph, layer_type: str):
+        self.assertTrue(any(node.layer_type == layer_type for node in graph.dag.nodes if isinstance(node, ComputeNode)))
+
     # ── Conv2d big_size (3 scenarios: output > / == / < block_shape) ──
 
     def test_conv_big_size(self):
@@ -1161,6 +1344,166 @@ class TestE2ESingleLayer(CompilerTestBase):
                 with self.subTest(test_name=test_name):
                     model = nn_modules.SingleAdaptiveAvgpool1d(output_size=output_size)
                     self._export_compile_and_deploy(model, (1, 32, shape), test_name, style='multiplexed')
+
+    # ── Matrix operations (BlockColMajor / ParBlockColMajor) ──
+
+    def test_par_block_col_major_transpose(self):
+        """ParBlockColMajorTranspose E2E: n_heads=3."""
+        model = nn_modules.TransposeTest()
+        self._export_compile_and_deploy(
+            model,
+            (1, 32, 96),
+            'par_block_col_major_transpose',
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=3,
+            head_dim=32,
+            matmul_block_size=32,
+        )
+
+    def test_par_block_col_major_add(self):
+        """ParBlockColMajorAdd E2E, n_heads=2."""
+        model = nn_modules.SingleAdd()
+        graph, _ = self._export_compile_and_deploy(
+            model,
+            [(1, 32, 64), (1, 32, 64)],
+            'par_block_col_major_add',
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=2,
+            head_dim=32,
+            matmul_block_size=32,
+            input_names=['x0', 'x1'],
+        )
+        self.assertIsNotNone(graph)
+
+    def test_par_block_col_major_add_pt(self):
+        """ParBlockColMajorAddPt E2E: feature_mat input plus plaintext matrix."""
+        model = nn_modules.SingleAddPt(rows=32, cols=96)
+        graph, _ = self._export_compile_and_deploy(
+            model,
+            (1, 32, 96),
+            'par_block_col_major_add_pt',
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=3,
+            head_dim=32,
+            matmul_block_size=32,
+        )
+
+        layer_types = [node.layer_type for node in graph.dag.nodes if isinstance(node, ComputeNode)]
+        self.assertIn('pcm_add_pt', layer_types)
+
+        server_json = self.e2e_base_path / 'par_block_col_major_add_pt' / 'task' / 'server' / 'nn_layers_ct_0.json'
+        with open(server_json, 'r') as f:
+            layers = json.load(f)['layer']
+        pcm_layers = [layer for layer in layers.values() if layer['type'] == 'pcm_add_pt']
+        self.assertEqual(len(pcm_layers), 1)
+        self.assertEqual(len(pcm_layers[0]['feature_input']), 1)
+        self.assertIn('weight_path', pcm_layers[0])
+
+    def test_par_block_col_major_ccmm(self):
+        """ParBlockColMajorCCMM E2E: head-wise A @ K^T, n_heads=3."""
+        model = nn_modules.HeadWiseAKTTest()
+        self._export_compile_and_deploy(
+            model,
+            [(32, 96), (32, 96)],
+            'par_block_col_major_ccmm',
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=3,
+            head_dim=32,
+            matmul_block_size=32,
+            input_names=['x0', 'x1'],
+        )
+
+    def test_par_block_col_major_layernorm(self):
+        """ParBlockColMajor LayerNorm E2E, n_heads=2."""
+        model = nn_modules.LayerNorm(normalized_shape=64)
+        self._export_compile_and_deploy(
+            model,
+            (1, 32, 64),
+            'par_block_col_major_layernorm',
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=2,
+            head_dim=32,
+            matmul_block_size=32,
+        )
+
+    def test_par_block_col_major_gelu(self):
+        """ParBlockColMajor GELU E2E, n_heads=2."""
+        model = nn_modules.SingleGelu()
+        graph, _ = self._export_compile_and_deploy(
+            model,
+            (1, 32, 64),
+            'par_block_col_major_gelu',
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=2,
+            head_dim=32,
+            matmul_block_size=32,
+        )
+        self.assertTrue(any(node.layer_type == 'pcmpoly' for node in graph.dag.nodes if isinstance(node, ComputeNode)))
+
+    def test_par_block_col_major_cpmm(self):
+        """ParBlockColMajorCPMM E2E: x @ W (SQUARE), n_heads=3."""
+        model = nn_modules.CPMMSquareTest(dim=96)
+        self._export_compile_and_deploy(
+            model,
+            (1, 32, 96),
+            'par_block_col_major_cpmm',
+            style='multiplexed',
+            mat_pack_style='par_block_col_major',
+            n_heads=3,
+            head_dim=32,
+            matmul_block_size=32,
+        )
+
+    # ── Matrix operations (ParDiagonalPack) ──
+
+    def test_par_diagonal_pack_transpose(self):
+        """ParDiagonalPack transpose E2E: n_heads=3."""
+        model = nn_modules.TransposeTest()
+        graph, _ = self._export_compile_and_deploy(
+            model,
+            (1, 32, 96),
+            'par_diagonal_pack_transpose',
+            style='multiplexed',
+            mat_pack_style='par_diagonal_pack',
+            n_heads=3,
+            head_dim=32,
+            matmul_block_size=32,
+        )
+        self._assert_has_layer_type(graph, 'pdmtranspose')
+
+    def test_par_diagonal_pack_add_pt(self):
+        """ParDiagonalPack add plaintext matrix E2E."""
+        graph, _ = self._export_compile_and_deploy(
+            nn_modules.SingleAddPt(rows=32, cols=96),
+            (1, 32, 96),
+            'par_diagonal_pack_add_pt',
+            style='multiplexed',
+            mat_pack_style='par_diagonal_pack',
+            n_heads=3,
+            head_dim=32,
+            matmul_block_size=32,
+        )
+        self._assert_has_layer_type(graph, 'pdm_add_pt')
+
+    def test_par_diagonal_pack_cpmm(self):
+        """ParDiagonalPack PCMM E2E: x @ W (SQUARE), n_heads=3."""
+        graph, _ = self._export_compile_and_deploy(
+            nn_modules.CPMMSquareTest(dim=96),
+            (1, 32, 96),
+            'par_diagonal_pack_cpmm',
+            style='multiplexed',
+            mat_pack_style='par_diagonal_pack',
+            n_heads=3,
+            head_dim=32,
+            matmul_block_size=32,
+        )
+        self._assert_has_layer_type(graph, 'pdmpcmm')
 
 
 class TestE2EMultipleLayer(CompilerTestBase):

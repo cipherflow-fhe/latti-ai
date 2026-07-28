@@ -69,6 +69,7 @@ private:
     bool use_gpu_;
     int gpu_device_;
     bool needs_btp_ = false;
+    std::string mat_pack_style_;
 
     std::vector<std::string> input_keys_;
     std::map<std::string, InputParam> input_params_;

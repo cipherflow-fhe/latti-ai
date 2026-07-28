@@ -40,6 +40,11 @@ struct OutputParam {
     int width = 0;              // dim=2 only
     int length = 0;             // dim=1 only
     Duo invalid_fill = {1, 1};  // dim=2 only
+    bool is_mat = false;
+    Duo head_shape = {0, 0};
+    uint32_t matmul_block_size = 0;
+    uint32_t n_heads = 0;
+    bool is_transposed = true;
 };
 
 /// Per-input parameters read from task_config.json.
@@ -52,6 +57,11 @@ struct InputParam {
     int length = 0;    // dim=1 only
     int skip = 1;      // dim=0/1 packing stride
     int pack_num = 0;  // n_channel_per_ct
+    bool is_mat = false;
+    Duo head_shape = {0, 0};
+    uint32_t matmul_block_size = 0;
+    uint32_t n_heads = 0;
+    bool is_transposed = true;
 };
 
 /// Client-side encrypted inference interface.
@@ -117,8 +127,10 @@ private:
     std::vector<uint64_t> p_;
     bool needs_btp_ = false;
     std::string pack_style_;
+    uint32_t par_block_size_ = 0;  // block_size d for par_block_col_major (from first input)
     nlohmann::ordered_json task_config_;
     std::map<std::string, InputParam> input_params_;
+    std::string mat_pack_style_;
 
     std::unique_ptr<ls::CkksParameter> ckks_param_;
     std::unique_ptr<ls::CkksBtpParameter> btp_param_;

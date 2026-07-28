@@ -18,6 +18,7 @@ import sys
 import os
 from components import *
 from score import FheScoreParam, MpcScoreParam, BtpScoreParam
+from inference.model_generator.layers.poly_relu_base import PolyReluBase
 import copy
 from itertools import product
 import math
@@ -40,7 +41,7 @@ def process_levels(graph: LayerAbstractGraph):
                 succ = next(graph.dag.successors(node))
                 graph.dag.nodes[succ]['level'] = config.fhe_param.max_level
 
-    transforms.insert_drop_level_layers(graph)
+    # transforms.insert_drop_level_layers(graph)
 
 
 def get_leading_feature_nodes(dag: nx.DiGraph) -> list[FeatureNode]:
@@ -121,7 +122,9 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
     output_roots = [node for node, out_deg in graph.dag.out_degree() if out_deg == 0]
 
     param_dict = dict()
+    default_is_transposed = getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack'
     for node in input_roots + output_roots:
+        is_transposed = node.is_transposed if node.is_transposed is not None else default_is_transposed
         if node.dim == 0:
             param_dict[node.node_id] = {
                 'dim': node.dim,
@@ -133,6 +136,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 'level': graph.dag.nodes[node]['level'],
                 'depth': node.depth,
                 'pack_num': graph.dag.nodes[node]['pack_num'],
+                'is_transposed': is_transposed,
             }
         elif node.dim in (1, 2):
             param_dict[node.node_id] = {
@@ -147,7 +151,28 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 'depth': node.depth,
                 'pack_num': graph.dag.nodes[node]['pack_num'],
                 'invalid_fill': node.invalid_fill,
+                'is_transposed': is_transposed,
             }
+            if node.data_type:
+                param_dict[node.node_id]['data_type'] = node.data_type
+                if node.data_type == 'feature_mat' and node.head_shape is not None:
+                    param_dict[node.node_id]['head_shape'] = [int(x) for x in node.head_shape]
+
+    layernorm_stage_types = {
+        'pcmstats',
+        'pcmcenter',
+        'pcminit',
+        'pcmgs',
+        'pcmaffine',
+        'pdmstats',
+        'pdmcenter',
+        'pdminit',
+        'pdmgs',
+        'pdmaffine',
+    }
+    has_layernorm = any(
+        isinstance(node, ComputeNode) and node.layer_type in layernorm_stage_types for node in graph.dag.nodes
+    )
 
     task_config = {
         'task_type': 'fhe',
@@ -155,8 +180,13 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
         'server_start_id': 0,
         'server_end_id': 0,
         'block_shape': config.block_shape,
+        'mat_pack_style': config.mat_pack_style,
+        'model_type': config.model_type,
         'is_absorb_polyrelu': False,
         'pack_style': config.style,
+        'n_heads': config.n_heads,
+        'head_dim': config.head_dim,
+        'matmul_block_size': config.matmul_block_size,
         'task_input_id': [str(n.node_id) for n in input_roots],
         'task_output_id': [str(n.node_id) for n in output_roots],
         'task_input_param': {str(n.node_id): param_dict[n.node_id] for n in input_roots},
@@ -164,6 +194,47 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
         'server_task': server_task,
         'use_btp': use_btp,
     }
+    if has_layernorm:
+        layernorm_param = {
+            'var_std_bound': config.layernorm_var_std_bound,
+            'minimax_init_coeffs': list(config.layernorm_minimax_init_coeffs),
+            'eps': config.layernorm_eps,
+            'inv_std_scale': config.layernorm_inv_std_scale,
+            'inv_var_scale': config.layernorm_inv_var_scale,
+            'c0': config.layernorm_c0,
+            'c1': config.layernorm_c1,
+            'c2': config.layernorm_c2,
+            'num_iters': config.layernorm_num_iters,
+        }
+        for node in graph.dag.nodes:
+            if not (isinstance(node, ComputeNode) and node.layer_type in layernorm_stage_types):
+                continue
+            if hasattr(node, 'epsilon'):
+                layernorm_param['eps'] = node.epsilon
+            for key in (
+                'inv_std_scale',
+                'inv_var_scale',
+                'inv_var',
+                'inv_std',
+                'min_var',
+                'max_var',
+                'w_buffer',
+                'input_scale',
+                'max_denominator',
+                'normalized_epsilon',
+                'c0',
+                'c1',
+                'c2',
+                'num_iters',
+                'profile',
+                'use_asor',
+            ):
+                if hasattr(node, key):
+                    layernorm_param[key] = getattr(node, key)
+            if all(hasattr(node, key) for key in ('c0', 'c1', 'c2')):
+                layernorm_param['minimax_init_coeffs'] = [node.c0, node.c1, node.c2]
+            break
+        task_config['layernorm_param'] = layernorm_param
     os.makedirs(file_path, exist_ok=True)
     with open(os.path.join(file_path, 'task_config.json'), 'w') as f:
         json.dump(task_config, f, indent=4, ensure_ascii=False)
@@ -220,6 +291,7 @@ def update_shape_for_btp(graph: LayerAbstractGraph):
     compute_nodes_in_topo_sort = [node for node in all_nodes_in_topo_sort if isinstance(node, ComputeNode)]
     for compute_node in compute_nodes_in_topo_sort:
         preds: list[FeatureNode] = list(graph.dag.predecessors(compute_node))
+        preds = transforms.sort_preds_by_input_index(graph.dag, compute_node, preds)
         succs: list[FeatureNode] = list(graph.dag.successors(compute_node))
         if isinstance(compute_node, ConvComputeNode):
             if check_conv_upsample_factor(graph, compute_node):
@@ -256,6 +328,38 @@ def update_shape_for_btp(graph: LayerAbstractGraph):
         elif compute_node.layer_type == 'resize':
             for i in range(2):
                 succs[0].shape[i] = preds[0].shape[i] * compute_node.upsample_factor_in[i]
+        elif compute_node.layer_type == 'parcpmm':
+            succs[0].shape[0] = preds[0].shape[0]
+        elif compute_node.layer_type == 'pdmpcmm':
+            weight_shape = getattr(compute_node, 'weight_shape', [])
+            succs[0].shape[0] = weight_shape[0] if len(weight_shape) >= 1 else preds[0].shape[0]
+            if len(preds[0].shape) > 1:
+                succs[0].shape[1] = preds[0].shape[1]
+        elif compute_node.layer_type == 'partranspose':
+            n_heads = max(1, config.n_heads)
+            succs[0].shape[0] = preds[0].shape[1] // n_heads if len(preds[0].shape) > 1 else preds[0].shape[0]
+            succs[0].shape[1] = preds[0].shape[0] * n_heads
+        elif compute_node.layer_type == 'pdmtranspose':
+            n_heads = max(1, config.n_heads)
+            if preds[0].head_shape is not None:
+                succs[0].shape[0] = preds[0].head_shape[1]
+                succs[0].shape[1] = preds[0].head_shape[0] * n_heads
+            else:
+                succs[0].shape[0] = preds[0].shape[1] // n_heads if len(preds[0].shape) > 1 else preds[0].shape[0]
+                succs[0].shape[1] = preds[0].shape[0] * n_heads
+        elif compute_node.layer_type == 'parccmm':
+            succs[0].shape[0] = preds[0].shape[0]
+            if len(preds) > 1 and len(preds[1].shape) > 1:
+                succs[0].shape[1] = preds[1].shape[1]
+        elif compute_node.layer_type == 'pdmccmm':
+            n_heads = max(1, config.n_heads)
+            if preds[0].head_shape is not None and len(preds) > 1 and preds[1].head_shape is not None:
+                succs[0].shape[0] = preds[0].head_shape[0] * n_heads
+                succs[0].shape[1] = preds[1].head_shape[1]
+            else:
+                succs[0].shape[0] = preds[0].shape[0]
+                if len(preds) > 1 and len(preds[1].shape) > 1:
+                    succs[0].shape[1] = preds[1].shape[1]
         else:
             for i in range(2):
                 succs[0].shape[i] = preds[0].shape[i]

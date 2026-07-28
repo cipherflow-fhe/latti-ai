@@ -45,6 +45,8 @@ ParBlockColMajorCCMM::ParBlockColMajorCCMM(const CkksParameter& param_in,
     p_ = p;
 
     n_slot_ = param_.get_n() / 2;
+    assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
+    assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
     n_h_padded_ = next_pow2(n_heads);
 
     // Determine chunk sizing
@@ -55,6 +57,9 @@ ParBlockColMajorCCMM::ParBlockColMajorCCMM(const CkksParameter& param_in,
     } else {
         n_blocks_per_chunk_ = n_slot_ / (d_ * d_);
         chunk_size_ = n_slot_;
+        if (n_blocks_per_chunk_ == 1) {
+            n_h_padded_ = n_heads_;
+        }
         n_cts_per_block_idx_ = n_h_padded_ / n_blocks_per_chunk_;
     }
 
@@ -65,6 +70,12 @@ ParBlockColMajorCCMM::ParBlockColMajorCCMM(const CkksParameter& param_in,
     num_block_cols_A_ = div_ceil(n, d_);
     num_block_rows_B_ = div_ceil(n, d_);
     num_block_cols_B_ = div_ceil(p, d_);
+
+    bsgs_bs_sigma_ = (uint32_t)ceil(sqrt((double)d_));
+    bsgs_gs_sigma_ = div_ceil(d_, bsgs_bs_sigma_);
+    uint32_t n_tau = 2 * d_ - 1;
+    bsgs_bs_tau_ = (uint32_t)ceil(sqrt((double)n_tau));
+    bsgs_gs_tau_ = div_ceil(n_tau, bsgs_bs_tau_);
 }
 
 int ParBlockColMajorCCMM::get_block_index(int bi, int bj, int num_block_rows) {
@@ -107,6 +118,7 @@ std::vector<double> ParBlockColMajorCCMM::build_sigma_diagonal(int k_idx) const 
 }
 
 // Build tau diagonal: base on d² elements, then expand by S
+// BSGS: shift base vector to compensate for giant-step rotation
 std::vector<double> ParBlockColMajorCCMM::build_tau_diagonal(int offset) const {
     uint32_t d_sq = d_ * d_;
     uint32_t S = n_blocks_per_chunk_;
@@ -121,6 +133,19 @@ std::vector<double> ParBlockColMajorCCMM::build_tau_diagonal(int offset) const {
                 u_base[idx] = 1.0;
             }
         }
+    }
+
+    // BSGS shift: rotate base by -giant_rot/S to compensate
+    uint32_t j_idx = (uint32_t)(offset + (int)(d_ - 1));
+    uint32_t g_bsgs = j_idx / bsgs_bs_tau_;
+    int shift = (int)(g_bsgs * bsgs_bs_tau_) - (int)(d_ - 1);
+    shift = ((shift % (int)d_sq) + (int)d_sq) % (int)d_sq;
+    if (shift != 0) {
+        vector<double> u_shifted(d_sq, 0.0);
+        for (uint32_t idx = 0; idx < d_sq; idx++) {
+            u_shifted[idx] = u_base[(idx + d_sq - shift) % d_sq];
+        }
+        u_base = move(u_shifted);
     }
 
     // Expand by S
@@ -232,53 +257,120 @@ void ParBlockColMajorCCMM::precompute_diagonals() {
     }
 }
 
-// sigma: d rotations + d pt_muls + (d-1) adds + 1 rescale
-// Input level L -> Output level L-1
-// Rotation amounts scaled by n_blocks_per_chunk_
+// ── Generate methods for encode_pt executor ───────────────────────────────────
+
+CkksPlaintextRingt ParBlockColMajorCCMM::generate_sigma_pt(CkksContext& ctx, uint32_t k) const {
+    return ctx.encode_ringt(build_sigma_diagonal(k), param_.get_q(level_));
+}
+
+CkksPlaintextRingt ParBlockColMajorCCMM::generate_tau_pt(CkksContext& ctx, uint32_t offset_idx) const {
+    int offset = (int)offset_idx - (int)(d_ - 1);  // offset_idx 0..2d-2 → offset -(d-1)..d-1
+    return ctx.encode_ringt(build_tau_diagonal(offset), param_.get_q(level_));
+}
+
+CkksPlaintextRingt ParBlockColMajorCCMM::generate_psi_k0_pt(CkksContext& ctx) const {
+    double psi_scale = param_.get_q(level_ - 2) / param_.get_default_scale() * param_.get_q(level_ - 1);
+    return ctx.encode_ringt(build_psi_k_equal_0_diagonals(), psi_scale);
+}
+
+CkksPlaintextRingt ParBlockColMajorCCMM::generate_psi_wk_pt(CkksContext& ctx, uint32_t i) const {
+    double psi_scale = param_.get_q(level_ - 2) / param_.get_default_scale() * param_.get_q(level_ - 1);
+    auto [w_k, w_kd] = build_psi_diagonals(i);
+    return ctx.encode_ringt(w_k, psi_scale);
+}
+
+CkksPlaintextRingt ParBlockColMajorCCMM::generate_psi_wkd_pt(CkksContext& ctx, uint32_t i) const {
+    double psi_scale = param_.get_q(level_ - 2) / param_.get_default_scale() * param_.get_q(level_ - 1);
+    auto [w_k, w_kd] = build_psi_diagonals(i);
+    return ctx.encode_ringt(w_kd, psi_scale);
+}
+
+// sigma with BSGS: (bsgs_bs-1) baby + (bsgs_gs-1) giant rotations
+// + d pt_muls + (d-1) adds + 1 rescale.  Level L -> L-1.
 CkksCiphertext ParBlockColMajorCCMM::sigma_on_ct(CkksContext& ctx, const CkksCiphertext& a) const {
     double default_scale = param_.get_default_scale();
     uint32_t S = n_blocks_per_chunk_;
+    int unit = (int)(d_ * S);
+
+    auto baby_rots = populate_rotations_1_side(ctx, a, bsgs_bs_sigma_ - 1, unit);
+
     CkksCiphertext result(0);
+    bool result_init = false;
 
-    for (uint32_t k_idx = 0; k_idx < d_; k_idx++) {
-        int rot_amount = ((int)(d_ * k_idx) * (int)S) % (int)chunk_size_;
-        CkksCiphertext rotated = (rot_amount == 0) ? a.copy() : ctx.rotate(a, rot_amount);
+    for (uint32_t g = 0; g < bsgs_gs_sigma_; g++) {
+        CkksCiphertext inner(0);
+        bool inner_init = false;
+        uint32_t b_end = std::min(bsgs_bs_sigma_, d_ - g * bsgs_bs_sigma_);
 
-        auto diag_mul = ctx.ringt_to_mul(sigma_diag_pt_[k_idx], level_);
-        auto product = ctx.mult_plain_mul(rotated, diag_mul);
+        for (uint32_t b = 0; b < b_end; b++) {
+            uint32_t k = g * bsgs_bs_sigma_ + b;
+            auto diag_mul = ctx.ringt_to_mul(sigma_diag_pt_[k], level_);
+            auto product = ctx.mult_plain_mul(baby_rots[b], diag_mul);
 
-        if (k_idx == 0) {
-            result = move(product);
+            if (!inner_init) {
+                inner = move(product);
+                inner_init = true;
+            } else {
+                inner = ctx.add(inner, product);
+            }
+        }
+
+        int giant_rot = (int)(g * bsgs_bs_sigma_) * unit;
+        if (giant_rot != 0)
+            inner = ctx.rotate(inner, giant_rot);
+
+        if (!result_init) {
+            result = move(inner);
+            result_init = true;
         } else {
-            result = ctx.add(result, product);
+            result = ctx.add(result, inner);
         }
     }
     return ctx.rescale(result, default_scale);
 }
 
-// tau: (2d-1) rotations + (2d-1) pt_muls + (2d-2) adds + 1 rescale
-// Input level L -> Output level L-1
-// Rotation amounts scaled by n_blocks_per_chunk_
+// tau with BSGS: (bsgs_bs-1) baby + up to bsgs_gs giant rotations
+// + (2d-1) pt_muls + (2d-2) adds + 1 rescale.  Level L -> L-1.
 CkksCiphertext ParBlockColMajorCCMM::tau_on_ct(CkksContext& ctx, const CkksCiphertext& b) const {
     double default_scale = param_.get_default_scale();
     uint32_t S = n_blocks_per_chunk_;
+    int unit = (int)S;
+    uint32_t n_tau = 2 * d_ - 1;
+
+    auto baby_rots = populate_rotations_1_side(ctx, b, bsgs_bs_tau_ - 1, unit);
+
     CkksCiphertext result(0);
+    bool result_init = false;
 
-    int diag_idx = 0;
-    for (int offset = -(int)(d_ - 1); offset <= (int)(d_ - 1); offset++) {
-        // Scaled rotation: offset * S, mod chunk_size_
-        int rot_amount = ((offset * (int)S) % (int)chunk_size_ + (int)chunk_size_) % (int)chunk_size_;
-        CkksCiphertext rotated = (rot_amount == 0) ? b.copy() : ctx.rotate(b, rot_amount);
+    for (uint32_t g = 0; g < bsgs_gs_tau_; g++) {
+        CkksCiphertext inner(0);
+        bool inner_init = false;
+        uint32_t b_end = std::min(bsgs_bs_tau_, n_tau - g * bsgs_bs_tau_);
 
-        auto diag_mul = ctx.ringt_to_mul(tau_diag_pt_[diag_idx], level_);
-        auto product = ctx.mult_plain_mul(rotated, diag_mul);
+        for (uint32_t b_step = 0; b_step < b_end; b_step++) {
+            uint32_t j_idx = g * bsgs_bs_tau_ + b_step;
+            auto diag_mul = ctx.ringt_to_mul(tau_diag_pt_[j_idx], level_);
+            auto product = ctx.mult_plain_mul(baby_rots[b_step], diag_mul);
 
-        if (diag_idx == 0) {
-            result = move(product);
-        } else {
-            result = ctx.add(result, product);
+            if (!inner_init) {
+                inner = move(product);
+                inner_init = true;
+            } else {
+                inner = ctx.add(inner, product);
+            }
         }
-        diag_idx++;
+
+        int giant_rot = ((int)(g * bsgs_bs_tau_) - (int)(d_ - 1)) * (int)S;
+        giant_rot = ((giant_rot % (int)chunk_size_) + (int)chunk_size_) % (int)chunk_size_;
+        if (giant_rot != 0)
+            inner = ctx.rotate(inner, giant_rot);
+
+        if (!result_init) {
+            result = move(inner);
+            result_init = true;
+        } else {
+            result = ctx.add(result, inner);
+        }
     }
     return ctx.rescale(result, default_scale);
 }
@@ -391,7 +483,21 @@ ParBlockColMajorCCMM::run(CkksContext& ctx, const FeatureMatEncrypted& A, const 
     FeatureMatEncrypted result(&ctx, A.level);
     result.data = run_core(ctx, A.data, B.data);
     result.level = A.level - 3;  // block_mult consumes 3 levels
-    result.shape = {m_, p_};     // per-head result shape
+    result.head_shape = {m_, p_};
+    result.shape = {m_, p_ * n_heads_};
     result.matmul_block_size = d_;
     return result;
+}
+
+Array<double, 2> ParBlockColMajorCCMM::run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const {
+    Array<double, 2> C({m_, p_ * n_heads_});
+    for (uint32_t h = 0; h < n_heads_; h++)
+        for (uint32_t i = 0; i < m_; i++)
+            for (uint32_t j = 0; j < p_; j++) {
+                double s = 0;
+                for (uint32_t k = 0; k < n_; k++)
+                    s += A.get(i, h * n_ + k) * B.get(k, h * p_ + j);
+                C.set(i, h * p_ + j, s);
+            }
+    return C;
 }

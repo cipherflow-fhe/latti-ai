@@ -27,12 +27,35 @@ FeatureMatEncrypted::FeatureMatEncrypted(CkksContext* context_in, int ct_level) 
     level = ct_level;
 }
 
+FeatureMatEncrypted FeatureMatEncrypted::refresh_ciphertext() const {
+    CkksBtpContext* ctx = dynamic_cast<CkksBtpContext*>(context);
+    if (ctx == nullptr) {
+        throw std::runtime_error("refresh_ciphertext() requires CkksBtpContext");
+    }
+    int new_level = 9;
+    FeatureMatEncrypted result(ctx, new_level);
+    result.data.resize(data.size());
+    parallel_for(data.size(), th_nums, *ctx, [&](CkksBtpContext& ctx_copy, int ct_idx) {
+        result.data[ct_idx] = ctx_copy.bootstrap(data[ct_idx]);
+        assert(new_level == result.data[ct_idx].get_level());
+    });
+    result.shape = shape;
+    result.head_shape = head_shape;
+    result.matmul_block_size = matmul_block_size;
+    result.n_channel = n_channel;
+    result.n_channel_per_ct = n_channel_per_ct;
+    return result;
+}
+
 void FeatureMatEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
                                                uint32_t d,
                                                bool is_symmetric,
                                                double scale_in) {
     uint32_t m = matrix.get_shape()[0];
     uint32_t n_cols = matrix.get_shape()[1];
+    shape = {m, n_cols};
+    head_shape = {m, n_cols};
+    matmul_block_size = d;
     uint32_t num_block_rows = div_ceil(m, d);
     uint32_t num_block_cols = div_ceil(n_cols, d);
     int n_slot = context->get_parameter().get_n() / 2;
@@ -120,16 +143,22 @@ static uint32_t next_power_of_2(uint32_t x) {
 void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matrix,
                                                    uint32_t d,
                                                    uint32_t n_heads,
+                                                   uint32_t head_dim,
                                                    bool is_symmetric,
                                                    double scale_in) {
     uint32_t m = matrix.get_shape()[0];
     uint32_t total_cols = matrix.get_shape()[1];
-    uint32_t cols_per_head = total_cols / n_heads;
+    shape = {m, total_cols};
+    head_shape = {m, head_dim};
+    matmul_block_size = d;
+    uint32_t cols_per_head = head_dim;
+    uint32_t n = cols_per_head * n_heads;  // columns per megablock
+    uint32_t K_col = div_ceil(total_cols, n);
     uint32_t n_h_padded = next_power_of_2(n_heads);
     int n_slot = context->get_parameter().get_n() / 2;
     const int N_THREAD = 4;
 
-    // Determine chunk sizing and n_blocks_per_chunk(S)
+    // Determine chunk sizing and n_heads_per_chunk(S)
     uint32_t S, chunk_size, n_cts_per_block_idx;
     if ((uint32_t)n_slot >= n_h_padded * d * d) {
         S = n_h_padded;
@@ -138,41 +167,50 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
     } else {
         S = n_slot / (d * d);
         chunk_size = n_slot;
+        if (S == 1) {
+            n_h_padded = n_heads;
+        }
         n_cts_per_block_idx = n_h_padded / S;
     }
     uint32_t num_chunks = n_slot / chunk_size;
 
     uint32_t num_block_rows = div_ceil(m, d);
     uint32_t num_block_cols = div_ceil(cols_per_head, d);
-    uint32_t total_vecs = num_block_rows * num_block_cols * n_cts_per_block_idx;
+    uint32_t cts_per_mb = num_block_rows * num_block_cols * n_cts_per_block_idx;
+    uint32_t total_vecs = K_col * cts_per_mb;
 
     vector<vector<double>> block_vecs(total_vecs);
 
-    // Column-major block order: for bj, for bi, for g (group number of cts for the same block idx)
-    for (uint32_t bj = 0; bj < num_block_cols; bj++) {
-        for (uint32_t bi = 0; bi < num_block_rows; bi++) {
-            for (uint32_t g = 0; g < n_cts_per_block_idx; g++) {
-                uint32_t vec_idx = (bi + num_block_rows * bj) * n_cts_per_block_idx + g;
-                vector<double> vec(n_slot, 0.0);
+    for (uint32_t col_mb = 0; col_mb < K_col; col_mb++) {
+        // Column-major block order: for bj, for bi, for g
+        for (uint32_t bj = 0; bj < num_block_cols; bj++) {
+            for (uint32_t bi = 0; bi < num_block_rows; bi++) {
+                for (uint32_t g = 0; g < n_cts_per_block_idx; g++) {
+                    uint32_t local_idx = (bi + num_block_rows * bj) * n_cts_per_block_idx + g;
+                    uint32_t vec_idx = col_mb * cts_per_mb + local_idx;
+                    vector<double> vec(n_slot, 0.0);
 
-                for (uint32_t h_local = 0; h_local < S; h_local++) {
-                    uint32_t h = g * S + h_local;  // global head index
-                    for (uint32_t col = 0; col < d; col++) {
-                        for (uint32_t row = 0; row < d; row++) {
-                            uint32_t r = bi * d + row;
-                            uint32_t c = bj * d + col;
-                            double val = 0.0;
-                            if (h < n_heads && r < m && c < cols_per_head) {
-                                val = matrix.get(r, h * cols_per_head + c);
-                            }
-                            uint32_t base_slot = (row + d * col) * S + h_local;
-                            for (uint32_t ci = 0; ci < num_chunks; ci++) {
-                                vec[ci * chunk_size + base_slot] = val;
+                    for (uint32_t h_local = 0; h_local < S; h_local++) {
+                        uint32_t h = g * S + h_local;  // global head index
+                        for (uint32_t col = 0; col < d; col++) {
+                            for (uint32_t row = 0; row < d; row++) {
+                                uint32_t r = bi * d + row;
+                                uint32_t c = bj * d + col;
+                                double val = 0.0;
+                                if (h < n_heads && r < m && c < cols_per_head) {
+                                    uint32_t global_col = col_mb * n + h * cols_per_head + c;
+                                    if (global_col < total_cols)
+                                        val = matrix.get(r, global_col);
+                                }
+                                uint32_t base_slot = (row + d * col) * S + h_local;
+                                for (uint32_t ci = 0; ci < num_chunks; ci++) {
+                                    vec[ci * chunk_size + base_slot] = val;
+                                }
                             }
                         }
                     }
+                    block_vecs[vec_idx] = move(vec);
                 }
-                block_vecs[vec_idx] = move(vec);
             }
         }
     }
@@ -197,6 +235,7 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
 
 Array<double, 2>
 FeatureMatEncrypted::par_block_col_major_unpack(uint32_t m, uint32_t n_per_head, uint32_t d, uint32_t n_heads) const {
+    uint32_t total_cols = shape[1];
     uint32_t n_h_padded = next_power_of_2(n_heads);
     int n_slot = context->get_parameter().get_n() / 2;
     const int N_THREAD = 4;
@@ -209,42 +248,225 @@ FeatureMatEncrypted::par_block_col_major_unpack(uint32_t m, uint32_t n_per_head,
     } else {
         S = n_slot / (d * d);
         chunk_size = n_slot;
+        if (S == 1) {
+            n_h_padded = n_heads;
+        }
         n_cts_per_block_idx = n_h_padded / S;
     }
 
     uint32_t num_block_rows = div_ceil(m, d);
     uint32_t num_block_cols = div_ceil(n_per_head, d);
-    uint32_t total_vecs = num_block_rows * num_block_cols * n_cts_per_block_idx;
-    uint32_t total_cols = n_heads * n_per_head;
+    uint32_t cts_per_mb = num_block_rows * num_block_cols * n_cts_per_block_idx;
 
+    // Infer K_col (number of output megablocks) from ciphertext count
+    uint32_t K_col = data.size() / cts_per_mb;
+    assert(K_col * cts_per_mb == data.size());
+
+    uint32_t n = n_heads * n_per_head;  // columns per megablock
     Array<double, 2> result({(uint64_t)m, (uint64_t)total_cols});
 
-    parallel_for(total_vecs, N_THREAD, *context, [&](CkksContext& ctx_copy, int vec_idx) {
-        // Recover bi, bj, g from vec_idx
-        uint32_t block_idx = vec_idx / n_cts_per_block_idx;
-        uint32_t g = vec_idx % n_cts_per_block_idx;
-        uint32_t bi = block_idx % num_block_rows;
-        uint32_t bj = block_idx / num_block_rows;
+    for (uint32_t col_mb = 0; col_mb < K_col; col_mb++) {
+        uint32_t ct_offset = col_mb * cts_per_mb;
 
-        CkksPlaintext x_pt = ctx_copy.decrypt(data[vec_idx]);
-        Array1D x_mg = ctx_copy.decode(x_pt);
+        parallel_for(cts_per_mb, N_THREAD, *context, [&](CkksContext& ctx_copy, int local_idx) {
+            uint32_t vec_idx = ct_offset + local_idx;
+            // Recover bi, bj, g from local_idx
+            uint32_t block_idx = local_idx / n_cts_per_block_idx;
+            uint32_t g = local_idx % n_cts_per_block_idx;
+            uint32_t bi = block_idx % num_block_rows;
+            uint32_t bj = block_idx / num_block_rows;
 
-        for (uint32_t h_local = 0; h_local < S; h_local++) {
-            uint32_t h = g * S + h_local;
-            if (h >= n_heads)
-                continue;
-            for (uint32_t col = 0; col < d; col++) {
-                for (uint32_t row = 0; row < d; row++) {
-                    uint32_t r = bi * d + row;
-                    uint32_t c = bj * d + col;
-                    if (r < m && c < n_per_head) {
-                        uint32_t slot = (row + d * col) * S + h_local;
-                        result.set(r, h * n_per_head + c, x_mg[slot]);
+            CkksPlaintext x_pt = ctx_copy.decrypt(data[vec_idx]);
+            Array1D x_mg = ctx_copy.decode(x_pt);
+
+            for (uint32_t h_local = 0; h_local < S; h_local++) {
+                uint32_t h = g * S + h_local;
+                if (h >= n_heads)
+                    continue;
+                for (uint32_t col = 0; col < d; col++) {
+                    for (uint32_t row = 0; row < d; row++) {
+                        uint32_t r = bi * d + row;
+                        uint32_t c = bj * d + col;
+                        if (r < m && c < n_per_head) {
+                            uint32_t global_col = col_mb * n + h * n_per_head + c;
+                            if (global_col < total_cols) {
+                                uint32_t slot = (row + d * col) * S + h_local;
+                                result.set(r, global_col, x_mg[slot]);
+                            }
+                        }
                     }
                 }
             }
+        });
+    }
+    return result;
+}
+
+void FeatureMatEncrypted::par_diagonal_pack(const Array<double, 2>& matrix,
+                                            uint32_t n_heads,
+                                            const Duo& head_shape_in,
+                                            bool is_lower,
+                                            bool is_transposed,
+                                            bool is_symmetric,
+                                            double scale_in) {
+    uint32_t H_prepad = n_heads;
+    assert(H_prepad > 0);
+
+    uint32_t n_prepad = is_transposed ? head_shape_in[1] : head_shape_in[0];
+    uint32_t m_prepad = is_transposed ? head_shape_in[0] : head_shape_in[1];
+    uint32_t m = next_power_of_2(m_prepad);
+    assert(n_prepad > 0);
+    assert(m_prepad > 0);
+
+    if (is_transposed) {
+        assert(matrix.get_shape()[1] == n_prepad);
+        shape = {static_cast<uint32_t>(matrix.get_shape()[0]), n_prepad};
+    } else {
+        assert(matrix.get_shape()[0] == n_prepad);
+        shape = {n_prepad, static_cast<uint32_t>(matrix.get_shape()[1])};
+    }
+    head_shape = head_shape_in;
+    matmul_block_size = m;
+
+    uint32_t packed_extent = H_prepad * m_prepad;
+    uint32_t n_mb = div_ceil(is_transposed ? shape[0] : shape[1], packed_extent);
+    uint32_t H = next_power_of_2(H_prepad);
+    uint32_t n = next_power_of_2(n_prepad);
+    assert(n >= m);
+    assert(n % m == 0);
+
+    uint32_t n_slot = context->get_parameter().get_n() / 2;
+    assert(n_slot % (H * n) == 0);
+    uint32_t c = n_slot / (H * n);
+    assert(m % c == 0);
+    uint32_t cts_per_mb = m / c;
+    uint32_t total_vecs = n_mb * cts_per_mb;
+    const int N_THREAD = 4;
+
+    vector<vector<double>> packed_vecs(total_vecs);
+
+    for (uint32_t mb = 0; mb < n_mb; mb++) {
+        for (uint32_t ct_local = 0; ct_local < cts_per_mb; ct_local++) {
+            vector<double> vec(n_slot, 0.0);
+            for (uint32_t local_diag = 0; local_diag < c; local_diag++) {
+                uint32_t diag_idx = ct_local * c + local_diag;
+                uint32_t segment_base = local_diag * H * n;
+                for (uint32_t t = 0; t < n; t++) {
+                    for (uint32_t h = 0; h < H; h++) {
+                        double val = 0.0;
+                        if (is_transposed) {
+                            uint32_t local_row = is_lower ? (diag_idx + t) % m : t % m;
+                            uint32_t col = is_lower ? t : (diag_idx + t) % n;
+                            uint32_t global_row = mb * packed_extent + h * m_prepad + local_row;
+                            if (h < H_prepad && local_row < m_prepad && col < n_prepad && global_row < shape[0]) {
+                                val = matrix.get(global_row, col);
+                            }
+                        } else {
+                            uint32_t row = is_lower ? (diag_idx + t) % n : t;
+                            uint32_t local_col = is_lower ? t % m : (diag_idx + t) % m;
+                            uint32_t global_col = mb * packed_extent + h * m_prepad + local_col;
+                            if (h < H_prepad && row < n_prepad && local_col < m_prepad && global_col < shape[1]) {
+                                val = matrix.get(row, global_col);
+                            }
+                        }
+                        vec[segment_base + t * H + h] = val;
+                    }
+                }
+            }
+            packed_vecs[mb * cts_per_mb + ct_local] = move(vec);
+        }
+    }
+
+    data.clear();
+    data_compress.clear();
+    if (is_symmetric) {
+        data_compress.resize(total_vecs);
+    } else {
+        data.resize(total_vecs);
+    }
+
+    parallel_for(total_vecs, N_THREAD, *context, [&](CkksContext& ctx_copy, int idx) {
+        auto enc = ctx_copy.encode(packed_vecs[idx], level, scale_in);
+        if (is_symmetric) {
+            data_compress[idx] = ctx_copy.encrypt_symmetric_compressed(enc);
+        } else {
+            data[idx] = ctx_copy.encrypt_symmetric(enc);
         }
     });
+}
+
+Array<double, 2> FeatureMatEncrypted::par_diagonal_unpack(uint32_t n_heads,
+                                                          const Duo& head_shape_in,
+                                                          bool is_lower,
+                                                          bool is_transposed) const {
+    uint32_t H_prepad = n_heads;
+    assert(H_prepad > 0);
+
+    uint32_t n_prepad = is_transposed ? head_shape_in[1] : head_shape_in[0];
+    uint32_t m_prepad = is_transposed ? head_shape_in[0] : head_shape_in[1];
+    uint32_t m = next_power_of_2(m_prepad);
+    assert(n_prepad > 0);
+    assert(m_prepad > 0);
+
+    if (is_transposed) {
+        assert(shape[1] == n_prepad);
+        assert(head_shape[0] == head_shape_in[0] && head_shape[1] == head_shape_in[1]);
+    } else {
+        assert(shape[0] == n_prepad);
+        assert(head_shape[0] == head_shape_in[0] && head_shape[1] == head_shape_in[1]);
+    }
+
+    uint32_t packed_extent = H_prepad * m_prepad;
+    uint32_t n_mb = div_ceil(is_transposed ? shape[0] : shape[1], packed_extent);
+    uint32_t H = next_power_of_2(H_prepad);
+    uint32_t n = next_power_of_2(n_prepad);
+    assert(n >= m);
+
+    assert(n % m == 0);
+
+    uint32_t n_slot = context->get_parameter().get_n() / 2;
+    assert(n_slot % (H * n) == 0);
+    uint32_t c = n_slot / (H * n);
+    assert(m % c == 0);
+    uint32_t cts_per_mb = m / c;
+    assert(data.size() == n_mb * cts_per_mb);
+    const int N_THREAD = 4;
+
+    std::array<uint64_t, 2> result_shape =
+        is_transposed ? std::array<uint64_t, 2>{shape[0], n_prepad} : std::array<uint64_t, 2>{n_prepad, shape[1]};
+    Array<double, 2> result(result_shape);
+
+    for (uint32_t mb = 0; mb < n_mb; mb++) {
+        uint32_t ct_offset = mb * cts_per_mb;
+        parallel_for(cts_per_mb, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_local) {
+            CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_offset + ct_local]);
+            Array1D slots = ctx_copy.decode(x_pt);
+            for (uint32_t local_diag = 0; local_diag < c; local_diag++) {
+                uint32_t diag_idx = ct_local * c + local_diag;
+                uint32_t segment_base = local_diag * H * n;
+                for (uint32_t t = 0; t < n; t++) {
+                    for (uint32_t h = 0; h < H_prepad; h++) {
+                        if (is_transposed) {
+                            uint32_t local_row = is_lower ? (diag_idx + t) % m : t % m;
+                            uint32_t col = is_lower ? t : (diag_idx + t) % n;
+                            uint32_t global_row = mb * packed_extent + h * m_prepad + local_row;
+                            if (local_row < m_prepad && col < n_prepad && global_row < shape[0]) {
+                                result.set(global_row, col, slots[segment_base + t * H + h]);
+                            }
+                        } else {
+                            uint32_t row = is_lower ? (diag_idx + t) % n : t;
+                            uint32_t local_col = is_lower ? t % m : (diag_idx + t) % m;
+                            uint32_t global_col = mb * packed_extent + h * m_prepad + local_col;
+                            if (row < n_prepad && local_col < m_prepad && global_col < shape[1]) {
+                                result.set(row, global_col, slots[segment_base + t * H + h]);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     return result;
 }
 
@@ -313,6 +535,7 @@ FeatureMatEncrypted FeatureMatEncrypted::drop_level(int n_level_to_drop) const {
     int new_level = level - n_level_to_drop;
     FeatureMatEncrypted result(context, new_level);
     result.shape = shape;
+    result.head_shape = head_shape;
     result.matmul_block_size = matmul_block_size;
     result.data.resize(data.size());
     parallel_for(data.size(), th_nums, *context, [&](CkksContext& ctx_copy, int ct_idx) {

@@ -23,7 +23,8 @@
 
 class FeatureMatEncrypted : public FeatureEncrypted {
 public:
-    Duo shape = {0, 0};  // {rows (L), cols (C)}
+    Duo shape = {0, 0};       // full shape: {rows, total_cols}
+    Duo head_shape = {0, 0};  // per-head shape: {rows, cols_per_head}
     uint32_t matmul_block_size = 0;
     std::vector<ls::CkksCiphertext> data;
     std::vector<ls::CkksCompressedCiphertext> data_compress;
@@ -39,17 +40,31 @@ public:
 
     // Parallel (interleaved) block column-major packing: interleave blocks from
     // multiple heads at the same block position into a single ciphertext.
-    // matrix shape: m × (n_heads * cols_per_head), block_size d = head_dim.
+    // head_dim: columns per head within each megablock.
     void par_block_col_major_pack(const Array<double, 2>& matrix,
                                   uint32_t d,
                                   uint32_t n_heads,
+                                  uint32_t head_dim,
                                   bool is_symmetric = false,
                                   double scale_in = DEFAULT_SCALE);
+    // Unpack: K_col is inferred from data.size(). n_per_head = head_dim within each megablock.
+    // total_cols is taken from shape[1].
     Array<double, 2> par_block_col_major_unpack(uint32_t m, uint32_t n_per_head, uint32_t d, uint32_t n_heads) const;
+
+    void par_diagonal_pack(const Array<double, 2>& matrix,
+                           uint32_t n_heads,
+                           const Duo& head_shape,
+                           bool is_lower = true,
+                           bool is_transposed = true,
+                           bool is_symmetric = false,
+                           double scale_in = DEFAULT_SCALE);
+    Array<double, 2>
+    par_diagonal_unpack(uint32_t n_heads, const Duo& head_shape, bool is_lower = true, bool is_transposed = true) const;
 
     void decompress();
 
     Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;
     FeatureMatEncrypted drop_level(int n_level_to_drop) const;
+    FeatureMatEncrypted refresh_ciphertext() const;
 };

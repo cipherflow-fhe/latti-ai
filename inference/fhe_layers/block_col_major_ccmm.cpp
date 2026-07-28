@@ -337,3 +337,43 @@ BlockColMajorCCMM::run(CkksContext& ctx, const FeatureMatEncrypted& A, const Fea
     result.matmul_block_size = d_;
     return result;
 }
+
+// ── Generate methods for encode_pt executor ───────────────────────────────────
+
+CkksPlaintextRingt BlockColMajorCCMM::generate_sigma_pt(CkksContext& ctx, uint32_t k) const {
+    return ctx.encode_ringt(build_sigma_diagonal(k), param_.get_q(level_));
+}
+
+CkksPlaintextRingt BlockColMajorCCMM::generate_tau_pt(CkksContext& ctx, uint32_t offset_idx) const {
+    int offset = (int)offset_idx - (int)(d_ - 1);  // offset_idx 0..2d-2 → offset -(d-1)..d-1
+    return ctx.encode_ringt(build_tau_diagonal(offset), param_.get_q(level_));
+}
+
+CkksPlaintextRingt BlockColMajorCCMM::generate_psi_k0_pt(CkksContext& ctx) const {
+    double psi_scale = param_.get_q(level_ - 2) / param_.get_default_scale() * param_.get_q(level_ - 1);
+    return ctx.encode_ringt(build_psi_k_equal_0_diagonals(), psi_scale);
+}
+
+CkksPlaintextRingt BlockColMajorCCMM::generate_psi_wk_pt(CkksContext& ctx, uint32_t i) const {
+    double psi_scale = param_.get_q(level_ - 2) / param_.get_default_scale() * param_.get_q(level_ - 1);
+    auto [w_k, w_kd] = build_psi_diagonals(i);
+    return ctx.encode_ringt(w_k, psi_scale);
+}
+
+CkksPlaintextRingt BlockColMajorCCMM::generate_psi_wkd_pt(CkksContext& ctx, uint32_t i) const {
+    double psi_scale = param_.get_q(level_ - 2) / param_.get_default_scale() * param_.get_q(level_ - 1);
+    auto [w_k, w_kd] = build_psi_diagonals(i);
+    return ctx.encode_ringt(w_kd, psi_scale);
+}
+
+Array<double, 2> BlockColMajorCCMM::run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const {
+    Array<double, 2> C({m_, p_});
+    for (uint32_t i = 0; i < m_; i++)
+        for (uint32_t j = 0; j < p_; j++) {
+            double s = 0;
+            for (uint32_t k = 0; k < n_; k++)
+                s += A.get(i, k) * B.get(k, j);
+            C.set(i, j, s);
+        }
+    return C;
+}

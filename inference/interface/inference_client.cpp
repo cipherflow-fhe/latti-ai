@@ -19,12 +19,17 @@
 #include <iostream>
 
 #include "interface/inference_client.h"
+#include "data_structs/feature_mat.h"
 
 using namespace lattisense;
 
 using namespace fhe_ops_lib;
 
 namespace {
+
+bool is_par_diagonal_pack(const std::string& mat_pack_style) {
+    return mat_pack_style == "par_diagonal_pack";
+}
 
 int read_skip(const json& param, int default_value = 1) {
     if (!param.contains("skip")) {
@@ -56,12 +61,29 @@ void InferenceClient::read_configuration() {
         output_skip_ = read_skip(output_param);
     }
 
+    mat_pack_style_ = task_config_.value<std::string>("mat_pack_style", "");
+
     // Read per-output parameters
+    uint32_t global_n_heads = task_config_.value("n_heads", 0u);
+    uint32_t global_matmul_block_size = task_config_.value("matmul_block_size", 0u);
     for (auto& [name, param] : task_config_["task_output_param"].items()) {
         OutputParam op;
         op.dim = param["dim"];
-        op.channel = param["channel"];
-        if (op.dim == 0) {
+        op.channel = param.value("channel", 1);
+        op.is_mat = param.value("data_type", std::string("")) == "feature_mat";
+        op.is_transposed = param.value("is_transposed", true);
+        if (op.is_mat) {
+            op.height = param["shape"][0];
+            op.width = param["shape"][1];
+            if (param.contains("head_shape")) {
+                op.head_shape = {param["head_shape"][0], param["head_shape"][1]};
+            }
+            op.matmul_block_size = param.value("matmul_block_size", global_matmul_block_size);
+            op.n_heads = param.value("n_heads", global_n_heads);
+            if (param.contains("head_shape")) {
+                op.head_shape = {param["head_shape"][0].get<uint32_t>(), param["head_shape"][1].get<uint32_t>()};
+            }
+        } else if (op.dim == 0) {
             op.skip = read_skip(param);
         } else if (op.dim == 1) {
             op.length = param["shape"][0];
@@ -86,8 +108,20 @@ void InferenceClient::read_configuration() {
         InputParam ip;
         ip.dim = param["dim"];
         ip.level = param["level"];
-        ip.channel = param["channel"];
-        if (ip.dim == 2) {
+        ip.channel = param.value("channel", 1);
+        ip.is_mat = param.value("data_type", std::string("")) == "feature_mat";
+        if (ip.is_mat) {
+            ip.height = param["shape"][0];
+            ip.width = param["shape"][1];
+            if (param.contains("head_shape")) {
+                ip.head_shape = {param["head_shape"][0], param["head_shape"][1]};
+            }
+            ip.matmul_block_size = param.value("matmul_block_size", global_matmul_block_size);
+            ip.n_heads = param.value("n_heads", global_n_heads);
+            if (param.contains("head_shape")) {
+                ip.head_shape = {param["head_shape"][0].get<uint32_t>(), param["head_shape"][1].get<uint32_t>()};
+            }
+        } else if (ip.dim == 2) {
             ip.height = param["shape"][0];
             ip.width = param["shape"][1];
         } else if (ip.dim == 1) {
@@ -96,8 +130,20 @@ void InferenceClient::read_configuration() {
         } else if (ip.dim == 0) {
             ip.skip = read_skip(param);
         }
-        ip.pack_num = param.value("pack_num", 0);
+        if (!ip.is_mat) {
+            ip.pack_num = param.value("pack_num", 0);
+        }
+        ip.is_transposed = param.value("is_transposed", true);
         input_params_[name] = ip;
+    }
+
+    // Compute par_block_size from the first input feature (if par format)
+    if (global_n_heads > 1 && !input_params_.empty()) {
+        auto& first_ip = input_params_.begin()->second;
+        if (first_ip.is_mat) {
+            par_block_size_ =
+                first_ip.matmul_block_size != 0 ? first_ip.matmul_block_size : first_ip.width / global_n_heads;
+        }
     }
 
     // Use first input's ckks params for context setup
@@ -220,9 +266,34 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
         }
         const auto& param = it->second;
 
-        std::cout << "[Client] Encrypting input '" << name << "' (dim=" << param.dim << ")..." << std::endl;
+        std::cout << "[Client] Encrypting input '" << name << "' (dim=" << param.dim << ", is_mat=" << param.is_mat
+                  << ")..." << std::endl;
 
-        if (param.dim == 0) {
+        if (param.is_mat) {
+            if (param.n_heads <= 1) {
+                throw std::runtime_error("[Client] feature_mat input only supports par matrix ops with n_heads > 1: " +
+                                         name);
+            }
+            FeatureMatEncrypted input_ct(context_ptr_, param.level);
+            if (is_par_diagonal_pack(mat_pack_style_)) {
+                if (param.head_shape[0] == 0 || param.head_shape[1] == 0) {
+                    throw std::runtime_error("[Client] par_diagonal_pack input is missing head_shape: " + name);
+                }
+                auto csv_array = csv_to_array<2>(csv_path, {(uint64_t)param.width, (uint64_t)param.height});
+                auto input_array = transpose_2d_array(csv_array);
+                input_ct.par_diagonal_pack(input_array, param.n_heads, param.head_shape, true, param.is_transposed,
+                                           false, scale);
+            } else {
+                auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.height, (uint64_t)param.width});
+                if (param.width % param.n_heads != 0) {
+                    throw std::runtime_error("[Client] feature_mat width must be divisible by n_heads: " + name);
+                }
+                uint32_t head_dim = param.head_shape[1] != 0 ? param.head_shape[1] : param.width / param.n_heads;
+                uint32_t d = param.matmul_block_size != 0 ? param.matmul_block_size : head_dim;
+                input_ct.par_block_col_major_pack(input_array, d, param.n_heads, head_dim, false, scale);
+            }
+            result[name] = input_ct.serialize();
+        } else if (param.dim == 0) {
             auto input_array = csv_to_array<1>(csv_path);
             Feature0DEncrypted input_ct(context_ptr_, param.level);
             uint32_t input_skip = n_slots_ / param.pack_num;
@@ -274,7 +345,46 @@ InferenceClient::decrypt(const std::map<std::string, Bytes>& encrypted_outputs) 
         std::cout << "[Client] Decrypting output '" << name << "' (dim=" << param.dim << ")..." << std::endl;
 
         DecryptedOutput result;
-        if (param.dim == 0) {
+        if (param.is_mat) {
+            if (param.n_heads <= 1) {
+                throw std::runtime_error("[Client] feature_mat output only supports par matrix ops with n_heads > 1: " +
+                                         name);
+            }
+            FeatureMatEncrypted output_ct(context_ptr_, 0);
+            output_ct.deserialize(bytes);
+            Array<double, 2> decrypted;
+            if (is_par_diagonal_pack(mat_pack_style_)) {
+                if (param.head_shape[0] == 0 || param.head_shape[1] == 0) {
+                    throw std::runtime_error("[Client] par_diagonal_pack output is missing head_shape: " + name);
+                }
+                output_ct.shape = {static_cast<uint32_t>(param.height), static_cast<uint32_t>(param.width)};
+                output_ct.head_shape = param.head_shape;
+                decrypted = output_ct.par_diagonal_unpack(param.n_heads, param.head_shape, true, param.is_transposed);
+                decrypted = transpose_2d_array(decrypted);
+            } else {
+                uint32_t d = output_ct.matmul_block_size != 0 ? output_ct.matmul_block_size : par_block_size_;
+                if (d == 0) {
+                    throw std::runtime_error("[Client] feature_mat output is missing par block size: " + name);
+                }
+                uint32_t m_per_head = param.height;
+                uint32_t n_per_head = d;
+                if (param.head_shape[0] != 0 && param.head_shape[1] != 0) {
+                    n_per_head = param.head_shape[1];
+                    if (param.height == param.head_shape[0] * param.n_heads && param.width == param.head_shape[1]) {
+                        m_per_head = param.height;
+                    } else {
+                        m_per_head = param.head_shape[0];
+                    }
+                } else if (param.height % param.n_heads == 0 && param.height > d) {
+                    m_per_head = param.height / param.n_heads;
+                } else {
+                    m_per_head = param.height;
+                }
+                decrypted = output_ct.par_block_col_major_unpack(m_per_head, n_per_head, d, param.n_heads);
+            }
+            auto dec_1d = decrypted.to_array_1d();
+            result.output = std::vector<double>(dec_1d.data(), dec_1d.data() + dec_1d.size());
+        } else if (param.dim == 0) {
             Feature0DEncrypted output_ct(context_ptr_, 0);
             output_ct.deserialize(bytes);
             output_ct.skip = param.skip;

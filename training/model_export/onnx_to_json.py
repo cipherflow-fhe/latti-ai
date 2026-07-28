@@ -35,13 +35,37 @@ from .operations.MaxPool import MaxPoolComputeNode
 from .operations.Sigmoid import SigmoidComputeNode
 from .operations.PolyRelu import PolyReluComputeNode
 from .operations.ConvTranspose import ConvTransposeComputeNode
-from .operations.PolyAct import PolyActComputeNode
+from .operations.PolyAct import PolyActComputeNode, PolyActRNPolyComputeNode
+from .operations.MatMul import MatMulComputeNode
+from .operations.Transpose import TransposeComputeNode
+from .operations.LayerNorm import LayerNormComputeNode
 from .onnx_model_manipulations import simplify_onnx_model
 
 log = logging.getLogger(__name__)
 
+MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
 
-def gen_data_nodes(value_infos) -> dict[str, FeatureNode]:
+
+def _json_safe_attr_value(value):
+    if isinstance(value, bytes):
+        return value.decode('utf-8')
+    if isinstance(value, onnx.TensorProto):
+        return numpy_helper.to_array(value).tolist()
+    if hasattr(value, 'item') and callable(value.item):
+        return value.item()
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_attr_value(v) for v in value]
+    return value
+
+
+def _node_attrs(node: onnx.NodeProto) -> dict:
+    attrs = {}
+    for attr in node.attribute:
+        attrs[attr.name] = _json_safe_attr_value(onnx.helper.get_attribute_value(attr))
+    return attrs
+
+
+def gen_data_nodes(value_infos, feature_mat: bool = False) -> dict[str, FeatureNode]:
     """Build FeatureNode dict from ONNX value_info entries."""
     data_nodes: dict[str, FeatureNode] = dict()
     for key, feature in value_infos.items():
@@ -51,7 +75,14 @@ def gen_data_nodes(value_infos) -> dict[str, FeatureNode]:
             tensor_shape.append(s.dim_value)
         if len(tensor_shape) == 0:
             continue
-        if len(tensor_shape) == 1:
+        if feature_mat:
+            if len(tensor_shape) == 3:
+                shape = tensor_shape[1:]
+            else:
+                shape = list(tensor_shape)
+            dim = 2
+            channel = 1
+        elif len(tensor_shape) == 1:
             shape = tensor_shape
             dim = 0
             channel = tensor_shape[0]
@@ -67,6 +98,8 @@ def gen_data_nodes(value_infos) -> dict[str, FeatureNode]:
         skip = [1] * max(dim, 1)
         ckks_parameter_id = 'param0'
         node = FeatureNode(key, dim, channel, scale, skip, ckks_parameter_id, shape)
+        if feature_mat:
+            node.data_type = 'feature_mat'
         data_nodes[key] = node
     return data_nodes
 
@@ -86,14 +119,259 @@ def get_constant(const_node: onnx.NodeProto):
     return const_value
 
 
-def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
+class PcmAddPtComputeNode(ComputeNode):
+    def __init__(
+        self,
+        layer_id: str,
+        feature_input: list[FeatureNode],
+        feature_output: list[FeatureNode],
+        weight_path: str,
+        layer_type: str = 'pcm_add_pt',
+        source_op_type: str = '',
+    ):
+        super().__init__(layer_id, layer_type, feature_input, feature_output)
+        self.weight_path = weight_path
+        self.source_op_type = source_op_type
+        feature_output[0].skip = list(feature_input[0].skip)
+        feature_output[0].shape = list(feature_input[0].shape)
+        feature_output[0].level = feature_input[0].level
+        feature_output[0].data_type = feature_input[0].data_type
+
+    def to_json(self) -> dict:
+        info = {
+            'type': self.layer_type,
+            'feature_input': [i.node_id for i in self.feature_input],
+            'feature_output': [i.node_id for i in self.feature_output],
+            'weight_path': self.weight_path,
+        }
+        if self.source_op_type:
+            info['source_op_type'] = self.source_op_type
+        return info
+
+
+class CustomMultiHeadAttentionComputeNode(ComputeNode):
+    def __init__(
+        self,
+        layer_id: str,
+        feature_input: list[FeatureNode],
+        feature_output: list[FeatureNode],
+        q_weight_path: str,
+        k_weight_path: str,
+        v_weight_path: str,
+        proj_weight_path: str,
+        gamma_path: str,
+        poly_weight_path: str,
+        q_bias_path: str = '',
+        k_bias_path: str = '',
+        v_bias_path: str = '',
+        proj_bias_path: str = '',
+        poly_order: int = 4,
+        model_type: str = '',
+        attrs: dict | None = None,
+    ):
+        super().__init__(layer_id, 'CustomMultiHeadAttention', feature_input, feature_output)
+        self.q_weight_path = q_weight_path
+        self.k_weight_path = k_weight_path
+        self.v_weight_path = v_weight_path
+        self.proj_weight_path = proj_weight_path
+        self.gamma_path = gamma_path
+        self.poly_weight_path = poly_weight_path
+        self.q_bias_path = q_bias_path
+        self.k_bias_path = k_bias_path
+        self.v_bias_path = v_bias_path
+        self.proj_bias_path = proj_bias_path
+        self.poly_order = poly_order
+        self.model_type = model_type
+        self.attrs = attrs or {}
+
+    @staticmethod
+    def _split_qkv_weight_paths(qkv_weight_path: str, layer_id: str) -> tuple[str, str, str]:
+        if qkv_weight_path.endswith('.qkv.weight'):
+            prefix = qkv_weight_path[: -len('.qkv.weight')]
+            return f'{prefix}.q.weight', f'{prefix}.k.weight', f'{prefix}.v.weight'
+        return f'{layer_id}.q.weight', f'{layer_id}.k.weight', f'{layer_id}.v.weight'
+
+    @staticmethod
+    def _split_qkv_bias_paths(qkv_bias_path: str, layer_id: str) -> tuple[str, str, str]:
+        if not qkv_bias_path:
+            return '', '', ''
+        if qkv_bias_path.endswith('.qkv.bias'):
+            prefix = qkv_bias_path[: -len('.qkv.bias')]
+            return f'{prefix}.q.bias', f'{prefix}.k.bias', f'{prefix}.v.bias'
+        return f'{layer_id}.q.bias', f'{layer_id}.k.bias', f'{layer_id}.v.bias'
+
+    @staticmethod
+    def _gamma_path(running_max_path: str, layer_id: str) -> str:
+        if running_max_path.endswith('.running_max_concat'):
+            return running_max_path[: -len('.running_max_concat')] + '.gamma'
+        return f'{layer_id}.gamma'
+
+    @staticmethod
+    def _poly_weight_path(poly_coeff_paths: list[str], running_max_path: str, layer_id: str) -> str:
+        if running_max_path.endswith('.running_max_concat'):
+            attn_prefix = running_max_path[: -len('.running_max_concat')]
+            if poly_coeff_paths:
+                coeff_prefix = poly_coeff_paths[0].rsplit('.', 1)[0]
+                marker = '.attn.'
+                if marker in coeff_prefix and attn_prefix.endswith('.attn'):
+                    return f'{attn_prefix}.{coeff_prefix.split(marker, 1)[1]}.weight'
+            return f'{attn_prefix}.poly.weight'
+        if poly_coeff_paths:
+            first_path = poly_coeff_paths[0]
+            suffix = first_path.rsplit('.', 1)[-1]
+            if suffix.startswith('a') and suffix[1:].isdigit():
+                return first_path.rsplit('.', 1)[0] + '.weight'
+        return f'{layer_id}.poly.weight'
+
+    @staticmethod
+    def _poly_order(poly_coeff_paths: list[str], default: int = 4) -> int:
+        order = 0
+        for path in poly_coeff_paths:
+            suffix = path.rsplit('.', 1)[-1]
+            if suffix.startswith('a') and suffix[1:].isdigit():
+                order = max(order, int(suffix[1:]))
+        return order or default
+
+    @staticmethod
+    def from_onnx_node(x: onnx.NodeProto, features_nodes) -> 'CustomMultiHeadAttentionComputeNode':
+        layer_id = format_id(x.name)
+        feature_input = [features_nodes[format_id(x.input[0])]]
+        feature_output = [features_nodes[format_id(x.output[0])]]
+        qkv_weight_path = x.input[1] if len(x.input) > 1 else ''
+        qkv_bias_path = x.input[2] if len(x.input) > 2 else ''
+        q_weight_path, k_weight_path, v_weight_path = CustomMultiHeadAttentionComputeNode._split_qkv_weight_paths(
+            qkv_weight_path, layer_id
+        )
+        q_bias_path, k_bias_path, v_bias_path = CustomMultiHeadAttentionComputeNode._split_qkv_bias_paths(
+            qkv_bias_path, layer_id
+        )
+        proj_weight_path = x.input[3] if len(x.input) > 3 else f'{layer_id}.proj.weight'
+        proj_bias_path = x.input[4] if len(x.input) > 4 else ''
+        running_max_path = x.input[5] if len(x.input) > 5 else ''
+        poly_coeff_paths = list(x.input[6:])
+
+        return CustomMultiHeadAttentionComputeNode(
+            layer_id=layer_id,
+            feature_input=feature_input,
+            feature_output=feature_output,
+            q_weight_path=q_weight_path,
+            k_weight_path=k_weight_path,
+            v_weight_path=v_weight_path,
+            proj_weight_path=proj_weight_path,
+            gamma_path=CustomMultiHeadAttentionComputeNode._gamma_path(running_max_path, layer_id),
+            poly_weight_path=CustomMultiHeadAttentionComputeNode._poly_weight_path(
+                poly_coeff_paths, running_max_path, layer_id
+            ),
+            q_bias_path=q_bias_path,
+            k_bias_path=k_bias_path,
+            v_bias_path=v_bias_path,
+            proj_bias_path=proj_bias_path,
+            poly_order=CustomMultiHeadAttentionComputeNode._poly_order(poly_coeff_paths),
+        )
+
+    @staticmethod
+    def from_bert_onnx_node(x: onnx.NodeProto, features_nodes) -> 'CustomMultiHeadAttentionComputeNode':
+        layer_id = format_id(x.name)
+        attrs = _node_attrs(x)
+        return CustomMultiHeadAttentionComputeNode(
+            layer_id=layer_id,
+            feature_input=[features_nodes[format_id(x.input[0])]],
+            feature_output=[features_nodes[format_id(x.output[0])]],
+            q_weight_path=x.input[1],
+            q_bias_path=x.input[2],
+            k_weight_path=x.input[3],
+            k_bias_path=x.input[4],
+            v_weight_path=x.input[5],
+            v_bias_path=x.input[6],
+            proj_weight_path=x.input[7],
+            proj_bias_path=x.input[8],
+            gamma_path=f'{layer_id}.gamma',
+            poly_weight_path=f'{layer_id}.poly.weight',
+            poly_order=15,
+            model_type='bert',
+            attrs=attrs,
+        )
+
+    def to_json(self) -> dict:
+        info = {
+            'type': self.layer_type,
+            'feature_input': [i.node_id for i in self.feature_input],
+            'feature_output': [i.node_id for i in self.feature_output],
+            'q_weight_path': self.q_weight_path,
+            'k_weight_path': self.k_weight_path,
+            'v_weight_path': self.v_weight_path,
+            'proj_weight_path': self.proj_weight_path,
+            'gamma_path': self.gamma_path,
+            'poly_weight_path': self.poly_weight_path,
+            'poly_order': self.poly_order,
+        }
+        if self.model_type:
+            info['model_type'] = self.model_type
+        for key, value in self.attrs.items():
+            info[key] = value
+        if self.q_bias_path:
+            info['q_bias_path'] = self.q_bias_path
+        if self.k_bias_path:
+            info['k_bias_path'] = self.k_bias_path
+        if self.v_bias_path:
+            info['v_bias_path'] = self.v_bias_path
+        if self.proj_bias_path:
+            info['proj_bias_path'] = self.proj_bias_path
+        return info
+
+
+class CustomPolyFunctionComputeNode(ComputeNode):
+    def __init__(
+        self,
+        layer_id: str,
+        layer_type: str,
+        feature_input: list[FeatureNode],
+        feature_output: list[FeatureNode],
+        attrs: dict | None = None,
+    ):
+        super().__init__(layer_id, layer_type, feature_input, feature_output)
+        self.attrs = attrs or {}
+
+    @staticmethod
+    def from_onnx_node(x: onnx.NodeProto, features_nodes) -> 'CustomPolyFunctionComputeNode':
+        return CustomPolyFunctionComputeNode(
+            layer_id=format_id(x.name),
+            layer_type=x.op_type,
+            feature_input=[features_nodes[format_id(x.input[0])]],
+            feature_output=[features_nodes[format_id(x.output[0])]],
+            attrs=_node_attrs(x),
+        )
+
+    def to_json(self) -> dict:
+        info = {
+            'type': self.layer_type,
+            'feature_input': [i.node_id for i in self.feature_input],
+            'feature_output': [i.node_id for i in self.feature_output],
+        }
+        info.update(self.attrs)
+        return info
+
+
+def onnx_to_json(
+    onnx_filename: str,
+    output_filename: str,
+    style: str,
+    mat_pack_style: str = '',
+    model_type: str = '',
+):
     """Convert an ONNX model file to the JSON format for encrypted inference.
 
     Args:
         onnx_filename:  Path to the input ``.onnx`` model.
         output_filename: Path to the output ``.json`` file.
         style:          Packing style (``'ordinary'`` or ``'multiplexed'``).
+        mat_pack_style:      Data packing type.
+        model_type:          Model family selector for custom ONNX variants.
     """
+    if mat_pack_style not in MAT_PACK_STYLES:
+        raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
+    feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
+
     onnx_model = onnx.load(onnx_filename)
     simplify_onnx_model(onnx_model)
     onnx_model = shape_inference.infer_shapes(onnx_model)
@@ -105,10 +383,14 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
     value_infos.update(input_value_infos)
     value_infos.update(output_value_infos)
     value_infos.update({i.name: i for i in graph.value_info})
-    features_nodes = gen_data_nodes(value_infos)
+    features_nodes = gen_data_nodes(value_infos, feature_mat=feature_mat)
     compute_nodes: dict[str, ComputeNode] = {}
 
-    constant_nodes = dict()
+    constant_nodes = {
+        format_id(init.name): [numpy_helper.to_array(init), numpy_helper.to_array(init)] for init in graph.initializer
+    }
+    weight_shapes = {init.name: list(init.dims) for init in graph.initializer}
+    initializer_names = {init.name for init in graph.initializer}
 
     for n in graph.node:
         name = format_id(n.output[0])
@@ -136,7 +418,9 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
             case 'Dropout':
                 compute_node = DropoutComputeNode.from_onnx_node(n, features_nodes)
             case 'Mul':
-                compute_node = MultCoeffComputeNode.from_onnx_node(n, features_nodes, constant_nodes)
+                compute_node = MultCoeffComputeNode.from_onnx_node(
+                    n, features_nodes, constant_nodes, mat_pack_style=mat_pack_style
+                )
             case 'AveragePool':
                 compute_node = AveragePoolComputeNode.from_onnx_node(n, features_nodes)
             case 'GlobalAveragePool':
@@ -159,22 +443,88 @@ def onnx_to_json(onnx_filename: str, output_filename: str, style: str):
                 compute_node = DenseComputeNode.from_onnx_node(n, features_nodes)
             case 'ConvTranspose':
                 compute_node = ConvTransposeComputeNode.from_onnx_node(n, features_nodes)
+            case 'MatMul':
+                compute_node = MatMulComputeNode.from_onnx_node(
+                    n, features_nodes, weight_shapes, mat_pack_style=mat_pack_style, model_type=model_type
+                )
+            case 'Transpose':
+                compute_node = TransposeComputeNode.from_onnx_node(n, features_nodes, mat_pack_style=mat_pack_style)
+            case 'LayerNorm':
+                compute_node = LayerNormComputeNode.from_onnx_node(n, features_nodes)
             case 'RangeNormPoly2d':
                 compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
             case 'RangeNormPoly1d':
                 compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
             case 'PolyAct':
                 compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
+            case 'PolyActRNPoly':
+                compute_node = PolyActRNPolyComputeNode.from_onnx_node(n, features_nodes)
+            case 'Linear':
+                compute_node = MatMulComputeNode.from_onnx_node(
+                    n, features_nodes, weight_shapes, mat_pack_style=mat_pack_style, model_type=model_type
+                )
+            case 'CustomLayerNorm':
+                compute_node = LayerNormComputeNode.from_onnx_node(n, features_nodes)
+            case 'CustomMultiHeadAttention':
+                if model_type == 'bert':
+                    compute_node = CustomMultiHeadAttentionComputeNode.from_bert_onnx_node(n, features_nodes)
+                else:
+                    compute_node = CustomMultiHeadAttentionComputeNode.from_onnx_node(n, features_nodes)
+            case 'CustomPositionEmbedding':
+                layer_type = 'pdm_add_pt' if mat_pack_style == 'par_diagonal_pack' else 'pcm_add_pt'
+                compute_node = PcmAddPtComputeNode(
+                    format_id(n.name),
+                    [features_nodes[format_id(n.input[0])]],
+                    [features_nodes[format_id(n.output[0])]],
+                    n.input[1],
+                    layer_type=layer_type,
+                    source_op_type='CustomPositionEmbedding',
+                )
+            case 'CustomGELU' | 'CustomTanh':
+                compute_node = CustomPolyFunctionComputeNode.from_onnx_node(n, features_nodes)
+            case 'PolyActRN':
+                compute_node = PolyActRNPolyComputeNode.from_onnx_node(n, features_nodes)
             case _:
-                kwargs = {}
-                if 'Add' in n.op_type:
-                    inp = [format_id(i) for i in n.input]
+                if n.op_type == 'Add' and feature_mat:
+                    raw_inputs = list(n.input)
+                    constant_inputs = [raw for raw in raw_inputs if format_id(raw) in constant_nodes]
+                    constant_ids = {format_id(raw) for raw in constant_inputs}
+                    feature_inputs = [
+                        raw
+                        for raw in raw_inputs
+                        if format_id(raw) in features_nodes and format_id(raw) not in constant_ids
+                    ]
+                    if len(feature_inputs) == 1 and len(constant_inputs) == 1:
+                        weight_path = constant_inputs[0]
+                        if weight_path not in initializer_names:
+                            raise ValueError(
+                                f'feature_mat Add constant for node {n.name} must be an ONNX initializer, got {weight_path}'
+                            )
+                        compute_node = PcmAddPtComputeNode(
+                            format_id(n.name),
+                            [features_nodes[format_id(feature_inputs[0])]],
+                            [features_nodes[format_id(n.output[0])]],
+                            weight_path,
+                            layer_type='pdm_add_pt' if mat_pack_style == 'par_diagonal_pack' else 'pcm_add_pt',
+                        )
+                    else:
+                        kwargs = {
+                            'layer_id': format_id(n.name),
+                            'layer_type': get_type_id(n.op_type),
+                            'feature_input': [features_nodes[i] for i in inp if i in features_nodes],
+                            'feature_output': [features_nodes[i] for i in out if i in features_nodes],
+                        }
+                        compute_node = get_op_code_generator(n.op_type, **kwargs)
+                else:
+                    kwargs = {}
+                    if 'Add' in n.op_type:
+                        inp = [format_id(i) for i in n.input]
 
-                kwargs['layer_id'] = format_id(n.name)
-                kwargs['layer_type'] = get_type_id(n.op_type)
-                kwargs['feature_input'] = [features_nodes[i] for i in inp if i in features_nodes]
-                kwargs['feature_output'] = [features_nodes[i] for i in out if i in features_nodes]
-                compute_node = get_op_code_generator(n.op_type, **kwargs)
+                    kwargs['layer_id'] = format_id(n.name)
+                    kwargs['layer_type'] = get_type_id(n.op_type)
+                    kwargs['feature_input'] = [features_nodes[i] for i in inp if i in features_nodes]
+                    kwargs['feature_output'] = [features_nodes[i] for i in out if i in features_nodes]
+                    compute_node = get_op_code_generator(n.op_type, **kwargs)
 
         compute_nodes[format_id(n.name)] = compute_node
 

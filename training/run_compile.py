@@ -23,6 +23,7 @@ Supports both ONNX model files (.onnx) and pre-converted JSON files (pt.json)
 """
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -36,6 +37,43 @@ from nn_tools import export_h5_from_onnx
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 log = logging.getLogger(__name__)
+
+
+MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
+
+
+def read_compile_config(config_path: str) -> dict[str, int | float | str]:
+    if not config_path:
+        return {}
+    with open(config_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    mat_pack_style = data.get('mat_pack_style', '')
+    if mat_pack_style not in MAT_PACK_STYLES:
+        raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
+    result = {
+        'n_heads': int(data['n_heads']),
+        'head_dim': int(data['head_dim']),
+        'matmul_block_size': int(data['matmul_block_size']),
+        'mat_pack_style': mat_pack_style,
+        'model_type': str(data.get('model_type', '')),
+    }
+    for key in (
+        'btp_scale',
+        'set_btp_scale',
+        'bert_softmax_values_btp_scale',
+        'bert_softmax_denominator_btp_scale',
+        'bert_softmax_scaled_denominator_btp_scale',
+        'bert_softmax_inverse_btp_scale',
+        'bert_layernorm_inverse_btp_scale',
+        'bert_softmax_initial_denominator_scale',
+        'bert_softmax_wide_initial_denominator_scale',
+        'bert_softmax_use_wide_inverse_epsilon',
+        'bert_softmax_first_refinement_denominator_scale',
+        'bert_softmax_later_refinement_denominator_scale',
+    ):
+        if key in data and data[key] is not None:
+            result[key] = float(data[key])
+    return result
 
 
 def main():
@@ -85,6 +123,22 @@ Examples:
         '--temperature', type=float, default=1.0, help='Temperature parameter for randomization (default: 0.0)'
     )
 
+    parser.add_argument(
+        '--config',
+        type=str,
+        default='',
+        help='Compile config JSON path containing n_heads, head_dim, matmul_block_size, mat_pack_style',
+    )
+
+    parser.add_argument(
+        '--set_btp_scale',
+        '--btp_scale',
+        dest='set_btp_scale',
+        type=float,
+        default=None,
+        help='Wrap each bootstrapping layer with pcmgamma layers using this scale',
+    )
+
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -110,6 +164,13 @@ Examples:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    compile_config = read_compile_config(args.config)
+    mat_pack_style = compile_config.get('mat_pack_style', '')
+    model_type = compile_config.get('model_type', '')
+    feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
+    set_btp_scale = args.set_btp_scale
+    if set_btp_scale is None:
+        set_btp_scale = compile_config.get('set_btp_scale', compile_config.get('btp_scale'))
     onnx_path = input_path if is_onnx else None
 
     if is_onnx:
@@ -121,7 +182,13 @@ Examples:
         print(f'[ONNX→JSON] Style: {onnx_style}')
 
         try:
-            onnx_to_json(str(input_path), str(pt_json_path), onnx_style)
+            onnx_to_json(
+                str(input_path),
+                str(pt_json_path),
+                onnx_style,
+                mat_pack_style=mat_pack_style,
+                model_type=model_type,
+            )
             log.info('[ONNX→JSON] Done: %s → %s (style=%s)', input_path, pt_json_path, onnx_style)
         except Exception as e:
             print(f'\n[Error] ONNX to JSON conversion failed: {e}')
@@ -136,7 +203,11 @@ Examples:
 
     print(f'\n[Compile] Input: {pt_json_path}')
     print(f'[Compile] Output: {output_dir}')
-    print(f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}')
+    print(
+        f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, '
+        f'COMPILE_CONFIG={args.config or "<none>"}, MAT_PACK_STYLE={mat_pack_style}, '
+        f'MODEL_TYPE={model_type}, SET_BTP_SCALE={set_btp_scale}'
+    )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
     try:
@@ -148,6 +219,29 @@ Examples:
             num_workers=args.num_workers,
             style=args.style,
             graph_type=args.graph_type,
+            n_heads=compile_config.get('n_heads'),
+            head_dim=compile_config.get('head_dim'),
+            matmul_block_size=compile_config.get('matmul_block_size'),
+            mat_pack_style=mat_pack_style,
+            model_type=model_type,
+            set_btp_scale=set_btp_scale,
+            bert_softmax_values_btp_scale=compile_config.get('bert_softmax_values_btp_scale'),
+            bert_softmax_denominator_btp_scale=compile_config.get('bert_softmax_denominator_btp_scale'),
+            bert_softmax_scaled_denominator_btp_scale=compile_config.get('bert_softmax_scaled_denominator_btp_scale'),
+            bert_softmax_inverse_btp_scale=compile_config.get('bert_softmax_inverse_btp_scale'),
+            bert_layernorm_inverse_btp_scale=compile_config.get('bert_layernorm_inverse_btp_scale'),
+            bert_softmax_initial_denominator_scale=compile_config.get('bert_softmax_initial_denominator_scale'),
+            bert_softmax_wide_initial_denominator_scale=compile_config.get(
+                'bert_softmax_wide_initial_denominator_scale'
+            ),
+            bert_softmax_use_wide_inverse_epsilon=compile_config.get('bert_softmax_use_wide_inverse_epsilon'),
+            bert_softmax_first_refinement_denominator_scale=compile_config.get(
+                'bert_softmax_first_refinement_denominator_scale'
+            ),
+            bert_softmax_later_refinement_denominator_scale=compile_config.get(
+                'bert_softmax_later_refinement_denominator_scale'
+            ),
+            # enable_score_cache=False
         )
 
         print(f'\n[Compile] Success! Output: {output_dir}')
@@ -170,6 +264,8 @@ Examples:
                         onnx_path=str(onnx_path),
                         json_path=str(json_path),
                         h5_path=str(h5_path),
+                        feature_mat=feature_mat,
+                        model_type=model_type,
                     )
                     print(f'[H5 Export] Done: {h5_path}')
                 except Exception as e:

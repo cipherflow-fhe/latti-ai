@@ -33,30 +33,78 @@ class MatMulComputeNode(ComputeNode):
         layer_type: str,
         feature_input: list[FeatureNode],
         feature_output: list[FeatureNode],
+        weight_path: str = '',
+        weight_shape: list[int] | None = None,
+        bias_path: str = '',
         is_mpc=False,
+        to_expand: bool = False,
     ):
         super(MatMulComputeNode, self).__init__(layer_id, layer_type, feature_input, feature_output)
+        self.weight_path = weight_path
+        self.weight_shape = weight_shape or []
+        self.bias_path = bias_path
+        self.to_expand = to_expand
         feature_output[0].skip = [1, 1]
 
     @override
     def to_json(self):
         info = dict()
         info['type'] = self.layer_type
-        info['channel_input'] = int(self.feature_input[0].channel)
-        info['channel_output'] = int(self.feature_output[0].channel)
-        info['ckks_parameter_id_input'] = self.feature_input[0].ckks_parameter_id
-        info['ckks_parameter_id_output'] = self.feature_output[0].ckks_parameter_id
         info['feature_input'] = [i.node_id for i in self.feature_input]
         info['feature_output'] = [i.node_id for i in self.feature_output]
+        if self.layer_type in ('parcpmm', 'pdmpcmm') and self.weight_path:
+            info['weight_path'] = self.weight_path
+        if self.layer_type in ('parcpmm', 'pdmpcmm') and self.weight_shape:
+            info['weight_shape'] = self.weight_shape
+        if self.layer_type in ('parcpmm', 'pdmpcmm') and self.bias_path:
+            info['bias_path'] = self.bias_path
+        if self.layer_type in ('parcpmm', 'pdmpcmm') and self.to_expand:
+            info['to_expand'] = True
         return info
 
     @staticmethod
-    def from_onnx_node(x: NodeProto, features_nodes) -> 'MatMulComputeNode':
+    def from_onnx_node(
+        x: NodeProto,
+        features_nodes,
+        weight_shapes: dict | None = None,
+        mat_pack_style: str = '',
+        model_type: str = '',
+    ) -> 'MatMulComputeNode':
         layer_id = format_id(x.name)
-        layer_type = 'maxpool2d'
-        feature_input = [features_nodes[format_id(x.input[0])]]
+        input1_id = format_id(x.input[1])
+        is_diagonal_pack = mat_pack_style == 'par_diagonal_pack'
+        weight_path = ''
+        weight_shape = []
+        bias_path = ''
+        if input1_id in features_nodes:
+            layer_type = 'pdmccmm' if is_diagonal_pack else 'parccmm'
+            feature_input = [features_nodes[format_id(x.input[0])], features_nodes[input1_id]]
+        else:
+            layer_type = 'pdmpcmm' if is_diagonal_pack else 'parcpmm'
+            feature_input = [features_nodes[format_id(x.input[0])]]
+            weight_path = x.input[1]
+            if weight_shapes and x.input[1] in weight_shapes:
+                weight_shape = list(weight_shapes[x.input[1]])
+                if is_diagonal_pack and model_type != 'bert' and len(weight_shape) == 2:
+                    weight_shape = [weight_shape[1], weight_shape[0]]
         feature_output = [features_nodes[format_id(x.output[0])]]
         attrs = ComputeNode.get_attr_value_dict(x)
         log.debug('%s', attrs)
+        has_bias_input = len(x.input) > 2 and bool(x.input[2])
+        has_fused_bias_input = has_bias_input and 'fused_bias' in x.input[2]
+        is_pcmm = layer_type in ('parcpmm', 'pdmpcmm')
+        to_expand = is_pcmm and x.op_type == 'Linear' and has_fused_bias_input
+        if is_pcmm and x.op_type == 'Linear':
+            if has_bias_input:
+                bias_path = x.input[2]
 
-        return MatMulComputeNode(layer_id, layer_type, feature_input, feature_output)
+        return MatMulComputeNode(
+            layer_id,
+            layer_type,
+            feature_input,
+            feature_output,
+            weight_path,
+            weight_shape,
+            bias_path=bias_path,
+            to_expand=to_expand,
+        )

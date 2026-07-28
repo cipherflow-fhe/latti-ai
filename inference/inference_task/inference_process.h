@@ -55,6 +55,7 @@ public:
     uint32_t channel;
     double scale;
     Duo shape = {0, 0};
+    Duo head_shape = {0, 0};
     Duo skip = {1, 1};
     Duo special_skip = {1, 1};  // 0D from special_info.skip
     Duo invalid_fill = {0, 0};  // 0D from special_info，2D
@@ -63,6 +64,8 @@ public:
     int pack_channel_per_ciphertext;
     int level = 0;
     double ckks_scale = 0.0;
+    bool is_mat = false;  // true when data_type == "feature_mat"
+    bool is_transposed = true;
 
     FeatureNode(const json& json_data);
 
@@ -92,11 +95,17 @@ public:
 
     std::filesystem::path project_path;
     std::string pack_style;
+    std::string mat_pack_style;
+    std::string model_type;
     Duo block_shape;
+    uint32_t n_heads = 1;
+    uint32_t head_dim = 0;
+    uint32_t matmul_block_size = 0;
     bool is_absorb_polyrelu;
     json json_data;
     json json_features;
     json json_layers;
+    json layernorm_param;
     bool is_lazy = false;
     // Time statistics
     double total_fhe_time = 0.0;
@@ -133,11 +142,16 @@ public:
         ckks_layers_[key] = std::move(layer);
     }
 
+    std::map<std::string, UPtr<ls::CkksParameter>> ckks_parameters_;
+
 private:
     virtual void _init_conv_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     virtual void _init_square_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     virtual void _init_dense_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     virtual void _init_add_layer(const std::string& key, const json& layer, const std::string& block_input_feature);
+    virtual void _init_par_block_col_major_add_layer(const std::string& key, const json& layer);
+    virtual void
+    _init_par_block_col_major_add_pt_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     virtual void _init_reshape_layer(const std::string& key, const json& layer);
     virtual void _init_mult_scalar_layer(const std::string& key,
                                          const json& layer,
@@ -162,6 +176,35 @@ private:
     void _init_upsample_layer(const std::string& key, const json& layer, const Duo& block_shape = {128, 256});
     void _init_upsample_nearest_layer(const std::string& key, const json& layer);
     void _init_conv1d_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_parcpmm_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_parccmm_layer(const std::string& key, const json& layer);
+    void _init_partranspose_layer(const std::string& key, const json& layer);
+    void _init_pdmpcmm_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pdmccmm_layer(const std::string& key, const json& layer);
+    void _init_pdmtranspose_layer(const std::string& key, const json& layer);
+    void _init_pdm_add_pt_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pdmgamma_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pdmpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pdmupperaddpt_layer(const std::string& key, const json& layer);
+    void _init_pdmupperpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pdmmulsquare_layer(const std::string& key, const json& layer);
+    void _init_pdmheadcolsum_layer(const std::string& key, const json& layer);
+    void _init_pdminvinit_layer(const std::string& key, const json& layer);
+    void _init_pdminviter_layer(const std::string& key, const json& layer);
+    void _init_pdmctmul_layer(const std::string& key, const json& layer);
+    void _init_pdmupperpolymultct_layer(const std::string& key, const json& layer);
+    void _init_pdmstats_layer(const std::string& key, const json& layer);
+    void _init_pdmcenter_layer(const std::string& key, const json& layer);
+    void _init_pdminit_layer(const std::string& key, const json& layer);
+    void _init_pdmgs_layer(const std::string& key, const json& layer);
+    void _init_pdmaffine_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pcmgamma_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pcmpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pcmstats_layer(const std::string& key, const json& layer);
+    void _init_pcmcenter_layer(const std::string& key, const json& layer);
+    void _init_pcminit_layer(const std::string& key, const json& layer);
+    void _init_pcmgs_layer(const std::string& key, const json& layer);
+    void _init_pcmaffine_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     template <typename T> void _prepare_layer(const std::string& key, UPtr<T> layer) {
         if (is_lazy) {
             layer->prepare_weight_lazy();
@@ -199,7 +242,6 @@ private:
         return h5_to_array<dim>(h5_file, layer.at(path_key).get<std::string>(), shape, scale);
     }
 
-    std::map<std::string, UPtr<ls::CkksParameter>> ckks_parameters_;
     std::map<std::string, UPtr<Layer>> ckks_layers_;
 };
 
@@ -221,6 +263,7 @@ public:
     std::map<std::string, Array<double, 2>> p_feature1d_x;
     std::vector<std::string> available_keys;
     std::map<std::string, Array1D> p_feature0d_x;
+    std::map<std::string, Array<double, 2>> p_feature_mat_x;
 
     void run_task(bool is_mpc = false, ls::ProgressCallback progress_cb = nullptr);
     void run_task_sdk(bool is_mpc = false);
@@ -239,6 +282,9 @@ private:
     void set_feature(const std::string& feature_id, UPtr<FeatureEncrypted> feature);
     template <typename T> T get_ciphertext_output_feature(const std::string& feature_id) {
         return dynamic_cast<const T&>(_get_feature(feature_id)).copy();
+    }
+    const FeatureEncrypted& get_output_feature_ref(const std::string& feature_id) {
+        return _get_feature(feature_id);
     }
 
 private:

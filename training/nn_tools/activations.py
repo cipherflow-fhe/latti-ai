@@ -115,6 +115,59 @@ def _eval_hermite(x, hermite_coeffs, scale_after=1.0):
     return result
 
 
+class _LayerNormExport(torch.autograd.Function):
+    """ONNX export helper: emit LayerNorm as a single custom op ``nn_tools::LayerNorm``."""
+
+    @staticmethod
+    def forward(ctx, x, weight, bias, eps):
+        import torch.nn.functional as F
+
+        return F.layer_norm(x, weight.shape, weight, bias, eps)
+
+    @staticmethod
+    def symbolic(g, x, weight, bias, eps):
+        return g.op(
+            'nn_tools::LayerNorm',
+            x,
+            weight,
+            bias,
+            epsilon_f=eps,
+        ).setType(x.type())
+
+
+class FHELayerNorm(nn.Module):
+    """LayerNorm that exports as a single ``nn_tools::LayerNorm`` ONNX custom op.
+
+    Functionally identical to ``nn.LayerNorm`` during training and plain
+    inference.  During ONNX export the decomposed arithmetic (ReduceMean /
+    Sub / Pow / ...) is replaced by one node so the compiler can recognise
+    it directly.
+
+    Args:
+        normalized_shape: Last N dimensions to normalize over (int or tuple).
+        eps:              Numerical stability constant.
+    """
+
+    def __init__(self, normalized_shape, eps: float = 1e-5):
+        super().__init__()
+        if isinstance(normalized_shape, int):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(self.normalized_shape))
+        self.bias = nn.Parameter(torch.zeros(self.normalized_shape))
+
+    def forward(self, x):
+        if torch.onnx.is_in_onnx_export():
+            return _LayerNormExport.apply(x, self.weight, self.bias, self.eps)
+        import torch.nn.functional as F
+
+        return F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
+
+    def extra_repr(self):
+        return f'normalized_shape={self.normalized_shape}, eps={self.eps}'
+
+
 class _PolyActExport(torch.autograd.Function):
     """ONNX export helper: emit PolyAct as a single custom op."""
 
@@ -168,6 +221,40 @@ class PolyAct(nn.Module):
 
     def extra_repr(self):
         return f'degree={self.degree}, scale_before={self.scale_before}, scale_after={self.scale_after}'
+
+
+class _PolyActRNPolyExport(torch.autograd.Function):
+    """ONNX export helper: emit PolyActRNPoly as a single custom op."""
+
+    @staticmethod
+    def forward(ctx, x, degree, activation_name):
+        import torch.nn.functional as F
+
+        return F.gelu(x)
+
+    @staticmethod
+    def symbolic(g, x, degree, activation_name):
+        return g.op('nn_tools::PolyActRNPoly', x, degree_i=degree, activation_s=activation_name).setType(x.type())
+
+
+class PolyActRNPoly(nn.Module):
+    """GELU that exports as a single ``nn_tools::PolyActRNPoly`` ONNX custom op."""
+
+    def __init__(self, hermite_coeffs, num_features=0, activation_name='gelu', **kwargs):
+        super().__init__()
+        self.degree = len(hermite_coeffs) - 1
+        self.num_features = num_features
+        self.activation_name = activation_name
+
+    def forward(self, x):
+        if torch.onnx.is_in_onnx_export():
+            return _PolyActRNPolyExport.apply(x, self.degree, self.activation_name)
+        import torch.nn.functional as F
+
+        return F.gelu(x)
+
+    def extra_repr(self):
+        return f'degree={self.degree}, activation={self.activation_name}'
 
 
 class _RangeNormPoly1dExport(torch.autograd.Function):

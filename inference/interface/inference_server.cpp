@@ -20,10 +20,15 @@
 #include <map>
 
 #include "interface/inference_server.h"
+#include "data_structs/feature_mat.h"
 
 using namespace lattisense;
 
 namespace {
+
+bool is_par_diagonal_pack(const std::string& mat_pack_style) {
+    return mat_pack_style == "par_diagonal_pack";
+}
 
 int read_skip(const json& param, int default_value = 1) {
     if (!param.contains("skip")) {
@@ -51,15 +56,30 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
     std::string ckks_param_id = input_param["ckks_parameter_id"];
     int poly_modulus_degree = ckks_config[ckks_param_id]["poly_modulus_degree"].get<int>();
     needs_btp_ = task_config.value("use_btp", false);
+    mat_pack_style_ = task_config.value<std::string>("mat_pack_style", "");
 
     // Store all input keys and per-input parameters
+    uint32_t global_n_heads = task_config.value("n_heads", 0u);
+    uint32_t global_matmul_block_size = task_config.value("matmul_block_size", 0u);
     for (auto& [name, param] : task_config["task_input_param"].items()) {
         input_keys_.push_back(name);
         InputParam ip;
         ip.dim = param["dim"];
         ip.level = param["level"];
-        ip.channel = param["channel"];
-        if (ip.dim == 2) {
+        ip.channel = param.value("channel", 1);
+        ip.is_mat = param.value("data_type", std::string("")) == "feature_mat";
+        if (ip.is_mat) {
+            ip.height = param["shape"][0];
+            ip.width = param["shape"][1];
+            if (param.contains("head_shape")) {
+                ip.head_shape = {param["head_shape"][0], param["head_shape"][1]};
+            }
+            ip.matmul_block_size = param.value("matmul_block_size", global_matmul_block_size);
+            ip.n_heads = param.value("n_heads", global_n_heads);
+            if (param.contains("head_shape")) {
+                ip.head_shape = {param["head_shape"][0].get<uint32_t>(), param["head_shape"][1].get<uint32_t>()};
+            }
+        } else if (ip.dim == 2) {
             ip.height = param["shape"][0];
             ip.width = param["shape"][1];
         } else if (ip.dim == 1) {
@@ -68,7 +88,9 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
         } else if (ip.dim == 0) {
             ip.skip = read_skip(param);
         }
-        ip.pack_num = param.value("pack_num", 0);
+        if (!ip.is_mat) {
+            ip.pack_num = param.value("pack_num", 0);
+        }
         input_params_[name] = ip;
     }
 
@@ -77,8 +99,20 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
         output_keys_.push_back(name);
         OutputParam op;
         op.dim = param["dim"];
-        op.channel = param["channel"];
-        if (op.dim == 0) {
+        op.channel = param.value("channel", 1);
+        op.is_mat = param.value("data_type", std::string("")) == "feature_mat";
+        if (op.is_mat) {
+            op.height = param["shape"][0];
+            op.width = param["shape"][1];
+            if (param.contains("head_shape")) {
+                op.head_shape = {param["head_shape"][0], param["head_shape"][1]};
+            }
+            op.matmul_block_size = param.value("matmul_block_size", global_matmul_block_size);
+            op.n_heads = param.value("n_heads", global_n_heads);
+            if (param.contains("head_shape")) {
+                op.head_shape = {param["head_shape"][0].get<uint32_t>(), param["head_shape"][1].get<uint32_t>()};
+            }
+        } else if (op.dim == 0) {
             op.skip = read_skip(param);
         } else if (op.dim == 1) {
             op.length = param["shape"][0];
@@ -145,7 +179,16 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
         }
         const auto& param = it->second;
 
-        if (param.dim == 0) {
+        if (param.is_mat) {
+            auto input_ct = std::make_unique<FeatureMatEncrypted>(context_ptr_, 0);
+            input_ct->deserialize(bytes);
+            input_ct->shape = {static_cast<uint32_t>(param.height), static_cast<uint32_t>(param.width)};
+            input_ct->head_shape = param.head_shape;
+            if (input_ct->matmul_block_size == 0) {
+                input_ct->matmul_block_size = param.matmul_block_size;
+            }
+            fp_->set_feature(name, std::move(input_ct));
+        } else if (param.dim == 0) {
             auto input_ct = std::make_unique<Feature0DEncrypted>(context_ptr_, 0);
             input_ct->deserialize(bytes);
             fp_->set_feature(name, std::move(input_ct));
@@ -174,7 +217,10 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
     // Serialize output ciphertexts
     std::map<std::string, Bytes> encrypted_outputs;
     for (auto& [name, param] : output_params_) {
-        if (param.dim == 0) {
+        if (param.is_mat) {
+            const auto& output_ct = dynamic_cast<const FeatureMatEncrypted&>(fp_->_get_feature(name));
+            encrypted_outputs[name] = output_ct.serialize();
+        } else if (param.dim == 0) {
             auto output_ct = fp_->get_ciphertext_output_feature<Feature0DEncrypted>(name);
             encrypted_outputs[name] = output_ct.serialize();
         } else if (param.dim == 1) {
@@ -202,7 +248,16 @@ InferenceServer::evaluate_plaintext(const std::map<std::string, std::string>& in
         }
         const auto& param = it->second;
 
-        if (param.dim == 0) {
+        if (param.is_mat) {
+            if (is_par_diagonal_pack(mat_pack_style_)) {
+                auto csv_array = csv_to_array<2>(csv_path, {(uint64_t)param.width, (uint64_t)param.height});
+                auto input_array = transpose_2d_array(csv_array);
+                fp_->p_feature_mat_x[name] = std::move(input_array.copy());
+            } else {
+                auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.height, (uint64_t)param.width});
+                fp_->p_feature_mat_x[name] = std::move(input_array.copy());
+            }
+        } else if (param.dim == 0) {
             auto input_array = csv_to_array<1>(csv_path);
             fp_->p_feature0d_x[name] = input_array.to_array_1d();
         } else if (param.dim == 1) {
@@ -219,7 +274,15 @@ InferenceServer::evaluate_plaintext(const std::map<std::string, std::string>& in
 
     std::map<std::string, std::vector<double>> results;
     for (auto& [name, param] : output_params_) {
-        if (param.dim == 0) {
+        if (param.is_mat) {
+            if (!fp_->p_feature_mat_x.count(name)) {
+                throw std::runtime_error("[Server] Plaintext output not produced: " + name);
+            }
+            auto& arr = fp_->p_feature_mat_x[name];
+            auto arr_1d =
+                is_par_diagonal_pack(mat_pack_style_) ? transpose_2d_array(arr).to_array_1d() : arr.to_array_1d();
+            results[name] = std::vector<double>(arr_1d.data(), arr_1d.data() + arr_1d.size());
+        } else if (param.dim == 0) {
             if (!fp_->p_feature0d_x.count(name)) {
                 throw std::runtime_error("[Server] Plaintext output not produced: " + name);
             }
