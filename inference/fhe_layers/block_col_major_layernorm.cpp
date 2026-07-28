@@ -165,7 +165,7 @@ vector<CkksCiphertext> BlockColMajorLNStats::run(CkksContext& ctx, const Feature
         a_cts[bi] = ctx_copy.add_plain_ringt(a_cts[bi], eps_add_pt_);
     });
 
-    return move(a_cts);
+    return a_cts;
 }
 
 // ============================================================
@@ -243,7 +243,7 @@ vector<CkksCiphertext> BlockColMajorLNXCentered::run(CkksContext& ctx, const Fea
         x_centered[idx] = ctx_copy.sub(x_drop, mean_cts[bi]);
     });
 
-    return move(x_centered);
+    return x_centered;
 }
 
 // ============================================================
