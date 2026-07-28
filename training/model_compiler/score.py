@@ -1559,9 +1559,11 @@ class FheScoreParam:
         elif layer_type == 'pcmgs':
             ordered_preds = sorted(
                 preds,
-                key=lambda p: self.dag.edges[p, node].get('input_index')
-                if self.dag.edges[p, node].get('input_index') is not None
-                else 0,
+                key=lambda p: (
+                    self.dag.edges[p, node].get('input_index')
+                    if self.dag.edges[p, node].get('input_index') is not None
+                    else 0
+                ),
             )
             m = ordered_preds[0].shape[0]
             block_size = config.matmul_block_size
@@ -1576,9 +1578,11 @@ class FheScoreParam:
         elif layer_type == 'pdmgs':
             ordered_preds = sorted(
                 preds,
-                key=lambda p: self.dag.edges[p, node].get('input_index')
-                if self.dag.edges[p, node].get('input_index') is not None
-                else 0,
+                key=lambda p: (
+                    self.dag.edges[p, node].get('input_index')
+                    if self.dag.edges[p, node].get('input_index') is not None
+                    else 0
+                ),
             )
             n_slot = n // 2
             level_y = self.dag.nodes[ordered_preds[0]]['level']
@@ -1596,9 +1600,11 @@ class FheScoreParam:
         elif layer_type == 'pcmaffine':
             ordered_preds = sorted(
                 preds,
-                key=lambda p: self.dag.edges[p, node].get('input_index')
-                if self.dag.edges[p, node].get('input_index') is not None
-                else 0,
+                key=lambda p: (
+                    self.dag.edges[p, node].get('input_index')
+                    if self.dag.edges[p, node].get('input_index') is not None
+                    else 0
+                ),
             )
             m = ordered_preds[0].shape[0]
             n_cols = ordered_preds[0].shape[1]
@@ -1618,9 +1624,11 @@ class FheScoreParam:
         elif layer_type == 'pdmaffine':
             ordered_preds = sorted(
                 preds,
-                key=lambda p: self.dag.edges[p, node].get('input_index')
-                if self.dag.edges[p, node].get('input_index') is not None
-                else 0,
+                key=lambda p: (
+                    self.dag.edges[p, node].get('input_index')
+                    if self.dag.edges[p, node].get('input_index') is not None
+                    else 0
+                ),
             )
             n_slot = n // 2
             level_x = self.dag.nodes[ordered_preds[0]]['level']
