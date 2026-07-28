@@ -667,6 +667,7 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                     node.shape[0] = total_dim
                     node.shape[1] = seq_len
                     node.head_shape = [head_dim, seq_len]
+                    node.is_transposed = True
                 else:
                     node.head_shape = [node.shape[0], head_dim]
 
@@ -728,9 +729,11 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                         succ.head_shape = [preds[0].head_shape[1], preds[0].head_shape[0]]
                         succ.shape[0] = succ.head_shape[0]
                         succ.shape[1] = succ.head_shape[1] * n_heads
+                        succ.is_transposed = False
                     else:
                         succ.shape[0] = preds[0].shape[1]
                         succ.shape[1] = preds[0].shape[0]
+                        succ.is_transposed = False
                 elif compute_node.layer_type == 'parccmm':
                     succ.shape[0] = preds[0].shape[0]
                     if preds[0].head_shape is not None and len(preds) > 1 and preds[1].head_shape is not None:

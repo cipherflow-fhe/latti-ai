@@ -360,6 +360,7 @@ class FeatureNode:
         self.has_sp_info = False
         self.data_type: str = ''
         self.head_shape: list = None  # per-head shape for feature_mat
+        self.is_transposed = None
 
     def __repr__(self) -> str:
         return f'{self.node_id}'
@@ -751,6 +752,8 @@ class LayerAbstractGraph:
             node.data_type = feature_json.get('data_type', '')
             if 'head_shape' in feature_json:
                 node.head_shape = feature_json['head_shape']
+            if 'is_transposed' in feature_json:
+                node.is_transposed = bool(feature_json['is_transposed'])
             graph_info.dag.add_node(node, name=key, skip=skip)
             feature_dict[key] = node
 
@@ -1597,12 +1600,13 @@ class LayerAbstractGraph:
 
         features = dict()
         all_nodes_in_topo_sort = list(nx.topological_sort(self.dag))
-        is_transposed = getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack'
+        default_is_transposed = getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack'
         for feature in all_nodes_in_topo_sort:
             if isinstance(feature, FeatureNode):
                 key = feature.node_id
                 dim = feature.dim
                 channel = feature.channel
+                is_transposed = feature.is_transposed if feature.is_transposed is not None else default_is_transposed
 
                 scale = feature.scale
                 ckks_scale = feature.ckks_scale

@@ -122,8 +122,9 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
     output_roots = [node for node, out_deg in graph.dag.out_degree() if out_deg == 0]
 
     param_dict = dict()
-    is_transposed = getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack'
+    default_is_transposed = getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack'
     for node in input_roots + output_roots:
+        is_transposed = node.is_transposed if node.is_transposed is not None else default_is_transposed
         if node.dim == 0:
             param_dict[node.node_id] = {
                 'dim': node.dim,
