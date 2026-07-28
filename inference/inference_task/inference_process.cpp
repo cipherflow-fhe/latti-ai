@@ -29,6 +29,29 @@ using namespace lattisense;
 uint64_t fhe_time = 0;
 bool normal_output = false;
 
+namespace {
+
+UPtr<CkksParameter> make_ckks_parameter_from_json(const json& param_json) {
+    const uint64_t n = param_json.at("poly_modulus_degree").get<uint64_t>();
+
+    UPtr<CkksParameter> param;
+    if (param_json.contains("q") && param_json.contains("p")) {
+        const auto q = param_json.at("q").get<vector<uint64_t>>();
+        const auto p = param_json.at("p").get<vector<uint64_t>>();
+        param = MakeU<CkksParameter>(CkksParameter::create_custom_parameter(n, q, p));
+    } else {
+        param = MakeU<CkksParameter>(CkksParameter::create_parameter(n));
+    }
+
+    if (param_json.contains("log_slots")) {
+        param->set_log_slots(param_json.at("log_slots").get<int>());
+    }
+
+    return param;
+}
+
+}  // namespace
+
 Node::Node() {}
 
 InferenceProcess::InferenceProcess(InitInferenceProcess* fp_in) {
@@ -256,8 +279,7 @@ void InitInferenceProcess::init_parameters(bool is_bootstrapping) {
     } else {
         for (auto& param : json_params.items()) {
             string key = param.key();
-            int n = param.value()["poly_modulus_degree"];
-            ckks_parameters_[key] = MakeU<CkksParameter>(CkksParameter::create_parameter(n));
+            ckks_parameters_[key] = make_ckks_parameter_from_json(param.value());
         }
     }
 }
@@ -293,17 +315,16 @@ void InitInferenceProcess::_init_conv_layer(const string& key, const json& layer
 void InitInferenceProcess::_init_conv1d_layer(const string& key, const json& layer, const hid_t& h5_file) {
     FeatureNode feature_input(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output(json_features[layer["feature_output"][0].get<string>()]);
-    int out_level = feature_output.level;
+    // Conv1D plaintext scales are tied to the input ciphertext level. A
+    // multiplexed layer with skip/stride > 1 consumes two levels, so deriving
+    // the layer level from output.level + 1 encodes the select mask at q0.
+    int layer_level = feature_input.level;
     uint32_t input_shape = feature_input.shape[0];
     uint32_t kernel_shape = layer["kernel_shape"][0];
     uint32_t stride = layer["stride"][0];
     uint32_t skip = feature_input.skip[0];
     uint32_t n_channel_per_ct = feature_input.pack_channel_per_ciphertext;
     CkksParameter& param = *ckks_parameters_.at(feature_input.ckks_parameter_id);
-
-    auto weight =
-        _load_h5_tensor<3>(layer, h5_file, "weight",
-                           {(uint64_t)feature_output.channel, (uint64_t)feature_input.channel, (uint64_t)kernel_shape});
     auto bias = _load_h5_tensor<1>(layer, h5_file, "bias", {(uint64_t)feature_output.channel});
 
     string style = layer.value("style", string("ordinary"));
@@ -314,16 +335,22 @@ void InitInferenceProcess::_init_conv1d_layer(const string& key, const json& lay
             auto dw_weight = _load_h5_tensor<3>(layer, h5_file, "weight",
                                                 {(uint64_t)feature_output.channel, 1, (uint64_t)kernel_shape});
             auto conv_layer = MakeU<MultiplexedDWConv1DPackedLayer>(param, input_shape, move(dw_weight), move(bias),
-                                                                    stride, skip, n_channel_per_ct, out_level + 1);
+                                                                    stride, skip, n_channel_per_ct, layer_level);
             _prepare_layer(key, move(conv_layer));
         } else {
+            auto weight = _load_h5_tensor<3>(
+                layer, h5_file, "weight",
+                {(uint64_t)feature_output.channel, (uint64_t)feature_input.channel, (uint64_t)kernel_shape});
             auto conv_layer = MakeU<MultiplexedConv1DPackedLayer>(param, input_shape, move(weight), move(bias), stride,
-                                                                  skip, n_channel_per_ct, out_level + 1);
+                                                                  skip, n_channel_per_ct, layer_level);
             _prepare_layer(key, move(conv_layer));
         }
     } else {
+        auto weight = _load_h5_tensor<3>(
+            layer, h5_file, "weight",
+            {(uint64_t)feature_output.channel, (uint64_t)feature_input.channel, (uint64_t)kernel_shape});
         auto conv_layer = MakeU<Conv1DPackedLayer>(param, input_shape, move(weight), move(bias), stride, skip,
-                                                   n_channel_per_ct, out_level + 1);
+                                                   n_channel_per_ct, layer_level);
         _prepare_layer(key, move(conv_layer));
     }
 }
@@ -974,9 +1001,16 @@ void InitInferenceProcess::_init_mult_scalar_layer(const string& key,
     FeatureNode feature_input0(json_features[layer["feature_input"][0].get<string>()]);
     FeatureNode feature_output0(json_features[layer["feature_output"][0].get<string>()]);
 
+    Duo mult_input_shape = feature_input0.shape;
+    Duo mult_skip = feature_input0.skip;
+    if (feature_input0.dim == 1) {
+        mult_input_shape[1] = 1;
+        mult_skip[1] = 1;
+    }
+
     Duo block_expansion;
-    if (feature_input0.shape[0] > block_shape[0] || feature_input0.shape[1] > block_shape[1]) {
-        block_expansion = {feature_input0.shape[0] / block_shape[0], feature_input0.shape[1] / block_shape[1]};
+    if (mult_input_shape[0] > block_shape[0] || mult_input_shape[1] > block_shape[1]) {
+        block_expansion = {mult_input_shape[0] / block_shape[0], mult_input_shape[1] / block_shape[1]};
     } else {
         block_expansion = {1, 1};
     }
@@ -985,7 +1019,7 @@ void InitInferenceProcess::_init_mult_scalar_layer(const string& key,
 
     double scale = layer["weight_scale"];
     auto weight = _load_h5_tensor<1>(layer, h5_file, "weight", {feature_input0.channel});
-    auto mult_scalar = MakeU<MultScalarLayer>(param, feature_input0.shape, move(weight), feature_input0.skip,
+    auto mult_scalar = MakeU<MultScalarLayer>(param, mult_input_shape, move(weight), mult_skip,
                                               feature_input0.pack_channel_per_ciphertext, feature_input0.level,
                                               upsample_factor, block_expansion);
     _prepare_layer(
@@ -2074,7 +2108,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
     fp->total_fhe_time += fhe_timer.get_duration().count();
 }
 
-void InferenceProcess::run_task(bool is_mpc) {
+void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
     // Reset time statistics for each request
     fp->total_fhe_time = 0.0;
     fp->total_fpga_time = 0.0;
@@ -2406,7 +2440,7 @@ void InferenceProcess::run_task(bool is_mpc) {
             if (!fhe_task_cpu_) {
                 prepare_task();
             }
-            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
+            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
@@ -2414,7 +2448,8 @@ void InferenceProcess::run_task(bool is_mpc) {
             if (!fhe_task_gpu_) {
                 prepare_task();
             }
-            fhe_time = fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
+            fhe_time =
+                fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb, gpu_device);
             break;
         }
 #else
@@ -2518,8 +2553,29 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
                 }
             }
             if (layer_type == "mult_scalar") {
-                const Array<double, 3>& input0 = p_feature2d_x[feature_input[0]];
-                result = fp->get_layer<MultScalarLayer>(key).run_plaintext(input0);
+                FeatureNode feature_input0(json_features[feature_input[0]]);
+                if (feature_input0.dim == 2) {
+                    const Array<double, 3>& input0 = p_feature2d_x[feature_input[0]];
+                    result = fp->get_layer<MultScalarLayer>(key).run_plaintext(input0);
+                } else if (feature_input0.dim == 1) {
+                    const auto& input0 = p_feature1d_x[feature_input[0]];
+                    auto shape = input0.get_shape();
+                    result1d = Array<double, 2>(shape);
+                    const auto& weight = fp->get_layer<MultScalarLayer>(key).weight;
+                    for (uint64_t ch = 0; ch < shape[0]; ch++) {
+                        double w = weight.get(ch);
+                        for (uint64_t i = 0; i < shape[1]; i++) {
+                            result1d.set(ch, i, input0.get(ch, i) * w);
+                        }
+                    }
+                } else {
+                    const auto& input0 = p_feature0d_x[feature_input[0]];
+                    result0d.resize(input0.size());
+                    const auto& weight = fp->get_layer<MultScalarLayer>(key).weight;
+                    for (size_t ch = 0; ch < input0.size(); ch++) {
+                        result0d[ch] = input0[ch] * weight.get(ch);
+                    }
+                }
             }
             if (layer_type == "concat2d") {
                 // "concat2d" is used for all dim in {0,1,2}; dispatch by input dim.
@@ -2862,7 +2918,7 @@ void InferenceProcess::run_task_plaintext(bool is_mpc) {
     }
 }
 
-void InferenceProcess::run_task_lazy(bool is_mpc) {
+void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_cb) {
     fp->total_fhe_time = 0.0;
     fp->total_fpga_time = 0.0;
 
@@ -3001,14 +3057,13 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
         }
         cxx_args.push_back(CxxVectorArgument{ki, &z_lists[out_idx]});
     }
-
     // 4. run
     switch (compute_device) {
         case ComputeDevice::CPU: {
             if (!fhe_task_cpu_) {
                 prepare_task();
             }
-            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
+            fhe_time = fhe_time + fhe_task_cpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb);
             break;
         }
 #ifdef INFERENCE_SDK_ENABLE_GPU
@@ -3016,7 +3071,8 @@ void InferenceProcess::run_task_lazy(bool is_mpc) {
             if (!fhe_task_gpu_) {
                 prepare_task();
             }
-            fhe_time = fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args);
+            fhe_time =
+                fhe_time + fhe_task_gpu_->run(ckks_contexts.at(context_id).get(), cxx_args, progress_cb, gpu_device);
             break;
         }
 #else

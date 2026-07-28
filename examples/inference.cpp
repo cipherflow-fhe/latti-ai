@@ -27,13 +27,11 @@
 #include <string>
 #include <vector>
 
-#include <fhe_ops_lib/utils.h>
-
+#include "fhe_ops_lib/utils.h"
 #include "interface/inference_client.h"
 #include "interface/inference_server.h"
 
 using namespace std;
-namespace ls = lattisense;
 
 int main(int argc, char* argv[]) {
     string task_dir;
@@ -105,7 +103,7 @@ int main(int argc, char* argv[]) {
 
     // --- Server side: load model and run encrypted inference ---
     cout << "[Step 3/5] Server loading model and importing context..." << endl;
-    InferenceServer server(task_dir + "/server", use_gpu);
+    InferenceServer server(task_dir + "/server", use_gpu, 0);
     server.import_eval_context(eval_ctx);
     server.load_model();
 
@@ -122,12 +120,34 @@ int main(int argc, char* argv[]) {
     // --- Display results ---
     cout << "========== Results ==========" << endl;
     for (auto& [name, result] : results) {
-        ls::print_double_message(result.output.data(), ("Encrypted output [" + name + "]").c_str(), 1);
+        cout << "Encrypted output [" << name << "] = [";
+        int print_count = min(result.num_outputs, 5);
+        for (int i = 0; i < print_count; i++) {
+            if (i > 0) {
+                cout << ", ";
+            }
+            cout << fixed << setprecision(8) << result.output[i];
+        }
+        if (result.num_outputs > print_count) {
+            cout << ", ...";
+        }
+        cout << "] (num_outputs=" << result.num_outputs << ")" << endl;
     }
 
     auto plaintext_outputs = server.evaluate_plaintext(input_csvs);
     for (auto& [name, plaintext_output] : plaintext_outputs) {
-        ls::print_double_message(plaintext_output.data(), ("Plaintext output [" + name + "]").c_str(), 1);
+        cout << "Plaintext output [" << name << "] = [";
+        int print_count = min<int>(plaintext_output.size(), 5);
+        for (int i = 0; i < print_count; i++) {
+            if (i > 0) {
+                cout << ", ";
+            }
+            cout << fixed << setprecision(8) << plaintext_output[i];
+        }
+        if ((int)plaintext_output.size() > print_count) {
+            cout << ", ...";
+        }
+        cout << "] (num_outputs=" << plaintext_output.size() << ")" << endl;
     }
 
     if (verify) {

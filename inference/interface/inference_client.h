@@ -55,7 +55,7 @@ struct InputParam {
     int height = 0;    // dim=2 only
     int width = 0;     // dim=2 only
     int length = 0;    // dim=1 only
-    int skip = 1;      // dim=0 only
+    int skip = 1;      // dim=0/1 packing stride
     int pack_num = 0;  // n_channel_per_ct
     bool is_mat = false;
     Duo head_shape = {0, 0};
@@ -68,7 +68,8 @@ struct InputParam {
 ///
 /// Holds the secret key and is responsible for:
 /// - Generating the full CKKS key pair
-/// - Exporting a public-only evaluation context for the server
+/// - Exporting a computation-keys-only evaluation context (no SK, no PK) for the server
+/// - Exporting the full context (incl. SK) for client-side persistence
 /// - Encrypting input data
 /// - Decrypting inference results
 ///
@@ -83,12 +84,28 @@ public:
     InferenceClient(InferenceClient&&) = default;
     InferenceClient& operator=(InferenceClient&&) = default;
 
-    /// Read configuration and generate crypto context with keys.
+    /// Generate crypto context with keys.
     void setup();
+
+    /// Release all in-memory key material immediately.
+    /// After this call, encrypt()/decrypt() will fail until setup() or load_full_context()
+    /// is called again. Use this to free GBs of key memory without waiting for the GC to
+    /// finalize the wrapper object.
+    void release();
 
     /// Export a public-only evaluation context (serialized bytes).
     /// The server uses this to perform encrypted computation without the secret key.
     Bytes export_eval_context() const;
+
+    /// Export the full client state including the secret key.
+    /// Contents: SK + PK + relin + rotation. Size is comparable to eval_context.
+    /// Pair with load_full_context() to restore a client that can both encrypt and decrypt.
+    Bytes export_full_context() const;
+
+    /// Restore a full client (with secret key) from bytes produced by export_full_context().
+    /// After this call, both encrypt() and decrypt() work.
+    /// Typically call exactly one of {setup, load_full_context}; calling both replaces the context.
+    void load_full_context(const Bytes& full_bytes);
 
     /// Encrypt inputs from CSV files and return serialized ciphertexts.
     /// @param input_csvs  Map of input name -> CSV file path.
@@ -105,6 +122,7 @@ private:
     std::map<std::string, OutputParam> output_params_;
     int n_slots_ = 0;
     int poly_modulus_degree_ = 0;
+    int log_slots_ = -1;
     std::vector<uint64_t> q_;
     std::vector<uint64_t> p_;
     bool needs_btp_ = false;
