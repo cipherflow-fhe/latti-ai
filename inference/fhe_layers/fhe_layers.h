@@ -43,6 +43,7 @@
 #include "fhe_layers/par_lower_diag_ccmm.h"
 #include "fhe_layers/par_lower_diag_transpose.h"
 #include "fhe_layers/par_block_col_major_add_pt.h"
+#include "fhe_layers/batch_dense_packed_layer.h"
 #include "fhe_layers/par_lower_diagonal_add_pt.h"
 #include "fhe_layers/par_block_col_major_layernorm.h"
 #include "fhe_layers/par_block_col_major_polyactrn.h"

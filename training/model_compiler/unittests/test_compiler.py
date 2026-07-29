@@ -274,6 +274,10 @@ class CompilerTestBase(unittest.TestCase):
     def _has_bootstrapping(self, graph):
         return any(isinstance(n, ComputeNode) and n.layer_type == 'bootstrapping' for n in graph.dag.nodes)
 
+    def _assert_has_layer_type(self, graph, layer_type: str):
+        layer_types = [n.layer_type for n in graph.dag.nodes if isinstance(n, ComputeNode)]
+        self.assertIn(layer_type, layer_types)
+
     def _check_concat_input_ordering(self, graph: LayerAbstractGraph, raw_json_path):
         """Assert every concat2d node in *graph* preserves the input ordering from *raw_json_path*."""
         raw_graph = LayerAbstractGraph.from_json(str(raw_json_path))

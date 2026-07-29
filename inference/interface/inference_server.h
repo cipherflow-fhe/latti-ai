@@ -39,7 +39,8 @@ class InferenceServer {
 public:
     /// @param server_dir  Path to the server directory (contains model weights, ergs, task_config.json).
     /// @param use_gpu     Whether to use GPU acceleration.
-    explicit InferenceServer(const std::string& server_dir, bool use_gpu = false);
+    /// @param gpu_device  GPU device index (default 0).
+    explicit InferenceServer(const std::string& server_dir, bool use_gpu = false, int gpu_device = 0);
     ~InferenceServer();
 
     InferenceServer(const InferenceServer&) = delete;
@@ -55,8 +56,10 @@ public:
 
     /// Run encrypted inference on serialized ciphertext inputs.
     /// @param encrypted_inputs  Map of input name -> serialized ciphertext bytes.
+    /// @param progress_cb  Optional callback for progress reporting (completed, total).
     /// Returns map of output name -> serialized ciphertext bytes.
-    std::map<std::string, Bytes> evaluate(const std::map<std::string, Bytes>& encrypted_inputs);
+    std::map<std::string, Bytes> evaluate(const std::map<std::string, Bytes>& encrypted_inputs,
+                                          ls::ProgressCallback progress_cb = nullptr);
 
     /// Run plaintext inference on CSV input files (for verification).
     std::map<std::string, std::vector<double>> evaluate_plaintext(const std::map<std::string, std::string>& input_csvs);
@@ -64,6 +67,7 @@ public:
 private:
     std::filesystem::path server_dir_;
     bool use_gpu_;
+    int gpu_device_;
     bool needs_btp_ = false;
     std::string mat_pack_style_;
 

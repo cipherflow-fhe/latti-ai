@@ -128,8 +128,9 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
     output_roots = [node for node, out_deg in graph.dag.out_degree() if out_deg == 0]
 
     param_dict = dict()
-    is_transposed = getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack'
+    default_is_transposed = getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack'
     for node in input_roots + output_roots:
+        is_transposed = node.is_transposed if node.is_transposed is not None else default_is_transposed
         if node.dim == 0:
             param_dict[node.node_id] = {
                 'dim': node.dim,
@@ -186,6 +187,7 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
         'server_end_id': 0,
         'block_shape': config.block_shape,
         'mat_pack_style': config.mat_pack_style,
+        'model_type': config.model_type,
         'is_absorb_polyrelu': False,
         'pack_style': config.style,
         'n_heads': config.n_heads,
@@ -215,9 +217,28 @@ def graph_to_task_config(graph: LayerAbstractGraph, file_path, use_btp: bool = T
                 continue
             if hasattr(node, 'epsilon'):
                 layernorm_param['eps'] = node.epsilon
-            for key in ('inv_std_scale', 'inv_var_scale', 'c0', 'c1', 'c2', 'num_iters'):
+            for key in (
+                'inv_std_scale',
+                'inv_var_scale',
+                'inv_var',
+                'inv_std',
+                'min_var',
+                'max_var',
+                'w_buffer',
+                'input_scale',
+                'max_denominator',
+                'normalized_epsilon',
+                'c0',
+                'c1',
+                'c2',
+                'num_iters',
+                'profile',
+                'use_asor',
+            ):
                 if hasattr(node, key):
                     layernorm_param[key] = getattr(node, key)
+            if all(hasattr(node, key) for key in ('c0', 'c1', 'c2')):
+                layernorm_param['minimax_init_coeffs'] = [node.c0, node.c1, node.c2]
             break
         task_config['layernorm_param'] = layernorm_param
     os.makedirs(file_path, exist_ok=True)

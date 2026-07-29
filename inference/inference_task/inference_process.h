@@ -96,6 +96,7 @@ public:
     std::filesystem::path project_path;
     std::string pack_style;
     std::string mat_pack_style;
+    std::string model_type;
     Duo block_shape;
     uint32_t n_heads = 1;
     uint32_t head_dim = 0;
@@ -184,6 +185,14 @@ private:
     void _init_pdm_add_pt_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_pdmgamma_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_pdmpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pdmupperaddpt_layer(const std::string& key, const json& layer);
+    void _init_pdmupperpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pdmmulsquare_layer(const std::string& key, const json& layer);
+    void _init_pdmheadcolsum_layer(const std::string& key, const json& layer);
+    void _init_pdminvinit_layer(const std::string& key, const json& layer);
+    void _init_pdminviter_layer(const std::string& key, const json& layer);
+    void _init_pdmctmul_layer(const std::string& key, const json& layer);
+    void _init_pdmupperpolymultct_layer(const std::string& key, const json& layer);
     void _init_pdmstats_layer(const std::string& key, const json& layer);
     void _init_pdmcenter_layer(const std::string& key, const json& layer);
     void _init_pdminit_layer(const std::string& key, const json& layer);
@@ -246,6 +255,7 @@ public:
     virtual ~InferenceProcess();
     InitInferenceProcess* fp;
     ComputeDevice compute_device = ComputeDevice::CPU;  // Default to CPU mode
+    int gpu_device = 0;
 
     std::map<std::string, UPtr<ls::CkksContext>> ckks_contexts;
 
@@ -255,10 +265,10 @@ public:
     std::map<std::string, Array1D> p_feature0d_x;
     std::map<std::string, Array<double, 2>> p_feature_mat_x;
 
-    void run_task(bool is_mpc = false);
+    void run_task(bool is_mpc = false, ls::ProgressCallback progress_cb = nullptr);
     void run_task_sdk(bool is_mpc = false);
     void run_task_plaintext(bool is_mpc = false);
-    void run_task_lazy(bool is_mpc = false);
+    void run_task_lazy(bool is_mpc = false, ls::ProgressCallback progress_cb = nullptr);
 
     // load_model
     void prepare_task();

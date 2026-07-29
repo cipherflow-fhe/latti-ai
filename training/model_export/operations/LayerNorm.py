@@ -16,7 +16,19 @@
 
 from typing_extensions import override
 from . import ComputeNode, FeatureNode, format_id
-from onnx import NodeProto
+from onnx import NodeProto, TensorProto, numpy_helper
+
+
+def _json_safe_attr_value(value):
+    if isinstance(value, bytes):
+        return value.decode('utf-8')
+    if isinstance(value, TensorProto):
+        return numpy_helper.to_array(value).tolist()
+    if hasattr(value, 'item') and callable(value.item):
+        return value.item()
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_attr_value(v) for v in value]
+    return value
 
 
 class LayerNormComputeNode(ComputeNode):
@@ -41,6 +53,7 @@ class LayerNormComputeNode(ComputeNode):
         c1: float = -16.15885111,
         c2: float = 11.52830778,
         num_iters: int = 2,
+        attrs: dict | None = None,
     ):
         super().__init__(layer_id, 'layernorm', feature_input, feature_output)
         self.epsilon = epsilon
@@ -52,6 +65,7 @@ class LayerNormComputeNode(ComputeNode):
         self.c1 = c1
         self.c2 = c2
         self.num_iters = num_iters
+        self.attrs = attrs or {}
 
     @override
     def to_json(self) -> dict:
@@ -71,6 +85,8 @@ class LayerNormComputeNode(ComputeNode):
             info['weight_path'] = self.weight_name
         if self.bias_name:
             info['bias_path'] = self.bias_name
+        for key, value in self.attrs.items():
+            info.setdefault(key, value)
         return info
 
     @staticmethod
@@ -79,14 +95,16 @@ class LayerNormComputeNode(ComputeNode):
         feature_input = [features_nodes[format_id(x.input[0])]]
         feature_output = [features_nodes[format_id(x.output[0])]]
 
-        attrs = ComputeNode.get_attr_value_dict(x)
+        attrs = {key: _json_safe_attr_value(value) for key, value in ComputeNode.get_attr_value_dict(x).items()}
         epsilon = float(attrs.get('eps', attrs.get('epsilon', 1e-5)))
         inv_std_scale = float(attrs.get('inv_std_scale', 1.0))
         inv_var_scale = float(attrs.get('inv_var_scale', 1.0))
         c0 = float(attrs.get('c0', 6.19067182))
         c1 = float(attrs.get('c1', -16.15885111))
         c2 = float(attrs.get('c2', 11.52830778))
-        num_iters = int(attrs.get('num_iters', 2))
+        num_iters = int(
+            attrs.get('num_iters', attrs.get('max_inverse_sqrt_iterations', attrs.get('max_inverse_sqrt_iteration', 2)))
+        )
 
         # input[1] = weight initialiser, input[2] = bias initialiser (raw ONNX names)
         weight_name = x.input[1] if len(x.input) > 1 else ''
@@ -105,4 +123,5 @@ class LayerNormComputeNode(ComputeNode):
             c1=c1,
             c2=c2,
             num_iters=num_iters,
+            attrs=attrs,
         )

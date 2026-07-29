@@ -1,6 +1,18 @@
 {
-  "n_heads": 3,
+  "n_heads": 12,
   "head_dim": 64,
   "matmul_block_size": 64,
-  "mat_pack_style": "par_diagonal_pack"
+  "mat_pack_style": "par_diagonal_pack",
+  "model_type": "bert",
+  "btp_scale": 1.0,
+  "bert_softmax_values_btp_scale": 512.0,
+  "bert_softmax_denominator_btp_scale": 16.0,
+  "bert_softmax_scaled_denominator_btp_scale": 16.0,
+  "bert_softmax_inverse_btp_scale": 0.125,
+  "bert_layernorm_inverse_btp_scale": 0.125,
+  "bert_softmax_initial_denominator_scale": 512.0,
+  "bert_softmax_wide_initial_denominator_scale": 65536.0,
+  "bert_softmax_use_wide_inverse_epsilon": 1.0,
+  "bert_softmax_first_refinement_denominator_scale": 2.0,
+  "bert_softmax_later_refinement_denominator_scale": 1.0
 }

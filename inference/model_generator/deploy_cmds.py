@@ -72,6 +72,16 @@ from inference.model_generator.layers.par_upper_diagonal_polyact import (
     ParUpperDiagonalPolyActRNGamma,
     ParUpperDiagonalPolyActRNPoly,
 )
+from inference.model_generator.layers.par_upper_diagonal_poly import ParUpperDiagonalPoly
+from inference.model_generator.layers.par_upper_diagonal_poly_mult_ct import ParUpperDiagonalPolyMultCt
+from inference.model_generator.layers.par_upper_diagonal_softmax import (
+    ParUpperDiagonalAddPt,
+    ParUpperDiagonalGELU,
+    ParUpperDiagonalHeadColSum,
+    ParUpperDiagonalInverseInit,
+    ParUpperDiagonalInverseIter,
+    ParUpperDiagonalMultipleSquare,
+)
 from training.model_compiler.components import (
     N16QP1546H192H32,
     PN13QP218,
@@ -107,8 +117,8 @@ def set_param(param_name):
             n=fhe.poly_modulus_degree,
             q=fhe.q,
             p=fhe.p,
+            scale=1 << fhe.log_default_scale,
         )
-        param.scale = 1 << fhe.log_default_scale
     set_fhe_param(param)
 
 
@@ -250,6 +260,22 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             if degree not in (2, 4):
                 raise ValueError(f"pdmpoly layer '{layer_id}' only supports degree 2 or 4, got {degree}")
             return ParUpperDiagonalPolyActRNPoly(shape, head_shape, n_heads, n // 2, degree)
+        if layer_type == 'pdmupperaddpt':
+            return ParUpperDiagonalAddPt(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdmupperpoly':
+            return ParUpperDiagonalPoly(shape, head_shape, n_heads, n // 2, int(layer_config.get('order', 15)))
+        if layer_type == 'pdmmulsquare':
+            return ParUpperDiagonalMultipleSquare(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdmheadcolsum':
+            return ParUpperDiagonalHeadColSum(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdminvinit':
+            return ParUpperDiagonalInverseInit(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdminviter':
+            return ParUpperDiagonalInverseIter(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdmctmul':
+            return ParUpperDiagonalGELU(shape, head_shape, n_heads, n // 2)
+        if layer_type == 'pdmupperpolymultct':
+            return ParUpperDiagonalPolyMultCt(shape, head_shape, n_heads, n // 2)
         raise ValueError(f'Unsupported PDM upper layer type: {layer_type}')
 
     def _pdm_upper_shape(feat, head_shape):
@@ -356,7 +382,16 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             'pdmaffine',
             'pdmgamma',
             'pdmpoly',
+            'pdmupperaddpt',
+            'pdmupperpoly',
+            'pdmmulsquare',
+            'pdmheadcolsum',
+            'pdminvinit',
         }:
+            return _pdm_single_input_total_ct_layer(
+                consumer_type, feat, feature_id, consumer_layer_id, consumer
+            ).total_cts
+        if consumer_type in {'pdminviter', 'pdmctmul', 'pdmupperpolymultct'}:
             return _pdm_single_input_total_ct_layer(
                 consumer_type, feat, feature_id, consumer_layer_id, consumer
             ).total_cts
@@ -467,6 +502,14 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     'pdmaffine',
                     'pdmgamma',
                     'pdmpoly',
+                    'pdmupperaddpt',
+                    'pdmupperpoly',
+                    'pdmmulsquare',
+                    'pdmheadcolsum',
+                    'pdminvinit',
+                    'pdminviter',
+                    'pdmctmul',
+                    'pdmupperpolymultct',
                 }:
                     layer = _pdm_single_input_total_ct_layer(
                         consumer_type, feat, input_fid, consumer_layer_id, consumer
@@ -508,7 +551,23 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose', 'pcm_add_pt'}
     _PCM_LAYER_TYPES = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine', 'pcmgamma', 'pcmpoly'}
     _PDM_MATRIX_LAYER_TYPES = {'pdmpcmm', 'pdmccmm', 'pdmtranspose', 'pdm_add_pt'}
-    _PDM_LAYER_TYPES = {'pdmstats', 'pdmcenter', 'pdminit', 'pdmgs', 'pdmaffine', 'pdmgamma', 'pdmpoly'}
+    _PDM_LAYER_TYPES = {
+        'pdmstats',
+        'pdmcenter',
+        'pdminit',
+        'pdmgs',
+        'pdmaffine',
+        'pdmgamma',
+        'pdmpoly',
+        'pdmupperaddpt',
+        'pdmupperpoly',
+        'pdmmulsquare',
+        'pdmheadcolsum',
+        'pdminvinit',
+        'pdminviter',
+        'pdmctmul',
+        'pdmupperpolymultct',
+    }
     _FEATURE_MAT_LAYER_TYPES = _PAR_MATRIX_LAYER_TYPES | _PCM_LAYER_TYPES | _PDM_MATRIX_LAYER_TYPES | _PDM_LAYER_TYPES
     _UNSUPPORTED_MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose'}
 
@@ -1266,6 +1325,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         n_channel_per_ct_1d,
                         math.ceil(n_in_channel / n_channel_per_ct_1d),
                         math.ceil(n_out_channel / n_block_per_ct),
+                        invalid_fill=[invalid_fill_1d, 1],
                     )
                     if lazy:
                         dense_data_source = CustomDataNode(type='fc_data_source', id=f'{layer_id}')
@@ -1681,6 +1741,14 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             'pdmaffine',
             'pdmgamma',
             'pdmpoly',
+            'pdmupperaddpt',
+            'pdmupperpoly',
+            'pdmmulsquare',
+            'pdmheadcolsum',
+            'pdminvinit',
+            'pdminviter',
+            'pdmctmul',
+            'pdmupperpolymultct',
         }:
             layer_type = layer_config['type']
             n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_type)
@@ -1699,12 +1767,14 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 data_source_type = 'layernorm_data_source'
             elif layer_type == 'pdmgamma':
                 data_source_type = 'polyactrn_gamma_data_source'
-            else:
+            elif layer_type == 'pdmpoly':
                 data_source_type = 'polyactrn_poly_data_source'
+            else:
+                data_source_type = 'pdmupper_data_source'
 
             data_source = CustomDataNode(type=data_source_type, id=f'{layer_id}')
             input_args.append(Argument(f'{layer_id}', [data_source]))
-            if layer_type in {'pdmgs', 'pdmaffine'}:
+            if layer_type in {'pdmgs', 'pdmaffine', 'pdminviter', 'pdmctmul', 'pdmupperpolymultct'}:
                 layer_output_nodes = layer.call_custom_compute(
                     feature_id_to_nodes_map[layer_input_feature_ids[0]],
                     feature_id_to_nodes_map[layer_input_feature_ids[1]],

@@ -29,6 +29,8 @@ jobs:
         - /opt/heongpu-cache:/opt/heongpu-cache
         - /opt/go-mod-cache:/root/go/pkg/mod
     timeout-minutes: 120
+    env:
+      PYTHONPATH: ${{ github.workspace }}/inference/lattisense:${{ github.workspace }}
 
     steps:
       - name: Configure git proxy
@@ -39,8 +41,11 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install CMake 3.30.4
+        run: python3 -m pip install --upgrade cmake==3.30.4 -i https://mirrors.aliyun.com/pypi/simple/
+
       - name: Install Python dependencies
-        run: pip install -r training/requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+        run: python3 -m pip install -i https://mirrors.aliyun.com/pypi/simple/ -r training/requirements.txt pybind11
 
       - name: Detect CUDA architecture
         id: cuda-arch
@@ -68,12 +73,12 @@ jobs:
       - name: Restore HEonGPU cache
         run: |
           CUDA_ARCH="${{ steps.cuda-arch.outputs.arch }}"
-          HEONGPU_COMMIT=$(git -C inference/lattisense/HEonGPU rev-parse HEAD)
+          HEONGPU_COMMIT=$(git -C inference/lattisense/backends/HEonGPU rev-parse HEAD)
           CACHE_DIR="/opt/heongpu-cache/${HEONGPU_COMMIT}-arch${CUDA_ARCH}"
           if [ -d "${CACHE_DIR}/install/lib" ]; then
             echo "Using cached HEonGPU (${HEONGPU_COMMIT:0:8}, arch=${CUDA_ARCH})"
-            cp -a "${CACHE_DIR}/install" inference/lattisense/HEonGPU/install
-            cp -a "${CACHE_DIR}/build" inference/lattisense/HEonGPU/build
+            cp -a "${CACHE_DIR}/install" inference/lattisense/backends/HEonGPU/install
+            cp -a "${CACHE_DIR}/build" inference/lattisense/backends/HEonGPU/build
           else
             echo "No cache found, HEonGPU will be built automatically during cmake configure"
           fi
@@ -84,39 +89,85 @@ jobs:
           cmake -B build \
             -DINFERENCE_SDK_ENABLE_GPU=ON \
             -DLATTISENSE_CUDA_ARCH=${CUDA_ARCH} \
-            -DHEONGPU_CCCL_GIT_URL=https://gitee.com/nvidia_mirror/cccl.git
+            -DHEONGPU_CCCL_GIT_URL=https://gitee.com/mirrors_NVIDIA/cccl.git \
+            -DHEONGPU_SPDLOG_GIT_URL=https://gitee.com/mirror-luyi/spdlog.git
           cmake --build build -j$(nproc)
 
       - name: Save HEonGPU cache
         run: |
           CUDA_ARCH="${{ steps.cuda-arch.outputs.arch }}"
-          HEONGPU_COMMIT=$(git -C inference/lattisense/HEonGPU rev-parse HEAD)
+          HEONGPU_COMMIT=$(git -C inference/lattisense/backends/HEonGPU rev-parse HEAD)
           CACHE_DIR="/opt/heongpu-cache/${HEONGPU_COMMIT}-arch${CUDA_ARCH}"
-          if [ ! -d "${CACHE_DIR}/install/lib" ] && [ -d "inference/lattisense/HEonGPU/install/lib" ]; then
+          if [ ! -d "${CACHE_DIR}/install/lib" ] && [ -d "inference/lattisense/backends/HEonGPU/install/lib" ]; then
             echo "Saving HEonGPU build to cache"
             mkdir -p "${CACHE_DIR}"
-            cp -a inference/lattisense/HEonGPU/install "${CACHE_DIR}/"
-            cp -a inference/lattisense/HEonGPU/build "${CACHE_DIR}/"
+            cp -a inference/lattisense/backends/HEonGPU/install "${CACHE_DIR}/"
+            cp -a inference/lattisense/backends/HEonGPU/build "${CACHE_DIR}/"
             # Keep only the 3 most recent caches
             ls -dt /opt/heongpu-cache/*/ 2>/dev/null | tail -n +4 | xargs rm -rf 2>/dev/null || true
           fi
 
-      - name: Run compiler tests
+      - name: Build pybind11 modules (client + server)
+        run: |
+          # Client (standalone, only needs fhe_ops_lib)
+          cd inference/interface/python/client
+          mkdir -p build && cd build
+          cmake .. \
+            -DFHE_OPS_LIB=$GITHUB_WORKSPACE/build/inference/lattisense/fhe_ops_lib/libfhe_ops_lib.so \
+            -Dpybind11_DIR=$(python3 -m pybind11 --cmakedir)
+          cmake --build . -j$(nproc)
+
+          # Server (needs full latti-ai build)
+          cd $GITHUB_WORKSPACE/inference/interface/python/server
+          mkdir -p build && cd build
+          cmake .. \
+            -Dpybind11_DIR=$(python3 -m pybind11 --cmakedir) \
+            -DLATTI_AI_BUILD=$GITHUB_WORKSPACE/build
+          cmake --build . -j$(nproc)
+
+      - name: Generate example instructions
+        run: |
+          export PYTHONPATH="$GITHUB_WORKSPACE/inference/lattisense:$PYTHONPATH"
+          python3 inference/interface/gen_mega_ag.py --task-dir examples/test_mnist/task
+          python3 inference/interface/gen_mega_ag.py --task-dir examples/test_cifar10/task
+
+      - name: Test pybind11 modules
+        timeout-minutes: 10
+        run: |
+          cd $GITHUB_WORKSPACE
+          python3 inference/interface/python/client/test_client.py
+          python3 inference/interface/python/server/test_server.py
+
+      - name: Generate E2E compiler test data
         run: |
           cd build/inference/unittests
-          python3 ../../../training/model_compiler/unittests/test_compiler.py
+          python3 ../../../training/model_compiler/unittests/test_compiler.py TestE2ESingleLayer TestE2EMultipleLayer
 
       - name: Run E2E tests (GPU)
         timeout-minutes: 30
         run: |
           cd build/inference/unittests
-          ./test_e2e_single_layer "[e2e][gpu]"
-          ./test_e2e_multiple_layer "[e2e][gpu]"
+          ./test_e2e_single_layer "gpu/all"
+          python3 - <<'PY'
+          import subprocess
 
-      - name: Generate example instructions
-        run: |
-          python3 inference/interface/gen_mega_ag.py --task-dir examples/test_mnist/task
-          python3 inference/interface/gen_mega_ag.py --task-dir examples/test_cifar10/task
+          listed = subprocess.run(
+              ["./test_e2e_multiple_layer", "--list-tests", "[e2e][gpu]"],
+              check=False,
+              stdout=subprocess.PIPE,
+              text=True,
+          )
+          test_names = [line.strip() for line in listed.stdout.splitlines() if line.startswith("  gpu/")]
+          if not test_names:
+              raise RuntimeError("No multiple-layer GPU E2E tests found")
+
+          for test_name in test_names:
+              print(f"::group::{test_name}", flush=True)
+              try:
+                  subprocess.run(["./test_e2e_multiple_layer", test_name], check=True)
+              finally:
+                  print("::endgroup::", flush=True)
+          PY
 
       - name: Run example tests (GPU only)
         timeout-minutes: 60
@@ -167,7 +218,8 @@ jobs:
             ./test_data_structs
             ./test_fhe_layers_hetero 'sq*'
             cd /workspace
-            python -m pytest training/model_compiler/unittests/test_compiler.py -v
+            export PYTHONPATH=/workspace/inference/lattisense:/workspace:\$PYTHONPATH
+            python training/model_compiler/unittests/test_compiler.py TestE2ESingleLayer TestE2EMultipleLayer
           "
 
       - name: Tag and push

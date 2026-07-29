@@ -61,11 +61,18 @@ class PolyActRNSource:
     eps: float
 
 
+@dataclass(frozen=True)
+class PolyActRNPolySource:
+    degree: int
+    activation_name: str
+
+
 def export_feature_mat_h5_from_onnx(
     onnx_path: str,
     json_path: str,
     h5_path: str,
     verbose: bool = True,
+    model_type: str = '',
 ) -> str:
     """Export H5 parameters for a compiled feature_mat CT graph.
 
@@ -80,10 +87,15 @@ def export_feature_mat_h5_from_onnx(
     """
     onnx_model = onnx.load(onnx_path)
     onnx_weights = {init.name: numpy_helper.to_array(init).astype('float64') for init in onnx_model.graph.initializer}
-    attention_sources, polyact_sources = _index_onnx_sources(onnx_model)
+    attention_sources, polyact_sources, pcmpoly_sources = _index_onnx_sources(onnx_model)
 
     with open(json_path, 'r', encoding='utf-8') as f:
         graph = json.load(f)
+    if not model_type:
+        task_config_path = os.path.join(os.path.dirname(json_path), 'task_config.json')
+        if os.path.exists(task_config_path):
+            with open(task_config_path, 'r', encoding='utf-8') as f:
+                model_type = str(json.load(f).get('model_type', ''))
 
     features: dict[str, dict[str, Any]] = graph['feature']
     layers: dict[str, dict[str, Any]] = graph['layer']
@@ -95,11 +107,13 @@ def export_feature_mat_h5_from_onnx(
         if ltype == 'parcpmm':
             _export_parcpmm(layer_key, layer, features, onnx_weights, out)
         elif ltype == 'pdmpcmm':
-            _export_pdmpcmm(layer_key, layer, features, onnx_weights, out)
+            _export_pdmpcmm(layer_key, layer, features, onnx_weights, out, model_type=model_type)
         elif ltype == 'pcmgamma':
             _export_pcmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
         elif ltype == 'pdmgamma':
             _export_pdmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
+        elif ltype == 'pdmupperpoly':
+            _export_pdmupperpoly(layer_key, layer, features, out)
         elif ltype == 'pcmpoly':
             _export_pcmpoly(
                 layer_key,
@@ -108,8 +122,10 @@ def export_feature_mat_h5_from_onnx(
                 onnx_weights,
                 attention_sources,
                 polyact_sources,
+                pcmpoly_sources,
                 standalone_gamma_paths,
                 out,
+                model_type=model_type,
             )
         elif ltype == 'pdmpoly':
             _export_pdmpoly(
@@ -119,8 +135,10 @@ def export_feature_mat_h5_from_onnx(
                 onnx_weights,
                 attention_sources,
                 polyact_sources,
+                pcmpoly_sources,
                 standalone_gamma_paths,
                 out,
+                model_type=model_type,
             )
         elif ltype == 'pcmaffine':
             _export_pcmaffine(layer_key, layer, features, onnx_weights, out)
@@ -146,9 +164,12 @@ def export_feature_mat_h5_from_onnx(
     return h5_path
 
 
-def _index_onnx_sources(onnx_model: onnx.ModelProto) -> tuple[dict[str, AttentionSource], dict[str, PolyActRNSource]]:
+def _index_onnx_sources(
+    onnx_model: onnx.ModelProto,
+) -> tuple[dict[str, AttentionSource], dict[str, PolyActRNSource], dict[str, PolyActRNPolySource]]:
     attention_sources: dict[str, AttentionSource] = {}
     polyact_sources: dict[str, PolyActRNSource] = {}
+    pcmpoly_sources: dict[str, PolyActRNPolySource] = {}
 
     for node in onnx_model.graph.node:
         attrs = _attrs(node)
@@ -187,7 +208,16 @@ def _index_onnx_sources(onnx_model: onnx.ModelProto) -> tuple[dict[str, Attentio
                 eps=float(attrs.get('eps', 1e-3)),
             )
 
-    return attention_sources, polyact_sources
+        elif node.op_type == 'PolyActRNPoly':
+            source = PolyActRNPolySource(
+                degree=int(attrs.get('degree', attrs.get('degree_i', 4))),
+                activation_name=str(attrs.get('activation', attrs.get('activation_s', 'gelu'))),
+            )
+            node_id = _format_id(node.name)
+            pcmpoly_sources[node_id] = source
+            pcmpoly_sources[f'{node_id}.weight'] = source
+
+    return attention_sources, polyact_sources, pcmpoly_sources
 
 
 def _standalone_pcmgamma_paths(layers: dict[str, dict[str, Any]]) -> set[str]:
@@ -236,13 +266,14 @@ def _export_pdmpcmm(
     features: dict[str, dict[str, Any]],
     onnx_weights: dict[str, np.ndarray],
     out: dict[str, np.ndarray],
+    model_type: str = '',
 ) -> None:
     weight_path = _required_path(layer, 'weight_path', layer_key)
     fout = _feature(features, layer['feature_output'][0], layer_key)
 
     weight = _resolve_parcpmm_weight(weight_path, layer, features, onnx_weights)
     logical_shape = _pdmpcmm_logical_weight_shape(weight, layer, layer_key, weight_path)
-    weight = _pdmpcmm_weight_matrix(weight, logical_shape, layer_key, weight_path)
+    weight = _pdmpcmm_weight_matrix(weight, logical_shape, layer_key, weight_path, model_type=model_type)
     _put(out, weight_path, weight, layer_key)
 
     bias_path = layer.get('bias_path', '')
@@ -280,6 +311,8 @@ def _export_pdmgamma(
 
     if 'btp_scale' in layer:
         gamma = np.full(expected_shape, float(layer['btp_scale']), dtype=np.float64)
+    elif 'scalar_value' in layer:
+        gamma = np.full(expected_shape, float(layer['scalar_value']), dtype=np.float64)
     elif dst_path in attention_sources:
         source = attention_sources[dst_path]
         gamma = 1.0 / _scale_factor(source.running_max_path, source.upper_bound, source.eps, onnx_weights)
@@ -304,8 +337,10 @@ def _export_pdmpoly(
     onnx_weights: dict[str, np.ndarray],
     attention_sources: dict[str, AttentionSource],
     polyact_sources: dict[str, PolyActRNSource],
+    pcmpoly_sources: dict[str, PolyActRNPolySource],
     standalone_gamma_paths: set[str],
     out: dict[str, np.ndarray],
+    model_type: str = '',
 ) -> None:
     dst_path = layer.get('coeffs_path') or _required_path(layer, 'weight_path', layer_key)
     fin = _feature(features, layer['feature_input'][0], layer_key)
@@ -323,7 +358,8 @@ def _export_pdmpoly(
             onnx_weights,
             absorb_input_gamma=gamma_path not in standalone_gamma_paths,
         )
-        coeffs = coeffs / _sequence_length(fin, layer_key)
+        if model_type != 'bert':
+            coeffs = coeffs / _sequence_length(fin, layer_key)
     else:
         source_path = layer.get('running_max_path') or dst_path
         if source_path in polyact_sources:
@@ -337,12 +373,34 @@ def _export_pdmpoly(
                 onnx_weights,
                 absorb_input_gamma=gamma_path not in standalone_gamma_paths,
             )
+        elif layer_key in pcmpoly_sources or dst_path in pcmpoly_sources:
+            source = pcmpoly_sources[layer_key] if layer_key in pcmpoly_sources else pcmpoly_sources[dst_path]
+            coeffs = _polyactrnpoly_coeff_matrix(source, expected_shape[1])
         elif dst_path in onnx_weights:
             coeffs = onnx_weights[dst_path].copy()
         else:
             raise KeyError(f'{layer_key}: cannot resolve pdmpoly source for {dst_path}')
 
     coeffs = _reshape_checked(coeffs, expected_shape, layer_key, dst_path)
+    _put(out, dst_path, coeffs, layer_key)
+
+
+def _export_pdmupperpoly(
+    layer_key: str,
+    layer: dict[str, Any],
+    features: dict[str, dict[str, Any]],
+    out: dict[str, np.ndarray],
+) -> None:
+    dst_path = layer.get('coeffs_path') or _required_path(layer, 'weight_path', layer_key)
+    fin = _feature(features, layer['feature_input'][0], layer_key)
+    order = int(layer.get('order', 15))
+    expected_shape = (order + 1, int(fin['shape'][0]))
+    if 'coefficients' not in layer:
+        raise KeyError(f'{layer_key}: pdmupperpoly requires coefficients in layer JSON')
+    coeffs = np.asarray(_parse_coefficients(layer['coefficients']), dtype='float64')
+    if coeffs.size != order + 1:
+        raise ValueError(f'{layer_key}: pdmupperpoly has {coeffs.size} coefficients, expected {order + 1}')
+    coeffs = np.tile(coeffs.reshape(order + 1, 1), (1, expected_shape[1]))
     _put(out, dst_path, coeffs, layer_key)
 
 
@@ -382,7 +440,17 @@ def _export_pdm_add_pt(
     data = np.asarray(onnx_weights[path], dtype='float64')
     if data.ndim == 3 and data.shape[0] == 1:
         data = data.reshape(data.shape[1], data.shape[2])
-    if data.ndim == 2 and tuple(data.T.shape) == expected_shape:
+    if layer.get('source_op_type') == 'CustomPositionEmbedding':
+        if data.ndim == 2 and data.shape[1] == expected_shape[0] and data.shape[0] >= expected_shape[1]:
+            data = data[: expected_shape[1], :].T.copy()
+        elif data.ndim == 2 and tuple(data.T.shape) == expected_shape:
+            data = data.T.copy()
+        else:
+            raise ValueError(
+                f'{layer_key}: CustomPositionEmbedding {path} shape {tuple(data.shape)} cannot transpose to '
+                f'pdm_add_pt matrix shape {expected_shape}'
+            )
+    elif data.ndim == 2 and tuple(data.T.shape) == expected_shape:
         data = data.T.copy()
     elif data.ndim == 2 and tuple(data.shape) == expected_shape:
         data = data.copy()
@@ -410,6 +478,8 @@ def _export_pcmgamma(
 
     if 'btp_scale' in layer:
         gamma = np.full(expected_shape, float(layer['btp_scale']), dtype=np.float64)
+    elif 'scalar_value' in layer:
+        gamma = np.full(expected_shape, float(layer['scalar_value']), dtype=np.float64)
     elif dst_path in attention_sources:
         source = attention_sources[dst_path]
         gamma = 1.0 / _scale_factor(source.running_max_path, source.upper_bound, source.eps, onnx_weights)
@@ -434,8 +504,10 @@ def _export_pcmpoly(
     onnx_weights: dict[str, np.ndarray],
     attention_sources: dict[str, AttentionSource],
     polyact_sources: dict[str, PolyActRNSource],
+    pcmpoly_sources: dict[str, PolyActRNPolySource],
     standalone_gamma_paths: set[str],
     out: dict[str, np.ndarray],
+    model_type: str = '',
 ) -> None:
     dst_path = layer.get('coeffs_path') or _required_path(layer, 'weight_path', layer_key)
     fin = _feature(features, layer['feature_input'][0], layer_key)
@@ -453,7 +525,8 @@ def _export_pcmpoly(
             onnx_weights,
             absorb_input_gamma=gamma_path not in standalone_gamma_paths,
         )
-        coeffs = coeffs / _sequence_length(fin, layer_key)
+        if model_type != 'bert':
+            coeffs = coeffs / _sequence_length(fin, layer_key)
     else:
         source_path = layer.get('running_max_path') or dst_path
         if source_path in polyact_sources:
@@ -467,6 +540,9 @@ def _export_pcmpoly(
                 onnx_weights,
                 absorb_input_gamma=gamma_path not in standalone_gamma_paths,
             )
+        elif layer_key in pcmpoly_sources or dst_path in pcmpoly_sources:
+            source = pcmpoly_sources[layer_key] if layer_key in pcmpoly_sources else pcmpoly_sources[dst_path]
+            coeffs = _polyactrnpoly_coeff_matrix(source, expected_shape[1])
         elif dst_path in onnx_weights:
             coeffs = onnx_weights[dst_path].copy()
         else:
@@ -540,8 +616,13 @@ def _pdmpcmm_weight_matrix(
     logical_shape: tuple[int, int],
     layer_key: str,
     weight_path: str,
+    model_type: str = '',
 ) -> np.ndarray:
     weight = np.asarray(weight, dtype='float64')
+    if model_type == 'bert':
+        if weight.ndim == 2 and tuple(weight.shape) == logical_shape:
+            return weight.copy()
+        return _reshape_checked(weight, logical_shape, layer_key, weight_path)
     if weight.ndim == 2 and tuple(weight.T.shape) == logical_shape:
         return weight.T.copy()
     if weight.ndim == 2 and tuple(weight.shape) == logical_shape:
@@ -561,11 +642,16 @@ def _resolve_parcpmm_weight(
         weight = {'q': q, 'k': k, 'v': v}[part].copy()
         if part == 'q':
             weight *= 1.0 / math.sqrt(_layer_head_dim(layer, features))
+        if layer.get('weight_multiplier') is not None:
+            weight *= float(layer['weight_multiplier'])
         return weight
 
     if weight_path not in onnx_weights:
         raise KeyError(f'{layer.get("type", "parcpmm")}: weight not found in ONNX: {weight_path}')
-    return onnx_weights[weight_path].copy()
+    weight = onnx_weights[weight_path].copy()
+    if layer.get('weight_multiplier') is not None:
+        weight = weight * float(layer['weight_multiplier'])
+    return weight
 
 
 def _resolve_parcpmm_bias(
@@ -580,11 +666,16 @@ def _resolve_parcpmm_bias(
         bias = {'q': q, 'k': k, 'v': v}[part].copy()
         if part == 'q':
             bias *= 1.0 / math.sqrt(_layer_head_dim(layer, features))
+        if layer.get('bias_multiplier') is not None:
+            bias *= float(layer['bias_multiplier'])
         return bias
 
     if bias_path not in onnx_weights:
         raise KeyError(f'{layer.get("type", "parcpmm")}: bias not found in ONNX: {bias_path}')
-    return onnx_weights[bias_path].copy()
+    bias = onnx_weights[bias_path].copy()
+    if layer.get('bias_multiplier') is not None:
+        bias = bias * float(layer['bias_multiplier'])
+    return bias
 
 
 def _qkv_source(path: str, suffix: str) -> tuple[str, str]:
@@ -636,6 +727,52 @@ def _coeff_matrix(
     return coeff.reshape(-1, 1) * scale_factor
 
 
+def _polyactrnpoly_coeff_matrix(source: PolyActRNPolySource, n_cols: int) -> np.ndarray:
+    from .eval_fn_hat_for_aespa import get_hermite_coeffs_for_module
+
+    hermite_coeffs = get_hermite_coeffs_for_module(_resolve_activation_cls(source.activation_name), source.degree)
+    return _standard_poly_coeff_matrix(np.ones(n_cols, dtype='float64'), 1.0, 0.0, hermite_coeffs)
+
+
+def _standard_poly_coeff_matrix(
+    running_max: np.ndarray,
+    upper_bound: float,
+    eps: float,
+    hermite_coeffs: tuple[float, ...],
+) -> np.ndarray:
+    scale = np.asarray(running_max, dtype='float64').reshape(-1) / upper_bound + eps
+    degree = len(hermite_coeffs) - 1
+
+    hermite_power = [np.array([1.0], dtype='float64')]
+    if degree >= 1:
+        hermite_power.append(np.array([0.0, 1.0], dtype='float64'))
+    for n in range(2, degree + 1):
+        x_he_prev = np.concatenate(([0.0], hermite_power[n - 1]))
+        he_prev2 = np.pad(hermite_power[n - 2], (0, len(x_he_prev) - len(hermite_power[n - 2])))
+        hermite_power.append(x_he_prev - (n - 1) * he_prev2)
+
+    coeffs = np.zeros((degree + 1, len(scale)), dtype='float64')
+    for n, a_n in enumerate(hermite_coeffs):
+        for power, he_coeff in enumerate(hermite_power[n]):
+            if he_coeff != 0:
+                coeffs[power] += float(a_n) * float(he_coeff) * np.power(scale, 1 - power)
+    return coeffs
+
+
+def _resolve_activation_cls(name: str):
+    import torch.nn as nn
+
+    activations = {
+        'relu': nn.ReLU,
+        'silu': nn.SiLU,
+        'gelu': nn.GELU,
+    }
+    activation_cls = activations.get(name.lower())
+    if activation_cls is None:
+        raise ValueError(f'Unknown activation "{name}". Add it to _resolve_activation_cls.')
+    return activation_cls
+
+
 def _coeff_index(path: str) -> int | None:
     name = path.rsplit('.', 1)[-1]
     if len(name) >= 2 and name[0] == 'a' and name[1:].isdigit():
@@ -651,6 +788,14 @@ def _attrs(node: onnx.NodeProto) -> dict[str, Any]:
             value = value.decode('utf-8')
         values[attr.name] = value
     return values
+
+
+def _parse_coefficients(value: Any) -> list[float]:
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    if isinstance(value, str):
+        return [float(item.strip()) for item in value.split(',') if item.strip()]
+    return [float(item) for item in value]
 
 
 def _input_or_empty(node: onnx.NodeProto, idx: int) -> str:

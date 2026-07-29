@@ -80,6 +80,16 @@ from inference.model_generator.layers.par_upper_diagonal_polyact import (
     ParUpperDiagonalPolyActRNGamma,
     ParUpperDiagonalPolyActRNPoly,
 )
+from inference.model_generator.layers.par_upper_diagonal_poly import ParUpperDiagonalPoly
+from inference.model_generator.layers.par_upper_diagonal_poly_mult_ct import ParUpperDiagonalPolyMultCt
+from inference.model_generator.layers.par_upper_diagonal_softmax import (
+    ParUpperDiagonalAddPt,
+    ParUpperDiagonalGELU,
+    ParUpperDiagonalHeadColSum,
+    ParUpperDiagonalInverseInit,
+    ParUpperDiagonalInverseIter,
+    ParUpperDiagonalMultipleSquare,
+)
 from inference.model_generator.layers.upsample_layer import UpsampleNearestLayer
 
 
@@ -1027,6 +1037,14 @@ class FheScoreParam:
         n_packed_in = self.n_packed_in  # ceil(n_in / pack)
         n_packed_out = self.n_packed_out  # ceil(n_out / pack_out)
 
+        def pdm_upper_shape_and_head(feature: FeatureNode):
+            head_shape = list(feature.head_shape or [])
+            if len(head_shape) != 2:
+                raise ValueError(f'missing head_shape for PDM upper layer input {feature.node_id}')
+            if config.head_dim > 0 and head_shape[0] == config.head_dim and head_shape[1] != config.head_dim:
+                head_shape = [head_shape[1], head_shape[0]]
+            return (head_shape[0], feature.shape[0]), tuple(head_shape)
+
         # ── conv2d ──────────────────────────────────────────────────────────
         if layer_type == 'conv2d' and node.dim == 2:
             input_shape = self.input_shape
@@ -1277,9 +1295,11 @@ class FheScoreParam:
         elif layer_type == 'avgpool1d':
             input_shape = self.input_shape
             stride = node.stride
+            n_input_ct = n_packed_in
             skip_1d = self.input_skip[0] if isinstance(self.input_skip, list) else self.input_skip
             layer = Avgpool1DLayer(stride[0], input_shape[0], channel=n_in, skip=skip_1d)
             is_adaptive = getattr(node, 'is_adaptive_avgpool', True)
+            is_big_size = getattr(node, 'is_big_size', False)
             if is_big_size:
                 raise ('unsuport avgpool1d in big_size')
             if is_adaptive:
@@ -1338,7 +1358,7 @@ class FheScoreParam:
                     n_slot=n_slot,
                 )
                 return layer.get_fhe_op_count(self.input_mult_level)
-            except (AssertionError, ValueError, TypeError):
+            except (AssertionError, ValueError, TypeError, RuntimeError):
                 return None
         elif layer_type == 'pcmgamma':
             m = preds[0].shape[0]
@@ -1359,12 +1379,77 @@ class FheScoreParam:
         elif layer_type == 'pdmgamma':
             n_slot = n // 2
             try:
+                shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalPolyActRNGamma(
-                    shape=tuple(preds[0].shape),
-                    head_shape=tuple(preds[0].head_shape),
+                    shape=shape,
+                    head_shape=head_shape,
                     n_heads=config.n_heads,
                     n_slot=n_slot,
                 )
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pdmupperaddpt':
+            n_slot = n // 2
+            try:
+                shape, head_shape = pdm_upper_shape_and_head(preds[0])
+                layer = ParUpperDiagonalAddPt(shape, head_shape, config.n_heads, n_slot)
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pdmupperpoly':
+            n_slot = n // 2
+            try:
+                shape, head_shape = pdm_upper_shape_and_head(preds[0])
+                layer = ParUpperDiagonalPoly(shape, head_shape, config.n_heads, n_slot, getattr(node, 'order', 15))
+                return layer.get_fhe_op_count(level=self.input_mult_level)
+            except (AssertionError, ValueError, TypeError, RuntimeError):
+                return None
+        elif layer_type == 'pdmmulsquare':
+            n_slot = n // 2
+            try:
+                shape, head_shape = pdm_upper_shape_and_head(preds[0])
+                layer = ParUpperDiagonalMultipleSquare(shape, head_shape, config.n_heads, n_slot)
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pdmheadcolsum':
+            n_slot = n // 2
+            try:
+                shape, head_shape = pdm_upper_shape_and_head(preds[0])
+                layer = ParUpperDiagonalHeadColSum(shape, head_shape, config.n_heads, n_slot)
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pdminvinit':
+            n_slot = n // 2
+            try:
+                shape, head_shape = pdm_upper_shape_and_head(preds[0])
+                layer = ParUpperDiagonalInverseInit(shape, head_shape, config.n_heads, n_slot)
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pdminviter':
+            n_slot = n // 2
+            try:
+                shape, head_shape = pdm_upper_shape_and_head(preds[0])
+                layer = ParUpperDiagonalInverseIter(shape, head_shape, config.n_heads, n_slot)
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pdmctmul':
+            n_slot = n // 2
+            try:
+                shape, head_shape = pdm_upper_shape_and_head(preds[0])
+                layer = ParUpperDiagonalGELU(shape, head_shape, config.n_heads, n_slot)
+                return layer.get_fhe_op_count(self.input_mult_level)
+            except (AssertionError, ValueError, TypeError):
+                return None
+        elif layer_type == 'pdmupperpolymultct':
+            n_slot = n // 2
+            try:
+                shape, head_shape = pdm_upper_shape_and_head(preds[0])
+                layer = ParUpperDiagonalPolyMultCt(shape, head_shape, config.n_heads, n_slot)
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError, TypeError):
                 return None
@@ -1387,9 +1472,10 @@ class FheScoreParam:
         elif layer_type == 'pdmpoly':
             n_slot = n // 2
             try:
+                shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalPolyActRNPoly(
-                    shape=tuple(preds[0].shape),
-                    head_shape=tuple(preds[0].head_shape),
+                    shape=shape,
+                    head_shape=head_shape,
                     n_heads=config.n_heads,
                     n_slot=n_slot,
                     degree=getattr(node, 'order', 4),
@@ -1473,9 +1559,11 @@ class FheScoreParam:
         elif layer_type == 'pcmgs':
             ordered_preds = sorted(
                 preds,
-                key=lambda p: self.dag.edges[p, node].get('input_index')
-                if self.dag.edges[p, node].get('input_index') is not None
-                else 0,
+                key=lambda p: (
+                    self.dag.edges[p, node].get('input_index')
+                    if self.dag.edges[p, node].get('input_index') is not None
+                    else 0
+                ),
             )
             m = ordered_preds[0].shape[0]
             block_size = config.matmul_block_size
@@ -1490,9 +1578,11 @@ class FheScoreParam:
         elif layer_type == 'pdmgs':
             ordered_preds = sorted(
                 preds,
-                key=lambda p: self.dag.edges[p, node].get('input_index')
-                if self.dag.edges[p, node].get('input_index') is not None
-                else 0,
+                key=lambda p: (
+                    self.dag.edges[p, node].get('input_index')
+                    if self.dag.edges[p, node].get('input_index') is not None
+                    else 0
+                ),
             )
             n_slot = n // 2
             level_y = self.dag.nodes[ordered_preds[0]]['level']
@@ -1510,9 +1600,11 @@ class FheScoreParam:
         elif layer_type == 'pcmaffine':
             ordered_preds = sorted(
                 preds,
-                key=lambda p: self.dag.edges[p, node].get('input_index')
-                if self.dag.edges[p, node].get('input_index') is not None
-                else 0,
+                key=lambda p: (
+                    self.dag.edges[p, node].get('input_index')
+                    if self.dag.edges[p, node].get('input_index') is not None
+                    else 0
+                ),
             )
             m = ordered_preds[0].shape[0]
             n_cols = ordered_preds[0].shape[1]
@@ -1532,9 +1624,11 @@ class FheScoreParam:
         elif layer_type == 'pdmaffine':
             ordered_preds = sorted(
                 preds,
-                key=lambda p: self.dag.edges[p, node].get('input_index')
-                if self.dag.edges[p, node].get('input_index') is not None
-                else 0,
+                key=lambda p: (
+                    self.dag.edges[p, node].get('input_index')
+                    if self.dag.edges[p, node].get('input_index') is not None
+                    else 0
+                ),
             )
             n_slot = n // 2
             level_x = self.dag.nodes[ordered_preds[0]]['level']
@@ -1627,9 +1721,11 @@ class FheScoreParam:
             n_slot = n // 2
             try:
                 edge_indices = {pred: self.dag.edges[pred, node].get('input_index') for pred in preds}
-                ordered_preds = sorted(preds, key=lambda p: edge_indices[p]) if all(
-                    idx is not None for idx in edge_indices.values()
-                ) else preds
+                ordered_preds = (
+                    sorted(preds, key=lambda p: edge_indices[p])
+                    if all(idx is not None for idx in edge_indices.values())
+                    else preds
+                )
                 layer = ParLowerDiagCCMM(
                     shape_A=tuple(ordered_preds[0].head_shape),
                     shape_B=tuple(ordered_preds[1].head_shape),

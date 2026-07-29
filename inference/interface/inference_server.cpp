@@ -30,10 +30,21 @@ bool is_par_diagonal_pack(const std::string& mat_pack_style) {
     return mat_pack_style == "par_diagonal_pack";
 }
 
+int read_skip(const json& param, int default_value = 1) {
+    if (!param.contains("skip")) {
+        return default_value;
+    }
+    const auto& skip = param.at("skip");
+    if (skip.is_array()) {
+        return skip.empty() ? default_value : skip.at(0).get<int>();
+    }
+    return skip.get<int>();
+}
+
 }  // namespace
 
-InferenceServer::InferenceServer(const std::string& server_dir, bool use_gpu)
-    : server_dir_(server_dir), use_gpu_(use_gpu) {}
+InferenceServer::InferenceServer(const std::string& server_dir, bool use_gpu, int gpu_device)
+    : server_dir_(server_dir), use_gpu_(use_gpu), gpu_device_(gpu_device) {}
 
 InferenceServer::~InferenceServer() = default;
 
@@ -73,8 +84,9 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
             ip.width = param["shape"][1];
         } else if (ip.dim == 1) {
             ip.length = param["shape"][0];
+            ip.skip = read_skip(param);
         } else if (ip.dim == 0) {
-            ip.skip = param.value("skip", 1);
+            ip.skip = read_skip(param);
         }
         if (!ip.is_mat) {
             ip.pack_num = param.value("pack_num", 0);
@@ -101,7 +113,7 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
                 op.head_shape = {param["head_shape"][0].get<uint32_t>(), param["head_shape"][1].get<uint32_t>()};
             }
         } else if (op.dim == 0) {
-            op.skip = param["skip"];
+            op.skip = read_skip(param);
         } else if (op.dim == 1) {
             op.length = param["shape"][0];
         } else if (op.dim == 2) {
@@ -150,13 +162,15 @@ void InferenceServer::load_model() {
 
     if (use_gpu_) {
         fp_->compute_device = ComputeDevice::GPU;
+        fp_->gpu_device = gpu_device_;
     }
     fp_->prepare_task();
 
     std::cout << "[Server] Done." << std::endl;
 }
 
-std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::string, Bytes>& encrypted_inputs) {
+std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::string, Bytes>& encrypted_inputs,
+                                                       lattisense::ProgressCallback progress_cb) {
     // Deserialize and set all input ciphertexts
     for (auto& [name, bytes] : encrypted_inputs) {
         auto it = input_params_.find(name);
@@ -195,7 +209,7 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
     std::cout << "[Server] Device: " << (use_gpu_ ? "GPU" : "CPU") << std::endl;
     Timer timer;
     timer.start();
-    fp_->run_task_lazy();
+    fp_->run_task_lazy(false, progress_cb);
     timer.stop();
     timer.print("Encrypted inference time");
     std::cout << "[Server] Done." << std::endl;
@@ -222,6 +236,11 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
 
 std::map<std::string, std::vector<double>>
 InferenceServer::evaluate_plaintext(const std::map<std::string, std::string>& input_csvs) {
+    fp_->p_feature0d_x.clear();
+    fp_->p_feature1d_x.clear();
+    fp_->p_feature2d_x.clear();
+    fp_->available_keys.clear();
+
     for (auto& [name, csv_path] : input_csvs) {
         auto it = input_params_.find(name);
         if (it == input_params_.end()) {
@@ -249,23 +268,36 @@ InferenceServer::evaluate_plaintext(const std::map<std::string, std::string>& in
                 csv_to_array<3>(csv_path, {(uint64_t)param.channel, (uint64_t)param.height, (uint64_t)param.width});
             fp_->p_feature2d_x[name] = std::move(input_array.copy());
         }
+        fp_->available_keys.push_back(name);
     }
     fp_->run_task_plaintext();
 
     std::map<std::string, std::vector<double>> results;
     for (auto& [name, param] : output_params_) {
         if (param.is_mat) {
+            if (!fp_->p_feature_mat_x.count(name)) {
+                throw std::runtime_error("[Server] Plaintext output not produced: " + name);
+            }
             auto& arr = fp_->p_feature_mat_x[name];
             auto arr_1d =
                 is_par_diagonal_pack(mat_pack_style_) ? transpose_2d_array(arr).to_array_1d() : arr.to_array_1d();
             results[name] = std::vector<double>(arr_1d.data(), arr_1d.data() + arr_1d.size());
         } else if (param.dim == 0) {
+            if (!fp_->p_feature0d_x.count(name)) {
+                throw std::runtime_error("[Server] Plaintext output not produced: " + name);
+            }
             results[name] = fp_->p_feature0d_x[name];
         } else if (param.dim == 1) {
+            if (!fp_->p_feature1d_x.count(name)) {
+                throw std::runtime_error("[Server] Plaintext output not produced: " + name);
+            }
             auto& arr = fp_->p_feature1d_x[name];
             auto arr_1d = arr.to_array_1d();
             results[name] = std::vector<double>(arr_1d.data(), arr_1d.data() + arr_1d.size());
         } else {
+            if (!fp_->p_feature2d_x.count(name)) {
+                throw std::runtime_error("[Server] Plaintext output not produced: " + name);
+            }
             auto& arr = fp_->p_feature2d_x[name];
             auto arr_1d = arr.to_array_1d();
             results[name] = std::vector<double>(arr_1d.data(), arr_1d.data() + arr_1d.size());

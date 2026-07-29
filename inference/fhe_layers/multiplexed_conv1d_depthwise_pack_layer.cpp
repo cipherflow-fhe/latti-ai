@@ -284,11 +284,9 @@ Feature1DEncrypted MultiplexedDWConv1DPackedLayer::run(CkksContext& ctx, Feature
     result.n_channel = n_channel;
     result.shape = x.shape / stride;
     result.skip = x.skip * stride;
-    result.n_channel_per_ct = n_channel_per_ct;
-
     bool needs_rearrange = (skip > 1 || stride > 1);
+    result.n_channel_per_ct = n_channel_per_ct;
     result.level = x.level - (needs_rearrange ? 2 : 1);
-
     return result;
 }
 

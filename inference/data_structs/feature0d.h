@@ -27,6 +27,12 @@ class Feature0DEncrypted : public FeatureEncrypted {
 public:
     uint32_t pack_type = 0;
     uint32_t skip = 0;
+    // Batch-packed 0D mode: data is logically [batch_size, batch_feature_dim]
+    // and different batch row blocks occupy different d*d chunks.
+    bool batch_packed = false;
+    uint32_t batch_size = 0;
+    uint32_t batch_feature_dim = 0;
+    uint32_t batch_block_size = 0;
     std::vector<ls::CkksCiphertext> data;
     std::vector<ls::CkksCompressedCiphertext> data_compressed;
 
@@ -35,6 +41,11 @@ public:
               bool is_symmetric = false,
               double scale_in = DEFAULT_SCALE,
               uint32_t skip_in = 1);
+    // Batch-packed matrix mode. Each input row is one sample; different
+    // batch row blocks are stored in different d*d chunks of one ciphertext.
+    void
+    batch_pack(const Array<double, 2>& matrix, uint32_t d, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
+    Array<double, 2> batch_unpack(uint32_t batch_size, uint32_t feature_dim, uint32_t d) const;
     void pack_cyclic(const std::vector<double>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
     Array<double, 1> unpack() const;
 

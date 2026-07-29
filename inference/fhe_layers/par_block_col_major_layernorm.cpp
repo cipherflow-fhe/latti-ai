@@ -256,7 +256,7 @@ vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const Feat
         a_cts[bi] = ctx_copy.add_plain_ringt(a_cts[bi], eps_add_pt_);
     });
 
-    return move(a_cts);
+    return a_cts;
 }
 
 Array<double, 2> ParBlockColMajorLNStats::run_plaintext(const Array<double, 2>& x) const {
@@ -418,7 +418,7 @@ vector<CkksCiphertext> ParBlockColMajorLNXCentered::run(CkksContext& ctx, const 
         x_centered[ct_idx] = ctx_copy.sub(x_drop, mean_cts[bi]);
     });
 
-    return move(x_centered);
+    return x_centered;
 }
 
 Array<double, 2> ParBlockColMajorLNXCentered::run_plaintext(const Array<double, 2>& x) const {

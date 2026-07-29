@@ -35,10 +35,10 @@ class SingleConv(nn.Module):
 class ExplicitBootstrappingModel(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv0 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.conv0 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
         self.btp0 = BootstrappingMarker()
         self.conv1 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
 
     def forward(self, x):
         x1 = self.conv0(x)
@@ -52,12 +52,12 @@ class ExplicitBootstrappingModel(nn.Module):
 class MultipleExplicitBootstrappingModel(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv0 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.conv0 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
         self.btp0 = BootstrappingMarker()
         self.conv1 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
         self.btp1 = BootstrappingMarker()
         self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.conv_skip = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.conv_skip = nn.Conv2d(3, 32, kernel_size=3, padding=1)
 
     def forward(self, x):
         x1 = self.conv0(x)
