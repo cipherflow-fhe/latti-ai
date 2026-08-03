@@ -7,6 +7,8 @@ vs_build/
 .vscode/
 .idea/
 .cache/
+.codex/
+.ignore
 
 # Python
 __pycache__/
@@ -45,6 +47,7 @@ config_user.json
 gen_task/*.json
 **/mega_ag.json
 **/task_signature.json
+inference/mpc/
 
 # Dataset directories
 mnist/
