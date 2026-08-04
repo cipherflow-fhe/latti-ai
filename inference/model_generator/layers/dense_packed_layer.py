@@ -23,6 +23,10 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.encrypted_param_ops import (
+    accumulate_encrypted_param_terms,
+    require_no_plaintext_input_rotation,
+)
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 
 
@@ -217,6 +221,18 @@ class DensePackedLayer:
         bias_pt = [CkksPlaintextRingtNode(f'denseb_{layer_id}_{i}') for i in range(self.n_packed_out_feature)]
         return weight_pt, bias_pt
 
+    def make_param_ct_nodes_skip_0d(self, layer_id, level: int):
+        """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes_skip_0d()."""
+        weight_ct_size = self.n_packed_in_feature * self.pack
+        weight_ct = [
+            [CkksCiphertextNode(f'densew_{layer_id}_{m}_{i}', level=level) for i in range(weight_ct_size)]
+            for m in range(self.n_packed_out_feature)
+        ]
+        bias_ct = [
+            CkksCiphertextNode(f'denseb_{layer_id}_{i}', level=level - 1) for i in range(self.n_packed_out_feature)
+        ]
+        return weight_ct, bias_ct
+
     def make_pt_nodes_multiplexed(self, layer_id, n):
         """Return (weight_pt, bias_pt) for call_multiplexed().
 
@@ -283,6 +299,51 @@ class DensePackedLayer:
             total = rescale(total)
             total = add(total, bias_pt[out_idx])
             result.append(total)
+        return result
+
+    def call_param_ct_skip_0d(
+        self, x: list[DataNode], weight_ct, bias_ct, skip_0d: int, input_is_plaintext: bool = False
+    ):
+        """0D dense path with encrypted offline parameters."""
+        bsgs_bs = int(math.ceil(math.sqrt(self.pack)))
+        bsgs_gs = int(math.ceil(self.pack / bsgs_bs))
+        require_no_plaintext_input_rotation(op_class, input_is_plaintext, bsgs_bs > 1)
+
+        baby_rots = []
+        for node in x:
+            if bsgs_bs > 1:
+                steps = [b * skip_0d for b in range(1, bsgs_bs)]
+                rots = [node] + rotate_cols(node, steps)
+            else:
+                rots = [node]
+            baby_rots.append(rots)
+
+        result = []
+        for out_idx in range(self.n_packed_out_feature):
+            total = None
+            for ct_in in range(len(x)):
+                for g in range(bsgs_gs):
+                    x_terms = []
+                    w_terms = []
+                    b_end = min(bsgs_bs, self.pack - g * bsgs_bs)
+                    for b in range(b_end):
+                        d = g * bsgs_bs + b
+                        weight_idx = ct_in * self.pack + d
+                        x_terms.append(baby_rots[ct_in][b])
+                        w_terms.append(weight_ct[out_idx][weight_idx])
+
+                    inner = accumulate_encrypted_param_terms(x_terms, w_terms)
+                    if g > 0:
+                        inner = rotate_cols(inner, [g * bsgs_bs * skip_0d])[0]
+
+                    if total is None:
+                        total = inner
+                    else:
+                        total = add(total, inner)
+
+            if total is None:
+                raise ValueError('Encrypted dense accumulation produced no terms')
+            result.append(add(total, bias_ct[out_idx]))
         return result
 
     def call_skip_0d_custom_compute(self, x: list[CkksCiphertextNode], dense_data_source, skip_0d: int):

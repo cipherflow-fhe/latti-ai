@@ -21,6 +21,10 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.encrypted_param_ops import (
+    accumulate_encrypted_param_terms,
+    require_no_plaintext_input_rotation,
+)
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 
 
@@ -164,6 +168,21 @@ class Conv2DPackedLayer:
         bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_packed_out_channel)]
         return weight_pt, bias_pt
 
+    def make_param_ct_nodes(self, layer_id, level: int):
+        """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes()."""
+        index = self.kernel_shape[0] * self.kernel_shape[1]
+        weight_ct = [
+            [
+                [CkksCiphertextNode(f'convw_{layer_id}_{n}_{m}_{i}', level=level) for i in range(index)]
+                for m in range(self.n_packed_in_channel * self.pack)
+            ]
+            for n in range(self.n_packed_out_channel)
+        ]
+        bias_ct = [
+            CkksCiphertextNode(f'convb_{layer_id}_{i}', level=level - 1) for i in range(self.n_packed_out_channel)
+        ]
+        return weight_ct, bias_ct
+
     def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call(), grouped by level.
 
@@ -249,4 +268,29 @@ class Conv2DPackedLayer:
             b = bias_pt[packed_out_channel_idx]
             result_ct = add(partial_sum, b)
             result.append(result_ct)
+        return result
+
+    def call_param_ct(self, x: list[DataNode], weight_ct, bias_ct, input_is_plaintext: bool = False):
+        rotations_needed = self.pack > 1 or self.input_rotate_ranges[0] > 0 or self.input_rotate_ranges[1] > 0
+        require_no_plaintext_input_rotation(op_class, input_is_plaintext, rotations_needed)
+
+        rotated_x: list[DataNode] = list()
+        for x_node in x:
+            rotated_x += Conv2DPackedLayer.populate_rotations_1_side(
+                x_node, self.pack - 1, self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
+            )
+        rotated_x_2d = self.gen_rotated_x(rotated_x)
+
+        result = []
+        for packed_out_channel_idx in range(self.n_packed_out_channel):
+            x_terms = []
+            w_terms = []
+            for in_channel_idx in range(self.n_packed_in_channel * self.pack):
+                for i in range(self.kernel_shape[0]):
+                    for j in range(self.kernel_shape[1]):
+                        index = i * self.kernel_shape[1] + j
+                        x_terms.append(rotated_x_2d[in_channel_idx][index])
+                        w_terms.append(weight_ct[packed_out_channel_idx][in_channel_idx][index])
+            partial_sum = accumulate_encrypted_param_terms(x_terms, w_terms)
+            result.append(add(partial_sum, bias_ct[packed_out_channel_idx]))
         return result

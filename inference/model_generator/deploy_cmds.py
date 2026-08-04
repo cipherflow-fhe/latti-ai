@@ -105,6 +105,9 @@ _FHE_PARAMS = {
     'N16QP1546H192H32': N16QP1546H192H32,
 }
 
+INPUT_MODES = {'ciphertext', 'plaintext'}
+PARAMETER_MODES = {'plaintext_lazy', 'plaintext_eager', 'encrypted_offline'}
+
 
 def set_param(param_name):
     if param_name not in _FHE_PARAMS:
@@ -122,7 +125,28 @@ def set_param(param_name):
     set_fhe_param(param)
 
 
-def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordinary', lazy=False):
+def gen_custom_task(
+    task_path,
+    param_name='PN14QP438',
+    use_gpu=True,
+    style='ordinary',
+    lazy=False,
+    parameter_mode=None,
+    input_mode='ciphertext',
+    output_dir=None,
+):
+    if parameter_mode is None:
+        parameter_mode = 'plaintext_lazy' if lazy else 'plaintext_eager'
+    if parameter_mode not in PARAMETER_MODES:
+        raise ValueError(f'Unsupported parameter_mode: {parameter_mode!r}. Expected one of {sorted(PARAMETER_MODES)}')
+    if input_mode not in INPUT_MODES:
+        raise ValueError(f'Unsupported input_mode: {input_mode!r}. Expected one of {sorted(INPUT_MODES)}')
+    if parameter_mode == 'plaintext_lazy':
+        lazy = True
+    elif parameter_mode in {'plaintext_eager', 'encrypted_offline'}:
+        lazy = False
+    output_dir = task_path if output_dir is None else output_dir
+
     n = _FHE_PARAMS[param_name].poly_modulus_degree
     set_param(param_name)
     task_config_info = read_config(os.path.join(task_path, 'task_config.json'))
@@ -132,10 +156,12 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         block_shape = [64, 64]
     config_info = read_config(os.path.join(task_path, 'nn_layers_ct_0.json'))
     input_args = list()
+    offline_input_args = list()
     feature_id_to_nodes_map = {}
     par_feature_shapes = {}
     pdm_feature_head_shapes = {}
     task_output_feature_ids = config_info['output_feature']
+    graph_input_feature_ids = set(config_info['input_feature'])
     feature_consumers = {}
     for consumer_layer_id, lyr in config_info['layer'].items():
         for fid in lyr.get('feature_input', []):
@@ -221,6 +247,28 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         pdm_feature_head_shapes[feature_id] = head_shape
         return head_shape
 
+    def _feature_input_is_plaintext(feature_id):
+        return input_mode == 'plaintext' and feature_id in graph_input_feature_ids
+
+    def _make_feature_nodes(feature_id, count, level):
+        if _feature_input_is_plaintext(feature_id):
+            return [CkksPlaintextRingtNode(feature_id + f'input{k}') for k in range(count)]
+        return [CkksCiphertextNode(feature_id + f'input{k}', level=level) for k in range(count)]
+
+    def _append_parameter_arg(arg_id, nodes):
+        arg = Argument(arg_id, nodes)
+        if parameter_mode == 'encrypted_offline':
+            offline_input_args.append(arg)
+        else:
+            input_args.append(arg)
+
+    def _unsupported_encrypted_parameter_layer(layer_id, layer_type):
+        raise ValueError(
+            f"Layer '{layer_id}' ({layer_type}) is not supported by "
+            'parameter_mode="encrypted_offline" in Phase 1. Supported parameterized paths are ordinary conv2d '
+            'and 0D dense without special_info.'
+        )
+
     def _register_feature_nodes(feature_id, count, level):
         count = int(count)
         if count <= 0:
@@ -232,7 +280,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     f"feature '{feature_id}' is already registered with {len(nodes)} ciphertexts, expected {count}"
                 )
             return nodes
-        nodes = [CkksCiphertextNode(feature_id + f'input{k}', level=level) for k in range(count)]
+        nodes = _make_feature_nodes(feature_id, count, level)
         feature_id_to_nodes_map[feature_id] = nodes
         input_args.append(Argument(feature_id, nodes))
         return nodes
@@ -570,10 +618,13 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     }
     _FEATURE_MAT_LAYER_TYPES = _PAR_MATRIX_LAYER_TYPES | _PCM_LAYER_TYPES | _PDM_MATRIX_LAYER_TYPES | _PDM_LAYER_TYPES
     _UNSUPPORTED_MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose'}
+    _ENCRYPTED_OFFLINE_UNSUPPORTED_LAYER_TYPES = _FEATURE_MAT_LAYER_TYPES
 
     for layer_id, layer_config in config_info['layer'].items():
         if layer_config['type'] == 'relu2d':
             continue
+        if parameter_mode == 'encrypted_offline' and layer_config['type'] in _ENCRYPTED_OFFLINE_UNSUPPORTED_LAYER_TYPES:
+            _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
         layer_input_feature_ids = layer_config['feature_input']
         layer_output_feature_ids = layer_config['feature_output']
 
@@ -625,7 +676,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
             for input_node in layer_input_feature_ids:
                 if input_node not in feature_id_to_nodes_map.keys():
-                    x = [CkksCiphertextNode(input_node + f'input{k}', level=level) for k in range(n_packed_in_channel)]
+                    x = _make_feature_nodes(input_node, n_packed_in_channel, level)
                     feature_id_to_nodes_map.update({input_node: x})
                     input_args.append(Argument(input_node, x))
 
@@ -643,6 +694,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             next_stride = [block_expansion[0] // stride[0], block_expansion[1] // stride[1]]
             padding = [-1, -1]
             if is_big_conv:
+                if parameter_mode == 'encrypted_offline':
+                    _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
                 if groups == n_out_channel and groups != 1:
                     big_conv = InverseMultiplexedDepthwiseConv2DLayer(
                         n_out_channel,
@@ -720,6 +773,17 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                         input_args.append(Argument(f'{layer_id}', [conv_data_source]))
+                    elif parameter_mode == 'encrypted_offline':
+                        weight_ct, bias_ct = conv0_layer.make_param_ct_nodes(layer_id, level)
+                        _append_parameter_arg(f'convw_{layer_id}', weight_ct)
+                        _append_parameter_arg(f'convb_{layer_id}', bias_ct)
+                        layer_output_nodes = conv0_layer.call_param_ct(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                            weight_ct,
+                            bias_ct,
+                            input_is_plaintext=_feature_input_is_plaintext(layer_input_feature_ids[0]),
+                        )
+                        feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                     else:
                         weight_pt, bias_pt = conv0_layer.make_pt_nodes(layer_id)
                         input_args.append(Argument(f'convw_{layer_id}', weight_pt))
@@ -755,6 +819,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                             n_packed_out_channel,
                         )
 
+                    if parameter_mode == 'encrypted_offline':
+                        _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
                     if lazy:
                         conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
                         layer_output_nodes = conv0_layer.call_custom_compute(
@@ -783,6 +849,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif layer_config['type'] in ('poly_relu2d', 'polyact'):
+            if parameter_mode == 'encrypted_offline':
+                _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
             feat = config_info['feature'][layer_input_feature_ids[0]]
             level = int(feat['level'])
             order = layer_config['order']
@@ -852,6 +920,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     input_args.append(Argument(f'poly_reluw_{layer_id}_{i}', weight_pt[i]))
 
         elif layer_config['type'] == 'conv1d':
+            if parameter_mode == 'encrypted_offline':
+                _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
             input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape'][0]
             kernel_shape = layer_config['kernel_shape'][0]
             stride = layer_config['stride'][0]
@@ -956,6 +1026,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     input_args.append(Argument(f'convb_{layer_id}', bias_pt))
 
         elif layer_config['type'] == 'mult_scalar':
+            if parameter_mode == 'encrypted_offline':
+                _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
             mult_scalar_layer = MultScalarLayer()
             input_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
             if lazy:
@@ -1295,6 +1367,17 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     layer_output_nodes = fc_layer.call_skip_0d_custom_compute(
                         feature_id_to_nodes_map[layer_input_feature_ids[0]], dense_data_source, skip_0d
                     )
+                elif parameter_mode == 'encrypted_offline':
+                    weight_ct, bias_ct = fc_layer.make_param_ct_nodes_skip_0d(layer_id, level)
+                    _append_parameter_arg(f'densew_{layer_id}', weight_ct)
+                    _append_parameter_arg(f'denseb_{layer_id}', bias_ct)
+                    layer_output_nodes = fc_layer.call_param_ct_skip_0d(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                        weight_ct,
+                        bias_ct,
+                        skip_0d,
+                        input_is_plaintext=_feature_input_is_plaintext(layer_input_feature_ids[0]),
+                    )
                 else:
                     weight_pt, bias_pt = fc_layer.make_pt_nodes_skip_0d(layer_id)
                     input_args.append(Argument(f'densew_{layer_id}', weight_pt))
@@ -1303,6 +1386,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, skip_0d
                     )
             else:
+                if parameter_mode == 'encrypted_offline':
+                    _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
                 special_info = config_info['feature'][layer_input_feature_ids[0]]['special_info']
                 special_shape = special_info['shape']
                 special_skip = special_info['skip']
@@ -1383,7 +1468,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
             # Register par-type input (deferred from the top of the loop)
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
+                x = _make_feature_nodes(input_fid, n_cts_in, level)
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1408,7 +1493,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
             input_fid = layer_input_feature_ids[0]
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
+                x = _make_feature_nodes(input_fid, n_cts_in, level)
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1524,7 +1609,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             # Register par-type input (deferred from the top of the loop)
             input_fid = layer_input_feature_ids[0]
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
+                x = _make_feature_nodes(input_fid, n_cts_in, level)
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1568,7 +1653,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         shape_per_head = _par_input_shape(feat, n_heads, split_rows=(idx == 1), feature_id=input_fid)
                         par_feature_shapes[input_fid] = shape_per_head
                     n_cts = _par_ct_count(shape_per_head, block_size, G)
-                    x = [CkksCiphertextNode(input_fid + f'input{j}', level=int(feat['level'])) for j in range(n_cts)]
+                    x = _make_feature_nodes(input_fid, n_cts, int(feat['level']))
                     feature_id_to_nodes_map[input_fid] = x
                     input_args.append(Argument(input_fid, x))
 
@@ -1591,7 +1676,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             layer = ParBlockColMajorLNStats(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
 
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                x = _make_feature_nodes(input_fid, layer.total_cts, level)
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1610,7 +1695,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             layer = ParBlockColMajorLNXCentered(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
 
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                x = _make_feature_nodes(input_fid, layer.total_cts, level)
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1687,7 +1772,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             )
 
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                x = _make_feature_nodes(input_fid, layer.total_cts, level)
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1721,7 +1806,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             )
 
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                x = _make_feature_nodes(input_fid, layer.total_cts, level)
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1791,7 +1876,11 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     output_args = [Argument(output_id, feature_id_to_nodes_map[output_id]) for output_id in task_output_feature_ids]
 
     process_custom_task(
-        input_args=input_args, output_args=output_args, output_instruction_path=task_path, fpga_acc=False
+        input_args=input_args,
+        output_args=output_args,
+        offline_input_args=offline_input_args,
+        output_instruction_path=output_dir,
+        fpga_acc=False,
     )
 
 
@@ -1806,6 +1895,23 @@ if __name__ == '__main__':
     parser.add_argument(
         '--lazy', action='store_true', help='Use lazy weight generation (encode_pt custom compute nodes)'
     )
+    parser.add_argument(
+        '--parameter-mode',
+        choices=sorted(PARAMETER_MODES),
+        default=None,
+        help='Parameter handling mode. Defaults to plaintext_lazy when --lazy is set, otherwise plaintext_eager.',
+    )
+    parser.add_argument(
+        '--input-mode',
+        choices=sorted(INPUT_MODES),
+        default='ciphertext',
+        help='Graph input mode for generated task signature.',
+    )
+    parser.add_argument(
+        '--output-dir',
+        default=None,
+        help='Directory for mega_ag.json and task_signature.json. Defaults to task_path.',
+    )
     args = parser.parse_args()
 
     task_path = args.task_path
@@ -1814,4 +1920,11 @@ if __name__ == '__main__':
 
     for _, is_fpga in config['server_task'].items():
         if is_fpga['enable_fpga']:
-            gen_custom_task(os.path.join(task_path, 'server'), use_gpu=True, lazy=args.lazy)
+            gen_custom_task(
+                task_path,
+                use_gpu=True,
+                lazy=args.lazy,
+                parameter_mode=args.parameter_mode,
+                input_mode=args.input_mode,
+                output_dir=args.output_dir,
+            )
