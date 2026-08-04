@@ -243,6 +243,11 @@ InferenceProvisioner::parse_parameter_argument(const std::string& arg_id, const 
         info.param_kind = "bias";
         return info;
     }
+    if (starts_with(source_id, "mult_scalar_")) {
+        info.layer_id = source_id.substr(std::string("mult_scalar_").size());
+        info.param_kind = "mult_scalar_weight";
+        return info;
+    }
     if (starts_with(source_id, "poly_reluw_")) {
         const std::string prefix = "poly_reluw_";
         size_t best_len = 0;
@@ -462,6 +467,12 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                 auto& layer = init.get_layer<PolyRelu2D>(info.layer_id);
                 ringt = layer.generate_weight_pt_for_bsgs(context, info.coeff_idx, ct_idx);
             }
+        } else if (info.param_kind == "mult_scalar_weight") {
+            if (shape.size() != 1) {
+                throw std::runtime_error("[Provisioner] mult_scalar weight signature must be rank 1: " + arg_id);
+            }
+            auto& layer = init.get_layer<MultScalarLayer>(info.layer_id);
+            ringt = layer.generate_weight_pt_for_index(context, static_cast<int>(flat_idx));
         } else {
             throw std::runtime_error("[Provisioner] Unsupported encrypted parameter argument: " + arg_id);
         }

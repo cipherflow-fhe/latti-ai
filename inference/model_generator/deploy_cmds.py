@@ -116,12 +116,12 @@ def set_param(param_name):
     if param_name == 'N16QP1546H192H32':
         param = CkksBtpParam.create_default_param()
     else:
-        param = CkksParam.create_custom_param(
+        param = Param.create_ckks_custom_param(
             n=fhe.poly_modulus_degree,
             q=fhe.q,
             p=fhe.p,
-            scale=1 << fhe.log_default_scale,
         )
+        param.scale = 1 << fhe.log_default_scale
     set_fhe_param(param)
 
 
@@ -296,7 +296,7 @@ def gen_custom_task(
         raise ValueError(
             f"Layer '{layer_id}' ({layer_type}) is not supported by "
             'parameter_mode="encrypted_offline" in Phase 3. Supported parameterized paths are conv2d variants, '
-            '0D/special dense, and polyrelu/polyact. Public structural constants remain plaintext.'
+            '0D/special dense, mult_scalar, and polyrelu/polyact. Public structural constants remain plaintext.'
         )
 
     def _register_feature_nodes(feature_id, count, level):
@@ -1103,8 +1103,6 @@ def gen_custom_task(
                     input_args.append(Argument(f'convb_{layer_id}', bias_pt))
 
         elif layer_config['type'] == 'mult_scalar':
-            if parameter_mode == 'encrypted_offline':
-                _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
             mult_scalar_layer = MultScalarLayer()
             input_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
             if lazy:
@@ -1112,6 +1110,11 @@ def gen_custom_task(
                 layer_output_nodes = mult_scalar_layer.call_custom_compute(input_nodes, conv_data_source)
                 feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                 input_args.append(Argument(f'{layer_id}', [conv_data_source]))
+            elif parameter_mode == 'encrypted_offline':
+                weight_ct = mult_scalar_layer.make_param_ct_nodes(layer_id, len(input_nodes), level)
+                layer_output_nodes = mult_scalar_layer.call_param_ct(input_nodes, weight_ct)
+                feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                _append_parameter_arg(f'mult_scalar_{layer_id}', weight_ct)
             else:
                 pt = mult_scalar_layer.make_pt_nodes(layer_id, len(input_nodes))
                 layer_output_nodes = mult_scalar_layer.call(input_nodes, pt)

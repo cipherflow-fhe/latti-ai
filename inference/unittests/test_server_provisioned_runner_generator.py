@@ -126,6 +126,83 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
             self.assertIn('relin', compute_types)
             self.assertIn('rescale', compute_types)
 
+    def test_mult_scalar_uses_offline_ct_param(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server_dir = root / 'server'
+            runner_dir = root / 'runner'
+            server_dir.mkdir()
+
+            graph = {
+                'feature': {
+                    'input': _feature(2),
+                    'hidden': _feature(1),
+                    'output': _feature(0),
+                },
+                'layer': {
+                    'fc1': {
+                        'type': 'fc0',
+                        'feature_input': ['input'],
+                        'feature_output': ['hidden'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                    'scale': {
+                        'type': 'mult_scalar',
+                        'feature_input': ['hidden'],
+                        'feature_output': ['output'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                },
+                'input_feature': ['input'],
+                'output_feature': ['output'],
+            }
+            task_config = {
+                'task_type': 'fhe',
+                'task_num': 1,
+                'server_start_id': 0,
+                'server_end_id': 0,
+                'block_shape': [1, 1],
+                'pack_style': 'ordinary',
+                'task_input_id': ['input'],
+                'task_output_id': ['output'],
+                'task_input_param': {'input': graph['feature']['input']},
+                'task_output_param': {'output': graph['feature']['output']},
+                'server_task': {'nn_layers_ct_0': {'enable_fpga': True}},
+                'use_btp': False,
+            }
+
+            with open(server_dir / 'nn_layers_ct_0.json', 'w', encoding='utf-8') as f:
+                json.dump(graph, f)
+            with open(server_dir / 'task_config.json', 'w', encoding='utf-8') as f:
+                json.dump(task_config, f)
+
+            gen_custom_task(
+                str(server_dir),
+                param_name='PN13QP218',
+                style='ordinary',
+                parameter_mode='encrypted_offline',
+                input_mode='plaintext',
+                output_dir=str(runner_dir),
+            )
+
+            with open(runner_dir / 'task_signature.json', 'r', encoding='utf-8') as f:
+                signature = json.load(f)
+            with open(runner_dir / 'mega_ag.json', 'r', encoding='utf-8') as f:
+                mega_ag = json.load(f)
+
+            offline_by_id = {arg['id']: arg for arg in signature['offline']}
+            self.assertEqual(offline_by_id['mult_scalar_scale']['type'], 'ct')
+            self.assertEqual(offline_by_id['mult_scalar_scale']['phase'], 'offline')
+            self.assertEqual(offline_by_id['mult_scalar_scale']['level'], 1)
+            self.assertEqual(offline_by_id['mult_scalar_scale']['size'], [1])
+
+            compute_types = {node['type'] for node in mega_ag['compute'].values()}
+            self.assertIn('mult', compute_types)
+            self.assertIn('relin', compute_types)
+            self.assertIn('rescale', compute_types)
+
 
 if __name__ == '__main__':
     unittest.main()
