@@ -315,6 +315,166 @@ class PolyReluBase:
 
         return result
 
+    def _bsgs_encrypted_coeff_levels(self, input_level: int) -> list[int]:
+        order = self.order
+        baby_steps = int(np.ceil(np.sqrt(order + 1)))
+        giant_steps = int(np.ceil((order + 1) / baby_steps))
+        power_info = self._compute_power_info(order)
+        required, _ = self._determine_required_powers(order, baby_steps, giant_steps, power_info)
+        max_depth = max(power_info[p][0] for p in required)
+        bsgs_output_level = input_level - max_depth - 1
+        if bsgs_output_level < 0:
+            raise ValueError(
+                f'{type(self).__name__} (order={order}) cannot materialize encrypted coefficients from '
+                f'input level {input_level}: BSGS output level would be {bsgs_output_level}.'
+            )
+
+        bp_out_level = [bsgs_output_level] * giant_steps
+        for g in range(1, giant_steps):
+            if g * baby_steps <= order:
+                bp_out_level[g] = bsgs_output_level + 1
+
+        coeff_levels = [bsgs_output_level] * (order + 1)
+        for g in range(giant_steps):
+            target_level = bp_out_level[g]
+            valid_bs = [b for b in range(baby_steps) if g * baby_steps + b <= order]
+            has_non_const_terms = any(b > 0 for b in valid_bs)
+            for b in valid_bs:
+                idx = g * baby_steps + b
+                if b == 0:
+                    if has_non_const_terms:
+                        coeff_levels[idx] = target_level
+                    else:
+                        coeff_levels[idx] = bsgs_output_level + 1 if g > 0 else bsgs_output_level
+                else:
+                    coeff_levels[idx] = target_level + 1
+        return coeff_levels
+
+    def make_param_ct_nodes(self, layer_id, n_pack_in_channel, input_level: int):
+        """Return encrypted polynomial coefficient nodes grouped by coefficient index.
+
+        Each coefficient index has exactly one BSGS use-site level, so keeping the
+        existing poly_reluw_<layer>_<coeff> argument grouping preserves shape while
+        still materializing encrypted params at the correct level.
+        """
+        levels = self._bsgs_encrypted_coeff_levels(input_level)
+        return [
+            [CkksCiphertextNode(f'poly_reluw_{layer_id}_{i}_{j}', level=levels[i]) for j in range(n_pack_in_channel)]
+            for i in range(self.order + 1)
+        ]
+
+    def _run_bsgs_core_param_ct(self, x: list, get_weight):
+        """BSGS graph with encrypted polynomial coefficients."""
+        order = self.order
+        baby_steps = int(np.ceil(np.sqrt(order + 1)))
+        giant_steps = int(np.ceil((order + 1) / baby_steps))
+
+        power_info = self._compute_power_info(order)
+        required, to_compute = self._determine_required_powers(order, baby_steps, giant_steps, power_info)
+
+        level_cost = self.compute_bsgs_level_cost(order)
+        for i, ct in enumerate(x):
+            if ct.level < level_cost:
+                raise ValueError(
+                    f'{type(self).__name__} (order={order}): Input ciphertext {i} has '
+                    f'insufficient level: {ct.level} < {level_cost}. '
+                    f'BSGS algorithm will consume {level_cost} levels.'
+                )
+
+        result = [None] * len(x)
+
+        for x_idx in range(len(x)):
+            x_powers = {1: x[x_idx]}
+            for i in sorted(to_compute):
+                if i <= 1:
+                    continue
+                _, a, b = power_info[i]
+                xa = x_powers[a]
+                xb = x_powers[b]
+                tgt = min(xa.level, xb.level)
+                if xa.level > tgt:
+                    xa = drop_level(xa, xa.level - tgt)
+                if xb.level > tgt:
+                    xb = drop_level(xb, xb.level - tgt)
+                x_powers[i] = rescale(relin(mult(xa, xb)))
+
+            max_depth = 0
+            max_power_level = x[x_idx].level
+            for p in required:
+                d = power_info[p][0]
+                if d > max_depth:
+                    max_depth = d
+                    max_power_level = x_powers[p].level
+            bsgs_output_level = max_power_level - 1
+
+            bp_out_level = [bsgs_output_level] * giant_steps
+            for g in range(1, giant_steps):
+                if g * baby_steps <= order:
+                    bp_out_level[g] = bsgs_output_level + 1
+
+            baby_polys = [None] * giant_steps
+            baby_poly_has_terms = [False] * giant_steps
+            coeff0_cts = [None] * giant_steps
+
+            for g in range(giant_steps):
+                target_level = bp_out_level[g]
+
+                for b in range(baby_steps):
+                    idx = g * baby_steps + b
+                    if idx > order:
+                        break
+
+                    coeff_ct = get_weight(idx, x_idx)
+
+                    if b == 0:
+                        coeff0_cts[g] = coeff_ct
+                        continue
+
+                    baby_poly_has_terms[g] = True
+                    x_copy = x_powers[b]
+                    if x_copy.level > target_level + 1:
+                        x_copy = drop_level(x_copy, x_copy.level - (target_level + 1))
+                    term = rescale(relin(mult(x_copy, coeff_ct)))
+
+                    if baby_polys[g] is None:
+                        baby_polys[g] = term
+                    else:
+                        baby_polys[g] = add(baby_polys[g], term)
+
+                if coeff0_cts[g] is not None and baby_poly_has_terms[g]:
+                    baby_polys[g] = add(baby_polys[g], coeff0_cts[g])
+
+            result[x_idx] = baby_polys[0] if baby_polys[0] is not None else coeff0_cts[0]
+
+            for g in range(1, giant_steps):
+                giant_power = g * baby_steps
+                if giant_power > order:
+                    break
+
+                x_giant = x_powers[giant_power]
+                mult_level = bsgs_output_level + 1
+                if x_giant.level > mult_level:
+                    x_giant = drop_level(x_giant, x_giant.level - mult_level)
+
+                if baby_poly_has_terms[g]:
+                    bp = baby_polys[g]
+                    if bp.level > mult_level:
+                        bp = drop_level(bp, bp.level - mult_level)
+                    term = rescale(relin(mult(bp, x_giant)))
+                else:
+                    if coeff0_cts[g] is not None:
+                        term = rescale(relin(mult(x_giant, coeff0_cts[g])))
+                    else:
+                        continue
+
+                result[x_idx] = add(result[x_idx], term)
+
+        return result
+
+    def call_bsgs_param_ct(self, x: list, weight_ct):
+        """BSGS with encrypted offline polynomial coefficients."""
+        return self._run_bsgs_core_param_ct(x, lambda idx, x_idx: weight_ct[idx][x_idx])
+
     def make_pt_nodes(self, layer_id, n_pack_in_channel):
         """Return weight_pt placeholder list with shape [order+1][n_pack_in_channel]."""
         return [

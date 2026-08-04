@@ -18,6 +18,7 @@
 
 #include "interface/inference_provisioner.h"
 
+#include <cctype>
 #include <fstream>
 #include <iostream>
 #include <numeric>
@@ -39,6 +40,30 @@ bool starts_with(const std::string& value, const std::string& prefix) {
     return value.rfind(prefix, 0) == 0;
 }
 
+bool is_unsigned_integer(const std::string& value) {
+    if (value.empty()) {
+        return false;
+    }
+    for (char ch : value) {
+        if (!std::isdigit(static_cast<unsigned char>(ch))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string strip_use_site_suffix(const std::string& arg_id) {
+    const auto suffix_pos = arg_id.find("__L");
+    if (suffix_pos == std::string::npos) {
+        return arg_id;
+    }
+    const auto level_start = suffix_pos + std::string("__L").size();
+    if (level_start >= arg_id.size() || !std::isdigit(static_cast<unsigned char>(arg_id[level_start]))) {
+        return arg_id;
+    }
+    return arg_id.substr(0, suffix_pos);
+}
+
 void write_json_file(const std::filesystem::path& path, const json& value) {
     if (path.has_parent_path()) {
         std::filesystem::create_directories(path.parent_path());
@@ -55,6 +80,33 @@ void copy_if_exists(const std::filesystem::path& src, const std::filesystem::pat
         std::filesystem::create_directories(dst.parent_path());
         std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing);
     }
+}
+
+Bytes serialize_context(const fhe::CkksContext& context) {
+    if (const auto* btp_context = dynamic_cast<const fhe::CkksBtpContext*>(&context)) {
+        return btp_context->serialize();
+    }
+    return context.serialize_advanced();
+}
+
+std::unique_ptr<fhe::CkksContext> deserialize_context(const Bytes& bytes, bool use_btp) {
+    if (use_btp) {
+        return std::make_unique<fhe::CkksBtpContext>(fhe::CkksBtpContext::deserialize(bytes));
+    }
+    return std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize_advanced(bytes));
+}
+
+Bytes serialize_public_context(fhe::CkksContext& context, bool use_btp) {
+    if (use_btp) {
+        auto* btp_context = dynamic_cast<fhe::CkksBtpContext*>(&context);
+        if (btp_context == nullptr) {
+            throw std::runtime_error("[Provisioner] expected CkksBtpContext for bootstrapping task");
+        }
+        auto pub_ctx = btp_context->make_public_context();
+        return pub_ctx.serialize();
+    }
+    auto pub_ctx = context.make_public_context(false, true, true);
+    return pub_ctx.serialize_advanced();
 }
 
 }  // namespace
@@ -102,10 +154,7 @@ fhe::CkksParameter InferenceProvisioner::make_parameter() const {
 void InferenceProvisioner::setup_or_load_keys() {
     task_config_ = read_json((server_dir_ / "task_config.json").string());
     ckks_config_ = read_json((server_dir_ / "ckks_parameter.json").string());
-
-    if (task_config_.value("use_btp", false)) {
-        throw std::runtime_error("[Provisioner] bootstrapping contexts are Phase 3/4 work and are not supported yet");
-    }
+    const bool use_btp = task_config_.value("use_btp", false);
 
     auto secret_context_path = provisioner_dir_ / "secret_context.bin";
     if (!std::filesystem::exists(secret_context_path) && std::filesystem::exists(provisioner_dir_ / "secret_key.bin")) {
@@ -113,8 +162,7 @@ void InferenceProvisioner::setup_or_load_keys() {
     }
     if (std::filesystem::exists(secret_context_path)) {
         std::cout << "[Provisioner] Loading existing server-owned secret context..." << std::endl;
-        context_ = std::make_unique<fhe::CkksContext>(
-            fhe::CkksContext::deserialize_advanced(read_binary_file(secret_context_path)));
+        context_ = deserialize_context(read_binary_file(secret_context_path), use_btp);
         if (secret_context_path.filename() != "secret_context.bin") {
             write_binary_file(provisioner_dir_ / "secret_context.bin", read_binary_file(secret_context_path));
         }
@@ -122,11 +170,18 @@ void InferenceProvisioner::setup_or_load_keys() {
     }
 
     std::cout << "[Provisioner] Generating server-owned CKKS keys..." << std::endl;
-    auto param = make_parameter();
-    context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::create_random_context(param));
-    context_->gen_rotation_keys();
+    if (use_btp) {
+        auto param = fhe::CkksBtpParameter::create_parameter();
+        auto btp_context = std::make_unique<fhe::CkksBtpContext>(fhe::CkksBtpContext::create_random_context(param));
+        btp_context->gen_rotation_keys();
+        context_ = std::move(btp_context);
+    } else {
+        auto param = make_parameter();
+        context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::create_random_context(param));
+        context_->gen_rotation_keys();
+    }
 
-    const Bytes full_context = context_->serialize_advanced();
+    const Bytes full_context = serialize_context(*context_);
     write_binary_file(secret_context_path, full_context);
     write_binary_file(provisioner_dir_ / "secret_key.bin", full_context);
 }
@@ -163,48 +218,254 @@ void InferenceProvisioner::copy_private_and_runner_configs(const std::filesystem
     }
 }
 
-std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_dense_argument(const std::string& arg_id,
-                                                                              const json& sig,
-                                                                              fhe::CkksContext& context) const {
-    const bool is_weight = starts_with(arg_id, "densew_");
-    const bool is_bias = starts_with(arg_id, "denseb_");
-    if (!is_weight && !is_bias) {
-        throw std::runtime_error("[Provisioner] Phase 2 only supports encrypted DensePackedLayer args, got: " + arg_id);
+InferenceProvisioner::ParameterArgumentInfo
+InferenceProvisioner::parse_parameter_argument(const std::string& arg_id, const InitInferenceProcess& init) const {
+    ParameterArgumentInfo info;
+    const std::string source_id = strip_use_site_suffix(arg_id);
+    info.source_id = source_id;
+    if (starts_with(source_id, "convw_")) {
+        info.layer_id = source_id.substr(std::string("convw_").size());
+        info.param_kind = "weight";
+        return info;
     }
+    if (starts_with(source_id, "convb_")) {
+        info.layer_id = source_id.substr(std::string("convb_").size());
+        info.param_kind = "bias";
+        return info;
+    }
+    if (starts_with(source_id, "densew_")) {
+        info.layer_id = source_id.substr(std::string("densew_").size());
+        info.param_kind = "weight";
+        return info;
+    }
+    if (starts_with(source_id, "denseb_")) {
+        info.layer_id = source_id.substr(std::string("denseb_").size());
+        info.param_kind = "bias";
+        return info;
+    }
+    if (starts_with(source_id, "poly_reluw_")) {
+        const std::string prefix = "poly_reluw_";
+        size_t best_len = 0;
+        std::string best_layer_id;
+        int best_coeff = -1;
+        for (const auto& item : init.json_layers.items()) {
+            const std::string& layer_id = item.key();
+            const std::string layer_prefix = prefix + layer_id + "_";
+            if (!starts_with(source_id, layer_prefix)) {
+                continue;
+            }
+            const std::string coeff_text = source_id.substr(layer_prefix.size());
+            if (!is_unsigned_integer(coeff_text)) {
+                continue;
+            }
+            if (layer_id.size() > best_len) {
+                best_len = layer_id.size();
+                best_layer_id = layer_id;
+                best_coeff = std::stoi(coeff_text);
+            }
+        }
+        if (!best_layer_id.empty()) {
+            info.layer_id = best_layer_id;
+            info.param_kind = "poly_coeff";
+            info.coeff_idx = best_coeff;
+            return info;
+        }
+    }
+    throw std::runtime_error("[Provisioner] Unsupported encrypted parameter argument id: " + arg_id);
+}
 
-    const std::string prefix = is_weight ? "densew_" : "denseb_";
-    const std::string layer_id = arg_id.substr(prefix.size());
+std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argument(const std::string& arg_id,
+                                                                                  const json& sig,
+                                                                                  fhe::CkksContext& context,
+                                                                                  InitInferenceProcess& init) const {
+    const auto info = parse_parameter_argument(arg_id, init);
     const int encrypt_level = sig.at("level").get<int>();
     const auto shape = sig.at("size").get<std::vector<uint64_t>>();
-
-    InitInferenceProcess init(server_dir_.string(), false);
-    init.init_parameters(false);
-    init.is_lazy = true;
-    init.load_model_prepare();
-
-    auto& layer = init.get_layer<DensePackedLayer>(layer_id);
-    if (!layer.normal_dense || layer.is_1d_multiplexed) {
-        throw std::runtime_error("[Provisioner] Phase 2 only supports ordinary 0D DensePackedLayer args: " + arg_id);
-    }
-
     const uint64_t count = shape_size(sig);
+
+    const auto& layer_cfg = init.json_layers.at(info.layer_id);
+    const std::string layer_type = layer_cfg.at("type").get<std::string>();
+    const bool is_weight = info.param_kind == "weight";
+    const bool is_bias = info.param_kind == "bias";
+
     std::vector<fhe::CkksCiphertext> encrypted;
     encrypted.reserve(count);
+
     for (uint64_t flat_idx = 0; flat_idx < count; ++flat_idx) {
         fhe::CkksPlaintextRingt ringt;
-        if (is_weight) {
-            if (shape.size() != 2) {
-                throw std::runtime_error("[Provisioner] dense weight signature must be rank 2: " + arg_id);
+
+        if (starts_with(arg_id, "dense")) {
+            auto& layer = init.get_layer<DensePackedLayer>(info.layer_id);
+            if (is_weight) {
+                if (shape.size() != 2) {
+                    throw std::runtime_error("[Provisioner] dense weight signature must be rank 2: " + arg_id);
+                }
+                const int out_idx = static_cast<int>(flat_idx / shape[1]);
+                const int weight_idx = static_cast<int>(flat_idx % shape[1]);
+                if (layer.is_1d_multiplexed) {
+                    ringt = layer.generate_weight_pt_1d_mult_for_indices(context, out_idx, weight_idx);
+                } else if (layer.normal_dense) {
+                    ringt = layer.generate_weight_0d_pt_for_indices(context, out_idx, weight_idx);
+                } else {
+                    ringt = layer.generate_weight_pt_mult_pack_for_indices(context, out_idx, weight_idx);
+                }
+            } else {
+                if (!is_bias || shape.size() != 1) {
+                    throw std::runtime_error("[Provisioner] dense bias signature must be rank 1: " + arg_id);
+                }
+                const int out_idx = static_cast<int>(flat_idx);
+                if (layer.is_1d_multiplexed) {
+                    ringt = layer.generate_bias_pt_1d_mult_for_index(context, out_idx);
+                } else if (layer.normal_dense) {
+                    ringt = layer.generate_bias_0d_pt_for_index(context, out_idx);
+                } else {
+                    ringt = layer.generate_bias_pt_mult_pack_for_index(context, out_idx);
+                }
             }
-            const uint32_t out_idx = static_cast<uint32_t>(flat_idx / shape[1]);
-            const uint32_t weight_idx = static_cast<uint32_t>(flat_idx % shape[1]);
-            ringt = layer.generate_weight_0d_pt_for_indices(context, out_idx, weight_idx);
-        } else {
+        } else if (starts_with(arg_id, "conv")) {
+            if (layer_type != "conv2d") {
+                throw std::runtime_error("[Provisioner] encrypted conv argument is only supported for conv2d: " +
+                                         arg_id);
+            }
+            const bool is_big_size = layer_cfg.value("is_big_size", false);
+            const int groups = layer_cfg.at("groups").get<int>();
+            const int n_out_channel =
+                init.json_features.at(layer_cfg.at("feature_output")[0].get<std::string>()).at("channel").get<int>();
+
+            if (init.pack_style == "multiplexed") {
+                if (is_big_size) {
+                    if (groups == 1) {
+                        auto& layer = init.get_layer<InverseMultiplexedConv2DLayer>(info.layer_id);
+                        if (is_weight) {
+                            if (shape.size() != 3) {
+                                throw std::runtime_error(
+                                    "[Provisioner] inverse conv weight signature must be rank 3: " + arg_id);
+                            }
+                            const int out_idx = static_cast<int>(flat_idx / (shape[1] * shape[2]));
+                            const int in_idx = static_cast<int>((flat_idx / shape[2]) % shape[1]);
+                            const int weight_idx = static_cast<int>(flat_idx % shape[2]);
+                            ringt = layer.generate_weight_pt_for_indices(context, out_idx, in_idx, weight_idx);
+                        } else {
+                            if (!is_bias || shape.size() != 1) {
+                                throw std::runtime_error("[Provisioner] inverse conv bias signature must be rank 1: " +
+                                                         arg_id);
+                            }
+                            ringt = layer.generate_bias_pt_for_index(context, static_cast<int>(flat_idx));
+                        }
+                    } else {
+                        auto& layer = init.get_layer<InverseMultiplexedConv2DLayerDepthwise>(info.layer_id);
+                        if (is_weight) {
+                            if (shape.size() != 2) {
+                                throw std::runtime_error(
+                                    "[Provisioner] inverse depthwise conv weight signature must be rank 2: " + arg_id);
+                            }
+                            const int out_idx = static_cast<int>(flat_idx / shape[1]);
+                            const int weight_idx = static_cast<int>(flat_idx % shape[1]);
+                            ringt = layer.generate_weight_pt_for_indices(context, out_idx, weight_idx);
+                        } else {
+                            if (!is_bias || shape.size() != 1) {
+                                throw std::runtime_error(
+                                    "[Provisioner] inverse depthwise conv bias signature must be rank 1: " + arg_id);
+                            }
+                            ringt = layer.generate_bias_pt_for_index(context, static_cast<int>(flat_idx));
+                        }
+                    }
+                } else if (groups == 1) {
+                    auto& layer = init.get_layer<MultiplexedConv2DPackedLayer>(info.layer_id);
+                    if (is_weight) {
+                        if (shape.size() != 3) {
+                            throw std::runtime_error(
+                                "[Provisioner] multiplexed conv weight signature must be rank 3: " + arg_id);
+                        }
+                        const int out_idx = static_cast<int>(flat_idx / (shape[1] * shape[2]));
+                        const int in_idx = static_cast<int>((flat_idx / shape[2]) % shape[1]);
+                        const int kernel_idx = static_cast<int>(flat_idx % shape[2]);
+                        ringt = layer.generate_weight_pt_for_indices(context, out_idx, in_idx, kernel_idx);
+                    } else {
+                        if (!is_bias || shape.size() != 1) {
+                            throw std::runtime_error("[Provisioner] multiplexed conv bias signature must be rank 1: " +
+                                                     arg_id);
+                        }
+                        ringt = layer.generate_bias_pt_for_index(context, static_cast<int>(flat_idx));
+                    }
+                } else {
+                    auto& layer = init.get_layer<MultiplexedConv2DPackedLayerDepthwise>(info.layer_id);
+                    if (is_weight) {
+                        if (shape.size() != 2) {
+                            throw std::runtime_error(
+                                "[Provisioner] multiplexed depthwise conv weight signature must be rank 2: " + arg_id);
+                        }
+                        const int ct_idx = static_cast<int>(flat_idx / shape[1]);
+                        const int kernel_idx = static_cast<int>(flat_idx % shape[1]);
+                        ringt = layer.generate_weight_pt_for_indices(context, ct_idx, kernel_idx);
+                    } else {
+                        if (!is_bias || shape.size() != 1) {
+                            throw std::runtime_error(
+                                "[Provisioner] multiplexed depthwise conv bias signature must be rank 1: " + arg_id);
+                        }
+                        ringt = layer.generate_bias_pt_for_index(context, static_cast<int>(flat_idx));
+                    }
+                }
+            } else {
+                const bool is_depthwise = groups == n_out_channel && groups != 1;
+                if (is_depthwise) {
+                    auto& layer = init.get_layer<Conv2DPackedDepthwiseLayer>(info.layer_id);
+                    if (is_weight) {
+                        if (shape.size() != 2) {
+                            throw std::runtime_error(
+                                "[Provisioner] ordinary depthwise conv weight signature must be rank 2: " + arg_id);
+                        }
+                        const int ct_idx = static_cast<int>(flat_idx / shape[1]);
+                        const int kernel_idx = static_cast<int>(flat_idx % shape[1]);
+                        ringt = layer.generate_weight_pt_for_indices(context, ct_idx, kernel_idx);
+                    } else {
+                        if (!is_bias || shape.size() != 1) {
+                            throw std::runtime_error(
+                                "[Provisioner] ordinary depthwise conv bias signature must be rank 1: " + arg_id);
+                        }
+                        ringt = layer.generate_bias_pt_for_index(context, static_cast<int>(flat_idx));
+                    }
+                } else {
+                    auto& layer = init.get_layer<Conv2DPackedLayer>(info.layer_id);
+                    if (is_weight) {
+                        if (shape.size() != 3) {
+                            throw std::runtime_error("[Provisioner] ordinary conv weight signature must be rank 3: " +
+                                                     arg_id);
+                        }
+                        const int out_idx = static_cast<int>(flat_idx / (shape[1] * shape[2]));
+                        const int in_idx = static_cast<int>((flat_idx / shape[2]) % shape[1]);
+                        const int kernel_idx = static_cast<int>(flat_idx % shape[2]);
+                        ringt = layer.generate_weight_pt_for_indices(context, out_idx, in_idx, kernel_idx);
+                    } else {
+                        if (!is_bias || shape.size() != 1) {
+                            throw std::runtime_error("[Provisioner] ordinary conv bias signature must be rank 1: " +
+                                                     arg_id);
+                        }
+                        ringt = layer.generate_bias_pt_for_index(context, static_cast<int>(flat_idx));
+                    }
+                }
+            }
+        } else if (info.param_kind == "poly_coeff") {
             if (shape.size() != 1) {
-                throw std::runtime_error("[Provisioner] dense bias signature must be rank 1: " + arg_id);
+                throw std::runtime_error("[Provisioner] polyrelu coeff signature must be rank 1: " + arg_id);
             }
-            ringt = layer.generate_bias_0d_pt_for_index(context, static_cast<uint32_t>(flat_idx));
+            const std::string feature_id = layer_cfg.at("feature_input")[0].get<std::string>();
+            const int dim = init.json_features.at(feature_id).at("dim").get<int>();
+            const int ct_idx = static_cast<int>(flat_idx);
+            if (dim == 0) {
+                auto& layer = init.get_layer<PolyRelu0D>(info.layer_id);
+                ringt = layer.generate_weight_pt_for_bsgs(context, info.coeff_idx, ct_idx);
+            } else if (dim == 1) {
+                auto& layer = init.get_layer<PolyRelu1D>(info.layer_id);
+                ringt = layer.generate_weight_pt_for_bsgs(context, info.coeff_idx, ct_idx);
+            } else {
+                auto& layer = init.get_layer<PolyRelu2D>(info.layer_id);
+                ringt = layer.generate_weight_pt_for_bsgs(context, info.coeff_idx, ct_idx);
+            }
+        } else {
+            throw std::runtime_error("[Provisioner] Unsupported encrypted parameter argument: " + arg_id);
         }
+
         auto pt = context.ringt_to_pt(ringt, encrypt_level);
         encrypted.push_back(context.encrypt_asymmetric(pt));
     }
@@ -215,7 +476,8 @@ void InferenceProvisioner::write_encrypted_argument(const std::filesystem::path&
                                                     const std::string& arg_id,
                                                     const std::vector<fhe::CkksCiphertext>& values,
                                                     json& manifest,
-                                                    const json& sig) const {
+                                                    const json& sig,
+                                                    const ParameterArgumentInfo& info) const {
     const std::string filename = arg_id + ".bin";
     std::stringstream ss;
     uint64_t count = values.size();
@@ -227,9 +489,19 @@ void InferenceProvisioner::write_encrypted_argument(const std::filesystem::path&
     write_binary_file(parameter_root / filename, ss_to_bytes(ss));
 
     manifest["arguments"][arg_id] = {
-        {"id", arg_id},           {"type", "ct"},     {"level", sig.at("level").get<int>()},
-        {"size", sig.at("size")}, {"file", filename},
+        {"id", arg_id},
+        {"source_id", info.source_id.empty() ? arg_id : info.source_id},
+        {"type", "ct"},
+        {"level", sig.at("level").get<int>()},
+        {"use_site_level", sig.at("level").get<int>()},
+        {"size", sig.at("size")},
+        {"file", filename},
+        {"layer_id", info.layer_id},
+        {"param_kind", info.param_kind},
     };
+    if (info.coeff_idx >= 0) {
+        manifest["arguments"][arg_id]["coeff_idx"] = info.coeff_idx;
+    }
 }
 
 void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_arg) {
@@ -244,8 +516,7 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
         throw std::runtime_error("[Provisioner] only CKKS task signatures are supported");
     }
 
-    auto eval_context = context_->make_public_context(false, true, true);
-    Bytes eval_bytes = eval_context.serialize_advanced();
+    const Bytes eval_bytes = serialize_public_context(*context_, task_config_.value("use_btp", false));
     write_binary_file(provisioner_dir_ / "eval_context.bin", eval_bytes);
     write_binary_file(runner_dir / "eval_context.bin", eval_bytes);
 
@@ -257,14 +528,21 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
         {"arguments", json::object()},
     };
 
+    InitInferenceProcess init(server_dir_.string(), false);
+    init.init_parameters(task_config_.value("use_btp", false));
+    init.is_lazy = true;
+    init.load_model_prepare();
+
     for (const auto& sig : task_signature_.at("offline")) {
         const std::string arg_id = sig.at("id").get<std::string>();
         if (sig.at("type").get<std::string>() != "ct") {
-            throw std::runtime_error("[Provisioner] Phase 2 only supports ciphertext offline args: " + arg_id);
+            throw std::runtime_error("[Provisioner] encrypted_offline only supports ciphertext offline args: " +
+                                     arg_id);
         }
         std::cout << "[Provisioner] Encrypting offline parameter " << arg_id << "..." << std::endl;
-        auto encrypted = encrypt_dense_argument(arg_id, sig, *context_);
-        write_encrypted_argument(parameter_root, arg_id, encrypted, manifest, sig);
+        const auto info = parse_parameter_argument(arg_id, init);
+        auto encrypted = encrypt_parameter_argument(arg_id, sig, *context_, init);
+        write_encrypted_argument(parameter_root, arg_id, encrypted, manifest, sig, info);
     }
 
     write_json_file(parameter_root / "manifest.json", manifest);

@@ -28,6 +28,8 @@
 
 namespace fhe = fhe_ops_lib;
 
+class InitInferenceProcess;
+
 class InferenceProvisioner {
 public:
     explicit InferenceProvisioner(const std::string& task_dir);
@@ -53,11 +55,22 @@ private:
     void resolve_directories();
     fhe::CkksParameter make_parameter() const;
     void copy_private_and_runner_configs(const std::filesystem::path& runner_dir) const;
-    std::vector<fhe::CkksCiphertext>
-    encrypt_dense_argument(const std::string& arg_id, const json& sig, fhe::CkksContext& context) const;
+    struct ParameterArgumentInfo {
+        std::string source_id;
+        std::string layer_id;
+        std::string param_kind;
+        int coeff_idx = -1;
+    };
+
+    ParameterArgumentInfo parse_parameter_argument(const std::string& arg_id, const InitInferenceProcess& init) const;
+    std::vector<fhe::CkksCiphertext> encrypt_parameter_argument(const std::string& arg_id,
+                                                                const json& sig,
+                                                                fhe::CkksContext& context,
+                                                                InitInferenceProcess& init) const;
     void write_encrypted_argument(const std::filesystem::path& parameter_root,
                                   const std::string& arg_id,
                                   const std::vector<fhe::CkksCiphertext>& values,
                                   json& manifest,
-                                  const json& sig) const;
+                                  const json& sig,
+                                  const ParameterArgumentInfo& info) const;
 };

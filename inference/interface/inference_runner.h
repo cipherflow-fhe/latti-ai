@@ -56,10 +56,15 @@ private:
     std::map<std::string, InputParam> input_params_;
     std::map<std::string, OutputParam> output_params_;
     int n_slots_ = 0;
+    std::string pack_style_;
     std::unique_ptr<fhe::CkksContext> eval_context_;
     std::unique_ptr<EncryptedParameterStore> parameter_store_;
 
     void read_configuration();
     std::vector<fhe::CkksPlaintextRingt>
     encode_plaintext_0d_input(const std::string& name, const std::string& csv_path, const json& sig) const;
+    std::vector<fhe::CkksPlaintextRingt>
+    encode_plaintext_1d_input(const std::string& name, const std::string& csv_path, const json& sig) const;
+    std::vector<fhe::CkksPlaintextRingt>
+    encode_plaintext_2d_input(const std::string& name, const std::string& csv_path, const json& sig) const;
 };

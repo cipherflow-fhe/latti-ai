@@ -172,7 +172,8 @@ class Conv2DPackedDepthwiseLayer:
         steps = []
         for i in range(1, n_rotation + 1):
             steps.append(i * unit)
-        result += rotate_cols(x, steps)
+        if steps:
+            result += rotate_cols(x, steps)
         return result
 
     @staticmethod
@@ -183,7 +184,7 @@ class Conv2DPackedDepthwiseLayer:
             post_steps.append(i * unit)
             nega_steps.append(-i * unit)
         steps = nega_steps + post_steps
-        r_temp = rotate_cols(x, steps)
+        r_temp = rotate_cols(x, steps) if steps else []
         result: list[DataNode] = list()
 
         # Reverse negatives when inserting
@@ -191,6 +192,25 @@ class Conv2DPackedDepthwiseLayer:
         result.append(x)
         result += r_temp[len(nega_steps) : :]
         return result
+
+    @staticmethod
+    def rotation_steps_2_sides(n_rotation: int, unit: int) -> list[int]:
+        result = []
+        for i in range(n_rotation, 0, -1):
+            result.append(-i * unit)
+        result.append(0)
+        for i in range(1, n_rotation + 1):
+            result.append(i * unit)
+        return result
+
+    def kernel_rotation_steps(self) -> list[int]:
+        steps = []
+        row_steps = self.rotation_steps_2_sides(self.input_rotate_ranges[0], self.input_rotate_units[0])
+        col_steps = self.rotation_steps_2_sides(self.input_rotate_ranges[1], self.input_rotate_units[1])
+        for row_step in row_steps:
+            for col_step in col_steps:
+                steps.append(row_step + col_step)
+        return steps
 
     def gen_rotated_x(self, x: list[DataNode]):
         rotated_x: list[list[DataNode]] = list()
@@ -287,6 +307,9 @@ class Conv2DPackedDepthwiseLayer:
         return result
 
     def call_param_ct(self, x: list[DataNode], weight_ct, bias_ct, input_is_plaintext: bool = False):
+        if input_is_plaintext:
+            return self.call_param_ct_plaintext_input(x, weight_ct, bias_ct)
+
         rotations_needed = self.input_rotate_ranges[0] > 0 or self.input_rotate_ranges[1] > 0
         require_no_plaintext_input_rotation(op_class, input_is_plaintext, rotations_needed)
 
@@ -301,5 +324,27 @@ class Conv2DPackedDepthwiseLayer:
                     x_terms.append(rotated_x_2d[packed_out_channel_idx][index])
                     w_terms.append(weight_ct[packed_out_channel_idx][index])
             partial_sum = accumulate_encrypted_param_terms(x_terms, w_terms)
+            partial_sum = rescale(partial_sum)
+            result.append(add(partial_sum, bias_ct[packed_out_channel_idx]))
+        return result
+
+    def call_param_ct_plaintext_input(self, x: list[DataNode], weight_ct, bias_ct):
+        kernel_steps = self.kernel_rotation_steps()
+        result = []
+        for packed_out_channel_idx in range(self.n_packed_out_channel):
+            partial_sum = None
+            base_x = x[packed_out_channel_idx]
+            for index in range(self.kernel_shape[0] * self.kernel_shape[1]):
+                total_step = int(kernel_steps[index])
+                w = weight_ct[packed_out_channel_idx][index]
+                if total_step != 0:
+                    w = rotate_cols(w, [-total_step])[0]
+                term = mult(w, base_x)
+                if total_step != 0:
+                    term = rotate_cols(term, [total_step])[0]
+                partial_sum = term if partial_sum is None else add(partial_sum, term)
+            if partial_sum is None:
+                raise ValueError('Encrypted depthwise conv accumulation produced no terms')
+            partial_sum = rescale(partial_sum)
             result.append(add(partial_sum, bias_ct[packed_out_channel_idx]))
         return result

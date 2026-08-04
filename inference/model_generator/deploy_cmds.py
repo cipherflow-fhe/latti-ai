@@ -255,18 +255,48 @@ def gen_custom_task(
             return [CkksPlaintextRingtNode(feature_id + f'input{k}') for k in range(count)]
         return [CkksCiphertextNode(feature_id + f'input{k}', level=level) for k in range(count)]
 
+    encrypted_parameter_arg_counts = {}
+    encrypted_parameter_effective_ids = set()
+
+    def _flatten_nodes(nodes):
+        if isinstance(nodes, list):
+            result = []
+            for item in nodes:
+                result.extend(_flatten_nodes(item))
+            return result
+        return [nodes]
+
+    def _argument_level(nodes):
+        for node in _flatten_nodes(nodes):
+            if hasattr(node, 'level'):
+                return int(node.level)
+        return None
+
     def _append_parameter_arg(arg_id, nodes):
-        arg = Argument(arg_id, nodes)
         if parameter_mode == 'encrypted_offline':
+            effective_id = arg_id
+            count = encrypted_parameter_arg_counts.get(arg_id, 0)
+            encrypted_parameter_arg_counts[arg_id] = count + 1
+            if count > 0:
+                level = _argument_level(nodes)
+                suffix = f'__L{level}' if level is not None else f'__U{count}'
+                effective_id = f'{arg_id}{suffix}'
+                extra = 1
+                while effective_id in encrypted_parameter_effective_ids:
+                    effective_id = f'{arg_id}{suffix}__U{extra}'
+                    extra += 1
+            encrypted_parameter_effective_ids.add(effective_id)
+            arg = Argument(effective_id, nodes)
             offline_input_args.append(arg)
         else:
+            arg = Argument(arg_id, nodes)
             input_args.append(arg)
 
     def _unsupported_encrypted_parameter_layer(layer_id, layer_type):
         raise ValueError(
             f"Layer '{layer_id}' ({layer_type}) is not supported by "
-            'parameter_mode="encrypted_offline" in Phase 1. Supported parameterized paths are ordinary conv2d '
-            'and 0D dense without special_info.'
+            'parameter_mode="encrypted_offline" in Phase 3. Supported parameterized paths are conv2d variants, '
+            '0D/special dense, and polyrelu/polyact. Public structural constants remain plaintext.'
         )
 
     def _register_feature_nodes(feature_id, count, level):
@@ -694,8 +724,6 @@ def gen_custom_task(
             next_stride = [block_expansion[0] // stride[0], block_expansion[1] // stride[1]]
             padding = [-1, -1]
             if is_big_conv:
-                if parameter_mode == 'encrypted_offline':
-                    _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
                 if groups == n_out_channel and groups != 1:
                     big_conv = InverseMultiplexedDepthwiseConv2DLayer(
                         n_out_channel,
@@ -725,6 +753,21 @@ def gen_custom_task(
                     )
                     feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                     input_args.append(Argument(f'{layer_id}', [conv_data_source]))
+                elif parameter_mode == 'encrypted_offline':
+                    weight_ct, bias_ct, repack_mask_pt = big_conv.make_param_ct_nodes(layer_id, level)
+                    _append_parameter_arg(f'convw_{layer_id}', weight_ct)
+                    _append_parameter_arg(f'convb_{layer_id}', bias_ct)
+                    if repack_mask_pt is not None:
+                        input_args.append(Argument(f'repack_mask_{layer_id}', [repack_mask_pt]))
+                    layer_output_nodes = big_conv.call_param_ct(
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                        weight_ct,
+                        bias_ct,
+                        n,
+                        repack_mask_pt=repack_mask_pt,
+                        input_is_plaintext=_feature_input_is_plaintext(layer_input_feature_ids[0]),
+                    )
+                    feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                 else:
                     weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes(layer_id)
                     layer_output_nodes = big_conv.call(
@@ -819,8 +862,6 @@ def gen_custom_task(
                             n_packed_out_channel,
                         )
 
-                    if parameter_mode == 'encrypted_offline':
-                        _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
                     if lazy:
                         conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
                         layer_output_nodes = conv0_layer.call_custom_compute(
@@ -828,6 +869,20 @@ def gen_custom_task(
                         )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                         input_args.append(Argument(f'{layer_id}', [conv_data_source]))
+                    elif parameter_mode == 'encrypted_offline':
+                        weight_ct, bias_ct, mask_pt = conv0_layer.make_param_ct_nodes(layer_id, level)
+                        if mask_pt:
+                            input_args.append(Argument(f'convm_{layer_id}', mask_pt))
+                        _append_parameter_arg(f'convw_{layer_id}', weight_ct)
+                        _append_parameter_arg(f'convb_{layer_id}', bias_ct)
+                        layer_output_nodes = conv0_layer.call_param_ct(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                            weight_ct,
+                            bias_ct,
+                            mask_pt,
+                            input_is_plaintext=_feature_input_is_plaintext(layer_input_feature_ids[0]),
+                        )
+                        feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                     else:
                         weight_pt, bias_pt, mask_pt = conv0_layer.make_pt_nodes(layer_id)
                         if mask_pt:
@@ -849,8 +904,6 @@ def gen_custom_task(
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif layer_config['type'] in ('poly_relu2d', 'polyact'):
-            if parameter_mode == 'encrypted_offline':
-                _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
             feat = config_info['feature'][layer_input_feature_ids[0]]
             level = int(feat['level'])
             order = layer_config['order']
@@ -871,6 +924,11 @@ def gen_custom_task(
                         feature_id_in_nodes, poly_data_source, layer_id
                     )
                     input_args.append(Argument(f'{layer_id}', [poly_data_source]))
+                elif parameter_mode == 'encrypted_offline':
+                    weight_ct = polyrelu.make_param_ct_nodes(
+                        layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].level
+                    )
+                    layer_output_nodes = polyrelu.call_bsgs_param_ct(feature_id_in_nodes, weight_ct)
                 else:
                     weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
                     layer_output_nodes = polyrelu.call_bsgs_feature0d(feature_id_in_nodes, weight_pt)
@@ -887,6 +945,11 @@ def gen_custom_task(
                         layer_output_nodes = polyrelu.call_bsgs_mux_lazy(
                             feature_id_in_nodes, poly_data_source, layer_id
                         )
+                    elif parameter_mode == 'encrypted_offline':
+                        weight_ct = polyrelu.make_param_ct_nodes(
+                            layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].level
+                        )
+                        layer_output_nodes = polyrelu.call_bsgs_param_ct(feature_id_in_nodes, weight_ct)
                     else:
                         weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
                         layer_output_nodes = polyrelu.call_bsgs_mux(feature_id_in_nodes, weight_pt)
@@ -897,6 +960,11 @@ def gen_custom_task(
                         layer_output_nodes = polyrelu.call_bsgs_skip_lazy(
                             feature_id_in_nodes, poly_data_source, layer_id
                         )
+                    elif parameter_mode == 'encrypted_offline':
+                        weight_ct = polyrelu.make_param_ct_nodes(
+                            layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].level
+                        )
+                        layer_output_nodes = polyrelu.call_bsgs_param_ct(feature_id_in_nodes, weight_ct)
                     else:
                         weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
                         layer_output_nodes = polyrelu.call_bsgs_skip(feature_id_in_nodes, weight_pt)
@@ -910,14 +978,23 @@ def gen_custom_task(
                     poly_data_source = CustomDataNode(type='poly_data_source', id=f'{layer_id}')
                     layer_output_nodes = polyrelu.call_bsgs_lazy(feature_id_in_nodes, poly_data_source, layer_id)
                     input_args.append(Argument(f'{layer_id}', [poly_data_source]))
+                elif parameter_mode == 'encrypted_offline':
+                    weight_ct = polyrelu.make_param_ct_nodes(
+                        layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].level
+                    )
+                    layer_output_nodes = polyrelu.call_bsgs_param_ct(feature_id_in_nodes, weight_ct)
                 else:
                     weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
                     layer_output_nodes = polyrelu.call_bsgs_feature2d(feature_id_in_nodes, weight_pt)
 
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
             if not lazy:
-                for i in range(len(weight_pt)):
-                    input_args.append(Argument(f'poly_reluw_{layer_id}_{i}', weight_pt[i]))
+                if parameter_mode == 'encrypted_offline':
+                    for i in range(len(weight_ct)):
+                        _append_parameter_arg(f'poly_reluw_{layer_id}_{i}', weight_ct[i])
+                else:
+                    for i in range(len(weight_pt)):
+                        input_args.append(Argument(f'poly_reluw_{layer_id}_{i}', weight_pt[i]))
 
         elif layer_config['type'] == 'conv1d':
             if parameter_mode == 'encrypted_offline':
@@ -1386,8 +1463,6 @@ def gen_custom_task(
                         feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, skip_0d
                     )
             else:
-                if parameter_mode == 'encrypted_offline':
-                    _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
                 special_info = config_info['feature'][layer_input_feature_ids[0]]['special_info']
                 special_shape = special_info['shape']
                 special_skip = special_info['skip']
@@ -1418,6 +1493,17 @@ def gen_custom_task(
                         layer_output_nodes = dense.call_1d_multiplexed_custom_compute(
                             feature_id_to_nodes_map[layer_input_feature_ids[0]], dense_data_source, n
                         )
+                    elif parameter_mode == 'encrypted_offline':
+                        weight_ct, bias_ct = dense.make_param_ct_nodes_1d_multiplexed(layer_id, n, level)
+                        _append_parameter_arg(f'densew_{layer_id}', weight_ct)
+                        _append_parameter_arg(f'denseb_{layer_id}', bias_ct)
+                        layer_output_nodes = dense.call_param_ct_1d_multiplexed(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                            weight_ct,
+                            bias_ct,
+                            n,
+                            input_is_plaintext=_feature_input_is_plaintext(layer_input_feature_ids[0]),
+                        )
                     else:
                         weight_pt, bias_pt = dense.make_pt_nodes_1d_multiplexed(layer_id, n)
                         input_args.append(Argument(f'densew_{layer_id}', weight_pt))
@@ -1442,6 +1528,17 @@ def gen_custom_task(
                         input_args.append(Argument(f'{layer_id}', [dense_data_source]))
                         layer_output_nodes = dense.call_multiplexed_custom_compute(
                             feature_id_to_nodes_map[layer_input_feature_ids[0]], dense_data_source, n
+                        )
+                    elif parameter_mode == 'encrypted_offline':
+                        weight_ct, bias_ct = dense.make_param_ct_nodes_multiplexed(layer_id, n, level)
+                        _append_parameter_arg(f'densew_{layer_id}', weight_ct)
+                        _append_parameter_arg(f'denseb_{layer_id}', bias_ct)
+                        layer_output_nodes = dense.call_param_ct_multiplexed(
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                            weight_ct,
+                            bias_ct,
+                            n,
+                            input_is_plaintext=_feature_input_is_plaintext(layer_input_feature_ids[0]),
                         )
                     else:
                         weight_pt, bias_pt = dense.make_pt_nodes_multiplexed(layer_id, n)

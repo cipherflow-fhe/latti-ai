@@ -22,6 +22,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.encrypted_param_ops import (
+    accumulate_encrypted_param_terms,
+    require_no_plaintext_input_rotation,
+)
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 
 
@@ -436,6 +440,20 @@ class InverseMultiplexedConv2DLayer:
         repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}') if self.need_repack else None
         return weight_pt, bias_pt, repack_mask_pt
 
+    def make_param_ct_nodes(self, layer_id, level: int):
+        """Return encrypted weight/bias nodes plus plaintext repack mask."""
+        inner = self.kernel_shape[0] * self.kernel_shape[1] * self.output_step[0] * self.output_step[1]
+        weight_ct = [
+            [
+                [CkksCiphertextNode(f'convw_{layer_id}_{k}_{n}_{i}', level=level) for i in range(inner)]
+                for n in range(self.n_in_channel)
+            ]
+            for k in range(self.n_out_channel)
+        ]
+        bias_ct = [CkksCiphertextNode(f'convb_{layer_id}_{i}', level=level - 1) for i in range(self.n_out_channel)]
+        repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}') if self.need_repack else None
+        return weight_ct, bias_ct, repack_mask_pt
+
     def call(
         self, x: list[CkksCiphertextNode], weight_pt, bias_pt, N: int, repack_mask_pt=None
     ) -> list[CkksCiphertextNode]:
@@ -570,6 +588,164 @@ class InverseMultiplexedConv2DLayer:
             return res
 
         res = [0 for i in range(int(math.ceil(len(weight_pt) / n_channel_per_ct_out) * output_step0 * output_step1))]
+        if n_channel_per_ct_out == 1:
+            res = temp_res
+        else:
+            for out_ct_idx in range(0, len(temp_res)):
+                pack_out_ct_idx = int(out_ct_idx // n_channel_per_ct_out)
+                channel_idx_in_ct = out_ct_idx % n_channel_per_ct_out
+                if channel_idx_in_ct == 0:
+                    res[pack_out_ct_idx] = temp_res[out_ct_idx]
+                else:
+                    step = int(
+                        -1
+                        * channel_idx_in_ct
+                        * self.input_shape[0]
+                        // self.stride[0]
+                        * self.input_shape[1]
+                        // self.stride[1]
+                    )
+                    if step == 0:
+                        s_rot = temp_res[out_ct_idx]
+                    else:
+                        s_rot = rotate_cols(temp_res[out_ct_idx], [step])[0]
+                    res[pack_out_ct_idx] = add(res[pack_out_ct_idx], s_rot)
+        return res
+
+    def call_param_ct(
+        self,
+        x: list[DataNode],
+        weight_ct,
+        bias_ct,
+        N: int,
+        repack_mask_pt=None,
+        input_is_plaintext: bool = False,
+    ) -> list[CkksCiphertextNode]:
+        require_no_plaintext_input_rotation(op_class, input_is_plaintext, True)
+
+        pad0 = self.padding[0]
+        pad1 = self.padding[1]
+        stride0 = self.stride[0]
+        stride1 = self.stride[1]
+        output_step0 = self.output_step[0]
+        output_step1 = self.output_step[1]
+        kernel_shape0 = self.kernel_shape[0]
+        kernel_shape1 = self.kernel_shape[1]
+        block_shape1 = self.block_shape[1]
+
+        rotated_x = [[] for i in range(self.n_in_channel)]
+
+        for n_in_channel in range(0, self.n_in_channel):
+            base_in_ct_idx = int(n_in_channel * stride0 * stride1 * output_step0 * output_step1)
+            for r_i2 in range(0, output_step0):
+                for r_j2 in range(0, output_step1):
+                    for row_seg_idx in range(self.stride[0]):
+                        for col_seg_idx in range(self.stride[1]):
+                            split_kernel_shape0 = (kernel_shape0 - 1 - row_seg_idx) // stride0 + 1
+                            split_kernel_shape1 = (kernel_shape1 - 1 - col_seg_idx) // stride1 + 1
+                            for u_s in range(split_kernel_shape0):
+                                for v_s in range(split_kernel_shape1):
+                                    begin_row_idx = (row_seg_idx - pad0 + stride0 * (u_s + r_i2)) % (
+                                        stride0 * output_step0
+                                    )
+                                    begin_row_idx = (begin_row_idx + stride0 * output_step0) % (stride0 * output_step0)
+                                    begin_col_idx = (col_seg_idx - pad1 + stride1 * (v_s + r_j2)) % (
+                                        stride1 * output_step1
+                                    )
+                                    begin_col_idx = (begin_col_idx + stride1 * output_step1) % (stride1 * output_step1)
+                                    begin_idx = begin_row_idx * stride1 * output_step1 + begin_col_idx
+                                    in_ct_idx = base_in_ct_idx + begin_idx
+                                    row_step = (row_seg_idx - pad0 + stride0 * (u_s + r_i2) - begin_row_idx) // (
+                                        stride0 * output_step0
+                                    )
+                                    col_step = (col_seg_idx - pad1 + stride1 * (v_s + r_j2) - begin_col_idx) // (
+                                        stride1 * output_step1
+                                    )
+                                    step = int(row_step * block_shape1 + col_step)
+                                    if step == 0:
+                                        res_temp = x[in_ct_idx]
+                                    else:
+                                        res_temp = rotate_cols(x[in_ct_idx], [step])[0]
+                                    rotated_x[n_in_channel].append(res_temp)
+
+        n_channel_per_ct_out = 1
+        if 2 * self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1] < N:
+            n_channel_per_ct_out = N / (2 * self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1])
+        else:
+            n_channel_per_ct_out = 1
+
+        temp_res = [0 for i in range(len(weight_ct) * self.output_step[0] * self.output_step[1])]
+
+        for ct_idx in range(0, len(weight_ct)):
+            for r_i2 in range(0, output_step0):
+                for r_j2 in range(0, output_step1):
+                    x_terms = list()
+                    w_terms = list()
+                    out_ct_idx = ct_idx * output_step0 * output_step1 + r_i2 * output_step1 + r_j2
+                    base_idx = (r_i2 * output_step1 + r_j2) * self.kernel_shape[0] * self.kernel_shape[1]
+                    for j in range(0, len(weight_ct[ct_idx])):
+                        for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
+                            x_terms.append(rotated_x[j][k + base_idx])
+                            w_terms.append(weight_ct[ct_idx][j][k + base_idx])
+                    s = accumulate_encrypted_param_terms(x_terms, w_terms)
+                    s = rescale(s)
+                    s = add(s, bias_ct[ct_idx])
+                    if ct_idx == 0 and r_i2 == 0 and r_j2 == 0:
+                        used = self.get_used_input_indices()
+                        total = self.n_in_channel * stride0 * stride1 * output_step0 * output_step1
+                        zero_cts = []
+                        for idx in range(total):
+                            if idx not in used:
+                                zero_cts.append(sub(x[idx], x[idx]))
+                        if zero_cts:
+                            sum_zero = zero_cts[0]
+                            for zc in zero_cts[1:]:
+                                sum_zero = add(sum_zero, zc)
+                            sum_zero = sub(sum_zero, sum_zero)
+                            s = add(s, drop_level(sum_zero, 1))
+                    temp_res[out_ct_idx] = s
+
+        if self.need_repack:
+            output_shape0 = self.input_shape[0] // self.orig_stride[0]
+            output_shape1 = self.input_shape[1] // self.orig_stride[1]
+            out_skip0 = self.block_shape[0] // output_shape0
+            out_skip1 = self.block_shape[1] // output_shape1
+            n_channel_per_block = out_skip0 * out_skip1
+            n_block_per_ct = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
+            n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
+
+            repack_mask = repack_mask_pt
+
+            for c in range(len(temp_res)):
+                temp_res[c] = mult(temp_res[c], repack_mask)
+
+            res = [None] * n_out_ct
+            for out_ct_idx in range(n_out_ct):
+                packed = None
+                for ch_in_ct in range(n_channel_per_ct_out_repack):
+                    c = out_ct_idx * n_channel_per_ct_out_repack + ch_in_ct
+                    if c >= self.n_out_channel:
+                        break
+                    block_idx = ch_in_ct // n_channel_per_block
+                    ch_in_block = ch_in_ct % n_channel_per_block
+                    cx = ch_in_block // out_skip1
+                    cy = ch_in_block % out_skip1
+
+                    rot_step = -(cx * self.block_shape[1] + cy + block_idx * self.block_shape[0] * self.block_shape[1])
+                    if rot_step == 0:
+                        rotated = temp_res[c]
+                    else:
+                        rotated = rotate_cols(temp_res[c], [rot_step])[0]
+
+                    if packed is None:
+                        packed = rotated
+                    else:
+                        packed = add(packed, rotated)
+                res[out_ct_idx] = rescale(packed)
+            return res
+
+        res = [0 for i in range(int(math.ceil(len(weight_ct) / n_channel_per_ct_out) * output_step0 * output_step1))]
         if n_channel_per_ct_out == 1:
             res = temp_res
         else:

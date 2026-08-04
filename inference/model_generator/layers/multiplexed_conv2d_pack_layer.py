@@ -22,6 +22,10 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.encrypted_param_ops import (
+    accumulate_encrypted_param_terms,
+    require_no_plaintext_input_rotation,
+)
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 
 
@@ -196,7 +200,8 @@ class MultiplexedConv2DPackedLayer:
         steps = []
         for i in range(1, n_rotation + 1):
             steps.append(i * unit)
-        result += rotate_cols(x, steps)
+        if steps:
+            result += rotate_cols(x, steps)
         return result
 
     @staticmethod
@@ -206,12 +211,26 @@ class MultiplexedConv2DPackedLayer:
         for i in range(-filter_center, n_rotation - filter_center):
             if i != 0:
                 steps.append(i * unit)
-        r_temp = rotate_cols(x, steps)
+        r_temp = rotate_cols(x, steps) if steps else []
         result: list[CkksCiphertextNode] = list()
         result += list(r_temp[0:filter_center])
         result.append(x)
         result += r_temp[filter_center::]
         return result
+
+    @staticmethod
+    def rotation_steps_2_sides(n_rotation: int, unit: int) -> list[int]:
+        filter_center = int(np.floor(n_rotation / 2))
+        return [i * unit for i in range(-filter_center, n_rotation - filter_center)]
+
+    def kernel_rotation_steps(self) -> list[int]:
+        steps = []
+        row_steps = self.rotation_steps_2_sides(self.kernel_shape[0], self.input_rotate_units[0])
+        col_steps = self.rotation_steps_2_sides(self.kernel_shape[1], self.input_rotate_units[1])
+        for row_step in row_steps:
+            for col_step in col_steps:
+                steps.append(row_step + col_step)
+        return steps
 
     def gen_rotated_x(self, x: list[CkksCiphertextNode]):
         rotated_x: list[list[CkksCiphertextNode]] = list()
@@ -376,6 +395,34 @@ class MultiplexedConv2DPackedLayer:
             mask_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_mask)]
         return weight_pt, bias_pt, mask_pt
 
+    def make_param_ct_nodes(self, layer_id, level: int):
+        """Return encrypted weight/bias nodes plus plaintext structural masks."""
+        import math as _math
+
+        n_pack_in_channel = _math.ceil(self.n_in_channel / self.n_channel_per_ct)
+        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
+        size_0 = _math.ceil(self.n_out_channel / self.n_block_per_ct)
+        size_1 = n_pack_in_channel * self.n_block_per_ct
+
+        weight_ct = [
+            [
+                [CkksCiphertextNode(f'convw_{layer_id}_{i}_{j}_{k}', level=level) for k in range(kernel_size)]
+                for j in range(size_1)
+            ]
+            for i in range(size_0)
+        ]
+        n_bias = _math.ceil(self.n_out_channel / (self.stride[0] * self.stride[1] * self.n_channel_per_ct))
+        bias_level = level - 1
+        if not (self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1):
+            bias_level -= 1
+        bias_ct = [CkksCiphertextNode(f'convb_{layer_id}_{i}', level=bias_level) for i in range(n_bias)]
+        if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
+            mask_pt = []
+        else:
+            n_mask = min(self.n_block_per_ct, self.n_out_channel)
+            mask_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_mask)]
+        return weight_ct, bias_ct, mask_pt
+
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mast_pt) -> list[CkksCiphertextNode]:
         # 1. block direction rotation
         block_rotations: list[CkksCiphertextNode] = list()
@@ -459,6 +506,177 @@ class MultiplexedConv2DPackedLayer:
                 res.append(sp)
         for i in range(len(res)):
             res[i] = add(res[i], bias_pt[i])
+        return res
+
+    def call_param_ct(
+        self, x: list[DataNode], weight_ct, bias_ct, mast_pt, input_is_plaintext: bool = False
+    ) -> list[CkksCiphertextNode]:
+        if input_is_plaintext:
+            return self.call_param_ct_plaintext_input(x, weight_ct, bias_ct, mast_pt)
+
+        rotations_needed = self.n_block_per_ct > 1 or self.kernel_shape[0] > 1 or self.kernel_shape[1] > 1
+        require_no_plaintext_input_rotation(op_class, input_is_plaintext, rotations_needed)
+
+        block_rotations: list[DataNode] = list()
+        for x_node in x:
+            block_rotations += MultiplexedConv2DPackedLayer.populate_rotations_1_side(
+                x_node, self.n_block_per_ct - 1, self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
+            )
+        kernel_rotations = self.gen_rotated_x(block_rotations)
+        res: list = list()
+        result_ct = list()
+        for ct_idx in range(len(weight_ct)):
+            x_terms = []
+            w_terms = []
+            for j in range(len(weight_ct[ct_idx])):
+                for k in range(len(weight_ct[ct_idx][j])):
+                    x_terms.append(kernel_rotations[j][k])
+                    w_terms.append(weight_ct[ct_idx][j][k])
+            s = accumulate_encrypted_param_terms(x_terms, w_terms)
+            s = rescale(s)
+            s = self.sum_slot(s, self.skip[0], self.skip[1] * self.input_shape[1])
+            s = self.sum_slot(s, self.skip[1], 1)
+            if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
+                res.append(s)
+            else:
+                valid_n = min(self.n_block_per_ct, self.n_out_channel - ct_idx * self.n_block_per_ct)
+                for i in range(valid_n):
+                    n_block = (ct_idx * self.n_block_per_ct + i) % (
+                        self.n_channel_per_ct
+                        * self.stride[0]
+                        * self.stride[1]
+                        / (self.external_upsample_factor[0] * self.external_upsample_factor[1])
+                    )
+                    n_block_residue = (
+                        np.floor(n_block / (self.zero_inserted_skip[0] * self.zero_inserted_skip[1]))
+                        * self.skip[0]
+                        * self.skip[1]
+                        * self.input_shape[0]
+                        * self.input_shape[1]
+                    )
+                    n_skip = (
+                        np.floor(
+                            (n_block % (self.zero_inserted_skip[0] * self.zero_inserted_skip[1]))
+                            / self.zero_inserted_skip[1]
+                        )
+                        * self.input_shape[1]
+                        * self.skip[1]
+                    )
+                    rot_step = int(
+                        -n_block_residue
+                        - n_skip
+                        - n_block % self.zero_inserted_skip[1]
+                        + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
+                    )
+                    c_m = mult(s, mast_pt[i])
+                    c_m = rescale(c_m)
+                    result_ct.append(rotate_cols(c_m, [rot_step])[0])
+
+        for i in range(len(result_ct)):
+            n_block = i % (
+                self.stride[0]
+                * self.stride[1]
+                * self.n_channel_per_ct
+                / (self.external_upsample_factor[0] * self.external_upsample_factor[1])
+            )
+            c_m_s = result_ct[i]
+            if n_block == 0:
+                sp = c_m_s
+            else:
+                sp = add(sp, c_m_s)
+            if (i + 1) % (
+                self.stride[0]
+                * self.stride[1]
+                * self.n_channel_per_ct
+                / (self.external_upsample_factor[0] * self.external_upsample_factor[1])
+            ) == 0 or i == len(result_ct) - 1:
+                res.append(sp)
+        for i in range(len(res)):
+            res[i] = add(res[i], bias_ct[i])
+        return res
+
+    def call_param_ct_plaintext_input(self, x: list[DataNode], weight_ct, bias_ct, mast_pt) -> list[CkksCiphertextNode]:
+        block_unit = self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
+        kernel_steps = self.kernel_rotation_steps()
+        res: list = list()
+        result_ct = list()
+
+        for ct_idx in range(len(weight_ct)):
+            partial_sum = None
+            for j in range(len(weight_ct[ct_idx])):
+                base_x = x[j // self.n_block_per_ct]
+                block_step = (j % self.n_block_per_ct) * block_unit
+                for k in range(len(weight_ct[ct_idx][j])):
+                    total_step = int(block_step + kernel_steps[k])
+                    w = weight_ct[ct_idx][j][k]
+                    if total_step != 0:
+                        w = rotate_cols(w, [-total_step])[0]
+                    term = mult(w, base_x)
+                    if total_step != 0:
+                        term = rotate_cols(term, [total_step])[0]
+                    partial_sum = term if partial_sum is None else add(partial_sum, term)
+            if partial_sum is None:
+                raise ValueError('Encrypted multiplexed conv accumulation produced no terms')
+            s = rescale(partial_sum)
+            s = self.sum_slot(s, self.skip[0], self.skip[1] * self.input_shape[1])
+            s = self.sum_slot(s, self.skip[1], 1)
+            if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
+                res.append(s)
+            else:
+                valid_n = min(self.n_block_per_ct, self.n_out_channel - ct_idx * self.n_block_per_ct)
+                for i in range(valid_n):
+                    n_block = (ct_idx * self.n_block_per_ct + i) % (
+                        self.n_channel_per_ct
+                        * self.stride[0]
+                        * self.stride[1]
+                        / (self.external_upsample_factor[0] * self.external_upsample_factor[1])
+                    )
+                    n_block_residue = (
+                        np.floor(n_block / (self.zero_inserted_skip[0] * self.zero_inserted_skip[1]))
+                        * self.skip[0]
+                        * self.skip[1]
+                        * self.input_shape[0]
+                        * self.input_shape[1]
+                    )
+                    n_skip = (
+                        np.floor(
+                            (n_block % (self.zero_inserted_skip[0] * self.zero_inserted_skip[1]))
+                            / self.zero_inserted_skip[1]
+                        )
+                        * self.input_shape[1]
+                        * self.skip[1]
+                    )
+                    rot_step = int(
+                        -n_block_residue
+                        - n_skip
+                        - n_block % self.zero_inserted_skip[1]
+                        + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
+                    )
+                    c_m = mult(s, mast_pt[i])
+                    c_m = rescale(c_m)
+                    result_ct.append(rotate_cols(c_m, [rot_step])[0])
+
+        for i in range(len(result_ct)):
+            n_block = i % (
+                self.stride[0]
+                * self.stride[1]
+                * self.n_channel_per_ct
+                / (self.external_upsample_factor[0] * self.external_upsample_factor[1])
+            )
+            c_m_s = result_ct[i]
+            if n_block == 0:
+                sp = c_m_s
+            else:
+                sp = add(sp, c_m_s)
+            if (i + 1) % (
+                self.stride[0]
+                * self.stride[1]
+                * self.n_channel_per_ct
+                / (self.external_upsample_factor[0] * self.external_upsample_factor[1])
+            ) == 0 or i == len(result_ct) - 1:
+                res.append(sp)
+        for i in range(len(res)):
+            res[i] = add(res[i], bias_ct[i])
         return res
 
     def make_pt_nodes_reduct_rot(self, layer_id):

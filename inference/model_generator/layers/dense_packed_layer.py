@@ -204,7 +204,8 @@ class DensePackedLayer:
         steps = []
         for i in range(1, n_rotation + 1):
             steps.append(i * unit)
-        result += rotate_cols(x, steps)
+        if steps:
+            result += rotate_cols(x, steps)
         return result
 
     def make_pt_nodes_skip_0d(self, layer_id):
@@ -254,6 +255,24 @@ class DensePackedLayer:
         ]
         bias_pt = [CkksPlaintextRingtNode(f'denseb_{layer_id}_{i}') for i in range(n_packed_out)]
         return weight_pt, bias_pt
+
+    def make_param_ct_nodes_multiplexed(self, layer_id, n, level: int):
+        """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes_multiplexed()."""
+        input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
+        N_half = int(n / 2)
+        n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
+        valid_skip_0 = self.skip[0] // self.invalid_fill[0]
+        valid_skip_1 = self.skip[1] // self.invalid_fill[1]
+        n_channel_per_block = valid_skip_0 * valid_skip_1
+        n_channel = self.n_in_channel // (self.input_shape[0] * self.input_shape[1])
+        n_block_input = int(np.ceil(n_channel / (n_channel_per_block * n_num_pre_ct))) * n_num_pre_ct
+        n_packed_out = int(np.ceil(self.n_out_channel / n_num_pre_ct))
+        weight_ct = [
+            [CkksCiphertextNode(f'densew_{layer_id}_{i}_{j}', level=level) for j in range(n_block_input)]
+            for i in range(n_packed_out)
+        ]
+        bias_ct = [CkksCiphertextNode(f'denseb_{layer_id}_{i}', level=level - 1) for i in range(n_packed_out)]
+        return weight_ct, bias_ct
 
     def call_skip_0d(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, skip_0d: int):
         """Corresponds to C++ run_core_0d + run_skip_0d (BSGS approach)."""
@@ -343,6 +362,7 @@ class DensePackedLayer:
 
             if total is None:
                 raise ValueError('Encrypted dense accumulation produced no terms')
+            total = rescale(total)
             result.append(add(total, bias_ct[out_idx]))
         return result
 
@@ -466,6 +486,62 @@ class DensePackedLayer:
             result.append(s)
         return result
 
+    def call_param_ct_multiplexed(self, x: list[DataNode], weight_ct, bias_ct, n, input_is_plaintext: bool = False):
+        """2D multiplexed dense path with encrypted offline parameters."""
+        input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
+        x_size = len(x)
+        N_half = int(n / 2)
+        n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
+
+        valid_skip_0 = self.skip[0] // self.invalid_fill[0]
+        valid_skip_1 = self.skip[1] // self.invalid_fill[1]
+        n_channel_per_block = valid_skip_0 * valid_skip_1
+        n_channel = self.n_in_channel // (self.input_shape[0] * self.input_shape[1])
+        n_block_input = int(np.ceil(n_channel / (n_channel_per_block * n_num_pre_ct))) * n_num_pre_ct
+        n_packed_out_feature_for_mult_pack = int(np.ceil(self.n_out_channel / n_num_pre_ct))
+
+        block_size = input_ct_shape[0] * input_ct_shape[1]
+
+        n_rot_factor = n_num_pre_ct // n_block_input if 0 < n_block_input < n_num_pre_ct else 1
+        n_rep_iters = int(np.floor(np.log2(n_rot_factor))) if n_rot_factor > 1 else 0
+        n_rotations_per_ct = min(n_block_input, n_num_pre_ct)
+        require_no_plaintext_input_rotation(
+            op_class,
+            input_is_plaintext,
+            n_rep_iters > 0 or n_rotations_per_ct > 1,
+        )
+
+        x_rep = list(x)
+        for x_id in range(x_size):
+            for r in range(n_rep_iters):
+                x_rep[x_id] = add(x_rep[x_id], rotate_cols(x_rep[x_id], -(2**r) * n_block_input * block_size)[0])
+
+        rotated_cts = []
+        for x_id in range(x_size):
+            rotated_cts.append(self.populate_rotations_1_side(x_rep[x_id], n_rotations_per_ct - 1, block_size))
+
+        result = []
+
+        for packed_out_feature_idx in range(n_packed_out_feature_for_mult_pack):
+            x_terms = []
+            w_terms = []
+            for in_feature_idx in range(len(weight_ct[packed_out_feature_idx])):
+                group = in_feature_idx // n_num_pre_ct
+                offset = in_feature_idx % n_num_pre_ct
+                x_terms.append(rotated_cts[group][offset])
+                w_terms.append(weight_ct[packed_out_feature_idx][in_feature_idx])
+
+            s = accumulate_encrypted_param_terms(x_terms, w_terms)
+            s = rescale(s)
+            s = add(s, bias_ct[packed_out_feature_idx])
+            n_fold = block_size
+            while n_fold > 1:
+                rotated = rotate_cols(s, n_fold // 2)
+                s = add(s, rotated[0])
+                n_fold //= 2
+            result.append(s)
+        return result
+
     def make_pt_nodes_1d_multiplexed(self, layer_id, n):
         """Return (weight_pt, bias_pt) for call_1d_multiplexed().
 
@@ -504,6 +580,27 @@ class DensePackedLayer:
         ]
         bias_pt = [CkksPlaintextRingtNode(f'denseb_{layer_id}_{i}') for i in range(n_packed_out)]
         return weight_pt, bias_pt
+
+    def make_param_ct_nodes_1d_multiplexed(self, layer_id, n, level: int):
+        """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes_1d_multiplexed()."""
+        N_half = n // 2
+        shape = int(self.input_shape[0])
+        skip_val = int(self.skip[0])
+        invalid_fill_val = int(self.invalid_fill[0])
+        block_size = shape * skip_val
+        n_block_per_ct = N_half // block_size
+        valid_sub = skip_val // invalid_fill_val
+        n_valid_per_ct = n_block_per_ct * valid_sub
+        n_actual_channels = self.n_in_channel // shape
+        n_block_input = int(np.ceil(n_actual_channels / n_valid_per_ct)) * n_block_per_ct
+        n_packed_out = int(np.ceil(self.n_out_channel / n_block_per_ct))
+
+        weight_ct = [
+            [CkksCiphertextNode(f'densew_{layer_id}_{i}_{j}', level=level) for j in range(n_block_input)]
+            for i in range(n_packed_out)
+        ]
+        bias_ct = [CkksCiphertextNode(f'denseb_{layer_id}_{i}', level=level - 1) for i in range(n_packed_out)]
+        return weight_ct, bias_ct
 
     def call_1d_multiplexed(self, x: list, weight_pt, bias_pt, n):
         """Corresponds to C++ run_1d_multiplexed.
@@ -549,6 +646,50 @@ class DensePackedLayer:
             s = add(s, bias_pt[out_group])
 
             # Fold over block_size (sum spatial positions into slot 0 of each block)
+            n_fold = block_size
+            while n_fold > 1:
+                rotated = rotate_cols(s, n_fold // 2)
+                s = add(s, rotated[0])
+                n_fold //= 2
+
+            result.append(s)
+        return result
+
+    def call_param_ct_1d_multiplexed(self, x: list[DataNode], weight_ct, bias_ct, n, input_is_plaintext: bool = False):
+        """1D multiplexed dense path with encrypted offline parameters."""
+        N_half = n // 2
+        shape = int(self.input_shape[0])
+        skip_val = int(self.skip[0])
+        invalid_fill_val = int(self.invalid_fill[0])
+        block_size = shape * skip_val
+        n_block_per_ct = N_half // block_size
+        valid_sub = skip_val // invalid_fill_val
+        n_valid_per_ct = n_block_per_ct * valid_sub
+        n_actual_channels = self.n_in_channel // shape
+        n_block_input = int(np.ceil(n_actual_channels / n_valid_per_ct)) * n_block_per_ct
+        n_packed_out = int(np.ceil(self.n_out_channel / n_block_per_ct))
+        x_size = len(x)
+
+        require_no_plaintext_input_rotation(op_class, input_is_plaintext, n_block_per_ct > 1)
+
+        rotated_cts = []
+        for x_id in range(x_size):
+            rotated_cts.append(self.populate_rotations_1_side(x[x_id], n_block_per_ct - 1, block_size))
+
+        result = []
+        for out_group in range(n_packed_out):
+            x_terms = []
+            w_terms = []
+            for rot_idx in range(len(weight_ct[out_group])):
+                group = rot_idx // n_block_per_ct
+                offset = rot_idx % n_block_per_ct
+                x_terms.append(rotated_cts[group][offset])
+                w_terms.append(weight_ct[out_group][rot_idx])
+
+            s = accumulate_encrypted_param_terms(x_terms, w_terms)
+            s = rescale(s)
+            s = add(s, bias_ct[out_group])
+
             n_fold = block_size
             while n_fold > 1:
                 rotated = rotate_cols(s, n_fold // 2)
