@@ -296,7 +296,8 @@ def gen_custom_task(
         raise ValueError(
             f"Layer '{layer_id}' ({layer_type}) is not supported by "
             'parameter_mode="encrypted_offline" in Phase 3. Supported parameterized paths are conv2d variants, '
-            '0D/special dense, mult_scalar, and polyrelu/polyact. Public structural constants remain plaintext.'
+            '0D/special dense, mult_scalar, and polyrelu/polyact. Structural constants that enter the runner '
+            'signature should be modeled as offline encrypted parameters or explicit runner-local constants.'
         )
 
     def _register_feature_nodes(feature_id, count, level):
@@ -872,7 +873,7 @@ def gen_custom_task(
                     elif parameter_mode == 'encrypted_offline':
                         weight_ct, bias_ct, mask_pt = conv0_layer.make_param_ct_nodes(layer_id, level)
                         if mask_pt:
-                            input_args.append(Argument(f'convm_{layer_id}', mask_pt))
+                            _append_parameter_arg(f'convm_{layer_id}', mask_pt)
                         _append_parameter_arg(f'convw_{layer_id}', weight_ct)
                         _append_parameter_arg(f'convb_{layer_id}', bias_ct)
                         layer_output_nodes = conv0_layer.call_param_ct(

@@ -19,7 +19,7 @@
 - Runner 持有 eval context，包括 relin key、rotation/galois key 和 bootstrapping 所需公钥材料；这些公钥只用于同态计算，不能解密参数密文或输出密文。
 - Runner 可读取加密后的模型参数并执行 `PT * CT`、`CT * CT` 等计算，但不能解密参数或结果。
 - `Provisioner` / `Decryptor` 位于 server 侧，持有 secret key，因此可以访问明文模型参数并解密输出。
-- v1 默认不加密 public structural constants，例如 avgpool select tensors、concat masks、repack masks、upsample select tensors 和 routing/mask 类常量。这些常量不来自训练权重，暂按公开结构信息处理。
+- v1 已将 CIFAR10 runner 图中会进入 signature 的 `convm_` structural masks 也作为 offline ciphertext 参数处理，避免 Runner 需要额外的 plaintext mask 输入。avgpool select tensors、concat masks、repack masks、upsample select tensors 和 routing/mask 类常量如果后续出现在 runner signature 中，也应按相同模式迁移到 offline encrypted parameters，或显式标注为 Runner-local public constants。
 
 ## 目录结构
 
@@ -100,12 +100,13 @@ python inference/interface/gen_mega_ag.py \
   --task-dir ./runs/cifar10/task/runner \
   --deployment-mode server_provisioned_runner \
   --input ./runs/cifar10/task/client/img.csv \
-  --output-cipher ./runs/cifar10/output.ct
+  --output-cipher ./runs/cifar10/output.ct \
+  --gpu
 ```
 
 Runner 读取明文 CSV 输入，将输入编码为 plaintext/ringt argument，加载 offline encrypted parameters，执行 MegaAG，并把输出密文序列化到 `--output-cipher`。
 
-多输入任务可以使用 `--input name=path` 形式显式绑定输入名。
+GPU 运行需要先用 `-DINFERENCE_SDK_ENABLE_GPU=ON` 构建，并在运行命令中显式传入 `--gpu`；CPU 运行时省略 `--gpu`。多输入任务可以使用 `--input name=path` 形式显式绑定输入名。
 
 ### 5. Server 解密输出
 
@@ -133,7 +134,8 @@ Python MegaAG 图不会显式插入 `ringt_to_mul()` 节点。原始 `CT * PT` �
 
 ## 注意事项
 
-- `CT * CT` 比 `CT * PT` 更重，参数密文体积也远大于 H5 或 plaintext ringt 参数；Runner 侧应依赖 manifest 和 lazy load 降低峰值内存。
+- `CT * CT` 比 `CT * PT` 更重，参数密文体积也远大于 H5 或 plaintext ringt 参数；`convm_` 这类 structural masks 加密后同样会引入额外 relin/rescale 成本。Runner 侧应依赖 manifest 和 lazy load 降低峰值内存。
+- 仅打开 CMake GPU 编译开关不会自动切换运行时 backend；`./build/examples/inference` 需要显式传入 `--gpu` 才会使用 GPU Runner。
 - eval context 必须覆盖 MegaAG 中所有 relin、rotation/galois 和 bootstrapping key 需求。
 - 不要把每个 term 都改成“先 rescale 再累加”的通用写法，除非原 layer 的 `run_core` 本来就是这个轨迹；否则会改变 level/scale 语义。
 - `client_encrypted_input` 默认流程仍然保留，未显式指定 `--deployment-mode server_provisioned_runner` 时使用旧模式。

@@ -18,6 +18,7 @@
 
 #include "interface/inference_provisioner.h"
 
+#include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <iostream>
@@ -233,6 +234,11 @@ InferenceProvisioner::parse_parameter_argument(const std::string& arg_id, const 
         info.param_kind = "bias";
         return info;
     }
+    if (starts_with(source_id, "convm_")) {
+        info.layer_id = source_id.substr(std::string("convm_").size());
+        info.param_kind = "mask";
+        return info;
+    }
     if (starts_with(source_id, "densew_")) {
         info.layer_id = source_id.substr(std::string("densew_").size());
         info.param_kind = "weight";
@@ -292,6 +298,7 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
     const std::string layer_type = layer_cfg.at("type").get<std::string>();
     const bool is_weight = info.param_kind == "weight";
     const bool is_bias = info.param_kind == "bias";
+    const bool is_mask = info.param_kind == "mask";
 
     std::vector<fhe::CkksCiphertext> encrypted;
     encrypted.reserve(count);
@@ -386,12 +393,20 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                         const int in_idx = static_cast<int>((flat_idx / shape[2]) % shape[1]);
                         const int kernel_idx = static_cast<int>(flat_idx % shape[2]);
                         ringt = layer.generate_weight_pt_for_indices(context, out_idx, in_idx, kernel_idx);
-                    } else {
+                    } else if (is_bias) {
                         if (!is_bias || shape.size() != 1) {
                             throw std::runtime_error("[Provisioner] multiplexed conv bias signature must be rank 1: " +
                                                      arg_id);
                         }
                         ringt = layer.generate_bias_pt_for_index(context, static_cast<int>(flat_idx));
+                    } else if (is_mask) {
+                        if (shape.size() != 1) {
+                            throw std::runtime_error("[Provisioner] multiplexed conv mask signature must be rank 1: " +
+                                                     arg_id);
+                        }
+                        ringt = layer.generate_mask_pt_for_indices(context, static_cast<int>(flat_idx));
+                    } else {
+                        throw std::runtime_error("[Provisioner] unsupported multiplexed conv parameter: " + arg_id);
                     }
                 } else {
                     auto& layer = init.get_layer<MultiplexedConv2DPackedLayerDepthwise>(info.layer_id);
@@ -403,12 +418,25 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                         const int ct_idx = static_cast<int>(flat_idx / shape[1]);
                         const int kernel_idx = static_cast<int>(flat_idx % shape[1]);
                         ringt = layer.generate_weight_pt_for_indices(context, ct_idx, kernel_idx);
-                    } else {
+                    } else if (is_bias) {
                         if (!is_bias || shape.size() != 1) {
                             throw std::runtime_error(
                                 "[Provisioner] multiplexed depthwise conv bias signature must be rank 1: " + arg_id);
                         }
                         ringt = layer.generate_bias_pt_for_index(context, static_cast<int>(flat_idx));
+                    } else if (is_mask) {
+                        if (shape.size() != 1) {
+                            throw std::runtime_error(
+                                "[Provisioner] multiplexed depthwise conv mask signature must be rank 1: " + arg_id);
+                        }
+                        const int ct_idx =
+                            static_cast<int>(flat_idx / std::max<uint32_t>(1, layer.get_n_channel_per_ct()));
+                        const int local_idx =
+                            static_cast<int>(flat_idx % std::max<uint32_t>(1, layer.get_n_channel_per_ct()));
+                        ringt = layer.generate_mask_pt_for_indices(context, ct_idx, local_idx);
+                    } else {
+                        throw std::runtime_error("[Provisioner] unsupported multiplexed depthwise conv parameter: " +
+                                                 arg_id);
                     }
                 }
             } else {

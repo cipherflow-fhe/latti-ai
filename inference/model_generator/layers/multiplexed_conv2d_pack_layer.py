@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
     accumulate_encrypted_param_terms,
+    multiply_with_encrypted_param,
     require_no_plaintext_input_rotation,
 )
 from inference.model_generator.layers.fhe_op_utils import naf_weight
@@ -396,7 +397,7 @@ class MultiplexedConv2DPackedLayer:
         return weight_pt, bias_pt, mask_pt
 
     def make_param_ct_nodes(self, layer_id, level: int):
-        """Return encrypted weight/bias nodes plus plaintext structural masks."""
+        """Return encrypted weight/bias nodes plus encrypted structural masks."""
         import math as _math
 
         n_pack_in_channel = _math.ceil(self.n_in_channel / self.n_channel_per_ct)
@@ -417,11 +418,11 @@ class MultiplexedConv2DPackedLayer:
             bias_level -= 1
         bias_ct = [CkksCiphertextNode(f'convb_{layer_id}_{i}', level=bias_level) for i in range(n_bias)]
         if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
-            mask_pt = []
+            mask_ct = []
         else:
             n_mask = min(self.n_block_per_ct, self.n_out_channel)
-            mask_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_mask)]
-        return weight_ct, bias_ct, mask_pt
+            mask_ct = [CkksCiphertextNode(f'convm_{layer_id}_{i}', level=level - 1) for i in range(n_mask)]
+        return weight_ct, bias_ct, mask_ct
 
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mast_pt) -> list[CkksCiphertextNode]:
         # 1. block direction rotation
@@ -481,7 +482,7 @@ class MultiplexedConv2DPackedLayer:
                         - n_block % self.zero_inserted_skip[1]
                         + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
                     )
-                    c_m = mult(s, mast_pt[i])
+                    c_m = multiply_with_encrypted_param(s, mast_pt[i])
                     c_m = rescale(c_m)
                     result_ct.append(rotate_cols(c_m, [rot_step])[0])
 
@@ -568,7 +569,7 @@ class MultiplexedConv2DPackedLayer:
                         - n_block % self.zero_inserted_skip[1]
                         + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
                     )
-                    c_m = mult(s, mast_pt[i])
+                    c_m = multiply_with_encrypted_param(s, mast_pt[i])
                     c_m = rescale(c_m)
                     result_ct.append(rotate_cols(c_m, [rot_step])[0])
 
