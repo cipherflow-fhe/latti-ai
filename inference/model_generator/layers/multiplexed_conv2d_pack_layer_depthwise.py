@@ -23,7 +23,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
+    add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
+    materialize_encrypted_param,
     multiply_with_encrypted_param,
     require_no_plaintext_input_rotation,
 )
@@ -394,7 +396,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
                         result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
         if self.stride[0] == 1:
             for i in range(len(res)):
-                res[i] = add(res[i], bias_ct[i])
+                res[i] = add_encrypted_param_bias(res[i], bias_ct[i])
             return res
 
         for i in range(len(result_ct)):
@@ -403,7 +405,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
             if p == 0:
                 sp = c_m_s
                 btp_idx = int(np.floor(i / (self.stride[0] * self.stride[1] * self.n_channel_per_ct)))
-                sp = add(sp, bias_ct[btp_idx])
+                sp = add_encrypted_param_bias(sp, bias_ct[btp_idx])
             else:
                 sp = add(sp, c_m_s)
             if (i + 1) % (self.stride[0] * self.stride[1] * self.n_channel_per_ct) == 0 or i == len(result_ct) - 1:
@@ -420,6 +422,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
             for j in range(len(weight_ct[ct_idx])):
                 total_step = int(kernel_steps[j])
                 w = weight_ct[ct_idx][j]
+                w = materialize_encrypted_param(w, base_x)
                 if total_step != 0:
                     w = rotate_cols(w, [-total_step])[0]
                 term = mult(w, base_x)
@@ -462,12 +465,12 @@ class MultiplexedConv2DPackedLayerDepthwise:
                         steps.append(-rot_step)
                 for i in range(self.n_channel_per_ct):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
-                        c_m = mult(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
+                        c_m = multiply_with_encrypted_param(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
                         c_m = rescale(c_m)
                         result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
         if self.stride[0] == 1:
             for i in range(len(res)):
-                res[i] = add(res[i], bias_ct[i])
+                res[i] = add_encrypted_param_bias(res[i], bias_ct[i])
             return res
 
         for i in range(len(result_ct)):
@@ -476,7 +479,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
             if p == 0:
                 sp = c_m_s
                 btp_idx = int(np.floor(i / (self.stride[0] * self.stride[1] * self.n_channel_per_ct)))
-                sp = add(sp, bias_ct[btp_idx])
+                sp = add_encrypted_param_bias(sp, bias_ct[btp_idx])
             else:
                 sp = add(sp, c_m_s)
             if (i + 1) % (self.stride[0] * self.stride[1] * self.n_channel_per_ct) == 0 or i == len(result_ct) - 1:

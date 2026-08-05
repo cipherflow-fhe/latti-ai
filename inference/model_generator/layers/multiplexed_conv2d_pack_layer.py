@@ -23,7 +23,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
+    add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
+    materialize_encrypted_param,
     multiply_with_encrypted_param,
     require_no_plaintext_input_rotation,
 )
@@ -593,7 +595,7 @@ class MultiplexedConv2DPackedLayer:
             ) == 0 or i == len(result_ct) - 1:
                 res.append(sp)
         for i in range(len(res)):
-            res[i] = add(res[i], bias_ct[i])
+            res[i] = add_encrypted_param_bias(res[i], bias_ct[i])
         return res
 
     def call_param_ct_plaintext_input(self, x: list[DataNode], weight_ct, bias_ct, mast_pt) -> list[CkksCiphertextNode]:
@@ -610,6 +612,7 @@ class MultiplexedConv2DPackedLayer:
                 for k in range(len(weight_ct[ct_idx][j])):
                     total_step = int(block_step + kernel_steps[k])
                     w = weight_ct[ct_idx][j][k]
+                    w = materialize_encrypted_param(w, base_x)
                     if total_step != 0:
                         w = rotate_cols(w, [-total_step])[0]
                     term = mult(w, base_x)
@@ -653,7 +656,7 @@ class MultiplexedConv2DPackedLayer:
                         - n_block % self.zero_inserted_skip[1]
                         + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
                     )
-                    c_m = mult(s, mast_pt[i])
+                    c_m = multiply_with_encrypted_param(s, mast_pt[i])
                     c_m = rescale(c_m)
                     result_ct.append(rotate_cols(c_m, [rot_step])[0])
 
@@ -677,7 +680,7 @@ class MultiplexedConv2DPackedLayer:
             ) == 0 or i == len(result_ct) - 1:
                 res.append(sp)
         for i in range(len(res)):
-            res[i] = add(res[i], bias_ct[i])
+            res[i] = add_encrypted_param_bias(res[i], bias_ct[i])
         return res
 
     def make_pt_nodes_reduct_rot(self, layer_id):

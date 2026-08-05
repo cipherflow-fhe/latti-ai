@@ -20,6 +20,7 @@ from inference.lattisense.frontend.custom_task import (
     CkksPlaintextNode,
     CkksPlaintextRingtNode,
     add,
+    custom_compute,
     mult,
     mult_relin,
 )
@@ -33,12 +34,41 @@ def is_plaintext_input(node: ParamInputNode) -> bool:
     return isinstance(node, (CkksPlaintextNode, CkksPlaintextRingtNode, CkksPlaintextMulNode))
 
 
+def materialize_encrypted_param(param_ct: CkksCiphertextNode, trigger: ParamInputNode) -> CkksCiphertextNode:
+    store_node = getattr(param_ct, 'encrypted_parameter_store_node', None)
+    if store_node is None:
+        return param_ct
+    if getattr(param_ct, 'encrypted_parameter_materialized', False):
+        return param_ct
+
+    arg_id = getattr(param_ct, 'encrypted_parameter_arg_id')
+    flat_index = getattr(param_ct, 'encrypted_parameter_flat_index')
+    custom_compute(
+        inputs=[store_node],
+        output=param_ct,
+        type='load_encrypted_param_ct',
+        attributes={
+            'arg_id': arg_id,
+            'flat_index': flat_index,
+            'expected_level': param_ct.level,
+        },
+        wait_inputs=[trigger],
+    )
+    param_ct.encrypted_parameter_materialized = True
+    return param_ct
+
+
 def multiply_with_encrypted_param(x: ParamInputNode, weight_ct: CkksCiphertextNode) -> CkksCiphertextNode:
+    weight_ct = materialize_encrypted_param(weight_ct, x)
     if isinstance(x, CkksCiphertextNode):
         return mult_relin(x, weight_ct)
     if is_plaintext_input(x):
         return mult(weight_ct, x)
     raise ValueError(f'Unsupported encrypted parameter input node type: {type(x)!r}')
+
+
+def add_encrypted_param_bias(x: CkksCiphertextNode, bias_ct: CkksCiphertextNode) -> CkksCiphertextNode:
+    return add(x, materialize_encrypted_param(bias_ct, x))
 
 
 def accumulate_encrypted_param_terms(xs: list[ParamInputNode], weights: list[CkksCiphertextNode]) -> CkksCiphertextNode:

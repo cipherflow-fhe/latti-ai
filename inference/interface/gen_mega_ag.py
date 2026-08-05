@@ -58,6 +58,12 @@ def main():
         default=None,
         help='Override output directory for mega_ag.json/task_signature.json.',
     )
+    parser.add_argument(
+        '--parameter-loading-mode',
+        choices=['eager', 'runtime_lazy'],
+        default=None,
+        help='Encrypted parameter loading mode for server_provisioned_runner. Defaults to task_config or eager.',
+    )
     args = parser.parse_args()
 
     task_dir = os.path.abspath(args.task_dir)
@@ -111,6 +117,7 @@ def main():
     server_config_path = os.path.join(task_dir, 'server', 'task_config.json')
     with open(server_config_path, 'r', encoding='utf-8') as f:
         server_config = json.load(f)
+    parameter_loading_mode = args.parameter_loading_mode or server_config.get('parameter_loading_mode', 'eager')
 
     for erg_name, erg_config in server_config['server_task'].items():
         if erg_config['enable_fpga']:
@@ -131,6 +138,7 @@ def main():
                         'deployment_mode': 'server_provisioned_runner',
                         'input_mode': 'plaintext',
                         'parameter_mode': 'encrypted_offline',
+                        'parameter_loading_mode': parameter_loading_mode,
                         'decryptor': 'provisioner',
                         'deployment_role': 'runner',
                     }
@@ -144,6 +152,8 @@ def main():
                     style=style,
                     lazy=False,
                     parameter_mode='encrypted_offline',
+                    deployment_mode='server_provisioned_runner',
+                    parameter_loading_mode=parameter_loading_mode,
                     input_mode='plaintext',
                     output_dir=output_dir,
                 )

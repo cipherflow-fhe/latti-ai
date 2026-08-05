@@ -72,5 +72,6 @@ private:
                                   const std::vector<fhe::CkksCiphertext>& values,
                                   json& manifest,
                                   const json& sig,
-                                  const ParameterArgumentInfo& info) const;
+                                  const ParameterArgumentInfo& info,
+                                  bool write_element_index = false) const;
 };

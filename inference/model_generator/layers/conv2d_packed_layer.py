@@ -22,7 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
+    add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
+    materialize_encrypted_param,
     require_no_plaintext_input_rotation,
 )
 from inference.model_generator.layers.fhe_op_utils import naf_weight
@@ -316,7 +318,7 @@ class Conv2DPackedLayer:
                         w_terms.append(weight_ct[packed_out_channel_idx][in_channel_idx][index])
             partial_sum = accumulate_encrypted_param_terms(x_terms, w_terms)
             partial_sum = rescale(partial_sum)
-            result.append(add(partial_sum, bias_ct[packed_out_channel_idx]))
+            result.append(add_encrypted_param_bias(partial_sum, bias_ct[packed_out_channel_idx]))
         return result
 
     def call_param_ct_plaintext_input(self, x: list[DataNode], weight_ct, bias_ct):
@@ -332,6 +334,7 @@ class Conv2DPackedLayer:
                 for index in range(self.kernel_shape[0] * self.kernel_shape[1]):
                     total_step = int(pack_step + kernel_steps[index])
                     w = weight_ct[packed_out_channel_idx][in_channel_idx][index]
+                    w = materialize_encrypted_param(w, base_x)
                     if total_step != 0:
                         w = rotate_cols(w, [-total_step])[0]
                     term = mult(w, base_x)
@@ -341,5 +344,5 @@ class Conv2DPackedLayer:
             if partial_sum is None:
                 raise ValueError('Encrypted conv accumulation produced no terms')
             partial_sum = rescale(partial_sum)
-            result.append(add(partial_sum, bias_ct[packed_out_channel_idx]))
+            result.append(add_encrypted_param_bias(partial_sum, bias_ct[packed_out_channel_idx]))
         return result

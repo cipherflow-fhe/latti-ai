@@ -22,6 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.encrypted_param_ops import materialize_encrypted_param
 
 
 class PolyReluBase:
@@ -473,7 +474,10 @@ class PolyReluBase:
 
     def call_bsgs_param_ct(self, x: list, weight_ct):
         """BSGS with encrypted offline polynomial coefficients."""
-        return self._run_bsgs_core_param_ct(x, lambda idx, x_idx: weight_ct[idx][x_idx])
+        return self._run_bsgs_core_param_ct(
+            x,
+            lambda idx, x_idx: materialize_encrypted_param(weight_ct[idx][x_idx], x[x_idx]),
+        )
 
     def make_pt_nodes(self, layer_id, n_pack_in_channel):
         """Return weight_pt placeholder list with shape [order+1][n_pack_in_channel]."""

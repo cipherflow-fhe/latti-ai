@@ -54,6 +54,38 @@ std::vector<json> online_args_with_phase(const json& signature, const std::strin
     return result;
 }
 
+ExecutorFunc create_load_encrypted_param_executor() {
+    return [](ExecutionContext&, const std::unordered_map<NodeIndex, std::any>& inputs, std::any& output,
+              const ComputeNode& self) -> void {
+        if (!self.custom_prop.has_value()) {
+            throw std::runtime_error("[Runner] load_encrypted_param_ct missing custom properties");
+        }
+        if (self.input_nodes.empty()) {
+            throw std::runtime_error("[Runner] load_encrypted_param_ct missing parameter store input");
+        }
+
+        const auto& attrs = self.custom_prop->attributes;
+        const std::string arg_id = attrs.at("arg_id").get<std::string>();
+        const uint64_t flat_index = attrs.at("flat_index").get<uint64_t>();
+        const int expected_level = attrs.value("expected_level", -1);
+
+        const NodeIndex store_node_idx = self.input_nodes[0]->index;
+        auto store_data = std::any_cast<std::shared_ptr<fhe::CustomData>>(inputs.at(store_node_idx));
+        auto* store = store_data->get_typed_data<EncryptedParameterStore>();
+        if (store == nullptr) {
+            throw std::runtime_error("[Runner] encrypted parameter store is null");
+        }
+
+        auto value = store->load_element(arg_id, flat_index);
+        if (expected_level >= 0 && value->get_level() != expected_level) {
+            throw std::runtime_error("[Runner] encrypted parameter level mismatch for " + arg_id + "[" +
+                                     std::to_string(flat_index) + "]: expected " + std::to_string(expected_level) +
+                                     ", got " + std::to_string(value->get_level()));
+        }
+        output = value;
+    };
+}
+
 }  // namespace
 
 InferenceRunner::InferenceRunner(const std::string& runner_dir, bool use_gpu, int gpu_device)
@@ -421,8 +453,11 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
 
     std::vector<lattisense::CxxVectorArgument> cxx_args;
     std::vector<std::vector<fhe::CkksPlaintextRingt>> online_inputs;
+    std::vector<fhe::CustomData> lazy_parameter_store_arg;
     std::vector<std::unique_ptr<FeatureEncrypted>> output_features;
     std::vector<std::string> output_names;
+    const bool runtime_lazy_parameters =
+        task_config_.value("parameter_loading_mode", std::string("eager")) == "runtime_lazy";
 
     auto input_sigs = online_args_with_phase(task_signature_, "in");
     auto output_sigs = online_args_with_phase(task_signature_, "out");
@@ -453,13 +488,18 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
         cxx_args.push_back(lattisense::CxxVectorArgument{id, &online_inputs.back()});
     }
 
-    for (const auto& sig : task_signature_.at("offline")) {
-        const std::string id = sig.at("id").get<std::string>();
-        if (sig.at("type").get<std::string>() != "ct") {
-            throw std::runtime_error("[Runner] only offline ciphertext parameters are supported: " + id);
+    if (runtime_lazy_parameters) {
+        lazy_parameter_store_arg.emplace_back(static_cast<void*>(parameter_store_.get()));
+        cxx_args.push_back(lattisense::CxxVectorArgument{"encrypted_parameter_store", &lazy_parameter_store_arg});
+    } else {
+        for (const auto& sig : task_signature_.at("offline")) {
+            const std::string id = sig.at("id").get<std::string>();
+            if (sig.at("type").get<std::string>() != "ct") {
+                throw std::runtime_error("[Runner] only offline ciphertext parameters are supported: " + id);
+            }
+            auto& values = parameter_store_->load_argument(id);
+            cxx_args.push_back(lattisense::CxxVectorArgument{id, &values});
         }
-        auto& values = parameter_store_->load_argument(id);
-        cxx_args.push_back(lattisense::CxxVectorArgument{id, &values});
     }
 
     for (const auto& sig : output_sigs) {
@@ -528,12 +568,18 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
     if (use_gpu_) {
 #ifdef INFERENCE_SDK_ENABLE_GPU
         lattisense::FheTaskGpu task(runner_dir_.string());
+        if (runtime_lazy_parameters) {
+            task.bind_custom_executors({{"load_encrypted_param_ct", create_load_encrypted_param_executor()}});
+        }
         task.run(eval_context_.get(), cxx_args, progress_cb, gpu_device_);
 #else
         throw std::runtime_error("[Runner] GPU support is disabled. Reconfigure with -DINFERENCE_SDK_ENABLE_GPU=ON.");
 #endif
     } else {
         lattisense::FheTaskCpu task(runner_dir_.string());
+        if (runtime_lazy_parameters) {
+            task.bind_custom_executors({{"load_encrypted_param_ct", create_load_encrypted_param_executor()}});
+        }
         task.run(eval_context_.get(), cxx_args, progress_cb);
     }
 
