@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
+    add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
     require_no_plaintext_input_rotation,
 )
@@ -363,7 +364,7 @@ class DensePackedLayer:
             if total is None:
                 raise ValueError('Encrypted dense accumulation produced no terms')
             total = rescale(total)
-            result.append(add(total, bias_ct[out_idx]))
+            result.append(add_encrypted_param_bias(total, bias_ct[out_idx]))
         return result
 
     def call_skip_0d_custom_compute(self, x: list[CkksCiphertextNode], dense_data_source, skip_0d: int):
@@ -533,7 +534,7 @@ class DensePackedLayer:
 
             s = accumulate_encrypted_param_terms(x_terms, w_terms)
             s = rescale(s)
-            s = add(s, bias_ct[packed_out_feature_idx])
+            s = add_encrypted_param_bias(s, bias_ct[packed_out_feature_idx])
             n_fold = block_size
             while n_fold > 1:
                 rotated = rotate_cols(s, n_fold // 2)
@@ -688,7 +689,7 @@ class DensePackedLayer:
 
             s = accumulate_encrypted_param_terms(x_terms, w_terms)
             s = rescale(s)
-            s = add(s, bias_ct[out_group])
+            s = add_encrypted_param_bias(s, bias_ct[out_group])
 
             n_fold = block_size
             while n_fold > 1:

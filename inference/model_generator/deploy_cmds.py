@@ -107,6 +107,7 @@ _FHE_PARAMS = {
 
 INPUT_MODES = {'ciphertext', 'plaintext'}
 PARAMETER_MODES = {'plaintext_lazy', 'plaintext_eager', 'encrypted_offline'}
+PARAMETER_LOADING_MODES = {'eager', 'runtime_lazy'}
 
 
 def set_param(param_name):
@@ -116,7 +117,7 @@ def set_param(param_name):
     if param_name == 'N16QP1546H192H32':
         param = CkksBtpParam.create_default_param()
     else:
-        param = Param.create_ckks_custom_param(
+        param = CkksParam.create_custom_param(
             n=fhe.poly_modulus_degree,
             q=fhe.q,
             p=fhe.p,
@@ -134,6 +135,8 @@ def gen_custom_task(
     parameter_mode=None,
     input_mode='ciphertext',
     output_dir=None,
+    deployment_mode=None,
+    parameter_loading_mode=None,
 ):
     if parameter_mode is None:
         parameter_mode = 'plaintext_lazy' if lazy else 'plaintext_eager'
@@ -145,11 +148,21 @@ def gen_custom_task(
         lazy = True
     elif parameter_mode in {'plaintext_eager', 'encrypted_offline'}:
         lazy = False
-    output_dir = task_path if output_dir is None else output_dir
-
     n = _FHE_PARAMS[param_name].poly_modulus_degree
     set_param(param_name)
     task_config_info = read_config(os.path.join(task_path, 'task_config.json'))
+    deployment_mode = deployment_mode or task_config_info.get('deployment_mode', 'client_encrypted_input')
+    if parameter_loading_mode is None:
+        parameter_loading_mode = task_config_info.get('parameter_loading_mode', 'eager')
+    if parameter_loading_mode not in PARAMETER_LOADING_MODES:
+        raise ValueError(
+            f'Unsupported parameter_loading_mode: {parameter_loading_mode!r}. '
+            f'Expected one of {sorted(PARAMETER_LOADING_MODES)}'
+        )
+    runtime_lazy_parameters = parameter_mode == 'encrypted_offline' and parameter_loading_mode == 'runtime_lazy'
+    if runtime_lazy_parameters and deployment_mode != 'server_provisioned_runner':
+        raise ValueError('parameter_loading_mode="runtime_lazy" is only supported for server_provisioned_runner')
+    output_dir = task_path if output_dir is None else output_dir
     try:
         block_shape = task_config_info['block_shape']
     except Exception:
@@ -257,6 +270,12 @@ def gen_custom_task(
 
     encrypted_parameter_arg_counts = {}
     encrypted_parameter_effective_ids = set()
+    encrypted_parameter_signature = []
+    encrypted_parameter_store_node = (
+        CustomDataNode(type='encrypted_parameter_store', id='encrypted_parameter_store')
+        if runtime_lazy_parameters
+        else None
+    )
 
     def _flatten_nodes(nodes):
         if isinstance(nodes, list):
@@ -266,11 +285,30 @@ def gen_custom_task(
             return result
         return [nodes]
 
+    def _shape(nodes):
+        if not isinstance(nodes, list):
+            return []
+        sub_shape = _shape(nodes[0]) if nodes else []
+        return [len(nodes)] + sub_shape
+
     def _argument_level(nodes):
         for node in _flatten_nodes(nodes):
             if hasattr(node, 'level'):
                 return int(node.level)
         return None
+
+    def _parameter_signature(effective_id, source_id, nodes):
+        flat_nodes = _flatten_nodes(nodes)
+        if not flat_nodes:
+            raise ValueError(f'No encrypted parameter nodes for {effective_id}')
+        first = flat_nodes[0]
+        return {
+            'id': effective_id,
+            'source_id': source_id,
+            'type': first.type.value if isinstance(first.type, DataType) else first.type,
+            'size': _shape(nodes),
+            'level': first.level,
+        }
 
     def _append_parameter_arg(arg_id, nodes):
         if parameter_mode == 'encrypted_offline':
@@ -287,7 +325,16 @@ def gen_custom_task(
                     extra += 1
             encrypted_parameter_effective_ids.add(effective_id)
             arg = Argument(effective_id, nodes)
-            offline_input_args.append(arg)
+            if runtime_lazy_parameters:
+                if encrypted_parameter_store_node is None:
+                    raise ValueError('runtime_lazy parameter store node was not initialized')
+                encrypted_parameter_signature.append(_parameter_signature(effective_id, arg_id, nodes))
+                for flat_index, node in enumerate(_flatten_nodes(nodes)):
+                    node.encrypted_parameter_store_node = encrypted_parameter_store_node
+                    node.encrypted_parameter_arg_id = effective_id
+                    node.encrypted_parameter_flat_index = flat_index
+            else:
+                offline_input_args.append(arg)
         else:
             arg = Argument(arg_id, nodes)
             input_args.append(arg)
@@ -929,6 +976,8 @@ def gen_custom_task(
                     weight_ct = polyrelu.make_param_ct_nodes(
                         layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].level
                     )
+                    for i in range(len(weight_ct)):
+                        _append_parameter_arg(f'poly_reluw_{layer_id}_{i}', weight_ct[i])
                     layer_output_nodes = polyrelu.call_bsgs_param_ct(feature_id_in_nodes, weight_ct)
                 else:
                     weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
@@ -950,6 +999,8 @@ def gen_custom_task(
                         weight_ct = polyrelu.make_param_ct_nodes(
                             layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].level
                         )
+                        for i in range(len(weight_ct)):
+                            _append_parameter_arg(f'poly_reluw_{layer_id}_{i}', weight_ct[i])
                         layer_output_nodes = polyrelu.call_bsgs_param_ct(feature_id_in_nodes, weight_ct)
                     else:
                         weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
@@ -965,6 +1016,8 @@ def gen_custom_task(
                         weight_ct = polyrelu.make_param_ct_nodes(
                             layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].level
                         )
+                        for i in range(len(weight_ct)):
+                            _append_parameter_arg(f'poly_reluw_{layer_id}_{i}', weight_ct[i])
                         layer_output_nodes = polyrelu.call_bsgs_param_ct(feature_id_in_nodes, weight_ct)
                     else:
                         weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
@@ -983,19 +1036,17 @@ def gen_custom_task(
                     weight_ct = polyrelu.make_param_ct_nodes(
                         layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].level
                     )
+                    for i in range(len(weight_ct)):
+                        _append_parameter_arg(f'poly_reluw_{layer_id}_{i}', weight_ct[i])
                     layer_output_nodes = polyrelu.call_bsgs_param_ct(feature_id_in_nodes, weight_ct)
                 else:
                     weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
                     layer_output_nodes = polyrelu.call_bsgs_feature2d(feature_id_in_nodes, weight_pt)
 
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-            if not lazy:
-                if parameter_mode == 'encrypted_offline':
-                    for i in range(len(weight_ct)):
-                        _append_parameter_arg(f'poly_reluw_{layer_id}_{i}', weight_ct[i])
-                else:
-                    for i in range(len(weight_pt)):
-                        input_args.append(Argument(f'poly_reluw_{layer_id}_{i}', weight_pt[i]))
+            if not lazy and parameter_mode != 'encrypted_offline':
+                for i in range(len(weight_pt)):
+                    input_args.append(Argument(f'poly_reluw_{layer_id}_{i}', weight_pt[i]))
 
         elif layer_config['type'] == 'conv1d':
             if parameter_mode == 'encrypted_offline':
@@ -1113,9 +1164,9 @@ def gen_custom_task(
                 input_args.append(Argument(f'{layer_id}', [conv_data_source]))
             elif parameter_mode == 'encrypted_offline':
                 weight_ct = mult_scalar_layer.make_param_ct_nodes(layer_id, len(input_nodes), level)
+                _append_parameter_arg(f'mult_scalar_{layer_id}', weight_ct)
                 layer_output_nodes = mult_scalar_layer.call_param_ct(input_nodes, weight_ct)
                 feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-                _append_parameter_arg(f'mult_scalar_{layer_id}', weight_ct)
             else:
                 pt = mult_scalar_layer.make_pt_nodes(layer_id, len(input_nodes))
                 layer_output_nodes = mult_scalar_layer.call(input_nodes, pt)
@@ -1975,6 +2026,8 @@ def gen_custom_task(
             raise ValueError(f'Unsupported layer type: {layer_config["type"]}')
 
     output_args = [Argument(output_id, feature_id_to_nodes_map[output_id]) for output_id in task_output_feature_ids]
+    if runtime_lazy_parameters and encrypted_parameter_signature:
+        offline_input_args.append(Argument('encrypted_parameter_store', [encrypted_parameter_store_node]))
 
     process_custom_task(
         input_args=input_args,
@@ -1982,6 +2035,9 @@ def gen_custom_task(
         offline_input_args=offline_input_args,
         output_instruction_path=output_dir,
         fpga_acc=False,
+        extra_signature_fields=(
+            {'encrypted_parameters': encrypted_parameter_signature} if runtime_lazy_parameters else None
+        ),
     )
 
 
@@ -2013,6 +2069,12 @@ if __name__ == '__main__':
         default=None,
         help='Directory for mega_ag.json and task_signature.json. Defaults to task_path.',
     )
+    parser.add_argument(
+        '--parameter-loading-mode',
+        choices=sorted(PARAMETER_LOADING_MODES),
+        default=None,
+        help='Encrypted offline parameter loading mode. runtime_lazy is only valid for server_provisioned_runner.',
+    )
     args = parser.parse_args()
 
     task_path = args.task_path
@@ -2028,4 +2090,5 @@ if __name__ == '__main__':
                 parameter_mode=args.parameter_mode,
                 input_mode=args.input_mode,
                 output_dir=args.output_dir,
+                parameter_loading_mode=args.parameter_loading_mode,
             )

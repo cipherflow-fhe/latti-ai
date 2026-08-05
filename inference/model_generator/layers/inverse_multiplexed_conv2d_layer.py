@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
+    add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
     require_no_plaintext_input_rotation,
 )
@@ -689,7 +690,7 @@ class InverseMultiplexedConv2DLayer:
                             w_terms.append(weight_ct[ct_idx][j][k + base_idx])
                     s = accumulate_encrypted_param_terms(x_terms, w_terms)
                     s = rescale(s)
-                    s = add(s, bias_ct[ct_idx])
+                    s = add_encrypted_param_bias(s, bias_ct[ct_idx])
                     if ct_idx == 0 and r_i2 == 0 and r_j2 == 0:
                         used = self.get_used_input_indices()
                         total = self.n_in_channel * stride0 * stride1 * output_step0 * output_step1

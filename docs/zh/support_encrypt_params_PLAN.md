@@ -1,8 +1,8 @@
 # Server-Provisioned Encrypted-Parameter Runner Mode Plan
 
-> 状态：Phase 1-4 已完成。Phase 4 按当前要求仅新增中文文档
-> `docs/zh/server_provisioned_runner.md`，未更新 README。本文档后续仅保留背景、设计决策、
-> 风险与验收清单，不再包含新的待执行 Phase。
+> 状态：Phase 1-5 已完成。Phase 4 已补齐 `server_provisioned_runner` 下的
+> runtime lazy encrypted parameter loading；原 Phase 4 文档/API 收尾调整为 Phase 5。
+> 本文档后续仅保留背景、设计决策、风险与验收清单，不再包含新的待执行 Phase。
 
 ## 1. 背景与目标
 
@@ -40,9 +40,17 @@
   "deployment_mode": "server_provisioned_runner",
   "input_mode": "plaintext",
   "parameter_mode": "encrypted_offline",
+  "parameter_loading_mode": "runtime_lazy",
   "decryptor": "provisioner"
 }
 ```
+
+`parameter_loading_mode` 可选值：
+
+- `eager`：默认值。Runner 启动计算前按 signature 的 `offline` 参数列表整包反序列化参数密文，保持 Phase 1-3 的行为。
+- `runtime_lazy`：仅在 `deployment_mode=server_provisioned_runner` 下生效。Runner signature 的 `offline`
+  只保留 `encrypted_parameter_store` 句柄，真实参数列表写入 `encrypted_parameters`；MegaAG 在参数 use-site
+  插入 `load_encrypted_param_ct`，运行到对应位置时才按元素反序列化所需密文。
 
 默认模式保持当前行为，可显式表示为：
 
@@ -131,10 +139,20 @@ python training/run_compile.py \
 ```bash
 python inference/interface/gen_mega_ag.py \
   --task-dir ./runs/cifar10/task \
-  --deployment-mode server_provisioned_runner
+  --deployment-mode server_provisioned_runner \
+  --parameter-loading-mode runtime_lazy
 ```
 
 输出写入 `task/runner/mega_ag.json` 和 `task/runner/task_signature.json`，不要覆盖 `task/server/mega_ag.json`。
+
+`--parameter-loading-mode` 默认是 `eager`，也可以从 `task/server/task_config.json` 的
+`parameter_loading_mode` 读取。两种模式的图和签名差异：
+
+- `eager`：每个加密参数仍是 `task_signature.offline` 中的独立 `ct` 参数，Runner 在执行前调用
+  `EncryptedParameterStore::load_argument()` 反序列化整个参数向量。
+- `runtime_lazy`：`task_signature.offline` 只包含一个 `encrypted_parameter_store` 自定义参数；
+  原有参数签名写入 `task_signature.encrypted_parameters`。生成器在每个参数真正参与计算的位置插入
+  `load_encrypted_param_ct` 节点，节点属性记录 `arg_id`、`flat_index` 和 `expected_level`。
 
 ### 4.3 Provisioner 离线加密参数
 
@@ -153,7 +171,9 @@ python inference/interface/gen_mega_ag.py \
 - 读取 `task/server/model_parameters.h5`。
 - 对每个参数层调用 C++ layer 的 `generate_*_pt` / packing 逻辑生成 encoded plaintext。
 - 按 MegaAG use-site 的目标 level 物化 encoded plaintext，并加密为 `CkksCiphertext`。
-- 根据 manifest 写入 `encrypted_model_parameters/`。
+- 根据 manifest 写入 `encrypted_model_parameters/`。`eager` 产物保持 v1 manifest；`runtime_lazy` 写出
+  `latti-ai.encrypted-parameter-store.v2`，在每个 argument 下记录元素级 `offset` / `length`，支持按
+  `arg_id + flat_index` 随机读取单个密文。
 
 ### 4.4 Runner 现场执行
 
@@ -170,9 +190,14 @@ Runner 行为：
 - 加载 `runner/eval_context.bin`。
 - 读取明文 CSV 输入。
 - 按 task input 的 packing/scale/level 编码为 plaintext。
-- 按 MegaAG 和 manifest 按需加载参数密文。
+- `eager` 模式在 run 前加载完整 offline 参数；`runtime_lazy` 模式只传入 `encrypted_parameter_store`，
+  并在计算图执行到 `load_encrypted_param_ct` 时按需加载 `arg_id[flat_index]`。
 - 执行 FHE 计算。
 - 序列化密文输出。
+
+CPU 和 GPU Runner 都支持 `runtime_lazy`。两条路径绑定同一个 `load_encrypted_param_ct` custom executor；
+GPU 模式下 use-site trigger 通过 `wait_inputs` 表达为调度依赖，不作为 executor 输入传入，避免为了触发加载而把
+GPU activation 做 D2H 拷贝。
 
 ### 4.5 Server 解密结果
 
@@ -258,6 +283,7 @@ Decryptor 使用 server secret key 解密 Runner 结果，并输出分类 logits
 
 ```bash
 --deployment-mode client_encrypted_input|server_provisioned_runner
+--parameter-loading-mode eager|runtime_lazy
 ```
 
 当前默认仍调用：
@@ -275,8 +301,12 @@ gen_custom_task(
     lazy=False,
     parameter_mode="encrypted_offline",
     input_mode="plaintext",
+    parameter_loading_mode="runtime_lazy",
 )
 ```
+
+`runtime_lazy` 必须和 `deployment_mode="server_provisioned_runner"` 组合使用；标准
+`client_encrypted_input` 模式继续默认 `eager`，不插入参数加载 custom node。
 
 ### 6.2 `inference/model_generator/deploy_cmds.py`
 
@@ -290,15 +320,22 @@ gen_custom_task(
   - `ciphertext`
   - `plaintext`
 - `output_dir`
+- `parameter_loading_mode`
+  - `eager`
+  - `runtime_lazy`
 
 新模式中：
 
 - graph input feature 不创建 `CkksCiphertextNode`，而是创建适合乘法的 plaintext/ringt node。
 - 参数不创建 `CustomDataNode(type='*_data_source')`。
-- 参数按 use-site 创建 `CkksCiphertextNode`，并加入 `offline_input_args`；同一逻辑 pt 如在不同 level 使用，
-  需要拆成不同 offline arg。
+- `eager` 下参数按 use-site 创建 `CkksCiphertextNode`，并加入 `offline_input_args`；同一逻辑 pt 如在不同
+  level 使用，需要拆成不同 offline arg。
+- `runtime_lazy` 下参数仍按 use-site 创建 `CkksCiphertextNode`，但 `offline_input_args` 只加入
+  `encrypted_parameter_store`；参数节点挂载 store metadata，并在第一次 use-site 前通过
+  `load_encrypted_param_ct` materialize。
 - output 仍创建 `CkksCiphertextNode`。
-- `process_custom_task` 必须写出完整 online + offline signature。
+- `process_custom_task` 必须写出完整 online + offline signature；`runtime_lazy` 额外写出
+  `encrypted_parameters` 供 Provisioner 生成 manifest。
 
 ### 6.3 task signature 修正
 
@@ -462,6 +499,7 @@ class EncryptedParameterStore {
 public:
     explicit EncryptedParameterStore(std::filesystem::path root);
     const std::vector<CkksCiphertext>& load_argument(const std::string& arg_id);
+    std::shared_ptr<CkksCiphertext> load_element(const std::string& arg_id, uint64_t flat_index);
     bool has_argument(const std::string& arg_id) const;
 };
 ```
@@ -469,11 +507,15 @@ public:
 职责：
 
 - 读取 manifest。
-- 按 `CxxVectorArgument` 需要的 arg id 懒加载 ciphertext。
-- 缓存已加载参数，避免每次重复反序列化。
+- `load_argument()` 保持 `eager` 兼容：按 `CxxVectorArgument` 需要的 arg id 懒加载整个 ciphertext vector。
+- `load_element()` 支持 `runtime_lazy`：按 manifest v2 中的元素级 byte range 只读取并反序列化
+  `arg_id[flat_index]`。
+- 分别缓存已加载的完整参数和单个元素，避免重复反序列化。
 - 校验 ciphertext level/size 与 `task_signature.json` 一致。
 - 支持多个 offline arg 指向同一 source parameter 的不同 level 实例；cache key 使用 offline arg id，
   manifest 可额外提供 source 去重信息。
+  如果 manifest 没有元素级 `elements` 字段，`load_element()` 回退到 `load_argument()`，保证旧 v1/eager
+  bundle 仍可读取。
 
 ### 8.3 InferenceRunner
 
@@ -494,7 +536,10 @@ public:
 
 - 加载 runner config、`mega_ag.json`、`task_signature.json`、`eval_context.bin`。
 - 将 CSV 明文输入编码为 plaintext/ringt argument。
-- 从 `EncryptedParameterStore` 获取 offline ciphertext parameter arguments。
+- `eager` 下从 `EncryptedParameterStore` 获取 offline ciphertext parameter arguments。
+- `runtime_lazy` 下只把 `encrypted_parameter_store` 作为 offline custom data 传给 MegaAG，并为
+  `load_encrypted_param_ct` 绑定 custom executor；executor 运行时读取节点属性中的 `arg_id` 和
+  `flat_index`，调用 `EncryptedParameterStore::load_element()`。
 - 创建 ciphertext output buffer。
 - 调用 `FheTaskCpu/FheTaskGpu::run`。
 - 返回序列化 ciphertext output。
@@ -533,12 +578,28 @@ public:
 - Python generator 生成 offline parameter args。
 - C++ signature check 正确合并 online/offline/output。
 - Runner 运行时在传参顺序上与 signature 保持一致。
+- `runtime_lazy` 下 `offline_input_args` 只包含 `encrypted_parameter_store`，真实参数签名改由
+  `encrypted_parameters` 承载，避免 Runner 在 run 前构造所有参数密文 vector。
 
 ### 9.3 CT*CT 的 key 要求
 
 新模式中后续参数层会产生 `relin`，因此 eval context 必须包含足够 level 的 relin key。
 
 卷积、packing 和 bootstrapping 仍需要 rotation/galois keys。Provisioner 导出的 eval context 要覆盖 MegaAG 中所有 key signature。
+
+### 9.4 wait-only dependencies
+
+`runtime_lazy` 的加载节点需要等到对应 use-site 的 activation 已经就绪，才能保证“计算到这里才加载”。但这个
+activation 不能作为 `load_encrypted_param_ct` 的普通输入传入 custom executor，否则 GPU Runner 会为了调用
+CPU custom executor 把 activation 从 device 拉回 host。
+
+因此 frontend/MegaAG 增加了 `wait_inputs`：
+
+- `wait_inputs` 只参与 ready 计数和调度顺序，不进入 executor 的 input list。
+- MegaAG 内部用 `wait_nodes` 和 `wait_successors` 单独维护调度依赖。
+- backend ABI bridge、CPU/GPU wrapper 和 custom executor 参数布局仍只看到真实 `inputs`。
+- `load_encrypted_param_ct` 的真实输入只有 `encrypted_parameter_store`；activation 只是 wait-only trigger，
+  这让 CPU/GPU 都能在 use-site 前加载参数，同时避免 GPU activation 的额外 D2H。
 
 ## 10. 测试计划
 
@@ -639,11 +700,32 @@ public:
 - CIFAR10 ResNet-20 新模式端到端输出可解密。
 - 与明文参考误差可接受。
 
-### Phase 4: Documentation and public API polish（已完成）
+### Phase 4: Runtime lazy encrypted parameter loading（已完成）
+
+- 新增 `parameter_loading_mode=runtime_lazy`，仅在 `deployment_mode=server_provisioned_runner` 下生效。
+- `task_signature.offline` 从完整参数列表缩减为 `encrypted_parameter_store`，真实参数签名写入
+  `task_signature.encrypted_parameters`。
+- 在参数 use-site 插入 `load_encrypted_param_ct` custom node，按 `arg_id + flat_index` 加载单个密文元素。
+- 为 custom compute 增加 `wait_inputs`，把 activation readiness 表达为调度依赖，而不是 executor 输入。
+- `EncryptedParameterStore` 增加 `load_element()`；runtime lazy bundle 使用 manifest v2 记录每个元素的
+  `offset` / `length`，支持随机读取和元素级缓存。
+- Runner 在 CPU/GPU 路径都绑定 `load_encrypted_param_ct` executor；`eager` 仍为默认值，旧
+  `client_encrypted_input` 和 `server_provisioned_runner` eager 行为不变。
+
+验收标准：
+
+- Runner 启动计算前不再一次性反序列化所有参数密文。
+- 参数密文只在计算图执行到对应 use-site 前通过 `load_encrypted_param_ct` 加载。
+- GPU runtime lazy 不为触发加载而把 activation 作为 custom executor 输入传回 CPU。
+- CPU 和 GPU runner 在同一 encrypted parameter bundle 上均可执行并由 server/provisioner 解密结果。
+
+### Phase 5: Documentation and public API polish（已完成）
 
 - 已新增中文文档：`docs/zh/server_provisioned_runner.md`。
 - 已给出 server provision、runner execute、server decrypt 的 quick start。
 - 已标明新模式安全边界：Runner 看得到输入明文，但没有 secret key 和明文模型参数。
+- 已说明 `parameter_loading_mode=runtime_lazy` 在 compile、MegaAG 生成、Provisioner、Runner 和 Decryptor
+  链路中的使用方式。
 - README 暂未更新，符合当前“只新增中文文档”的要求。
 
 ## 12. 关键风险与决策
@@ -663,6 +745,8 @@ level/scale 轨迹：参数密文按每个 use-site 的 target level 生成，CT
 ### 12.3 参数密文体积风险
 
 把所有 encoded parameters 加密后，体积会远大于 H5 和 plaintext ringt 参数。需要 shard + manifest，并支持 lazy load。
+`runtime_lazy` 可以降低 Runner 峰值内存和启动反序列化成本，但不会减少 bundle 总体积，也不会降低最终被实际用到
+的参数密文反序列化总量。
 
 ### 12.4 命名风险
 
@@ -683,4 +767,59 @@ v1 已将 CIFAR10 runner signature 中的 `convm_` masks 纳入 offline cipherte
 5. server 可解密 ciphertext 并得到与明文参考接近的 logits。
 6. 现有 quick start 和旧 API 默认行为不变。
 
-至此 PLAN.md 中的 Phase 1-4 均已落地；本文档不再包含新的待执行 Phase。
+至此 PLAN.md 中的 Phase 1-5 均已落地；本文档不再包含新的待执行 Phase。
+
+## 14. GPU runtime_lazy debug 记录
+
+本次在 CIFAR10 `server_provisioned_runner` + `parameter_loading_mode=runtime_lazy` + `--gpu` 链路中，
+Runner 启动后立刻出现：
+
+```text
+[Runner] Running server_provisioned_runner task...
+Segmentation fault
+```
+
+`gdb --batch -ex run -ex bt --args ... --gpu` 定位到崩溃发生在
+`MegaAG::insert_backend_abi_bridge_nodes()`。这说明问题不是 GPU FHE kernel 计算失败，而是 GPU backend
+加载 MegaAG 时做 ABI bridge 图改写失败。
+
+直接原因：
+
+- GPU bridge 里对非 input data node 有一个隐含假设：只要不是 input，就必须至少有一个 producer，因此直接访问
+  `data_node.predecessors[0]`。
+- runtime lazy CIFAR10 图中存在一批参数密文 data node 被普通 FHE compute 消费，但既不是 `inputs` /
+  `offline_inputs`，也没有 `load_encrypted_param_ct` producer。
+- 这些节点主要来自 `poly_relu/polyact` 和 `mult_scalar` 参数路径。生成器先调用了 `call_param_ct()` 构图，
+  后调用 `_append_parameter_arg()` 给参数节点挂载 `encrypted_parameter_store` metadata；因此
+  `materialize_encrypted_param()` 在构图时看不到 store，不会插入 `load_encrypted_param_ct`。
+
+修复原则：
+
+- 所有 runtime-lazy encrypted parameter 节点，必须先通过 `_append_parameter_arg()` 注册并挂载
+  `encrypted_parameter_store_node`、`encrypted_parameter_arg_id`、`encrypted_parameter_flat_index`，再进入
+  `call_param_ct()` / `multiply_with_encrypted_param()` / `materialize_encrypted_param()`。
+- `poly_relu/polyact` 和 `mult_scalar` 已按这个顺序修正；conv/dense 路径原本就是先注册参数再构图。
+- GPU bridge 增加防御性检查：如果 data node 有 consumer 或是 output，但没有 producer 且不是 input，
+  应抛出明确错误，而不是继续访问空 predecessor 造成 segfault。
+
+后续注意点：
+
+- 新增任何 encrypted-parameter layer 时，不能只把参数加入 `encrypted_parameters` signature；还必须确认
+  MegaAG 中每个被消费的参数 data node 都有对应 `load_encrypted_param_ct` producer，或在 eager 模式下是
+  `offline_inputs`。
+- runtime lazy 单测应检查“所有出现在 compute `inputs` 或 `wait_inputs` 中的数据节点，都来自
+  `inputs`、`offline_inputs` 或某个 compute `outputs`”。这能提前发现会在 GPU bridge 阶段崩溃的坏图。
+- `wait_inputs` 只能表达 readiness，不能作为 custom executor 的真实输入。否则 GPU 路径会为触发 lazy load
+  引入 activation D2H，破坏本模式的设计目标。
+- 如果修改参数 id 去重、level 后缀或 `encrypted_parameters` 生成逻辑，必须同步检查 manifest 覆盖：
+  `task_signature.encrypted_parameters[*].id` 应全部存在于 `encrypted_model_parameters/manifest.json.arguments`。
+- 对已生成的旧 runner bundle，修复生成器后至少需要重新运行 `gen_mega_ag.py --parameter-loading-mode runtime_lazy`。
+  如果参数 id 或 signature 发生变化，还需要重新运行 `provision_encrypted_runner_bundle` 以生成匹配的 manifest。
+
+本次验证结果：
+
+- 重新生成 CIFAR10 runner 图后，缺失 source 的 data node 数为 0。
+- `load_encrypted_param_ct` 节点数从 7798 增加到 7900，补上了此前缺失的 `poly_relu/polyact` 和
+  `mult_scalar` 参数加载节点。
+- GPU runner 完整执行完成并写出 `runs/cifar10/output.ct`。
+- `decrypt_runner_output` 可成功解密输出，Top-1 为 index 3。

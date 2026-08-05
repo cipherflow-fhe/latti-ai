@@ -57,6 +57,19 @@ runs/cifar10/task/
 
 `runner/` 是可搬运目录。部署前应检查其中没有 secret key、secret context、H5 模型参数或明文参数文件。
 
+`runtime_lazy` 模式下，`task/runner/task_config.json` 会包含：
+
+```json
+{
+  "deployment_mode": "server_provisioned_runner",
+  "input_mode": "plaintext",
+  "parameter_mode": "encrypted_offline",
+  "parameter_loading_mode": "runtime_lazy",
+  "decryptor": "provisioner",
+  "deployment_role": "runner"
+}
+```
+
 ## Quick Start
 
 以下以 CIFAR10 风格目录为例。路径可按实际任务调整。
@@ -78,10 +91,11 @@ python training/run_compile.py \
 ```bash
 python inference/interface/gen_mega_ag.py \
   --task-dir ./runs/cifar10/task \
-  --deployment-mode server_provisioned_runner
+  --deployment-mode server_provisioned_runner \
+  --parameter-loading-mode runtime_lazy
 ```
 
-该步骤把 `mega_ag.json` 和 `task_signature.json` 写入 `task/runner/`，并将模型参数声明为 offline ciphertext arguments。
+该步骤把 `mega_ag.json` 和 `task_signature.json` 写入 `task/runner/`。默认 `--parameter-loading-mode eager` 保持旧行为，将模型参数声明为 offline ciphertext arguments；`runtime_lazy` 只在 `server_provisioned_runner` 下生效，会把 `offline` 缩减为一个 `encrypted_parameter_store` 句柄，并在 `encrypted_parameters` 中记录真实参数列表。
 
 ### 3. Provisioner 离线加密参数
 
@@ -104,7 +118,7 @@ python inference/interface/gen_mega_ag.py \
   --gpu
 ```
 
-Runner 读取明文 CSV 输入，将输入编码为 plaintext/ringt argument，加载 offline encrypted parameters，执行 MegaAG，并把输出密文序列化到 `--output-cipher`。
+Runner 读取明文 CSV 输入，将输入编码为 plaintext/ringt argument，执行 MegaAG，并把输出密文序列化到 `--output-cipher`。在 `eager` 模式下，Runner 启动计算前整包反序列化 offline encrypted parameters；在 `runtime_lazy` 模式下，计算图运行到参数 use-site 时才通过 `load_encrypted_param_ct` 节点按元素读取并反序列化所需密文。
 
 GPU 运行需要先用 `-DINFERENCE_SDK_ENABLE_GPU=ON` 构建，并在运行命令中显式传入 `--gpu`；CPU 运行时省略 `--gpu`。多输入任务可以使用 `--input name=path` 形式显式绑定输入名。
 
@@ -117,6 +131,34 @@ GPU 运行需要先用 `-DINFERENCE_SDK_ENABLE_GPU=ON` 构建，并在运行命�
 ```
 
 Decryptor 使用 provisioner 目录中的 secret key 或 secret context 解密 Runner 输出，并打印输出向量和 top-1。
+
+## runtime_lazy 全链路开关
+
+`parameter_loading_mode=runtime_lazy` 的入口在 MegaAG 生成阶段。推荐显式传：
+
+```bash
+python inference/interface/gen_mega_ag.py \
+  --task-dir ./runs/cifar10/task \
+  --deployment-mode server_provisioned_runner \
+  --parameter-loading-mode runtime_lazy
+```
+
+如果 `task/server/task_config.json` 已经写入 `"parameter_loading_mode": "runtime_lazy"`，也可以省略该 flag；
+`gen_mega_ag.py` 会读取 server config，并把该字段写入 `task/runner/task_config.json`。
+
+完整链路中的配置流向如下：
+
+- `training/run_compile.py --deployment-mode server_provisioned_runner` 只负责生成新模式目录和基础配置，不在编译阶段加密参数。
+- `gen_mega_ag.py --parameter-loading-mode runtime_lazy` 写出 runtime-lazy graph/signature：`offline` 只有
+  `encrypted_parameter_store`，真实参数列表在 `encrypted_parameters`。
+- `provision_encrypted_runner_bundle` 不需要额外 flag；它读取 `task/runner/task_config.json`，看到
+  `parameter_loading_mode=runtime_lazy` 后生成 manifest v2，在每个参数元素上记录 byte `offset` / `length`。
+- `./build/examples/inference` 不需要额外 lazy flag；Runner 读取同一个 `task_config.json`，自动绑定
+  `load_encrypted_param_ct` executor。CPU 默认生效，传 `--gpu` 时 GPU Runner 也走同一套 use-site lazy load。
+- `decrypt_runner_output` 与加载模式无关，只使用 provisioner 侧 secret key 或 secret context 解密输出。
+
+切回 eager 只需省略 `--parameter-loading-mode runtime_lazy`，或显式传 `--parameter-loading-mode eager`。
+`runtime_lazy` 不支持标准 `client_encrypted_input` 模式；旧 client/server quick start 的默认行为保持不变。
 
 ## 参数 level 与 use-site 物化
 
@@ -131,6 +173,21 @@ Python MegaAG 图不会显式插入 `ringt_to_mul()` 节点。原始 `CT * PT` �
 - offline argument id 应能对应到 use-site level，例如通过 `source_id + use_site + level` 的映射记录到 manifest。
 
 这样做的结果是：执行计算图的 level/scale 管理与原始 `CT * PT` 模式保持一致，额外差异主要来自参数变为 ciphertext 后需要 `CT * CT`、`relin` 和更高的运行成本。
+
+## use-site 懒加载语义
+
+`runtime_lazy` 是运行时懒加载，不是“启动时延迟一点再整包读取”。Runner 在 `evaluate_plaintext_input()` 中只构造一个
+`encrypted_parameter_store` offline argument；每个参数密文节点在 MegaAG 中由 `load_encrypted_param_ct` 负责 materialize。
+
+加载节点包含：
+
+- 普通 `inputs`：只有 `encrypted_parameter_store`。
+- `attributes`：`arg_id`、`flat_index`、`expected_level`。
+- `wait_inputs`：对应 use-site 的 activation 或 plaintext input，只用于调度 ready 判断。
+
+因此执行到相应 use-site 前，Runner 才调用 `EncryptedParameterStore::load_element(arg_id, flat_index)` 读取单个密文。
+manifest v2 记录元素级 byte range，所以不需要反序列化同一参数向量中的其他元素；已加载元素会缓存在 store 内。
+GPU 下 `wait_inputs` 不会进入 custom executor 参数列表，不会为了触发加载把 activation 从 GPU 拷回 CPU。
 
 ## 注意事项
 

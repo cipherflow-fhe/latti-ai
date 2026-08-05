@@ -516,13 +516,19 @@ void InferenceProvisioner::write_encrypted_argument(const std::filesystem::path&
                                                     const std::vector<fhe::CkksCiphertext>& values,
                                                     json& manifest,
                                                     const json& sig,
-                                                    const ParameterArgumentInfo& info) const {
+                                                    const ParameterArgumentInfo& info,
+                                                    bool write_element_index) const {
     const std::string filename = arg_id + ".bin";
     std::stringstream ss;
     uint64_t count = values.size();
     ss_write(ss, count);
+    json elements = json::array();
     for (const auto& ct : values) {
         Bytes ct_bytes = ct.serialize(context_->get_parameter());
+        if (write_element_index) {
+            const auto payload_offset = static_cast<uint64_t>(ss.tellp()) + sizeof(size_t);
+            elements.push_back({{"offset", payload_offset}, {"length", static_cast<uint64_t>(ct_bytes.size())}});
+        }
         ss_write_vector(ss, ct_bytes);
     }
     write_binary_file(parameter_root / filename, ss_to_bytes(ss));
@@ -538,6 +544,9 @@ void InferenceProvisioner::write_encrypted_argument(const std::filesystem::path&
         {"layer_id", info.layer_id},
         {"param_kind", info.param_kind},
     };
+    if (write_element_index) {
+        manifest["arguments"][arg_id]["elements"] = std::move(elements);
+    }
     if (info.coeff_idx >= 0) {
         manifest["arguments"][arg_id]["coeff_idx"] = info.coeff_idx;
     }
@@ -554,6 +563,7 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
     if (task_signature_.value("algorithm", std::string("")) != "CKKS") {
         throw std::runtime_error("[Provisioner] only CKKS task signatures are supported");
     }
+    const json runner_task_config = read_json((runner_dir / "task_config.json").string());
 
     const Bytes eval_bytes = serialize_public_context(*context_, task_config_.value("use_btp", false));
     write_binary_file(provisioner_dir_ / "eval_context.bin", eval_bytes);
@@ -562,8 +572,11 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
     const auto parameter_root = runner_dir / "encrypted_model_parameters";
     std::filesystem::create_directories(parameter_root);
 
+    const bool runtime_lazy =
+        runner_task_config.value("parameter_loading_mode",
+                                 task_config_.value("parameter_loading_mode", std::string("eager"))) == "runtime_lazy";
     json manifest = {
-        {"format", "latti-ai.encrypted-parameter-store.v1"},
+        {"format", runtime_lazy ? "latti-ai.encrypted-parameter-store.v2" : "latti-ai.encrypted-parameter-store.v1"},
         {"arguments", json::object()},
     };
 
@@ -572,7 +585,12 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
     init.is_lazy = true;
     init.load_model_prepare();
 
-    for (const auto& sig : task_signature_.at("offline")) {
+    if (runtime_lazy && !task_signature_.contains("encrypted_parameters")) {
+        throw std::runtime_error("[Provisioner] runtime_lazy requires task_signature.encrypted_parameters");
+    }
+    const auto& parameter_sigs =
+        runtime_lazy ? task_signature_.at("encrypted_parameters") : task_signature_.at("offline");
+    for (const auto& sig : parameter_sigs) {
         const std::string arg_id = sig.at("id").get<std::string>();
         if (sig.at("type").get<std::string>() != "ct") {
             throw std::runtime_error("[Provisioner] encrypted_offline only supports ciphertext offline args: " +
@@ -581,7 +599,7 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
         std::cout << "[Provisioner] Encrypting offline parameter " << arg_id << "..." << std::endl;
         const auto info = parse_parameter_argument(arg_id, init);
         auto encrypted = encrypt_parameter_argument(arg_id, sig, *context_, init);
-        write_encrypted_argument(parameter_root, arg_id, encrypted, manifest, sig, info);
+        write_encrypted_argument(parameter_root, arg_id, encrypted, manifest, sig, info, runtime_lazy);
     }
 
     write_json_file(parameter_root / "manifest.json", manifest);

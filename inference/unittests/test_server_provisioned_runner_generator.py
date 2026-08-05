@@ -36,6 +36,21 @@ def _feature(level: int):
     }
 
 
+def _data_with_missing_source(mega_ag):
+    source_data = set(mega_ag.get('inputs', [])) | set(mega_ag.get('offline_inputs', []))
+    for compute in mega_ag['compute'].values():
+        source_data.update(compute.get('outputs', []))
+
+    used_data = set()
+    for compute in mega_ag['compute'].values():
+        used_data.update(compute.get('inputs', []))
+        used_data.update(compute.get('wait_inputs', []))
+
+    return sorted(
+        (idx, mega_ag['data'].get(str(idx), {}).get('id', '<missing>')) for idx in used_data if idx not in source_data
+    )
+
+
 class TestServerProvisionedRunnerGenerator(unittest.TestCase):
     def test_two_dense_layers_use_plaintext_input_and_offline_ct_params(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -202,6 +217,261 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
             self.assertIn('mult', compute_types)
             self.assertIn('relin', compute_types)
             self.assertIn('rescale', compute_types)
+
+    def test_runtime_lazy_uses_store_and_wait_only_load_nodes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server_dir = root / 'server'
+            runner_dir = root / 'runner'
+            server_dir.mkdir()
+
+            graph = {
+                'feature': {
+                    'input': _feature(2),
+                    'hidden': _feature(1),
+                    'output': _feature(0),
+                },
+                'layer': {
+                    'fc1': {
+                        'type': 'fc0',
+                        'feature_input': ['input'],
+                        'feature_output': ['hidden'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                    'fc2': {
+                        'type': 'fc0',
+                        'feature_input': ['hidden'],
+                        'feature_output': ['output'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                },
+                'input_feature': ['input'],
+                'output_feature': ['output'],
+            }
+            task_config = {
+                'task_type': 'fhe',
+                'task_num': 1,
+                'server_start_id': 0,
+                'server_end_id': 0,
+                'block_shape': [1, 1],
+                'pack_style': 'ordinary',
+                'deployment_mode': 'server_provisioned_runner',
+                'parameter_loading_mode': 'runtime_lazy',
+                'task_input_id': ['input'],
+                'task_output_id': ['output'],
+                'task_input_param': {'input': graph['feature']['input']},
+                'task_output_param': {'output': graph['feature']['output']},
+                'server_task': {'nn_layers_ct_0': {'enable_fpga': True}},
+                'use_btp': False,
+            }
+
+            with open(server_dir / 'nn_layers_ct_0.json', 'w', encoding='utf-8') as f:
+                json.dump(graph, f)
+            with open(server_dir / 'task_config.json', 'w', encoding='utf-8') as f:
+                json.dump(task_config, f)
+
+            gen_custom_task(
+                str(server_dir),
+                param_name='PN13QP218',
+                style='ordinary',
+                parameter_mode='encrypted_offline',
+                input_mode='plaintext',
+                deployment_mode='server_provisioned_runner',
+                parameter_loading_mode='runtime_lazy',
+                output_dir=str(runner_dir),
+            )
+
+            with open(runner_dir / 'task_signature.json', 'r', encoding='utf-8') as f:
+                signature = json.load(f)
+            with open(runner_dir / 'mega_ag.json', 'r', encoding='utf-8') as f:
+                mega_ag = json.load(f)
+
+            self.assertEqual([arg['id'] for arg in signature['offline']], ['encrypted_parameter_store'])
+            self.assertEqual(signature['offline'][0]['type'], 'encrypted_parameter_store')
+            encrypted_param_ids = {arg['id'] for arg in signature['encrypted_parameters']}
+            self.assertEqual(encrypted_param_ids, {'densew_fc1', 'denseb_fc1', 'densew_fc2', 'denseb_fc2'})
+
+            load_nodes = [node for node in mega_ag['compute'].values() if node['type'] == 'load_encrypted_param_ct']
+            self.assertEqual(len(load_nodes), 4)
+            store_indices = {idx for idx, node in mega_ag['data'].items() if node['id'] == 'encrypted_parameter_store'}
+            self.assertEqual(len(store_indices), 1)
+            store_idx = int(next(iter(store_indices)))
+            for node in load_nodes:
+                self.assertEqual(node['inputs'], [store_idx])
+                self.assertEqual(len(node['outputs']), 1)
+                self.assertEqual(len(node.get('wait_inputs', [])), 1)
+                self.assertIn('arg_id', node['attributes'])
+                self.assertIn('flat_index', node['attributes'])
+
+            self.assertEqual(_data_with_missing_source(mega_ag), [])
+
+    def test_runtime_lazy_materializes_polyrelu_params(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server_dir = root / 'server'
+            runner_dir = root / 'runner'
+            server_dir.mkdir()
+
+            graph = {
+                'feature': {
+                    'input': _feature(3),
+                    'hidden': _feature(2),
+                    'output': _feature(0),
+                },
+                'layer': {
+                    'fc1': {
+                        'type': 'fc0',
+                        'feature_input': ['input'],
+                        'feature_output': ['hidden'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                    'act': {
+                        'type': 'polyact',
+                        'feature_input': ['hidden'],
+                        'feature_output': ['output'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                        'order': 2,
+                    },
+                },
+                'input_feature': ['input'],
+                'output_feature': ['output'],
+            }
+            task_config = {
+                'task_type': 'fhe',
+                'task_num': 1,
+                'server_start_id': 0,
+                'server_end_id': 0,
+                'block_shape': [1, 1],
+                'pack_style': 'ordinary',
+                'deployment_mode': 'server_provisioned_runner',
+                'parameter_loading_mode': 'runtime_lazy',
+                'task_input_id': ['input'],
+                'task_output_id': ['output'],
+                'task_input_param': {'input': graph['feature']['input']},
+                'task_output_param': {'output': graph['feature']['output']},
+                'server_task': {'nn_layers_ct_0': {'enable_fpga': True}},
+                'use_btp': False,
+            }
+
+            with open(server_dir / 'nn_layers_ct_0.json', 'w', encoding='utf-8') as f:
+                json.dump(graph, f)
+            with open(server_dir / 'task_config.json', 'w', encoding='utf-8') as f:
+                json.dump(task_config, f)
+
+            gen_custom_task(
+                str(server_dir),
+                param_name='PN13QP218',
+                style='ordinary',
+                parameter_mode='encrypted_offline',
+                input_mode='plaintext',
+                deployment_mode='server_provisioned_runner',
+                parameter_loading_mode='runtime_lazy',
+                output_dir=str(runner_dir),
+            )
+
+            with open(runner_dir / 'task_signature.json', 'r', encoding='utf-8') as f:
+                signature = json.load(f)
+            with open(runner_dir / 'mega_ag.json', 'r', encoding='utf-8') as f:
+                mega_ag = json.load(f)
+
+            self.assertEqual([arg['id'] for arg in signature['offline']], ['encrypted_parameter_store'])
+            encrypted_param_ids = {arg['id'] for arg in signature['encrypted_parameters']}
+            self.assertEqual(
+                encrypted_param_ids,
+                {
+                    'densew_fc1',
+                    'denseb_fc1',
+                    'poly_reluw_act_0',
+                    'poly_reluw_act_1',
+                    'poly_reluw_act_2',
+                },
+            )
+            load_nodes = [node for node in mega_ag['compute'].values() if node['type'] == 'load_encrypted_param_ct']
+            loaded_arg_ids = {node['attributes']['arg_id'] for node in load_nodes}
+            self.assertEqual(loaded_arg_ids, encrypted_param_ids)
+            self.assertEqual(_data_with_missing_source(mega_ag), [])
+
+    def test_runtime_lazy_materializes_mult_scalar_params(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server_dir = root / 'server'
+            runner_dir = root / 'runner'
+            server_dir.mkdir()
+
+            graph = {
+                'feature': {
+                    'input': _feature(2),
+                    'hidden': _feature(1),
+                    'output': _feature(0),
+                },
+                'layer': {
+                    'fc1': {
+                        'type': 'fc0',
+                        'feature_input': ['input'],
+                        'feature_output': ['hidden'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                    'scale': {
+                        'type': 'mult_scalar',
+                        'feature_input': ['hidden'],
+                        'feature_output': ['output'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                },
+                'input_feature': ['input'],
+                'output_feature': ['output'],
+            }
+            task_config = {
+                'task_type': 'fhe',
+                'task_num': 1,
+                'server_start_id': 0,
+                'server_end_id': 0,
+                'block_shape': [1, 1],
+                'pack_style': 'ordinary',
+                'deployment_mode': 'server_provisioned_runner',
+                'parameter_loading_mode': 'runtime_lazy',
+                'task_input_id': ['input'],
+                'task_output_id': ['output'],
+                'task_input_param': {'input': graph['feature']['input']},
+                'task_output_param': {'output': graph['feature']['output']},
+                'server_task': {'nn_layers_ct_0': {'enable_fpga': True}},
+                'use_btp': False,
+            }
+
+            with open(server_dir / 'nn_layers_ct_0.json', 'w', encoding='utf-8') as f:
+                json.dump(graph, f)
+            with open(server_dir / 'task_config.json', 'w', encoding='utf-8') as f:
+                json.dump(task_config, f)
+
+            gen_custom_task(
+                str(server_dir),
+                param_name='PN13QP218',
+                style='ordinary',
+                parameter_mode='encrypted_offline',
+                input_mode='plaintext',
+                deployment_mode='server_provisioned_runner',
+                parameter_loading_mode='runtime_lazy',
+                output_dir=str(runner_dir),
+            )
+
+            with open(runner_dir / 'task_signature.json', 'r', encoding='utf-8') as f:
+                signature = json.load(f)
+            with open(runner_dir / 'mega_ag.json', 'r', encoding='utf-8') as f:
+                mega_ag = json.load(f)
+
+            self.assertEqual([arg['id'] for arg in signature['offline']], ['encrypted_parameter_store'])
+            encrypted_param_ids = {arg['id'] for arg in signature['encrypted_parameters']}
+            self.assertEqual(encrypted_param_ids, {'densew_fc1', 'denseb_fc1', 'mult_scalar_scale'})
+            load_nodes = [node for node in mega_ag['compute'].values() if node['type'] == 'load_encrypted_param_ct']
+            loaded_arg_ids = {node['attributes']['arg_id'] for node in load_nodes}
+            self.assertEqual(loaded_arg_ids, encrypted_param_ids)
+            self.assertEqual(_data_with_missing_source(mega_ag), [])
 
 
 if __name__ == '__main__':
