@@ -22,6 +22,11 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.encrypted_param_ops import (
+    accumulate_encrypted_param_terms,
+    multiply_with_encrypted_param,
+    require_no_plaintext_input_rotation,
+)
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 
 
@@ -173,7 +178,8 @@ class MultiplexedConv2DPackedLayerDepthwise:
         steps = []
         for i in range(1, n_rotation + 1):
             steps.append(i * unit)
-        result += rotate_cols(x, steps)
+        if steps:
+            result += rotate_cols(x, steps)
         return result
 
     @staticmethod
@@ -183,12 +189,26 @@ class MultiplexedConv2DPackedLayerDepthwise:
         for i in range(-filter_center, n_rotation - filter_center):
             if i != 0:
                 steps.append(i * unit)
-        r_temp = rotate_cols(x, steps)
+        r_temp = rotate_cols(x, steps) if steps else []
         result: list[CkksCiphertextNode] = list()
         result += list(r_temp[0:filter_center])
         result.append(x)
         result += r_temp[filter_center::]
         return result
+
+    @staticmethod
+    def rotation_steps_2_sides(n_rotation: int, unit: int) -> list[int]:
+        filter_center = int(np.floor(n_rotation / 2))
+        return [i * unit for i in range(-filter_center, n_rotation - filter_center)]
+
+    def kernel_rotation_steps(self) -> list[int]:
+        steps = []
+        row_steps = self.rotation_steps_2_sides(self.kernel_shape[0], self.input_rotate_units[0])
+        col_steps = self.rotation_steps_2_sides(self.kernel_shape[1], self.input_rotate_units[1])
+        for row_step in row_steps:
+            for col_step in col_steps:
+                steps.append(row_step + col_step)
+        return steps
 
     def gen_rotated_x(self, x: list[CkksCiphertextNode]):
         rotated_x: list[list[CkksCiphertextNode]] = list()
@@ -223,6 +243,26 @@ class MultiplexedConv2DPackedLayerDepthwise:
         else:
             mask_pt = []
         return weight_pt, bias_pt, mask_pt
+
+    def make_param_ct_nodes(self, layer_id, level: int):
+        """Return encrypted weight/bias nodes plus encrypted structural masks."""
+        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
+        weight_ct = [
+            [CkksCiphertextNode(f'convw_{layer_id}_{j}_{k}', level=level) for k in range(kernel_size)]
+            for j in range(self.n_packed_in_channel)
+        ]
+        import math as _math
+
+        n_bias = _math.ceil(self.n_out_channel / (self.stride[0] * self.stride[1] * self.n_channel_per_ct))
+        bias_level = level - 1
+        if self.stride[0] != 1 or self.stride[1] != 1:
+            bias_level -= 1
+        bias_ct = [CkksCiphertextNode(f'convb_{layer_id}_{i}', level=bias_level) for i in range(n_bias)]
+        if self.stride[0] != 1 or self.stride[1] != 1:
+            mask_pt = [CkksCiphertextNode(f'convm_{layer_id}_{i}', level=level - 1) for i in range(self.n_out_channel)]
+        else:
+            mask_pt = []
+        return weight_ct, bias_ct, mask_pt
 
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mast_pt) -> list[CkksCiphertextNode]:
         # 1. Kernel direction rotation
@@ -275,7 +315,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
                         steps.append(-rot_step)
                 for i in range(self.n_channel_per_ct):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
-                        c_m = mult(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
+                        c_m = multiply_with_encrypted_param(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
                         c_m = rescale(c_m)
                         result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
         if self.stride[0] == 1:
@@ -290,6 +330,153 @@ class MultiplexedConv2DPackedLayerDepthwise:
                 sp = c_m_s
                 btp_idx = int(np.floor(i / (self.stride[0] * self.stride[1] * self.n_channel_per_ct)))
                 sp = add(sp, bias_pt[btp_idx])
+            else:
+                sp = add(sp, c_m_s)
+            if (i + 1) % (self.stride[0] * self.stride[1] * self.n_channel_per_ct) == 0 or i == len(result_ct) - 1:
+                res.append(sp)
+        return res
+
+    def call_param_ct(
+        self, x: list[DataNode], weight_ct, bias_ct, mast_pt, input_is_plaintext: bool = False
+    ) -> list[CkksCiphertextNode]:
+        if input_is_plaintext:
+            return self.call_param_ct_plaintext_input(x, weight_ct, bias_ct, mast_pt)
+
+        rotations_needed = self.kernel_shape[0] > 1 or self.kernel_shape[1] > 1
+        require_no_plaintext_input_rotation(op_class, input_is_plaintext, rotations_needed)
+
+        kernel_rotations = self.gen_rotated_x(x)
+        res: list = list()
+        result_ct = list()
+        for ct_idx in range(len(weight_ct)):
+            x_terms = []
+            w_terms = []
+            for j in range(len(weight_ct[ct_idx])):
+                x_terms.append(kernel_rotations[ct_idx][j])
+                w_terms.append(weight_ct[ct_idx][j])
+            s = accumulate_encrypted_param_terms(x_terms, w_terms)
+            s = rescale(s)
+            if self.stride[0] == 1 and self.stride[1] == 1:
+                res.append(s)
+            else:
+                steps = []
+                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[0]):
+                    if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
+                        r_n_block = int(
+                            (ct_idx * self.n_channel_per_ct + i)
+                            / int(self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1])
+                        )
+                        r_n_block_residue = (ct_idx * self.n_channel_per_ct + i) % int(
+                            self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1]
+                        )
+                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[0] * self.skip[0])))
+                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[0] * self.skip[0])
+                        n_block = int(np.floor((ct_idx * self.n_channel_per_ct + i) / int(self.skip[0] * self.skip[1])))
+                        n_block_residue = int(
+                            np.floor((ct_idx * self.n_channel_per_ct + i)) % int(self.skip[0] * self.skip[1])
+                        )
+                        n_stride_skip = int(np.floor(n_block_residue / self.skip[0]))
+                        n_stride_skip_residue = n_block_residue % self.skip[0]
+                        rot_step = (
+                            (r_n_block - n_block)
+                            * self.skip[0]
+                            * self.skip[1]
+                            * self.input_shape[0]
+                            * self.input_shape[1]
+                            + (r_n_stride_skip - n_stride_skip) * self.skip[0] * self.input_shape[0]
+                            + (r_n_stride_skip_residue - n_stride_skip_residue)
+                        )
+                        steps.append(-rot_step)
+                for i in range(self.n_channel_per_ct):
+                    if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
+                        c_m = multiply_with_encrypted_param(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
+                        c_m = rescale(c_m)
+                        result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
+        if self.stride[0] == 1:
+            for i in range(len(res)):
+                res[i] = add(res[i], bias_ct[i])
+            return res
+
+        for i in range(len(result_ct)):
+            p = i % (self.stride[0] * self.stride[1] * self.n_channel_per_ct)
+            c_m_s = result_ct[i]
+            if p == 0:
+                sp = c_m_s
+                btp_idx = int(np.floor(i / (self.stride[0] * self.stride[1] * self.n_channel_per_ct)))
+                sp = add(sp, bias_ct[btp_idx])
+            else:
+                sp = add(sp, c_m_s)
+            if (i + 1) % (self.stride[0] * self.stride[1] * self.n_channel_per_ct) == 0 or i == len(result_ct) - 1:
+                res.append(sp)
+        return res
+
+    def call_param_ct_plaintext_input(self, x: list[DataNode], weight_ct, bias_ct, mast_pt) -> list[CkksCiphertextNode]:
+        kernel_steps = self.kernel_rotation_steps()
+        res: list = list()
+        result_ct = list()
+        for ct_idx in range(len(weight_ct)):
+            partial_sum = None
+            base_x = x[ct_idx]
+            for j in range(len(weight_ct[ct_idx])):
+                total_step = int(kernel_steps[j])
+                w = weight_ct[ct_idx][j]
+                if total_step != 0:
+                    w = rotate_cols(w, [-total_step])[0]
+                term = mult(w, base_x)
+                if total_step != 0:
+                    term = rotate_cols(term, [total_step])[0]
+                partial_sum = term if partial_sum is None else add(partial_sum, term)
+            if partial_sum is None:
+                raise ValueError('Encrypted multiplexed depthwise conv accumulation produced no terms')
+            s = rescale(partial_sum)
+            if self.stride[0] == 1 and self.stride[1] == 1:
+                res.append(s)
+            else:
+                steps = []
+                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[0]):
+                    if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
+                        r_n_block = int(
+                            (ct_idx * self.n_channel_per_ct + i)
+                            / int(self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1])
+                        )
+                        r_n_block_residue = (ct_idx * self.n_channel_per_ct + i) % int(
+                            self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1]
+                        )
+                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[0] * self.skip[0])))
+                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[0] * self.skip[0])
+                        n_block = int(np.floor((ct_idx * self.n_channel_per_ct + i) / int(self.skip[0] * self.skip[1])))
+                        n_block_residue = int(
+                            np.floor((ct_idx * self.n_channel_per_ct + i)) % int(self.skip[0] * self.skip[1])
+                        )
+                        n_stride_skip = int(np.floor(n_block_residue / self.skip[0]))
+                        n_stride_skip_residue = n_block_residue % self.skip[0]
+                        rot_step = (
+                            (r_n_block - n_block)
+                            * self.skip[0]
+                            * self.skip[1]
+                            * self.input_shape[0]
+                            * self.input_shape[1]
+                            + (r_n_stride_skip - n_stride_skip) * self.skip[0] * self.input_shape[0]
+                            + (r_n_stride_skip_residue - n_stride_skip_residue)
+                        )
+                        steps.append(-rot_step)
+                for i in range(self.n_channel_per_ct):
+                    if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
+                        c_m = mult(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
+                        c_m = rescale(c_m)
+                        result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
+        if self.stride[0] == 1:
+            for i in range(len(res)):
+                res[i] = add(res[i], bias_ct[i])
+            return res
+
+        for i in range(len(result_ct)):
+            p = i % (self.stride[0] * self.stride[1] * self.n_channel_per_ct)
+            c_m_s = result_ct[i]
+            if p == 0:
+                sp = c_m_s
+                btp_idx = int(np.floor(i / (self.stride[0] * self.stride[1] * self.n_channel_per_ct)))
+                sp = add(sp, bias_ct[btp_idx])
             else:
                 sp = add(sp, c_m_s)
             if (i + 1) % (self.stride[0] * self.stride[1] * self.n_channel_per_ct) == 0 or i == len(result_ct) - 1:

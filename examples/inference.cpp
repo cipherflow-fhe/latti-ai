@@ -29,7 +29,9 @@
 
 #include "fhe_ops_lib/utils.h"
 #include "interface/inference_client.h"
+#include "interface/inference_runner.h"
 #include "interface/inference_server.h"
+#include "interface/runner_bundle_io.h"
 
 using namespace std;
 
@@ -38,6 +40,8 @@ int main(int argc, char* argv[]) {
     vector<string> input_args;
     bool use_gpu = false;
     bool verify = false;
+    string deployment_mode = "client_encrypted_input";
+    string output_cipher;
     constexpr double tolerance = 0.1;
 
     for (int i = 1; i < argc; i++) {
@@ -49,13 +53,59 @@ int main(int argc, char* argv[]) {
             input_args.push_back(argv[++i]);
         } else if (strcmp(argv[i], "--verify") == 0) {
             verify = true;
+        } else if (strcmp(argv[i], "--deployment-mode") == 0 && i + 1 < argc) {
+            deployment_mode = argv[++i];
+        } else if (strcmp(argv[i], "--output-cipher") == 0 && i + 1 < argc) {
+            output_cipher = argv[++i];
         }
     }
 
     if (task_dir.empty() || input_args.empty()) {
         cerr << "Usage: " << argv[0] << " --task-dir <path> --input [name=]<path> [--input ...] [--gpu] [--verify]"
+             << " [--deployment-mode client_encrypted_input|server_provisioned_runner]" << " [--output-cipher <path>]"
              << endl;
         return 1;
+    }
+    if (deployment_mode != "client_encrypted_input" && deployment_mode != "server_provisioned_runner") {
+        cerr << "Unsupported --deployment-mode: " << deployment_mode << endl;
+        return 1;
+    }
+    if (deployment_mode == "server_provisioned_runner") {
+        if (output_cipher.empty()) {
+            cerr << "--output-cipher is required for server_provisioned_runner mode." << endl;
+            return 1;
+        }
+
+        auto task_config = read_json(task_dir + "/task_config.json");
+        vector<string> input_names;
+        for (auto& [name, _] : task_config["task_input_param"].items()) {
+            input_names.push_back(name);
+        }
+
+        map<string, string> input_csvs;
+        for (size_t i = 0; i < input_args.size(); i++) {
+            auto eq_pos = input_args[i].find('=');
+            if (eq_pos != string::npos) {
+                input_csvs[input_args[i].substr(0, eq_pos)] = input_args[i].substr(eq_pos + 1);
+            } else if (i < input_names.size()) {
+                input_csvs[input_names[i]] = input_args[i];
+            } else {
+                cerr << "Too many --input arguments. Expected " << input_names.size() << " inputs." << endl;
+                return 1;
+            }
+        }
+
+        try {
+            InferenceRunner runner(task_dir, use_gpu, 0);
+            runner.load();
+            auto encrypted_outputs = runner.evaluate_plaintext_input(input_csvs);
+            write_named_bytes_bundle(output_cipher, encrypted_outputs);
+            cout << "Runner ciphertext output written to " << output_cipher << endl;
+        } catch (const exception& e) {
+            cerr << e.what() << endl;
+            return 2;
+        }
+        return 0;
     }
 
     // Read input names from task_config

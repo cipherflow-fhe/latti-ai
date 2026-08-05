@@ -36,6 +36,7 @@ struct OutputParam {
     int dim = 0;
     int channel = 0;
     int skip = 1;               // dim=0 only (scalar skip)
+    Duo skip2d = {1, 1};        // dim=2 packing stride
     int height = 0;             // dim=2 only
     int width = 0;              // dim=2 only
     int length = 0;             // dim=1 only
@@ -45,6 +46,7 @@ struct OutputParam {
     uint32_t matmul_block_size = 0;
     uint32_t n_heads = 0;
     bool is_transposed = true;
+    int pack_num = 0;  // n_channel_per_ct
 };
 
 /// Per-input parameters read from task_config.json.
@@ -52,10 +54,12 @@ struct InputParam {
     int dim = 0;
     int level = 0;
     int channel = 0;
-    int height = 0;    // dim=2 only
-    int width = 0;     // dim=2 only
-    int length = 0;    // dim=1 only
-    int skip = 1;      // dim=0/1 packing stride
+    int height = 0;  // dim=2 only
+    int width = 0;   // dim=2 only
+    int length = 0;  // dim=1 only
+    int skip = 1;    // dim=0/1 packing stride
+    Duo skip2d = {1, 1};
+    Duo invalid_fill = {1, 1};
     int pack_num = 0;  // n_channel_per_ct
     bool is_mat = false;
     Duo head_shape = {0, 0};

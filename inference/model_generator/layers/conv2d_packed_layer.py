@@ -21,6 +21,10 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.encrypted_param_ops import (
+    accumulate_encrypted_param_terms,
+    require_no_plaintext_input_rotation,
+)
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 
 
@@ -74,7 +78,8 @@ class Conv2DPackedLayer:
         steps = []
         for i in range(1, n_rotation + 1):
             steps.append(i * unit)
-        result += rotate_cols(x, steps)
+        if steps:
+            result += rotate_cols(x, steps)
         return result
 
     @staticmethod
@@ -85,7 +90,7 @@ class Conv2DPackedLayer:
             post_steps.append(i * unit)
             nega_steps.append(-i * unit)
         steps = nega_steps + post_steps
-        r_temp = rotate_cols(x, steps)
+        r_temp = rotate_cols(x, steps) if steps else []
         result: list[CkksCiphertextNode] = list()
 
         # Reverse negatives when inserting
@@ -93,6 +98,25 @@ class Conv2DPackedLayer:
         result.append(x)
         result += r_temp[len(nega_steps) : :]
         return result
+
+    @staticmethod
+    def rotation_steps_2_sides(n_rotation: int, unit: int) -> list[int]:
+        result = []
+        for i in range(n_rotation, 0, -1):
+            result.append(-i * unit)
+        result.append(0)
+        for i in range(1, n_rotation + 1):
+            result.append(i * unit)
+        return result
+
+    def kernel_rotation_steps(self) -> list[int]:
+        steps = []
+        row_steps = self.rotation_steps_2_sides(self.input_rotate_ranges[0], self.input_rotate_units[0])
+        col_steps = self.rotation_steps_2_sides(self.input_rotate_ranges[1], self.input_rotate_units[1])
+        for row_step in row_steps:
+            for col_step in col_steps:
+                steps.append(row_step + col_step)
+        return steps
 
     def gen_rotated_x(self, x: list[CkksCiphertextNode]):
         rotated_x: list[list[CkksCiphertextNode]] = list()
@@ -163,6 +187,21 @@ class Conv2DPackedLayer:
         ]
         bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_packed_out_channel)]
         return weight_pt, bias_pt
+
+    def make_param_ct_nodes(self, layer_id, level: int):
+        """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes()."""
+        index = self.kernel_shape[0] * self.kernel_shape[1]
+        weight_ct = [
+            [
+                [CkksCiphertextNode(f'convw_{layer_id}_{n}_{m}_{i}', level=level) for i in range(index)]
+                for m in range(self.n_packed_in_channel * self.pack)
+            ]
+            for n in range(self.n_packed_out_channel)
+        ]
+        bias_ct = [
+            CkksCiphertextNode(f'convb_{layer_id}_{i}', level=level - 1) for i in range(self.n_packed_out_channel)
+        ]
+        return weight_ct, bias_ct
 
     def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call(), grouped by level.
@@ -249,4 +288,58 @@ class Conv2DPackedLayer:
             b = bias_pt[packed_out_channel_idx]
             result_ct = add(partial_sum, b)
             result.append(result_ct)
+        return result
+
+    def call_param_ct(self, x: list[DataNode], weight_ct, bias_ct, input_is_plaintext: bool = False):
+        if input_is_plaintext:
+            return self.call_param_ct_plaintext_input(x, weight_ct, bias_ct)
+
+        rotations_needed = self.pack > 1 or self.input_rotate_ranges[0] > 0 or self.input_rotate_ranges[1] > 0
+        require_no_plaintext_input_rotation(op_class, input_is_plaintext, rotations_needed)
+
+        rotated_x: list[DataNode] = list()
+        for x_node in x:
+            rotated_x += Conv2DPackedLayer.populate_rotations_1_side(
+                x_node, self.pack - 1, self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
+            )
+        rotated_x_2d = self.gen_rotated_x(rotated_x)
+
+        result = []
+        for packed_out_channel_idx in range(self.n_packed_out_channel):
+            x_terms = []
+            w_terms = []
+            for in_channel_idx in range(self.n_packed_in_channel * self.pack):
+                for i in range(self.kernel_shape[0]):
+                    for j in range(self.kernel_shape[1]):
+                        index = i * self.kernel_shape[1] + j
+                        x_terms.append(rotated_x_2d[in_channel_idx][index])
+                        w_terms.append(weight_ct[packed_out_channel_idx][in_channel_idx][index])
+            partial_sum = accumulate_encrypted_param_terms(x_terms, w_terms)
+            partial_sum = rescale(partial_sum)
+            result.append(add(partial_sum, bias_ct[packed_out_channel_idx]))
+        return result
+
+    def call_param_ct_plaintext_input(self, x: list[DataNode], weight_ct, bias_ct):
+        pack_unit = self.input_shape[0] * self.skip[0] * self.input_shape[1] * self.skip[1]
+        kernel_steps = self.kernel_rotation_steps()
+
+        result = []
+        for packed_out_channel_idx in range(self.n_packed_out_channel):
+            partial_sum = None
+            for in_channel_idx in range(self.n_packed_in_channel * self.pack):
+                base_x = x[in_channel_idx // self.pack]
+                pack_step = (in_channel_idx % self.pack) * pack_unit
+                for index in range(self.kernel_shape[0] * self.kernel_shape[1]):
+                    total_step = int(pack_step + kernel_steps[index])
+                    w = weight_ct[packed_out_channel_idx][in_channel_idx][index]
+                    if total_step != 0:
+                        w = rotate_cols(w, [-total_step])[0]
+                    term = mult(w, base_x)
+                    if total_step != 0:
+                        term = rotate_cols(term, [total_step])[0]
+                    partial_sum = term if partial_sum is None else add(partial_sum, term)
+            if partial_sum is None:
+                raise ValueError('Encrypted conv accumulation produced no terms')
+            partial_sum = rescale(partial_sum)
+            result.append(add(partial_sum, bias_ct[packed_out_channel_idx]))
         return result
