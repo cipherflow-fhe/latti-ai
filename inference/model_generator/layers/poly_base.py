@@ -24,7 +24,7 @@ import inference.lattisense.frontend.custom_task as custom_task
 
 
 @dataclass
-class MatPolyPowerInfo:
+class PolyPowerInfo:
     depth: int
     level: int
     scale: float
@@ -55,7 +55,7 @@ def _stockmeyer_baby_poly_count(order: int) -> int:
 
 def _validate_horner_baby_steps(baby_steps: int):
     if baby_steps not in (4, 8):
-        raise ValueError('MatPolyBase Stockmeyer Horner supports only baby_steps 4 or 8')
+        raise ValueError('PolyBase Stockmeyer Horner supports only baby_steps 4 or 8')
 
 
 def _log2_horner_baby_steps(baby_steps: int) -> int:
@@ -68,8 +68,8 @@ def _stockmeyer_horner_baby_poly_count(order: int, baby_steps: int) -> int:
     return (order + baby_steps) // baby_steps
 
 
-class MatPolyBase:
-    """Python model-generator counterpart of C++ MatPolyBase planning logic."""
+class PolyBase:
+    """Python model-generator counterpart of C++ PolyBase planning logic."""
 
     def __init__(self, order: int):
         self.order = int(order)
@@ -80,7 +80,7 @@ class MatPolyBase:
 
         self.stockmeyer_baby_steps = 4
         self.stockmeyer_n_baby_polys = 0
-        self.stockmeyer_powers: dict[int, MatPolyPowerInfo] = {}
+        self.stockmeyer_powers: dict[int, PolyPowerInfo] = {}
         self.stockmeyer_baby_poly_output_scale: list[float] = []
         self.stockmeyer_baby_poly_output_level: list[int] = []
         self.stockmeyer_output_level = 0
@@ -90,7 +90,7 @@ class MatPolyBase:
 
         self.stockmeyer_horner_baby_steps = 8
         self.stockmeyer_horner_n_baby_polys = 0
-        self.stockmeyer_horner_powers: dict[int, MatPolyPowerInfo] = {}
+        self.stockmeyer_horner_powers: dict[int, PolyPowerInfo] = {}
         self.stockmeyer_horner_baby_poly_output_scale: list[float] = []
         self.stockmeyer_horner_baby_poly_output_level: list[int] = []
         self.stockmeyer_horner_output_level = 0
@@ -101,7 +101,7 @@ class MatPolyBase:
     @staticmethod
     def compute_stockmeyer_level_cost(order: int) -> int:
         if order <= 0 or order >= 64:
-            raise ValueError('MatPolyBase Stockmeyer supports only order < 64')
+            raise ValueError('PolyBase Stockmeyer supports only order < 64')
         if order < 2:
             return 1
 
@@ -112,7 +112,7 @@ class MatPolyBase:
     def compute_stockmeyer_horner_level_cost(order: int, baby_steps: int = 8) -> int:
         _validate_horner_baby_steps(baby_steps)
         if order <= 0 or order >= 64:
-            raise ValueError('MatPolyBase Stockmeyer Horner supports only order < 64')
+            raise ValueError('PolyBase Stockmeyer Horner supports only order < 64')
 
         n_baby_polys = _stockmeyer_horner_baby_poly_count(order, baby_steps)
         return (n_baby_polys - 1) + _log2_horner_baby_steps(baby_steps)
@@ -120,7 +120,7 @@ class MatPolyBase:
     def _param(self):
         param = custom_task.g_param
         if param is None:
-            raise RuntimeError('Please call set_fhe_param() before using MatPolyBase.')
+            raise RuntimeError('Please call set_fhe_param() before using PolyBase.')
         return param
 
     def _default_scale(self) -> float:
@@ -140,11 +140,11 @@ class MatPolyBase:
             return
 
         if self.order <= 0 or self.order >= 64:
-            raise ValueError('MatPolyBase Stockmeyer supports only order < 64')
+            raise ValueError('PolyBase Stockmeyer supports only order < 64')
 
         level_cost = self.compute_stockmeyer_level_cost(self.order)
         if level < level_cost:
-            raise ValueError(f'MatPolyBase Stockmeyer input level is too low for order {self.order}')
+            raise ValueError(f'PolyBase Stockmeyer input level is too low for order {self.order}')
 
         self._set_level(level)
         self.stockmeyer_baby_steps = 4
@@ -169,11 +169,11 @@ class MatPolyBase:
             return
 
         if self.order <= 0 or self.order >= 64:
-            raise ValueError('MatPolyBase Stockmeyer Horner supports only order < 64')
+            raise ValueError('PolyBase Stockmeyer Horner supports only order < 64')
 
         level_cost = self.compute_stockmeyer_horner_level_cost(self.order, baby_steps)
         if level < level_cost:
-            raise ValueError(f'MatPolyBase Stockmeyer Horner input level is too low for order {self.order}')
+            raise ValueError(f'PolyBase Stockmeyer Horner input level is too low for order {self.order}')
 
         self._set_level(level)
         self.stockmeyer_horner_baby_steps = baby_steps
@@ -190,15 +190,15 @@ class MatPolyBase:
     def compute_stockmeyer_power_info(self):
         scale = self._default_scale()
         self.stockmeyer_powers.clear()
-        self.stockmeyer_powers[1] = MatPolyPowerInfo(0, self.level, scale, 0, 0, True)
+        self.stockmeyer_powers[1] = PolyPowerInfo(0, self.level, scale, 0, 0, True)
 
         def add_square_power(power: int, half_power: int):
             half = self.stockmeyer_powers[half_power]
             result_level = half.level - 1
             if result_level < 0 or half.level >= len(self.modulus):
-                raise ValueError('MatPolyBase Stockmeyer power level is out of range')
+                raise ValueError('PolyBase Stockmeyer power level is out of range')
             result_scale = (half.scale / float(self.modulus[half.level])) * half.scale
-            self.stockmeyer_powers[power] = MatPolyPowerInfo(
+            self.stockmeyer_powers[power] = PolyPowerInfo(
                 half.depth + 1,
                 result_level,
                 result_scale,
@@ -220,15 +220,15 @@ class MatPolyBase:
     def compute_stockmeyer_horner_power_info(self):
         scale = self._default_scale()
         self.stockmeyer_horner_powers.clear()
-        self.stockmeyer_horner_powers[1] = MatPolyPowerInfo(0, self.level, scale, 0, 0, True)
+        self.stockmeyer_horner_powers[1] = PolyPowerInfo(0, self.level, scale, 0, 0, True)
 
         def add_square_power(power: int, half_power: int):
             half = self.stockmeyer_horner_powers[half_power]
             result_level = half.level - 1
             if result_level < 0 or half.level >= len(self.modulus):
-                raise ValueError('MatPolyBase Stockmeyer Horner power level is out of range')
+                raise ValueError('PolyBase Stockmeyer Horner power level is out of range')
             result_scale = (half.scale / float(self.modulus[half.level])) * half.scale
-            self.stockmeyer_horner_powers[power] = MatPolyPowerInfo(
+            self.stockmeyer_horner_powers[power] = PolyPowerInfo(
                 half.depth + 1,
                 result_level,
                 result_scale,
@@ -280,7 +280,7 @@ class MatPolyBase:
             target_level = self.stockmeyer_baby_poly_output_level[j]
             target_scale = self.stockmeyer_baby_poly_output_scale[j]
             if target_level < 0 or target_level > self.level:
-                raise ValueError('MatPolyBase Stockmeyer baby polynomial target level is out of range')
+                raise ValueError('PolyBase Stockmeyer baby polynomial target level is out of range')
 
             base = j * self.stockmeyer_baby_steps
             if base <= self.order:
@@ -288,18 +288,18 @@ class MatPolyBase:
                 coeff_scale[base] = target_scale
             if base + 1 <= self.order:
                 if target_level + 1 > self.level:
-                    raise ValueError('MatPolyBase Stockmeyer linear coefficient target level is out of range')
+                    raise ValueError('PolyBase Stockmeyer linear coefficient target level is out of range')
                 level_order[base + 1] = target_level + 1
                 coeff_scale[base + 1] = (target_scale / a1) * self._q(target_level + 1)
             if base + 2 <= self.order:
                 if target_level + 1 > self.level:
-                    raise ValueError('MatPolyBase Stockmeyer quadratic coefficient target level is out of range')
+                    raise ValueError('PolyBase Stockmeyer quadratic coefficient target level is out of range')
                 a2 = self.stockmeyer_powers[2].scale
                 level_order[base + 2] = target_level + 1
                 coeff_scale[base + 2] = (target_scale / a2) * self._q(target_level + 1)
             if base + 3 <= self.order:
                 if target_level + 2 > self.level:
-                    raise ValueError('MatPolyBase Stockmeyer cubic coefficient target level is out of range')
+                    raise ValueError('PolyBase Stockmeyer cubic coefficient target level is out of range')
                 a2 = self.stockmeyer_powers[2].scale
                 level_order[base + 3] = target_level + 2
                 coeff_scale[base + 3] = ((target_scale / a2) * self._q(target_level + 1) / a1) * self._q(
@@ -326,7 +326,7 @@ class MatPolyBase:
         for j in range(1, self.stockmeyer_horner_n_baby_polys):
             target_level = lout + j
             if target_level < 0 or target_level > self.level:
-                raise ValueError('MatPolyBase Stockmeyer Horner baby polynomial target level is out of range')
+                raise ValueError('PolyBase Stockmeyer Horner baby polynomial target level is out of range')
             self.stockmeyer_horner_baby_poly_output_level[j] = target_level
             self.stockmeyer_horner_baby_poly_output_scale[j] = (
                 self.stockmeyer_horner_baby_poly_output_scale[j - 1] / ab
@@ -334,7 +334,7 @@ class MatPolyBase:
 
         def set_coeff(coeff_idx: int, coeff_level: int, value: float):
             if coeff_level < 0 or coeff_level > self.level:
-                raise ValueError('MatPolyBase Stockmeyer Horner coefficient target level is out of range')
+                raise ValueError('PolyBase Stockmeyer Horner coefficient target level is out of range')
             level_order[coeff_idx] = coeff_level
             coeff_scale[coeff_idx] = value
 
@@ -342,7 +342,7 @@ class MatPolyBase:
             target_level = self.stockmeyer_horner_baby_poly_output_level[j]
             target_scale = self.stockmeyer_horner_baby_poly_output_scale[j]
             if target_level < 0 or target_level > self.level:
-                raise ValueError('MatPolyBase Stockmeyer Horner baby polynomial target level is out of range')
+                raise ValueError('PolyBase Stockmeyer Horner baby polynomial target level is out of range')
 
             base = j * self.stockmeyer_horner_baby_steps
             if base <= self.order:

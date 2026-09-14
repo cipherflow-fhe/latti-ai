@@ -18,14 +18,14 @@
 
 #pragma once
 
-#include "mat_poly_base.h"
+#include "poly_base.h"
 #include "../data_structs/feature_mat.h"
 #include <vector>
 
 // Polynomial evaluation for ciphertexts packed by
 // FeatureMatEncrypted::par_diagonal_pack(..., is_lower=false, is_transposed=false).
 // Coefficients are column-wise: coeffs[k, j] is the coefficient of x^k for column j.
-class ParUpperDiagonalPoly : public MatPolyBase {
+class ParUpperDiagonalPoly : public PolyBase {
 public:
     ParUpperDiagonalPoly(const ls::CkksParameter& param,
                          Duo shape,
@@ -56,6 +56,7 @@ public:
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
 private:
+    Array<double, 2> coeffs_;
     uint32_t n_prepad_ = 0, total_cols_ = 0, m_prepad_ = 0;
     uint32_t H_prepad_ = 0, H_ = 0, m_ = 0, n_ = 0, packed_extent_ = 0;
     uint32_t n_slot_ = 0, segment_len_ = 0, c_ = 0, cts_per_mb_ = 0, n_mb_ = 0;

@@ -20,7 +20,7 @@
 - Modify `inference/model_generator/layers/par_upper_diagonal_poly.py`, `training/model_compiler/transforms.py`
 
 - [ ] Rename symbols and includes globally.
-- [ ] Change `MatPolyBase` constructor to `(const CkksParameter&, uint32_t level, int order)` and remove `Array<double,2>` storage.
+- [ ] Change `PolyBase` constructor to `(const CkksParameter&, uint32_t level, int order)` and remove `Array<double,2>` storage.
 - [ ] Keep all existing normal and Horner planner methods, changing diagnostics to `PolyBase`.
 - [ ] Update `ParUpperDiagonalPoly` to store coefficients itself and initialize `PolyBase` with parameter/level/order.
 - [ ] Update Python class/module names and all compiler imports.
@@ -36,27 +36,26 @@
 - [ ] Use `compute_stockmeyer_level_cost`, `prepare_weight_stockmeyer`, Stockmeyer generated task path, and Stockmeyer output level.
 - [ ] Run the focused test before implementation; confirm compilation/API failure.
 
-### Task 3: Implement C++ PolyRelu2D planner and execution
+### Task 3: Implement new C++ Poly2D layer
 
 **Files:**
-- Modify `inference/fhe_layers/poly_relu2d.h/.cpp`
+- Create `inference/fhe_layers/poly2d.h/.cpp`
+- Modify `inference/fhe_layers/CMakeLists.txt`, `fhe_layers.h`
 
-- [ ] Include `poly_base.h` and add a `PolyBase stockmeyer_base_` member initialized with layer parameter, level, and order.
-- [ ] Add `prepare_weight_stockmeyer`, lazy variant, and `generate_weight_pt_for_stockmeyer`; share the existing ordinary/multiplexed slot layout with BSGS generation and use planner coefficient scale/level maps.
-- [ ] Add `run_core_stockmeyer` using planner powers, four-term baby polynomials, planner target levels/scales, and giant-power combination; support lazy and eager plaintexts.
+- [ ] Define `Poly2D : public PolyBase` with the `PolyRelu2D` 2D layout fields and coefficient storage.
+- [ ] Add `prepare_weight_stockmeyer`, lazy variant, and `generate_weight_pt_for_stockmeyer`; share ordinary/multiplexed slot construction and use PolyBase coefficient scale/level maps.
+- [ ] Add `run_core_stockmeyer` using PolyBase powers, four-term baby polynomials, target levels/scales, and giant-power combination; support eager and lazy plaintext generation.
 - [ ] Add `run_stockmeyer` preserving `Feature2DEncrypted` metadata and output level.
-- [ ] Make `prepare_weight`/`prepare_weight_lazy` continue existing behavior unless explicitly called by tests.
-- [ ] Run the focused C++ test and fix scale/level alignment issues until it passes.
+- [ ] Build a failing C++ test first, then compile and run the focused test after implementation.
 
-### Task 4: Add Python Stockmeyer DAG support and test
+### Task 4: Add Python Poly2D DAG support and test
 
 **Files:**
-- Modify `inference/model_generator/layers/poly_relu_base.py`, `poly_relu2d.py`
+- Create `inference/model_generator/layers/poly2d.py`
 - Modify `inference/unittests/test_gen_layers.py`
 
-- [ ] Add planner-backed Stockmeyer core with the same four-term grouping and combine levels as C++.
-- [ ] Add eager `call_stockmeyer_feature2d` and lazy/custom-compute equivalent with `poly_relu_stockmeyer` op naming.
-- [ ] Copy `test_poly_relu_bsgs_feature2d`, preserve coefficients and final sign-times-input graph, and switch cost/API/path names.
+- [ ] Mirror C++ `Poly2D` initialization, Stockmeyer four-term call graph, eager `call_stockmeyer_feature2d`, and lazy `call_custom_compute`.
+- [ ] Copy `test_poly_relu_bsgs_feature2d`, preserve coefficients and final sign-times-input graph, instantiate `Poly2D`, and switch cost/API/path names.
 - [ ] Run the focused Python test and inspect generated argument names/levels.
 
 ### Task 5: Full validation and cleanup

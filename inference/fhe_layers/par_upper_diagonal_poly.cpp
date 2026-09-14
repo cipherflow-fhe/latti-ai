@@ -87,7 +87,7 @@ ParUpperDiagonalPoly::ParUpperDiagonalPoly(const CkksParameter& param,
                                            uint32_t init_level,
                                            Array<double, 2>&& coeffs,
                                            uint32_t order_in)
-    : MatPolyBase(param, move(coeffs), init_level, static_cast<int>(order_in)) {
+    : PolyBase(param, init_level, static_cast<int>(order_in)), coeffs_(move(coeffs)) {
     assert(order > 0);
     assert(coeffs_.get_shape()[0] == order + 1);
 

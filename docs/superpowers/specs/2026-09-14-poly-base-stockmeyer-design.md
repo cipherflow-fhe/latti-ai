@@ -2,7 +2,7 @@
 
 ## Goal
 
-Rename the generic polynomial scale/level planner from `MatPolyBase`/`mat_poly_base` to `PolyBase`/`poly_base`, remove its dependency on matrix coefficient storage, and reuse it for `PolyRelu2D` Stockmeyer evaluation. Existing `ParUpperDiagonalPoly` behavior remains unchanged, including its existing Stockmeyer Horner path. New `PolyRelu2D` APIs support ordinary and multiplexed packing and the non-Horner Stockmeyer algorithm only.
+Rename the generic polynomial scale/level planner from `PolyBase`/`mat_poly_base` to `PolyBase`/`poly_base`, remove its dependency on matrix coefficient storage, and reuse it for `PolyRelu2D` Stockmeyer evaluation. Existing `ParUpperDiagonalPoly` behavior remains unchanged, including its existing Stockmeyer Horner path. New `PolyRelu2D` APIs support ordinary and multiplexed packing and the non-Horner Stockmeyer algorithm only.
 
 ## Architecture
 
@@ -10,15 +10,15 @@ Rename the generic polynomial scale/level planner from `MatPolyBase`/`mat_poly_b
 
 `ParUpperDiagonalPoly` inherits `PolyBase` and keeps coefficient data and diagonal packing in its own class. Its includes, constructor, and build target use `poly_base.*`.
 
-`PolyRelu2D` owns a `PolyBase` planner initialized with the same CKKS parameter, level, and order as the layer. Its Stockmeyer weight preparation uses the existing ordinary/multiplexed slot construction, with coefficient scales and target levels obtained from the planner. Its execution builds powers and four-term baby polynomials, then combines giant polynomials using the planner's target levels/scales. Lazy mode generates the same plaintext nodes on demand.
+`Poly2D` is a new `PolyBase`-derived C++ layer that owns the 2D coefficient/layout state and all Stockmeyer preparation and execution APIs. It uses the existing ordinary/multiplexed slot construction, with coefficient scales and target levels obtained directly from `PolyBase`. `PolyRelu2D` remains unchanged. `Poly2D` builds powers and four-term baby polynomials, then combines giant polynomials using the planner target levels/scales; lazy mode generates the same plaintexts on demand.
 
 ## Python model generator
 
-Rename `mat_poly_base.py` and `MatPolyBase` to `poly_base.py` and `PolyBase`; update `ParUpperDiagonalPoly` and compiler transform imports. Add `PolyRelu2D.call_stockmeyer_feature2d()` and lazy generation using the same operation graph as C++ and the same generic planner metadata. Do not add Stockmeyer Horner APIs to `PolyRelu2D`.
+Rename `poly_base.py` and `PolyBase` to `poly_base.py` and `PolyBase`; update `ParUpperDiagonalPoly` and compiler transform imports. Add `Poly2D` with initialization, `call_stockmeyer_feature2d()`, and custom-compute lazy generation using the same operation graph as C++ and the same generic planner metadata. Do not add Stockmeyer Horner APIs to `PolyRelu2D`.
 
 ## Tests
 
-Add Python and heterogeneous C++ `poly_relu_stockmeyer_feature2d` tests mirroring the existing BSGS feature2d test, including the same degree-7 coefficients, level calculation, sign-times-input final operation, and numerical tolerances. Add planner/name checks through the existing ParUpperDiagonal Stockmeyer tests after renaming.
+Add Python and heterogeneous C++ `poly_relu_stockmeyer_feature2d` tests using `Poly2D` mirroring the existing BSGS feature2d test, including the same degree-7 coefficients, level calculation, sign-times-input final operation, and numerical tolerances. Add planner/name checks through the existing ParUpperDiagonal Stockmeyer tests after renaming.
 
 ## Compatibility and validation
 

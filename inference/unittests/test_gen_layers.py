@@ -63,6 +63,8 @@ from inference.model_generator.layers.par_upper_diagonal_polyact import (  # noq
     ParUpperDiagonalPolyActRNPoly,
 )
 from inference.model_generator.layers.par_upper_diagonal_poly import ParUpperDiagonalPoly  # noqa: E402
+from inference.model_generator.layers.poly_relu2d import PolyRelu2D  # noqa: E402
+from inference.model_generator.layers.poly2d import Poly2D  # noqa: E402
 from inference.model_generator.layers.par_upper_diagonal_poly_mult_ct import ParUpperDiagonalPolyMultCt  # noqa: E402
 from inference.model_generator.layers.par_upper_diagonal_softmax import (  # noqa: E402
     ParUpperDiagonalAddPt,
@@ -852,6 +854,59 @@ class TestLayerExport(unittest.TestCase):
             output_args=[Argument('output_ct', output_ct)],
             output_instruction_path=base_path
             / f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order0}_{order1}'
+            / f'level_{level}',
+            fpga_acc=False,
+        )
+
+    def test_poly_relu_stockmeyer_feature2d(self):
+        N = 16384
+        set_param('PN14QP438')
+        n_in_channel = 32
+        input_shape = (32, 32)
+        skip = (1, 1)
+        n_in_channel_per_ct = int(np.floor(N / 2 / (input_shape[0] * input_shape[1])))
+        n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
+        order0 = 7
+        order1 = 7
+        level_cost0 = Poly2D.compute_stockmeyer_level_cost(order0)
+        level_cost1 = Poly2D.compute_stockmeyer_level_cost(order1)
+        level = level_cost0 + level_cost1 + 1  # +1 for sign(x)*x multiplication
+
+        input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+        weight_pt0 = [
+            [CkksPlaintextRingtNode(f'poly0w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order0 + 1)
+        ]
+        poly_layer0 = Poly2D(input_shape, order0, skip, n_in_channel_per_ct)
+        output_ct0 = poly_layer0.call_stockmeyer_feature2d(input_ct, weight_pt0)
+
+        weight_pt1 = [
+            [CkksPlaintextRingtNode(f'poly1w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order1 + 1)
+        ]
+        poly_layer1 = Poly2D(input_shape, order1, skip, n_in_channel_per_ct)
+        output_ct1 = poly_layer1.call_stockmeyer_feature2d(output_ct0, weight_pt1)
+
+        output_ct = list()
+        for idx in range(len(output_ct1)):
+            tmp = input_ct[idx]
+            if tmp.level > output_ct1[idx].level:
+                tmp = drop_level(tmp, tmp.level - output_ct1[idx].level)
+            tmp0 = rescale(relin(mult(output_ct1[idx], tmp)))
+            tmp1 = input_ct[idx]
+            if tmp1.level > tmp0.level:
+                tmp1 = drop_level(tmp1, tmp1.level - tmp0.level)
+            output_ct.append(add(tmp0, tmp1))
+
+        input_args = list()
+        input_args.append(Argument('input_node', input_ct))
+        for i in range(order0 + 1):
+            input_args.append(Argument(f'poly0_weight_pt{i}', weight_pt0[i]))
+        for i in range(order1 + 1):
+            input_args.append(Argument(f'poly1_weight_pt{i}', weight_pt1[i]))
+        process_custom_task(
+            input_args=input_args,
+            output_args=[Argument('output_ct', output_ct)],
+            output_instruction_path=base_path
+            / f'CKKS_poly_relu_stockmeyer_{n_in_channel}_channel_order_{order0}_{order1}'
             / f'level_{level}',
             fpga_acc=False,
         )

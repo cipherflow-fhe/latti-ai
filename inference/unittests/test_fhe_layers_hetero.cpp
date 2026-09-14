@@ -34,6 +34,7 @@
 #include "data_structs/feature.h"
 #include "fhe_layers/conv2d_packed_layer.h"
 #include "fhe_layers/poly_relu2d.h"
+#include "fhe_layers/poly2d.h"
 #include "fhe_layers/poly_relu_base.h"
 #include "fhe_layers/poly_relu1d.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer.h"
@@ -1197,7 +1198,7 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polytanh_cpp", "[fhe_layers][par_u
     const uint32_t m_prepad = 128;
     const uint32_t total_cols = 256;
     const uint32_t order = 15;
-    const int stockmeyer_level_cost = MatPolyBase::compute_stockmeyer_level_cost(order);
+    const int stockmeyer_level_cost = PolyBase::compute_stockmeyer_level_cost(order);
     const double input_scale = 40.0;
     const double default_scale = param.get_default_scale();
     Duo shape = {n_prepad, total_cols};
@@ -1325,7 +1326,7 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_horner_polygelu_cpp",
     const uint32_t total_cols = 256;
     const uint32_t order = 15;
     const int horner_baby_steps = 8;
-    const int horner_level_cost = MatPolyBase::compute_stockmeyer_horner_level_cost(order, horner_baby_steps);
+    const int horner_level_cost = PolyBase::compute_stockmeyer_horner_level_cost(order, horner_baby_steps);
     const int init_level = 3 * horner_level_cost + 5;
     CkksContext context = CkksContext::create_random_context(param, init_level);
 
@@ -1723,8 +1724,8 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
         FeatureMatEncrypted exp_arg = gamma_layer.run(context, centered);
 
         uint32_t order = static_cast<uint32_t>(profile.coeffs.size() - 1);
-        exp_arg = refresh_to_min_level(std::move(exp_arg),
-                                       MatPolyBase::compute_stockmeyer_level_cost(static_cast<int>(order)));
+        exp_arg =
+            refresh_to_min_level(std::move(exp_arg), PolyBase::compute_stockmeyer_level_cost(static_cast<int>(order)));
         ParUpperDiagonalPoly exp_poly(param, shape, head_shape, n_heads, exp_arg.level,
                                       make_coeff_matrix(profile.coeffs), order);
         exp_poly.prepare_weight_stockmeyer();
@@ -3597,7 +3598,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         in_cts.push_back(ct.copy());
     layer_data.emplace_back(static_cast<void*>(layer.get()));
 
-    const int output_level = init_level - MatPolyBase::compute_stockmeyer_level_cost(static_cast<int>(order));
+    const int output_level = init_level - PolyBase::compute_stockmeyer_level_cost(static_cast<int>(order));
     uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
         out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
@@ -4588,6 +4589,97 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs_feature2d", "", He
     fs::path project_path = base_path /
                             ("CKKS_poly_relu_bsgs_" + to_string(n_channel) + "_channel_order_" + to_string(order0) +
                              "_" + to_string(order1)) /
+                            ("level_" + to_string(init_level));
+
+    auto arg_names = read_arg_names(project_path);
+    // Build cxx_args matching Python naming: poly0_weight_pt{i}, poly1_weight_pt{i}
+    vector<CxxVectorArgument> cxx_args;
+    int idx = 0;
+    cxx_args.push_back({arg_names[idx++], &input_feature.data});
+    for (int i = 0; i <= order0; i++)
+        cxx_args.push_back({arg_names[idx++], &poly0.weight_pt[i]});
+    for (int i = 0; i <= order1; i++)
+        cxx_args.push_back({arg_names[idx++], &poly1.weight_pt[i]});
+    cxx_args.push_back({arg_names[idx++], &output_feature.data});
+
+    this->run(project_path, cxx_args);
+
+    auto output_mg = output_feature.unpack_multiplexed();
+
+    // Plaintext reference: result = x + sign(x) * x
+    auto p0_plain = poly0.run_plaintext_for_non_absorb_case(input_array);
+    auto sign_plain = poly1.run_plaintext_for_non_absorb_case(p0_plain);
+    Array<double, 3> expected({n_channel, input_shape[0], input_shape[1]});
+    for (uint64_t i = 0; i < input_array.get_size(); i++) {
+        expected.set(i, input_array.get(i) + sign_plain.get(i) * input_array.get(i));
+    }
+
+    // relu(x) = (x + sign(x) * x) / 2
+    Array<double, 3> relu_ct({n_channel, input_shape[0], input_shape[1]});
+    Array<double, 3> relu_expected({n_channel, input_shape[0], input_shape[1]});
+    Array<double, 3> relu_true({n_channel, input_shape[0], input_shape[1]});
+    for (uint64_t i = 0; i < input_array.get_size(); i++) {
+        relu_ct.set(i, output_mg.get(i) / 2.0);
+        relu_expected.set(i, expected.get(i) / 2.0);
+        relu_true.set(i, std::max(0.0, input_array.get(i)));
+    }
+
+    print_double_message(input_array.to_array_1d().data(), "input_array", 10);
+    print_double_message(relu_true.to_array_1d().data(), "relu_true", 10);
+    print_double_message(relu_expected.to_array_1d().data(), "relu_plain", 10);
+    print_double_message(relu_ct.to_array_1d().data(), "relu_ct", 10);
+
+    auto compare_result = compare(expected, output_mg);
+    REQUIRE(compare_result.max_error < 5.0e-2 * compare_result.max_abs);
+    REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
+}
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_stockmeyer_feature2d", "", HeteroProcessors) {
+    Duo input_shape = {32, 32};
+    uint32_t n_channel = 32;
+    Duo skip = {1, 1};
+    uint32_t n_channel_per_ct = div_ceil(this->n_slot, prod(input_shape));
+    int order0 = 7;
+    int order1 = 7;
+    int level_cost0 = Poly2D::compute_stockmeyer_level_cost(order0);
+    int level_cost1 = Poly2D::compute_stockmeyer_level_cost(order1);
+    int init_level = level_cost0 + level_cost1 + 1;  // +1 for sign(x)*x multiplication
+
+    auto input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
+    // auto weight0 = gen_random_array<2>({order0 + 1, (int)n_channel}, 1.0);
+    // auto weight1 = gen_random_array<2>({order1 + 1, (int)n_channel}, 1.0);
+    auto weight0 = make_uniform_coeff(
+        {0.0, 7.30445164958251, 0.0, -3.46825871108659e1, 0.0, 5.98596518298826e1, 0.0, -3.18755225906466e1},
+        n_channel);
+    auto weight1 = make_uniform_coeff(
+        {0.0, 2.40085652217597, 0.0, -2.63125454261783, 0.0, 1.54912674773593, 0.0, -3.31172956504304e-1}, n_channel);
+
+    Feature2DEncrypted input_feature(&this->context, init_level, skip);
+    input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
+
+    // Layer 0: p0(x)
+    Poly2D poly0(this->context.get_parameter(), input_shape, order0, move(weight0), skip, n_channel_per_ct, init_level);
+    poly0.prepare_weight_stockmeyer();
+
+    // Layer 1: sign(x) ≈ p1(p0(x))
+    Poly2D poly1(this->context.get_parameter(), input_shape, order1, move(weight1), skip, n_channel_per_ct,
+                 init_level - level_cost0);
+    poly1.prepare_weight_stockmeyer();
+
+    // Output: after sign*x mult + rescale
+    int output_level = init_level - level_cost0 - level_cost1 - 1;
+    Feature2DEncrypted output_feature(&this->context, output_level);
+    output_feature.skip = skip;
+    output_feature.shape = input_shape;
+    output_feature.n_channel = n_channel;
+    output_feature.n_channel_per_ct = input_feature.n_channel_per_ct;
+    for (int i = 0; i < div_ceil(n_channel, n_channel_per_ct); i++) {
+        output_feature.data.push_back(this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+    }
+
+    fs::path project_path = base_path /
+                            ("CKKS_poly_relu_stockmeyer_" + to_string(n_channel) + "_channel_order_" +
+                             to_string(order0) + "_" + to_string(order1)) /
                             ("level_" + to_string(init_level));
 
     auto arg_names = read_arg_names(project_path);

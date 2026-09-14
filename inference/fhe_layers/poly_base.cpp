@@ -16,7 +16,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "mat_poly_base.h"
+#include "poly_base.h"
 #include <algorithm>
 #include <functional>
 #include <stdexcept>
@@ -51,7 +51,7 @@ int stockmeyer_baby_poly_count(int order) {
 
 void validate_horner_baby_steps(int baby_steps) {
     if (baby_steps != 4 && baby_steps != 8) {
-        throw invalid_argument("MatPolyBase Stockmeyer Horner supports only baby_steps 4 or 8");
+        throw invalid_argument("PolyBase Stockmeyer Horner supports only baby_steps 4 or 8");
     }
 }
 
@@ -67,15 +67,14 @@ int stockmeyer_horner_baby_poly_count(int order, int baby_steps) {
 
 }  // namespace
 
-MatPolyBase::MatPolyBase(const CkksParameter& param_in, Array<double, 2>&& coeffs_in, uint32_t level_in, int order_in)
-    : Layer(param_in), order(order_in), coeffs_(move(coeffs_in)) {
+PolyBase::PolyBase(const CkksParameter& param_in, uint32_t level_in, int order_in) : Layer(param_in), order(order_in) {
     level_ = level_in;
     N = param_in.get_n();
 }
 
-int MatPolyBase::compute_stockmeyer_level_cost(int order) {
+int PolyBase::compute_stockmeyer_level_cost(int order) {
     if (order <= 0 || order >= 64) {
-        throw invalid_argument("MatPolyBase Stockmeyer supports only order < 64");
+        throw invalid_argument("PolyBase Stockmeyer supports only order < 64");
     }
     if (order < 2) {
         return 1;
@@ -85,28 +84,28 @@ int MatPolyBase::compute_stockmeyer_level_cost(int order) {
     return 2 + ceil_log2_int(n_baby_polys);
 }
 
-int MatPolyBase::compute_stockmeyer_horner_level_cost(int order, int baby_steps) {
+int PolyBase::compute_stockmeyer_horner_level_cost(int order, int baby_steps) {
     validate_horner_baby_steps(baby_steps);
     if (order <= 0 || order >= 64) {
-        throw invalid_argument("MatPolyBase Stockmeyer Horner supports only order < 64");
+        throw invalid_argument("PolyBase Stockmeyer Horner supports only order < 64");
     }
 
     int n_baby_polys = stockmeyer_horner_baby_poly_count(order, baby_steps);
     return (n_baby_polys - 1) + log2_horner_baby_steps(baby_steps);
 }
 
-void MatPolyBase::init_stockmeyer() {
+void PolyBase::init_stockmeyer() {
     if (stockmeyer_initialized) {
         return;
     }
 
     if (order <= 0 || order >= 64) {
-        throw invalid_argument("MatPolyBase Stockmeyer supports only order < 64");
+        throw invalid_argument("PolyBase Stockmeyer supports only order < 64");
     }
 
     int level_cost = compute_stockmeyer_level_cost(order);
     if ((int)level_ < level_cost) {
-        throw invalid_argument("MatPolyBase Stockmeyer input level is too low for order " + to_string(order));
+        throw invalid_argument("PolyBase Stockmeyer input level is too low for order " + to_string(order));
     }
 
     modulus.clear();
@@ -123,19 +122,19 @@ void MatPolyBase::init_stockmeyer() {
     stockmeyer_initialized = true;
 }
 
-void MatPolyBase::init_stockmeyer_horner(int baby_steps) {
+void PolyBase::init_stockmeyer_horner(int baby_steps) {
     validate_horner_baby_steps(baby_steps);
     if (stockmeyer_horner_initialized && stockmeyer_horner_baby_steps == baby_steps) {
         return;
     }
 
     if (order <= 0 || order >= 64) {
-        throw invalid_argument("MatPolyBase Stockmeyer Horner supports only order < 64");
+        throw invalid_argument("PolyBase Stockmeyer Horner supports only order < 64");
     }
 
     int level_cost = compute_stockmeyer_horner_level_cost(order, baby_steps);
     if ((int)level_ < level_cost) {
-        throw invalid_argument("MatPolyBase Stockmeyer Horner input level is too low for order " + to_string(order));
+        throw invalid_argument("PolyBase Stockmeyer Horner input level is too low for order " + to_string(order));
     }
 
     modulus.clear();
@@ -153,7 +152,7 @@ void MatPolyBase::init_stockmeyer_horner(int baby_steps) {
     stockmeyer_horner_initialized = true;
 }
 
-void MatPolyBase::compute_stockmeyer_power_info() {
+void PolyBase::compute_stockmeyer_power_info() {
     double S = param_.get_default_scale();
     stockmeyer_powers.clear();
 
@@ -163,7 +162,7 @@ void MatPolyBase::compute_stockmeyer_power_info() {
         const auto& half = stockmeyer_powers.at(half_power);
         int result_level = half.level - 1;
         if (result_level < 0 || half.level >= (int)modulus.size()) {
-            throw invalid_argument("MatPolyBase Stockmeyer power level is out of range");
+            throw invalid_argument("PolyBase Stockmeyer power level is out of range");
         }
         double result_scale = (half.scale / modulus[half.level]) * half.scale;
         stockmeyer_powers[power] = {half.depth + 1, result_level, result_scale, half_power, half_power, true};
@@ -183,7 +182,7 @@ void MatPolyBase::compute_stockmeyer_power_info() {
     }
 }
 
-void MatPolyBase::compute_stockmeyer_horner_power_info() {
+void PolyBase::compute_stockmeyer_horner_power_info() {
     double S = param_.get_default_scale();
     stockmeyer_horner_powers.clear();
 
@@ -193,7 +192,7 @@ void MatPolyBase::compute_stockmeyer_horner_power_info() {
         const auto& half = stockmeyer_horner_powers.at(half_power);
         int result_level = half.level - 1;
         if (result_level < 0 || half.level >= (int)modulus.size()) {
-            throw invalid_argument("MatPolyBase Stockmeyer Horner power level is out of range");
+            throw invalid_argument("PolyBase Stockmeyer Horner power level is out of range");
         }
         double result_scale = (half.scale / modulus[half.level]) * half.scale;
         stockmeyer_horner_powers[power] = {half.depth + 1, result_level, result_scale, half_power, half_power, true};
@@ -204,8 +203,8 @@ void MatPolyBase::compute_stockmeyer_horner_power_info() {
     }
 }
 
-void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& coeff_scale,
-                                                        std::map<int, int>& level_order) {
+void PolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& coeff_scale,
+                                                     std::map<int, int>& level_order) {
     coeff_scale.clear();
     level_order.clear();
 
@@ -249,7 +248,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
         int target_level = stockmeyer_baby_poly_output_level[j];
         double target_scale = stockmeyer_baby_poly_output_scale[j];
         if (target_level < 0 || target_level > (int)level_) {
-            throw invalid_argument("MatPolyBase Stockmeyer baby polynomial target level is out of range");
+            throw invalid_argument("PolyBase Stockmeyer baby polynomial target level is out of range");
         }
 
         int base = j * stockmeyer_baby_steps;
@@ -259,14 +258,14 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
         }
         if (base + 1 <= order) {
             if (target_level + 1 > (int)level_) {
-                throw invalid_argument("MatPolyBase Stockmeyer linear coefficient target level is out of range");
+                throw invalid_argument("PolyBase Stockmeyer linear coefficient target level is out of range");
             }
             level_order[base + 1] = target_level + 1;
             coeff_scale[base + 1] = (target_scale / A1) * param_.get_q(target_level + 1);
         }
         if (base + 2 <= order) {
             if (target_level + 1 > (int)level_) {
-                throw invalid_argument("MatPolyBase Stockmeyer quadratic coefficient target level is out of range");
+                throw invalid_argument("PolyBase Stockmeyer quadratic coefficient target level is out of range");
             }
             double A2 = stockmeyer_powers.at(2).scale;
             level_order[base + 2] = target_level + 1;
@@ -274,7 +273,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
         }
         if (base + 3 <= order) {
             if (target_level + 2 > (int)level_) {
-                throw invalid_argument("MatPolyBase Stockmeyer cubic coefficient target level is out of range");
+                throw invalid_argument("PolyBase Stockmeyer cubic coefficient target level is out of range");
             }
             double A2 = stockmeyer_powers.at(2).scale;
             level_order[base + 3] = target_level + 2;
@@ -284,8 +283,8 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
     }
 }
 
-void MatPolyBase::compute_coefficient_scales_stockmeyer_horner(std::map<int, double>& coeff_scale,
-                                                               std::map<int, int>& level_order) {
+void PolyBase::compute_coefficient_scales_stockmeyer_horner(std::map<int, double>& coeff_scale,
+                                                            std::map<int, int>& level_order) {
     coeff_scale.clear();
     level_order.clear();
 
@@ -305,7 +304,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer_horner(std::map<int, dou
     for (int j = 1; j < stockmeyer_horner_n_baby_polys; j++) {
         int target_level = Lout + j;
         if (target_level < 0 || target_level > (int)level_) {
-            throw invalid_argument("MatPolyBase Stockmeyer Horner baby polynomial target level is out of range");
+            throw invalid_argument("PolyBase Stockmeyer Horner baby polynomial target level is out of range");
         }
         stockmeyer_horner_baby_poly_output_level[j] = target_level;
         stockmeyer_horner_baby_poly_output_scale[j] =
@@ -314,7 +313,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer_horner(std::map<int, dou
 
     auto set_coeff = [&](int coeff_idx, int coeff_level, double scale) {
         if (coeff_level < 0 || coeff_level > (int)level_) {
-            throw invalid_argument("MatPolyBase Stockmeyer Horner coefficient target level is out of range");
+            throw invalid_argument("PolyBase Stockmeyer Horner coefficient target level is out of range");
         }
         level_order[coeff_idx] = coeff_level;
         coeff_scale[coeff_idx] = scale;
@@ -324,7 +323,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer_horner(std::map<int, dou
         int target_level = stockmeyer_horner_baby_poly_output_level[j];
         double target_scale = stockmeyer_horner_baby_poly_output_scale[j];
         if (target_level < 0 || target_level > (int)level_) {
-            throw invalid_argument("MatPolyBase Stockmeyer Horner baby polynomial target level is out of range");
+            throw invalid_argument("PolyBase Stockmeyer Horner baby polynomial target level is out of range");
         }
 
         int base = j * stockmeyer_horner_baby_steps;

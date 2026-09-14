@@ -23,7 +23,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
-from inference.model_generator.layers.mat_poly_base import MatPolyBase
+from inference.model_generator.layers.poly_base import PolyBase
 
 
 op_class = 'ParUpperDiagonalPoly'
@@ -50,7 +50,7 @@ class _StockmeyerNode:
     const_only: bool = False
 
 
-class ParUpperDiagonalPoly(MatPolyBase):
+class ParUpperDiagonalPoly(PolyBase):
     """Python model-generator counterpart of C++ ParUpperDiagonalPoly."""
 
     def __init__(self, shape: tuple, head_shape: tuple, n_heads: int, n_slot: int, order: int):

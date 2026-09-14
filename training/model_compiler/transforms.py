@@ -23,7 +23,7 @@ import networkx as nx
 
 from components import *
 from inference.model_generator.layers.poly_relu_base import PolyReluBase
-from inference.model_generator.layers.mat_poly_base import MatPolyBase
+from inference.model_generator.layers.poly_base import PolyBase
 
 
 class Direction(Enum):
@@ -936,7 +936,7 @@ def set_level_costs(graph: LayerAbstractGraph):
         elif compute_node.layer_type == 'pdmupperaddpt':
             graph.dag.nodes[compute_node]['level_cost'] = 0
         elif compute_node.layer_type == 'pdmupperpoly':
-            graph.dag.nodes[compute_node]['level_cost'] = MatPolyBase.compute_stockmeyer_level_cost(compute_node.order)
+            graph.dag.nodes[compute_node]['level_cost'] = PolyBase.compute_stockmeyer_level_cost(compute_node.order)
         elif compute_node.layer_type == 'pdmmulsquare':
             graph.dag.nodes[compute_node]['level_cost'] = 2
         elif compute_node.layer_type == 'pdmheadcolsum':
@@ -1544,7 +1544,7 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
         exp_arg,
         _make_upper_poly(f'{base_id}_softmax_exp_poly', coefficients),
         f'{base_id}_softmax_exp_poly_out',
-        MatPolyBase.compute_stockmeyer_level_cost(len(coefficients) - 1),
+        PolyBase.compute_stockmeyer_level_cost(len(coefficients) - 1),
     )
 
     values = exp_poly
@@ -1873,7 +1873,7 @@ def _expand_custom_gelu(graph: LayerAbstractGraph, node: ComputeNode):
         x_scaled,
         _make_upper_poly(f'{base_id}_gelu_poly1', p1),
         f'{base_id}_gelu_f1',
-        MatPolyBase.compute_stockmeyer_level_cost(len(p1) - 1),
+        PolyBase.compute_stockmeyer_level_cost(len(p1) - 1),
     )
     f1_scaled = _append_unary_compute(
         graph,
@@ -1887,7 +1887,7 @@ def _expand_custom_gelu(graph: LayerAbstractGraph, node: ComputeNode):
         f1_scaled,
         _make_upper_poly(f'{base_id}_gelu_poly2', p2),
         f'{base_id}_gelu_half_tanh',
-        MatPolyBase.compute_stockmeyer_level_cost(len(p2) - 1),
+        PolyBase.compute_stockmeyer_level_cost(len(p2) - 1),
     )
     half_tanh_scaled = _append_unary_compute(
         graph,
@@ -1901,7 +1901,7 @@ def _expand_custom_gelu(graph: LayerAbstractGraph, node: ComputeNode):
         half_tanh_scaled,
         _make_upper_poly(f'{base_id}_gelu_poly3', p3),
         f'{base_id}_gelu_refined',
-        MatPolyBase.compute_stockmeyer_level_cost(len(p3) - 1),
+        PolyBase.compute_stockmeyer_level_cost(len(p3) - 1),
     )
 
     gelu_node = ComputeNode(f'{base_id}_gelu_mult_ct', 'pdmupperpolymultct', 1, 1)
@@ -1946,7 +1946,7 @@ def _expand_custom_tanh(graph: LayerAbstractGraph, node: ComputeNode):
         x_scaled,
         _make_upper_poly(f'{base_id}_tanh_poly1', p1),
         f'{base_id}_tanh_f1',
-        MatPolyBase.compute_stockmeyer_level_cost(len(p1) - 1),
+        PolyBase.compute_stockmeyer_level_cost(len(p1) - 1),
     )
     f1_scaled = _append_unary_compute(
         graph,
@@ -1958,7 +1958,7 @@ def _expand_custom_tanh(graph: LayerAbstractGraph, node: ComputeNode):
     tanh_node = _make_upper_poly(f'{base_id}_tanh_poly2', p2)
     graph.dag.add_node(
         tanh_node,
-        **_compute_attrs(MatPolyBase.compute_stockmeyer_level_cost(len(p2) - 1), tanh_node.layer_id),
+        **_compute_attrs(PolyBase.compute_stockmeyer_level_cost(len(p2) - 1), tanh_node.layer_id),
     )
     graph.dag.add_edge(f1_scaled, tanh_node)
     graph.dag.add_edge(tanh_node, out, **output_edge_attrs)
