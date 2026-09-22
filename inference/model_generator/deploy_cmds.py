@@ -114,15 +114,22 @@ def set_param(param_name):
     if param_name not in _FHE_PARAMS:
         raise ValueError(f'Unsupported FHE parameter name: {param_name!r}')
     fhe = _FHE_PARAMS[param_name]
+
+    # lattisense v6：参数统一用 log_n（v3 的 CkksBtpParam / n= 参数已移除）。
+    n = fhe.poly_modulus_degree
+    log_n = 0
+    while (1 << log_n) < n:
+        log_n += 1
+
+    param = CkksParam.create_custom_param(
+        log_n=log_n,
+        q=fhe.q,
+        p=fhe.p,
+        log_scale=fhe.log_default_scale,
+    )
+    # BTP 参数不再有独立类型，用 enable_bootstrapping 标志区分。
     if param_name == 'N16QP1546H192H32':
-        param = CkksBtpParam.create_default_param()
-    else:
-        param = CkksParam.create_custom_param(
-            n=fhe.poly_modulus_degree,
-            q=fhe.q,
-            p=fhe.p,
-        )
-        param.scale = 1 << fhe.log_default_scale
+        param.enable_bootstrapping = True
     set_fhe_param(param)
 
 
@@ -1201,12 +1208,16 @@ def gen_custom_task(
             feature_id_to_nodes_map.update({output_fid: layer_output_nodes})
 
         elif layer_config['type'] == 'bootstrapping':
+            # v6：bootstrap 后的输出 level 由模型的 feature 规划决定，
+            # 不等于 g_param.max_level，需要显式传入。
+            btp_out_fid = layer_output_feature_ids[0]
+            level_out = int(config_info['feature'][btp_out_fid]['level'])
             layer_output_nodes = []
             for node in feature_id_to_nodes_map[layer_input_feature_ids[0]]:
                 if node.level > 0:
                     node = drop_level(node, node.level)
-                layer_output_nodes.append(bootstrap(node))
-            feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+                layer_output_nodes.append(bootstrap(node, output_level=level_out))
+            feature_id_to_nodes_map.update({btp_out_fid: layer_output_nodes})
 
         elif layer_config['type'] in ('add', 'add2d'):
             is_feature_mat_add = any(
