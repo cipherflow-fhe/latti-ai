@@ -89,7 +89,7 @@ ParUpperDiagonalPolyMultCt::ParUpperDiagonalPolyMultCt(const CkksParameter& para
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.n() / 2;
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 
     H_ = next_pow2(H_prepad_);
@@ -127,16 +127,16 @@ vector<double> ParUpperDiagonalPolyMultCt::build_constant_vec(double value, uint
     return vec;
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParUpperDiagonalPolyMultCt::generate_one_pt(CkksContext& ctx, uint32_t mb, uint32_t ct_local, uint32_t) const {
-    double D = param_.get_default_scale();
-    double scale = static_cast<double>(param_.get_q(level_ - 1)) / D * static_cast<double>(param_.get_q(level_));
-    return ctx.encode_ringt(build_constant_vec(1.0, mb, ct_local), scale);
+    double D = param_.default_scale();
+    double scale = static_cast<double>(param_.q()[level_ - 1]) / D * static_cast<double>(param_.q()[level_]);
+    return ls_compat::encode_ringt(ctx, build_constant_vec(1.0, mb, ct_local), scale);
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParUpperDiagonalPolyMultCt::generate_half_pt(CkksContext& ctx, uint32_t mb, uint32_t ct_local, uint32_t) const {
-    return ctx.encode_ringt(build_constant_vec(0.5, mb, ct_local), param_.get_default_scale());
+    return ls_compat::encode_ringt(ctx, build_constant_vec(0.5, mb, ct_local), param_.default_scale());
 }
 
 void ParUpperDiagonalPolyMultCt::prepare_weight() {
@@ -166,7 +166,7 @@ ParUpperDiagonalPolyMultCt::run(CkksContext& ctx, const FeatureMatEncrypted& hal
     assert(x.data.size() == total_cts());
     assert(half_tanh.data.size() == x.data.size());
 
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     FeatureMatEncrypted result(&ctx, level_ - 2);
     result.shape = x.shape;
     result.head_shape = x.head_shape;
@@ -176,12 +176,12 @@ ParUpperDiagonalPolyMultCt::run(CkksContext& ctx, const FeatureMatEncrypted& hal
     result.data.resize(total_cts());
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto one_mul = ctx_copy.ringt_to_mul(one_pt_[idx], level_);
-        auto x_scaled = ctx_copy.rescale(ctx_copy.mult_plain_mul(x.data[idx], one_mul), D);  // level L-1, scale q_{L-1}
+        auto one_mul = ls_compat::ringt_to_mul(ctx_copy, one_pt_[idx], level_);
+        auto x_scaled = ctx_copy.rescale(ctx_copy.mult(x.data[idx], one_mul));  // level L-1, scale q_{L-1}
         auto half_tanh_drop = ctx_copy.drop_level(half_tanh.data[idx]);
-        auto half_plus = ctx_copy.add_plain_ringt(half_tanh_drop, half_pt_[idx]);  // level L-1, scale D
+        auto half_plus = ctx_copy.add(half_tanh_drop, half_pt_[idx]);  // level L-1, scale D
         auto product = ctx_copy.mult(x_scaled, half_plus);
-        result.data[idx] = ctx_copy.rescale(ctx_copy.relinearize(product), D);  // level L-2, scale D
+        result.data[idx] = ctx_copy.rescale(ctx_copy.relinearize(product));  // level L-2, scale D
     });
 
     result.level = level_ - 2;

@@ -90,10 +90,10 @@ void UpsampleNearestLayer::prepare_weight_lazy() {
     select_tensor_pt.clear();
 }
 
-CkksPlaintextRingt UpsampleNearestLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int idx) const {
+CkksPlaintext UpsampleNearestLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int idx) const {
     // Generate select_tensor on-demand
     auto si = select_tensor(idx);
-    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_));
+    return ls_compat::encode_ringt(ctx, si, ctx.parameter().q()[level_]);
 }
 
 Feature2DEncrypted UpsampleNearestLayer::run(CkksContext& ctx, const Feature2DEncrypted& x) {
@@ -138,17 +138,17 @@ Feature2DEncrypted UpsampleNearestLayer::run(CkksContext& ctx, const Feature2DEn
             // Lazy mode: generate plaintext on-demand if select_tensor_pt is empty
             if (select_tensor_pt.empty()) {
                 auto pt_ringt = generate_select_tensor_pt_for_index(ctx_copy, out_channel_pos);
-                auto pt = ctx_copy.ringt_to_mul(pt_ringt, level_);
-                c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], pt);
+                auto pt = ls_compat::ringt_to_mul(ctx_copy, pt_ringt, level_);
+                c_m_s = ctx_copy.mult(s_rots[steps[i]], pt);
             } else {
                 auto& pt_ringt = select_tensor_pt[out_channel_pos];
-                auto pt = ctx_copy.ringt_to_mul(pt_ringt, level_);
-                c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], pt);
+                auto pt = ls_compat::ringt_to_mul(ctx_copy, pt_ringt, level_);
+                c_m_s = ctx_copy.mult(s_rots[steps[i]], pt);
             }
 
             if ((idx * x.n_channel_per_ct + i) < x.n_channel) {
                 result_tmp[idx * x.n_channel_per_ct + i] =
-                    move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
+                    move(ctx_copy.rescale(c_m_s));
             }
         }
     });

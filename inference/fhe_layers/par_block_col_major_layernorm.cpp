@@ -50,7 +50,7 @@ ParBlockColMajorLNStats::ParBlockColMajorLNStats(const CkksParameter& param,
     n_heads_ = n_heads;
     cols_per_head_ = total_dim_ / n_heads_;
     n_h_padded_ = next_power_of_2(n_heads);
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.n() / 2;
     assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
     assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
 
@@ -71,13 +71,13 @@ ParBlockColMajorLNStats::ParBlockColMajorLNStats(const CkksParameter& param,
     num_block_cols_ = div_ceil(cols_per_head_, d_);
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParBlockColMajorLNStats::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t, uint32_t, uint32_t) const {
-    double D = param_.get_default_scale();
-    double q_L = param_.get_q(level_);
-    double q_L1 = param_.get_q(level_ - 1);
-    double q_L2 = param_.get_q(level_ - 2);
-    double q_L3 = param_.get_q(level_ - 3);
+    double D = param_.default_scale();
+    double q_L = param_.q()[level_];
+    double q_L1 = param_.q()[level_ - 1];
+    double q_L2 = param_.q()[level_ - 2];
+    double q_L3 = param_.q()[level_ - 3];
     double norm_dim = static_cast<double>(total_dim_);
 
     if (pt_idx == 0) {
@@ -88,19 +88,19 @@ ParBlockColMajorLNStats::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t
             if (h_local == 0)
                 h0_mask[i] = 1.0;
         }
-        return ctx.encode_ringt(h0_mask, q_L);
+        return ls_compat::encode_ringt(ctx, h0_mask, q_L);
     }
     if (pt_idx == 1) {
         vector<double> inv_n_vec(n_slot_, 1.0 / norm_dim);
-        return ctx.encode_ringt(inv_n_vec, q_L1);
+        return ls_compat::encode_ringt(ctx, inv_n_vec, q_L1);
     }
     if (pt_idx == 2) {
         vector<double> iv_vec(n_slot_, inv_var_);
-        return ctx.encode_ringt(iv_vec, q_L2 / D * q_L3);
+        return ls_compat::encode_ringt(ctx, iv_vec, q_L2 / D * q_L3);
     }
     if (pt_idx == 3) {
         vector<double> eps_vec(n_slot_, eps_ * inv_var_);
-        return ctx.encode_ringt(eps_vec, D);
+        return ls_compat::encode_ringt(ctx, eps_vec, D);
     }
     throw runtime_error("ParBlockColMajorLNStats: unknown pt_idx " + to_string(pt_idx));
 }
@@ -127,7 +127,7 @@ CkksCiphertext ParBlockColMajorLNStats::intra_block_col_sum(CkksContext& ctx, co
 }
 
 vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     uint32_t total_cts = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
 
     // Step 1: Column sum + x_sq for all ciphertexts
@@ -138,7 +138,7 @@ vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const Feat
         col_sum_per_block[ct_idx] = intra_block_col_sum(ctx_copy, x.data[ct_idx]);
         auto prod = ctx_copy.mult(x.data[ct_idx], x.data[ct_idx]);
         auto relin = ctx_copy.relinearize(prod);
-        x_sq[ct_idx] = ctx_copy.rescale(relin, D / param_.get_q(level_) * D);
+        x_sq[ct_idx] = ctx_copy.rescale(relin);
     });
 
     // Step 2: Cross-block-col and cross-group sums of column-summed data
@@ -166,9 +166,9 @@ vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const Feat
             auto rotated = ctx_copy.rotate(summed, (int)step);
             summed = ctx_copy.add(summed, rotated);
         }
-        auto mask_mul = ctx_copy.ringt_to_mul(h0_mask_pt_, summed.get_level());
-        auto masked = ctx_copy.mult_plain_mul(summed, mask_mul);
-        auto masked_rescaled = ctx_copy.rescale(masked, D);
+        auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, h0_mask_pt_, summed.level());
+        auto masked = ctx_copy.mult(summed, mask_mul);
+        auto masked_rescaled = ctx_copy.rescale(masked);
         CkksCiphertext replicated = masked_rescaled.copy();
         for (uint32_t step = 1; step < S_; step *= 2) {
             auto rotated = ctx_copy.rotate(replicated, -(int)step);
@@ -208,9 +208,9 @@ vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const Feat
             auto rotated = ctx_copy.rotate(summed, (int)step);
             summed = ctx_copy.add(summed, rotated);
         }
-        auto mask_mul = ctx_copy.ringt_to_mul(h0_mask_pt_, summed.get_level());
-        auto masked = ctx_copy.mult_plain_mul(summed, mask_mul);
-        auto masked_rescaled = ctx_copy.rescale(masked, D / param_.get_q(level_ - 1) * D);
+        auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, h0_mask_pt_, summed.level());
+        auto masked = ctx_copy.mult(summed, mask_mul);
+        auto masked_rescaled = ctx_copy.rescale(masked);
         CkksCiphertext replicated = masked_rescaled.copy();
         for (uint32_t step = 1; step < S_; step *= 2) {
             auto rotated = ctx_copy.rotate(replicated, -(int)step);
@@ -223,9 +223,9 @@ vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const Feat
     // Step 6: mean = sum_x * pt(1/norm_dim) -> L-2, exact D
     vector<CkksCiphertext> mean_cts(num_block_rows_);
     parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto pt_inv_n = ctx_copy.ringt_to_mul(inv_n_pt_, level_ - 1);
-        auto p = ctx_copy.mult_plain_mul(sum_x[bi], pt_inv_n);
-        mean_cts[bi] = ctx_copy.rescale(p, D);
+        auto pt_inv_n = ls_compat::ringt_to_mul(ctx_copy, inv_n_pt_, level_ - 1);
+        auto p = ctx_copy.mult(sum_x[bi], pt_inv_n);
+        mean_cts[bi] = ctx_copy.rescale(p);
     });
     // mean at L-2, scale D
 
@@ -234,11 +234,11 @@ vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const Feat
     vector<CkksCiphertext> mean_sq(num_block_rows_);
     parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
         auto prod = ctx_copy.mult(mean_cts[bi], mean_cts[bi]);
-        mean_sq[bi] = ctx_copy.rescale(ctx_copy.relinearize(prod), D / param_.get_q(level_ - 2) * D);
+        mean_sq[bi] = ctx_copy.rescale(ctx_copy.relinearize(prod));
 
-        auto pt_inv_n = ctx_copy.ringt_to_mul(inv_n_pt_, level_ - 2);
-        auto p = ctx_copy.mult_plain_mul(sum_x_sq_row[bi], pt_inv_n);
-        E_x_sq[bi] = ctx_copy.rescale(p, D / param_.get_q(level_ - 2) * D);
+        auto pt_inv_n = ls_compat::ringt_to_mul(ctx_copy, inv_n_pt_, level_ - 2);
+        auto p = ctx_copy.mult(sum_x_sq_row[bi], pt_inv_n);
+        E_x_sq[bi] = ctx_copy.rescale(p);
     });
 
     // Step 8: var = E_x_sq - mean_sq
@@ -250,10 +250,10 @@ vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const Feat
     // Step 9: a = var * inv_var + eps*inv_var
     vector<CkksCiphertext> a_cts(num_block_rows_);
     parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto pt_iv = ctx_copy.ringt_to_mul(iv_pt_, level_ - 3);
-        auto p = ctx_copy.mult_plain_mul(var_cts[bi], pt_iv);
-        a_cts[bi] = ctx_copy.rescale(p, D);
-        a_cts[bi] = ctx_copy.add_plain_ringt(a_cts[bi], eps_add_pt_);
+        auto pt_iv = ls_compat::ringt_to_mul(ctx_copy, iv_pt_, level_ - 3);
+        auto p = ctx_copy.mult(var_cts[bi], pt_iv);
+        a_cts[bi] = ctx_copy.rescale(p);
+        a_cts[bi] = ctx_copy.add(a_cts[bi], eps_add_pt_);
     });
 
     return a_cts;
@@ -293,7 +293,7 @@ ParBlockColMajorLNXCentered::ParBlockColMajorLNXCentered(const CkksParameter& pa
     n_heads_ = n_heads;
     cols_per_head_ = total_dim_ / n_heads_;
     n_h_padded_ = next_power_of_2(n_heads);
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.n() / 2;
     assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
     assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
 
@@ -314,10 +314,10 @@ ParBlockColMajorLNXCentered::ParBlockColMajorLNXCentered(const CkksParameter& pa
     num_block_cols_ = div_ceil(cols_per_head_, d_);
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParBlockColMajorLNXCentered::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t, uint32_t, uint32_t) const {
-    double q_L = param_.get_q(level_);
-    double q_L1 = param_.get_q(level_ - 1);
+    double q_L = param_.q()[level_];
+    double q_L1 = param_.q()[level_ - 1];
     double norm_dim = static_cast<double>(total_dim_);
 
     if (pt_idx == 0) {
@@ -328,11 +328,11 @@ ParBlockColMajorLNXCentered::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint
             if (h_local == 0)
                 h0_mask[i] = 1.0;
         }
-        return ctx.encode_ringt(h0_mask, q_L);
+        return ls_compat::encode_ringt(ctx, h0_mask, q_L);
     }
     if (pt_idx == 1) {
         vector<double> inv_n_vec(n_slot_, 1.0 / norm_dim);
-        return ctx.encode_ringt(inv_n_vec, q_L1);
+        return ls_compat::encode_ringt(ctx, inv_n_vec, q_L1);
     }
     throw runtime_error("ParBlockColMajorLNXCentered: unknown pt_idx " + to_string(pt_idx));
 }
@@ -354,7 +354,7 @@ CkksCiphertext ParBlockColMajorLNXCentered::intra_block_col_sum(CkksContext& ctx
 }
 
 vector<CkksCiphertext> ParBlockColMajorLNXCentered::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     uint32_t total_cts = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
 
     // Step 1: Column sum for all ciphertexts
@@ -388,9 +388,9 @@ vector<CkksCiphertext> ParBlockColMajorLNXCentered::run(CkksContext& ctx, const 
             auto rotated = ctx_copy.rotate(summed, (int)step);
             summed = ctx_copy.add(summed, rotated);
         }
-        auto mask_mul = ctx_copy.ringt_to_mul(h0_mask_pt_, summed.get_level());
-        auto masked = ctx_copy.mult_plain_mul(summed, mask_mul);
-        auto masked_rescaled = ctx_copy.rescale(masked, D);
+        auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, h0_mask_pt_, summed.level());
+        auto masked = ctx_copy.mult(summed, mask_mul);
+        auto masked_rescaled = ctx_copy.rescale(masked);
         CkksCiphertext replicated = masked_rescaled.copy();
         for (uint32_t step = 1; step < S_; step *= 2) {
             auto rotated = ctx_copy.rotate(replicated, -(int)step);
@@ -403,9 +403,9 @@ vector<CkksCiphertext> ParBlockColMajorLNXCentered::run(CkksContext& ctx, const 
     // Step 4: mean = sum_x * pt(1/norm_dim) -> L-2, exact D
     vector<CkksCiphertext> mean_cts(num_block_rows_);
     parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto pt_inv_n = ctx_copy.ringt_to_mul(inv_n_pt_, level_ - 1);
-        auto p = ctx_copy.mult_plain_mul(sum_x[bi], pt_inv_n);
-        mean_cts[bi] = ctx_copy.rescale(p, D);
+        auto pt_inv_n = ls_compat::ringt_to_mul(ctx_copy, inv_n_pt_, level_ - 1);
+        auto p = ctx_copy.mult(sum_x[bi], pt_inv_n);
+        mean_cts[bi] = ctx_copy.rescale(p);
     });
     // mean at L-2, scale D
 
@@ -449,27 +449,27 @@ ParBlockColMajorLNMinimaxInit::ParBlockColMajorLNMinimaxInit(const CkksParameter
     : Layer(param), c0_(c0), c1_(c1), c2_(c2) {
     level_ = input_level;
     d_ = block_size;
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.n() / 2;
     chunk_size_ = d_ * d_;
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParBlockColMajorLNMinimaxInit::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t, uint32_t, uint32_t) const {
-    double D = param_.get_default_scale();
-    double q_L = param_.get_q(level_);
+    double D = param_.default_scale();
+    double q_L = param_.q()[level_];
 
     if (pt_idx == 0) {
         vector<double> c0_vec(n_slot_, c0_);
-        return ctx.encode_ringt(c0_vec, D);
+        return ls_compat::encode_ringt(ctx, c0_vec, D);
     }
     if (pt_idx == 1) {
         vector<double> c1_vec(n_slot_, c1_);
-        return ctx.encode_ringt(c1_vec, q_L);
+        return ls_compat::encode_ringt(ctx, c1_vec, q_L);
     }
     if (pt_idx == 2) {
-        double q_L1 = param_.get_q(level_ - 1);
+        double q_L1 = param_.q()[level_ - 1];
         vector<double> c2_vec(n_slot_, c2_);
-        return ctx.encode_ringt(c2_vec, q_L / D * q_L1);
+        return ls_compat::encode_ringt(ctx, c2_vec, q_L / D * q_L1);
     }
     throw runtime_error("ParBlockColMajorLNMinimaxInit: unknown pt_idx " + to_string(pt_idx));
 }
@@ -482,24 +482,24 @@ void ParBlockColMajorLNMinimaxInit::prepare_weight() {
 }
 
 vector<CkksCiphertext> ParBlockColMajorLNMinimaxInit::run(CkksContext& ctx, const vector<CkksCiphertext>& a_cts) {
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     uint32_t n_rows = a_cts.size();
     vector<CkksCiphertext> y_cts(n_rows);
 
     parallel_for(n_rows, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
         auto a_sq_raw = ctx_copy.mult(a_cts[bi], a_cts[bi]);
-        auto a_sq = ctx_copy.rescale(ctx_copy.relinearize(a_sq_raw), D / param_.get_q(level_) * D);
+        auto a_sq = ctx_copy.rescale(ctx_copy.relinearize(a_sq_raw));
 
-        auto c2_mul = ctx_copy.ringt_to_mul(c2_norm_pt_, level_ - 1);
-        auto c2a2 = ctx_copy.rescale(ctx_copy.mult_plain_mul(a_sq, c2_mul), D);
+        auto c2_mul = ls_compat::ringt_to_mul(ctx_copy, c2_norm_pt_, level_ - 1);
+        auto c2a2 = ctx_copy.rescale(ctx_copy.mult(a_sq, c2_mul));
 
-        auto c1_mul = ctx_copy.ringt_to_mul(c1_pt_, level_);
-        auto c1a = ctx_copy.rescale(ctx_copy.mult_plain_mul(a_cts[bi], c1_mul), D);
+        auto c1_mul = ls_compat::ringt_to_mul(ctx_copy, c1_pt_, level_);
+        auto c1a = ctx_copy.rescale(ctx_copy.mult(a_cts[bi], c1_mul));
 
         auto c1a_drop = ctx_copy.drop_level(c1a);
 
         auto y0 = ctx_copy.add(c1a_drop, c2a2);
-        y0 = ctx_copy.add_plain_ringt(y0, c0_add_pt_);
+        y0 = ctx_copy.add(y0, c0_add_pt_);
 
         y_cts[bi] = move(y0);
     });
@@ -529,24 +529,24 @@ ParBlockColMajorLNGoldschmidt::ParBlockColMajorLNGoldschmidt(const CkksParameter
     : Layer(param) {
     level_ = input_level;
     d_ = block_size;
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.n() / 2;
     chunk_size_ = d_ * d_;
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParBlockColMajorLNGoldschmidt::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t, uint32_t, uint32_t) const {
-    double D = param_.get_default_scale();
-    double q_L = param_.get_q(level_);
-    double q_L1 = param_.get_q(level_ - 1);
-    double q_L2 = param_.get_q(level_ - 2);
+    double D = param_.default_scale();
+    double q_L = param_.q()[level_];
+    double q_L1 = param_.q()[level_ - 1];
+    double q_L2 = param_.q()[level_ - 2];
 
     if (pt_idx == 0) {
         vector<double> three_vec(n_slot_, 3.0);
-        return ctx.encode_ringt(three_vec, D / q_L * D / q_L1 * D);
+        return ls_compat::encode_ringt(ctx, three_vec, D / q_L * D / q_L1 * D);
     }
     if (pt_idx == 1) {
         vector<double> half_vec(n_slot_, 0.5);
-        return ctx.encode_ringt(half_vec, q_L / D * q_L / D * q_L1 / D * q_L2);
+        return ls_compat::encode_ringt(ctx, half_vec, q_L / D * q_L / D * q_L1 / D * q_L2);
     }
     throw runtime_error("ParBlockColMajorLNGoldschmidt: unknown pt_idx " + to_string(pt_idx));
 }
@@ -560,33 +560,33 @@ void ParBlockColMajorLNGoldschmidt::prepare_weight() {
 vector<CkksCiphertext> ParBlockColMajorLNGoldschmidt::run(CkksContext& ctx,
                                                           const vector<CkksCiphertext>& y_cts,
                                                           const vector<CkksCiphertext>& a_cts) {
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     uint32_t n_rows = y_cts.size();
     vector<CkksCiphertext> y_new(n_rows);
 
     parallel_for(n_rows, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
         // Drop a to level_ to match y
         auto a_drop = a_cts[bi].copy();
-        if (a_drop.get_level() > (int)level_) {
-            a_drop = ctx_copy.drop_level(a_drop, a_drop.get_level() - (int)level_);
+        if (a_drop.level() > (int)level_) {
+            a_drop = ctx_copy.drop_level(a_drop, a_drop.level() - (int)level_);
         }
 
         // Step 1 (parallel): y*a and y*y -> level_-1, scale S1 = D²/q_{L_y}
         auto ya_raw = ctx_copy.mult(y_cts[bi], a_drop);
-        auto ya = ctx_copy.rescale(ctx_copy.relinearize(ya_raw), D / param_.get_q(level_) * D);
+        auto ya = ctx_copy.rescale(ctx_copy.relinearize(ya_raw));
 
         auto yy_raw = ctx_copy.mult(y_cts[bi], y_cts[bi]);
-        auto yy = ctx_copy.rescale(ctx_copy.relinearize(yy_raw), D / param_.get_q(level_) * D);
+        auto yy = ctx_copy.rescale(ctx_copy.relinearize(yy_raw));
 
         // Step 2: (y*a)*(y*y) -> level_-2, scale S_prod = D⁴/(q_L²·q_{L-1})
         auto ya_yy_raw = ctx_copy.mult(ya, yy);
-        double S_prod = D / param_.get_q(level_) * D / param_.get_q(level_) * D / param_.get_q(level_ - 1) * D;
-        auto ya_yy = ctx_copy.rescale(ctx_copy.relinearize(ya_yy_raw), S_prod);
+        double S_prod = D / param_.q()[level_] * D / param_.q()[level_] * D / param_.q()[level_ - 1] * D;
+        auto ya_yy = ctx_copy.rescale(ctx_copy.relinearize(ya_yy_raw));
 
         // Step 3: 3*y (pt*ct) -> level_-1, scale S_prod
-        auto three_mul = ctx_copy.ringt_to_mul(three_pt_, level_);
-        auto three_y_raw = ctx_copy.mult_plain_mul(y_cts[bi], three_mul);
-        auto three_y = ctx_copy.rescale(three_y_raw, S_prod);
+        auto three_mul = ls_compat::ringt_to_mul(ctx_copy, three_pt_, level_);
+        auto three_y_raw = ctx_copy.mult(y_cts[bi], three_mul);
+        auto three_y = ctx_copy.rescale(three_y_raw);
         // Drop 3*y from level_-1 to level_-2 to match (y*a)*(y*y)
         auto three_y_drop = ctx_copy.drop_level(three_y);
 
@@ -594,9 +594,9 @@ vector<CkksCiphertext> ParBlockColMajorLNGoldschmidt::run(CkksContext& ctx,
         auto diff = ctx_copy.sub(three_y_drop, ya_yy);
 
         // Step 5: 0.5 * diff (normalizing pt*ct -> exact D at level_-3)
-        auto half_mul = ctx_copy.ringt_to_mul(half_norm_pt_, level_ - 2);
-        auto half_raw = ctx_copy.mult_plain_mul(diff, half_mul);
-        y_new[bi] = ctx_copy.rescale(half_raw, D);
+        auto half_mul = ls_compat::ringt_to_mul(ctx_copy, half_norm_pt_, level_ - 2);
+        auto half_raw = ctx_copy.mult(diff, half_mul);
+        y_new[bi] = ctx_copy.rescale(half_raw);
     });
 
     return y_new;
@@ -635,7 +635,7 @@ ParBlockColMajorLNAffine::ParBlockColMajorLNAffine(const CkksParameter& param,
     n_heads_ = n_heads;
     cols_per_head_ = shape[1] / n_heads_;
     n_h_padded_ = next_power_of_2(n_heads);
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.n() / 2;
     assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
     assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
 
@@ -656,13 +656,13 @@ ParBlockColMajorLNAffine::ParBlockColMajorLNAffine(const CkksParameter& param,
     num_block_cols_ = div_ceil(cols_per_head_, d_);
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParBlockColMajorLNAffine::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_t bi, uint32_t bj, uint32_t g) const {
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
 
     if (pt_idx == 0) {
-        double q_L = param_.get_q(y_level_);
-        double q_L1 = param_.get_q(y_level_ - 1);
+        double q_L = param_.q()[y_level_];
+        double q_L1 = param_.q()[y_level_ - 1];
         vector<double> gamma_vec(n_slot_, 0.0);
         for (uint32_t h_local = 0; h_local < S_; h_local++) {
             uint32_t h = g * S_ + h_local;
@@ -680,7 +680,7 @@ ParBlockColMajorLNAffine::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_
                 }
             }
         }
-        return ctx.encode_ringt(gamma_vec, q_L / D * q_L1);
+        return ls_compat::encode_ringt(ctx, gamma_vec, q_L / D * q_L1);
     }
 
     if (pt_idx == 1) {
@@ -701,7 +701,7 @@ ParBlockColMajorLNAffine::generate_pt(CkksContext& ctx, uint32_t pt_idx, uint32_
                 }
             }
         }
-        return ctx.encode_ringt(beta_vec, D);
+        return ls_compat::encode_ringt(ctx, beta_vec, D);
     }
 
     throw runtime_error("ParBlockColMajorLNAffine: unknown pt_idx " + to_string(pt_idx));
@@ -736,7 +736,7 @@ void ParBlockColMajorLNAffine::prepare_weight() {
 FeatureMatEncrypted ParBlockColMajorLNAffine::run(CkksContext& ctx,
                                                   const vector<CkksCiphertext>& x_centered,
                                                   const vector<CkksCiphertext>& y_cts) {
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     uint32_t total_cts = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
 
     FeatureMatEncrypted result(&ctx, y_level_ - 2);
@@ -750,17 +750,17 @@ FeatureMatEncrypted ParBlockColMajorLNAffine::run(CkksContext& ctx,
         uint32_t bi = block_idx % num_block_rows_;
 
         uint32_t gamma_idx = ct_idx;
-        auto gamma_mul = ctx_copy.ringt_to_mul(gamma_pt_[gamma_idx], y_level_);
-        auto yw = ctx_copy.rescale(ctx_copy.mult_plain_mul(y_cts[bi], gamma_mul), param_.get_q(y_level_ - 1));
+        auto gamma_mul = ls_compat::ringt_to_mul(ctx_copy, gamma_pt_[gamma_idx], y_level_);
+        auto yw = ctx_copy.rescale(ctx_copy.mult(y_cts[bi], gamma_mul));
 
         auto xc = x_centered[ct_idx].copy();
-        if (xc.get_level() > (int)(y_level_ - 1)) {
-            xc = ctx_copy.drop_level(xc, xc.get_level() - (int)(y_level_ - 1));
+        if (xc.level() > (int)(y_level_ - 1)) {
+            xc = ctx_copy.drop_level(xc, xc.level() - (int)(y_level_ - 1));
         }
 
-        auto out = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(xc, yw)), D);
+        auto out = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(xc, yw)));
 
-        result.data[ct_idx] = ctx_copy.add_plain_ringt(out, beta_add_pt_[ct_idx]);
+        result.data[ct_idx] = ctx_copy.add(out, beta_add_pt_[ct_idx]);
     });
 
     result.level = y_level_ - 2;

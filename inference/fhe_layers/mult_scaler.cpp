@@ -60,13 +60,14 @@ void MultScalarLayer::prepare_weight_lazy() {
     // 仅缓存参数，不预编码 weight_pt
 }
 
-CkksPlaintextRingt MultScalarLayer::generate_weight_pt_for_index(CkksContext& ctx, int i) const {
+CkksPlaintext MultScalarLayer::generate_weight_pt_for_index(CkksContext& ctx, int i) const {
+    const CkksParameter& param = ctx.parameter();
     const int skip_prod = skip[0] * skip[1];
     int channel = weight.get_shape()[0];
     const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
-    double pack_scale = ctx.get_parameter().get_q(level_);
+    double pack_scale = static_cast<double>(param.q()[level_]);
 
-    vector<double> feature_tmp_pack(ctx.get_parameter().get_n() / 2);
+    vector<double> feature_tmp_pack(param.n() / 2);
     for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
         int block_i = linear_idx / (block_shape[0] * block_shape[1]);
         int residual = linear_idx % (block_shape[0] * block_shape[1]);
@@ -81,7 +82,13 @@ CkksPlaintextRingt MultScalarLayer::generate_weight_pt_for_index(CkksContext& ct
         int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;
         feature_tmp_pack[index] = weight.get(channel_idx);
     }
-    return ctx.encode_ringt(feature_tmp_pack, pack_scale);
+    CkksPlaintext pt(param, plaintext_metadata(/*is_ringt=*/true,
+                                               /*is_batched=*/true,
+                                               /*level=*/0,
+                                               /*log_slots=*/param.log_max_slots(),
+                                               /*scale=*/pack_scale));
+    ctx.encode(feature_tmp_pack, pt);
+    return pt;
 }
 
 void MultScalarLayer::prepare_weight() {
@@ -92,34 +99,42 @@ void MultScalarLayer::prepare_weight() {
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
     weight_pt.resize(n_packed_out_channel);
-    double pack_scale = ctx.get_parameter().get_q(level_);
-    parallel_for(n_packed_out_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int n_packed_out_channel_idx) {
-        const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
-        vector<double> feature_tmp_pack(ctx_copy.get_parameter().get_n() / 2);
-        for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
-            int block_i = linear_idx / (block_shape[0] * block_shape[1]);
-            int residual = linear_idx % (block_shape[0] * block_shape[1]);
-            int shape_i = residual / block_shape[1];
-            int shape_j = residual % block_shape[1];
+    double pack_scale = static_cast<double>(ctx.parameter().q()[level_]);
+    parallel_for(n_packed_out_channel, th_nums, ctx,
+                 [&](CkksContext& ctx_copy, int n_packed_out_channel_idx) {
+                     const CkksParameter& param_copy = ctx_copy.parameter();
+                     const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
+                     vector<double> feature_tmp_pack(param_copy.n() / 2);
+                     for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
+                         int block_i = linear_idx / (block_shape[0] * block_shape[1]);
+                         int residual = linear_idx % (block_shape[0] * block_shape[1]);
+                         int shape_i = residual / block_shape[1];
+                         int shape_j = residual % block_shape[1];
 
-            int channel_idx = n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
-                              block_i * skip_prod + (skip[1] * (shape_i % skip[0]) + shape_j % skip[1]);
-            if (channel_idx >= channel || (shape_i % pre_skip[0]) >= skip[0] || (shape_j % pre_skip[1]) >= skip[1])
-                continue;
+                         int channel_idx =
+                             n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
+                             block_i * skip_prod + (skip[1] * (shape_i % skip[0]) + shape_j % skip[1]);
+                         if (channel_idx >= channel || (shape_i % pre_skip[0]) >= skip[0] ||
+                             (shape_j % pre_skip[1]) >= skip[1])
+                             continue;
 
-            int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;
-            feature_tmp_pack[index] = weight.get(channel_idx);
-        }
-        weight_pt[n_packed_out_channel_idx] = move(ctx_copy.encode_ringt(feature_tmp_pack, pack_scale));
-    });
+                         int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;
+                         feature_tmp_pack[index] = weight.get(channel_idx);
+                     }
+                     CkksPlaintext pt(param_copy, plaintext_metadata(/*is_ringt=*/true,
+                                                                     /*is_batched=*/true,
+                                                                     /*level=*/0,
+                                                                     /*log_slots=*/param_copy.log_max_slots(),
+                                                                     /*scale=*/pack_scale));
+                     ls_compat:ctx_copy.encode(feature_tmp_pack, pt);
+                     weight_pt[n_packed_out_channel_idx] = std::move(pt);
+                 });
 }
 
 std::vector<CkksCiphertext> MultScalarLayer::run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
     vector<CkksCiphertext> res(x.size());
     parallel_for(x.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int x_idx) {
-        auto w_pt = ctx_copy.ringt_to_mul(weight_pt[x_idx], x[x_idx].get_level());
-        res[x_idx] =
-            ctx_copy.rescale(ctx_copy.mult_plain_mul(x[x_idx], w_pt), ctx_copy.get_parameter().get_default_scale());
+        res[x_idx] = ctx_copy.rescale(ctx_copy.mult(x[x_idx], weight_pt[x_idx]));
     });
     return res;
 }

@@ -130,9 +130,9 @@ void Avgpool2DLayer::prepare_weight_lazy(const CkksParameter& param_in,
     n_channel_ = n_channel;
 }
 
-CkksPlaintextRingt Avgpool2DLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int i) const {
+CkksPlaintext Avgpool2DLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int i) const {
     vector<double> si = select_tensor(i);
-    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_));
+    return ls_compat::encode_ringt(ctx, si, ctx.parameter().q()[level_]);
 }
 
 void Avgpool2DLayer::prepare_weight(const CkksParameter& param_in,
@@ -153,7 +153,7 @@ void Avgpool2DLayer::prepare_weight(const CkksParameter& param_in,
     select_tensor_pt.resize(n_select_pt);
     for (uint32_t i = 0; i < n_select_pt; i++) {
         vector<double> si = select_tensor(i);
-        CkksPlaintextRingt p_st = ctx.encode_ringt(si, ctx.get_parameter().get_q(level));
+        CkksPlaintext p_st = ls_compat::encode_ringt(ctx, si, ctx.parameter().q()[level]);
         select_tensor_pt[i] = move(p_st);
     }
 }
@@ -170,14 +170,14 @@ void Avgpool2DLayer::prepare_weight_repack(const CkksParameter& param_in,
     block_shape = block_shape_in;
 
     // Generate repack mask: 1.0 at every second_stage_stride position within block
-    int N = ctx.get_parameter().get_n();
+    int N = ctx.parameter().n();
     vector<double> mask_vec(N / 2, 0.0);
     for (uint32_t row = 0; row < block_shape[0]; row += second_stage_stride[0]) {
         for (uint32_t col = 0; col < block_shape[1]; col += second_stage_stride[1]) {
             mask_vec[row * block_shape[1] + col] = 1.0;
         }
     }
-    repack_mask_pt = ctx.encode_ringt(mask_vec, ctx.get_parameter().get_q(level));
+    repack_mask_pt = ls_compat::encode_ringt(ctx, mask_vec, ctx.parameter().q()[level]);
 }
 
 Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, const Feature2DEncrypted& x) {
@@ -224,10 +224,10 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
         for (uint32_t i = 0; i < n_valid; i++) {
             int out_channel_pos = (idx * x.n_channel_per_ct + i) % (x.n_channel_per_ct * stride[0] * stride[1]);
             auto& pt_ringt = select_tensor_pt[out_channel_pos];
-            auto pt = ctx_copy.ringt_to_mul(pt_ringt, level_);
-            lattisense::CkksCiphertext c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], pt);
+            auto pt = ls_compat::ringt_to_mul(ctx_copy, pt_ringt, level_);
+            lattisense::CkksCiphertext c_m_s = ctx_copy.mult(s_rots[steps[i]], pt);
             result_tmp[idx * x.n_channel_per_ct + i] =
-                move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
+                move(ctx_copy.rescale(c_m_s));
         }
     });
     vector<CkksCiphertext> res;
@@ -259,7 +259,7 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
 
 Feature2DEncrypted
 Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x, const Duo block_expansion) {
-    int N = ctx.get_parameter().get_n();
+    int N = ctx.parameter().n();
     uint32_t x_size = x.data.size();
 
     // Determine first_stage_stride and second_stage_stride
@@ -327,8 +327,8 @@ Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x,
 
         // Step 3a: mask all channels with the shared repack mask
         parallel_for(n_channel_, th_nums, ctx, [&](CkksContext& ctx_copy, int c) {
-            auto mask_mul = ctx_copy.ringt_to_mul(repack_mask_pt, level_);
-            res[c] = ctx_copy.mult_plain_mul(res[c], mask_mul);
+            auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, repack_mask_pt, level_);
+            res[c] = ctx_copy.mult(res[c], mask_mul);
         });
 
         // Step 3b: rotate + accumulate, grouped by output CT
@@ -362,7 +362,7 @@ Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x,
                     sum = ctx_copy.add(sum, rotated);
                 }
             }
-            repack_res[out_ct_idx] = ctx_copy.rescale(sum, ctx_copy.get_parameter().get_default_scale());
+            repack_res[out_ct_idx] = ctx_copy.rescale(sum);
         });
 
         Feature2DEncrypted result(&ctx, x.level - 1);

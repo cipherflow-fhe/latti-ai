@@ -77,7 +77,7 @@ void PolyRelu2D::prepare_weight() {
         for (int n_packed_out_channel_idx = 0; n_packed_out_channel_idx < n_packed_out_channel;
              n_packed_out_channel_idx++) {
             const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
-            vector<double> feature_tmp_pack(ctx_copy.get_parameter().get_n() / 2);
+            vector<double> feature_tmp_pack(ctx_copy.parameter().n() / 2);
             for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
                 int block_i = linear_idx / (block_shape[0] * block_shape[1]);
                 int residual = linear_idx % (block_shape[0] * block_shape[1]);
@@ -94,15 +94,15 @@ void PolyRelu2D::prepare_weight() {
                 feature_tmp_pack[index] = weight.get(idx, channel_idx);
             }
 
-            double pack_scale = param_.get_default_scale();
+            double pack_scale = param_.default_scale();
             if (idx == order - 1) {
-                pack_scale = param_.get_default_scale();
+                pack_scale = param_.default_scale();
             } else {
                 for (int k = 0; k < order - idx - 1; k++) {
-                    pack_scale = pack_scale * param_.get_default_scale() / param_.get_q(level_ - k);
+                    pack_scale = pack_scale * param_.default_scale() / param_.q()[level_ - k];
                 }
             }
-            weight_pt[idx].push_back(ctx_copy.encode_ringt(feature_tmp_pack, pack_scale));
+            weight_pt[idx].push_back(ls_compat::encode_ringt(ctx_copy, feature_tmp_pack, pack_scale));
         }
     });
 }
@@ -111,7 +111,7 @@ void PolyRelu2D::prepare_weight_lazy() {
     weight_pt.clear();
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 PolyRelu2D::generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
     vector<double> feature_tmp_pack(N / 2, 0.0);
 
@@ -130,19 +130,19 @@ PolyRelu2D::generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_pack
         feature_tmp_pack[index] = weight.get(idx, channel_idx);
     }
 
-    double pack_scale = param_.get_default_scale();
+    double pack_scale = param_.default_scale();
     if (idx == order - 1) {
-        pack_scale = param_.get_default_scale();
+        pack_scale = param_.default_scale();
     } else {
         for (int k = 0; k < order - idx - 1; k++) {
-            pack_scale = pack_scale * param_.get_default_scale() / param_.get_q(level_ - k);
+            pack_scale = pack_scale * param_.default_scale() / param_.q()[level_ - k];
         }
     }
 
-    return ctx.encode_ringt(feature_tmp_pack, pack_scale);
+    return ls_compat::encode_ringt(ctx, feature_tmp_pack, pack_scale);
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 PolyRelu2D::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
     vector<double> feature_tmp_pack(N / 2, 0.0);
     if (is_ordinary_pack) {
@@ -180,13 +180,13 @@ PolyRelu2D::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx,
 
     if (order != 4) {
         if (idx == 0) {
-            pack_scale = pack_scale * param_.get_default_scale();
+            pack_scale = pack_scale * param_.default_scale();
         } else {
             for (int k = 0; k < idx; k++) {
                 if (k == idx - 1) {
-                    pack_scale = pack_scale * param_.get_q(level_ - (order - k - 1));
+                    pack_scale = pack_scale * param_.q()[level_ - (order - k - 1)];
                 } else {
-                    pack_scale = param_.get_q(level_ - (order - k - 1)) / param_.get_default_scale() * pack_scale;
+                    pack_scale = param_.q()[level_ - (order - k - 1)] / param_.default_scale() * pack_scale;
                 }
             }
         }
@@ -194,7 +194,7 @@ PolyRelu2D::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx,
         pack_scale = cached_bsgs_coeff_scale.at(idx);
         target_level = cached_bsgs_level_order.at(idx);
     }
-    auto result = ctx.encode_ringt(feature_tmp_pack, pack_scale);
+    auto result = ls_compat::encode_ringt(ctx, feature_tmp_pack, pack_scale);
     return result;
 }
 
@@ -206,22 +206,20 @@ std::vector<CkksCiphertext> PolyRelu2D::run_core(CkksContext& ctx, const std::ve
         for (int order_idx = order - 1; order_idx > 0; --order_idx) {
             if (weight_pt.empty()) {
                 auto w_pt = generate_weight_pt_for_indices(ctx_copy, order_idx, x_idx);
-                result[x_idx] = ctx_copy.add_plain_ringt(result[x_idx], w_pt);
-                result[x_idx] = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(result[x_idx], x[x_idx])),
-                                                 ctx_copy.get_parameter().get_default_scale());
+                result[x_idx] = ctx_copy.add(result[x_idx], w_pt);
+                result[x_idx] = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(result[x_idx], x[x_idx])));
             } else {
-                result[x_idx] = ctx_copy.add_plain_ringt(result[x_idx], weight_pt[order_idx][x_idx]);
-                result[x_idx] = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(result[x_idx], x[x_idx])),
-                                                 ctx_copy.get_parameter().get_default_scale());
+                result[x_idx] = ctx_copy.add(result[x_idx], weight_pt[order_idx][x_idx]);
+                result[x_idx] = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(result[x_idx], x[x_idx])));
             }
         }
         if (weight_pt.empty()) {
             auto w_pt = generate_weight_pt_for_indices(ctx_copy, 0, x_idx);
-            result[x_idx] = ctx_copy.add_plain_ringt(result[x_idx], w_pt);
+            result[x_idx] = ctx_copy.add(result[x_idx], w_pt);
         } else {
-            result[x_idx] = ctx_copy.add_plain_ringt(result[x_idx], weight_pt[0][x_idx]);
+            result[x_idx] = ctx_copy.add(result[x_idx], weight_pt[0][x_idx]);
         }
-        result[x_idx].set_scale(ctx_copy.get_parameter().get_default_scale());
+        result[x_idx].set_scale(ctx_copy.parameter().default_scale());
     });
     return result;
 }
@@ -303,7 +301,7 @@ void PolyRelu2D::prepare_weight_bsgs() {
         for (int n_packed_out_channel_idx = 0; n_packed_out_channel_idx < n_packed_out_channel;
              n_packed_out_channel_idx++) {
             const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
-            vector<double> feature_tmp_pack(ctx_copy.get_parameter().get_n() / 2);
+            vector<double> feature_tmp_pack(ctx_copy.parameter().n() / 2);
 
             if (is_ordinary_pack) {
                 for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
@@ -339,7 +337,7 @@ void PolyRelu2D::prepare_weight_bsgs() {
 
             double pack_scale = cached_bsgs_coeff_scale[idx];
 
-            weight_pt[idx].push_back(ctx_copy.encode_ringt(feature_tmp_pack, pack_scale));
+            weight_pt[idx].push_back(ls_compat::encode_ringt(ctx_copy, feature_tmp_pack, pack_scale));
         }
     });
 }
@@ -360,7 +358,7 @@ void PolyRelu2D::prepare_weight_hornor() {
         for (int n_packed_out_channel_idx = 0; n_packed_out_channel_idx < n_packed_out_channel;
              n_packed_out_channel_idx++) {
             const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
-            vector<double> feature_tmp_pack(ctx_copy.get_parameter().get_n() / 2);
+            vector<double> feature_tmp_pack(ctx_copy.parameter().n() / 2);
             if (is_ordinary_pack) {
                 for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
                     int channel_idx = n_packed_out_channel_idx * n_channel_per_ct + ch;
@@ -395,17 +393,17 @@ void PolyRelu2D::prepare_weight_hornor() {
 
             double pack_scale = 1;
             if (idx == 0) {
-                pack_scale = pack_scale * param_.get_default_scale();
+                pack_scale = pack_scale * param_.default_scale();
             } else {
                 for (int k = 0; k < idx; k++) {
                     if (k == idx - 1) {
-                        pack_scale = pack_scale * param_.get_q(level_ - (order - k - 1));
+                        pack_scale = pack_scale * param_.q()[level_ - (order - k - 1)];
                     } else {
-                        pack_scale = param_.get_q(level_ - (order - k - 1)) / param_.get_default_scale() * pack_scale;
+                        pack_scale = param_.q()[level_ - (order - k - 1)] / param_.default_scale() * pack_scale;
                     }
                 }
             }
-            weight_pt[idx].push_back(ctx_copy.encode_ringt(feature_tmp_pack, pack_scale));
+            weight_pt[idx].push_back(ls_compat::encode_ringt(ctx_copy, feature_tmp_pack, pack_scale));
         }
     });
 }
@@ -414,7 +412,7 @@ void PolyRelu2D::prepare_weight_hornor_lazy() {
     weight_pt.clear();
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 PolyRelu2D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
     vector<double> feature_tmp_pack(N / 2, 0.0);
 
@@ -449,7 +447,7 @@ PolyRelu2D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int n_packed_
     }
 
     double pack_scale = cached_bsgs_coeff_scale.at(idx);
-    return ctx.encode_ringt(feature_tmp_pack, pack_scale);
+    return ls_compat::encode_ringt(ctx, feature_tmp_pack, pack_scale);
 }
 
 Feature2DEncrypted PolyRelu2D::run_bsgs(CkksContext& ctx, const Feature2DEncrypted& x) {
@@ -461,7 +459,7 @@ Feature2DEncrypted PolyRelu2D::run_bsgs(CkksContext& ctx, const Feature2DEncrypt
     result.n_channel = x.n_channel;
     result.n_channel_per_ct = x.n_channel_per_ct;
     result.data = run_core_bsgs(ctx, x.data);
-    result.level = result.data[0].get_level();
+    result.level = result.data[0].level();
     return result;
 }
 
@@ -474,7 +472,7 @@ Feature2DEncrypted PolyRelu2D::run_horner(CkksContext& ctx, const Feature2DEncry
     result.n_channel = x.n_channel;
     result.n_channel_per_ct = x.n_channel_per_ct;
     result.data = run_core_horner(ctx, x.data);
-    result.level = result.data[0].get_level();
+    result.level = result.data[0].level();
     return result;
 }
 
@@ -483,30 +481,28 @@ std::vector<CkksCiphertext> PolyRelu2D::run_core_horner(CkksContext& ctx, const 
     parallel_for(x.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int x_idx) {
         if (weight_pt.empty()) {
             auto w_pt_order_rt = generate_weight_pt_for_non_absorb_indices(ctx_copy, order, x_idx);
-            auto w_pt_order = ctx_copy.ringt_to_mul(w_pt_order_rt, x[x_idx].get_level());
-            result[x_idx] = ctx_copy.rescale(ctx_copy.mult_plain_mul(x[x_idx], w_pt_order),
-                                             ctx_copy.get_parameter().get_default_scale());
+            auto w_pt_order = ls_compat::ringt_to_mul(ctx_copy, w_pt_order_rt, x[x_idx].level());
+            result[x_idx] = ctx_copy.rescale(ctx_copy.mult(x[x_idx], w_pt_order));
         } else {
-            auto w_pt = ctx_copy.ringt_to_mul(weight_pt[order][x_idx], x[x_idx].get_level());
+            auto w_pt = ls_compat::ringt_to_mul(ctx_copy, weight_pt[order][x_idx], x[x_idx].level());
             result[x_idx] =
-                ctx_copy.rescale(ctx_copy.mult_plain_mul(x[x_idx], w_pt), ctx_copy.get_parameter().get_default_scale());
+                ctx_copy.rescale(ctx_copy.mult(x[x_idx], w_pt));
         }
 
         for (int order_idx = order - 1; order_idx > 0; --order_idx) {
             if (weight_pt.empty()) {
                 auto w_pt = generate_weight_pt_for_non_absorb_indices(ctx_copy, order_idx, x_idx);
-                result[x_idx] = ctx_copy.add_plain_ringt(result[x_idx], w_pt);
+                result[x_idx] = ctx_copy.add(result[x_idx], w_pt);
             } else {
-                result[x_idx] = ctx_copy.add_plain_ringt(result[x_idx], weight_pt[order_idx][x_idx]);
+                result[x_idx] = ctx_copy.add(result[x_idx], weight_pt[order_idx][x_idx]);
             }
-            result[x_idx] = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(result[x_idx], x[x_idx])),
-                                             ctx_copy.get_parameter().get_default_scale());
+            result[x_idx] = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(result[x_idx], x[x_idx])));
         }
         if (weight_pt.empty()) {
             auto w0_pt = generate_weight_pt_for_non_absorb_indices(ctx_copy, 0, x_idx);
-            result[x_idx] = ctx_copy.add_plain_ringt(result[x_idx], w0_pt);
+            result[x_idx] = ctx_copy.add(result[x_idx], w0_pt);
         } else {
-            result[x_idx] = ctx_copy.add_plain_ringt(result[x_idx], weight_pt[0][x_idx]);
+            result[x_idx] = ctx_copy.add(result[x_idx], weight_pt[0][x_idx]);
         }
     });
     return result;

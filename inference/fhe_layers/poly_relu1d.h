@@ -64,7 +64,7 @@ public:
     void prepare_weight_bsgs_mux();
     void prepare_weight_bsgs_mux_lazy();
 
-    ls::CkksPlaintextRingt generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int ct_idx) const override;
+    ls::CkksPlaintext generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int ct_idx) const override;
 
     // run uses whichever mode was prepared
     Feature1DEncrypted run(ls::CkksContext& ctx, const Feature1DEncrypted& x);
@@ -79,6 +79,6 @@ private:
     // n_channel_per_ct for mode 2 (larger than mode 1 by factor skip)
     int n_channel_per_ct_mux;
 
-    ls::CkksPlaintextRingt generate_weight_pt_skip1d(ls::CkksContext& ctx, int idx, int ct_idx) const;
-    ls::CkksPlaintextRingt generate_weight_pt_mux1d(ls::CkksContext& ctx, int idx, int ct_idx) const;
+    ls::CkksPlaintext generate_weight_pt_skip1d(ls::CkksContext& ctx, int idx, int ct_idx) const;
+    ls::CkksPlaintext generate_weight_pt_mux1d(ls::CkksContext& ctx, int idx, int ct_idx) const;
 };

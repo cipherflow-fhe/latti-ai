@@ -34,12 +34,12 @@ public:
                                    uint32_t init_level,
                                    Array<double, 1>&& gamma);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> gamma_pt_;
+    std::vector<ls::CkksPlaintext> gamma_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_gamma_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t ct_local, uint32_t g = 0) const;
 
 private:
@@ -63,16 +63,16 @@ public:
                                   Array<double, 2>&& coeffs,
                                   uint32_t degree);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> c2_pt_;
-    std::vector<ls::CkksPlaintextRingt> c1_pt_;
-    std::vector<ls::CkksPlaintextRingt> c0_add_pt_;
-    std::vector<ls::CkksPlaintextRingt> c4_pt_;
-    std::vector<ls::CkksPlaintextRingt> c3_pt_;
+    std::vector<ls::CkksPlaintext> c2_pt_;
+    std::vector<ls::CkksPlaintext> c1_pt_;
+    std::vector<ls::CkksPlaintext> c0_add_pt_;
+    std::vector<ls::CkksPlaintext> c4_pt_;
+    std::vector<ls::CkksPlaintext> c3_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_coeff_pt(ls::CkksContext& ctx, uint32_t coeff_idx, uint32_t mb, uint32_t ct_local, uint32_t g = 0) const;
 
 private:

@@ -36,12 +36,12 @@ PolyReluBase::PolyReluBase(const CkksParameter& param_in,
     order = order_in;
     level_ = level_in;
     n_channel_per_ct = n_channel_per_ct_in;
-    N = param_in.get_n();
+    N = param_in.n();
     cached_channel = weight.get_shape()[1];
 }
 
 void PolyReluBase::compute_all_powers() {
-    powers[1] = {0, (int)level_, param_.get_default_scale(), 0, 0, true};
+    powers[1] = {0, (int)level_, param_.default_scale(), 0, 0, true};
     for (int n = 2; n <= order; n++) {
         compute_power(n);
     }
@@ -185,7 +185,7 @@ void PolyReluBase::init_bsgs() {
 
     modulus.clear();
     for (int i = 0; i <= (int)level_; i++) {
-        modulus.push_back(param_.get_q(i));
+        modulus.push_back(param_.q()[i]);
     }
     powers.clear();
     compute_all_powers();
@@ -213,7 +213,7 @@ void PolyReluBase::determine_required_powers_bsgs() {
 
 void PolyReluBase::compute_coefficient_scales_bsgs(std::map<int, double>& coeff_scale,
                                                    std::map<int, int>& level_order) {
-    double S = param_.get_default_scale();
+    double S = param_.default_scale();
 
     int max_depth = 0, max_power_level = level_;
     for (int p : required_powers) {
@@ -240,7 +240,7 @@ void PolyReluBase::compute_coefficient_scales_bsgs(std::map<int, double>& coeff_
             PowerInfo gp_info = get_power_info(giant_power);
             int level_mult = bsgs_output_level + 1;
             baby_poly_output_level[g] = level_mult;
-            baby_poly_output_scale[g] = S * param_.get_q(level_mult) / gp_info.scale;
+            baby_poly_output_scale[g] = S * param_.q()[level_mult] / gp_info.scale;
         }
 
         int start_idx = g * baby_steps;
@@ -257,7 +257,7 @@ void PolyReluBase::compute_coefficient_scales_bsgs(std::map<int, double>& coeff_
                 coeff_scale[idx] = target_scale;
             } else {
                 PowerInfo x_info = get_power_info(baby_step);
-                coeff_scale[idx] = target_scale * param_.get_q(target_level + 1) / x_info.scale;
+                coeff_scale[idx] = target_scale * param_.q()[target_level + 1] / x_info.scale;
                 level_order[idx] = target_level + 1;
             }
         }
@@ -310,16 +310,15 @@ std::vector<CkksCiphertext> PolyReluBase::run_core_bsgs(CkksContext& ctx, const 
             auto x_a = x_powers[a].copy();
             auto x_b = x_powers[b].copy();
 
-            int target_level = std::min(x_a.get_level(), x_b.get_level());
-            while (x_a.get_level() > target_level) {
+            int target_level = std::min(x_a.level(), x_b.level());
+            while (x_a.level() > target_level) {
                 x_a = ctx_copy.drop_level(x_a);
             }
-            while (x_b.get_level() > target_level) {
+            while (x_b.level() > target_level) {
                 x_b = ctx_copy.drop_level(x_b);
             }
 
-            x_powers[i] = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(x_a, x_b)),
-                                           ctx_copy.get_parameter().get_default_scale());
+            x_powers[i] = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(x_a, x_b)));
             if (x_powers[i].is_empty()) {
                 throw std::runtime_error("BSGS: x_powers[" + std::to_string(i) + "] is empty after computation");
             }
@@ -345,18 +344,18 @@ std::vector<CkksCiphertext> PolyReluBase::run_core_bsgs(CkksContext& ctx, const 
                     baby_poly_has_terms[g] = true;
 
                     auto x_copy = x_powers[b].copy();
-                    while (x_copy.get_level() > target_level + 1) {
+                    while (x_copy.level() > target_level + 1) {
                         x_copy = ctx_copy.drop_level(x_copy);
                     }
 
                     CkksCiphertext term;
                     if (weight_pt.empty()) {
                         auto coeff_pt_rt = generate_weight_pt_for_bsgs(ctx_copy, idx, x_idx);
-                        auto coeff_pt = ctx_copy.ringt_to_mul(coeff_pt_rt, x_copy.get_level());
-                        term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_copy, coeff_pt), target_scale);
+                        auto coeff_pt = ls_compat::ringt_to_mul(ctx_copy, coeff_pt_rt, x_copy.level());
+                        term = ctx_copy.rescale(ctx_copy.mult(x_copy, coeff_pt));
                     } else {
-                        auto coeff_pt = ctx_copy.ringt_to_mul(weight_pt[idx][x_idx], x_copy.get_level());
-                        term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_copy, coeff_pt), target_scale);
+                        auto coeff_pt = ls_compat::ringt_to_mul(ctx_copy, weight_pt[idx][x_idx], x_copy.level());
+                        term = ctx_copy.rescale(ctx_copy.mult(x_copy, coeff_pt));
                     }
 
                     if (!baby_poly_initialized[g]) {
@@ -377,9 +376,9 @@ std::vector<CkksCiphertext> PolyReluBase::run_core_bsgs(CkksContext& ctx, const 
             if (const_idx <= order && baby_poly_has_terms[g]) {
                 if (weight_pt.empty()) {
                     auto coeff_pt = generate_weight_pt_for_bsgs(ctx_copy, const_idx, x_idx);
-                    baby_polys[g] = ctx_copy.add_plain_ringt(baby_polys[g], coeff_pt);
+                    baby_polys[g] = ctx_copy.add(baby_polys[g], coeff_pt);
                 } else {
-                    baby_polys[g] = ctx_copy.add_plain_ringt(baby_polys[g], weight_pt[const_idx][x_idx]);
+                    baby_polys[g] = ctx_copy.add(baby_polys[g], weight_pt[const_idx][x_idx]);
                 }
             }
         }
@@ -402,7 +401,7 @@ std::vector<CkksCiphertext> PolyReluBase::run_core_bsgs(CkksContext& ctx, const 
             auto x_giant = x_powers[giant_power].copy();
             int mult_level = bsgs_output_level + 1;
 
-            while (x_giant.get_level() > mult_level) {
+            while (x_giant.level() > mult_level) {
                 x_giant = ctx_copy.drop_level(x_giant);
             }
 
@@ -410,23 +409,20 @@ std::vector<CkksCiphertext> PolyReluBase::run_core_bsgs(CkksContext& ctx, const 
 
             if (baby_poly_has_terms[g]) {
                 auto baby_poly_copy = baby_polys[g].copy();
-                while (baby_poly_copy.get_level() > mult_level) {
+                while (baby_poly_copy.level() > mult_level) {
                     baby_poly_copy = ctx_copy.drop_level(baby_poly_copy);
                 }
-                term = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(baby_poly_copy, x_giant)),
-                                        ctx_copy.get_parameter().get_default_scale());
+                term = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(baby_poly_copy, x_giant)));
             } else {
                 int const_idx = g * baby_steps;
                 if (const_idx <= order) {
                     if (weight_pt.empty()) {
                         auto coeff_pt_rt = generate_weight_pt_for_bsgs(ctx_copy, const_idx, x_idx);
-                        auto coeff_pt = ctx_copy.ringt_to_mul(coeff_pt_rt, x_giant.get_level());
-                        term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_giant, coeff_pt),
-                                                ctx_copy.get_parameter().get_default_scale());
+                        auto coeff_pt = ls_compat::ringt_to_mul(ctx_copy, coeff_pt_rt, x_giant.level());
+                        term = ctx_copy.rescale(ctx_copy.mult(x_giant, coeff_pt));
                     } else {
-                        auto coeff_pt = ctx_copy.ringt_to_mul(weight_pt[const_idx][x_idx], x_giant.get_level());
-                        term = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_giant, coeff_pt),
-                                                ctx_copy.get_parameter().get_default_scale());
+                        auto coeff_pt = ls_compat::ringt_to_mul(ctx_copy, weight_pt[const_idx][x_idx], x_giant.level());
+                        term = ctx_copy.rescale(ctx_copy.mult(x_giant, coeff_pt));
                     }
                 }
             }
@@ -448,7 +444,7 @@ PolyRelu0D::PolyRelu0D(const CkksParameter& param_in,
                        uint32_t level_in,
                        int order_in,
                        int ciphertext_skip_in)
-    : PolyReluBase(param_in, move(weight_in), param_in.get_n() / 2 / ciphertext_skip_in, level_in, order_in),
+    : PolyReluBase(param_in, move(weight_in), param_in.n() / 2 / ciphertext_skip_in, level_in, order_in),
       ciphertext_skip(ciphertext_skip_in) {}
 
 void PolyRelu0D::prepare_weight_0d_skip() {
@@ -461,7 +457,7 @@ void PolyRelu0D::prepare_weight_0d_skip() {
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
     parallel_for(order + 1, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         for (int ct_idx = 0; ct_idx < n_packed_out_channel; ct_idx++) {
-            vector<double> feature_tmp_pack(ctx_copy.get_parameter().get_n() / 2, 0.0);
+            vector<double> feature_tmp_pack(ctx_copy.parameter().n() / 2, 0.0);
             for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
                 int channel_idx = ct_idx * n_channel_per_ct + ch;
                 if (channel_idx >= channel)
@@ -469,7 +465,7 @@ void PolyRelu0D::prepare_weight_0d_skip() {
                 feature_tmp_pack[ch * ciphertext_skip] = weight.get(idx, channel_idx);
             }
             double pack_scale = cached_bsgs_coeff_scale[idx];
-            weight_pt[idx].push_back(ctx_copy.encode_ringt(feature_tmp_pack, pack_scale));
+            weight_pt[idx].push_back(ls_compat::encode_ringt(ctx_copy, feature_tmp_pack, pack_scale));
         }
     });
 }
@@ -482,7 +478,7 @@ void PolyRelu0D::prepare_weight_0d_skip_lazy() {
 
 // ---- Mode 1: direct 0D skip pack ----
 
-CkksPlaintextRingt PolyRelu0D::generate_weight_pt_skip0d(CkksContext& ctx, int idx, int ct_idx) const {
+CkksPlaintext PolyRelu0D::generate_weight_pt_skip0d(CkksContext& ctx, int idx, int ct_idx) const {
     vector<double> feature_tmp_pack(N / 2, 0.0);
     for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
         int channel_idx = ct_idx * n_channel_per_ct + ch;
@@ -491,7 +487,7 @@ CkksPlaintextRingt PolyRelu0D::generate_weight_pt_skip0d(CkksContext& ctx, int i
         feature_tmp_pack[ch * ciphertext_skip] = weight.get(idx, channel_idx);
     }
     double pack_scale = cached_bsgs_coeff_scale.at(idx);
-    return ctx.encode_ringt(feature_tmp_pack, pack_scale);
+    return ls_compat::encode_ringt(ctx, feature_tmp_pack, pack_scale);
 }
 
 // ---- Mode 2: from reshape of 2D with shape>1 ----
@@ -500,7 +496,7 @@ CkksPlaintextRingt PolyRelu0D::generate_weight_pt_skip0d(CkksContext& ctx, int i
 //   channel ch in CT at block ch, position (h,k):
 //   slot = ch * block_size + h * W * s0 * s1 + k * s1
 
-CkksPlaintextRingt PolyRelu0D::generate_weight_pt_multiplexed(CkksContext& ctx, int idx, int ct_idx) const {
+CkksPlaintext PolyRelu0D::generate_weight_pt_multiplexed(CkksContext& ctx, int idx, int ct_idx) const {
     vector<double> feature_tmp_pack(N / 2, 0.0);
     int H = special_input_shape[0], W = special_input_shape[1];
     int s0 = special_skip[0], s1 = special_skip[1];
@@ -518,7 +514,7 @@ CkksPlaintextRingt PolyRelu0D::generate_weight_pt_multiplexed(CkksContext& ctx, 
         }
     }
     double pack_scale = cached_bsgs_coeff_scale.at(idx);
-    return ctx.encode_ringt(feature_tmp_pack, pack_scale);
+    return ls_compat::encode_ringt(ctx, feature_tmp_pack, pack_scale);
 }
 
 void PolyRelu0D::prepare_weight_2d_multiplexed(const Duo& input_shape_in, const Duo& skip_in) {
@@ -551,7 +547,7 @@ void PolyRelu0D::prepare_weight_2d_multiplexed_lazy(const Duo& input_shape_in, c
     weight_pt.clear();
 }
 
-CkksPlaintextRingt PolyRelu0D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int ct_idx) const {
+CkksPlaintext PolyRelu0D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int ct_idx) const {
     if (is_multiplexed)
         return generate_weight_pt_multiplexed(ctx, idx, ct_idx);
     return generate_weight_pt_skip0d(ctx, idx, ct_idx);
@@ -563,7 +559,7 @@ Feature0DEncrypted PolyRelu0D::run(CkksContext& ctx, const Feature0DEncrypted& x
     result.n_channel_per_ct = x.n_channel_per_ct;
     result.skip = x.skip;
     result.data = run_core_bsgs(ctx, x.data);
-    result.level = result.data[0].get_level();
+    result.level = result.data[0].level();
     return result;
 }
 

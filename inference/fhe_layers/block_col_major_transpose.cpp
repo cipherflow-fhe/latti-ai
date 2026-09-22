@@ -36,7 +36,7 @@ BlockColMajorTranspose::BlockColMajorTranspose(const CkksParameter& param_in,
     m_ = m;
     n_ = n;
 
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.n() / 2;
     chunk_size_ = d_ * d_;
     assert(n_slot_ % chunk_size_ == 0 && "n_slot must be divisible by d^2");
     num_chunks_ = n_slot_ / chunk_size_;
@@ -79,28 +79,28 @@ std::vector<double> BlockColMajorTranspose::build_transpose_diagonal(int k) cons
 void BlockColMajorTranspose::precompute_diagonals() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
 
-    double transpose_scale = param_.get_q(level_);
+    double transpose_scale = param_.q()[level_];
 
     // Transpose: (2d-1) diagonal vectors, k from -(d-1) to (d-1)
     transpose_diag_pt_.clear();
     transpose_diag_pt_.reserve(2 * d_ - 1);
     for (int k = -(int)(d_ - 1); k <= (int)(d_ - 1); k++) {
         auto diag_vec = build_transpose_diagonal(k);
-        transpose_diag_pt_.push_back(ctx.encode_ringt(diag_vec, transpose_scale));
+        transpose_diag_pt_.push_back(ls_compat::encode_ringt(ctx, diag_vec, transpose_scale));
     }
 }
 
-CkksPlaintextRingt BlockColMajorTranspose::generate_transpose_diag_pt(CkksContext& ctx, uint32_t k_idx) const {
+CkksPlaintext BlockColMajorTranspose::generate_transpose_diag_pt(CkksContext& ctx, uint32_t k_idx) const {
     int k = (int)k_idx - (int)(d_ - 1);  // k_idx 0..2d-2 -> k -(d-1)..d-1
     auto diag_vec = build_transpose_diagonal(k);
-    return ctx.encode_ringt(diag_vec, param_.get_q(level_));
+    return ls_compat::encode_ringt(ctx, diag_vec, param_.q()[level_]);
 }
 
 // transpose_on_ct: (2d-1) rotations + (2d-1) pt_muls + (2d-2) adds + 1 rescale
 // Input level L -> Output level L-1
 // Same rotate->multiply->accumulate->rescale pattern as BlockCCMM::sigma_on_ct
 CkksCiphertext BlockColMajorTranspose::transpose_on_ct(CkksContext& ctx, const CkksCiphertext& ct) const {
-    double default_scale = param_.get_default_scale();
+    double default_scale = param_.default_scale();
     CkksCiphertext result(0);
 
     int diag_idx = 0;
@@ -108,8 +108,8 @@ CkksCiphertext BlockColMajorTranspose::transpose_on_ct(CkksContext& ctx, const C
         int rot_amount = (((int)(d_ - 1) * k) % (int)chunk_size_ + (int)chunk_size_) % (int)chunk_size_;
         CkksCiphertext rotated = (rot_amount == 0) ? ct.copy() : ctx.rotate(ct, rot_amount);
 
-        auto diag_mul = ctx.ringt_to_mul(transpose_diag_pt_[diag_idx], level_);
-        auto product = ctx.mult_plain_mul(rotated, diag_mul);
+        auto diag_mul = ls_compat::ringt_to_mul(ctx, transpose_diag_pt_[diag_idx], level_);
+        auto product = ctx.mult(rotated, diag_mul);
 
         if (diag_idx == 0) {
             result = move(product);
@@ -118,7 +118,7 @@ CkksCiphertext BlockColMajorTranspose::transpose_on_ct(CkksContext& ctx, const C
         }
         diag_idx++;
     }
-    return ctx.rescale(result, default_scale);
+    return ctx.rescale(result);
 }
 
 std::vector<CkksCiphertext> BlockColMajorTranspose::run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& cts) {

@@ -35,7 +35,7 @@ void Feature0DEncrypted::pack(const Array<double, 1>& feature_mg,
                               double scale_in,
                               uint32_t skip_in) {
     uint32_t n_in_features = feature_mg.get_size();
-    uint32_t n_slots = context->get_parameter().get_n() / 2;
+    uint32_t n_slots = context->parameter().n() / 2;
     n_channel = n_in_features;
     skip = skip_in;
     batch_packed = false;
@@ -52,12 +52,12 @@ void Feature0DEncrypted::pack(const Array<double, 1>& feature_mg,
                 feature_flat[i * skip] = feature_mg[src_idx];
             }
         }
-        auto feature_flat_pt = context->encode(feature_flat, level, scale_in);
+        auto feature_flat_pt = ls_compat::encode(*context, feature_flat, level, scale_in);
         if (!is_symmetric) {
-            auto feature_flat_ct = context->encrypt_asymmetric(feature_flat_pt);
+            auto feature_flat_ct = ls_compat::encrypt_asymmetric(*context, feature_flat_pt);
             data.push_back(move(feature_flat_ct));
         } else {
-            auto feature_flat_ct = context->encrypt_symmetric_compressed(feature_flat_pt);
+            auto feature_flat_ct = ls_compat::encrypt_symmetric_compressed(*context, feature_flat_pt);
             data_compressed.push_back(move(feature_flat_ct));
         }
     }
@@ -69,7 +69,7 @@ void Feature0DEncrypted::batch_pack(const Array<double, 2>& matrix, uint32_t d, 
     if (batch == 0 || feature_dim == 0)
         throw invalid_argument("Feature0DEncrypted::batch_pack requires a non-empty matrix");
 
-    uint32_t n_slot = context->get_parameter().get_n() / 2;
+    uint32_t n_slot = context->parameter().n() / 2;
     uint32_t chunk_size = d * d;
     if (d == 0 || (d & (d - 1)) != 0 || n_slot < chunk_size || n_slot % chunk_size != 0) {
         throw invalid_argument("Feature0DEncrypted::batch_pack requires power-of-two d and n_slot divisible by d*d");
@@ -112,11 +112,11 @@ void Feature0DEncrypted::batch_pack(const Array<double, 2>& matrix, uint32_t d, 
 
     const int n_threads = 4;
     parallel_for(total_cts, n_threads, *context, [&](CkksContext& ctx_copy, int idx) {
-        auto encoded = ctx_copy.encode(packed[idx], level, scale_in);
+        auto encoded = ls_compat::encode(ctx_copy, packed[idx], level, scale_in);
         if (is_symmetric)
-            data_compressed[idx] = ctx_copy.encrypt_symmetric_compressed(encoded);
+            data_compressed[idx] = ls_compat::encrypt_symmetric_compressed(ctx_copy, encoded);
         else
-            data[idx] = ctx_copy.encrypt_symmetric(encoded);
+            data[idx] = ls_compat::encrypt_symmetric(ctx_copy, encoded);
     });
 
     batch_packed = true;
@@ -129,7 +129,7 @@ void Feature0DEncrypted::batch_pack(const Array<double, 2>& matrix, uint32_t d, 
 }
 
 Array<double, 2> Feature0DEncrypted::batch_unpack(uint32_t batch, uint32_t feature_dim, uint32_t d) const {
-    uint32_t n_slot = context->get_parameter().get_n() / 2;
+    uint32_t n_slot = context->parameter().n() / 2;
     uint32_t chunk_size = d * d;
     if (d == 0 || (d & (d - 1)) != 0 || n_slot < chunk_size || n_slot % chunk_size != 0)
         throw invalid_argument("Feature0DEncrypted::batch_unpack requires power-of-two d and n_slot divisible by d*d");
@@ -147,7 +147,7 @@ Array<double, 2> Feature0DEncrypted::batch_unpack(uint32_t batch, uint32_t featu
     Array<double, 2> result({static_cast<uint64_t>(batch), static_cast<uint64_t>(feature_dim)});
     const int n_threads = 4;
     parallel_for(total_cts, n_threads, *context, [&](CkksContext& ctx_copy, int ct_idx) {
-        auto decoded = ctx_copy.decode(ctx_copy.decrypt(data[ct_idx]));
+        auto decoded = ls_compat::decode(ctx_copy, ctx_copy.decrypt(data[ct_idx]));
         uint32_t feature_block = ct_idx / batch_ct_groups;
         uint32_t group = ct_idx % batch_ct_groups;
         for (uint32_t chunk = 0; chunk < chunks_per_ct; ++chunk) {
@@ -170,7 +170,7 @@ Array<double, 2> Feature0DEncrypted::batch_unpack(uint32_t batch, uint32_t featu
 
 void Feature0DEncrypted::pack_cyclic(const std::vector<double>& feature_mg, bool is_symmetric, double scale_in) {
     uint32_t n_in_features = feature_mg.size();
-    uint32_t n_slots = context->get_parameter().get_n() / 2;
+    uint32_t n_slots = context->parameter().n() / 2;
     batch_packed = false;
     batch_size = 0;
     batch_feature_dim = 0;
@@ -187,19 +187,19 @@ void Feature0DEncrypted::pack_cyclic(const std::vector<double>& feature_mg, bool
                 feature_flat.push_back(feature_mg[i % n_in_features]);
             }
         }
-        auto feature_flat_pt = context->encode(feature_flat, level, scale_in);
+        auto feature_flat_pt = ls_compat::encode(*context, feature_flat, level, scale_in);
         if (!is_symmetric) {
-            auto feature_flat_ct = context->encrypt_symmetric(feature_flat_pt);
+            auto feature_flat_ct = ls_compat::encrypt_symmetric(*context, feature_flat_pt);
             data.push_back(move(feature_flat_ct));
         } else {
-            auto feature_flat_ct = context->encrypt_symmetric_compressed(feature_flat_pt);
+            auto feature_flat_ct = ls_compat::encrypt_symmetric_compressed(*context, feature_flat_pt);
             data_compressed.push_back(move(feature_flat_ct));
         }
     }
 }
 
 Feature0DEncrypted Feature0DEncrypted::refresh_ciphertext() const {
-    CkksBtpContext* ctx = dynamic_cast<CkksBtpContext*>(context);
+    CkksContext* ctx = dynamic_cast<CkksContext*>(context);
     int new_level = 9;
     Feature0DEncrypted result(ctx, new_level);
     result.dim = dim;
@@ -221,7 +221,7 @@ Array<double, 1> Feature0DEncrypted::unpack() const {
     int T = 0;
     for (int ct_idx = 0; ct_idx < data.size(); ct_idx++) {
         auto c_pt = context->decrypt(data[ct_idx]);
-        auto c = context->decode(c_pt);
+        auto c = ls_compat::decode(*context, c_pt);
         for (int j = 0; j < n_channel_per_ct; j++) {
             if (T >= n_channel) {
                 break;
@@ -250,7 +250,7 @@ Feature0DEncrypted Feature0DEncrypted::drop_level(int n_level_to_drop) const {
             ct_tmp = ctx_copy.drop_level(ct_tmp);
         }
         result.data[ct_idx] = move(ct_tmp);
-        assert(new_level == result.data[ct_idx].get_level());
+        assert(new_level == result.data[ct_idx].level());
     });
     return result;
 }
@@ -274,7 +274,7 @@ Feature0DEncrypted Feature0DEncrypted::copy() const {
 Feature0DShare::Feature0DShare(uint64_t q, int s) : FeatureShare{q, s} {}
 
 void Feature0DEncrypted::to_share(Feature0DEncrypted* share0, Feature0DShare* share1) const {
-    int n_slot = context->get_parameter().get_n() / 2;
+    int n_slot = context->parameter().n() / 2;
     share1->data.resize({data.size() * n_slot});
     share0->n_channel = n_channel;
     share0->n_channel_per_ct = n_channel_per_ct;
@@ -294,8 +294,8 @@ void Feature0DEncrypted::to_share(Feature0DEncrypted* share0, Feature0DShare* sh
             mask_d[j] = mask_i[j] / share_scale;
             share1->data[i * n_slot + j] = double_to_uint64(-mask_d[j], share_scale, share1->ring_mod);
         }
-        auto mask_pt = context->encode(mask_d, level, data[i].get_scale());
-        auto share0_c = context->add_plain(data[i], mask_pt);
+        auto mask_pt = ls_compat::encode(*context, mask_d, level, data[i].scale());
+        auto share0_c = context->add(data[i], mask_pt);
         share0->data.push_back(move(share0_c));
     }
 }
@@ -312,13 +312,13 @@ Bytes Feature0DEncrypted::serialize() const {
     uint32_t n_ct = data.size();
     ss_write(ss, n_ct);
     for (const CkksCiphertext& ct : data) {
-        Bytes ct_data = ct.serialize(context->get_parameter());
+        Bytes ct_data = ct.serialize();
         ss_write_vector(ss, ct_data);
     }
     uint32_t n_cct = data_compressed.size();
     ss_write(ss, n_cct);
     for (const CkksCompressedCiphertext& cct : data_compressed) {
-        Bytes cct_data = cct.serialize(context->get_parameter());
+        Bytes cct_data = cct.serialize();
         ss_write_vector(ss, cct_data);
     }
 
@@ -373,7 +373,7 @@ void Feature0DEncrypted::deserialize(const Bytes& bytes) {
 }
 
 void Feature0DShare::to_encrypted(Feature0DEncrypted* encrypted_share, Feature0DEncrypted* encrypted, int level) {
-    int n_slot = encrypted_share->context->get_parameter().get_n() / 2;
+    int n_slot = encrypted_share->context->parameter().n() / 2;
     int n_ct = data.get_size() / n_slot;
     encrypted->data.clear();
     encrypted->n_channel = encrypted_share->n_channel;
@@ -386,14 +386,13 @@ void Feature0DShare::to_encrypted(Feature0DEncrypted* encrypted_share, Feature0D
         for (int j = 0; j < n_slot; j++) {
             mask_d[j] = uint64_to_double(data[i * n_slot + j], scale, ring_mod);
         }
-        auto mask_pt = encrypted_share->context->encode(mask_d, level,
-                                                        encrypted_share->context->get_parameter().get_default_scale());
-        encrypted->data.push_back(encrypted_share->context->add_plain(encrypted_share->data[i], mask_pt));
+        auto mask_pt = ls_compat::encode(*encrypted_share->context, mask_d, level, encrypted_share->context->parameter().default_scale());
+        encrypted->data.push_back(encrypted_share->context->add(encrypted_share->data[i], mask_pt));
     }
 }
 
 Array<uint64_t, 1> Feature0DEncrypted::encrypt_from_share(const Feature0DShare& share, int n_channel) {
-    int n_slot = context->get_parameter().get_n() / 2;
+    int n_slot = context->parameter().n() / 2;
     uint32_t skip = 1;
     this->skip = skip;
 
@@ -424,13 +423,13 @@ void Feature0DEncrypted::decompress() {
     assert(data_compressed.size() > 0);
     size_t n_ct = data_compressed.size();
     for (int i = 0; i < n_ct; i++) {
-        data.push_back(context->compressed_ciphertext_to_ciphertext(data_compressed[i]));
+        data.push_back(ls_compat::compressed_ciphertext_to_ciphertext(data_compressed[i]));
     }
     data_compressed.clear();
 }
 
 Feature0DEncrypted Feature0DEncrypted::combine_with_share(const Feature0DShare& share) const {
-    int n_slot = context->get_parameter().get_n() / 2;
+    int n_slot = context->parameter().n() / 2;
     Feature0DEncrypted result(this->context, this->level);
     result.n_channel = this->n_channel;
     result.n_channel_per_ct = this->n_channel_per_ct;
@@ -447,8 +446,8 @@ Feature0DEncrypted Feature0DEncrypted::combine_with_share(const Feature0DShare& 
                 mask_d[j] = uint64_to_double(share.data.get(i * n_slot + j), scale, share.ring_mod);
             }
         }
-        CkksPlaintext mask_pt = context->encode(mask_d, level, context->get_parameter().get_default_scale());
-        result.data.push_back(context->add_plain(data[i], mask_pt));
+        CkksPlaintext mask_pt = ls_compat::encode(*context, mask_d, level, context->parameter().default_scale());
+        result.data.push_back(context->add(data[i], mask_pt));
     }
     return result;
 }
@@ -456,7 +455,7 @@ Feature0DEncrypted Feature0DEncrypted::combine_with_share(const Feature0DShare& 
 Feature0DEncrypted Feature0DEncrypted::combine_with_share_new_protocol(const Feature0DShare& share,
                                                                        const Feature0DEncrypted& f2d,
                                                                        const Bytes& b1) const {
-    int n_slot = context->get_parameter().get_n() / 2;
+    int n_slot = context->parameter().n() / 2;
     Feature0DEncrypted result(this->context, this->level);
     result.n_channel = this->n_channel;
     result.n_channel_per_ct = this->n_channel_per_ct;
@@ -480,13 +479,13 @@ Feature0DEncrypted Feature0DEncrypted::combine_with_share_new_protocol(const Fea
             b1_value[j] = 2 * b1_value[j] - 1;
             mask_d[j] = double(mask_value) / scale;
         }
-        CkksPlaintext mask_pt = context->encode(mask_d, level, encode_scale);
-        result.data.push_back(context->add_plain(data[i], mask_pt));
+        CkksPlaintext mask_pt = ls_compat::encode(*context, mask_d, level, encode_scale);
+        result.data.push_back(context->add(data[i], mask_pt));
 
-        CkksContext& ctx_extra = context->get_extra_level_context();
-        CkksPlaintext b1_pt = ctx_extra.encode(b1_value, level + 1, ctx_extra.get_parameter().get_q(level + 1));
-        auto f2d_mult = ctx_extra.mult_plain(f2d.data[i], b1_pt);
-        f2d_mult = ctx_extra.rescale(f2d_mult, encode_scale);
+        CkksContext& ctx_extra = (*context);
+        CkksPlaintext b1_pt = ls_compat::encode(ctx_extra, b1_value, level + 1, ctx_extra.parameter().q()[level + 1]);
+        auto f2d_mult = ctx_extra.mult(f2d.data[i], b1_pt);
+        f2d_mult = ctx_extra.rescale(f2d_mult);
 
         result.data[i] = context->add(result.data[i], f2d_mult);
     }
@@ -494,7 +493,7 @@ Feature0DEncrypted Feature0DEncrypted::combine_with_share_new_protocol(const Fea
 }
 
 void Feature0DEncrypted::split_to_shares(Feature0DEncrypted* share0, Feature0DShare* share1) const {
-    int n_slot = context->get_parameter().get_n() / 2;
+    int n_slot = context->parameter().n() / 2;
     double share_scale = pow(2, share1->scale_ord);
     int r_bitlength = 40;
     int feature_bitlength = ENC_TO_SHARE_SCALE_BIT + 1;
@@ -516,8 +515,8 @@ void Feature0DEncrypted::split_to_shares(Feature0DEncrypted* share0, Feature0DSh
         }
         mask_d_mat.push_back(mask_d);
         r_mat.push_back(r);
-        CkksPlaintext mask_pt = context->encode(mask_d, level, ENC_TO_SHARE_SCALE);
-        CkksCiphertext share0_ct = context->add_plain(data[i], mask_pt);
+        CkksPlaintext mask_pt = ls_compat::encode(*context, mask_d, level, ENC_TO_SHARE_SCALE);
+        CkksCiphertext share0_ct = context->add(data[i], mask_pt);
 
         share0->data.push_back(move(share0_ct));
     }
@@ -537,7 +536,7 @@ void Feature0DEncrypted::split_to_shares(Feature0DEncrypted* share0, Feature0DSh
 }
 
 void Feature0DEncrypted::split_to_shares_reshape(Feature0DEncrypted* share0, Feature0DShare* share1) const {
-    int n_slot = context->get_parameter().get_n() / 2;
+    int n_slot = context->parameter().n() / 2;
     double share_scale = pow(2, share1->scale_ord);
     int r_bitlength = 40;
     int feature_bitlength = ENC_TO_SHARE_SCALE_BIT + 1;
@@ -559,8 +558,8 @@ void Feature0DEncrypted::split_to_shares_reshape(Feature0DEncrypted* share0, Fea
         }
         r_mat.push_back(r);
         mask_d_mat.push_back(mask_d);
-        CkksPlaintext mask_pt = context->encode(mask_d, level, ENC_TO_SHARE_SCALE);
-        CkksCiphertext share0_ct = context->add_plain(data[i], mask_pt);
+        CkksPlaintext mask_pt = ls_compat::encode(*context, mask_d, level, ENC_TO_SHARE_SCALE);
+        CkksCiphertext share0_ct = context->add(data[i], mask_pt);
         share0->data.push_back(move(share0_ct));
     }
 

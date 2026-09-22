@@ -69,8 +69,8 @@ InverseMultiplexedConv2DLayerDepthwise::InverseMultiplexedConv2DLayerDepthwise(c
     }
 
     level_ = level_in;
-    weight_scale = param_.get_q(level_) * residual_scale;
-    N = param_in.get_n();
+    weight_scale = param_.q()[level_] * residual_scale;
+    N = param_in.n();
 }
 
 void InverseMultiplexedConv2DLayerDepthwise::prepare_weight() {
@@ -110,11 +110,11 @@ void InverseMultiplexedConv2DLayerDepthwise::prepare_weight_lazy() {
             }
         }
         CkksContext ctx_tmp = CkksContext::create_empty_context(this->param_);
-        repack_mask_pt = ctx_tmp.encode_ringt(mask_vec, ctx_tmp.get_parameter().get_q(level_ - 1));
+        repack_mask_pt = ls_compat::encode_ringt(ctx_tmp, mask_vec, ctx_tmp.parameter().q()[level_ - 1]);
     }
 }
 
-CkksPlaintextRingt InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_for_indices(CkksContext& ctx,
+CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_for_indices(CkksContext& ctx,
                                                                                           int out_channel_idx,
                                                                                           int kernel_count) const {
     int current_count = 0;
@@ -165,19 +165,19 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_fo
             w[i_s * (int)block_shape[1] + j_s] = w_val;
         }
     }
-    return ctx.encode_ringt(w, weight_scale);
+    return ls_compat::encode_ringt(ctx, w, weight_scale);
 }
 
-CkksPlaintextRingt InverseMultiplexedConv2DLayerDepthwise::generate_bias_pt_for_index(CkksContext& ctx,
+CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_bias_pt_for_index(CkksContext& ctx,
                                                                                       int out_channel_idx) const {
     vector<double> bias_vec(N / 2, 0.0);
     for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         bias_vec[linear_idx] = bias_.get(out_channel_idx);
     }
-    return ctx.encode_ringt(bias_vec, ctx.get_parameter().get_default_scale());
+    return ls_compat::encode_ringt(ctx, bias_vec, ctx.parameter().default_scale());
 }
 
-CkksPlaintextRingt InverseMultiplexedConv2DLayerDepthwise::generate_repack_mask_pt(CkksContext& ctx) const {
+CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_repack_mask_pt(CkksContext& ctx) const {
     Duo out_skip = block_shape / (input_shape_ / stride_);
     vector<double> mask_vec(N / 2, 0.0);
     for (uint32_t row = 0; row < block_shape[0]; row += out_skip[0]) {
@@ -185,7 +185,7 @@ CkksPlaintextRingt InverseMultiplexedConv2DLayerDepthwise::generate_repack_mask_
             mask_vec[row * block_shape[1] + col] = 1.0;
         }
     }
-    return ctx.encode_ringt(mask_vec, ctx.get_parameter().get_q(level_ - 1));
+    return ls_compat::encode_ringt(ctx, mask_vec, ctx.parameter().q()[level_ - 1]);
 }
 
 std::vector<uint32_t> InverseMultiplexedConv2DLayerDepthwise::get_used_input_indices() const {
@@ -256,19 +256,19 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayerDepthwise::run_core(CkksCont
             for (int k = 0; k < n_k; k++) {
                 if (weight_pt.empty()) {
                     auto w_pt_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, k + base_idx);
-                    auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
+                    auto w_pt = ls_compat::ringt_to_mul(ctx_copy, w_pt_rt, level_);
                     lattisense::CkksCiphertext one_mult_res =
-                        ctx_copy.mult_plain_mul(rotated_x[ct_idx][k + base_idx], w_pt);
+                        ctx_copy.mult(rotated_x[ct_idx][k + base_idx], w_pt);
                     if (k == 0) {
                         s = move(one_mult_res);
                     } else {
                         s = ctx_copy.add(s, one_mult_res);
                     }
                 } else {
-                    lattisense::CkksPlaintextRingt& w_pt_rt = weight_pt[ct_idx][k + base_idx];
-                    lattisense::CkksPlaintextMul w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
+                    lattisense::CkksPlaintext& w_pt_rt = weight_pt[ct_idx][k + base_idx];
+                    lattisense::CkksPlaintext w_pt = ls_compat::ringt_to_mul(ctx_copy, w_pt_rt, level_);
                     lattisense::CkksCiphertext one_mult_res =
-                        ctx_copy.mult_plain_mul(rotated_x[ct_idx][k + base_idx], w_pt);
+                        ctx_copy.mult(rotated_x[ct_idx][k + base_idx], w_pt);
                     if (k == 0) {
                         s = move(one_mult_res);
                     } else {
@@ -276,12 +276,12 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayerDepthwise::run_core(CkksCont
                     }
                 }
             }
-            s = ctx_copy.rescale(s, ctx_copy.get_parameter().get_default_scale());
+            s = ctx_copy.rescale(s);
             if (bias_pt.empty()) {
                 auto b_pt = generate_bias_pt_for_index(ctx_copy, ct_idx);
-                s = ctx_copy.add_plain_ringt(s, b_pt);
+                s = ctx_copy.add(s, b_pt);
             } else {
-                s = ctx_copy.add_plain_ringt(s, bias_pt[ct_idx]);
+                s = ctx_copy.add(s, bias_pt[ct_idx]);
             }
             temp_res[out_ct_idx] = move(s);
         }
@@ -296,8 +296,8 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayerDepthwise::run_core(CkksCont
 
         // Step 1: mask all channels with the shared repack mask
         parallel_for(n_out_channel_, th_nums, ctx, [&](CkksContext& ctx_copy, int c) {
-            auto mask_mul = ctx_copy.ringt_to_mul(repack_mask_pt, level_ - 1);
-            temp_res[c] = ctx_copy.mult_plain_mul(temp_res[c], mask_mul);
+            auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, repack_mask_pt, level_ - 1);
+            temp_res[c] = ctx_copy.mult(temp_res[c], mask_mul);
         });
 
         // Step 2: rotate + accumulate, grouped by output CT
@@ -330,7 +330,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayerDepthwise::run_core(CkksCont
                     sum = ctx_copy.add(sum, rotated);
                 }
             }
-            res[out_ct_idx] = ctx_copy.rescale(sum, ctx_copy.get_parameter().get_default_scale());
+            res[out_ct_idx] = ctx_copy.rescale(sum);
         });
         return res;
     }

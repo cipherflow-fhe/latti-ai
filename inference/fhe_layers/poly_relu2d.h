@@ -40,11 +40,11 @@ public:
     void prepare_weight_hornor();
     void prepare_weight_hornor_lazy();
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_weight_pt_for_indices(ls::CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_weight_pt_for_non_absorb_indices(ls::CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int n_packed_out_channel_idx) const override;
 
     Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);

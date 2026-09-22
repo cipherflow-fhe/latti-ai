@@ -45,7 +45,7 @@ ParBlockColMajorCPMM::ParBlockColMajorCPMM(const CkksParameter& param_in,
         throw runtime_error("ParBlockColMajorCPMM requires block_size >= per-head width");
     }
 
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.n() / 2;
     assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
     assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
     n_h_padded_ = next_pow2(n_heads);
@@ -222,8 +222,8 @@ std::vector<double> ParBlockColMajorCPMM::build_bias_vec(uint32_t mb, uint32_t b
 void ParBlockColMajorCPMM::precompute_diagonals() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
 
-    double diag_scale = param_.get_q(level_);
-    double mask_scale = param_.get_q(level_ - 1);
+    double diag_scale = param_.q()[level_];
+    double mask_scale = param_.q()[level_ - 1];
 
     // Diagonals: for each megablock, input group g, output block column bp, and rotation k
     diag_pt_.clear();
@@ -236,7 +236,7 @@ void ParBlockColMajorCPMM::precompute_diagonals() {
                 diag_pt_[mb][g][bp].reserve(d_);
                 for (uint32_t k = 0; k < d_; k++) {
                     auto diag_vec = build_block_diagonal(mb, g, bp, k);
-                    diag_pt_[mb][g][bp].push_back(ctx.encode_ringt(diag_vec, diag_scale));
+                    diag_pt_[mb][g][bp].push_back(ls_compat::encode_ringt(ctx, diag_vec, diag_scale));
                 }
             }
         }
@@ -244,36 +244,36 @@ void ParBlockColMajorCPMM::precompute_diagonals() {
 
     // Mask for selecting h=0 after cross-head sum
     auto mask_vec = build_head0_mask();
-    mask_h0_pt_ = ctx.encode_ringt(mask_vec, mask_scale);
+    mask_h0_pt_ = ls_compat::encode_ringt(ctx, mask_vec, mask_scale);
 
     // Bias plaintexts (encoded at default scale, matching output CT scale at level L-2)
     if (has_bias_) {
-        double D = param_.get_default_scale();
+        double D = param_.default_scale();
         uint32_t total_bias_pts = K_col_ * num_block_rows_A_ * n_cts_per_block_idx_;
         bias_pt_.resize(total_bias_pts);
         for (uint32_t mb = 0; mb < K_col_; mb++) {
             for (uint32_t bi = 0; bi < num_block_rows_A_; bi++) {
                 for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
                     uint32_t idx = mb * num_block_rows_A_ * n_cts_per_block_idx_ + bi * n_cts_per_block_idx_ + g;
-                    bias_pt_[idx] = ctx.encode_ringt(build_bias_vec(mb, bi, g), D);
+                    bias_pt_[idx] = ls_compat::encode_ringt(ctx, build_bias_vec(mb, bi, g), D);
                 }
             }
         }
     }
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParBlockColMajorCPMM::generate_diag_pt(CkksContext& ctx, uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const {
-    return ctx.encode_ringt(build_block_diagonal(mb, g, bp, k), param_.get_q(level_));
+    return ls_compat::encode_ringt(ctx, build_block_diagonal(mb, g, bp, k), param_.q()[level_]);
 }
 
-CkksPlaintextRingt ParBlockColMajorCPMM::generate_mask_h0_pt(CkksContext& ctx) const {
-    return ctx.encode_ringt(build_head0_mask(), param_.get_q(level_ - 1));
+CkksPlaintext ParBlockColMajorCPMM::generate_mask_h0_pt(CkksContext& ctx) const {
+    return ls_compat::encode_ringt(ctx, build_head0_mask(), param_.q()[level_ - 1]);
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParBlockColMajorCPMM::generate_bias_pt(CkksContext& ctx, uint32_t mb, uint32_t bi, uint32_t g) const {
-    return ctx.encode_ringt(build_bias_vec(mb, bi, g), param_.get_default_scale());
+    return ls_compat::encode_ringt(ctx, build_bias_vec(mb, bi, g), param_.default_scale());
 }
 
 // block_mult_cpmm with BSGS: (bsgs_bs-1) baby rotations + (bsgs_gs-1) giant rotations
@@ -283,7 +283,7 @@ CkksCiphertext ParBlockColMajorCPMM::block_mult_cpmm(CkksContext& ctx,
                                                      uint32_t megablock,
                                                      uint32_t g_input,
                                                      int bp) const {
-    double default_scale = param_.get_default_scale();
+    double default_scale = param_.default_scale();
     uint32_t S = n_blocks_per_chunk_;
     int unit = (int)(d_ * S);
 
@@ -299,8 +299,8 @@ CkksCiphertext ParBlockColMajorCPMM::block_mult_cpmm(CkksContext& ctx,
 
         for (uint32_t b = 0; b < b_end; b++) {
             uint32_t k = g * bsgs_bs_ + b;
-            auto diag_mul = ctx.ringt_to_mul(diag_pt_[megablock][g_input][bp][k], level_);
-            auto product = ctx.mult_plain_mul(baby_rots[b], diag_mul);
+            auto diag_mul = ls_compat::ringt_to_mul(ctx, diag_pt_[megablock][g_input][bp][k], level_);
+            auto product = ctx.mult(baby_rots[b], diag_mul);
 
             if (!inner_init) {
                 inner = move(product);
@@ -321,7 +321,7 @@ CkksCiphertext ParBlockColMajorCPMM::block_mult_cpmm(CkksContext& ctx,
             result = ctx.add(result, inner);
         }
     }
-    return ctx.rescale(result, default_scale);
+    return ctx.rescale(result);
 }
 
 // head_sum: tree-reduction sum across S head slots with fixed megablock idx and fixed heads group idx g.
@@ -358,7 +358,7 @@ std::vector<CkksCiphertext> ParBlockColMajorCPMM::run_core(CkksContext& ctx,
     uint32_t K_eff = mb_indices.size();
     uint32_t cts_per_mb = num_block_rows_A_ * n_cts_per_block_idx_;
     vector<CkksCiphertext> C_cts(cts_per_mb);
-    double default_scale = param_.get_default_scale();
+    double default_scale = param_.default_scale();
 
     parallel_for(num_block_rows_A_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
         for (uint32_t bp = 0; bp < n_heads_; bp++) {
@@ -381,8 +381,8 @@ std::vector<CkksCiphertext> ParBlockColMajorCPMM::run_core(CkksContext& ctx,
             }
 
             // Step 3: mask h=0 (L-1 -> L-2)
-            auto mask_mul = ctx_copy.ringt_to_mul(mask_h0_pt_, level_ - 1);
-            full_sum = ctx_copy.rescale(ctx_copy.mult_plain_mul(full_sum, mask_mul), default_scale);
+            auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, mask_h0_pt_, level_ - 1);
+            full_sum = ctx_copy.rescale(ctx_copy.mult(full_sum, mask_mul));
 
             // Step 4: rotate to output head position (generalized for G > 1)
             uint32_t g_out = bp / n_blocks_per_chunk_;
@@ -427,7 +427,7 @@ FeatureMatEncrypted ParBlockColMajorCPMM::run(CkksContext& ctx, const FeatureMat
     // Add bias if present (plaintext addition, no level consumed)
     if (has_bias_) {
         for (size_t i = 0; i < result.data.size(); i++) {
-            result.data[i] = ctx.add_plain_ringt(result.data[i], bias_pt_[i]);
+            result.data[i] = ctx.add(result.data[i], bias_pt_[i]);
         }
     }
 

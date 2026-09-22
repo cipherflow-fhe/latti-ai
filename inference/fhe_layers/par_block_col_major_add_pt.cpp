@@ -42,7 +42,7 @@ ParBlockColMajorAddPt::ParBlockColMajorAddPt(const CkksParameter& param_in,
     assert(B_vals_.get_shape()[0] == m_ && B_vals_.get_shape()[1] == total_dim);
 
     n_h_padded_ = next_pow2(n_heads);
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.n() / 2;
     assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
     assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
 
@@ -85,13 +85,13 @@ std::vector<double> ParBlockColMajorAddPt::build_pt_vec(uint32_t bi, uint32_t bj
     return pt_vec;
 }
 
-CkksPlaintextRingt ParBlockColMajorAddPt::generate_pt(CkksContext& ctx, uint32_t bi, uint32_t bj, uint32_t g) const {
-    return ctx.encode_ringt(build_pt_vec(bi, bj, g), param_.get_default_scale());
+CkksPlaintext ParBlockColMajorAddPt::generate_pt(CkksContext& ctx, uint32_t bi, uint32_t bj, uint32_t g) const {
+    return ls_compat::encode_ringt(ctx, build_pt_vec(bi, bj, g), param_.default_scale());
 }
 
 void ParBlockColMajorAddPt::precompute_pts() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
 
     uint32_t total = num_block_rows_ * num_block_cols_ * n_cts_per_block_idx_;
     pt_.resize(total);
@@ -99,7 +99,7 @@ void ParBlockColMajorAddPt::precompute_pts() {
         for (uint32_t bi = 0; bi < num_block_rows_; bi++) {
             for (uint32_t g = 0; g < n_cts_per_block_idx_; g++) {
                 uint32_t idx = (bi + num_block_rows_ * bj) * n_cts_per_block_idx_ + g;
-                pt_[idx] = ctx.encode_ringt(build_pt_vec(bi, bj, g), D);
+                pt_[idx] = ls_compat::encode_ringt(ctx, build_pt_vec(bi, bj, g), D);
             }
         }
     }
@@ -117,7 +117,7 @@ FeatureMatEncrypted ParBlockColMajorAddPt::run(CkksContext& ctx, const FeatureMa
     result.data.resize(total_cts);
 
     parallel_for(total_cts, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        result.data[ct_idx] = ctx_copy.add_plain_ringt(A.data[ct_idx], pt_[ct_idx]);
+        result.data[ct_idx] = ctx_copy.add(A.data[ct_idx], pt_[ct_idx]);
     });
 
     return result;

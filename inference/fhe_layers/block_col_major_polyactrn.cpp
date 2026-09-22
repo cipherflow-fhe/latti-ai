@@ -36,7 +36,7 @@ BlockColMajorPolyActRNGamma::BlockColMajorPolyActRNGamma(const CkksParameter& pa
     m_ = shape[0];
     n_ = shape[1];
     d_ = block_size;
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.n() / 2;
     chunk_size_ = d_ * d_;
     num_chunks_ = n_slot_ / chunk_size_;
     num_block_rows_ = div_ceil(m_, d_);
@@ -45,7 +45,7 @@ BlockColMajorPolyActRNGamma::BlockColMajorPolyActRNGamma(const CkksParameter& pa
 
 void BlockColMajorPolyActRNGamma::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
-    double q_L = param_.get_q(level_);
+    double q_L = param_.q()[level_];
 
     gamma_pt_.resize(num_block_cols_);
     for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
@@ -61,12 +61,12 @@ void BlockColMajorPolyActRNGamma::prepare_weight() {
                 }
             }
         }
-        gamma_pt_[bj] = ctx.encode_ringt(gamma_vec, q_L);
+        gamma_pt_[bj] = ls_compat::encode_ringt(ctx, gamma_vec, q_L);
     }
 }
 
 FeatureMatEncrypted BlockColMajorPolyActRNGamma::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     uint32_t total_blocks = num_block_rows_ * num_block_cols_;
 
     FeatureMatEncrypted result(&ctx, level_ - 1);
@@ -77,9 +77,9 @@ FeatureMatEncrypted BlockColMajorPolyActRNGamma::run(CkksContext& ctx, const Fea
     parallel_for(total_blocks, th_nums, ctx, [&](CkksContext& ctx_copy, int block_idx) {
         uint32_t bj = block_idx / num_block_rows_;
 
-        auto gamma_mul = ctx_copy.ringt_to_mul(gamma_pt_[bj], level_);
-        auto product = ctx_copy.mult_plain_mul(x.data[block_idx], gamma_mul);
-        result.data[block_idx] = ctx_copy.rescale(product, D);
+        auto gamma_mul = ls_compat::ringt_to_mul(ctx_copy, gamma_pt_[bj], level_);
+        auto product = ctx_copy.mult(x.data[block_idx], gamma_mul);
+        result.data[block_idx] = ctx_copy.rescale(product);
     });
 
     result.level = level_ - 1;
@@ -128,7 +128,7 @@ BlockColMajorPolyActRNPoly::BlockColMajorPolyActRNPoly(const CkksParameter& para
     m_ = shape[0];
     n_ = shape[1];
     d_ = block_size;
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.n() / 2;
     chunk_size_ = d_ * d_;
     num_chunks_ = n_slot_ / chunk_size_;
     num_block_rows_ = div_ceil(m_, d_);
@@ -137,23 +137,23 @@ BlockColMajorPolyActRNPoly::BlockColMajorPolyActRNPoly(const CkksParameter& para
 
 void BlockColMajorPolyActRNPoly::prepare_weight() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
-    double D = param_.get_default_scale();
-    double q_L = param_.get_q(level_);
-    double q_L1 = param_.get_q(level_ - 1);
+    double D = param_.default_scale();
+    double q_L = param_.q()[level_];
+    double q_L1 = param_.q()[level_ - 1];
 
     // --- c2: per bj ---
     double c2_scale = q_L / D * q_L1;
     c2_pt_.resize(num_block_cols_);
     for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
         auto vec = build_block_coeff_vec(n_slot_, chunk_size_, num_chunks_, d_, n_, bj, coeffs_, 2);
-        c2_pt_[bj] = ctx.encode_ringt(vec, c2_scale);
+        c2_pt_[bj] = ls_compat::encode_ringt(ctx, vec, c2_scale);
     }
 
     // --- c1: per bj ---
     c1_pt_.resize(num_block_cols_);
     for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
         auto vec = build_block_coeff_vec(n_slot_, chunk_size_, num_chunks_, d_, n_, bj, coeffs_, 1);
-        c1_pt_[bj] = ctx.encode_ringt(vec, q_L);
+        c1_pt_[bj] = ls_compat::encode_ringt(ctx, vec, q_L);
     }
 
     // --- c0: per (bi,bj), scale D, with 0-padding ---
@@ -174,32 +174,32 @@ void BlockColMajorPolyActRNPoly::prepare_weight() {
                 }
             }
             uint32_t idx = bi + num_block_rows_ * bj;
-            c0_add_pt_[idx] = ctx.encode_ringt(vec, D);
+            c0_add_pt_[idx] = ls_compat::encode_ringt(ctx, vec, D);
         }
     }
 
     // --- Degree-4 additional: c3 and c4 ---
     if (degree_ == 4) {
-        double q_L2 = param_.get_q(level_ - 2);
+        double q_L2 = param_.q()[level_ - 2];
 
         double c4_scale = q_L / D * q_L / D * q_L1 / D * q_L2;
         c4_pt_.resize(num_block_cols_);
         for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
             auto vec = build_block_coeff_vec(n_slot_, chunk_size_, num_chunks_, d_, n_, bj, coeffs_, 4);
-            c4_pt_[bj] = ctx.encode_ringt(vec, c4_scale);
+            c4_pt_[bj] = ls_compat::encode_ringt(ctx, vec, c4_scale);
         }
 
         double c3_scale = q_L / D * q_L / D * q_L2;
         c3_pt_.resize(num_block_cols_);
         for (uint32_t bj = 0; bj < num_block_cols_; bj++) {
             auto vec = build_block_coeff_vec(n_slot_, chunk_size_, num_chunks_, d_, n_, bj, coeffs_, 3);
-            c3_pt_[bj] = ctx.encode_ringt(vec, c3_scale);
+            c3_pt_[bj] = ls_compat::encode_ringt(ctx, vec, c3_scale);
         }
     }
 }
 
 FeatureMatEncrypted BlockColMajorPolyActRNPoly::run(CkksContext& ctx, const FeatureMatEncrypted& x) {
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     uint32_t total_blocks = num_block_rows_ * num_block_cols_;
     uint32_t out_level = (degree_ == 4) ? level_ - 3 : level_ - 2;
 
@@ -214,53 +214,53 @@ FeatureMatEncrypted BlockColMajorPolyActRNPoly::run(CkksContext& ctx, const Feat
 
             // x^2 = x * x -> level L-1
             auto x_sq_raw = ctx_copy.mult(x.data[block_idx], x.data[block_idx]);
-            auto x_sq = ctx_copy.rescale(ctx_copy.relinearize(x_sq_raw), D / param_.get_q(level_) * D);
+            auto x_sq = ctx_copy.rescale(ctx_copy.relinearize(x_sq_raw));
 
             // c2*x^2 -> level L-2, scale D
-            auto c2_mul = ctx_copy.ringt_to_mul(c2_pt_[bj], level_ - 1);
-            auto c2x2 = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_sq, c2_mul), D);
+            auto c2_mul = ls_compat::ringt_to_mul(ctx_copy, c2_pt_[bj], level_ - 1);
+            auto c2x2 = ctx_copy.rescale(ctx_copy.mult(x_sq, c2_mul));
 
             // c1*x -> level L-1, scale D
-            auto c1_mul = ctx_copy.ringt_to_mul(c1_pt_[bj], level_);
-            auto c1x = ctx_copy.rescale(ctx_copy.mult_plain_mul(x.data[block_idx], c1_mul), D);
+            auto c1_mul = ls_compat::ringt_to_mul(ctx_copy, c1_pt_[bj], level_);
+            auto c1x = ctx_copy.rescale(ctx_copy.mult(x.data[block_idx], c1_mul));
             // Drop c1*x to level L-2
             auto c1x_drop = ctx_copy.drop_level(c1x);
 
             // y = c0 + c1*x + c2*x^2
             auto y = ctx_copy.add(c1x_drop, c2x2);
-            result.data[block_idx] = ctx_copy.add_plain_ringt(y, c0_add_pt_[block_idx]);
+            result.data[block_idx] = ctx_copy.add(y, c0_add_pt_[block_idx]);
         });
     } else {
         // degree == 4
-        double q_L2 = param_.get_q(level_ - 2);
-        double S_high = param_.get_q(level_) / D * q_L2;
+        double q_L2 = param_.q()[level_ - 2];
+        double S_high = param_.q()[level_] / D * q_L2;
 
         parallel_for(total_blocks, th_nums, ctx, [&](CkksContext& ctx_copy, int block_idx) {
             uint32_t bj = block_idx / num_block_rows_;
 
             // === x^2 ===
             auto x_sq_raw = ctx_copy.mult(x.data[block_idx], x.data[block_idx]);
-            auto x_sq = ctx_copy.rescale(ctx_copy.relinearize(x_sq_raw), D / param_.get_q(level_) * D);
+            auto x_sq = ctx_copy.rescale(ctx_copy.relinearize(x_sq_raw));
             // x_sq at level L-1
 
             // === Low part: c0 + c1*x + c2*x^2 -> level L-2, scale D ===
-            auto c2_mul = ctx_copy.ringt_to_mul(c2_pt_[bj], level_ - 1);
-            auto c2x2 = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_sq, c2_mul), D);
+            auto c2_mul = ls_compat::ringt_to_mul(ctx_copy, c2_pt_[bj], level_ - 1);
+            auto c2x2 = ctx_copy.rescale(ctx_copy.mult(x_sq, c2_mul));
 
-            auto c1_mul = ctx_copy.ringt_to_mul(c1_pt_[bj], level_);
-            auto c1x = ctx_copy.rescale(ctx_copy.mult_plain_mul(x.data[block_idx], c1_mul), D);
+            auto c1_mul = ls_compat::ringt_to_mul(ctx_copy, c1_pt_[bj], level_);
+            auto c1x = ctx_copy.rescale(ctx_copy.mult(x.data[block_idx], c1_mul));
             auto c1x_drop = ctx_copy.drop_level(c1x);
 
             auto low = ctx_copy.add(c1x_drop, c2x2);
-            low = ctx_copy.add_plain_ringt(low, c0_add_pt_[block_idx]);
+            low = ctx_copy.add(low, c0_add_pt_[block_idx]);
             // low at level L-2, scale D
 
             // === High part: c3*x + c4*x^2 -> level L-2, scale S_high ===
-            auto c4_mul = ctx_copy.ringt_to_mul(c4_pt_[bj], level_ - 1);
-            auto c4x2 = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_sq, c4_mul), S_high);
+            auto c4_mul = ls_compat::ringt_to_mul(ctx_copy, c4_pt_[bj], level_ - 1);
+            auto c4x2 = ctx_copy.rescale(ctx_copy.mult(x_sq, c4_mul));
 
-            auto c3_mul = ctx_copy.ringt_to_mul(c3_pt_[bj], level_);
-            auto c3x = ctx_copy.rescale(ctx_copy.mult_plain_mul(x.data[block_idx], c3_mul), S_high);
+            auto c3_mul = ls_compat::ringt_to_mul(ctx_copy, c3_pt_[bj], level_);
+            auto c3x = ctx_copy.rescale(ctx_copy.mult(x.data[block_idx], c3_mul));
             auto c3x_drop = ctx_copy.drop_level(c3x);
 
             auto high = ctx_copy.add(c3x_drop, c4x2);
@@ -270,7 +270,7 @@ FeatureMatEncrypted BlockColMajorPolyActRNPoly::run(CkksContext& ctx, const Feat
             auto x_sq_drop = ctx_copy.drop_level(x_sq);  // L-2
 
             auto product = ctx_copy.mult(x_sq_drop, high);
-            auto x2_high = ctx_copy.rescale(ctx_copy.relinearize(product), D);
+            auto x2_high = ctx_copy.rescale(ctx_copy.relinearize(product));
             // x2_high at level L-3, scale D
 
             auto low_drop = ctx_copy.drop_level(low);  // L-3, scale D

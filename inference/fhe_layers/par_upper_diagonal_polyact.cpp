@@ -94,7 +94,7 @@ ParUpperDiagonalPolyActRNGamma::ParUpperDiagonalPolyActRNGamma(const CkksParamet
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.n() / 2;
     assert(gamma_vals_.get_size() >= total_cols_);
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 
@@ -136,9 +136,9 @@ vector<double> ParUpperDiagonalPolyActRNGamma::build_gamma_vec(uint32_t mb, uint
     return vec;
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParUpperDiagonalPolyActRNGamma::generate_gamma_pt(CkksContext& ctx, uint32_t mb, uint32_t ct_local, uint32_t) const {
-    return ctx.encode_ringt(build_gamma_vec(mb, ct_local), param_.get_q(level_));
+    return ls_compat::encode_ringt(ctx, build_gamma_vec(mb, ct_local), param_.q()[level_]);
 }
 
 void ParUpperDiagonalPolyActRNGamma::prepare_weight() {
@@ -158,7 +158,7 @@ FeatureMatEncrypted ParUpperDiagonalPolyActRNGamma::run(CkksContext& ctx, const 
     assert(x.matmul_block_size == m_);
     assert(x.data.size() == total_cts());
 
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     FeatureMatEncrypted result(&ctx, level_ - 1);
     result.shape = x.shape;
     result.head_shape = x.head_shape;
@@ -166,9 +166,9 @@ FeatureMatEncrypted ParUpperDiagonalPolyActRNGamma::run(CkksContext& ctx, const 
     result.data.resize(total_cts());
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto gamma_mul = ctx_copy.ringt_to_mul(gamma_pt_[idx], level_);
-        auto product = ctx_copy.mult_plain_mul(x.data[idx], gamma_mul);
-        result.data[idx] = ctx_copy.rescale(product, D);
+        auto gamma_mul = ls_compat::ringt_to_mul(ctx_copy, gamma_pt_[idx], level_);
+        auto product = ctx_copy.mult(x.data[idx], gamma_mul);
+        result.data[idx] = ctx_copy.rescale(product);
     });
 
     result.level = level_ - 1;
@@ -210,7 +210,7 @@ ParUpperDiagonalPolyActRNPoly::ParUpperDiagonalPolyActRNPoly(const CkksParameter
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.n() / 2;
     assert(coeffs_.get_shape()[1] >= total_cols_);
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 
@@ -254,30 +254,30 @@ ParUpperDiagonalPolyActRNPoly::build_coeff_vec(uint32_t coeff_idx, uint32_t mb, 
     return vec;
 }
 
-CkksPlaintextRingt ParUpperDiagonalPolyActRNPoly::generate_coeff_pt(CkksContext& ctx,
+CkksPlaintext ParUpperDiagonalPolyActRNPoly::generate_coeff_pt(CkksContext& ctx,
                                                                     uint32_t coeff_idx,
                                                                     uint32_t mb,
                                                                     uint32_t ct_local,
                                                                     uint32_t) const {
     assert(coeff_idx <= degree_);
 
-    double D = param_.get_default_scale();
-    double q_L = param_.get_q(level_);
+    double D = param_.default_scale();
+    double q_L = param_.q()[level_];
     double scale = D;
 
     if (coeff_idx == 1) {
         scale = q_L;
     } else if (coeff_idx == 2) {
-        scale = q_L / D * param_.get_q(level_ - 1);
+        scale = q_L / D * param_.q()[level_ - 1];
     } else if (coeff_idx == 3) {
         assert(degree_ == 4);
-        scale = q_L / D * q_L / D * param_.get_q(level_ - 2);
+        scale = q_L / D * q_L / D * param_.q()[level_ - 2];
     } else if (coeff_idx == 4) {
         assert(degree_ == 4);
-        scale = q_L / D * q_L / D * param_.get_q(level_ - 1) / D * param_.get_q(level_ - 2);
+        scale = q_L / D * q_L / D * param_.q()[level_ - 1] / D * param_.q()[level_ - 2];
     }
 
-    return ctx.encode_ringt(build_coeff_vec(coeff_idx, mb, ct_local), scale);
+    return ls_compat::encode_ringt(ctx, build_coeff_vec(coeff_idx, mb, ct_local), scale);
 }
 
 void ParUpperDiagonalPolyActRNPoly::prepare_weight() {
@@ -316,7 +316,7 @@ FeatureMatEncrypted ParUpperDiagonalPolyActRNPoly::run(CkksContext& ctx, const F
     assert(x.matmul_block_size == m_);
     assert(x.data.size() == total_cts());
 
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     uint32_t out_level = (degree_ == 4) ? level_ - 3 : level_ - 2;
 
     FeatureMatEncrypted result(&ctx, out_level);
@@ -328,49 +328,49 @@ FeatureMatEncrypted ParUpperDiagonalPolyActRNPoly::run(CkksContext& ctx, const F
     if (degree_ == 2) {
         parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
             auto x_sq_raw = ctx_copy.mult(x.data[idx], x.data[idx]);
-            auto x_sq = ctx_copy.rescale(ctx_copy.relinearize(x_sq_raw), D / param_.get_q(level_) * D);
+            auto x_sq = ctx_copy.rescale(ctx_copy.relinearize(x_sq_raw));
 
-            auto c2_mul = ctx_copy.ringt_to_mul(c2_pt_[idx], level_ - 1);
-            auto c2x2 = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_sq, c2_mul), D);  // level L-2, scale D
+            auto c2_mul = ls_compat::ringt_to_mul(ctx_copy, c2_pt_[idx], level_ - 1);
+            auto c2x2 = ctx_copy.rescale(ctx_copy.mult(x_sq, c2_mul));  // level L-2, scale D
 
-            auto c1_mul = ctx_copy.ringt_to_mul(c1_pt_[idx], level_);
-            auto c1x = ctx_copy.rescale(ctx_copy.mult_plain_mul(x.data[idx], c1_mul), D);  // level L-1, scale D
+            auto c1_mul = ls_compat::ringt_to_mul(ctx_copy, c1_pt_[idx], level_);
+            auto c1x = ctx_copy.rescale(ctx_copy.mult(x.data[idx], c1_mul));  // level L-1, scale D
             auto c1x_drop = ctx_copy.drop_level(c1x);
 
             auto y = ctx_copy.add(c1x_drop, c2x2);
-            result.data[idx] = ctx_copy.add_plain_ringt(y, c0_add_pt_[idx]);  // level L-2, scale D
+            result.data[idx] = ctx_copy.add(y, c0_add_pt_[idx]);  // level L-2, scale D
         });
     } else {
-        double q_L2 = param_.get_q(level_ - 2);
-        double S_high = param_.get_q(level_) / D * q_L2;
+        double q_L2 = param_.q()[level_ - 2];
+        double S_high = param_.q()[level_] / D * q_L2;
 
         parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
             auto x_sq_raw = ctx_copy.mult(x.data[idx], x.data[idx]);
-            auto x_sq = ctx_copy.rescale(ctx_copy.relinearize(x_sq_raw), D / param_.get_q(level_) * D);
+            auto x_sq = ctx_copy.rescale(ctx_copy.relinearize(x_sq_raw));
 
-            auto c2_mul = ctx_copy.ringt_to_mul(c2_pt_[idx], level_ - 1);
-            auto c2x2 = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_sq, c2_mul), D);
+            auto c2_mul = ls_compat::ringt_to_mul(ctx_copy, c2_pt_[idx], level_ - 1);
+            auto c2x2 = ctx_copy.rescale(ctx_copy.mult(x_sq, c2_mul));
 
-            auto c1_mul = ctx_copy.ringt_to_mul(c1_pt_[idx], level_);
-            auto c1x = ctx_copy.rescale(ctx_copy.mult_plain_mul(x.data[idx], c1_mul), D);
+            auto c1_mul = ls_compat::ringt_to_mul(ctx_copy, c1_pt_[idx], level_);
+            auto c1x = ctx_copy.rescale(ctx_copy.mult(x.data[idx], c1_mul));
             auto c1x_drop = ctx_copy.drop_level(c1x);
 
             auto low = ctx_copy.add(c1x_drop, c2x2);
-            low = ctx_copy.add_plain_ringt(low, c0_add_pt_[idx]);  // level L-2, scale D
+            low = ctx_copy.add(low, c0_add_pt_[idx]);  // level L-2, scale D
 
-            auto c4_mul = ctx_copy.ringt_to_mul(c4_pt_[idx], level_ - 1);
-            auto c4x2 = ctx_copy.rescale(ctx_copy.mult_plain_mul(x_sq, c4_mul), S_high);  // level L-2, scale S_high
+            auto c4_mul = ls_compat::ringt_to_mul(ctx_copy, c4_pt_[idx], level_ - 1);
+            auto c4x2 = ctx_copy.rescale(ctx_copy.mult(x_sq, c4_mul));  // level L-2, scale S_high
 
-            auto c3_mul = ctx_copy.ringt_to_mul(c3_pt_[idx], level_);
+            auto c3_mul = ls_compat::ringt_to_mul(ctx_copy, c3_pt_[idx], level_);
             auto c3x =
-                ctx_copy.rescale(ctx_copy.mult_plain_mul(x.data[idx], c3_mul), S_high);  // level L-1, scale S_high
+                ctx_copy.rescale(ctx_copy.mult(x.data[idx], c3_mul));  // level L-1, scale S_high
             auto c3x_drop = ctx_copy.drop_level(c3x);
 
             auto high = ctx_copy.add(c3x_drop, c4x2);    // level L-2, scale S_high
             auto x_sq_drop = ctx_copy.drop_level(x_sq);  // level L-2, scale D/q_L *D
 
             auto product = ctx_copy.mult(x_sq_drop, high);
-            auto x2_high = ctx_copy.rescale(ctx_copy.relinearize(product), D);  // level L-3, scale D
+            auto x2_high = ctx_copy.rescale(ctx_copy.relinearize(product));  // level L-3, scale D
             auto low_drop = ctx_copy.drop_level(low);                           // level L-3, scale D
 
             result.data[idx] = ctx_copy.add(low_drop, x2_high);  // level L-3, scale D
