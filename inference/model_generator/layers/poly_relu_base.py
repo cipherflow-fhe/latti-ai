@@ -482,6 +482,6 @@ class PolyReluBase:
     def make_pt_nodes(self, layer_id, n_pack_in_channel):
         """Return weight_pt placeholder list with shape [order+1][n_pack_in_channel]."""
         return [
-            [CkksPlaintextRingtNode(f'poly_reluw_{layer_id}_{i}_{j}') for j in range(n_pack_in_channel)]
+            [CkksPlaintextNode(f'poly_reluw_{layer_id}_{i}_{j}') for j in range(n_pack_in_channel)]
             for i in range(self.order + 1)
         ]

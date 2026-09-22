@@ -195,7 +195,7 @@ class ParBlockColMajorTranspose:
         d = self.d
         transpose_diag_pt = []
         for k_idx in range(2 * d - 1):
-            node = CkksPlaintextRingtNode(f'encode_pt_transpose_diag_{k_idx}')
+            node = CkksPlaintextNode(f'encode_pt_transpose_diag_{k_idx}')
             custom_compute(
                 inputs=[data_source],
                 output=node,

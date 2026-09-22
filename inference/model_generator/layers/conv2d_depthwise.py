@@ -237,7 +237,7 @@ class Conv2DPackedDepthwiseLayer:
                 for j in range(self.kernel_shape[1]):
                     index = i * self.kernel_shape[1] + j
                     x_ct = rotated_x_2d[packed_out_channel_idx][index]
-                    w_pt = CkksPlaintextRingtNode(f'encode_pt_{packed_out_channel_idx}_{index}')
+                    w_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}_{index}')
                     custom_compute(
                         inputs=[conv_data_source],
                         output=w_pt,
@@ -253,7 +253,7 @@ class Conv2DPackedDepthwiseLayer:
                     w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             partial_sum = rescale(partial_sum)
-            b_pt = CkksPlaintextRingtNode(f'encode_pt_{packed_out_channel_idx}')
+            b_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}')
             custom_compute(
                 inputs=[conv_data_source],
                 output=b_pt,
@@ -268,10 +268,10 @@ class Conv2DPackedDepthwiseLayer:
         """Return (weight_pt, bias_pt) with shapes matching call()."""
         index = self.kernel_shape[0] * self.kernel_shape[1]
         weight_pt = [
-            [CkksPlaintextRingtNode(f'convw_{layer_id}_{n}_{i}') for i in range(index)]
+            [CkksPlaintextNode(f'convw_{layer_id}_{n}_{i}') for i in range(index)]
             for n in range(self.n_packed_out_channel)
         ]
-        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_packed_out_channel)]
+        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}') for i in range(self.n_packed_out_channel)]
         return weight_pt, bias_pt
 
     def make_param_ct_nodes(self, layer_id, level: int):

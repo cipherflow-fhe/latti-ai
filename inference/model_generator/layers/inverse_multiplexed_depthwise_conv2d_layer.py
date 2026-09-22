@@ -168,7 +168,7 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                     w_pt_list = []
                     # Depthwise: no inner j loop over n_in_channel, only kernel positions
                     for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
-                        w_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}_{k + base_idx}')
+                        w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{k + base_idx}')
                         custom_compute(
                             inputs=[conv_data_source],
                             output=w_pt,
@@ -184,7 +184,7 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                         w_pt_list.append(w_pt)
                     partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
                     s = rescale(partial_sum)
-                    b_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}')
+                    b_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}')
                     custom_compute(
                         inputs=[conv_data_source],
                         output=b_pt,
@@ -219,7 +219,7 @@ class InverseMultiplexedDepthwiseConv2DLayer:
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 
             # Shared mask: select row%output_skip==0 && col%output_skip==0
-            repack_mask = CkksPlaintextRingtNode('repack_mask')
+            repack_mask = CkksPlaintextNode('repack_mask')
             custom_compute(
                 inputs=[conv_data_source],
                 output=repack_mask,
@@ -290,15 +290,15 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         weight_pt[k][i]: k in n_out_channel,
                          i in kernel_size * output_step[0] * output_step[1]
         bias_pt[i]: i in n_out_channel
-        repack_mask_pt: CkksPlaintextRingtNode if need_repack, else None
+        repack_mask_pt: CkksPlaintextNode if need_repack, else None
         """
         inner = self.kernel_shape[0] * self.kernel_shape[1] * self.output_step[0] * self.output_step[1]
         weight_pt = [
-            [CkksPlaintextRingtNode(f'convw_{layer_id}_{k}_{i}') for i in range(inner)]
+            [CkksPlaintextNode(f'convw_{layer_id}_{k}_{i}') for i in range(inner)]
             for k in range(self.n_out_channel)
         ]
-        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_out_channel)]
-        repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}') if self.need_repack else None
+        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}') for i in range(self.n_out_channel)]
+        repack_mask_pt = CkksPlaintextNode(f'repack_mask_{layer_id}') if self.need_repack else None
         return weight_pt, bias_pt, repack_mask_pt
 
     def make_param_ct_nodes(self, layer_id, level: int):
@@ -309,7 +309,7 @@ class InverseMultiplexedDepthwiseConv2DLayer:
             for k in range(self.n_out_channel)
         ]
         bias_ct = [CkksCiphertextNode(f'convb_{layer_id}_{i}', level=level - 1) for i in range(self.n_out_channel)]
-        repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}') if self.need_repack else None
+        repack_mask_pt = CkksPlaintextNode(f'repack_mask_{layer_id}') if self.need_repack else None
         return weight_ct, bias_ct, repack_mask_pt
 
     def get_fhe_op_count(self, level: int, N: int) -> dict[int, dict[str, int]]:

@@ -16,9 +16,7 @@
 
 from inference.lattisense.frontend.custom_task import (
     CkksCiphertextNode,
-    CkksPlaintextMulNode,
     CkksPlaintextNode,
-    CkksPlaintextRingtNode,
     add,
     custom_compute,
     mult,
@@ -26,12 +24,12 @@ from inference.lattisense.frontend.custom_task import (
 )
 
 
-PlainInputNode = CkksPlaintextNode | CkksPlaintextRingtNode | CkksPlaintextMulNode
+PlainInputNode = CkksPlaintextNode  # v6: ringt/mul 合并到 CkksPlaintextNode
 ParamInputNode = CkksCiphertextNode | PlainInputNode
 
 
 def is_plaintext_input(node: ParamInputNode) -> bool:
-    return isinstance(node, (CkksPlaintextNode, CkksPlaintextRingtNode, CkksPlaintextMulNode))
+    return isinstance(node, CkksPlaintextNode)
 
 
 def materialize_encrypted_param(param_ct: CkksCiphertextNode, trigger: ParamInputNode) -> CkksCiphertextNode:

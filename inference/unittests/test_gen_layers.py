@@ -527,12 +527,12 @@ class TestLayerExport(unittest.TestCase):
                             # Depthwise: weight_pt is 2D [out_ch][kernel], no n_in_channel dimension
                             weight_pt = [
                                 [
-                                    CkksPlaintextRingtNode(f'convw__conv1_{k}_{i}')
+                                    CkksPlaintextNode(f'convw__conv1_{k}_{i}')
                                     for i in range(int(index * next_stride[0] * next_stride[1]))
                                 ]
                                 for k in range(n_channel)
                             ]
-                            bias_pt = [CkksPlaintextRingtNode(f'convb__conv1_{i}') for i in range(n_channel)]
+                            bias_pt = [CkksPlaintextNode(f'convb__conv1_{i}') for i in range(n_channel)]
 
                             big_conv = InverseMultiplexedDepthwiseConv2DLayer(
                                 n_channel,
@@ -579,7 +579,7 @@ class TestLayerExport(unittest.TestCase):
             print(f'sub-test: order={order}')
             input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
             weight_pt = [
-                [CkksPlaintextRingtNode(f'polyw_{1}_{i}_{j}') for j in range(n_pack_in_channel)]
+                [CkksPlaintextNode(f'polyw_{1}_{i}_{j}') for j in range(n_pack_in_channel)]
                 for i in range(order + 1)
             ]
 
@@ -633,10 +633,10 @@ class TestLayerExport(unittest.TestCase):
                 CkksCiphertextNode(f'input_ct_{i}', level) for i in range(int(np.ceil(n_in_channel / n_channel_per_ct)))
             ]
             weight_pt = [
-                [CkksPlaintextRingtNode(f'weight_pt_{i}_{j}') for j in range(weight_pt_size)]
+                [CkksPlaintextNode(f'weight_pt_{i}_{j}') for j in range(weight_pt_size)]
                 for i in range(n_packed_out_feature)
             ]
-            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_feature)]
+            bias_pt = [CkksPlaintextNode(f'bias_pt_{i}') for i in range(n_packed_out_feature)]
 
             output_ct = dense.call_skip_0d(input_ct, weight_pt, bias_pt, skip_0d)
 
@@ -684,10 +684,10 @@ class TestLayerExport(unittest.TestCase):
             CkksCiphertextNode(f'input_ct0_{i}', init_level) for i in range(int(np.ceil(input_channel / n_slot)))
         ]
         weight_pt0 = [
-            [CkksPlaintextRingtNode(f'weight_pt0_{i}_{j}') for j in range(n_block_input0)]
+            [CkksPlaintextNode(f'weight_pt0_{i}_{j}') for j in range(n_block_input0)]
             for i in range(n_packed_out_feature0)
         ]
-        bias_pt0 = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_feature0)]
+        bias_pt0 = [CkksPlaintextNode(f'bias_pt_{i}') for i in range(n_packed_out_feature0)]
         dense0 = DensePackedLayer(
             output_channel,
             input_channel,
@@ -707,10 +707,10 @@ class TestLayerExport(unittest.TestCase):
         n_packed_out_feature1 = int(np.ceil(output_channel1 / n_channel_per_ct1))
         weight_pt_size1 = n_packed_in_feature1 * pack1
         weight_pt1 = [
-            [CkksPlaintextRingtNode(f'weight_pt1_{i}_{j}') for j in range(weight_pt_size1)]
+            [CkksPlaintextNode(f'weight_pt1_{i}_{j}') for j in range(weight_pt_size1)]
             for i in range(n_packed_out_feature1)
         ]
-        bias_pt1 = [CkksPlaintextRingtNode(f'bias_pt1_{i}') for i in range(n_packed_out_feature1)]
+        bias_pt1 = [CkksPlaintextNode(f'bias_pt1_{i}') for i in range(n_packed_out_feature1)]
         dense1 = DensePackedLayer(
             output_channel1,
             output_channel,
@@ -769,10 +769,10 @@ class TestLayerExport(unittest.TestCase):
 
             input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_input_ct)]
             weight_pt = [
-                [CkksPlaintextRingtNode(f'weight_pt_{i}_{j}') for j in range(n_block_input)]
+                [CkksPlaintextNode(f'weight_pt_{i}_{j}') for j in range(n_block_input)]
                 for i in range(n_packed_out)
             ]
-            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out)]
+            bias_pt = [CkksPlaintextNode(f'bias_pt_{i}') for i in range(n_packed_out)]
 
             dense = DensePackedLayer(
                 n_out_channel,
@@ -819,13 +819,13 @@ class TestLayerExport(unittest.TestCase):
 
         input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
         weight_pt0 = [
-            [CkksPlaintextRingtNode(f'poly0w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order0 + 1)
+            [CkksPlaintextNode(f'poly0w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order0 + 1)
         ]
         poly_layer0 = PolyRelu2D(input_shape, order0, skip, n_in_channel_per_ct)
         output_ct0 = poly_layer0.call_bsgs_feature2d(input_ct, weight_pt0)
 
         weight_pt1 = [
-            [CkksPlaintextRingtNode(f'poly1w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order1 + 1)
+            [CkksPlaintextNode(f'poly1w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order1 + 1)
         ]
         poly_layer1 = PolyRelu2D(input_shape, order1, skip, n_in_channel_per_ct)
         output_ct1 = poly_layer1.call_bsgs_feature2d(output_ct0, weight_pt1)
@@ -876,7 +876,7 @@ class TestLayerExport(unittest.TestCase):
                 print(f'sub-test: skip={skip_val}, order={order}')
                 input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
                 weight_pt = [
-                    [CkksPlaintextRingtNode(f'polyw_0d_{i}_{j}') for j in range(n_pack_in_channel)]
+                    [CkksPlaintextNode(f'polyw_0d_{i}_{j}') for j in range(n_pack_in_channel)]
                     for i in range(order + 1)
                 ]
 
@@ -926,7 +926,7 @@ class TestLayerExport(unittest.TestCase):
                     print(f'sub-test skip: shape={shape}, skip={skip_val}, order={order}')
                     input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
                     weight_pt = [
-                        [CkksPlaintextRingtNode(f'polyw_1d_skip_{i}_{j}') for j in range(n_pack_in_channel)]
+                        [CkksPlaintextNode(f'polyw_1d_skip_{i}_{j}') for j in range(n_pack_in_channel)]
                         for i in range(order + 1)
                     ]
 
@@ -972,7 +972,7 @@ class TestLayerExport(unittest.TestCase):
                     print(f'sub-test mux: shape={shape}, skip={skip_val}, order={order}')
                     input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
                     weight_pt = [
-                        [CkksPlaintextRingtNode(f'polyw_1d_mux_{i}_{j}') for j in range(n_pack_in_channel)]
+                        [CkksPlaintextNode(f'polyw_1d_mux_{i}_{j}') for j in range(n_pack_in_channel)]
                         for i in range(order + 1)
                     ]
 
@@ -1071,12 +1071,12 @@ class TestLayerExport(unittest.TestCase):
                         input_ct = [CkksCiphertextNode(f'input_{k}', init_level) for k in range(n_packed_in_channel)]
                         weight_pt = [
                             [
-                                [CkksPlaintextRingtNode(f'weight_pt_{i}_{k}_{j}') for k in range(kernel_shape)]
+                                [CkksPlaintextNode(f'weight_pt_{i}_{k}_{j}') for k in range(kernel_shape)]
                                 for j in range(n_packed_in_channel * n_block_per_ct)
                             ]
                             for i in range(n_weight_pt)
                         ]
-                        bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_channel)]
+                        bias_pt = [CkksPlaintextNode(f'bias_pt_{i}') for i in range(n_packed_out_channel)]
                         conv1d = MultiplexedConv1DPackedLayer(
                             n_out_channel,
                             n_in_channel,
@@ -1089,7 +1089,7 @@ class TestLayerExport(unittest.TestCase):
                             n_packed_out_channel,
                         )
                         n_select_pt = min(n_block_per_ct, n_out_channel)
-                        block_select_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
+                        block_select_pt = [CkksPlaintextNode(f'select_pt_{i}') for i in range(n_select_pt)]
                         output_ct = conv1d.call(input_ct, weight_pt, bias_pt, block_select_pt)
 
                         input_args = list()
@@ -1371,7 +1371,7 @@ class TestLayerExport(unittest.TestCase):
                     input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
                     out_channels_per_ct = n_channel_per_ct * stride
                     n_select_pt = min(n_channel, out_channels_per_ct)
-                    select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
+                    select_tensor_pt = [CkksPlaintextNode(f'select_pt_{i}') for i in range(n_select_pt)]
                     avgpool = Avgpool1DLayer(stride=stride, shape=s, channel=n_channel, skip=skip)
                     output_ct = avgpool.call_multiplexed_avgpool(
                         input_ct, select_tensor_pt, n_channel, n_channel_per_ct
@@ -1433,7 +1433,7 @@ class TestLayerExport(unittest.TestCase):
         n_channel_per_ct = int(np.ceil(N / 2 / (s * s)))
         n_ct = int(np.ceil(n_channel / n_channel_per_ct))
         input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
-        weight_pt = [CkksPlaintextRingtNode(f'weight_pt_{i}') for i in range(n_ct)]
+        weight_pt = [CkksPlaintextNode(f'weight_pt_{i}') for i in range(n_ct)]
         mult_layer = MultScalarLayer()
         output_ct = mult_layer.call(input_ct, weight_pt)
         input_args = list()
@@ -1478,12 +1478,12 @@ class TestLayerExport(unittest.TestCase):
                             input_ct = [CkksCiphertextNode(f'input_{k}', init_level) for k in range(n_packed_ct)]
                             # weight_pt[ct_idx][kernel_idx]
                             weight_pt = [
-                                [CkksPlaintextRingtNode(f'weight_pt_{i}_{k}') for k in range(kernel_shape)]
+                                [CkksPlaintextNode(f'weight_pt_{i}_{k}') for k in range(kernel_shape)]
                                 for i in range(n_packed_ct)
                             ]
-                            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out)]
+                            bias_pt = [CkksPlaintextNode(f'bias_pt_{i}') for i in range(n_packed_out)]
                             n_select_pt = min(n_channel_per_ct, n_channel)
-                            block_select_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
+                            block_select_pt = [CkksPlaintextNode(f'select_pt_{i}') for i in range(n_select_pt)]
 
                             conv1d = MultiplexedDWConv1DPackedLayer(
                                 n_channel,
@@ -1563,10 +1563,10 @@ class TestLayerExport(unittest.TestCase):
 
             input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_input_ct)]
             weight_pt = [
-                [CkksPlaintextRingtNode(f'weight_pt_{i}_{j}') for j in range(n_block_input)]
+                [CkksPlaintextNode(f'weight_pt_{i}_{j}') for j in range(n_block_input)]
                 for i in range(n_packed_out)
             ]
-            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out)]
+            bias_pt = [CkksPlaintextNode(f'bias_pt_{i}') for i in range(n_packed_out)]
 
             dense = DensePackedLayer(
                 n_out_channel,
@@ -1803,7 +1803,7 @@ class TestLayerExport(unittest.TestCase):
             )
             input_cts = [CkksCiphertextNode(f'input_ct_{n_prepad}_{k}', level=level) for k in range(layer.m_c)]
             transpose_mask_pt = [
-                [CkksPlaintextRingtNode(f'transpose_mask_pt_{out_diag_idx}_{mask_idx}') for mask_idx in range(2)]
+                [CkksPlaintextNode(f'transpose_mask_pt_{out_diag_idx}_{mask_idx}') for mask_idx in range(2)]
                 for out_diag_idx in range(layer.m)
             ]
             output_cts = layer.call(input_cts, transpose_mask_pt)
@@ -1849,15 +1849,15 @@ class TestLayerExport(unittest.TestCase):
             pt_A = [
                 [
                     [
-                        CkksPlaintextRingtNode(f'pcmm_pt_A_{mb}_{i}_{pt_idx}')
+                        CkksPlaintextNode(f'pcmm_pt_A_{mb}_{i}_{pt_idx}')
                         for pt_idx in range(layer.m_c * layer.c * layer.m_c)
                     ]
                     for i in range(layer.H)
                 ]
                 for mb in range(layer.K)
             ]
-            mask_wrap_pt = [CkksPlaintextRingtNode(f'pcmm_mask_wrap_pt_{i}') for i in range(layer.H - 1)]
-            bias_pt = [CkksPlaintextRingtNode(f'pcmm_bias_pt_{idx}') for idx in range(layer.n_out_mbs * layer.m_c)]
+            mask_wrap_pt = [CkksPlaintextNode(f'pcmm_mask_wrap_pt_{i}') for i in range(layer.H - 1)]
+            bias_pt = [CkksPlaintextNode(f'pcmm_bias_pt_{idx}') for idx in range(layer.n_out_mbs * layer.m_c)]
             output_cts = layer.call(input_cts, pt_A, mask_wrap_pt, bias_pt)
 
             process_custom_task(
@@ -1905,13 +1905,13 @@ class TestLayerExport(unittest.TestCase):
             B_cts = [CkksCiphertextNode(f'B_ct_{mode}_{k}', level=level) for k in range(n_B_cts)]
             replication_count = layer.m if layer.is_kqt else layer.n
             replication_mask_pt = [
-                CkksPlaintextRingtNode(f'ccmm_replication_mask_pt_{idx}')
+                CkksPlaintextNode(f'ccmm_replication_mask_pt_{idx}')
                 for idx in range(min(layer.c, replication_count))
             ]
             if layer.is_kqt:
                 kqt_route_pt = [
                     [
-                        [CkksPlaintextRingtNode(f'ccmm_kqt_route_pt_{j}_{ell}_{mask_idx}') for mask_idx in range(4)]
+                        [CkksPlaintextNode(f'ccmm_kqt_route_pt_{j}_{ell}_{mask_idx}') for mask_idx in range(4)]
                         for ell in range(layer.m)
                     ]
                     for j in range(layer.n_c)
@@ -1920,7 +1920,7 @@ class TestLayerExport(unittest.TestCase):
                 route_arg = Argument('kqt_route_pt', kqt_route_pt)
             else:
                 ordinary_route_pt = [
-                    [CkksPlaintextRingtNode(f'ccmm_ordinary_route_pt_{ell}_{mask_idx}') for mask_idx in range(4)]
+                    [CkksPlaintextNode(f'ccmm_ordinary_route_pt_{ell}_{mask_idx}') for mask_idx in range(4)]
                     for ell in range(layer.n)
                 ]
                 output_cts = layer.call(A_cts, B_cts, replication_mask_pt, ordinary_route_pt=ordinary_route_pt)
@@ -1948,7 +1948,7 @@ class TestLayerExport(unittest.TestCase):
         layer = ParLowerDiagonalAddPt(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
 
         input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=level) for k in range(layer.total_cts)]
-        add_pt = [CkksPlaintextRingtNode(f'lower_diag_add_pt_{k}') for k in range(layer.total_cts)]
+        add_pt = [CkksPlaintextNode(f'lower_diag_add_pt_{k}') for k in range(layer.total_cts)]
         output_cts = layer.call(input_cts, add_pt)
 
         process_custom_task(
@@ -1972,10 +1972,10 @@ class TestLayerExport(unittest.TestCase):
         stats_level = 4
         stats = ParUpperDiagonalLNStats(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
         input_cts = [CkksCiphertextNode(f'ln_stats_input_{k}', level=stats_level) for k in range(stats.total_cts)]
-        h0_mask_pt = CkksPlaintextRingtNode('ln_stats_h0_mask_pt')
-        inv_n_pt = [CkksPlaintextRingtNode(f'ln_stats_inv_n_pt_{k}') for k in range(stats.total_cts)]
-        iv_pt = [CkksPlaintextRingtNode(f'ln_stats_iv_pt_{k}') for k in range(stats.total_cts)]
-        eps_add_pt = [CkksPlaintextRingtNode(f'ln_stats_eps_add_pt_{k}') for k in range(stats.total_cts)]
+        h0_mask_pt = CkksPlaintextNode('ln_stats_h0_mask_pt')
+        inv_n_pt = [CkksPlaintextNode(f'ln_stats_inv_n_pt_{k}') for k in range(stats.total_cts)]
+        iv_pt = [CkksPlaintextNode(f'ln_stats_iv_pt_{k}') for k in range(stats.total_cts)]
+        eps_add_pt = [CkksPlaintextNode(f'ln_stats_eps_add_pt_{k}') for k in range(stats.total_cts)]
         output_cts = stats.call(input_cts, h0_mask_pt, inv_n_pt, iv_pt, eps_add_pt)
         process_custom_task(
             input_args=[
@@ -1997,8 +1997,8 @@ class TestLayerExport(unittest.TestCase):
         xcenter_level = 2
         xcenter = ParUpperDiagonalLNXCentered(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
         input_cts = [CkksCiphertextNode(f'ln_xcenter_input_{k}', level=xcenter_level) for k in range(xcenter.total_cts)]
-        h0_mask_pt = CkksPlaintextRingtNode('ln_xcenter_h0_mask_pt')
-        inv_n_pt = [CkksPlaintextRingtNode(f'ln_xcenter_inv_n_pt_{k}') for k in range(xcenter.total_cts)]
+        h0_mask_pt = CkksPlaintextNode('ln_xcenter_h0_mask_pt')
+        inv_n_pt = [CkksPlaintextNode(f'ln_xcenter_inv_n_pt_{k}') for k in range(xcenter.total_cts)]
         output_cts = xcenter.call(input_cts, h0_mask_pt, inv_n_pt)
         process_custom_task(
             input_args=[
@@ -2018,9 +2018,9 @@ class TestLayerExport(unittest.TestCase):
         minimax_level = 2
         minimax = ParUpperDiagonalLNMinimaxInit(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
         input_cts = [CkksCiphertextNode(f'ln_minimax_input_{k}', level=minimax_level) for k in range(minimax.total_cts)]
-        c0_add_pt = [CkksPlaintextRingtNode(f'ln_minimax_c0_add_pt_{k}') for k in range(minimax.total_cts)]
-        c1_pt = [CkksPlaintextRingtNode(f'ln_minimax_c1_pt_{k}') for k in range(minimax.total_cts)]
-        c2_norm_pt = [CkksPlaintextRingtNode(f'ln_minimax_c2_norm_pt_{k}') for k in range(minimax.total_cts)]
+        c0_add_pt = [CkksPlaintextNode(f'ln_minimax_c0_add_pt_{k}') for k in range(minimax.total_cts)]
+        c1_pt = [CkksPlaintextNode(f'ln_minimax_c1_pt_{k}') for k in range(minimax.total_cts)]
+        c2_norm_pt = [CkksPlaintextNode(f'ln_minimax_c2_norm_pt_{k}') for k in range(minimax.total_cts)]
         output_cts = minimax.call(input_cts, c0_add_pt, c1_pt, c2_norm_pt)
         process_custom_task(
             input_args=[
@@ -2042,8 +2042,8 @@ class TestLayerExport(unittest.TestCase):
         gold = ParUpperDiagonalLNGoldschmidt(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
         y_cts = [CkksCiphertextNode(f'ln_gold_y_{k}', level=gold_level) for k in range(gold.total_cts)]
         a_cts = [CkksCiphertextNode(f'ln_gold_a_{k}', level=gold_level) for k in range(gold.total_cts)]
-        three_pt = [CkksPlaintextRingtNode(f'ln_gold_three_pt_{k}') for k in range(gold.total_cts)]
-        half_norm_pt = [CkksPlaintextRingtNode(f'ln_gold_half_norm_pt_{k}') for k in range(gold.total_cts)]
+        three_pt = [CkksPlaintextNode(f'ln_gold_three_pt_{k}') for k in range(gold.total_cts)]
+        half_norm_pt = [CkksPlaintextNode(f'ln_gold_half_norm_pt_{k}') for k in range(gold.total_cts)]
         output_cts = gold.call(y_cts, a_cts, three_pt, half_norm_pt)
         process_custom_task(
             input_args=[
@@ -2067,8 +2067,8 @@ class TestLayerExport(unittest.TestCase):
             CkksCiphertextNode(f'ln_affine_xc_{k}', level=affine_y_level - 1) for k in range(affine.total_cts)
         ]
         y_cts = [CkksCiphertextNode(f'ln_affine_y_{k}', level=affine_y_level) for k in range(affine.total_cts)]
-        gamma_pt = [CkksPlaintextRingtNode(f'ln_affine_gamma_pt_{k}') for k in range(affine.total_cts)]
-        beta_add_pt = [CkksPlaintextRingtNode(f'ln_affine_beta_add_pt_{k}') for k in range(affine.total_cts)]
+        gamma_pt = [CkksPlaintextNode(f'ln_affine_gamma_pt_{k}') for k in range(affine.total_cts)]
+        beta_add_pt = [CkksPlaintextNode(f'ln_affine_beta_add_pt_{k}') for k in range(affine.total_cts)]
         output_cts = affine.call(x_centered, y_cts, gamma_pt, beta_add_pt)
         process_custom_task(
             input_args=[
@@ -2097,7 +2097,7 @@ class TestLayerExport(unittest.TestCase):
         gamma_level = 1
         gamma = ParUpperDiagonalPolyActRNGamma(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
         input_cts = [CkksCiphertextNode(f'poly_gamma_input_{k}', level=gamma_level) for k in range(gamma.total_cts)]
-        gamma_pt = [CkksPlaintextRingtNode(f'poly_gamma_pt_{k}') for k in range(gamma.total_cts)]
+        gamma_pt = [CkksPlaintextNode(f'poly_gamma_pt_{k}') for k in range(gamma.total_cts)]
         output_cts = gamma.call(input_cts, gamma_pt)
         process_custom_task(
             input_args=[Argument('input', input_cts), Argument('gamma_pt', gamma_pt)],
@@ -2119,11 +2119,11 @@ class TestLayerExport(unittest.TestCase):
             degree=degree,
         )
         input_cts = [CkksCiphertextNode(f'poly_input_{k}', level=poly_level) for k in range(poly.total_cts)]
-        c0_add_pt = [CkksPlaintextRingtNode(f'poly_c0_add_pt_{k}') for k in range(poly.total_cts)]
-        c1_pt = [CkksPlaintextRingtNode(f'poly_c1_pt_{k}') for k in range(poly.total_cts)]
-        c2_pt = [CkksPlaintextRingtNode(f'poly_c2_pt_{k}') for k in range(poly.total_cts)]
-        c3_pt = [CkksPlaintextRingtNode(f'poly_c3_pt_{k}') for k in range(poly.total_cts)]
-        c4_pt = [CkksPlaintextRingtNode(f'poly_c4_pt_{k}') for k in range(poly.total_cts)]
+        c0_add_pt = [CkksPlaintextNode(f'poly_c0_add_pt_{k}') for k in range(poly.total_cts)]
+        c1_pt = [CkksPlaintextNode(f'poly_c1_pt_{k}') for k in range(poly.total_cts)]
+        c2_pt = [CkksPlaintextNode(f'poly_c2_pt_{k}') for k in range(poly.total_cts)]
+        c3_pt = [CkksPlaintextNode(f'poly_c3_pt_{k}') for k in range(poly.total_cts)]
+        c4_pt = [CkksPlaintextNode(f'poly_c4_pt_{k}') for k in range(poly.total_cts)]
         output_cts = poly.call(input_cts, c0_add_pt, c1_pt, c2_pt, c3_pt, c4_pt)
         process_custom_task(
             input_args=[

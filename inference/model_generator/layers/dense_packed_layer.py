@@ -217,10 +217,10 @@ class DensePackedLayer:
         """
         weight_pt_size = self.n_packed_in_feature * self.pack
         weight_pt = [
-            [CkksPlaintextRingtNode(f'densew_{layer_id}_{m}_{i}') for i in range(weight_pt_size)]
+            [CkksPlaintextNode(f'densew_{layer_id}_{m}_{i}') for i in range(weight_pt_size)]
             for m in range(self.n_packed_out_feature)
         ]
-        bias_pt = [CkksPlaintextRingtNode(f'denseb_{layer_id}_{i}') for i in range(self.n_packed_out_feature)]
+        bias_pt = [CkksPlaintextNode(f'denseb_{layer_id}_{i}') for i in range(self.n_packed_out_feature)]
         return weight_pt, bias_pt
 
     def make_param_ct_nodes_skip_0d(self, layer_id, level: int):
@@ -251,10 +251,10 @@ class DensePackedLayer:
         n_block_input = int(np.ceil(n_channel / (n_channel_per_block * n_num_pre_ct))) * n_num_pre_ct
         n_packed_out = int(np.ceil(self.n_out_channel / n_num_pre_ct))
         weight_pt = [
-            [CkksPlaintextRingtNode(f'densew_{layer_id}_{i}_{j}') for j in range(n_block_input)]
+            [CkksPlaintextNode(f'densew_{layer_id}_{i}_{j}') for j in range(n_block_input)]
             for i in range(n_packed_out)
         ]
-        bias_pt = [CkksPlaintextRingtNode(f'denseb_{layer_id}_{i}') for i in range(n_packed_out)]
+        bias_pt = [CkksPlaintextNode(f'denseb_{layer_id}_{i}') for i in range(n_packed_out)]
         return weight_pt, bias_pt
 
     def make_param_ct_nodes_multiplexed(self, layer_id, n, level: int):
@@ -394,7 +394,7 @@ class DensePackedLayer:
                     for b in range(b_end):
                         d = g * bsgs_bs + b
                         weight_idx = ct_in * self.pack + d
-                        w_pt = CkksPlaintextRingtNode(f'encode_pt_{out_idx}_{weight_idx}')
+                        w_pt = CkksPlaintextNode(f'encode_pt_{out_idx}_{weight_idx}')
                         custom_compute(
                             inputs=[dense_data_source],
                             output=w_pt,
@@ -421,7 +421,7 @@ class DensePackedLayer:
                         total = add(total, inner)
 
             total = rescale(total)
-            b_pt = CkksPlaintextRingtNode(f'encode_pt_{out_idx}')
+            b_pt = CkksPlaintextNode(f'encode_pt_{out_idx}')
             custom_compute(
                 inputs=[dense_data_source],
                 output=b_pt,
@@ -576,10 +576,10 @@ class DensePackedLayer:
         n_packed_out = int(np.ceil(self.n_out_channel / n_block_per_ct))
 
         weight_pt = [
-            [CkksPlaintextRingtNode(f'densew_{layer_id}_{i}_{j}') for j in range(n_block_input)]
+            [CkksPlaintextNode(f'densew_{layer_id}_{i}_{j}') for j in range(n_block_input)]
             for i in range(n_packed_out)
         ]
-        bias_pt = [CkksPlaintextRingtNode(f'denseb_{layer_id}_{i}') for i in range(n_packed_out)]
+        bias_pt = [CkksPlaintextNode(f'denseb_{layer_id}_{i}') for i in range(n_packed_out)]
         return weight_pt, bias_pt
 
     def make_param_ct_nodes_1d_multiplexed(self, layer_id, n, level: int):
@@ -728,7 +728,7 @@ class DensePackedLayer:
                 group = rot_idx // n_block_per_ct
                 offset = rot_idx % n_block_per_ct
                 x_ct_list.append(rotated_cts[group][offset])
-                w_pt = CkksPlaintextRingtNode(f'encode_pt_{out_group}_{rot_idx}')
+                w_pt = CkksPlaintextNode(f'encode_pt_{out_group}_{rot_idx}')
                 custom_compute(
                     inputs=[dense_data_source],
                     output=w_pt,
@@ -739,7 +739,7 @@ class DensePackedLayer:
 
             s = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             s = rescale(s)
-            b_pt = CkksPlaintextRingtNode(f'encode_pt_{out_group}')
+            b_pt = CkksPlaintextNode(f'encode_pt_{out_group}')
             custom_compute(
                 inputs=[dense_data_source],
                 output=b_pt,
@@ -798,7 +798,7 @@ class DensePackedLayer:
                 group = in_feature_idx // n_num_pre_ct
                 offset = in_feature_idx % n_num_pre_ct
                 x_ct = rotated_cts[group][offset]
-                w_pt = CkksPlaintextRingtNode(f'encode_pt_{packed_out_feature_idx}_{in_feature_idx}')
+                w_pt = CkksPlaintextNode(f'encode_pt_{packed_out_feature_idx}_{in_feature_idx}')
                 custom_compute(
                     inputs=[dense_data_source],
                     output=w_pt,
@@ -814,7 +814,7 @@ class DensePackedLayer:
                 w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             s = rescale(partial_sum)
-            b_pt = CkksPlaintextRingtNode(f'encode_pt_{packed_out_feature_idx}')
+            b_pt = CkksPlaintextNode(f'encode_pt_{packed_out_feature_idx}')
             custom_compute(
                 inputs=[dense_data_source],
                 output=b_pt,

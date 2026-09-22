@@ -61,7 +61,7 @@ class _ParUpperDiagonalBase:
         return mb * self.cts_per_mb + ct_local
 
     def _make_pt(self, data_source, pt_idx: int, mb: int = 0, ct_local: int = 0):
-        node = CkksPlaintextRingtNode(f'encode_pt_{self.op_class}_{pt_idx}_{mb}_{ct_local}')
+        node = CkksPlaintextNode(f'encode_pt_{self.op_class}_{pt_idx}_{mb}_{ct_local}')
         custom_compute(
             inputs=[data_source],
             output=node,

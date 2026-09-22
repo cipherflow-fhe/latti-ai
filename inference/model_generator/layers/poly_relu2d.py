@@ -218,7 +218,7 @@ class PolyRelu2D(PolyReluBase):
             for i in range(len(x)):
                 res = x[i]
                 for order_idx in range(self.order - 1, 0, -1):
-                    w_pt = CkksPlaintextRingtNode(f'encode_pt_{order_idx}_{i}')
+                    w_pt = CkksPlaintextNode(f'encode_pt_{order_idx}_{i}')
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt,
@@ -236,7 +236,7 @@ class PolyRelu2D(PolyReluBase):
                     if res.level < x[i].level:
                         x[i] = drop_level(x[i], x[i].level - res.level)
                     res = rescale(relin(mult(res, x[i])))
-                w_pt = CkksPlaintextRingtNode(f'encode_pt_{0}_{i}')
+                w_pt = CkksPlaintextNode(f'encode_pt_{0}_{i}')
                 custom_compute(
                     inputs=[poly_data_source],
                     output=w_pt,
@@ -254,7 +254,7 @@ class PolyRelu2D(PolyReluBase):
             result = [0 for i in range(len(x))]
             for x_idx in range(len(x)):
                 if self.order <= 1:
-                    w_pt_1 = CkksPlaintextRingtNode(f'encode_pt_{1}_{x_idx}')
+                    w_pt_1 = CkksPlaintextNode(f'encode_pt_{1}_{x_idx}')
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt_1,
@@ -267,7 +267,7 @@ class PolyRelu2D(PolyReluBase):
                         },
                     )
                     res = rescale(mult(x[x_idx], w_pt_1))
-                    w_pt_0 = CkksPlaintextRingtNode(f'encode_pt_{0}_{x_idx}')
+                    w_pt_0 = CkksPlaintextNode(f'encode_pt_{0}_{x_idx}')
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt_0,
@@ -314,7 +314,7 @@ class PolyRelu2D(PolyReluBase):
 
                             if baby_step == 0:
                                 has_coeff0 = True
-                                w_pt = CkksPlaintextRingtNode(f'encode_pt_{coeff_idx}_{x_idx}')
+                                w_pt = CkksPlaintextNode(f'encode_pt_{coeff_idx}_{x_idx}')
                                 custom_compute(
                                     inputs=[poly_data_source],
                                     output=w_pt,
@@ -334,7 +334,7 @@ class PolyRelu2D(PolyReluBase):
                                 if x_copy.level > target_level:
                                     x_copy = drop_level(x_copy, x_copy.level - target_level)
 
-                                w_pt = CkksPlaintextRingtNode(f'encode_pt_{coeff_idx}_{x_idx}')
+                                w_pt = CkksPlaintextNode(f'encode_pt_{coeff_idx}_{x_idx}')
                                 custom_compute(
                                     inputs=[poly_data_source],
                                     output=w_pt,
@@ -390,7 +390,7 @@ class PolyRelu2D(PolyReluBase):
         def get_weight(idx, x_idx):
             key = (idx, x_idx)
             if key not in weight_cache:
-                w_pt = CkksPlaintextRingtNode(f'encode_pt_{idx}_{x_idx}')
+                w_pt = CkksPlaintextNode(f'encode_pt_{idx}_{x_idx}')
                 custom_compute(
                     inputs=[poly_data_source],
                     output=w_pt,

@@ -170,7 +170,7 @@ class MultiplexedDWConv1DPackedLayer:
             x_ct_list = []
             w_pt_list = []
             for k in range(self.kernel_shape):
-                w_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}_{k}')
+                w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{k}')
                 custom_compute(
                     inputs=[conv_data_source],
                     output=w_pt,
@@ -200,7 +200,7 @@ class MultiplexedDWConv1DPackedLayer:
         if not needs_rearrange:
             res = list()
             for ct_idx in range(self.n_packed_ct):
-                b_pt = CkksPlaintextRingtNode(f'encode_pt_bias_{ct_idx}')
+                b_pt = CkksPlaintextNode(f'encode_pt_bias_{ct_idx}')
                 custom_compute(
                     inputs=[conv_data_source],
                     output=b_pt,
@@ -220,7 +220,7 @@ class MultiplexedDWConv1DPackedLayer:
             n_local_ch = min(self.n_channel_per_ct, self.n_channel)
             select_pts = []
             for local_ch in range(n_local_ch):
-                s_pt = CkksPlaintextRingtNode(f'encode_pt_select_{local_ch}')
+                s_pt = CkksPlaintextNode(f'encode_pt_select_{local_ch}')
                 custom_compute(
                     inputs=[conv_data_source],
                     output=s_pt,
@@ -260,7 +260,7 @@ class MultiplexedDWConv1DPackedLayer:
                     else:
                         combined = add(combined, masked)
 
-                b_pt = CkksPlaintextRingtNode(f'encode_pt_bias_{po}')
+                b_pt = CkksPlaintextNode(f'encode_pt_bias_{po}')
                 custom_compute(
                     inputs=[conv_data_source],
                     output=b_pt,
@@ -282,14 +282,14 @@ class MultiplexedDWConv1DPackedLayer:
 
         n_packed_ct = _math.ceil(self.n_channel / self.n_channel_per_ct)
         weight_pt = [
-            [CkksPlaintextRingtNode(f'convw_{layer_id}_{ct_idx}_{k}') for k in range(self.kernel_shape)]
+            [CkksPlaintextNode(f'convw_{layer_id}_{ct_idx}_{k}') for k in range(self.kernel_shape)]
             for ct_idx in range(n_packed_ct)
         ]
-        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_packed_ct)]
+        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}') for i in range(n_packed_ct)]
         needs_rearrange = self.skip > 1 or self.stride > 1
         if needs_rearrange:
             n_local_ch = min(self.n_channel_per_ct, self.n_channel)
-            block_select_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_local_ch)]
+            block_select_pt = [CkksPlaintextNode(f'convm_{layer_id}_{i}') for i in range(n_local_ch)]
         else:
             block_select_pt = []
         return weight_pt, bias_pt, block_select_pt

@@ -66,7 +66,7 @@ class PolyRelu0D(PolyReluBase):
         def get_weight(idx, x_idx):
             key = (idx, x_idx)
             if key not in weight_cache:
-                w_pt = CkksPlaintextRingtNode(f'encode_pt_0d_{layer_id}_{idx}_{x_idx}')
+                w_pt = CkksPlaintextNode(f'encode_pt_0d_{layer_id}_{idx}_{x_idx}')
                 custom_compute(
                     inputs=[poly_data_source],
                     output=w_pt,

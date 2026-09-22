@@ -78,7 +78,7 @@ class ParUpperDiagonalPolyActRNGamma(_ParUpperDiagonalPolyBase):
         for mb in range(self.n_mb):
             for ct_local in range(self.cts_per_mb):
                 idx = self._ct_index(mb, ct_local)
-                node = CkksPlaintextRingtNode(f'encode_pt_gamma_{mb}_{ct_local}')
+                node = CkksPlaintextNode(f'encode_pt_gamma_{mb}_{ct_local}')
                 custom_compute(
                     inputs=[data_source],
                     output=node,
@@ -148,7 +148,7 @@ class ParUpperDiagonalPolyActRNPoly(_ParUpperDiagonalPolyBase):
         for mb in range(self.n_mb):
             for ct_local in range(self.cts_per_mb):
                 idx = self._ct_index(mb, ct_local)
-                node = CkksPlaintextRingtNode(f'encode_pt_poly_c{coeff_idx}_{mb}_{ct_local}')
+                node = CkksPlaintextNode(f'encode_pt_poly_c{coeff_idx}_{mb}_{ct_local}')
                 custom_compute(
                     inputs=[data_source],
                     output=node,

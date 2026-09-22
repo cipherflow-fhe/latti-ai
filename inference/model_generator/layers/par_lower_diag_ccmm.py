@@ -218,7 +218,7 @@ class ParLowerDiagCCMM:
         replication_count = self.m if self.is_kqt else self.n
         replication_mask_pt = []
         for ell in range(min(self.c, replication_count)):
-            node = CkksPlaintextRingtNode(f'encode_pt_replication_mask_{ell}')
+            node = CkksPlaintextNode(f'encode_pt_replication_mask_{ell}')
             custom_compute(
                 inputs=[data_source],
                 output=node,
@@ -234,7 +234,7 @@ class ParLowerDiagCCMM:
                 for ell in range(self.m):
                     route_ell = []
                     for mask_idx in range(4):
-                        node = CkksPlaintextRingtNode(f'encode_pt_kqt_route_{j}_{ell}_{mask_idx}')
+                        node = CkksPlaintextNode(f'encode_pt_kqt_route_{j}_{ell}_{mask_idx}')
                         custom_compute(
                             inputs=[data_source],
                             output=node,
@@ -256,7 +256,7 @@ class ParLowerDiagCCMM:
         for ell in range(self.n):
             route_ell = []
             for mask_idx in range(4):
-                node = CkksPlaintextRingtNode(f'encode_pt_ordinary_route_{ell}_{mask_idx}')
+                node = CkksPlaintextNode(f'encode_pt_ordinary_route_{ell}_{mask_idx}')
                 custom_compute(
                     inputs=[data_source],
                     output=node,

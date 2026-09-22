@@ -272,7 +272,7 @@ def gen_custom_task(
 
     def _make_feature_nodes(feature_id, count, level):
         if _feature_input_is_plaintext(feature_id):
-            return [CkksPlaintextRingtNode(feature_id + f'input{k}') for k in range(count)]
+            return [CkksPlaintextNode(feature_id + f'input{k}') for k in range(count)]
         return [CkksCiphertextNode(feature_id + f'input{k}', level=level) for k in range(count)]
 
     encrypted_parameter_arg_counts = {}
@@ -1314,7 +1314,7 @@ def gen_custom_task(
                 concat_layer = ConcatLayer()
                 input_node_lists = [feature_id_to_nodes_map[fid] for fid in layer_input_feature_ids]
                 total_channels = sum(input_n_channels)
-                mask_pts = [CkksPlaintextRingtNode(f'concat_mask_{layer_id}_{i}') for i in range(total_channels)]
+                mask_pts = [CkksPlaintextNode(f'concat_mask_{layer_id}_{i}') for i in range(total_channels)]
                 layer_output_nodes = concat_layer.call_multiple_inputs_mixed_pack(
                     input_node_lists,
                     input_n_channels,
@@ -1348,7 +1348,7 @@ def gen_custom_task(
                 total_channels = sum(input_n_channels)
 
                 # Create mask plaintext nodes for each global channel
-                mask_pts = [CkksPlaintextRingtNode(f'concat_mask_{layer_id}_{i}') for i in range(total_channels)]
+                mask_pts = [CkksPlaintextNode(f'concat_mask_{layer_id}_{i}') for i in range(total_channels)]
 
                 layer_output_nodes = concat_layer.call_multiple_inputs_uneven(
                     input_node_lists, input_n_channels, pack, input_shape, use_skip, mask_pts
@@ -1417,7 +1417,7 @@ def gen_custom_task(
                 need_repack = any(output_shape[i] < block_shape[i] for i in range(len(stride)))
                 repack_mask_pt = None
                 if need_repack:
-                    repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}')
+                    repack_mask_pt = CkksPlaintextNode(f'repack_mask_{layer_id}')
                 layer_output_nodes = avgpool.call_interleaved_avgpool(
                     feature_id_to_nodes_map[layer_input_feature_ids[0]],
                     block_expansion,
@@ -1452,7 +1452,7 @@ def gen_custom_task(
                         out_channels_per_ct = n_channel_per_ct * stride[0]
                         n_select_pt = min(n_in_channel, out_channels_per_ct)
                         select_tensor_pt = [
-                            CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)
+                            CkksPlaintextNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)
                         ]
                         layer_output_nodes = avgpool.call_multiplexed_avgpool(
                             feature_id_to_nodes_map[layer_input_feature_ids[0]],
@@ -1475,7 +1475,7 @@ def gen_custom_task(
                         out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
                         n_select_pt = min(n_in_channel, out_channels_per_ct)
                         select_tensor_pt = [
-                            CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)
+                            CkksPlaintextNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)
                         ]
                         layer_output_nodes = avgpool.call_multiplexed_avgpool(
                             feature_id_to_nodes_map[layer_input_feature_ids[0]],

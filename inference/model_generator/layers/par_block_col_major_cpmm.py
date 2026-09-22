@@ -125,7 +125,7 @@ class ParBlockColMajorCPMM:
 
         Returns:
             diag_pt:    diag_pt[mb][g][bp][k], total K*G*n_heads*d nodes.
-            mask_h0_pt: single CkksPlaintextRingtNode for the head-zero mask.
+            mask_h0_pt: single CkksPlaintextNode for the head-zero mask.
         """
         diag_pt = []
         for mb in range(self.K):
@@ -134,18 +134,18 @@ class ParBlockColMajorCPMM:
                 diag_pt_mbg = []
                 for bp in range(self.n_heads):
                     diag_pt_mbgbp = [
-                        CkksPlaintextRingtNode(f'cpmm_diag_{layer_id}_{mb}_{g}_{bp}_{k}') for k in range(self.d)
+                        CkksPlaintextNode(f'cpmm_diag_{layer_id}_{mb}_{g}_{bp}_{k}') for k in range(self.d)
                     ]
                     diag_pt_mbg.append(diag_pt_mbgbp)
                 diag_pt_mb.append(diag_pt_mbg)
             diag_pt.append(diag_pt_mb)
 
-        mask_h0_pt = CkksPlaintextRingtNode(f'cpmm_mask_h0_{layer_id}')
+        mask_h0_pt = CkksPlaintextNode(f'cpmm_mask_h0_{layer_id}')
 
         bias_pt = None
         if self.has_bias:
             bias_pt = [
-                CkksPlaintextRingtNode(f'cpmm_bias_{layer_id}_{mb}_{bi}_{g}')
+                CkksPlaintextNode(f'cpmm_bias_{layer_id}_{mb}_{bi}_{g}')
                 for mb in range(self.n_out_mbs)
                 for bi in range(self.num_block_rows_A)
                 for g in range(self.G)
@@ -304,7 +304,7 @@ class ParBlockColMajorCPMM:
                 for bp in range(self.n_heads):
                     diag_pt_mbgbp = []
                     for k in range(self.d):
-                        w_pt = CkksPlaintextRingtNode(f'encode_pt_{mb}_{g}_{bp}_{k}')
+                        w_pt = CkksPlaintextNode(f'encode_pt_{mb}_{g}_{bp}_{k}')
                         custom_compute(
                             inputs=[data_source],
                             output=w_pt,
@@ -323,7 +323,7 @@ class ParBlockColMajorCPMM:
                 diag_pt_mb.append(diag_pt_mbg)
             diag_pt.append(diag_pt_mb)
 
-        mask_h0_pt = CkksPlaintextRingtNode('encode_pt_mask_h0')
+        mask_h0_pt = CkksPlaintextNode('encode_pt_mask_h0')
         custom_compute(
             inputs=[data_source],
             output=mask_h0_pt,
@@ -337,7 +337,7 @@ class ParBlockColMajorCPMM:
             for mb in range(self.n_out_mbs):
                 for bi in range(self.num_block_rows_A):
                     for g in range(self.G):
-                        bp_node = CkksPlaintextRingtNode(f'encode_pt_bias_{mb}_{bi}_{g}')
+                        bp_node = CkksPlaintextNode(f'encode_pt_bias_{mb}_{bi}_{g}')
                         custom_compute(
                             inputs=[data_source],
                             output=bp_node,

@@ -281,7 +281,7 @@ class MultiplexedConv2DPackedLayer:
             w_pt_list = list()
             for j in range(size_1):
                 for k in range(size_2):
-                    w_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}_{j}_{k}')
+                    w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{j}_{k}')
                     custom_compute(
                         inputs=[conv_data_source],  # All nodes reference the same data source
                         output=w_pt,
@@ -326,7 +326,7 @@ class MultiplexedConv2DPackedLayer:
                         - n_block % self.zero_inserted_skip[1]
                         + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
                     )
-                    m_pt = CkksPlaintextRingtNode(f'encode_pt_mask_{ct_idx}_{i}')
+                    m_pt = CkksPlaintextNode(f'encode_pt_mask_{ct_idx}_{i}')
                     custom_compute(
                         inputs=[conv_data_source],
                         output=m_pt,
@@ -358,7 +358,7 @@ class MultiplexedConv2DPackedLayer:
                 res.append(sp)
         for i in range(len(res)):
             bias_idx = i
-            b_pt = CkksPlaintextRingtNode(f'encode_pt_{bias_idx}')
+            b_pt = CkksPlaintextNode(f'encode_pt_{bias_idx}')
             custom_compute(
                 inputs=[conv_data_source],
                 output=b_pt,
@@ -384,18 +384,18 @@ class MultiplexedConv2DPackedLayer:
 
         weight_pt = [
             [
-                [CkksPlaintextRingtNode(f'convw_{layer_id}_{i}_{j}_{k}') for k in range(kernel_size)]
+                [CkksPlaintextNode(f'convw_{layer_id}_{i}_{j}_{k}') for k in range(kernel_size)]
                 for j in range(size_1)
             ]
             for i in range(size_0)
         ]
         n_bias = _math.ceil(self.n_out_channel / (self.stride[0] * self.stride[1] * self.n_channel_per_ct))
-        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_bias)]
+        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}') for i in range(n_bias)]
         if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
             mask_pt = []
         else:
             n_mask = min(self.n_block_per_ct, self.n_out_channel)
-            mask_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_mask)]
+            mask_pt = [CkksPlaintextNode(f'convm_{layer_id}_{i}') for i in range(n_mask)]
         return weight_pt, bias_pt, mask_pt
 
     def make_param_ct_nodes(self, layer_id, level: int):
@@ -707,12 +707,12 @@ class MultiplexedConv2DPackedLayer:
 
         weight_pt = [
             [
-                [CkksPlaintextRingtNode(f'convw_{layer_id}_{i}_{j}_{k}') for k in range(kernel_size)]
+                [CkksPlaintextNode(f'convw_{layer_id}_{i}_{j}_{k}') for k in range(kernel_size)]
                 for j in range(size_1)
             ]
             for i in range(n_weight_pt)
         ]
-        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_bias)]
+        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}') for i in range(n_bias)]
         if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
             mask_pt = []
         else:
@@ -732,7 +732,7 @@ class MultiplexedConv2DPackedLayer:
                         self.n_block_per_ct,
                         int(np.ceil((self.n_out_channel - base) / skip_out_prod_l)),
                     )
-                mask_pt.append([CkksPlaintextRingtNode(f'convm_{layer_id}_{ct_idx_l}_{j}') for j in range(valid_i)])
+                mask_pt.append([CkksPlaintextNode(f'convm_{layer_id}_{ct_idx_l}_{j}') for j in range(valid_i)])
         return weight_pt, bias_pt, mask_pt
 
     def call_reduct_rot(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mask_pt) -> list[CkksCiphertextNode]:

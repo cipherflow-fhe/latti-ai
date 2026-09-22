@@ -65,7 +65,7 @@ class _ParUpperDiagonalSoftmaxBase:
         pts = [None] * self.total_cts
         source_id = getattr(data_source, 'id', self.op_class)
         for ct_idx in range(self.total_cts):
-            node = CkksPlaintextRingtNode(f'encode_pt_{source_id}_{pt_type}_{ct_idx}')
+            node = CkksPlaintextNode(f'encode_pt_{source_id}_{pt_type}_{ct_idx}')
             custom_compute(
                 inputs=[data_source],
                 output=node,

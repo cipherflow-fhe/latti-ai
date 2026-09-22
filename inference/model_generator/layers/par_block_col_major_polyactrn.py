@@ -92,7 +92,7 @@ class ParBlockColMajorPolyActRNGamma:
                 for bj in range(self.num_block_cols):
                     gamma_row = []
                     for g in range(self.G):
-                        gamma_node = CkksPlaintextRingtNode(f'encode_pt_gamma_{mb}_{bi}_{bj}_{g}')
+                        gamma_node = CkksPlaintextNode(f'encode_pt_gamma_{mb}_{bi}_{bj}_{g}')
                         custom_compute(
                             inputs=[data_source],
                             output=gamma_node,
@@ -242,7 +242,7 @@ class ParBlockColMajorPolyActRNPoly:
                     c4_row = []
                     c3_row = []
                     for g in range(self.G):
-                        c2_node = CkksPlaintextRingtNode(f'encode_pt_poly_c2_{mb}_{bi}_{bj}_{g}')
+                        c2_node = CkksPlaintextNode(f'encode_pt_poly_c2_{mb}_{bi}_{bj}_{g}')
                         custom_compute(
                             inputs=[data_source],
                             output=c2_node,
@@ -259,7 +259,7 @@ class ParBlockColMajorPolyActRNPoly:
                         )
                         c2_row.append(c2_node)
 
-                        c1_node = CkksPlaintextRingtNode(f'encode_pt_poly_c1_{mb}_{bi}_{bj}_{g}')
+                        c1_node = CkksPlaintextNode(f'encode_pt_poly_c1_{mb}_{bi}_{bj}_{g}')
                         custom_compute(
                             inputs=[data_source],
                             output=c1_node,
@@ -277,7 +277,7 @@ class ParBlockColMajorPolyActRNPoly:
                         c1_row.append(c1_node)
 
                         if self.degree == 4:
-                            c4_node = CkksPlaintextRingtNode(f'encode_pt_poly_c4_{mb}_{bi}_{bj}_{g}')
+                            c4_node = CkksPlaintextNode(f'encode_pt_poly_c4_{mb}_{bi}_{bj}_{g}')
                             custom_compute(
                                 inputs=[data_source],
                                 output=c4_node,
@@ -294,7 +294,7 @@ class ParBlockColMajorPolyActRNPoly:
                             )
                             c4_row.append(c4_node)
 
-                            c3_node = CkksPlaintextRingtNode(f'encode_pt_poly_c3_{mb}_{bi}_{bj}_{g}')
+                            c3_node = CkksPlaintextNode(f'encode_pt_poly_c3_{mb}_{bi}_{bj}_{g}')
                             custom_compute(
                                 inputs=[data_source],
                                 output=c3_node,
@@ -335,7 +335,7 @@ class ParBlockColMajorPolyActRNPoly:
                 for bj in range(self.num_block_cols):
                     c0_bibj = []
                     for g in range(self.G):
-                        c0_node = CkksPlaintextRingtNode(f'encode_pt_poly_c0_{mb}_{bi}_{bj}_{g}')
+                        c0_node = CkksPlaintextNode(f'encode_pt_poly_c0_{mb}_{bi}_{bj}_{g}')
                         custom_compute(
                             inputs=[data_source],
                             output=c0_node,

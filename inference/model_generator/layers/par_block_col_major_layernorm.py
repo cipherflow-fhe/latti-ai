@@ -116,7 +116,7 @@ class _ParBlockColMajorLNBase:
         return result
 
     def _make_pt(self, data_source, op_class: str, pt_idx: int, bi: int = 0, bj: int = 0, g: int = 0):
-        node = CkksPlaintextRingtNode(f'encode_pt_{op_class}_{pt_idx}_{bi}_{bj}_{g}')
+        node = CkksPlaintextNode(f'encode_pt_{op_class}_{pt_idx}_{bi}_{bj}_{g}')
         custom_compute(
             inputs=[data_source],
             output=node,
@@ -267,7 +267,7 @@ class ParBlockColMajorLNMinimaxInit:
         self.chunk_size = block_size * block_size
 
     def _make_pt(self, data_source, pt_idx: int):
-        node = CkksPlaintextRingtNode(f'encode_pt_{self.op_class}_{pt_idx}')
+        node = CkksPlaintextNode(f'encode_pt_{self.op_class}_{pt_idx}')
         custom_compute(
             inputs=[data_source],
             output=node,
@@ -317,7 +317,7 @@ class ParBlockColMajorLNGoldschmidt:
         self.chunk_size = block_size * block_size
 
     def _make_pt(self, data_source, pt_idx: int):
-        node = CkksPlaintextRingtNode(f'encode_pt_{self.op_class}_{pt_idx}')
+        node = CkksPlaintextNode(f'encode_pt_{self.op_class}_{pt_idx}')
         custom_compute(
             inputs=[data_source],
             output=node,

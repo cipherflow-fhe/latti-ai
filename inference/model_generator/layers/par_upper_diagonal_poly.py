@@ -269,7 +269,7 @@ class ParUpperDiagonalPoly(MatPolyBase):
             for mb in range(self.n_mb):
                 for ct_local in range(self.cts_per_mb):
                     ct_idx = self._ct_index(mb, ct_local)
-                    node = CkksPlaintextRingtNode(f'encode_pt_upper_poly_c{coeff_idx}_{mb}_{ct_local}')
+                    node = CkksPlaintextNode(f'encode_pt_upper_poly_c{coeff_idx}_{mb}_{ct_local}')
                     custom_compute(
                         inputs=[data_source],
                         output=node,
