@@ -104,9 +104,9 @@ std::vector<fhe_ops_lib::CkksCiphertext>& EncryptedParameterStore::load_argument
         Bytes ct_bytes;
         ss_read_vector(ss, &ct_bytes);
         auto ct = fhe_ops_lib::CkksCiphertext::deserialize(ct_bytes);
-        if (ct.get_level() != entry.level) {
+        if (ct.level() != entry.level) {
             throw std::runtime_error("Encrypted parameter level mismatch for " + arg_id + ": expected " +
-                                     std::to_string(entry.level) + ", got " + std::to_string(ct.get_level()));
+                                     std::to_string(entry.level) + ", got " + std::to_string(ct.level()));
         }
         values.push_back(std::move(ct));
     }
@@ -165,9 +165,9 @@ std::shared_ptr<fhe_ops_lib::CkksCiphertext> EncryptedParameterStore::load_eleme
             }
 
             auto ct = std::make_shared<fhe_ops_lib::CkksCiphertext>(fhe_ops_lib::CkksCiphertext::deserialize(ct_bytes));
-            if (ct->get_level() != entry.level) {
+            if (ct->level() != entry.level) {
                 throw std::runtime_error("Encrypted parameter level mismatch for " + arg_id + ": expected " +
-                                         std::to_string(entry.level) + ", got " + std::to_string(ct->get_level()));
+                                         std::to_string(entry.level) + ", got " + std::to_string(ct->level()));
             }
             cached_values[flat_index] = ct;
             return ct;

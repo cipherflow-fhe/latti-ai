@@ -84,30 +84,22 @@ void copy_if_exists(const std::filesystem::path& src, const std::filesystem::pat
 }
 
 Bytes serialize_context(const fhe::CkksContext& context) {
-    if (const auto* btp_context = dynamic_cast<const fhe::CkksBtpContext*>(&context)) {
+    if (const auto* btp_context = dynamic_cast<const fhe::CkksContext*>(&context)) {
         return btp_context->serialize();
     }
-    return context.serialize_advanced();
+    return context.serialize();
 }
 
 std::unique_ptr<fhe::CkksContext> deserialize_context(const Bytes& bytes, bool use_btp) {
     if (use_btp) {
-        return std::make_unique<fhe::CkksBtpContext>(fhe::CkksBtpContext::deserialize(bytes));
+        return std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize(bytes));
     }
-    return std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize_advanced(bytes));
+    return std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize(bytes));
 }
 
-Bytes serialize_public_context(fhe::CkksContext& context, bool use_btp) {
-    if (use_btp) {
-        auto* btp_context = dynamic_cast<fhe::CkksBtpContext*>(&context);
-        if (btp_context == nullptr) {
-            throw std::runtime_error("[Provisioner] expected CkksBtpContext for bootstrapping task");
-        }
-        auto pub_ctx = btp_context->make_public_context();
-        return pub_ctx.serialize();
-    }
-    auto pub_ctx = context.make_public_context(false, true, true);
-    return pub_ctx.serialize_advanced();
+Bytes serialize_public_context(fhe::CkksContext& context, bool /*use_btp*/) {
+    // v6：serialize() 天然不含 SK；make_public_context / serialize_advanced 已移除。
+    return context.serialize();
 }
 
 }  // namespace
@@ -132,24 +124,70 @@ void InferenceProvisioner::resolve_directories() {
     std::filesystem::create_directories(provisioner_dir_);
 }
 
+
+namespace {
+
+// v3 兼容：galois element -> rotation step 的离散对数（mod 2^(log_n+1)）
+// 5 是 galois 生成元；galois_element = 5^r mod 2N（或 -5^r 形式）
+int32_t galois_element_to_rotation(uint64_t gal_elem, int log_n) {
+    const uint64_t modulus = 1ULL << (log_n + 1);
+    const uint64_t mask = modulus - 1;
+    uint64_t p = 1;
+    for (uint64_t r = 0; r < modulus; ++r) {
+        if (p == gal_elem) return static_cast<int32_t>(r);
+        p = (p * 5) & mask;
+    }
+    return -1;
+}
+
+}  // namespace
+
 fhe::CkksParameter InferenceProvisioner::make_parameter() const {
+    // v3 兼容：优先读 gen_mega_ag 生成的 runner/fhe_parameter.json，
+    // 因为它记录了 Python 侧模型编译时真正用到的 q/p。
+    // 只读 ckks_parameter.json 会走 Lattigo 内置默认表，Q[0] 和 Python 不一致，
+    // 触发 check_parameter 里的 "CKKS parameter Q[0] mismatch"。
+    std::filesystem::path fhe_param_path = task_dir_ / "runner" / "fhe_parameter.json";
+    if (!std::filesystem::exists(fhe_param_path)) {
+        fhe_param_path = provisioner_dir_ / "fhe_parameter.json";
+    }
+    if (!std::filesystem::exists(fhe_param_path)) {
+        fhe_param_path = server_dir_ / "fhe_parameter.json";
+    }
+    if (std::filesystem::exists(fhe_param_path)) {
+        json pj = read_json(fhe_param_path.string());
+        if (pj.contains("q") && pj.contains("p") && pj.contains("log_n")) {
+            int log_n = pj.at("log_n").get<int>();
+            int log_default_scale = pj.value("log_default_scale", 40);
+            auto q = pj.at("q").get<std::vector<uint64_t>>();
+            auto p = pj.at("p").get<std::vector<uint64_t>>();
+            return fhe::CkksParameter::create_custom_parameter(log_n, log_default_scale, q, p);
+        }
+    }
+
+    // 回退：读 ckks_parameter.json（通常无 q/p，会走 Lattigo 默认表）
     const auto& first_input = task_config_.at("task_input_param").begin().value();
     const std::string ckks_param_id = first_input.at("ckks_parameter_id").get<std::string>();
     const auto& entry = ckks_config_.at(ckks_param_id);
     const int poly_modulus_degree = entry.at("poly_modulus_degree").get<int>();
+    int log_n = 0;
+    while ((1LL << log_n) < poly_modulus_degree) log_n++;
 
-    fhe::CkksParameter param(0);
+    int log_default_scale = 40;
+    if (entry.contains("log_default_scale")) {
+        log_default_scale = entry.at("log_default_scale").get<int>();
+    } else if (entry.contains("default_scale")) {
+        int64_t ds = static_cast<int64_t>(entry.at("default_scale").get<double>());
+        log_default_scale = 0;
+        while ((1LL << log_default_scale) < ds) log_default_scale++;
+    }
+
     if (entry.contains("q") && entry.contains("p")) {
         const auto q = entry.at("q").get<std::vector<uint64_t>>();
         const auto p = entry.at("p").get<std::vector<uint64_t>>();
-        param = fhe::CkksParameter::create_custom_parameter(poly_modulus_degree, q, p);
-    } else {
-        param = fhe::CkksParameter::create_parameter(poly_modulus_degree);
+        return fhe::CkksParameter::create_custom_parameter(log_n, log_default_scale, q, p);
     }
-    if (entry.contains("log_slots")) {
-        param.set_log_slots(entry.at("log_slots").get<int>());
-    }
-    return param;
+    return fhe::CkksParameter::create_parameter(log_n);
 }
 
 void InferenceProvisioner::setup_or_load_keys() {
@@ -171,15 +209,50 @@ void InferenceProvisioner::setup_or_load_keys() {
     }
 
     std::cout << "[Provisioner] Generating server-owned CKKS keys..." << std::endl;
+    // v6：BTP 参数由 CkksContext 从 residual 参数内部派生（见
+    //   fhe_ops_lib/schemes/ckks/bootstrapping.cpp:CreateCkksBtpParameterFromResidualParameter），
+    // 不能再手动 create_parameter(btp_log_n)，那样会超出 Lattigo 支持的 logN 范围（12~16）。
+    auto param = make_parameter();
     if (use_btp) {
-        auto param = fhe::CkksBtpParameter::create_parameter();
-        auto btp_context = std::make_unique<fhe::CkksBtpContext>(fhe::CkksBtpContext::create_random_context(param));
-        btp_context->gen_rotation_keys();
-        context_ = std::move(btp_context);
+        context_ = std::make_unique<fhe::CkksContext>(
+            fhe::CkksContext::create_random_context(param, fhe::EncryptorType::PUBLIC_KEY,
+                                                    /*enable_bootstrapping=*/true));
     } else {
-        auto param = make_parameter();
         context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::create_random_context(param));
+    }
+
+    // v3 兼容：按 task_signature.json 里的 glk_order 生成具体 rotations，
+    // 而不是只生成默认的 [1,2,4,...]。
+    std::vector<int32_t> rotations;
+    std::filesystem::path sig_path = task_dir_ / "runner" / "task_signature.json";
+    if (!std::filesystem::exists(sig_path)) {
+        sig_path = task_dir_ / "task_signature.json";
+    }
+    if (std::filesystem::exists(sig_path)) {
+        try {
+            json sig = read_json(sig_path.string());
+            if (sig.contains("key") && sig["key"].contains("glk_order")) {
+                const int log_n = param.log_n();
+                for (const auto& gal_elem_json : sig["key"]["glk_order"]) {
+                    uint64_t gal_elem = gal_elem_json.get<uint64_t>();
+                    int32_t r = galois_element_to_rotation(gal_elem, log_n);
+                    if (r >= 0 && std::find(rotations.begin(), rotations.end(), r) == rotations.end()) {
+                        rotations.push_back(r);
+                    }
+                }
+                std::cout << "[Provisioner] Resolved " << rotations.size()
+                          << " rotations from task_signature.json glk_order" << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[Provisioner] Failed to parse task_signature.json: " << e.what() << std::endl;
+        }
+    }
+
+    if (rotations.empty()) {
+        std::cout << "[Provisioner] Falling back to default rotation keys" << std::endl;
         context_->gen_rotation_keys();
+    } else {
+        context_->gen_rotation_keys(rotations);
     }
 
     const Bytes full_context = serialize_context(*context_);
@@ -304,7 +377,7 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
     encrypted.reserve(count);
 
     for (uint64_t flat_idx = 0; flat_idx < count; ++flat_idx) {
-        fhe::CkksPlaintextRingt ringt;
+        fhe::CkksPlaintext ringt;
 
         if (starts_with(arg_id, "dense")) {
             auto& layer = init.get_layer<DensePackedLayer>(info.layer_id);
@@ -505,8 +578,8 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
             throw std::runtime_error("[Provisioner] Unsupported encrypted parameter argument: " + arg_id);
         }
 
-        auto pt = context.ringt_to_pt(ringt, encrypt_level);
-        encrypted.push_back(context.encrypt_asymmetric(pt));
+        auto pt = ls_compat::ringt_to_pt(context, ringt, encrypt_level);
+        encrypted.push_back(ls_compat::encrypt_asymmetric(context, pt));
     }
     return encrypted;
 }
@@ -524,7 +597,7 @@ void InferenceProvisioner::write_encrypted_argument(const std::filesystem::path&
     ss_write(ss, count);
     json elements = json::array();
     for (const auto& ct : values) {
-        Bytes ct_bytes = ct.serialize(context_->get_parameter());
+        Bytes ct_bytes = ct.serialize();
         if (write_element_index) {
             const auto payload_offset = static_cast<uint64_t>(ss.tellp()) + sizeof(size_t);
             elements.push_back({{"offset", payload_offset}, {"length", static_cast<uint64_t>(ct_bytes.size())}});

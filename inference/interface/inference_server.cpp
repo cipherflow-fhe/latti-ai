@@ -126,11 +126,14 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
     std::cout << "[Server] Importing evaluation context..." << std::endl;
     std::cout << "[Server] Bootstrapping: " << (needs_btp_ ? "Yes" : "No") << std::endl;
 
+    // v6：deserialize() 已能恢复含 relin + galois 的上下文（不带 SK）。
+    // BTP 与非 BTP 共用同一个 CkksContext 类型。
     if (needs_btp_) {
-        eval_btp_context_ = std::make_unique<CkksBtpContext>(CkksBtpContext::deserialize(eval_context));
+        eval_btp_context_ = std::make_unique<CkksContext>(CkksContext::deserialize(eval_context));
+        eval_btp_context_->set_enable_bootstrapping(true);
         context_ptr_ = eval_btp_context_.get();
     } else {
-        eval_context_ = std::make_unique<CkksContext>(CkksContext::deserialize_advanced(eval_context));
+        eval_context_ = std::make_unique<CkksContext>(CkksContext::deserialize(eval_context));
         context_ptr_ = eval_context_.get();
     }
 

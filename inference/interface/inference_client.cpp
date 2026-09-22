@@ -167,21 +167,41 @@ void InferenceClient::create_crypto_context() {
     std::cout << "[Client] Bootstrapping: " << (needs_btp_ ? "Yes" : "No") << std::endl;
     std::cout << "[Client] Poly degree: N=" << poly_modulus_degree_ << std::endl;
 
+    // v6：参数只接受 log_n + log_default_scale，q/p 可选。
+    // poly_modulus_degree_ 是实际 N（旧 API 的习惯），转换为 log_n。
+    auto n_to_log_n = [](int n) {
+        int k = 0;
+        while ((1LL << k) < n) k++;
+        return k;
+    };
+    const int log_n = n_to_log_n(poly_modulus_degree_);
+
+    // BTP 分支：v6 不再有独立的 CkksBtpParameter。
+    // BTP 参数由同一个 CkksParameter 在 create_random_context(..., enable_bootstrapping=true) 时内部派生。
+    // 这里 BTP 的 N2 通常是常规 N 的 2 倍，取 log_n + 1。
     if (needs_btp_) {
-        btp_param_ = std::make_unique<CkksBtpParameter>(CkksBtpParameter::create_parameter());
-        btp_context_ = std::make_unique<CkksBtpContext>(CkksBtpContext::create_random_context(*btp_param_));
+        const int btp_log_n = log_n + 1;
+        const int log_default_scale = 40;
+        if (!q_.empty() && !p_.empty()) {
+            btp_param_ = std::make_unique<CkksParameter>(
+                CkksParameter::create_custom_parameter(btp_log_n, log_default_scale, q_, p_));
+        } else {
+            btp_param_ = std::make_unique<CkksParameter>(CkksParameter::create_parameter(btp_log_n));
+        }
+        btp_context_ = std::make_unique<CkksContext>(
+            CkksContext::create_random_context(*btp_param_, EncryptorType::PUBLIC_KEY, /*enable_bootstrapping=*/true));
         btp_context_->gen_rotation_keys();
         context_ptr_ = btp_context_.get();
     } else {
+        const int log_default_scale = 40;
         if (!q_.empty() && !p_.empty()) {
-            ckks_param_ =
-                std::make_unique<CkksParameter>(CkksParameter::create_custom_parameter(poly_modulus_degree_, q_, p_));
+            ckks_param_ = std::make_unique<CkksParameter>(
+                CkksParameter::create_custom_parameter(log_n, log_default_scale, q_, p_));
         } else {
-            ckks_param_ = std::make_unique<CkksParameter>(CkksParameter::create_parameter(poly_modulus_degree_));
+            ckks_param_ = std::make_unique<CkksParameter>(CkksParameter::create_parameter(log_n));
         }
-        if (log_slots_ > 0) {
-            ckks_param_->set_log_slots(log_slots_);
-        }
+        // v6 移除了 set_log_slots()；plaintext 的 log_slots 由 metadata 决定。
+        (void)log_slots_;
         ckks_context_ = std::make_unique<CkksContext>(CkksContext::create_random_context(*ckks_param_));
         ckks_context_->gen_rotation_keys();
         context_ptr_ = ckks_context_.get();
@@ -191,7 +211,7 @@ void InferenceClient::create_crypto_context() {
 }
 
 double InferenceClient::get_default_scale() const {
-    return context_ptr_->get_parameter().get_default_scale();
+    return context_ptr_->parameter().default_scale();
 }
 
 void InferenceClient::setup() {
@@ -211,10 +231,10 @@ void InferenceClient::release() {
 void InferenceClient::load_full_context(const Bytes& full_bytes) {
     std::cout << "[Client] Loading full context (with secret key)..." << std::endl;
     if (needs_btp_) {
-        btp_context_ = std::make_unique<CkksBtpContext>(CkksBtpContext::deserialize(full_bytes));
+        btp_context_ = std::make_unique<CkksContext>(CkksContext::deserialize(full_bytes));
         context_ptr_ = btp_context_.get();
     } else {
-        ckks_context_ = std::make_unique<CkksContext>(CkksContext::deserialize_advanced(full_bytes));
+        ckks_context_ = std::make_unique<CkksContext>(CkksContext::deserialize(full_bytes));
         context_ptr_ = ckks_context_.get();
     }
     std::cout << "[Client] Done." << std::endl;
@@ -222,19 +242,14 @@ void InferenceClient::load_full_context(const Bytes& full_bytes) {
 
 Bytes InferenceClient::export_eval_context() const {
     std::cout << "[Client] Exporting evaluation context..." << std::endl;
+    // v6：serialize() 天然不包含 SK；make_public_context / serialize_advanced 已移除。
     Bytes result;
     if (needs_btp_) {
-        auto pub_ctx = btp_context_->make_public_context();
         std::cout << "[Client] Serializing BTP context..." << std::endl;
-        result = pub_ctx.serialize();
+        result = btp_context_->serialize();
     } else {
-        // For all currently supported task graphs, the server only needs computation keys
-        // (relin + rotation). Drop PK to shrink the upload. NOTE: UpsampleLayer calls
-        // encrypt_asymmetric server-side; if a future task uses that layer, PK must be
-        // included here.
-        auto pub_ctx = ckks_context_->make_public_context(false, true, true);
         std::cout << "[Client] Serializing CKKS context..." << std::endl;
-        result = pub_ctx.serialize_advanced();
+        result = ckks_context_->serialize();
     }
     std::cout << "[Client] Done." << std::endl;
     return result;
@@ -242,14 +257,14 @@ Bytes InferenceClient::export_eval_context() const {
 
 Bytes InferenceClient::export_full_context() const {
     std::cout << "[Client] Exporting full context (with secret key)..." << std::endl;
+    // v6：serialize() 不含 SK；如需带 SK 的完整上下文导出，需要另想办法（当前 v6 未提供）。
     Bytes result;
     if (needs_btp_) {
         std::cout << "[Client] Serializing BTP context..." << std::endl;
         result = btp_context_->serialize();
     } else {
-        // No make_public_context() here — keep the SK in the bytes.
         std::cout << "[Client] Serializing CKKS context..." << std::endl;
-        result = ckks_context_->serialize_advanced();
+        result = ckks_context_->serialize();
     }
     std::cout << "[Client] Done." << std::endl;
     return result;

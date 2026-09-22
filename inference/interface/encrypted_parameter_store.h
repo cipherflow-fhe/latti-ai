@@ -26,7 +26,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "fhe_ops_lib/fhe_lib_v2.h"
+#include "fhe_ops_lib/schemes/ckks/ckks.h"
 #include "util.h"
 
 class EncryptedParameterStore {

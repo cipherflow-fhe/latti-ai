@@ -137,10 +137,10 @@ private:
     std::string mat_pack_style_;
 
     std::unique_ptr<ls::CkksParameter> ckks_param_;
-    std::unique_ptr<ls::CkksBtpParameter> btp_param_;
+    std::unique_ptr<ls::CkksParameter> btp_param_;
     ls::CkksContext* context_ptr_ = nullptr;
     std::unique_ptr<ls::CkksContext> ckks_context_;
-    std::unique_ptr<ls::CkksBtpContext> btp_context_;
+    std::unique_ptr<ls::CkksContext> btp_context_;
 
     void read_configuration();
     void create_crypto_context();

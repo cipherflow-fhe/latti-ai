@@ -61,10 +61,10 @@ private:
     std::unique_ptr<EncryptedParameterStore> parameter_store_;
 
     void read_configuration();
-    std::vector<fhe::CkksPlaintextRingt>
+    std::vector<fhe::CkksPlaintext>
     encode_plaintext_0d_input(const std::string& name, const std::string& csv_path, const json& sig) const;
-    std::vector<fhe::CkksPlaintextRingt>
+    std::vector<fhe::CkksPlaintext>
     encode_plaintext_1d_input(const std::string& name, const std::string& csv_path, const json& sig) const;
-    std::vector<fhe::CkksPlaintextRingt>
+    std::vector<fhe::CkksPlaintext>
     encode_plaintext_2d_input(const std::string& name, const std::string& csv_path, const json& sig) const;
 };
