@@ -1,5 +1,6 @@
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/lib)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/lattisense/fhe_ops_lib)
 
 add_definitions(-DOPENSSL_API_COMPAT=10100)
 add_definitions(-DSOURCE_PATH="${CMAKE_CURRENT_SOURCE_DIR}")

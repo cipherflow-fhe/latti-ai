@@ -1,5 +1,6 @@
 include_directories(${CMAKE_SOURCE_DIR}/inference)
 include_directories(${CMAKE_SOURCE_DIR}/inference/lib)
+include_directories(${CMAKE_SOURCE_DIR}/inference/lattisense/fhe_ops_lib)
 
 add_definitions(-DSOURCE_PATH="${CMAKE_SOURCE_DIR}/inference")
 

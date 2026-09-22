@@ -69,3 +69,7 @@ cifar10/
 lfw/
 resnet/
 resnet_new/
+
+# v6 adaptation build dirs
+build_adapt/
+build_gpu/
