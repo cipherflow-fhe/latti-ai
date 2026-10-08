@@ -70,8 +70,5 @@ inline CkksCiphertext encrypt_symmetric(CkksContext& ctx, const CkksPlaintext& p
 inline CkksCiphertext encrypt_symmetric_compressed(CkksContext& ctx, const CkksPlaintext& pt) {
     return ctx.encrypt(pt);
 }
-inline CkksCiphertext compressed_ciphertext_to_ciphertext(const CkksCiphertext& ct) {
-    return CkksCiphertext::deserialize(ct.serialize());
-}
 
 }  // namespace ls_compat

@@ -423,7 +423,7 @@ void Feature0DEncrypted::decompress() {
     assert(data_compressed.size() > 0);
     size_t n_ct = data_compressed.size();
     for (int i = 0; i < n_ct; i++) {
-        data.push_back(ls_compat::compressed_ciphertext_to_ciphertext(data_compressed[i]));
+        data.push_back(CkksCiphertext::deserialize(data_compressed[i].serialize()));
     }
     data_compressed.clear();
 }

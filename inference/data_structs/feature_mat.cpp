@@ -474,7 +474,7 @@ void FeatureMatEncrypted::decompress() {
     assert(data.size() == 0 && data_compress.size() > 0);
     size_t n_ct = data_compress.size();
     for (size_t i = 0; i < n_ct; i++) {
-        data.push_back(ls_compat::compressed_ciphertext_to_ciphertext(data_compress[i]));
+        data.push_back(CkksCiphertext::deserialize(data_compress[i].serialize()));
     }
     data_compress.clear();
 }
