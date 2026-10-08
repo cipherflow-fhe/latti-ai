@@ -97,9 +97,9 @@ void FeatureMatEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
     parallel_for(total_blocks, N_THREAD, *context, [&](CkksContext& ctx_copy, int idx) {
         auto enc = ls_compat::encode(ctx_copy, block_vecs[idx], level, scale_in);
         if (is_symmetric) {
-            data_compress[idx] = ls_compat::encrypt_symmetric_compressed(ctx_copy, enc);
+            data_compress[idx] = ctx_copy.encrypt(enc);
         } else {
-            data[idx] = ls_compat::encrypt_symmetric(ctx_copy, enc);
+            data[idx] = ctx_copy.encrypt(enc);
         }
     });
 }
@@ -226,9 +226,9 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
     parallel_for(total_vecs, N_THREAD, *context, [&](CkksContext& ctx_copy, int idx) {
         auto enc = ls_compat::encode(ctx_copy, block_vecs[idx], level, scale_in);
         if (is_symmetric) {
-            data_compress[idx] = ls_compat::encrypt_symmetric_compressed(ctx_copy, enc);
+            data_compress[idx] = ctx_copy.encrypt(enc);
         } else {
-            data[idx] = ls_compat::encrypt_symmetric(ctx_copy, enc);
+            data[idx] = ctx_copy.encrypt(enc);
         }
     });
 }
@@ -388,9 +388,9 @@ void FeatureMatEncrypted::par_diagonal_pack(const Array<double, 2>& matrix,
     parallel_for(total_vecs, N_THREAD, *context, [&](CkksContext& ctx_copy, int idx) {
         auto enc = ls_compat::encode(ctx_copy, packed_vecs[idx], level, scale_in);
         if (is_symmetric) {
-            data_compress[idx] = ls_compat::encrypt_symmetric_compressed(ctx_copy, enc);
+            data_compress[idx] = ctx_copy.encrypt(enc);
         } else {
-            data[idx] = ls_compat::encrypt_symmetric(ctx_copy, enc);
+            data[idx] = ctx_copy.encrypt(enc);
         }
     });
 }

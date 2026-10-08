@@ -57,7 +57,7 @@ void Feature0DEncrypted::pack(const Array<double, 1>& feature_mg,
             auto feature_flat_ct = context->encrypt(feature_flat_pt);
             data.push_back(move(feature_flat_ct));
         } else {
-            auto feature_flat_ct = ls_compat::encrypt_symmetric_compressed(*context, feature_flat_pt);
+            auto feature_flat_ct = context->encrypt(feature_flat_pt);
             data_compressed.push_back(move(feature_flat_ct));
         }
     }
@@ -114,9 +114,9 @@ void Feature0DEncrypted::batch_pack(const Array<double, 2>& matrix, uint32_t d, 
     parallel_for(total_cts, n_threads, *context, [&](CkksContext& ctx_copy, int idx) {
         auto encoded = ls_compat::encode(ctx_copy, packed[idx], level, scale_in);
         if (is_symmetric)
-            data_compressed[idx] = ls_compat::encrypt_symmetric_compressed(ctx_copy, encoded);
+            data_compressed[idx] = ctx_copy.encrypt(encoded);
         else
-            data[idx] = ls_compat::encrypt_symmetric(ctx_copy, encoded);
+            data[idx] = ctx_copy.encrypt(encoded);
     });
 
     batch_packed = true;
@@ -189,10 +189,10 @@ void Feature0DEncrypted::pack_cyclic(const std::vector<double>& feature_mg, bool
         }
         auto feature_flat_pt = ls_compat::encode(*context, feature_flat, level, scale_in);
         if (!is_symmetric) {
-            auto feature_flat_ct = ls_compat::encrypt_symmetric(*context, feature_flat_pt);
+            auto feature_flat_ct = context->encrypt(feature_flat_pt);
             data.push_back(move(feature_flat_ct));
         } else {
-            auto feature_flat_ct = ls_compat::encrypt_symmetric_compressed(*context, feature_flat_pt);
+            auto feature_flat_ct = context->encrypt(feature_flat_pt);
             data_compressed.push_back(move(feature_flat_ct));
         }
     }

@@ -76,10 +76,10 @@ void Feature1DEncrypted::pack(Array<double, 2>& feature_mg, bool is_symmetric, d
 
         auto image_flat_pt = ls_compat::encode(ctx_copy, image_flat, level, scale_in);
         if (is_symmetric) {
-            auto image_flat_ct = ls_compat::encrypt_symmetric_compressed(ctx_copy, image_flat_pt);
+            auto image_flat_ct = ctx_copy.encrypt(image_flat_pt);
             data_compress[ct_idx] = move(image_flat_ct);
         } else {
-            auto image_flat_ct = ls_compat::encrypt_symmetric(ctx_copy, image_flat_pt);
+            auto image_flat_ct = ctx_copy.encrypt(image_flat_pt);
             data[ct_idx] = move(image_flat_ct);
         }
     });
@@ -129,10 +129,10 @@ void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, bo
 
         auto image_flat_pt = ls_compat::encode(ctx_copy, image_flat, level, scale_in);
         if (is_symmetric) {
-            auto image_flat_ct = ls_compat::encrypt_symmetric_compressed(ctx_copy, image_flat_pt);
+            auto image_flat_ct = ctx_copy.encrypt(image_flat_pt);
             data_compress[ct_idx] = move(image_flat_ct);
         } else {
-            auto image_flat_ct = ls_compat::encrypt_symmetric(ctx_copy, image_flat_pt);
+            auto image_flat_ct = ctx_copy.encrypt(image_flat_pt);
             data[ct_idx] = move(image_flat_ct);
         }
     });

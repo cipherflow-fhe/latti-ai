@@ -162,9 +162,9 @@ void Feature2DEncrypted::pack_multiple_channel(const Array<double, 3>& feature_m
 
     parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         if (is_symmetric) {
-            data_compress[ct_idx] = ls_compat::encrypt_symmetric_compressed(ctx_copy, pt_vec[ct_idx]);
+            data_compress[ct_idx] = ctx_copy.encrypt(pt_vec[ct_idx]);
         } else {
-            data[ct_idx] = ls_compat::encrypt_symmetric(ctx_copy, pt_vec[ct_idx]);
+            data[ct_idx] = ctx_copy.encrypt(pt_vec[ct_idx]);
         }
     });
 }
@@ -187,9 +187,9 @@ void Feature2DEncrypted::pack_interleaved(const Array<double, 3>& feature_mg,
     }
     parallel_for(pt_vec.size(), N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         if (is_symmetric) {
-            data_compress[ct_idx] = ls_compat::encrypt_symmetric_compressed(ctx_copy, pt_vec[ct_idx]);
+            data_compress[ct_idx] = ctx_copy.encrypt(pt_vec[ct_idx]);
         } else {
-            data[ct_idx] = ls_compat::encrypt_symmetric(ctx_copy, pt_vec[ct_idx]);
+            data[ct_idx] = ctx_copy.encrypt(pt_vec[ct_idx]);
         }
     });
 }
@@ -208,9 +208,9 @@ void Feature2DEncrypted::pack_multiplexed(const Array<double, 3>& feature_mg, bo
     }
     parallel_for(pt_vec.size(), N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         if (is_symmetric) {
-            data_compress[ct_idx] = ls_compat::encrypt_symmetric_compressed(ctx_copy, pt_vec[ct_idx]);
+            data_compress[ct_idx] = ctx_copy.encrypt(pt_vec[ct_idx]);
         } else {
-            data[ct_idx] = ls_compat::encrypt_symmetric(ctx_copy, pt_vec[ct_idx]);
+            data[ct_idx] = ctx_copy.encrypt(pt_vec[ct_idx]);
         }
     });
 }

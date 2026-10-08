@@ -63,12 +63,4 @@ inline std::vector<double> decode(CkksContext& ctx, const CkksPlaintext& pt) {
     return out;
 }
 
-// encrypt_symmetric 系列 → 用 encrypt 兜底
-inline CkksCiphertext encrypt_symmetric(CkksContext& ctx, const CkksPlaintext& pt) {
-    return ctx.encrypt(pt);
-}
-inline CkksCiphertext encrypt_symmetric_compressed(CkksContext& ctx, const CkksPlaintext& pt) {
-    return ctx.encrypt(pt);
-}
-
 }  // namespace ls_compat
