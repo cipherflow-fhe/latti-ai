@@ -118,7 +118,8 @@ Array<double, 2> FeatureMatEncrypted::block_col_major_unpack(uint32_t m, uint32_
         uint32_t bj = idx / num_block_rows;
 
         CkksPlaintext x_pt = ctx_copy.decrypt(data[idx]);
-        Array1D x_mg = ls_compat::decode(ctx_copy, x_pt);
+        Array1D x_mg;
+        ctx_copy.decode(x_pt, x_mg);
         // Extract first d*d elements (column-major within block)
         for (uint32_t col = 0; col < d; col++) {
             for (uint32_t row = 0; row < d; row++) {
@@ -277,7 +278,8 @@ FeatureMatEncrypted::par_block_col_major_unpack(uint32_t m, uint32_t n_per_head,
             uint32_t bj = block_idx / num_block_rows;
 
             CkksPlaintext x_pt = ctx_copy.decrypt(data[vec_idx]);
-            Array1D x_mg = ls_compat::decode(ctx_copy, x_pt);
+            Array1D x_mg;
+            ctx_copy.decode(x_pt, x_mg);
 
             for (uint32_t h_local = 0; h_local < S; h_local++) {
                 uint32_t h = g * S + h_local;
@@ -440,7 +442,8 @@ Array<double, 2> FeatureMatEncrypted::par_diagonal_unpack(uint32_t n_heads,
         uint32_t ct_offset = mb * cts_per_mb;
         parallel_for(cts_per_mb, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_local) {
             CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_offset + ct_local]);
-            Array1D slots = ls_compat::decode(ctx_copy, x_pt);
+            Array1D slots;
+            ctx_copy.decode(x_pt, slots);
             for (uint32_t local_diag = 0; local_diag < c; local_diag++) {
                 uint32_t diag_idx = ct_local * c + local_diag;
                 uint32_t segment_base = local_diag * H * n;

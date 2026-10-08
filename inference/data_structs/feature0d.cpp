@@ -147,7 +147,8 @@ Array<double, 2> Feature0DEncrypted::batch_unpack(uint32_t batch, uint32_t featu
     Array<double, 2> result({static_cast<uint64_t>(batch), static_cast<uint64_t>(feature_dim)});
     const int n_threads = 4;
     parallel_for(total_cts, n_threads, *context, [&](CkksContext& ctx_copy, int ct_idx) {
-        auto decoded = ls_compat::decode(ctx_copy, ctx_copy.decrypt(data[ct_idx]));
+        std::vector<double> decoded;
+        ctx_copy.decode(ctx_copy.decrypt(data[ct_idx]), decoded);
         uint32_t feature_block = ct_idx / batch_ct_groups;
         uint32_t group = ct_idx % batch_ct_groups;
         for (uint32_t chunk = 0; chunk < chunks_per_ct; ++chunk) {
@@ -221,7 +222,8 @@ Array<double, 1> Feature0DEncrypted::unpack() const {
     int T = 0;
     for (int ct_idx = 0; ct_idx < data.size(); ct_idx++) {
         auto c_pt = context->decrypt(data[ct_idx]);
-        auto c = ls_compat::decode(*context, c_pt);
+        std::vector<double> c;
+        context->decode(c_pt, c);
         for (int j = 0; j < n_channel_per_ct; j++) {
             if (T >= n_channel) {
                 break;

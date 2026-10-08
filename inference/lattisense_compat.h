@@ -56,11 +56,4 @@ inline CkksPlaintext encode(CkksContext& ctx,
     return pt;
 }
 
-// decode 单参：返回 vector<double>
-inline std::vector<double> decode(CkksContext& ctx, const CkksPlaintext& pt) {
-    std::vector<double> out;
-    ctx.decode(pt, out);
-    return out;
-}
-
 }  // namespace ls_compat

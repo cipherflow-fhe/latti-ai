@@ -151,7 +151,8 @@ Array<double, 2> Feature1DEncrypted::unpack_multiplexed() const {
 
     parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_idx]);
-        Array1D x_mg = ls_compat::decode(ctx_copy, x_pt);
+        Array1D x_mg;
+        ctx_copy.decode(x_pt, x_mg);
 
         for (int j = 0; j < (int)n_channel_per_ct; j++) {
             int channel = ct_idx * (int)n_channel_per_ct + j;
@@ -178,7 +179,8 @@ Array<double, 2> Feature1DEncrypted::unpack() const {
     Array<double, 2> result({n_channel, shape});
     parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_idx]);
-        Array1D x_mg = ls_compat::decode(ctx_copy, x_pt);
+        Array1D x_mg;
+        ctx_copy.decode(x_pt, x_mg);
         for (int i = 0; i < n_channel_per_ct; i++) {
             int channel_idx = ct_idx * n_channel_per_ct + i;
             if (channel_idx >= n_channel) {
