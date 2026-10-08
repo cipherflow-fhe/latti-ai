@@ -1,8 +1,0 @@
-     16 ./docs/adaptation
-      7 ./inference/unittests
-      4 ./inference/interface
-      2 ./inference/fhe_layers
-      2 ./inference/data_structs
-      1 ./inference/inference_task
-      1 ./inference
-      1 ./examples

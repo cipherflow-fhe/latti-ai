@@ -1,7 +1,0 @@
-+90f46b90021106ba031db50828f5610c7ac98564 inference/lattisense (heads/newTry)
- 9bf7a7c2afdd1aec9dcb6b71d70b75a800e35f6a inference/lattisense/backends/lattisense-gpu-core (9bf7a7c)
- b743607c1173000718ca1f84016fd03093ebb6fc inference/lattisense/backends/lattisense-gpu-core/thirdparty/GPU-FFT (heads/main)
- 8a4daf11c7cdea8dde45fa0f8f7183c138d42b3b inference/lattisense/backends/lattisense-gpu-core/thirdparty/GPU-NTT (remotes/origin/paper_version-20-g8a4daf1)
- d9aaa6b5d7cc67a2ca307ef9d6203f25cc2458b4 inference/lattisense/backends/lattisense-gpu-core/thirdparty/RNGonGPU (d9aaa6b)
- 32332ce0f367b7e04612e66ae63da3812fb3b8e3 inference/lattisense/backends/lattisense-gpu-core/thirdparty/RNGonGPU/thirdparty/GPU-NTT (remotes/origin/paper_version-17-g32332ce)
- 27f3fe2db17b56583909ada1a59060b68f17b1a9 inference/lattisense/fhe_ops_lib/lattigo (v2.0-895-g27f3fe2d)
