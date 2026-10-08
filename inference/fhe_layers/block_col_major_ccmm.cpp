@@ -200,7 +200,7 @@ CkksCiphertext BlockColMajorCCMM::sigma_on_ct(CkksContext& ctx, const CkksCipher
         int rot_amount = (d_ * k_idx) % chunk_size_;
         CkksCiphertext rotated = (rot_amount == 0) ? a.copy() : ctx.rotate(a, rot_amount);
 
-        auto diag_mul = ls_compat::ringt_to_mul(ctx, sigma_diag_pt_[k_idx], level_);
+        auto diag_mul = CkksPlaintext::deserialize(sigma_diag_pt_[k_idx].serialize());
         auto product = ctx.mult(rotated, diag_mul);
 
         if (k_idx == 0) {
@@ -224,7 +224,7 @@ CkksCiphertext BlockColMajorCCMM::tau_on_ct(CkksContext& ctx, const CkksCipherte
         int rot_amount = ((offset % (int)chunk_size_) + (int)chunk_size_) % (int)chunk_size_;
         CkksCiphertext rotated = (rot_amount == 0) ? b.copy() : ctx.rotate(b, rot_amount);
 
-        auto diag_mul = ls_compat::ringt_to_mul(ctx, tau_diag_pt_[diag_idx], level_);
+        auto diag_mul = CkksPlaintext::deserialize(tau_diag_pt_[diag_idx].serialize());
         auto product = ctx.mult(rotated, diag_mul);
 
         if (diag_idx == 0) {
@@ -257,8 +257,8 @@ CkksCiphertext BlockColMajorCCMM::psi_on_ct(CkksContext& ctx, const CkksCipherte
     CkksCiphertext rotated_k = (rot_k == 0) ? b_tau.copy() : ctx.rotate(b_tau, rot_k);
     CkksCiphertext rotated_kd = (rot_kd == 0) ? b_tau.copy() : ctx.rotate(b_tau, rot_kd);
 
-    auto w_k_mul = ls_compat::ringt_to_mul(ctx, psi_w_k_pt_[psi_idx], level_ - 1);
-    auto w_kd_mul = ls_compat::ringt_to_mul(ctx, psi_w_k_minus_d_pt_[psi_idx], level_ - 1);
+    auto w_k_mul = CkksPlaintext::deserialize(psi_w_k_pt_[psi_idx].serialize());
+    auto w_kd_mul = CkksPlaintext::deserialize(psi_w_k_minus_d_pt_[psi_idx].serialize());
 
     auto term1 = ctx.mult(rotated_k, w_k_mul);
     auto term2 = ctx.mult(rotated_kd, w_kd_mul);
@@ -277,7 +277,7 @@ BlockColMajorCCMM::block_mult_ct(CkksContext& ctx, const CkksCiphertext& a, cons
     CkksCiphertext b_tau = tau_on_ct(ctx, b);
 
     // Step 2: i=0, use all-ones psi_k0 plaintext to scale b_tau
-    auto psi_k0_mul = ls_compat::ringt_to_mul(ctx, psi_k0_pt_, level_ - 1);
+    auto psi_k0_mul = CkksPlaintext::deserialize(psi_k0_pt_.serialize());
     auto b_0 = ctx.rescale(ctx.mult(b_tau, psi_k0_mul));  // L-1 -> L-2
     auto a_0 = ctx.drop_level(a_sigma.copy());                                     // L-1 -> L-2
     auto ct3_0 = ctx.mult(a_0, b_0);

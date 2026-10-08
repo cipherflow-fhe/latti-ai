@@ -263,7 +263,7 @@ FeatureMatEncrypted ParUpperDiagonalMultipleSquare::run(CkksContext& ctx, const 
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         auto sq = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(x.data[idx], x.data[idx])));
-        auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, mask_pt_[idx], level_ - 1);
+        auto mask_mul = CkksPlaintext::deserialize(mask_pt_[idx].serialize());
         result.data[idx] = ctx_copy.rescale(ctx_copy.mult(sq, mask_mul));
     });
 
@@ -381,7 +381,7 @@ FeatureMatEncrypted ParUpperDiagonalHeadColSum::run(CkksContext& ctx, const Feat
     result.data.resize(total_cts());
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, mask_pt_[idx], level_);
+        auto mask_mul = CkksPlaintext::deserialize(mask_pt_[idx].serialize());
         result.data[idx] = ctx_copy.rescale(ctx_copy.mult(head_sum, mask_mul));
     });
 
@@ -608,12 +608,12 @@ ParUpperDiagonalInverseIter::run(CkksContext& ctx, const FeatureMatEncrypted& a,
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         auto ba = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(b.data[idx], a.data[idx])));  // L-1
 
-        auto one_mul = ls_compat::ringt_to_mul(ctx_copy, one_pt_[idx], level_);
+        auto one_mul = CkksPlaintext::deserialize(one_pt_[idx].serialize());
         auto one_a = ctx_copy.rescale(ctx_copy.mult(a.data[idx], one_mul));  // L-1
 
         auto product = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(one_a, ba)));  // level L-2, scale D
 
-        auto two_mul = ls_compat::ringt_to_mul(ctx_copy, two_pt_[idx], level_);
+        auto two_mul = CkksPlaintext::deserialize(two_pt_[idx].serialize());
         auto two_a = ctx_copy.rescale(ctx_copy.mult(a.data[idx], two_mul));  // L-1, scale D
         auto two_a_drop = ctx_copy.drop_level(two_a);
 
@@ -726,7 +726,7 @@ ParUpperDiagonalGELU::run(CkksContext& ctx, const FeatureMatEncrypted& a, const 
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         auto product = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(a.data[idx], b.data[idx])));
-        auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, mask_pt_[idx], level_ - 1);
+        auto mask_mul = CkksPlaintext::deserialize(mask_pt_[idx].serialize());
         result.data[idx] = ctx_copy.rescale(ctx_copy.mult(product, mask_mul));
     });
 

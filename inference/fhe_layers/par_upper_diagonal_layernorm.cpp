@@ -203,7 +203,7 @@ CkksCiphertext ParUpperDiagonalLNStats::reduce_cols_in_ct(CkksContext& ctx,
         result = ctx.add(result, ctx.rotate(result, (int)step));
     }
 
-    auto mask_mul = ls_compat::ringt_to_mul(ctx, h0_mask_pt, result.level());
+    auto mask_mul = CkksPlaintext::deserialize(h0_mask_pt.serialize());
     auto masked = ctx.rescale(ctx.mult(result, mask_mul));
 
     CkksCiphertext replicated = masked.copy();
@@ -256,7 +256,7 @@ vector<CkksCiphertext> ParUpperDiagonalLNStats::run(CkksContext& ctx, const Feat
 
     vector<CkksCiphertext> a_cts(n_ct);
     parallel_for(n_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto pt_one = ls_compat::ringt_to_mul(ctx_copy, iv_pt_[idx], level_ - 2);
+        auto pt_one = CkksPlaintext::deserialize(iv_pt_[idx].serialize());
         a_cts[idx] = ctx_copy.rescale(ctx_copy.mult(variance, pt_one));  // level L-3, scale D
         a_cts[idx] = ctx_copy.add(a_cts[idx], eps_add_pt_[idx]);          // level L-3, scale D
     });
@@ -390,7 +390,7 @@ CkksCiphertext ParUpperDiagonalLNXCentered::reduce_cols_in_ct(CkksContext& ctx,
         result = ctx.add(result, ctx.rotate(result, (int)step));
     }
 
-    auto mask_mul = ls_compat::ringt_to_mul(ctx, h0_mask_pt_, result.level());
+    auto mask_mul = CkksPlaintext::deserialize(h0_mask_pt_.serialize());
     auto masked = ctx.rescale(ctx.mult(result, mask_mul));
 
     CkksCiphertext replicated = masked.copy();
@@ -422,7 +422,7 @@ vector<CkksCiphertext> ParUpperDiagonalLNXCentered::run(CkksContext& ctx, const 
 
     vector<CkksCiphertext> mean_cts(n_ct);
     parallel_for(n_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto pt_inv_n = ls_compat::ringt_to_mul(ctx_copy, inv_n_pt_[idx], level_ - 1);
+        auto pt_inv_n = CkksPlaintext::deserialize(inv_n_pt_[idx].serialize());
         mean_cts[idx] = ctx_copy.rescale(ctx_copy.mult(sum_x, pt_inv_n));  // level L-2, scale D
     });
 
@@ -552,10 +552,10 @@ vector<CkksCiphertext> ParUpperDiagonalLNMinimaxInit::run(CkksContext& ctx, cons
         auto a_sq_raw = ctx_copy.mult(a_cts[idx], a_cts[idx]);
         auto a_sq = ctx_copy.rescale(ctx_copy.relinearize(a_sq_raw));
 
-        auto c2_mul = ls_compat::ringt_to_mul(ctx_copy, c2_norm_pt_[idx], level_ - 1);
+        auto c2_mul = CkksPlaintext::deserialize(c2_norm_pt_[idx].serialize());
         auto c2a2 = ctx_copy.rescale(ctx_copy.mult(a_sq, c2_mul));  // level L-2, scale D
 
-        auto c1_mul = ls_compat::ringt_to_mul(ctx_copy, c1_pt_[idx], level_);
+        auto c1_mul = CkksPlaintext::deserialize(c1_pt_[idx].serialize());
         auto c1a = ctx_copy.rescale(ctx_copy.mult(a_cts[idx], c1_mul));  // level L-1, scale D
 
         auto y0 = ctx_copy.add(ctx_copy.drop_level(c1a), c2a2);
@@ -687,12 +687,12 @@ vector<CkksCiphertext> ParUpperDiagonalLNGoldschmidt::run(CkksContext& ctx,
         double S_prod = D / param_.q()[level_] * D / param_.q()[level_] * D / param_.q()[level_ - 1] * D;
         auto ya_yy = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(ya, yy)));  // level L-2, scale S_prod
 
-        auto three_mul = ls_compat::ringt_to_mul(ctx_copy, three_pt_[idx], level_);
+        auto three_mul = CkksPlaintext::deserialize(three_pt_[idx].serialize());
         auto three_y =
             ctx_copy.rescale(ctx_copy.mult(y_cts[idx], three_mul));  // level L-1, scale S_prod
         auto diff = ctx_copy.sub(ctx_copy.drop_level(three_y), ya_yy);                 // level L-2, scale S_prod
 
-        auto half_mul = ls_compat::ringt_to_mul(ctx_copy, half_norm_pt_[idx], level_ - 2);
+        auto half_mul = CkksPlaintext::deserialize(half_norm_pt_[idx].serialize());
         y_new[idx] = ctx_copy.rescale(ctx_copy.mult(diff, half_mul));  // level L-3, scale D
     });
 
@@ -822,7 +822,7 @@ FeatureMatEncrypted ParUpperDiagonalLNAffine::run(CkksContext& ctx,
     result.data.resize(total_cts());
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto gamma_mul = ls_compat::ringt_to_mul(ctx_copy, gamma_pt_[idx], y_level_);
+        auto gamma_mul = CkksPlaintext::deserialize(gamma_pt_[idx].serialize());
         auto yw = ctx_copy.rescale(ctx_copy.mult(y_cts[idx], gamma_mul));
 
         auto xc = x_centered[idx].copy();

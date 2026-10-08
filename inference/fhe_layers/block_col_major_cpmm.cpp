@@ -123,7 +123,7 @@ CkksCiphertext BlockColMajorCPMM::block_mult_cpmm(CkksContext& ctx, const CkksCi
         int rot_amount = (k * d_) % chunk_size_;
         CkksCiphertext rotated = (rot_amount == 0) ? a.copy() : ctx.rotate(a, rot_amount);
 
-        auto diag_mul = ls_compat::ringt_to_mul(ctx, diag_pt_[b_idx][k], level_);
+        auto diag_mul = CkksPlaintext::deserialize(diag_pt_[b_idx][k].serialize());
         auto product = ctx.mult(rotated, diag_mul);
 
         if (k == 0) {

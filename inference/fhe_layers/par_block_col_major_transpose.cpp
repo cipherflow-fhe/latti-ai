@@ -166,7 +166,7 @@ CkksCiphertext ParBlockColMajorTranspose::transpose_on_ct(CkksContext& ctx, cons
 
         for (uint32_t b = 0; b < b_end; b++) {
             uint32_t diag_idx = g * bsgs_bs_t_ + b;
-            auto diag_mul = ls_compat::ringt_to_mul(ctx, transpose_diag_pt_[diag_idx], level_);
+            auto diag_mul = CkksPlaintext::deserialize(transpose_diag_pt_[diag_idx].serialize());
             auto product = ctx.mult(baby_rots[b], diag_mul);
 
             if (!inner_init) {

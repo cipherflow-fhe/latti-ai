@@ -306,11 +306,11 @@ vector<CkksCiphertext> MultiplexedConv1DPackedLayer::run_core(CkksContext& ctx, 
                     CkksCiphertext product;
                     if (weight_pt.empty()) {
                         auto w_rt = generate_weight_pt_for_indices(ctx_copy, wg, w_idx, k);
-                        auto w = ls_compat::ringt_to_mul(ctx_copy, w_rt, level_);
+                        auto w = CkksPlaintext::deserialize(w_rt.serialize());
                         product = ctx_copy.mult(to_mult, w);
                     } else {
                         const auto& w_rt = weight_pt[wg][w_idx][k];
-                        auto w = ls_compat::ringt_to_mul(ctx_copy, w_rt, level_);
+                        auto w = CkksPlaintext::deserialize(w_rt.serialize());
                         product = ctx_copy.mult(to_mult, w);
                     }
 
@@ -376,10 +376,10 @@ vector<CkksCiphertext> MultiplexedConv1DPackedLayer::run_core(CkksContext& ctx, 
             CkksCiphertext masked;
             if (block_select_pt.empty()) {
                 auto bs_pt = generate_select_tensor_pt_for_index(ctx_copy, t);
-                auto bs_pt_rt = ls_compat::ringt_to_mul(ctx_copy, bs_pt, level_ - 1);
+                auto bs_pt_rt = CkksPlaintext::deserialize(bs_pt.serialize());
                 masked = ctx_copy.mult(result[wg], bs_pt_rt);
             } else {
-                auto bs_pt = ls_compat::ringt_to_mul(ctx_copy, block_select_pt[t], level_ - 1);
+                auto bs_pt = CkksPlaintext::deserialize(block_select_pt[t].serialize());
                 masked = ctx_copy.mult(result[wg], bs_pt);
             }
             masked = ctx_copy.rescale(masked);

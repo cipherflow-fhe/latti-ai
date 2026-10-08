@@ -352,7 +352,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core(CkksContext& ctx, 
         for (int j = 0; j < weight_pt[ct_idx].size(); j++) {
             for (int k = 0; k < weight_pt[ct_idx][j].size(); k++) {
                 auto& w_pt_rt = weight_pt[ct_idx][j][k];
-                auto w_pt = ls_compat::ringt_to_mul(ctx_copy, w_pt_rt, level_);
+                auto w_pt = CkksPlaintext::deserialize(w_pt_rt.serialize());
                 auto res = ctx_copy.mult(rotated_x[j][k], w_pt);
                 if (j == 0 && k == 0) {
                     s = move(res);
@@ -453,7 +453,7 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
                 if (lazy_encoding)
                     gen_w_pt_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, j, k);
                 const CkksPlaintext& w_pt_rt = lazy_encoding ? gen_w_pt_rt : weight_pt[ct_idx][j][k];
-                auto w_pt = ls_compat::ringt_to_mul(ctx_copy, w_pt_rt, level_);
+                auto w_pt = CkksPlaintext::deserialize(w_pt_rt.serialize());
                 res = ctx_copy.mult(rotated_x[j][k], w_pt);
                 if (j == 0 && k == 0) {
                     s = move(res);
@@ -486,7 +486,7 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
                     gen_m_pt = generate_mask_pt_for_indices(ctx_copy, i);
                 }
                 const CkksPlaintext& m_pt_rt = lazy_encoding ? gen_m_pt : mask_pt[i];
-                auto m_pt = ls_compat::ringt_to_mul(ctx_copy, m_pt_rt, level_ - 1);
+                auto m_pt = CkksPlaintext::deserialize(m_pt_rt.serialize());
                 auto c_m = ctx_copy.mult(s, m_pt);
                 c_m = ctx_copy.rescale(c_m);
                 result_ct[ct_idx * n_block_per_ct + i] = ctx_copy.rotate(c_m, rot_step);
@@ -582,7 +582,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core_for_reduct_rot(Ckk
             for (int j = 0; j < weight_pt[ct_idx].size(); j++) {
                 for (int k = 0; k < weight_pt[ct_idx][j].size(); k++) {
                     auto& w_pt_rt = weight_pt[ct_idx][j][k];
-                    auto w_pt = ls_compat::ringt_to_mul(ctx_copy, w_pt_rt, level_);
+                    auto w_pt = CkksPlaintext::deserialize(w_pt_rt.serialize());
                     auto mult_res = ctx_copy.mult(rotated_x[j][k], w_pt);
                     if (j == 0 && k == 0) {
                         s = move(mult_res);
@@ -610,7 +610,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core_for_reduct_rot(Ckk
         for (int j = 0; j < weight_pt[ct_idx].size(); j++) {
             for (int k = 0; k < weight_pt[ct_idx][j].size(); k++) {
                 auto& w_pt_rt = weight_pt[ct_idx][j][k];
-                auto w_pt = ls_compat::ringt_to_mul(ctx_copy, w_pt_rt, level_);
+                auto w_pt = CkksPlaintext::deserialize(w_pt_rt.serialize());
                 auto mult_res = ctx_copy.mult(rotated_x[j][k], w_pt);
                 if (j == 0 && k == 0) {
                     s = move(mult_res);
@@ -643,7 +643,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core_for_reduct_rot(Ckk
                 // against the post_skip-layout mask_pt for now. reduct_rot has no
                 // prepare_weight function wired up, so this path is effectively dead.
                 auto& m_pt_rt = mask_pt[i];
-                auto m_pt = ls_compat::ringt_to_mul(ctx_copy, m_pt_rt, level_ - 1);
+                auto m_pt = CkksPlaintext::deserialize(m_pt_rt.serialize());
                 auto c_m_s = ctx_copy.mult(s_rots[steps[i]], m_pt);
                 result_ct[channel_out] = move(ctx_copy.rescale(c_m_s));
             }

@@ -176,7 +176,7 @@ ParUpperDiagonalPolyMultCt::run(CkksContext& ctx, const FeatureMatEncrypted& hal
     result.data.resize(total_cts());
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto one_mul = ls_compat::ringt_to_mul(ctx_copy, one_pt_[idx], level_);
+        auto one_mul = CkksPlaintext::deserialize(one_pt_[idx].serialize());
         auto x_scaled = ctx_copy.rescale(ctx_copy.mult(x.data[idx], one_mul));  // level L-1, scale q_{L-1}
         auto half_tanh_drop = ctx_copy.drop_level(half_tanh.data[idx]);
         auto half_plus = ctx_copy.add(half_tanh_drop, half_pt_[idx]);  // level L-1, scale D

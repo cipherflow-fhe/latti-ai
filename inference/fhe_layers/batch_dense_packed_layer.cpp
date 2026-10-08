@@ -257,8 +257,8 @@ void BatchDensePackedLayer::encode_diagonals(CkksContext& ctx,
         auto wrapping = shift_plaintext_right(build_diagonal(input_block, output_block, k, true), giant);
         auto now_ringt = ls_compat::encode_ringt(ctx, now, diagonal_scale);
         auto wrapping_ringt = ls_compat::encode_ringt(ctx, wrapping, diagonal_scale);
-        diagonal_now.push_back(ls_compat::ringt_to_mul(ctx, now_ringt, level_));
-        diagonal_wrap.push_back(ls_compat::ringt_to_mul(ctx, wrapping_ringt, level_));
+        diagonal_now.push_back(CkksPlaintext::deserialize(now_ringt.serialize()));
+        diagonal_wrap.push_back(CkksPlaintext::deserialize(wrapping_ringt.serialize()));
     }
 }
 

@@ -77,7 +77,7 @@ FeatureMatEncrypted BlockColMajorPolyActRNGamma::run(CkksContext& ctx, const Fea
     parallel_for(total_blocks, th_nums, ctx, [&](CkksContext& ctx_copy, int block_idx) {
         uint32_t bj = block_idx / num_block_rows_;
 
-        auto gamma_mul = ls_compat::ringt_to_mul(ctx_copy, gamma_pt_[bj], level_);
+        auto gamma_mul = CkksPlaintext::deserialize(gamma_pt_[bj].serialize());
         auto product = ctx_copy.mult(x.data[block_idx], gamma_mul);
         result.data[block_idx] = ctx_copy.rescale(product);
     });
@@ -217,11 +217,11 @@ FeatureMatEncrypted BlockColMajorPolyActRNPoly::run(CkksContext& ctx, const Feat
             auto x_sq = ctx_copy.rescale(ctx_copy.relinearize(x_sq_raw));
 
             // c2*x^2 -> level L-2, scale D
-            auto c2_mul = ls_compat::ringt_to_mul(ctx_copy, c2_pt_[bj], level_ - 1);
+            auto c2_mul = CkksPlaintext::deserialize(c2_pt_[bj].serialize());
             auto c2x2 = ctx_copy.rescale(ctx_copy.mult(x_sq, c2_mul));
 
             // c1*x -> level L-1, scale D
-            auto c1_mul = ls_compat::ringt_to_mul(ctx_copy, c1_pt_[bj], level_);
+            auto c1_mul = CkksPlaintext::deserialize(c1_pt_[bj].serialize());
             auto c1x = ctx_copy.rescale(ctx_copy.mult(x.data[block_idx], c1_mul));
             // Drop c1*x to level L-2
             auto c1x_drop = ctx_copy.drop_level(c1x);
@@ -244,10 +244,10 @@ FeatureMatEncrypted BlockColMajorPolyActRNPoly::run(CkksContext& ctx, const Feat
             // x_sq at level L-1
 
             // === Low part: c0 + c1*x + c2*x^2 -> level L-2, scale D ===
-            auto c2_mul = ls_compat::ringt_to_mul(ctx_copy, c2_pt_[bj], level_ - 1);
+            auto c2_mul = CkksPlaintext::deserialize(c2_pt_[bj].serialize());
             auto c2x2 = ctx_copy.rescale(ctx_copy.mult(x_sq, c2_mul));
 
-            auto c1_mul = ls_compat::ringt_to_mul(ctx_copy, c1_pt_[bj], level_);
+            auto c1_mul = CkksPlaintext::deserialize(c1_pt_[bj].serialize());
             auto c1x = ctx_copy.rescale(ctx_copy.mult(x.data[block_idx], c1_mul));
             auto c1x_drop = ctx_copy.drop_level(c1x);
 
@@ -256,10 +256,10 @@ FeatureMatEncrypted BlockColMajorPolyActRNPoly::run(CkksContext& ctx, const Feat
             // low at level L-2, scale D
 
             // === High part: c3*x + c4*x^2 -> level L-2, scale S_high ===
-            auto c4_mul = ls_compat::ringt_to_mul(ctx_copy, c4_pt_[bj], level_ - 1);
+            auto c4_mul = CkksPlaintext::deserialize(c4_pt_[bj].serialize());
             auto c4x2 = ctx_copy.rescale(ctx_copy.mult(x_sq, c4_mul));
 
-            auto c3_mul = ls_compat::ringt_to_mul(ctx_copy, c3_pt_[bj], level_);
+            auto c3_mul = CkksPlaintext::deserialize(c3_pt_[bj].serialize());
             auto c3x = ctx_copy.rescale(ctx_copy.mult(x.data[block_idx], c3_mul));
             auto c3x_drop = ctx_copy.drop_level(c3x);
 

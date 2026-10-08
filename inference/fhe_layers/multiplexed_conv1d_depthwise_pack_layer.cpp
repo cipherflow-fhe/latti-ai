@@ -321,11 +321,11 @@ vector<CkksCiphertext> MultiplexedDWConv1DPackedLayer::run_core(CkksContext& ctx
             CkksCiphertext product;
             if (weight_pt.empty()) {
                 auto w_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, k);
-                auto w = ls_compat::ringt_to_mul(ctx_copy, w_rt, level_);
+                auto w = CkksPlaintext::deserialize(w_rt.serialize());
                 product = ctx_copy.mult(rotated_x[ct_idx][k], w);
             } else {
                 const auto& w_rt = weight_pt[ct_idx][k];
-                auto w = ls_compat::ringt_to_mul(ctx_copy, w_rt, level_);
+                auto w = CkksPlaintext::deserialize(w_rt.serialize());
                 product = ctx_copy.mult(rotated_x[ct_idx][k], w);
             }
 
@@ -386,10 +386,10 @@ vector<CkksCiphertext> MultiplexedDWConv1DPackedLayer::run_core(CkksContext& ctx
             CkksCiphertext masked;
             if (block_select_pt.empty()) {
                 auto bs_pt = generate_select_tensor_pt_for_index(ctx_copy, local_ch);
-                auto bs_pt_rt = ls_compat::ringt_to_mul(ctx_copy, bs_pt, level_ - 1);
+                auto bs_pt_rt = CkksPlaintext::deserialize(bs_pt.serialize());
                 masked = ctx_copy.mult(result[ct_idx], bs_pt_rt);
             } else {
-                auto bs_pt = ls_compat::ringt_to_mul(ctx_copy, block_select_pt[local_ch], level_ - 1);
+                auto bs_pt = CkksPlaintext::deserialize(block_select_pt[local_ch].serialize());
                 masked = ctx_copy.mult(result[ct_idx], bs_pt);
             }
             masked = ctx_copy.rescale(masked);

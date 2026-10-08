@@ -252,7 +252,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
                 for (int k = 0; k < kernel_shape_[0] * kernel_shape_[1]; k++) {
                     if (weight_pt.empty()) {
                         auto w_pt_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, j, k + base_idx);
-                        auto w_pt = ls_compat::ringt_to_mul(ctx_copy, w_pt_rt, level_);
+                        auto w_pt = CkksPlaintext::deserialize(w_pt_rt.serialize());
                         lattisense::CkksCiphertext one_mult_res =
                             ctx_copy.mult(rotated_x[j][k + base_idx], w_pt);
                         if (j == 0 && k == 0) {
@@ -262,7 +262,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
                         }
                     } else {
                         lattisense::CkksPlaintext& w_pt_rt = weight_pt[ct_idx][j][k + base_idx];
-                        lattisense::CkksPlaintext w_pt = ls_compat::ringt_to_mul(ctx_copy, w_pt_rt, level_);
+                        lattisense::CkksPlaintext w_pt = CkksPlaintext::deserialize(w_pt_rt.serialize());
                         lattisense::CkksCiphertext one_mult_res =
                             ctx_copy.mult(rotated_x[j][k + base_idx], w_pt);
                         if (j == 0 && k == 0) {
@@ -293,7 +293,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayer::run_core(CkksContext& ctx,
 
         // Step 1: mask all channels with the shared repack mask
         parallel_for(n_out_channel_, th_nums, ctx, [&](CkksContext& ctx_copy, int c) {
-            auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, repack_mask_pt, level_ - 1);
+            auto mask_mul = CkksPlaintext::deserialize(repack_mask_pt.serialize());
             temp_res[c] = ctx_copy.mult(temp_res[c], mask_mul);
         });
 

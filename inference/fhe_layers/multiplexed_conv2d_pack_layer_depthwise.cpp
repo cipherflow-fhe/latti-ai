@@ -265,11 +265,11 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksConte
             CkksCiphertext r_tmp;
             if (weight_pt.empty()) {
                 auto w_pt_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, k);
-                auto w_pt = ls_compat::ringt_to_mul(ctx_copy, w_pt_rt, level_);
+                auto w_pt = CkksPlaintext::deserialize(w_pt_rt.serialize());
                 r_tmp = ctx_copy.mult(rotated_x[ct_idx][k], w_pt);
             } else {
                 auto& w_pt_rt = weight_pt[ct_idx][k];
-                auto w_pt = ls_compat::ringt_to_mul(ctx_copy, w_pt_rt, level_);
+                auto w_pt = CkksPlaintext::deserialize(w_pt_rt.serialize());
                 r_tmp = ctx_copy.mult(rotated_x[ct_idx][k], w_pt);
             }
             if (k == 0) {
@@ -311,7 +311,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksConte
                     gen_m_pt = generate_mask_pt_for_indices(ctx_copy, ct_idx, i);
                 }
                 const CkksPlaintext& m_pt_rt = lazy_mask ? gen_m_pt : mask_pt[ct_idx * n_channel_per_ct + i];
-                auto m_pt = ls_compat::ringt_to_mul(ctx_copy, m_pt_rt, level_ - 1);
+                auto m_pt = CkksPlaintext::deserialize(m_pt_rt.serialize());
                 auto c_m = ctx_copy.mult(s, m_pt);
                 c_m = ctx_copy.rescale(c_m);
                 result_ct[ct_idx * n_channel_per_ct + i] = ctx_copy.rotate(c_m, steps[i / skip_[0]]);

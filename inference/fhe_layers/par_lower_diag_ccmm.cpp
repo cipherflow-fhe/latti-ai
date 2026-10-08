@@ -245,7 +245,7 @@ ParLowerDiagCCMM::replicate_lower_diag(CkksContext& ctx, const std::vector<CkksC
     assert(mask_idx < replication_mask_pt_.size());
 
     double default_scale = param_.default_scale();
-    auto mask_mul = ls_compat::ringt_to_mul(ctx, replication_mask_pt_[mask_idx], level_);
+    auto mask_mul = CkksPlaintext::deserialize(replication_mask_pt_[mask_idx].serialize());
     auto replicated = ctx.rescale(ctx.mult(B_cts[ct_idx], mask_mul));
     for (uint32_t step = 1; step < c_; step <<= 1) {
         replicated = ctx.add(replicated, ctx.rotate(replicated, (int)(segment_len_ * step)));
@@ -266,7 +266,7 @@ CkksCiphertext ParLowerDiagCCMM::apply_route_mask(CkksContext& ctx,
                                                   const CkksCiphertext& product_level_l_minus_2,
                                                   const CkksPlaintext& mask_pt) const {
     double default_scale = param_.default_scale();
-    auto mask_mul = ls_compat::ringt_to_mul(ctx, mask_pt, level_ - 2);
+    auto mask_mul = CkksPlaintext::deserialize(mask_pt.serialize());
     return ctx.rescale(ctx.mult(product_level_l_minus_2, mask_mul));
 }
 

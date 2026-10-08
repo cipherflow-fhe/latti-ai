@@ -166,7 +166,7 @@ vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const Feat
             auto rotated = ctx_copy.rotate(summed, (int)step);
             summed = ctx_copy.add(summed, rotated);
         }
-        auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, h0_mask_pt_, summed.level());
+        auto mask_mul = CkksPlaintext::deserialize(h0_mask_pt_.serialize());
         auto masked = ctx_copy.mult(summed, mask_mul);
         auto masked_rescaled = ctx_copy.rescale(masked);
         CkksCiphertext replicated = masked_rescaled.copy();
@@ -208,7 +208,7 @@ vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const Feat
             auto rotated = ctx_copy.rotate(summed, (int)step);
             summed = ctx_copy.add(summed, rotated);
         }
-        auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, h0_mask_pt_, summed.level());
+        auto mask_mul = CkksPlaintext::deserialize(h0_mask_pt_.serialize());
         auto masked = ctx_copy.mult(summed, mask_mul);
         auto masked_rescaled = ctx_copy.rescale(masked);
         CkksCiphertext replicated = masked_rescaled.copy();
@@ -223,7 +223,7 @@ vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const Feat
     // Step 6: mean = sum_x * pt(1/norm_dim) -> L-2, exact D
     vector<CkksCiphertext> mean_cts(num_block_rows_);
     parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto pt_inv_n = ls_compat::ringt_to_mul(ctx_copy, inv_n_pt_, level_ - 1);
+        auto pt_inv_n = CkksPlaintext::deserialize(inv_n_pt_.serialize());
         auto p = ctx_copy.mult(sum_x[bi], pt_inv_n);
         mean_cts[bi] = ctx_copy.rescale(p);
     });
@@ -236,7 +236,7 @@ vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const Feat
         auto prod = ctx_copy.mult(mean_cts[bi], mean_cts[bi]);
         mean_sq[bi] = ctx_copy.rescale(ctx_copy.relinearize(prod));
 
-        auto pt_inv_n = ls_compat::ringt_to_mul(ctx_copy, inv_n_pt_, level_ - 2);
+        auto pt_inv_n = CkksPlaintext::deserialize(inv_n_pt_.serialize());
         auto p = ctx_copy.mult(sum_x_sq_row[bi], pt_inv_n);
         E_x_sq[bi] = ctx_copy.rescale(p);
     });
@@ -250,7 +250,7 @@ vector<CkksCiphertext> ParBlockColMajorLNStats::run(CkksContext& ctx, const Feat
     // Step 9: a = var * inv_var + eps*inv_var
     vector<CkksCiphertext> a_cts(num_block_rows_);
     parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto pt_iv = ls_compat::ringt_to_mul(ctx_copy, iv_pt_, level_ - 3);
+        auto pt_iv = CkksPlaintext::deserialize(iv_pt_.serialize());
         auto p = ctx_copy.mult(var_cts[bi], pt_iv);
         a_cts[bi] = ctx_copy.rescale(p);
         a_cts[bi] = ctx_copy.add(a_cts[bi], eps_add_pt_);
@@ -388,7 +388,7 @@ vector<CkksCiphertext> ParBlockColMajorLNXCentered::run(CkksContext& ctx, const 
             auto rotated = ctx_copy.rotate(summed, (int)step);
             summed = ctx_copy.add(summed, rotated);
         }
-        auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, h0_mask_pt_, summed.level());
+        auto mask_mul = CkksPlaintext::deserialize(h0_mask_pt_.serialize());
         auto masked = ctx_copy.mult(summed, mask_mul);
         auto masked_rescaled = ctx_copy.rescale(masked);
         CkksCiphertext replicated = masked_rescaled.copy();
@@ -403,7 +403,7 @@ vector<CkksCiphertext> ParBlockColMajorLNXCentered::run(CkksContext& ctx, const 
     // Step 4: mean = sum_x * pt(1/norm_dim) -> L-2, exact D
     vector<CkksCiphertext> mean_cts(num_block_rows_);
     parallel_for(num_block_rows_, th_nums, ctx, [&](CkksContext& ctx_copy, int bi) {
-        auto pt_inv_n = ls_compat::ringt_to_mul(ctx_copy, inv_n_pt_, level_ - 1);
+        auto pt_inv_n = CkksPlaintext::deserialize(inv_n_pt_.serialize());
         auto p = ctx_copy.mult(sum_x[bi], pt_inv_n);
         mean_cts[bi] = ctx_copy.rescale(p);
     });
@@ -490,10 +490,10 @@ vector<CkksCiphertext> ParBlockColMajorLNMinimaxInit::run(CkksContext& ctx, cons
         auto a_sq_raw = ctx_copy.mult(a_cts[bi], a_cts[bi]);
         auto a_sq = ctx_copy.rescale(ctx_copy.relinearize(a_sq_raw));
 
-        auto c2_mul = ls_compat::ringt_to_mul(ctx_copy, c2_norm_pt_, level_ - 1);
+        auto c2_mul = CkksPlaintext::deserialize(c2_norm_pt_.serialize());
         auto c2a2 = ctx_copy.rescale(ctx_copy.mult(a_sq, c2_mul));
 
-        auto c1_mul = ls_compat::ringt_to_mul(ctx_copy, c1_pt_, level_);
+        auto c1_mul = CkksPlaintext::deserialize(c1_pt_.serialize());
         auto c1a = ctx_copy.rescale(ctx_copy.mult(a_cts[bi], c1_mul));
 
         auto c1a_drop = ctx_copy.drop_level(c1a);
@@ -584,7 +584,7 @@ vector<CkksCiphertext> ParBlockColMajorLNGoldschmidt::run(CkksContext& ctx,
         auto ya_yy = ctx_copy.rescale(ctx_copy.relinearize(ya_yy_raw));
 
         // Step 3: 3*y (pt*ct) -> level_-1, scale S_prod
-        auto three_mul = ls_compat::ringt_to_mul(ctx_copy, three_pt_, level_);
+        auto three_mul = CkksPlaintext::deserialize(three_pt_.serialize());
         auto three_y_raw = ctx_copy.mult(y_cts[bi], three_mul);
         auto three_y = ctx_copy.rescale(three_y_raw);
         // Drop 3*y from level_-1 to level_-2 to match (y*a)*(y*y)
@@ -594,7 +594,7 @@ vector<CkksCiphertext> ParBlockColMajorLNGoldschmidt::run(CkksContext& ctx,
         auto diff = ctx_copy.sub(three_y_drop, ya_yy);
 
         // Step 5: 0.5 * diff (normalizing pt*ct -> exact D at level_-3)
-        auto half_mul = ls_compat::ringt_to_mul(ctx_copy, half_norm_pt_, level_ - 2);
+        auto half_mul = CkksPlaintext::deserialize(half_norm_pt_.serialize());
         auto half_raw = ctx_copy.mult(diff, half_mul);
         y_new[bi] = ctx_copy.rescale(half_raw);
     });
@@ -750,7 +750,7 @@ FeatureMatEncrypted ParBlockColMajorLNAffine::run(CkksContext& ctx,
         uint32_t bi = block_idx % num_block_rows_;
 
         uint32_t gamma_idx = ct_idx;
-        auto gamma_mul = ls_compat::ringt_to_mul(ctx_copy, gamma_pt_[gamma_idx], y_level_);
+        auto gamma_mul = CkksPlaintext::deserialize(gamma_pt_[gamma_idx].serialize());
         auto yw = ctx_copy.rescale(ctx_copy.mult(y_cts[bi], gamma_mul));
 
         auto xc = x_centered[ct_idx].copy();

@@ -214,12 +214,12 @@ void Conv1DPackedLayer::mult_add(CkksContext* ctx,
                     // Lazy mode: generate weight on-demand
                     CkksPlaintext w_pt_rt =
                         generate_weight_pt_for_indices(*ctx, packed_out_channel_idx, in_channel_idx, kernel_idx);
-                    auto w_pt = ls_compat::ringt_to_mul(*ctx, w_pt_rt, level_);
+                    auto w_pt = CkksPlaintext::deserialize(w_pt_rt.serialize());
                     product = ctx->mult(x_ct, w_pt);
                 } else {
                     // Normal mode: use pre-generated weight
                     const auto& w_pt_rt = weight_pt[packed_out_channel_idx][in_channel_idx][kernel_idx];
-                    auto w_pt = ls_compat::ringt_to_mul(*ctx, w_pt_rt, level_);
+                    auto w_pt = CkksPlaintext::deserialize(w_pt_rt.serialize());
                     product = ctx->mult(x_ct, w_pt);
                 }
 

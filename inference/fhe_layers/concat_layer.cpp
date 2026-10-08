@@ -156,7 +156,7 @@ Feature2DEncrypted ConcatLayer::run_multiple_inputs_uneven(CkksContext& ctx,
         uint32_t src_ct_idx = local_ch / n_channel_per_ct;
 
         // Use pre-computed mask plaintext
-        CkksPlaintext mask_mul = ls_compat::ringt_to_mul(ctx, mask_pt[global_ch], level);
+        CkksPlaintext mask_mul = CkksPlaintext::deserialize(mask_pt[global_ch].serialize());
         masked_cts[global_ch] = ctx.mult(inputs[input_idx].data[src_ct_idx], mask_mul);
     }
 

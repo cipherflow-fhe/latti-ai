@@ -285,9 +285,9 @@ vector<CkksCiphertext> ParUpperDiagonalPoly::run_core_stockmeyer(CkksContext& ct
 
             if (stockmeyer_weight_pt_.empty()) {
                 auto coeff_pt_rt = generate_weight_pt_for_stockmeyer(ctx_copy, coeff_idx, x_idx);
-                return ls_compat::ringt_to_mul(ctx_copy, coeff_pt_rt, level);
+                return CkksPlaintext::deserialize(coeff_pt_rt.serialize());
             }
-            return ls_compat::ringt_to_mul(ctx_copy, stockmeyer_weight_pt_[coeff_idx][x_idx], level);
+            return CkksPlaintext::deserialize(stockmeyer_weight_pt_[coeff_idx][x_idx].serialize());
         };
 
         auto add_const_coeff = [&](const CkksCiphertext& acc, int coeff_idx) -> CkksCiphertext {
@@ -546,9 +546,9 @@ ParUpperDiagonalPoly::run_core_stockmeyer_horner(CkksContext& ctx, const vector<
 
             if (stockmeyer_horner_weight_pt_.empty()) {
                 auto coeff_pt_rt = generate_weight_pt_for_stockmeyer_horner(ctx_copy, coeff_idx, x_idx);
-                return ls_compat::ringt_to_mul(ctx_copy, coeff_pt_rt, level);
+                return CkksPlaintext::deserialize(coeff_pt_rt.serialize());
             }
-            return ls_compat::ringt_to_mul(ctx_copy, stockmeyer_horner_weight_pt_[coeff_idx][x_idx], level);
+            return CkksPlaintext::deserialize(stockmeyer_horner_weight_pt_[coeff_idx][x_idx].serialize());
         };
 
         auto add_const_coeff = [&](const CkksCiphertext& acc, int coeff_idx) -> CkksCiphertext {

@@ -117,7 +117,7 @@ CkksCiphertext ParLowerDiagTranspose::apply_mask(CkksContext& ctx,
                                                  const CkksCiphertext& input_level_l,
                                                  const CkksPlaintext& mask_pt) const {
     double default_scale = param_.default_scale();
-    auto mask_mul = ls_compat::ringt_to_mul(ctx, mask_pt, level_);
+    auto mask_mul = CkksPlaintext::deserialize(mask_pt.serialize());
     return ctx.rescale(ctx.mult(input_level_l, mask_mul));
 }
 

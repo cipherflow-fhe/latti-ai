@@ -236,7 +236,7 @@ std::vector<CkksCiphertext> ParLowerDiagPCMM::run_core(CkksContext& ctx,
                 for (uint32_t j = 0; j < m_c_; j++) {
                     for (uint32_t ell = 0; ell < c_; ell++) {
                         uint32_t pt_idx = (j * c_ + ell) * m_c_ + r;
-                        auto pt_mul = ls_compat::ringt_to_mul(ctx, pt_A_[weight_mb][i][pt_idx], level_);
+                        auto pt_mul = CkksPlaintext::deserialize(pt_A_[weight_mb][i][pt_idx].serialize());
                         auto product = ctx.mult(ct_Br[j][ell], pt_mul);
                         if (!init) {
                             acc = std::move(product);
@@ -255,7 +255,7 @@ std::vector<CkksCiphertext> ParLowerDiagPCMM::run_core(CkksContext& ctx,
             CkksCiphertext acc = ctx.drop_level(ct_ir[0][r]);
             for (uint32_t i_idx = 0; i_idx < H_ - 1; i_idx++) {
                 uint32_t i = i_idx + 1;
-                auto mask_mul = ls_compat::ringt_to_mul(ctx, mask_wrap_pt_[i_idx], level_ - 1);
+                auto mask_mul = CkksPlaintext::deserialize(mask_wrap_pt_[i_idx].serialize());
                 auto ct_R = ctx.rescale(ctx.mult(ct_ir[i][r], mask_mul));  // level L-2, scale
                                                                                                     // D
                 auto ct_i_drop = ctx.drop_level(ct_ir[i][r]);

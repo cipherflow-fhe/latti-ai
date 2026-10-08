@@ -481,10 +481,10 @@ std::vector<CkksCiphertext> PolyRelu2D::run_core_horner(CkksContext& ctx, const 
     parallel_for(x.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int x_idx) {
         if (weight_pt.empty()) {
             auto w_pt_order_rt = generate_weight_pt_for_non_absorb_indices(ctx_copy, order, x_idx);
-            auto w_pt_order = ls_compat::ringt_to_mul(ctx_copy, w_pt_order_rt, x[x_idx].level());
+            auto w_pt_order = CkksPlaintext::deserialize(w_pt_order_rt.serialize());
             result[x_idx] = ctx_copy.rescale(ctx_copy.mult(x[x_idx], w_pt_order));
         } else {
-            auto w_pt = ls_compat::ringt_to_mul(ctx_copy, weight_pt[order][x_idx], x[x_idx].level());
+            auto w_pt = CkksPlaintext::deserialize(weight_pt[order][x_idx].serialize());
             result[x_idx] =
                 ctx_copy.rescale(ctx_copy.mult(x[x_idx], w_pt));
         }

@@ -108,7 +108,7 @@ CkksCiphertext BlockColMajorTranspose::transpose_on_ct(CkksContext& ctx, const C
         int rot_amount = (((int)(d_ - 1) * k) % (int)chunk_size_ + (int)chunk_size_) % (int)chunk_size_;
         CkksCiphertext rotated = (rot_amount == 0) ? ct.copy() : ctx.rotate(ct, rot_amount);
 
-        auto diag_mul = ls_compat::ringt_to_mul(ctx, transpose_diag_pt_[diag_idx], level_);
+        auto diag_mul = CkksPlaintext::deserialize(transpose_diag_pt_[diag_idx].serialize());
         auto product = ctx.mult(rotated, diag_mul);
 
         if (diag_idx == 0) {

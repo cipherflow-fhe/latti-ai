@@ -351,10 +351,10 @@ std::vector<CkksCiphertext> PolyReluBase::run_core_bsgs(CkksContext& ctx, const 
                     CkksCiphertext term;
                     if (weight_pt.empty()) {
                         auto coeff_pt_rt = generate_weight_pt_for_bsgs(ctx_copy, idx, x_idx);
-                        auto coeff_pt = ls_compat::ringt_to_mul(ctx_copy, coeff_pt_rt, x_copy.level());
+                        auto coeff_pt = CkksPlaintext::deserialize(coeff_pt_rt.serialize());
                         term = ctx_copy.rescale(ctx_copy.mult(x_copy, coeff_pt));
                     } else {
-                        auto coeff_pt = ls_compat::ringt_to_mul(ctx_copy, weight_pt[idx][x_idx], x_copy.level());
+                        auto coeff_pt = CkksPlaintext::deserialize(weight_pt[idx][x_idx].serialize());
                         term = ctx_copy.rescale(ctx_copy.mult(x_copy, coeff_pt));
                     }
 
@@ -418,10 +418,10 @@ std::vector<CkksCiphertext> PolyReluBase::run_core_bsgs(CkksContext& ctx, const 
                 if (const_idx <= order) {
                     if (weight_pt.empty()) {
                         auto coeff_pt_rt = generate_weight_pt_for_bsgs(ctx_copy, const_idx, x_idx);
-                        auto coeff_pt = ls_compat::ringt_to_mul(ctx_copy, coeff_pt_rt, x_giant.level());
+                        auto coeff_pt = CkksPlaintext::deserialize(coeff_pt_rt.serialize());
                         term = ctx_copy.rescale(ctx_copy.mult(x_giant, coeff_pt));
                     } else {
-                        auto coeff_pt = ls_compat::ringt_to_mul(ctx_copy, weight_pt[const_idx][x_idx], x_giant.level());
+                        auto coeff_pt = CkksPlaintext::deserialize(weight_pt[const_idx][x_idx].serialize());
                         term = ctx_copy.rescale(ctx_copy.mult(x_giant, coeff_pt));
                     }
                 }

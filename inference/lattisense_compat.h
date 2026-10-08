@@ -39,13 +39,6 @@ inline CkksPlaintext encode_ringt(CkksContext& ctx,
     return pt;
 }
 
-// ringt_to_mul：v6 中 mult(ct, pt) 自动处理 ringt，内部做一次序列化-反序列化拷贝
-inline CkksPlaintext ringt_to_mul(CkksContext& /*ctx*/, const CkksPlaintext& pt, int /*level*/) {
-    return CkksPlaintext::deserialize(pt.serialize());
-}
-inline CkksPlaintext ringt_to_mul(const CkksPlaintext& pt, int /*level*/) {
-    return CkksPlaintext::deserialize(pt.serialize());
-}
 
 // encode 三参：返回 CkksPlaintext（关键：返回值，不是 void）
 inline CkksPlaintext encode(CkksContext& ctx,

@@ -150,7 +150,7 @@ Feature1DEncrypted Avgpool1DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
         for (uint32_t i = 0; i < n_valid; i++) {
             int out_channel_pos = (idx * x.n_channel_per_ct + i) % (x.n_channel_per_ct * stride);
             auto& pt_ringt = select_tensor_pt[out_channel_pos];
-            auto pt = ls_compat::ringt_to_mul(ctx_copy, pt_ringt, level_);
+            auto pt = CkksPlaintext::deserialize(pt_ringt.serialize());
             lattisense::CkksCiphertext c_m_s = ctx_copy.mult(s_rots[steps[i]], pt);
             result_tmp[idx * x.n_channel_per_ct + i] =
                 move(ctx_copy.rescale(c_m_s));

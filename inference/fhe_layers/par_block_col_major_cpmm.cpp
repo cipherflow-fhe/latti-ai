@@ -299,7 +299,7 @@ CkksCiphertext ParBlockColMajorCPMM::block_mult_cpmm(CkksContext& ctx,
 
         for (uint32_t b = 0; b < b_end; b++) {
             uint32_t k = g * bsgs_bs_ + b;
-            auto diag_mul = ls_compat::ringt_to_mul(ctx, diag_pt_[megablock][g_input][bp][k], level_);
+            auto diag_mul = CkksPlaintext::deserialize(diag_pt_[megablock][g_input][bp][k].serialize());
             auto product = ctx.mult(baby_rots[b], diag_mul);
 
             if (!inner_init) {
@@ -381,7 +381,7 @@ std::vector<CkksCiphertext> ParBlockColMajorCPMM::run_core(CkksContext& ctx,
             }
 
             // Step 3: mask h=0 (L-1 -> L-2)
-            auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, mask_h0_pt_, level_ - 1);
+            auto mask_mul = CkksPlaintext::deserialize(mask_h0_pt_.serialize());
             full_sum = ctx_copy.rescale(ctx_copy.mult(full_sum, mask_mul));
 
             // Step 4: rotate to output head position (generalized for G > 1)

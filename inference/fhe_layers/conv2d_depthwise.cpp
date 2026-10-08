@@ -91,11 +91,11 @@ void Conv2DPackedDepthwiseLayer::mult_add(CkksContext* ctx,
                 CkksCiphertext product;
                 if (weight_pt_.empty()) {
                     CkksPlaintext w_pt_rt = generate_weight_pt_for_indices(*ctx, packed_out_ct_idx, kernel_idx);
-                    auto w_pt = ls_compat::ringt_to_mul(*ctx, w_pt_rt, level_);
+                    auto w_pt = CkksPlaintext::deserialize(w_pt_rt.serialize());
                     product = ctx->mult(x_ct, w_pt);
                 } else {
                     const CkksPlaintext& w_pt_rt = weight_pt_[packed_out_ct_idx][kernel_idx];
-                    auto w_pt = ls_compat::ringt_to_mul(*ctx, w_pt_rt, level_);
+                    auto w_pt = CkksPlaintext::deserialize(w_pt_rt.serialize());
                     product = ctx->mult(x_ct, w_pt);
                 }
                 if (ki == 0 && kj == 0) {

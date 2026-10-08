@@ -269,7 +269,7 @@ vector<CkksCiphertext> DensePackedLayer::run_core_mult_pack(CkksContext& ctx, co
                 } else {
                     w_ptr = &weight_pt[packed_out_feature_idx][in_feature_idx];
                 }
-                auto w_pt = ls_compat::ringt_to_mul(ctx_copy, *w_ptr, level_);
+                auto w_pt = CkksPlaintext::deserialize(w_ptr->serialize());
                 auto p = ctx_copy.mult(x_ct, w_pt);
                 if (in_feature_idx == 0) {
                     s = move(p);
@@ -348,7 +348,7 @@ vector<CkksCiphertext> DensePackedLayer::run_core_0d(CkksContext& ctx, const vec
                     } else {
                         w_ptr = &weight_pt[out_idx][weight_idx];
                     }
-                    auto w_pt = ls_compat::ringt_to_mul(ctx_copy, *w_ptr, level_);
+                    auto w_pt = CkksPlaintext::deserialize(w_ptr->serialize());
                     CkksCiphertext p = ctx_copy.mult(baby_rots[ct_in][b], w_pt);
 
                     if (!inner_init) {
@@ -541,7 +541,7 @@ Feature0DEncrypted DensePackedLayer::run_1d_multiplexed(CkksContext& ctx, const 
             } else {
                 w_ptr = &weight_pt[out_group][rot_idx];
             }
-            auto w_pt = ls_compat::ringt_to_mul(ctx_copy, *w_ptr, level_);
+            auto w_pt = CkksPlaintext::deserialize(w_ptr->serialize());
             auto p = ctx_copy.mult(x_ct, w_pt);
             if (rot_idx == 0) {
                 s = move(p);

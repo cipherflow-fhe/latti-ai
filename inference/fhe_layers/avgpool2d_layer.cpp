@@ -224,7 +224,7 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
         for (uint32_t i = 0; i < n_valid; i++) {
             int out_channel_pos = (idx * x.n_channel_per_ct + i) % (x.n_channel_per_ct * stride[0] * stride[1]);
             auto& pt_ringt = select_tensor_pt[out_channel_pos];
-            auto pt = ls_compat::ringt_to_mul(ctx_copy, pt_ringt, level_);
+            auto pt = CkksPlaintext::deserialize(pt_ringt.serialize());
             lattisense::CkksCiphertext c_m_s = ctx_copy.mult(s_rots[steps[i]], pt);
             result_tmp[idx * x.n_channel_per_ct + i] =
                 move(ctx_copy.rescale(c_m_s));
@@ -327,7 +327,7 @@ Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x,
 
         // Step 3a: mask all channels with the shared repack mask
         parallel_for(n_channel_, th_nums, ctx, [&](CkksContext& ctx_copy, int c) {
-            auto mask_mul = ls_compat::ringt_to_mul(ctx_copy, repack_mask_pt, level_);
+            auto mask_mul = CkksPlaintext::deserialize(repack_mask_pt.serialize());
             res[c] = ctx_copy.mult(res[c], mask_mul);
         });
 

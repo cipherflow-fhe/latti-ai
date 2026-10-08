@@ -138,11 +138,11 @@ Feature2DEncrypted UpsampleNearestLayer::run(CkksContext& ctx, const Feature2DEn
             // Lazy mode: generate plaintext on-demand if select_tensor_pt is empty
             if (select_tensor_pt.empty()) {
                 auto pt_ringt = generate_select_tensor_pt_for_index(ctx_copy, out_channel_pos);
-                auto pt = ls_compat::ringt_to_mul(ctx_copy, pt_ringt, level_);
+                auto pt = CkksPlaintext::deserialize(pt_ringt.serialize());
                 c_m_s = ctx_copy.mult(s_rots[steps[i]], pt);
             } else {
                 auto& pt_ringt = select_tensor_pt[out_channel_pos];
-                auto pt = ls_compat::ringt_to_mul(ctx_copy, pt_ringt, level_);
+                auto pt = CkksPlaintext::deserialize(pt_ringt.serialize());
                 c_m_s = ctx_copy.mult(s_rots[steps[i]], pt);
             }
 
