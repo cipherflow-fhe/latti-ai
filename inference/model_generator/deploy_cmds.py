@@ -301,7 +301,7 @@ def gen_custom_task(
     def _argument_level(nodes):
         for node in _flatten_nodes(nodes):
             if hasattr(node, 'level'):
-                return int(node.level)
+                return int(node.metadata.level)
         return None
 
     def _parameter_signature(effective_id, source_id, nodes):
@@ -314,7 +314,7 @@ def gen_custom_task(
             'source_id': source_id,
             'type': first.type.value if isinstance(first.type, DataType) else first.type,
             'size': _shape(nodes),
-            'level': first.level,
+            'level': first.metadata.level,
         }
 
     def _append_parameter_arg(arg_id, nodes):
@@ -965,8 +965,8 @@ def gen_custom_task(
             dim = feat['dim']
 
             feature_id_in_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
-            drop_level_n = feature_id_in_nodes[0].level - level
-            if level < feature_id_in_nodes[0].level:
+            drop_level_n = feature_id_in_nodes[0].metadata.level - level
+            if level < feature_id_in_nodes[0].metadata.level:
                 feature_id_in_nodes = [drop_level(node, drop_level_n) for node in feature_id_in_nodes]
 
             if dim == 0:
@@ -981,7 +981,7 @@ def gen_custom_task(
                     input_args.append(Argument(f'{layer_id}', [poly_data_source]))
                 elif parameter_mode == 'encrypted_offline':
                     weight_ct = polyrelu.make_param_ct_nodes(
-                        layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].level
+                        layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].metadata.level
                     )
                     for i in range(len(weight_ct)):
                         _append_parameter_arg(f'poly_reluw_{layer_id}_{i}', weight_ct[i])
@@ -1004,7 +1004,7 @@ def gen_custom_task(
                         )
                     elif parameter_mode == 'encrypted_offline':
                         weight_ct = polyrelu.make_param_ct_nodes(
-                            layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].level
+                            layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].metadata.level
                         )
                         for i in range(len(weight_ct)):
                             _append_parameter_arg(f'poly_reluw_{layer_id}_{i}', weight_ct[i])
@@ -1021,7 +1021,7 @@ def gen_custom_task(
                         )
                     elif parameter_mode == 'encrypted_offline':
                         weight_ct = polyrelu.make_param_ct_nodes(
-                            layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].level
+                            layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].metadata.level
                         )
                         for i in range(len(weight_ct)):
                             _append_parameter_arg(f'poly_reluw_{layer_id}_{i}', weight_ct[i])
@@ -1041,7 +1041,7 @@ def gen_custom_task(
                     input_args.append(Argument(f'{layer_id}', [poly_data_source]))
                 elif parameter_mode == 'encrypted_offline':
                     weight_ct = polyrelu.make_param_ct_nodes(
-                        layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].level
+                        layer_id, len(feature_id_in_nodes), feature_id_in_nodes[0].metadata.level
                     )
                     for i in range(len(weight_ct)):
                         _append_parameter_arg(f'poly_reluw_{layer_id}_{i}', weight_ct[i])
@@ -1214,9 +1214,17 @@ def gen_custom_task(
             level_out = int(config_info['feature'][btp_out_fid]['level'])
             layer_output_nodes = []
             for node in feature_id_to_nodes_map[layer_input_feature_ids[0]]:
-                if node.level > 0:
-                    node = drop_level(node, node.level)
-                layer_output_nodes.append(bootstrap(node, output_level=level_out))
+                if node.metadata.level > 0:
+                    node = drop_level(node, node.metadata.level)
+                btp_node = bootstrap(node)
+                if btp_node.metadata.level > level_out:
+                    btp_node = drop_level(btp_node, btp_node.metadata.level - level_out)
+                elif btp_node.metadata.level < level_out:
+                    print(
+                        f"[bootstrap] warning: btp output level {btp_node.metadata.level} "
+                        f"< target level_out {level_out} at layer {layer_id}"
+                    )
+                layer_output_nodes.append(btp_node)
             feature_id_to_nodes_map.update({btp_out_fid: layer_output_nodes})
 
         elif layer_config['type'] in ('add', 'add2d'):
@@ -2045,7 +2053,6 @@ def gen_custom_task(
         output_args=output_args,
         offline_input_args=offline_input_args,
         output_instruction_path=output_dir,
-        fpga_acc=False,
         extra_signature_fields=(
             {'encrypted_parameters': encrypted_parameter_signature} if runtime_lazy_parameters else None
         ),

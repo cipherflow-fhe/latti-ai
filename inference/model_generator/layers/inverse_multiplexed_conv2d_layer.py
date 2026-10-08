@@ -298,7 +298,7 @@ class InverseMultiplexedConv2DLayer:
                     out_ct_idx = ct_idx * output_step0 * output_step1 + r_i2 * output_step1 + r_j2
                     base_idx = (r_i2 * output_step1 + r_j2) * self.kernel_shape[0] * self.kernel_shape[1]
                     # Use the level of the first rotated_x as reference, ensuring all w_pt have consistent level
-                    reference_level = rotated_x[0][base_idx].level
+                    reference_level = rotated_x[0][base_idx].metadata.level
                     partial_sum: DataNode | None = None
                     x_ct_list = []
                     w_pt_list = []

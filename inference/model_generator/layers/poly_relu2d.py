@@ -136,10 +136,10 @@ class PolyRelu2D(PolyReluBase):
                 res = rescale(mult(x[i], weight_pt[self.order][i]))
                 for order_idx in range(self.order - 1, 0, -1):
                     res = add(res, weight_pt[order_idx][i])
-                    if res.level > x[i].level:
-                        res = drop_level(res, res.level - x[i].level)
-                    if res.level < x[i].level:
-                        x[i] = drop_level(x[i], x[i].level - res.level)
+                    if res.metadata.level > x[i].metadata.level:
+                        res = drop_level(res, res.metadata.level - x[i].metadata.level)
+                    if res.metadata.level < x[i].metadata.level:
+                        x[i] = drop_level(x[i], x[i].metadata.level - res.metadata.level)
                     res = rescale(relin(mult(res, x[i])))
                 res = add(res, weight_pt[0][i])
                 result.append(res)
@@ -162,8 +162,8 @@ class PolyRelu2D(PolyReluBase):
                             x_powers[i] = rescale(relin(mult(x_powers[half], x_powers[half])))
                         else:
                             y = x_powers[1]
-                            if x_powers[1].level > x_powers[i - 1].level:
-                                y = drop_level(x_powers[1], x_powers[1].level - x_powers[i - 1].level)
+                            if x_powers[1].metadata.level > x_powers[i - 1].metadata.level:
+                                y = drop_level(x_powers[1], x_powers[1].metadata.level - x_powers[i - 1].metadata.level)
                             x_powers[i] = rescale(relin(mult(x_powers[i - 1], y)))
                     x_giant = x_powers[baby_steps]
                     current_giant_power = x_giant
@@ -178,8 +178,8 @@ class PolyRelu2D(PolyReluBase):
                             else:
                                 x_copy = x_powers[baby_step]
 
-                                if x_copy.level > x_powers[1].level - 2 + giant_step:
-                                    x_copy = drop_level(x_copy, (x_copy.level - (x_powers[1].level - 2 + giant_step)))
+                                if x_copy.metadata.level > x_powers[1].metadata.level - 2 + giant_step:
+                                    x_copy = drop_level(x_copy, (x_copy.metadata.level - (x_powers[1].metadata.level - 2 + giant_step)))
 
                                 term = rescale(mult(x_copy, weight_pt[coeff_idx][x_idx]))
                             if baby_step == 0:
@@ -206,10 +206,10 @@ class PolyRelu2D(PolyReluBase):
 
         min_required_level = 3 if self.order == 4 else max(self.order - 1, 1)
         for i, ct in enumerate(x):
-            if ct.level < min_required_level:
+            if ct.metadata.level < min_required_level:
                 raise ValueError(
                     f'PolyReluLayer (order={self.order}): Input ciphertext {i} has insufficient level: '
-                    f'{ct.level} < {min_required_level}. '
+                    f'{ct.metadata.level} < {min_required_level}. '
                     f'Algorithm will consume {min_required_level} levels, causing negative level. '
                     f'Please use bootstrap before this layer or adjust the network depth.'
                 )
@@ -231,10 +231,10 @@ class PolyRelu2D(PolyReluBase):
                         },
                     )
                     res = add(res, w_pt)
-                    if res.level > x[i].level:
-                        res = drop_level(res, res.level - x[i].level)
-                    if res.level < x[i].level:
-                        x[i] = drop_level(x[i], x[i].level - res.level)
+                    if res.metadata.level > x[i].metadata.level:
+                        res = drop_level(res, res.metadata.level - x[i].metadata.level)
+                    if res.metadata.level < x[i].metadata.level:
+                        x[i] = drop_level(x[i], x[i].metadata.level - res.metadata.level)
                     res = rescale(relin(mult(res, x[i])))
                 w_pt = CkksPlaintextNode(f'encode_pt_{0}_{i}')
                 custom_compute(
@@ -285,7 +285,7 @@ class PolyRelu2D(PolyReluBase):
                     baby_steps = int(np.ceil(np.sqrt(self.order + 1)))
                     giant_steps = int(np.ceil((self.order + 1) / baby_steps))
 
-                    initial_level = x[x_idx].level
+                    initial_level = x[x_idx].metadata.level
 
                     x_powers = [0 for i in range(baby_steps + 1)]
                     x_powers[1] = x[x_idx]
@@ -296,8 +296,8 @@ class PolyRelu2D(PolyReluBase):
                             x_powers[i] = rescale(tp)
                         else:
                             y = x_powers[1]
-                            if x_powers[1].level > x_powers[i - 1].level:
-                                y = drop_level(x_powers[1], x_powers[1].level - x_powers[i - 1].level)
+                            if x_powers[1].metadata.level > x_powers[i - 1].metadata.level:
+                                y = drop_level(x_powers[1], x_powers[1].metadata.level - x_powers[i - 1].metadata.level)
                             x_powers[i] = rescale(relin(mult(x_powers[i - 1], y)))
                     x_giant = x_powers[baby_steps]
                     current_giant_power = x_giant
@@ -331,8 +331,8 @@ class PolyRelu2D(PolyReluBase):
                                 x_copy = x_powers[baby_step]
                                 target_level = initial_level - 2 + giant_step
 
-                                if x_copy.level > target_level:
-                                    x_copy = drop_level(x_copy, x_copy.level - target_level)
+                                if x_copy.metadata.level > target_level:
+                                    x_copy = drop_level(x_copy, x_copy.metadata.level - target_level)
 
                                 w_pt = CkksPlaintextNode(f'encode_pt_{coeff_idx}_{x_idx}')
                                 custom_compute(

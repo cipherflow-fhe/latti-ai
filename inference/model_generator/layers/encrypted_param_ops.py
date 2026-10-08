@@ -48,7 +48,7 @@ def materialize_encrypted_param(param_ct: CkksCiphertextNode, trigger: ParamInpu
         attributes={
             'arg_id': arg_id,
             'flat_index': flat_index,
-            'expected_level': param_ct.level,
+            'expected_level': param_ct.metadata.level,
         },
         wait_inputs=[trigger],
     )

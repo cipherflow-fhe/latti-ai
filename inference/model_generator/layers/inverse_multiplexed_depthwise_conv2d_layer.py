@@ -162,7 +162,7 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                     s = 0
                     out_ct_idx = ct_idx * output_step0 * output_step1 + r_i2 * output_step1 + r_j2
                     base_idx = (r_i2 * output_step1 + r_j2) * self.kernel_shape[0] * self.kernel_shape[1]
-                    reference_level = rotated_x[ct_idx][base_idx].level
+                    reference_level = rotated_x[ct_idx][base_idx].metadata.level
                     partial_sum: DataNode | None = None
                     x_ct_list = []
                     w_pt_list = []

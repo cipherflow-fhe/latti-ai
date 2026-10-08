@@ -330,8 +330,8 @@ class ParBlockColMajorLNGoldschmidt:
         result = [None] * len(y_cts)
         for bi, y in enumerate(y_cts):
             a = a_cts[bi]
-            if a.level > y.level:
-                a = drop_level(a, a.level - y.level)
+            if a.metadata.level > y.metadata.level:
+                a = drop_level(a, a.metadata.level - y.metadata.level)
 
             ya = rescale(relin(mult(y, a)))
             yy = rescale(relin(mult(y, y)))
@@ -386,8 +386,8 @@ class ParBlockColMajorLNAffine(_ParBlockColMajorLNBase):
 
             yw = rescale(mult(y_cts[bi], gamma_pt[bi][bj][g]))
             xc = x_ct
-            if xc.level > yw.level:
-                xc = drop_level(xc, xc.level - yw.level)
+            if xc.metadata.level > yw.metadata.level:
+                xc = drop_level(xc, xc.metadata.level - yw.metadata.level)
             out = rescale(relin(mult(xc, yw)))
             result[ct_idx] = add(out, beta_add_pt[bi][bj][g])
         return result

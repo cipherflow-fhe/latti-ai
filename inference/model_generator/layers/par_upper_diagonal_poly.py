@@ -94,12 +94,12 @@ class ParUpperDiagonalPoly(MatPolyBase):
     def _drop_to_level(self, ct, target_level: int, label: str):
         if target_level < 0:
             raise ValueError(f'ParUpperDiagonalPoly Stockmeyer {label}: negative target level')
-        if ct.level < target_level:
+        if ct.metadata.level < target_level:
             raise ValueError(
-                f'ParUpperDiagonalPoly Stockmeyer {label}: cannot raise level from {ct.level} to {target_level}'
+                f'ParUpperDiagonalPoly Stockmeyer {label}: cannot raise level from {ct.metadata.level} to {target_level}'
             )
-        if ct.level > target_level:
-            return drop_level(ct, ct.level - target_level)
+        if ct.metadata.level > target_level:
+            return drop_level(ct, ct.metadata.level - target_level)
         return ct
 
     def call(self, input_cts: list, stockmeyer_weight_pt: list) -> list:
@@ -113,9 +113,9 @@ class ParUpperDiagonalPoly(MatPolyBase):
         if not input_cts:
             return []
         for ct in input_cts:
-            assert ct.level == input_cts[0].level
+            assert ct.metadata.level == input_cts[0].metadata.level
 
-        self.init_stockmeyer(input_cts[0].level)
+        self.init_stockmeyer(input_cts[0].metadata.level)
         if self.order <= 0 or self.order >= 64:
             raise ValueError('ParUpperDiagonalPoly Stockmeyer supports only 1 <= order < 64')
 
@@ -289,7 +289,7 @@ class ParUpperDiagonalPoly(MatPolyBase):
 
     def call_custom_compute(self, input_cts: list, data_source) -> list:
         if input_cts:
-            self.init_stockmeyer(input_cts[0].level)
+            self.init_stockmeyer(input_cts[0].metadata.level)
         return self.call_stockmeyer(input_cts, self._make_stockmeyer_weight_pts(data_source))
 
     def get_fhe_op_count(self, n_ct: int | None = None, level: int | None = None) -> dict:

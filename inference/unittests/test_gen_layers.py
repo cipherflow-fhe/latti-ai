@@ -231,7 +231,6 @@ class TestLayerExport(unittest.TestCase):
                 input_args=input_args,
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / f'CKKS_square_{s}_{s}' / f'level_{n_in_level}' / 'server',
-                fpga_acc=False,
             )
 
     def test_conv2d_packed(self):
@@ -405,7 +404,6 @@ class TestLayerExport(unittest.TestCase):
                                 / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                                 / f'level_{init_level}'
                                 / 'server',
-                                fpga_acc=False,
                             )
 
     def test_inverse_mux_conv_repack(self):
@@ -481,7 +479,6 @@ class TestLayerExport(unittest.TestCase):
                         / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                         / f'level_{init_level}'
                         / 'server',
-                        fpga_acc=False,
                     )
 
     def test_inverse_mux_dw_conv(self):
@@ -561,7 +558,6 @@ class TestLayerExport(unittest.TestCase):
                                 / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                                 / f'level_{init_level}'
                                 / 'server',
-                                fpga_acc=False,
                             )
 
     def test_poly_bsgs(self):
@@ -597,7 +593,6 @@ class TestLayerExport(unittest.TestCase):
                 output_instruction_path=base_path
                 / f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order}'
                 / f'level_{level}',
-                fpga_acc=False,
             )
 
     def test_fc_pack_skip_feature0d(self):
@@ -652,7 +647,6 @@ class TestLayerExport(unittest.TestCase):
                 / f'CKKS_fc_prepare_weight1_1D_pack_skip_{s}_{s}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
             )
 
     def test_fc_fc_feature0d(self):
@@ -736,7 +730,6 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_fc_fc_{input_channel}_{output_channel}_{output_channel1}'
             / f'level_{init_level}'
             / 'server',
-            fpga_acc=False,
         )
 
     def test_fc_multiplexed_feature2d(self):
@@ -800,7 +793,6 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
-                fpga_acc=False,
             )
 
     def test_poly_relu_bsgs_feature2d(self):
@@ -833,12 +825,12 @@ class TestLayerExport(unittest.TestCase):
         output_ct = list()
         for idx in range(len(output_ct1)):
             tmp = input_ct[idx]
-            if tmp.level > output_ct1[idx].level:
-                tmp = drop_level(tmp, tmp.level - output_ct1[idx].level)
+            if tmp.metadata.level > output_ct1[idx].metadata.level:
+                tmp = drop_level(tmp, tmp.metadata.level - output_ct1[idx].metadata.level)
             tmp0 = rescale(relin(mult(output_ct1[idx], tmp)))
             tmp1 = input_ct[idx]
-            if tmp1.level > tmp0.level:
-                tmp1 = drop_level(tmp1, tmp1.level - tmp0.level)
+            if tmp1.metadata.level > tmp0.metadata.level:
+                tmp1 = drop_level(tmp1, tmp1.metadata.level - tmp0.metadata.level)
             output_ct.append(add(tmp0, tmp1))
 
         input_args = list()
@@ -853,7 +845,6 @@ class TestLayerExport(unittest.TestCase):
             output_instruction_path=base_path
             / f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order0}_{order1}'
             / f'level_{level}',
-            fpga_acc=False,
         )
 
     def test_poly_bsgs_feature0d(self):
@@ -894,7 +885,6 @@ class TestLayerExport(unittest.TestCase):
                     output_instruction_path=base_path
                     / f'CKKS_poly_relu_bsgs_feature0d_{n_in_channel}_channel_order_{order}_skip_{skip_val}'
                     / f'level_{level}',
-                    fpga_acc=False,
                 )
 
     def test_poly_bsgs_feature1d_skip(self):
@@ -942,7 +932,6 @@ class TestLayerExport(unittest.TestCase):
                         output_args=[Argument('output_ct', output_ct)],
                         output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_skip_{n_in_channel}_channel'
                         f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
-                        fpga_acc=False,
                     )
 
     def test_poly_bsgs_feature1d_mux(self):
@@ -988,7 +977,6 @@ class TestLayerExport(unittest.TestCase):
                         output_args=[Argument('output_ct', output_ct)],
                         output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_mux_{n_in_channel}_channel'
                         f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
-                        fpga_acc=False,
                     )
 
     def test_conv1d_layer(self):
@@ -1040,7 +1028,6 @@ class TestLayerExport(unittest.TestCase):
                             / f'conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}'
                             / f'level_{init_level}'
                             / 'server',
-                            fpga_acc=False,
                         )
 
     def test_mux_conv1d_layer(self):
@@ -1106,7 +1093,6 @@ class TestLayerExport(unittest.TestCase):
                             / f'multiplexed_conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}'
                             / f'level_{init_level}'
                             / 'server',
-                            fpga_acc=False,
                         )
 
     def test_add_layer(self):
@@ -1134,7 +1120,6 @@ class TestLayerExport(unittest.TestCase):
                     / f'CKKS_add_layer/ch_{n_channel}_shape_{s}_{s}'
                     / f'level_{level}'
                     / 'server',
-                    fpga_acc=False,
                 )
 
     def test_par_block_col_major_add(self):
@@ -1270,7 +1255,6 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}_{s}'
                         / f'level_{level}'
                         / 'server',
-                        fpga_acc=False,
                     )
 
     def test_adaptive_avgpool2d_layer(self):
@@ -1302,7 +1286,6 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}_{s}'
                         / f'level_{level}'
                         / 'server',
-                        fpga_acc=False,
                     )
 
     def test_interleaved_avgpool2d_layer(self):
@@ -1349,7 +1332,6 @@ class TestLayerExport(unittest.TestCase):
                             / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                             / f'level_{level}'
                             / 'server',
-                            fpga_acc=False,
                         )
 
     def test_avgpool1d_layer(self):
@@ -1387,7 +1369,6 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}'
                         / f'level_{level}'
                         / 'server',
-                        fpga_acc=False,
                     )
 
     def test_adaptive_avgpool1d_layer(self):
@@ -1419,7 +1400,6 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}'
                         / f'level_{level}'
                         / 'server',
-                        fpga_acc=False,
                     )
 
     def test_mult_scalar_layer(self):
@@ -1446,7 +1426,6 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_mult_scalar/ch_{n_channel}_shape_{s}_{s}'
             / f'level_{level}'
             / 'server',
-            fpga_acc=False,
         )
 
     def test_mux_dw_conv1d_layer(self):
@@ -1510,7 +1489,6 @@ class TestLayerExport(unittest.TestCase):
                                 / f'mux_dw_conv1d_ch_{n_channel}_input_{input_shape}_kernel_{kernel_shape}_skip_{skip}_stride_{stride}'
                                 / f'level_{init_level}'
                                 / 'server',
-                                fpga_acc=False,
                             )
 
     def test_fc_1d_multiplexed(self):
@@ -1595,7 +1573,6 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
-                fpga_acc=False,
             )
 
     def test_par_block_col_major_cpmm(self):
@@ -1624,7 +1601,6 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_block_col_major_cpmm' / f'level_{LEVEL}' / 'server',
-            fpga_acc=False,
         )
 
     def test_par_block_col_major_transpose(self):
@@ -1647,7 +1623,6 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_block_col_major_transpose' / f'level_{LEVEL}' / 'server',
-            fpga_acc=False,
         )
 
     def test_par_block_col_major_ccmm(self):
@@ -1679,7 +1654,6 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_block_col_major_ccmm' / f'level_{LEVEL}' / 'server',
-            fpga_acc=False,
         )
 
     def test_par_block_col_major_polyactrn(self):
@@ -1725,7 +1699,6 @@ class TestLayerExport(unittest.TestCase):
                 / f'degree_{degree}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
             )
 
     def test_par_block_col_major_layernorm(self):
@@ -1785,7 +1758,6 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output', output_cts)],
                 output_instruction_path=output_path,
-                fpga_acc=False,
             )
 
     def test_par_lower_diag_transpose(self):
@@ -1819,7 +1791,6 @@ class TestLayerExport(unittest.TestCase):
                 / f'n_prepad_{n_prepad}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
             )
 
     def test_par_lower_diag_pcmm(self):
@@ -1873,7 +1844,6 @@ class TestLayerExport(unittest.TestCase):
                 / mode.lower()
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
             )
 
     def test_par_lower_diag_ccmm(self):
@@ -1935,7 +1905,6 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output', output_cts)],
                 output_instruction_path=base_path / 'CKKS_par_lower_diag_ccmm' / mode / f'level_{level}' / 'server',
-                fpga_acc=False,
             )
 
     def test_par_lower_diagonal_add_pt(self):
@@ -1958,7 +1927,6 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_lower_diagonal_add_pt' / f'level_{level}' / 'server',
-            fpga_acc=False,
         )
 
     def test_par_upper_diagonal_layernorm_parts(self):
@@ -1991,7 +1959,6 @@ class TestLayerExport(unittest.TestCase):
             / 'stats'
             / f'level_{stats_level}'
             / 'server',
-            fpga_acc=False,
         )
 
         xcenter_level = 2
@@ -2012,7 +1979,6 @@ class TestLayerExport(unittest.TestCase):
             / 'xcentered'
             / f'level_{xcenter_level}'
             / 'server',
-            fpga_acc=False,
         )
 
         minimax_level = 2
@@ -2035,7 +2001,6 @@ class TestLayerExport(unittest.TestCase):
             / 'minimax'
             / f'level_{minimax_level}'
             / 'server',
-            fpga_acc=False,
         )
 
         gold_level = 3
@@ -2058,7 +2023,6 @@ class TestLayerExport(unittest.TestCase):
             / 'goldschmidt'
             / f'level_{gold_level}'
             / 'server',
-            fpga_acc=False,
         )
 
         affine_y_level = 2
@@ -2083,7 +2047,6 @@ class TestLayerExport(unittest.TestCase):
             / 'affine'
             / f'level_{affine_y_level}'
             / 'server',
-            fpga_acc=False,
         )
 
     def test_par_upper_diagonal_polyact(self):
@@ -2107,7 +2070,6 @@ class TestLayerExport(unittest.TestCase):
             / 'gamma'
             / f'level_{gamma_level}'
             / 'server',
-            fpga_acc=False,
         )
 
         poly_level, degree = 3, 4
@@ -2141,7 +2103,6 @@ class TestLayerExport(unittest.TestCase):
             / f'degree_{degree}'
             / f'level_{poly_level}'
             / 'server',
-            fpga_acc=False,
         )
 
     def test_par_upper_diagonal_poly_stockmeyer(self):
@@ -2171,7 +2132,6 @@ class TestLayerExport(unittest.TestCase):
             / f'order_{order}'
             / f'level_{level}'
             / 'server',
-            fpga_acc=False,
         )
 
     def test_par_upper_diagonal_poly_mult_ct(self):
@@ -2198,7 +2158,6 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_upper_diagonal_poly_mult_ct' / f'level_{level}' / 'server',
-            fpga_acc=False,
         )
 
     def test_par_upper_diagonal_softmax_helpers(self):
@@ -2223,7 +2182,6 @@ class TestLayerExport(unittest.TestCase):
             / 'add_pt'
             / f'level_{add_level}'
             / 'server',
-            fpga_acc=False,
         )
 
         square_level = 2
@@ -2244,7 +2202,6 @@ class TestLayerExport(unittest.TestCase):
             / 'multiple_square'
             / f'level_{square_level}'
             / 'server',
-            fpga_acc=False,
         )
 
         sum_level = 1
@@ -2262,7 +2219,6 @@ class TestLayerExport(unittest.TestCase):
             / 'head_col_sum'
             / f'level_{sum_level}'
             / 'server',
-            fpga_acc=False,
         )
 
         init_level = 1
@@ -2280,7 +2236,6 @@ class TestLayerExport(unittest.TestCase):
             / 'inverse_init'
             / f'level_{init_level}'
             / 'server',
-            fpga_acc=False,
         )
 
         iter_level = 2
@@ -2301,7 +2256,6 @@ class TestLayerExport(unittest.TestCase):
             / 'inverse_iter'
             / f'level_{iter_level}'
             / 'server',
-            fpga_acc=False,
         )
 
         gelu_level = 2
@@ -2322,7 +2276,6 @@ class TestLayerExport(unittest.TestCase):
             / 'gelu'
             / f'level_{gelu_level}'
             / 'server',
-            fpga_acc=False,
         )
 
     def test_par_cpmm_square(self):
@@ -2361,7 +2314,6 @@ class TestLayerExport(unittest.TestCase):
                 / f'm_{m}_heads_{n_heads}_dim_{head_dim}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
             )
 
     def test_par_cpmm_square_with_bias(self):
@@ -2401,7 +2353,6 @@ class TestLayerExport(unittest.TestCase):
                 / f'm_{m}_heads_{n_heads}_dim_{head_dim}_wcols_{W_cols}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
             )
 
     def test_par_cpmm_expand_with_bias(self):
@@ -2441,7 +2392,6 @@ class TestLayerExport(unittest.TestCase):
                 / f'm_{m}_heads_{n_heads}_dim_{head_dim}_wcols_{W_cols}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
             )
 
     def test_par_cpmm_reduce_with_bias(self):
@@ -2482,7 +2432,6 @@ class TestLayerExport(unittest.TestCase):
                 / f'm_{m}_heads_{n_heads}_dim_{head_dim}_wrows_{W_rows}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
             )
 
     def test_par_block_qkt_v_attention(self):
@@ -2546,7 +2495,6 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_par_attention_seq{seq_len}_heads{n_heads}_dim{head_dim}'
             / f'level_{init_level}'
             / 'server',
-            fpga_acc=False,
         )
 
     def test_par_cpmm_expand_reduce(self):
@@ -2592,7 +2540,6 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_par_cpmm_expand_reduce_m{m}_heads{n_heads}_dim{head_dim}_K{K_factor}'
             / f'level_{init_level}'
             / 'server',
-            fpga_acc=False,
         )
 
     def test_par_cpmm_expand_polyactrn_reduce(self):
@@ -2661,7 +2608,6 @@ class TestLayerExport(unittest.TestCase):
                 / f'degree_{degree}'
                 / f'level_{init_level}'
                 / 'server',
-                fpga_acc=False,
             )
 
     def test_par_full_attention(self):
@@ -2766,5 +2712,4 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_par_full_attention_seq{seq_len}_heads{n_heads}_dim{head_dim}'
             / f'level_{init_level}'
             / 'server',
-            fpga_acc=False,
         )
