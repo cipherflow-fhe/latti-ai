@@ -578,8 +578,7 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
             throw std::runtime_error("[Provisioner] Unsupported encrypted parameter argument: " + arg_id);
         }
 
-        auto pt = ls_compat::ringt_to_pt(context, ringt, encrypt_level);
-        encrypted.push_back(ls_compat::encrypt_asymmetric(context, pt));
+        encrypted.push_back(context.encrypt(ringt));
     }
     return encrypted;
 }

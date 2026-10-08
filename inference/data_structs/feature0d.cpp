@@ -54,7 +54,7 @@ void Feature0DEncrypted::pack(const Array<double, 1>& feature_mg,
         }
         auto feature_flat_pt = ls_compat::encode(*context, feature_flat, level, scale_in);
         if (!is_symmetric) {
-            auto feature_flat_ct = ls_compat::encrypt_asymmetric(*context, feature_flat_pt);
+            auto feature_flat_ct = context->encrypt(feature_flat_pt);
             data.push_back(move(feature_flat_ct));
         } else {
             auto feature_flat_ct = ls_compat::encrypt_symmetric_compressed(*context, feature_flat_pt);

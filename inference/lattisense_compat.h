@@ -39,7 +39,6 @@ inline CkksPlaintext encode_ringt(CkksContext& ctx,
     return pt;
 }
 
-
 // encode 三参：返回 CkksPlaintext（关键：返回值，不是 void）
 inline CkksPlaintext encode(CkksContext& ctx,
                             const std::vector<double>& values,
@@ -64,11 +63,6 @@ inline std::vector<double> decode(CkksContext& ctx, const CkksPlaintext& pt) {
     return out;
 }
 
-// serialize 丢参数
-inline Bytes serialize(const CkksCiphertext& ct) {
-    return ct.serialize();
-}
-
 // encrypt_symmetric 系列 → 用 encrypt 兜底
 inline CkksCiphertext encrypt_symmetric(CkksContext& ctx, const CkksPlaintext& pt) {
     return ctx.encrypt(pt);
@@ -76,18 +70,8 @@ inline CkksCiphertext encrypt_symmetric(CkksContext& ctx, const CkksPlaintext& p
 inline CkksCiphertext encrypt_symmetric_compressed(CkksContext& ctx, const CkksPlaintext& pt) {
     return ctx.encrypt(pt);
 }
-inline CkksCiphertext encrypt_asymmetric(CkksContext& ctx, const CkksPlaintext& pt) {
-    return ctx.encrypt(pt);
-}
 inline CkksCiphertext compressed_ciphertext_to_ciphertext(const CkksCiphertext& ct) {
     return CkksCiphertext::deserialize(ct.serialize());
-}
-
-
-// ringt_to_pt: v6 里没有独立转换；ringt 转普通 pt 的语义在 encrypt/encode 内部处理。
-// 兼容层里做一次序列化拷贝直通。
-inline CkksPlaintext ringt_to_pt(CkksContext& /*ctx*/, const CkksPlaintext& pt, int /*level*/) {
-    return CkksPlaintext::deserialize(pt.serialize());
 }
 
 }  // namespace ls_compat

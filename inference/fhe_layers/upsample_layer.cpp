@@ -45,7 +45,7 @@ void UpsampleLayer::prepare_data() {
 }
 
 Feature2DEncrypted UpsampleLayer::run(CkksContext& ctx, const Feature2DEncrypted& x) {
-    zero_vector_encrypted = ls_compat::encrypt_asymmetric(ctx, zero_vector_encoded);
+    zero_vector_encrypted = ctx.encrypt(zero_vector_encoded);
 
     if (n_channel_per_ct != 1) {
         throw std::runtime_error("invalid n_channel_per_ct value in UpsampleLayer");

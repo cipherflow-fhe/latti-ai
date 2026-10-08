@@ -235,7 +235,7 @@ void Feature2DEncrypted::column_pack(const Array<double, 2>& feature_mg, bool is
 
     for (int i = 0; i < pack_num; i++) {
         auto enc = ls_compat::encode(*context, feature_mg_pack[i], level, scale_in);
-        data.push_back(ls_compat::encrypt_asymmetric(*context, enc));
+        data.push_back(context->encrypt(enc));
     }
 }
 
@@ -258,7 +258,7 @@ void Feature2DEncrypted::row_pack(const Array<double, 2>& feature_mg, bool is_sy
     }
     for (int i = 0; i < pack_num; i++) {
         auto enc = ls_compat::encode(*context, feature_mg_pack[i], level, scale_in);
-        data.push_back(ls_compat::encrypt_asymmetric(*context, enc));
+        data.push_back(context->encrypt(enc));
     }
 }
 
