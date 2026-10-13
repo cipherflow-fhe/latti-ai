@@ -32,7 +32,7 @@ Client：已有 SK/PK 和参数的 context（初始化方式不在本文范围�
   │
   ├─ export_eval_context_to_file(path)
   │    ├─ 校验前置条件并计算 Galois 集合，创建同目录临时文件
-  │    ├─ BTP：Scheme → SK 标记 → PK → BTP 参数
+  │    ├─ BTP：Scheme → has_sk=0 → PK → BTP 参数
   │    ├─ 普通 CKKS：Scheme → has_sk=0 → has_pk=0
   │    ├─ 生成 RLK，用现有 serializer 编码到单键 buffer 并写文件，丢弃引用
   │    ├─ 写 RTKs 标记和 uint16 数量
@@ -139,6 +139,8 @@ PK、RLK、DtS/StD 分别调用对应的现有 serializer，保持 seed 压缩�
 
 `WriteTo()` 成功后清空内容，但保留 buffer 容量供下一把键复用；容量取决于最大 payload 及 buffer 扩容行为，不能把序列化长度当成其全部内存开销。每次写出后限制临时键的作用域，下一把键生成前不再保留上一把键的引用。
 
+单键 buffer 默认按需增长；如使用 `Grow`，只预留单个 payload 的编码尺寸或保守上界，禁止照搬现有 BTP serializer 的 `Grow(nKeys * bytesPerKey)` 或按整个 key set 的大小分配。
+
 ### 2. 完整旋转/共轭键集合
 
 写数量前，先计算并去重完整的 `galEl` 集合：
@@ -167,7 +169,7 @@ for galEl in deduplicated galEls:
 
 批量 `GenRotationKeys` 与逐键 `GenSwitchingKeyForGalois` 均在完整 Q/P level 分配键，并调用同一 `genrotKey → genSwitchingKey`，包括相同的逆 Galois 变换与分解参数；逐键路径复用现有采样算法。
 
-默认单 goroutine 顺序生成、编码和写出，复用同一个 `kgen` 与 buffer；其 `buffQP`/`buffQ` 和采样器状态不能被并发访问。本仓库的批量 `GenRotationKeys` 已通过 `WorkerPool` 并行生成，流式路径绕过该入口以减少键对象和并发工作区叠加；耗时与峰值 RSS 一起实测。
+默认单 goroutine 顺序生成、编码和写出，复用同一个 `kgen` 与 buffer；其 `buffQP`/`buffQ` 和采样器状态不能被并发访问。本仓库的批量 `GenRotationKeys` 先分配全套键，再通过 `WorkerPool` 并行生成，各作业创建独立的 key generator 工作区；默认并发数为 `min(GOMAXPROCS, 作业数)`，全套键仍全部存活。流式路径必须绕过该入口，同时避免全套键累计与并发工作区叠加；耗时与峰值 RSS 一起实测。
 
 ### 3. 复用 BTP DtS/StD 成对生成接口
 
@@ -193,7 +195,8 @@ create a unique temporary file in the destination directory
 keyBuf = one reusable bytes.Buffer
 
 write Scheme length and payload with the scheme-specific byte order
-write has_sk = 0
+write has_sk = uint8(0) unconditionally for both ordinary CKKS and BTP
+never choose has_sk from context.sk != nil or write a SecretKey payload
 write has_pk = 1 and PK payload for BTP; has_pk = 0 for ordinary CKKS
 if BTP: write BTP length and payload here
 
@@ -301,6 +304,7 @@ auto results = client.decrypt(encrypted_outputs);
 | :--- | :--- |
 | 普通 CKKS 协议 | 参数长度 BigEndian、`has_sk=0`、`has_pk=0`、RLK/RTKs payload 可由原 advanced deserializer 导入 |
 | BTP 协议 | 参数顺序、`uint16` 键数量、DtS/StD sparse/full 参数编码正确，无多余字节 |
+| SK 导出边界 | 从含 SK 的普通 CKKS/BTP 客户端 context 导出，解析结构并断言 `has_sk=0`、无 SK payload，原 deserializer 导入后 SK 为 nil；按相同参数/key set 复核文件大小，仅作为辅助检查 |
 | 编码兼容 | 单键 payload 直接复用原 serializer；文件由原 deserializer 导入，检查参数、字段、key set 和功能，不要求旋转键排列相同 |
 | Galois 完整性与功能等价 | BTP 专用旋转、通用正负旋转及共轭键组成的并集与旧路径一致；小参数下用同一 SK 和密文，分别以批量键与流式键执行旋转、共轭和重线性化，BTP 另验证 bootstrap，按 CKKS 误差容限比较解密结果 |
 | BTP 切换键 | 复用 `GenEncapsulationSwitchingKeys`，验证 DtS/StD 功能及 sparse/full 编码；覆盖 `EphemeralSecretWeight == 0` |
