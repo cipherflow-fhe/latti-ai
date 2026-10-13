@@ -25,7 +25,7 @@ find_package(HDF5 REQUIRED COMPONENTS CXX)
 find_package(OpenMP REQUIRED)
 
 set(LATTI_AI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
-set(LATTI_AI_BUILD "${LATTI_AI_ROOT}/build")
+set(LATTI_AI_BUILD "${LATTI_AI_ROOT}/build" CACHE PATH "Path to the CPU or GPU latti-ai build directory")
 
 include_directories(${LATTI_AI_ROOT}/inference)
 include_directories(${LATTI_AI_ROOT}/inference/lib)
@@ -55,7 +55,7 @@ target_link_libraries(latti_inference PRIVATE
 # Set RPATH so the .so can find shared libs relative to itself
 set_target_properties(latti_inference PROPERTIES
     INSTALL_RPATH "$ORIGIN;$ORIGIN/../../../build/inference/lattisense"
-    BUILD_WITH_INSTALL_RPATH ON
+    BUILD_WITH_INSTALL_RPATH OFF
 )
 
 install(TARGETS latti_inference DESTINATION ${CMAKE_CURRENT_SOURCE_DIR})

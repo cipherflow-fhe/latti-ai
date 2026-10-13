@@ -73,6 +73,8 @@ PYBIND11_MODULE(latti_inference, m) {
              }),
              py::arg("client_dir"))
         .def("setup", &InferenceClient::setup, py::call_guard<py::gil_scoped_release>())
+        .def("export_eval_context_to_file", &InferenceClient::export_eval_context_to_file, py::arg("filepath"),
+             py::call_guard<py::gil_scoped_release>())
         .def("export_eval_context",
              [](const InferenceClient& self) {
                  Bytes data;
@@ -120,6 +122,8 @@ PYBIND11_MODULE(latti_inference, m) {
                 self.import_eval_context(data);
             },
             py::arg("eval_context"))
+        .def("import_eval_context_file", &InferenceServer::import_eval_context_file, py::arg("filepath"),
+             py::call_guard<py::gil_scoped_release>())
         .def("load_model", &InferenceServer::load_model, py::call_guard<py::gil_scoped_release>())
         .def(
             "evaluate",
