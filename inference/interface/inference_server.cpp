@@ -17,6 +17,8 @@
  */
 
 #include <iostream>
+#include <fstream>
+#include <limits>
 #include <map>
 
 #include "interface/inference_server.h"
@@ -47,6 +49,35 @@ InferenceServer::InferenceServer(const std::string& server_dir, bool use_gpu, in
     : server_dir_(server_dir), use_gpu_(use_gpu), gpu_device_(gpu_device) {}
 
 InferenceServer::~InferenceServer() = default;
+
+namespace inference_detail {
+// Separate the stream read to exercise length and short-read errors without huge files.
+Bytes read_eval_context_file(std::istream& file, const std::string& filepath) {
+    const std::streamoff size = file.tellg();
+    if (size <= 0 || static_cast<std::uintmax_t>(size) > std::numeric_limits<size_t>::max() ||
+        static_cast<std::uintmax_t>(size) > std::numeric_limits<std::streamsize>::max()) {
+        throw std::runtime_error("Invalid eval context file size: " + filepath);
+    }
+    Bytes buffer;
+    if (static_cast<std::uintmax_t>(size) > buffer.max_size()) {
+        throw std::runtime_error("Eval context file is too large: " + filepath);
+    }
+    buffer.resize(static_cast<size_t>(size));
+    if (!file.seekg(0, std::ios::beg) ||
+        !file.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(size))) {
+        throw std::runtime_error("Failed to read eval context file: " + filepath);
+    }
+    return buffer;
+}
+}  // namespace inference_detail
+
+void InferenceServer::import_eval_context_file(const std::string& filepath) {
+    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open eval context file: " + filepath);
+    }
+    import_eval_context(inference_detail::read_eval_context_file(file, filepath));
+}
 
 void InferenceServer::import_eval_context(const Bytes& eval_context) {
     // Determine whether bootstrapping is needed from the server task config.

@@ -15,6 +15,10 @@ target_link_libraries(inference PUBLIC
     ${HDF5_CXX_LIBRARIES}
 )
 
+add_executable(streaming_context_file_test streaming_context_file_test.cpp)
+target_link_libraries(streaming_context_file_test PRIVATE inference_interface lattisense ${HDF5_CXX_LIBRARIES})
+add_test(NAME streaming-context-file COMMAND streaming_context_file_test ${CMAKE_CURRENT_SOURCE_DIR}/test_mnist/task)
+
 # --- Example verification tests ---
 set(EXAMPLES_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 

@@ -51,6 +51,9 @@ public:
     /// Import evaluation context (public keys only) from serialized bytes.
     void import_eval_context(const Bytes& eval_context);
 
+    /// Read a completed evaluation context file and reuse the existing import path.
+    void import_eval_context_file(const std::string& filepath);
+
     /// Load model weights and computation graph.
     void load_model();
 
