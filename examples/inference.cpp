@@ -94,17 +94,17 @@ int main(int argc, char* argv[]) {
     cout << "[Step 1/5] Setting up client (key generation)..." << endl;
     InferenceClient client(task_dir + "/client");
     client.setup();
-    auto eval_ctx = client.export_eval_context();
+    const string eval_context_file = task_dir + "/client/eval_context.bin";
 
     cout << "[Step 2/5] Encrypting input..." << endl;
     auto encrypted_inputs = client.encrypt(input_csvs);
 
-    // In actual scenarios, the client sends eval_ctx and encrypted_inputs to the server over the network.
+    // The caller transfers the completed evaluation context file and ciphertexts to the server.
 
     // --- Server side: load model and run encrypted inference ---
     cout << "[Step 3/5] Server loading model and importing context..." << endl;
     InferenceServer server(task_dir + "/server", use_gpu, 0);
-    server.import_eval_context(eval_ctx);
+    server.import_eval_context_file(eval_context_file);
     server.load_model();
 
     cout << "[Step 4/5] Running encrypted inference..." << endl;

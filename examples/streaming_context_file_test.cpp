@@ -77,6 +77,42 @@ int main(int argc, char** argv) {
         }
         auto client = fhe_ops_lib::CkksContext::create_streaming_context(parameters, path.string());
         server.import_eval_context_file(path.string());
+
+        // Exercise the default client entry point and file export after persistence/release.
+        auto client_directory = path.string() + "-client";
+        struct DirectoryCleanup {
+            std::filesystem::path path;
+            ~DirectoryCleanup() {
+                std::filesystem::remove_all(path);
+            }
+        } client_cleanup{client_directory};
+        std::filesystem::create_directory(client_directory);
+        for (const auto* name : {"task_config.json", "ckks_parameter.json"}) {
+            std::filesystem::copy_file(std::filesystem::path(argv[1]) / "client" / name,
+                                       std::filesystem::path(client_directory) / name);
+        }
+        InferenceClient default_client(client_directory);
+        default_client.setup();
+        auto published = std::filesystem::path(client_directory) / "eval_context.bin";
+        auto size = std::filesystem::file_size(published);
+        if (size == 0) {
+            throw std::runtime_error("setup returned before file publication");
+        }
+        auto saved_client = default_client.export_full_context();
+        default_client.release();
+        rejected = false;
+        try {
+            default_client.export_eval_context_to_file(path.string());
+        } catch (const std::runtime_error&) { rejected = true; }
+        if (!rejected) {
+            throw std::runtime_error("File export accepted a released client");
+        }
+        default_client.load_full_context(saved_client);
+        default_client.export_eval_context_to_file(path.string());
+        if (std::filesystem::file_size(path) != size) {
+            throw std::runtime_error("Restored client exported an incomplete evaluation context");
+        }
+        server.import_eval_context_file(path.string());
         std::cout << "Evaluation context file read and failure tests passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

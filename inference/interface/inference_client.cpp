@@ -163,14 +163,14 @@ void InferenceClient::read_configuration() {
 }
 
 void InferenceClient::create_crypto_context() {
-    std::cout << "[Client] Generating CKKS context and keys..." << std::endl;
+    std::cout << "[Client] Streaming evaluation keys to " << (client_dir_ / "eval_context.bin") << "..." << std::endl;
     std::cout << "[Client] Bootstrapping: " << (needs_btp_ ? "Yes" : "No") << std::endl;
     std::cout << "[Client] Poly degree: N=" << poly_modulus_degree_ << std::endl;
 
     if (needs_btp_) {
         btp_param_ = std::make_unique<CkksBtpParameter>(CkksBtpParameter::create_parameter());
-        btp_context_ = std::make_unique<CkksBtpContext>(CkksBtpContext::create_random_context(*btp_param_));
-        btp_context_->gen_rotation_keys();
+        btp_context_ = std::make_unique<CkksBtpContext>(
+            CkksBtpContext::create_streaming_context(*btp_param_, (client_dir_ / "eval_context.bin").string()));
         context_ptr_ = btp_context_.get();
     } else {
         if (!q_.empty() && !p_.empty()) {
@@ -182,8 +182,8 @@ void InferenceClient::create_crypto_context() {
         if (log_slots_ > 0) {
             ckks_param_->set_log_slots(log_slots_);
         }
-        ckks_context_ = std::make_unique<CkksContext>(CkksContext::create_random_context(*ckks_param_));
-        ckks_context_->gen_rotation_keys();
+        ckks_context_ = std::make_unique<CkksContext>(
+            CkksContext::create_streaming_context(*ckks_param_, (client_dir_ / "eval_context.bin").string()));
         context_ptr_ = ckks_context_.get();
     }
 
@@ -196,6 +196,17 @@ double InferenceClient::get_default_scale() const {
 
 void InferenceClient::setup() {
     create_crypto_context();
+}
+
+void InferenceClient::export_eval_context_to_file(const std::string& filepath) const {
+    if (!context_ptr_) {
+        throw std::runtime_error("[Client] setup() or load_full_context() is required before file export");
+    }
+    if (needs_btp_) {
+        btp_context_->export_eval_context_to_file(filepath);
+    } else {
+        ckks_context_->export_eval_context_to_file(filepath);
+    }
 }
 
 void InferenceClient::release() {

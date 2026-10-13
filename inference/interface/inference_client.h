@@ -67,8 +67,8 @@ struct InputParam {
 /// Client-side encrypted inference interface.
 ///
 /// Holds the secret key and is responsible for:
-/// - Generating the full CKKS key pair
-/// - Exporting a computation-keys-only evaluation context (no SK, no PK) for the server
+/// - Generating the CKKS key pair and streaming evaluation keys to a file
+/// - Exporting an evaluation context without SK (BTP includes PK) for the server
 /// - Exporting the full context (incl. SK) for client-side persistence
 /// - Encrypting input data
 /// - Decrypting inference results
@@ -84,8 +84,12 @@ public:
     InferenceClient(InferenceClient&&) = default;
     InferenceClient& operator=(InferenceClient&&) = default;
 
-    /// Generate crypto context with keys.
+    /// Stream evaluation keys to client_dir/eval_context.bin, retaining client SK/PK.
+    /// Returns only after the complete file is closed and published. Calls on this client must be sequential.
     void setup();
+
+    /// Generate evaluation keys from the current SK and stream them to a custom destination.
+    void export_eval_context_to_file(const std::string& filepath) const;
 
     /// Release all in-memory key material immediately.
     /// After this call, encrypt()/decrypt() will fail until setup() or load_full_context()
@@ -94,11 +98,12 @@ public:
     void release();
 
     /// Export a public-only evaluation context (serialized bytes).
+    /// Legacy path: requires a context with evaluation keys; default setup() writes a file instead.
     /// The server uses this to perform encrypted computation without the secret key.
     Bytes export_eval_context() const;
 
     /// Export the full client state including the secret key.
-    /// Contents: SK + PK + relin + rotation. Size is comparable to eval_context.
+    /// Contents: SK + PK and any resident evaluation keys. Streaming clients have no resident evaluation keys.
     /// Pair with load_full_context() to restore a client that can both encrypt and decrypt.
     Bytes export_full_context() const;
 
