@@ -4,13 +4,13 @@
 
 ### 1. 本规范的范围
 
-本文只定义 evaluation context 的计算公钥逐键生成、流式序列化、文件落盘和服务端文件导入。输入 context 必须已有与任务匹配的 SK 和 Scheme 参数；BTP 当前协议固定写入 PK，因此 BTP context 还必须已有 PK 和 BTP 参数；普通 CKKS 文件导出沿用现有客户端不包含 PK 的策略。`setup_keypair()` 的实现和普通 CKKS/BTP context 的初始化不在本文范围内。
+本文定义 evaluation context 的计算公钥逐键生成、流式序列化、文件落盘和服务端文件导入，并规定现有 `InferenceClient::setup()` / Node `client.setup()` 默认走逐键流式生成。默认入口内部只保留客户端加解密所需的 SK/PK，再逐键生成并落盘评估键；不新增独立的 `setup_keypair()` 对外接口。已有 context 的 `export_eval_context_to_file(path)` 仍作为可复用的底层文件导出入口：普通 CKKS 沿用现有客户端不包含 PK 的策略，BTP 固定写入 PK；BTP context 还必须已有 BTP 参数。
 
 低内存导出的前置条件是客户端没有预先常驻完整评估键。已有全套密钥的 context 也可以写文件，但它的常驻内存不会因文件导出接口自动下降。
 
 ### 2. 现状痛点
 
-现有 `client.setup()` 会生成并持有全套评估键。`export_eval_context()` 随后在 Go 侧构造完整 `bytes.Buffer`，C++ 的 `export_raw_data` 再复制为 `std::vector<uint8_t>`；客户端同时承受密钥对象和全量序列化副本的内存开销。
+当前 `client.setup()` 会生成并持有全套评估键。若仍先走该批量初始化，再调用文件导出，峰值已经发生，不能达到本规范的首要目标；`export_eval_context()` 随后还会在 Go 侧构造完整 `bytes.Buffer`，C++ 的 `export_raw_data` 再复制为 `std::vector<uint8_t>`。默认入口必须在批量评估键生成之前接入流式 writer。
 
 以 CIFAR-10、`N=65536`、`N16QP1546H192H32` 为参考参数，evaluation context 的压缩字节流约为 3.10 GiB。原稿中的常驻 RSS `14,408 MB`、峰值 `21,723 MB ～ 28,665 MB` 缺少测量环境和原始日志，只能作为待复核的历史报告值。
 
@@ -23,15 +23,26 @@
 
 “协议兼容”指格式和解析后的语义兼容。现有旋转键序列化遍历 Go map，顺序不稳定；不同随机生成的密钥也具有不同字节值，因此不要求新旧导出结果无条件逐字节相等。
 
+### 4. 仓库边界与实现位置
+
+本仓库的 `inference/lattisense` 是顶层仓库的 Git submodule；`inference/lattisense/fhe_ops_lib/lattigo` 又是 `lattisense` 的嵌套 submodule，远端为 `https://github.com/cipherflow-fhe/lattigo.git`，属于 CipherFlow 维护的 Lattigo fork。当前构建固定到该 submodule 的提交（本次检查为 `d68e5122`）；`inference/lattisense/plug-in/lattigo` 是另一个插件 Go module，不是本文使用的 RLWE/CKKS 库。
+
+`inference/lattisense/CMakeLists.txt` 会把 `fhe_ops_lib/lattigo/go_sdk` 编译为 `liblattigo.a/.so`，`fhe_ops_lib` 再链接该库，`inference/interface/node` 的 addon 链接已编译的 `libfhe_ops_lib`。因此推荐的最小实现位置是已有 `go_sdk` CGO 绑定层：增加流式 setup/export 导出函数，复用公开的 key generator 和 serializer；再在 LattiSense C++ 层加薄包装，保留 Node 现有 AsyncWorker 的调用形态。
+
+不修改 `rlwe/bit_stream.go`、`rlwe/keygenerator.go` 或 `ckks/bootstrapping/bootstrapper.go` 等核心算法和编码文件。完全不改 Lattigo submodule 而只在 C++ 层适配，将无法访问 Go context 的 key generator、SK 和逐键生成状态，需要另建 Go module、重复句柄桥接和构建规则，改动更大。这里的“上层适配”指 fork 内已有的 Go SDK/CGO 绑定层，而不是复制一套密码学实现。
+
+三个仓库均在本地 `feat/streaming-key-generation` 分支开发，不使用 worktree。顶层将原 `feat/split-key-gens` 重命名；`lattisense` 和 `lattigo` 从各自当前 checkout 的提交创建该分支，不直接修改原分支或切换到其他基线。实现提交需要依次提交 Go SDK 所在的嵌套 submodule、更新 `inference/lattisense` 的 submodule 指针，再更新顶层仓库指针；重新构建 `liblattigo`、`fhe_ops_lib` 和 Node addon 后，Node 才能调用新符号。
+
 ---
 
 ## 二、端到端架构与数据流
 
 ```text
-Client：已有 SK/PK 和参数的 context（初始化方式不在本文范围内）
+Client：默认 `setup()` 或已有 SK/PK 和参数的 context
   │
-  ├─ export_eval_context_to_file(path)
-  │    ├─ 校验前置条件并计算 Galois 集合，创建同目录临时文件
+  ├─ setup()（Node 默认入口；完成后仅保留客户端 SK/PK）
+  │    ├─ Go SDK 流式入口创建内部客户端密钥状态，创建同目录临时文件
+  │    ├─ 校验前置条件并计算 Galois 集合
   │    ├─ BTP：Scheme → has_sk=0 → PK → BTP 参数
   │    ├─ 普通 CKKS：Scheme → has_sk=0 → has_pk=0
   │    ├─ 生成 RLK，用现有 serializer 编码到单键 buffer 并写文件，丢弃引用
@@ -39,6 +50,9 @@ Client：已有 SK/PK 和参数的 context（初始化方式不在本文范围�
   │    ├─ 按 galEl 逐键生成、写出并丢弃（含共轭键）
   │    ├─ BTP：调用 GenEncapsulationSwitchingKeys，分别编码并写 DtS/StD
   │    └─ 检查写入、Close 和 Rename 的结果
+  │
+  ├─ export_eval_context_to_file(path)（已有 context 的底层/自定义路径入口）
+  │    └─ 复用同一逐键 writer，不构造完整内存 context
   │
   ├─ encrypt(input)
   │
@@ -122,7 +136,7 @@ Client.decrypt(encrypted_outputs) ◄──────────────�
 
 现有 `CiphertextQPToBytes`、`GadgetCiphertextToBytes`、`SwitchingKeyToBytes`、`RelinearizationKeyToByte` 等函数接受 `*bytes.Buffer`，可直接复用。
 
-最小方案在 Go SDK 导出函数内复用一个 `bytes.Buffer`，每次只编码当前 payload，完成后调用 `WriteTo(file)` 写入临时文件；成功后 buffer 自动清空，供下一次编码使用。以 SwitchingKey payload 为例：
+最小方案在 Go SDK 绑定层复用一个 `bytes.Buffer`，每次只编码当前 payload，完成后调用 `WriteTo(file)` 写入临时文件；成功后 buffer 自动清空，供下一次编码使用。默认 `setup()` 直接调用该绑定层流式入口，不能先调用当前 `CreateRandomCkksContext` / `CreateRandomCkksBtpContext`，再调用 `gen_rotation_keys` 或 BTP 批量生成路径后导出；BTP 的 `CreateRandomCkksBtpContext` 本身就会批量生成评估键。以 SwitchingKey payload 为例：
 
 ```go
 var keyBuf bytes.Buffer // 导出函数局部，跨 payload 复用
@@ -134,6 +148,8 @@ if _, err := keyBuf.WriteTo(file); err != nil {
 ```
 
 PK、RLK、DtS/StD 分别调用对应的现有 serializer，保持 seed 压缩和多项式位打包编码。这里只暂存当前 payload 的压缩字节；小型 Scheme/BTP 参数继续使用 `MarshalBinary`，不编码或复制完整 context，也不积累旋转键集合。
+
+默认流式 setup 在 Go SDK 内部准备 SK/PK、参数及加解密所需状态，随后复用同一逐键 writer；尤其 BTP 不调用会物化完整评估键的旧构造器，也不创建客户端不需要的 bootstrapper。这一内部构造只服务于流式 setup，不作为独立的 keypair-only 公共初始化接口。
 
 `bytes.Buffer.WriteTo` 直接把当前内容交给文件写入，返回写入错误或 `io.ErrShortWrite`，不额外复制整段 payload。已有 serializer 向内存 buffer 写入，不涉及磁盘错误；文件写入错误在 Go SDK 层检查并传播即可。无需修改 `rlwe/bit_stream.go`，也无需新增 writer 接口、serializer 变体或额外的 32 MiB `bufio.Writer`。
 
@@ -169,7 +185,7 @@ for galEl in deduplicated galEls:
 
 批量 `GenRotationKeys` 与逐键 `GenSwitchingKeyForGalois` 均在完整 Q/P level 分配键，并调用同一 `genrotKey → genSwitchingKey`，包括相同的逆 Galois 变换与分解参数；逐键路径复用现有采样算法。
 
-默认单 goroutine 顺序生成、编码和写出，复用同一个 `kgen` 与 buffer；其 `buffQP`/`buffQ` 和采样器状态不能被并发访问。本仓库的批量 `GenRotationKeys` 先分配全套键，再通过 `WorkerPool` 并行生成，各作业创建独立的 key generator 工作区；默认并发数为 `min(GOMAXPROCS, 作业数)`，全套键仍全部存活。流式路径必须绕过该入口，同时避免全套键累计与并发工作区叠加；耗时与峰值 RSS 一起实测。
+默认单 goroutine 顺序生成、编码和写出，复用同一个 `kgen` 与 buffer；其 `buffQP`/`buffQ` 和采样器状态不能被并发访问。本仓库的批量 `GenRotationKeys` 先分配全套键，再通过 `WorkerPool` 并行生成，各作业创建独立的 key generator 工作区；默认并发数为 `min(GOMAXPROCS, 作业数)`，全套键仍全部存活。默认流式入口必须绕过该批量初始化，同时避免全套键累计与并发工作区叠加；耗时与峰值 RSS 一起实测。
 
 ### 3. 复用 BTP DtS/StD 成对生成接口
 
@@ -222,18 +238,24 @@ CGO 导出函数返回 `0` 表示成功、非零表示失败，设置现有错�
 
 ### 5. C++ 包装接口
 
-本规范新增以下文件接口；SK/PK context 的准备方式由调用方提供：
+本规范保留现有 `setup()` 名称，将其默认实现切换为流式生成；同时保留以下文件接口供已有 context 或需要自定义目标路径的调用方使用。SK/PK 的内部准备不作为独立公开 API：
 
 ```cpp
 class InferenceClient {
 public:
+    // Existing entry point. Default implementation generates evaluation keys one by one
+    // and writes the completed file before resolving/returning.
+    void setup();
+
     // Requires SK and matching scheme parameters; BTP also requires PK and BTP parameters.
     // Generates and streams evaluation keys; throws on export failure.
     void export_eval_context_to_file(const std::string& filepath);
 };
 ```
 
-`CkksContext` 和 `CkksBtpContext` 分别包装对应的 Go stream export。文件导出不在客户端保留新生成的完整评估键集合；旧 `setup()` / `export_eval_context()` 路径仍按原语义运行。
+`CkksContext` 和 `CkksBtpContext` 分别包装对应的 Go stream setup/export。默认 `setup()` 完成后客户端只保留 SK/PK 及加解密所需状态，评估键文件由调用方传给服务端；旧 `export_eval_context()` 保留为兼容/对照路径，不作为默认实现，也不应由 Node 默认流程调用。
+
+为保持 Node 现有调用不变，`inference/interface/node/binding.cpp` 继续暴露 `client.setup()` Promise；其 worker 调用的 C++ `setup()` 改为等待流式文件完整关闭并发布后再 resolve。默认文件写入 `client_dir_/eval_context.bin`，服务端按该路径导入；如部署需要不同路径，增加一个薄的 `setup`/文件导出参数转发即可，不在 Node 层实现密钥生成或序列化。
 
 ---
 
@@ -282,14 +304,14 @@ void InferenceServer::import_eval_context_file(const std::string& path) {
 
 ### 1. 调用边界
 
-以下示例从已经准备好的 `client` context 开始；不定义或实现 `setup_keypair()`：
+默认 Node/C++ 流程从 `client.setup()` 开始；不定义或实现独立的 `setup_keypair()`：
 
 ```cpp
-std::string eval_context_file = task_dir + "/server/eval_context.bin";
-client.export_eval_context_to_file(eval_context_file);
+client.setup();  // default: stream keys to client_dir/eval_context.bin
 auto encrypted_inputs = client.encrypt(input_csvs);
 
 InferenceServer server(task_dir + "/server", use_gpu, 0);
+std::string eval_context_file = client_dir + "/eval_context.bin";
 server.import_eval_context_file(eval_context_file);
 server.load_model();
 auto encrypted_outputs = server.evaluate(encrypted_inputs);
@@ -310,7 +332,8 @@ auto results = client.decrypt(encrypted_outputs);
 | BTP 切换键 | 复用 `GenEncapsulationSwitchingKeys`，验证 DtS/StD 功能及 sparse/full 编码；覆盖 `EphemeralSecretWeight == 0` |
 | 写入失败 | 覆盖短写、磁盘写满、Close/Rename 失败，检查非零返回与 C++ 异常；旧目标保留，临时文件清理或报告清理失败 |
 | 文件读取失败 | 覆盖不存在、空文件、不可表示的长度和读取短于 `tellg` 的文件；不把当前 parser 的缺陷当成已验证的损坏文件处理能力 |
-| 客户端内存 | 用独立客户端进程对比旧路径密钥生成加内存导出与新路径逐键生成落盘，记录相同参数、key set、Go 版本、线程数、GC 配置、Heap 和峰值 RSS；确认新路径不累计键、不分配完整文件 buffer，且峰值显著降低 |
+| 默认入口 | Node `client.setup()` / C++ `setup()` 只在流式文件成功发布后返回；客户端保留 SK/PK，可加解密，默认不保留完整评估键集合 |
+| 客户端内存 | 用独立客户端进程对比旧批量 `setup()` 与新默认 `setup()`，记录相同参数、key set、Go 版本、线程数、GC 配置、Heap 和峰值 RSS；确认新路径不累计键、不分配完整文件 buffer，且峰值显著降低 |
 | 端到端回归 | CIFAR-10 BTP 和普通 CKKS 任务均通过各自误差容限；保留旧内存导出路径回归 |
 
 新路径接入示例并重新构建后，运行：
@@ -330,15 +353,16 @@ ctest --test-dir build -R '^example-mnist-cpu$' -V
 
 | 层级 | 文件 | 变动说明 |
 | :--- | :--- | :--- |
-| Go SDK BTP | `inference/lattisense/fhe_ops_lib/lattigo/go_sdk/bootstrap.go` | 新增 `StreamExportCkksBtpEvalContextToFile`；复用逐键生成、成对 DtS/StD 生成和现有 serializer，以单键 buffer 写文件 |
-| Go SDK CKKS | `inference/lattisense/fhe_ops_lib/lattigo/go_sdk/main.go` | 新增 `StreamExportCkksEvalContextToFile`；复用生成及 serializer 接口，共用小型文件写入/错误处理逻辑，保持 BigEndian 参数长度及不包含 PK 的策略 |
+| Go SDK BTP | `inference/lattisense/fhe_ops_lib/lattigo/go_sdk/bootstrap.go` | 增加默认流式 setup/export 入口；内部创建客户端 SK/PK，复用逐键生成、成对 DtS/StD 生成和现有 serializer，以单键 buffer 写文件 |
+| Go SDK CKKS | `inference/lattisense/fhe_ops_lib/lattigo/go_sdk/main.go` | 增加默认流式 setup/export 入口；复用生成及 serializer 接口，共用小型文件写入/错误处理逻辑，保持 BigEndian 参数长度及不包含 PK 的策略 |
 | 生成头文件 | `go_sdk/liblattigo.h`、`go_sdk/liblattigo_sanitized.h` | 由 Go 构建及 CMake 重新生成，使新的 CGO 导出符号可见；不手写生成头 |
-| LattiSense C++ | `inference/lattisense/fhe_ops_lib/fhe_lib_v2.h/.cpp` | 为两个 context 增加文件导出包装，检查 CGO 返回值 |
-| Client | `inference/interface/inference_client.h/.cpp` | 新增 `export_eval_context_to_file`，分别调用 CKKS/BTP 分支 |
+| LattiSense C++ | `inference/lattisense/fhe_ops_lib/fhe_lib_v2.h/.cpp` | 为两个 context 增加流式创建及文件导出薄包装，检查 CGO 返回值 |
+| Client | `inference/interface/inference_client.h/.cpp` | 保留 `setup()` 名称并改为默认调用流式入口；新增/保留 `export_eval_context_to_file` 作为已有 context 的薄包装 |
 | Server | `inference/interface/inference_server.h/.cpp` | 新增文件导入，检查长度及读错误，复用既有导入逻辑 |
+| Node | `inference/interface/node/binding.cpp` | 保留现有 `setup()` Promise/AsyncWorker，重新链接流式 C++ 实现；不在 N-API 层复制 keygen 或大文件 Buffer |
 | 示例与测试 | `examples/inference.cpp`、对应协议/失败路径测试 | 接入文件路径并覆盖普通 CKKS、BTP、旧接口和独立内存测量 |
 
-生成算法和底层编码直接复用，不改 `rlwe/bit_stream.go` 或 `ckks/bootstrapping/bootstrapper.go`。上述清单不包含 keypair-only 初始化或其他密钥生命周期 API。本文只承诺 C++ 接口范围；Python/Node 若需暴露文件 API，需另行增加绑定。
+生成算法和底层编码直接复用，不改核心 Lattigo 文件；默认入口的内部 SK/PK 准备只服务于流式 setup，不形成独立 keypair-only API。Python 绑定不在本次范围内，Node 绑定属于本次默认接口链路。
 
 ---
 
