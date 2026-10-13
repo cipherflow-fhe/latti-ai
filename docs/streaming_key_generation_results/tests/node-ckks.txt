@@ -1,0 +1,61 @@
+
+> latti-client-node@0.1.0 test
+> node test_client.js
+
+Testing latti_client N-API addon
+
+[TEST] import
+[PASS] InferenceClient constructor
+
+[TEST] setup (key generation)
+[Client] Streaming evaluation keys to "/tmp/latti-streaming-node-cn6vkG/eval_context.bin"...
+[Client] Bootstrapping: No
+[Client] Poly degree: N=16384
+[Client] Done.
+[PASS] setup (2.2s)
+
+[TEST] exportFullContext (client SK/PK persistence)
+[Client] Exporting full context (with secret key)...
+[Client] Serializing CKKS context...
+[Client] Done.
+[PASS] exportFullContext (1.7 MB)
+
+[TEST] encrypt
+[Client] Encrypting input 'input' (dim=2, is_mat=0)...
+[Client] Done.
+[PASS] encrypt (1156.1 KB, 0.0s)
+
+[TEST] decrypt (encrypt-decrypt roundtrip)
+[Client] Decrypting output 'output' (dim=2)...
+[Client] Done.
+[PASS] decrypt (numOutputs=256, 0.0s)
+[PASS] roundtrip verified (maxError=0.000000)
+
+[TEST] loadFullContext + encrypt + decrypt roundtrip (fresh client)
+[Client] Loading full context (with secret key)...
+[Client] Done.
+[Client] Encrypting input 'input' (dim=2, is_mat=0)...
+[Client] Done.
+[Client] Decrypting output 'output' (dim=2)...
+[Client] Done.
+[PASS] loadFullContext roundtrip (maxError=0.000000)
+
+[TEST] release + reload roundtrip
+[Client] Releasing in-memory key material...
+[Client] Done.
+[Client] Loading full context (with secret key)...
+[Client] Done.
+[Client] Encrypting input 'input' (dim=2, is_mat=0)...
+[Client] Done.
+[Client] Decrypting output 'output' (dim=2)...
+[Client] Done.
+[PASS] release + reload roundtrip (maxError=0.000000)
+
+[TEST] setup publication failure rejects Promise
+[Client] Streaming evaluation keys to "/tmp/latti-streaming-failure-GCKSdf/eval_context.bin"...
+[Client] Bootstrapping: No
+[Client] Poly degree: N=16384
+rename /tmp/latti-streaming-failure-GCKSdf/.eval-context-79619513 /tmp/latti-streaming-failure-GCKSdf/eval_context.bin: file exists
+[PASS] rejected; old target retained; temporary file removed
+
+=== ALL TESTS PASSED ===

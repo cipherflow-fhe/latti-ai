@@ -1,0 +1,41 @@
+UpdateCTestConfiguration  from :/home/linghm/latti-ai-fix/latti-ai/build/DartConfiguration.tcl
+Parse Config file:/home/linghm/latti-ai-fix/latti-ai/build/DartConfiguration.tcl
+Test project /home/linghm/latti-ai-fix/latti-ai/build
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 5
+    Start 5: streaming-context-file
+
+5: Test command: /home/linghm/latti-ai-fix/latti-ai/build/examples/streaming_context_file_test "/home/linghm/latti-ai-fix/latti-ai/examples/test_mnist/task"
+5: Working Directory: /home/linghm/latti-ai-fix/latti-ai/build/examples
+5: Test timeout computed to be: 1500
+5: [Server] Importing evaluation context...
+5: [Server] Bootstrapping: No
+5: [Server] Done.
+5: [Client] Streaming evaluation keys to "/tmp/latti-eval-106942318680406-client/eval_context.bin"...
+5: [Client] Bootstrapping: No
+5: [Client] Poly degree: N=16384
+5: [Client] Done.
+5: [Client] Exporting full context (with secret key)...
+5: [Client] Serializing CKKS context...
+5: [Client] Done.
+5: [Client] Releasing in-memory key material...
+5: [Client] Done.
+5: [Client] Loading full context (with secret key)...
+5: [Client] Done.
+5: [Server] Importing evaluation context...
+5: [Server] Bootstrapping: No
+5: [Server] Done.
+5: Evaluation context file read and failure tests passed
+1/1 Test #5: streaming-context-file ...........   Passed    6.14 sec
+
+The following tests passed:
+	streaming-context-file
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   6.14 sec

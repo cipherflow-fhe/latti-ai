@@ -1,6 +1,6 @@
 # 密钥流式生成落盘 implementation plan
 
-本计划严格依据 [设计规范](streaming_eval_context_file_design_spec.md)（修订提交 `7b5e690`），把规范要求拆成按模块执行、验证和提交的步骤。下列实现步骤均为待执行；本次只提交设计规范和本计划，不代表代码已实现或峰值内存已验收。
+本计划严格依据 [设计规范](streaming_eval_context_file_design_spec.md)（修订提交 `7b5e690`），把规范要求拆成按模块执行、验证和提交的步骤。M1–M7 已执行并验证；提交对应关系、重编译命令、回归结果和客户端峰值内存实测见 [验收记录](streaming_eval_context_file_validation.md)。
 
 ## 1. 分支、基线与提交规则
 
@@ -62,7 +62,7 @@ M1/M2 都复用已有底层实现，不修改 `rlwe/bit_stream.go`、`rlwe/keyge
 1. 为 `CkksContext` 和 `CkksBtpContext` 增加流式创建及 `export_eval_context_to_file(path)` 薄包装，把参数、路径传给 Go，接收 context 句柄并沿用现有 RAII 生命周期。
 2. 每个新调用检查状态码，用 `CHECK` 和既有错误消息转换为 C++ 异常；失败不包装无效句柄，不经 `export_raw_data` 或 `Bytes` 传递评估键文件。
 3. 原随机构造器、批量密钥生成及内存 serializer 保留，供已有完整 context 和旧路径对照使用；默认流式调用不经过这些入口。
-4. 用既有 `go_libs` 构建重新生成 `liblattigo.a/.so`、`liblattigo.h` 和 sanitized 头，再构建 `fhe_ops_lib`。生成头在当前 Lattigo 仓库被忽略，不手写或强制跟踪；不要把动态/静态库提交进源码。
+4. 用既有 `go_libs` 构建重新生成 `liblattigo.a/.so`、`liblattigo.h` 和 sanitized 头，再构建 `fhe_ops_lib`。核对后发现两个生成头在实现前基线中已被跟踪，因此提交其重新生成的声明，不手写或增加新的跟踪规则；不要把动态/静态库提交进源码。
 
 验证后提交：两个 C++ context 均能创建、导出、加解密；Go 失败可被 C++ 捕获且文件不错误发布。用原 C++ 导入包装读取新文件，验证旧完整 context 的内存序列化仍可使用。新符号必须由重新生成的头声明并由实际库链接成功，避免只编译头或加载旧库。
 
@@ -142,4 +142,4 @@ LD_LIBRARY_PATH="$PWD/build/inference/lattisense/fhe_ops_lib:$PWD/inference/latt
 | CIFAR-10 BTP、普通 CKKS 端到端 | M5、M7 | 新文件路径的 CTest 日志、完整且有限的输出、误差容限 |
 | 客户端峰值内存首要条件 | M7 | 独立进程、同条件旧新基线、分阶段堆数据、峰值 RSS 和降幅 |
 
-每个模块提交前执行 `git diff --check` 并检查实际暂存文件及所属仓库。最终核对三个仓库都在 `feat/streaming-key-generation`，gitlink 指向已提交实现，工作树没有遗留实现改动；分支名不替代 gitlink。M1 至 M7 尚未执行时，只能报告规划完成，不能报告流式实现、重编译或内存验收完成。
+每个模块提交前执行 `git diff --check` 并检查实际暂存文件及所属仓库。最终核对三个仓库都在 `feat/streaming-key-generation`，gitlink 指向已提交实现，工作树没有遗留实现改动；分支名不替代 gitlink。完成状态须以验收记录中的实际证据为准。

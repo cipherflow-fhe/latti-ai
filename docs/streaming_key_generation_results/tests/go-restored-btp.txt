@@ -1,0 +1,4 @@
+=== RUN   TestStreamingBtpRestoredClientShallowCopy
+--- PASS: TestStreamingBtpRestoredClientShallowCopy (0.01s)
+PASS
+ok  	github.com/cipherflow-fhe/lattigo/go_sdk	0.013s

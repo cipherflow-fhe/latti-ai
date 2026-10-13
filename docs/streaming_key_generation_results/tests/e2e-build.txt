@@ -1,0 +1,28 @@
+[  1%] Built target go_libs
+[  9%] Built target fhe_ops_lib_obj
+[  9%] Built target cxx_sdk_v2_obj
+[ 12%] Built target cpu_mega_ag_runner_obj
+[ 13%] Built target mega_ag_obj
+[ 16%] Built target log
+[ 17%] Built target abi_obj
+[ 19%] Built target lattisense
+[ 90%] Built target fhe_layers
+[ 93%] Built target inference_task
+[ 97%] Built target inference_interface
+[ 98%] Building CXX object inference/unittests/CMakeFiles/test_e2e_single_layer.dir/test_e2e_single_layer.cpp.o
+[100%] Linking CXX executable test_e2e_single_layer
+[100%] Built target test_e2e_single_layer
+[  1%] Built target go_libs
+[  9%] Built target cpu_mega_ag_runner_obj
+[  9%] Built target fhe_ops_lib_obj
+[ 12%] Built target cxx_sdk_v2_obj
+[ 16%] Built target log
+[ 16%] Built target mega_ag_obj
+[ 17%] Built target abi_obj
+[ 19%] Built target lattisense
+[ 90%] Built target fhe_layers
+[ 93%] Built target inference_task
+[ 97%] Built target inference_interface
+[ 98%] Building CXX object inference/unittests/CMakeFiles/test_e2e_multiple_layer.dir/test_e2e_multiple_layer.cpp.o
+[100%] Linking CXX executable test_e2e_multiple_layer
+[100%] Built target test_e2e_multiple_layer

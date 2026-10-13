@@ -1,0 +1,26 @@
+=== RUN   TestStreamingCkksProtocolAndFunction
+--- PASS: TestStreamingCkksProtocolAndFunction (0.23s)
+=== RUN   TestStreamingFileFailures
+=== RUN   TestStreamingFileFailures/write
+=== RUN   TestStreamingFileFailures/short
+=== RUN   TestStreamingFileFailures/close
+=== RUN   TestStreamingFileFailures/rename
+=== RUN   TestStreamingFileFailures/cleanup
+=== RUN   TestStreamingFileFailures/panic
+--- PASS: TestStreamingFileFailures (0.00s)
+    --- PASS: TestStreamingFileFailures/write (0.00s)
+    --- PASS: TestStreamingFileFailures/short (0.00s)
+    --- PASS: TestStreamingFileFailures/close (0.00s)
+    --- PASS: TestStreamingFileFailures/rename (0.00s)
+    --- PASS: TestStreamingFileFailures/cleanup (0.00s)
+    --- PASS: TestStreamingFileFailures/panic (0.00s)
+=== RUN   TestStreamingValidationAndCgoBoundary
+--- PASS: TestStreamingValidationAndCgoBoundary (0.00s)
+=== RUN   TestStreamingBtpProtocolAndBootstrap
+=== RUN   TestStreamingBtpProtocolAndBootstrap/ephemeral-32
+=== RUN   TestStreamingBtpProtocolAndBootstrap/ephemeral-0
+--- PASS: TestStreamingBtpProtocolAndBootstrap (19.15s)
+    --- PASS: TestStreamingBtpProtocolAndBootstrap/ephemeral-32 (9.86s)
+    --- PASS: TestStreamingBtpProtocolAndBootstrap/ephemeral-0 (9.29s)
+PASS
+ok  	github.com/cipherflow-fhe/lattigo/go_sdk	19.441s
