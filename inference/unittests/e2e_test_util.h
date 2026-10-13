@@ -74,13 +74,14 @@ static void run_e2e_test(const fs::path& test_dir, bool use_gpu) {
 
     // Client: generate keys and encrypt input
     InferenceClient client(client_dir.string());
-    measure_void("Key generation", [&] { client.setup(); });
-    auto eval_ctx = measure("Export eval context", [&] { return client.export_eval_context(); });
+    measure_void("Key generation and export", [&] { client.setup(); });
+    auto eval_context_file = (client_dir / "eval_context.bin").string();
     auto encrypted_inputs = measure("Encrypt input", [&] { return client.encrypt(input_csvs); });
 
     // Server: import context, load model, run encrypted inference
     InferenceServer server(server_dir.string(), use_gpu);
-    measure_void("Import eval context", [&] { server.import_eval_context(eval_ctx); });
+    measure_void("Import eval context", [&] { server.import_eval_context_file(eval_context_file); });
+    fs::remove(eval_context_file);
     measure_void("Load model", [&] { server.load_model(); });
     auto encrypted_outputs = measure("Evaluate (encrypted)", [&] { return server.evaluate(encrypted_inputs); });
 

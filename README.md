@@ -224,13 +224,12 @@ Use the `InferenceClient` / `InferenceServer` interface to run encrypted inferen
 
 // Client: generate keys and encrypt input
 InferenceClient client("./task/client");
-client.setup();
-auto eval_ctx = client.export_eval_context();           // serialize public keys (Bytes)
-auto encrypted_input = client.encrypt("./task/client/img.csv");  // encrypt and serialize ciphertext (Bytes)
+client.setup();  // writes ./task/client/eval_context.bin; retains client SK/PK
+auto encrypted_input = client.encrypt({{"input", "./task/client/img.csv"}});
 
 // Server: import public keys, load model, run inference on serialized ciphertext
 InferenceServer server("./task/server", use_gpu);
-server.import_eval_context(eval_ctx);           // deserialize public keys
+server.import_eval_context_file("./task/client/eval_context.bin");  // import the completed public-key file
 server.load_model();
 auto encrypted_output = server.evaluate(encrypted_input);  // deserialize input, inference, serialize output
 
