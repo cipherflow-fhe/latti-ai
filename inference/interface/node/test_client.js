@@ -3,13 +3,26 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const assert = require('assert');
 
 // latti_client.node is dynamically linked against libfhe_ops_lib.so.
 // Ensure LD_LIBRARY_PATH includes the directory containing it, e.g.:
 //   LD_LIBRARY_PATH=.../build/inference/lattisense/fhe_ops_lib node test_client.js
 const { InferenceClient } = require('./build/Release/latti_client.node');
 
-const TEST_TASK_DIR = path.join(__dirname, '..', 'python', 'client', 'testdata');
+const TEST_TASK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'latti-streaming-node-'));
+fs.cpSync(path.join(__dirname, '..', 'python', 'client', 'testdata'), TEST_TASK_DIR, {recursive: true});
+if (process.argv.includes('--btp')) {
+    const configPath = path.join(TEST_TASK_DIR, 'task_config.json');
+    const config = JSON.parse(fs.readFileSync(configPath));
+    config.use_btp = true;
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    const parametersPath = path.join(TEST_TASK_DIR, 'ckks_parameter.json');
+    const parameters = JSON.parse(fs.readFileSync(parametersPath));
+    parameters.param0.poly_modulus_degree = 65536;
+    fs.writeFileSync(parametersPath, JSON.stringify(parameters));
+}
 
 async function testImport() {
     console.log('[TEST] import');
@@ -21,25 +34,17 @@ async function testImport() {
 async function testSetup(client) {
     console.log('\n[TEST] setup (key generation)');
     const start = Date.now();
-    await client.setup();
+    const promise = client.setup();
+    assert(promise instanceof Promise);
+    await promise;
+    assert(fs.statSync(path.join(TEST_TASK_DIR, 'eval_context.bin')).size > 0);
     console.log(`[PASS] setup (${((Date.now() - start) / 1000).toFixed(1)}s)`);
-}
-
-async function testExportEvalContext(client) {
-    console.log('\n[TEST] exportEvalContext');
-    const start = Date.now();
-    const evalCtx = await client.exportEvalContext();
-    console.log(`[PASS] exportEvalContext (${(evalCtx.length / 1024 / 1024).toFixed(1)} MB, ${((Date.now() - start) / 1000).toFixed(1)}s)`);
-    return evalCtx;
 }
 
 async function testEncrypt(client) {
     console.log('\n[TEST] encrypt');
     const csvPath = path.join(TEST_TASK_DIR, 'img.csv');
-    if (!fs.existsSync(csvPath)) {
-        console.log(`[SKIP] ${csvPath} not found`);
-        return null;
-    }
+    assert(fs.existsSync(csvPath), `missing test input: ${csvPath}`);
     const start = Date.now();
     const encrypted = await client.encrypt({input: csvPath});
     const ct = encrypted.input;
@@ -59,23 +64,35 @@ async function testDecrypt(client, encrypted) {
     const original = csv.trim().split(',').map(Number);
     const decrypted = Array.from(output.output).slice(0, original.length);
     const maxError = Math.max(...original.map((v, i) => Math.abs(v - decrypted[i])));
-    if (maxError >= 0.01) {
-        console.log(`[FAIL] max error too large: ${maxError}`);
-        process.exit(1);
+    if (!Number.isFinite(maxError) || maxError >= 0.01) {
+        throw new Error(`max error too large: ${maxError}`);
     }
     console.log(`[PASS] roundtrip verified (maxError=${maxError.toFixed(6)})`);
 }
 
-async function testExportFullContext(client, evalCtx) {
-    console.log('\n[TEST] exportFullContext');
+async function testExportFullContext(client) {
+    console.log('\n[TEST] exportFullContext (client SK/PK persistence)');
     const fullCtx = await client.exportFullContext();
-    // full_ctx includes the secret key; eval_ctx does not. So full_ctx must be strictly larger.
-    if (fullCtx.length <= evalCtx.length) {
-        throw new Error(`fullCtx (${fullCtx.length}) should be larger than evalCtx (${evalCtx.length})`);
-    }
-    const deltaMb = (fullCtx.length - evalCtx.length) / 1024 / 1024;
-    console.log(`[PASS] exportFullContext (${(fullCtx.length / 1024 / 1024).toFixed(1)} MB, +${deltaMb.toFixed(1)} MB vs eval)`);
+    assert(fullCtx.length > 0);
+    console.log(`[PASS] exportFullContext (${(fullCtx.length / 1024 / 1024).toFixed(1)} MB)`);
     return fullCtx;
+}
+
+async function testSetupFailure() {
+    console.log('\n[TEST] setup publication failure rejects Promise');
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'latti-streaming-failure-'));
+    try {
+        fs.cpSync(TEST_TASK_DIR, directory, {recursive: true, filter: p => path.basename(p) !== 'eval_context.bin'});
+        // Rename cannot publish a regular file over a directory; the old target must survive.
+        fs.mkdirSync(path.join(directory, 'eval_context.bin'));
+        const client = new InferenceClient(directory);
+        await assert.rejects(client.setup());
+        assert(fs.statSync(path.join(directory, 'eval_context.bin')).isDirectory());
+        assert(!fs.readdirSync(directory).some(name => name.startsWith('.eval-context-')));
+        console.log('[PASS] rejected; old target retained; temporary file removed');
+    } finally {
+        fs.rmSync(directory, {recursive: true, force: true});
+    }
 }
 
 async function testLoadFullContextRoundtrip(taskDir, fullCtx) {
@@ -95,17 +112,14 @@ async function testLoadFullContextRoundtrip(taskDir, fullCtx) {
     const original = csv.trim().split(',').map(Number);
     const decrypted = Array.from(result.output.output).slice(0, original.length);
     const maxError = Math.max(...original.map((v, i) => Math.abs(v - decrypted[i])));
-    if (maxError >= 0.01) {
+    if (!Number.isFinite(maxError) || maxError >= 0.01) {
         throw new Error(`max error too large: ${maxError}`);
     }
     console.log(`[PASS] loadFullContext roundtrip (maxError=${maxError.toFixed(6)})`);
 }
 
-async function testReleaseThenReloadRoundtrip(taskDir, fullCtx) {
+async function testReleaseThenReloadRoundtrip(c, taskDir, fullCtx) {
     console.log('\n[TEST] release + reload roundtrip');
-    const { InferenceClient } = require('./build/Release/latti_client.node');
-    const c = new InferenceClient(taskDir);
-    await c.setup();
     await c.release();                  // frees freshly-generated keys
     await c.loadFullContext(fullCtx);   // restore from saved bytes
 
@@ -117,7 +131,7 @@ async function testReleaseThenReloadRoundtrip(taskDir, fullCtx) {
     const original = csv.trim().split(',').map(Number);
     const decrypted = Array.from(result.output.output).slice(0, original.length);
     const maxError = Math.max(...original.map((v, i) => Math.abs(v - decrypted[i])));
-    if (maxError >= 0.01) {
+    if (!Number.isFinite(maxError) || maxError >= 0.01) {
         throw new Error(`max error too large: ${maxError}`);
     }
     console.log(`[PASS] release + reload roundtrip (maxError=${maxError.toFixed(6)})`);
@@ -127,18 +141,16 @@ async function main() {
     console.log('Testing latti_client N-API addon\n');
     const client = await testImport();
     await testSetup(client);
-    const evalCtx = await testExportEvalContext(client);
-    const fullCtx = await testExportFullContext(client, evalCtx);
+    const fullCtx = await testExportFullContext(client);
     const encrypted = await testEncrypt(client);
-    if (encrypted) {
-        await testDecrypt(client, encrypted);
-        await testLoadFullContextRoundtrip(TEST_TASK_DIR, fullCtx);
-        await testReleaseThenReloadRoundtrip(TEST_TASK_DIR, fullCtx);
-    }
+    await testDecrypt(client, encrypted);
+    await testLoadFullContextRoundtrip(TEST_TASK_DIR, fullCtx);
+    await testReleaseThenReloadRoundtrip(client, TEST_TASK_DIR, fullCtx);
+    await testSetupFailure();
     console.log('\n=== ALL TESTS PASSED ===\n');
 }
 
-main().catch(err => {
+main().finally(() => fs.rmSync(TEST_TASK_DIR, {recursive: true, force: true})).catch(err => {
     console.error('[FATAL]', err);
     process.exit(1);
 });
