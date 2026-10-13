@@ -1,0 +1,32 @@
+[  1%] Built target go_libs
+[  3%] Built target log
+[  4%] Built target mega_ag_obj
+[  8%] Built target fhe_ops_lib_obj
+[ 11%] Built target cpu_mega_ag_runner_obj
+[ 13%] Built target cxx_sdk_v2_obj
+[ 14%] Built target abi_obj
+[ 15%] Built target fhe_ops_lib
+[ 16%] Linking C static library libabi.a
+[ 17%] Built target lattisense
+[ 19%] Linking CXX shared library libcpu_mega_ag_runner.so
+[ 77%] Built target fhe_layers
+[ 79%] Built target inference_task
+[ 80%] Building CXX object inference/unittests/CMakeFiles/test_fhe_layers_hetero.dir/test_fhe_layers_hetero.cpp.o
+[ 82%] Building CXX object inference/unittests/CMakeFiles/test_fhe_layers_hetero.dir/ut_util.cpp.o
+[ 82%] Built target abi
+[ 85%] Built target inference_interface
+[ 87%] Building CXX object inference/unittests/CMakeFiles/test_data_structs.dir/test_data_structs.cpp.o
+[ 87%] Building CXX object inference/unittests/CMakeFiles/test_data_structs.dir/ut_util.cpp.o
+[ 87%] Built target cpu_mega_ag_runner
+[ 89%] Built target test_e2e_single_layer
+[ 92%] Built target test_e2e_multiple_layer
+[ 94%] Built target inference
+[ 95%] Building CXX object examples/CMakeFiles/streaming_context_file_test.dir/streaming_context_file_test.cpp.o
+[ 96%] Linking CXX shared library libcxx_sdk_v2.so
+[ 96%] Built target cxx_sdk_v2
+[ 97%] Linking CXX executable streaming_context_file_test
+[ 97%] Built target streaming_context_file_test
+[ 98%] Linking CXX executable test_data_structs
+[ 98%] Built target test_data_structs
+[100%] Linking CXX executable test_fhe_layers_hetero
+[100%] Built target test_fhe_layers_hetero

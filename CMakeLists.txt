@@ -66,6 +66,10 @@ include_directories(${HDF5_INCLUDE_DIRS})
 
 enable_testing()
 
+include(cmake/BindSubmoduleBranch.cmake)
+bind_submodule_branch("${CMAKE_CURRENT_SOURCE_DIR}" inference/lattisense)
+bind_submodule_branch("${CMAKE_CURRENT_SOURCE_DIR}/inference/lattisense" fhe_ops_lib/lattigo)
+
 add_subdirectory(inference)
 add_subdirectory(examples)
 

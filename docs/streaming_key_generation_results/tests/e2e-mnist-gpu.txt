@@ -1,0 +1,87 @@
+UpdateCTestConfiguration  from :/home/linghm/latti-ai-fix/latti-ai/build/gpu/DartConfiguration.tcl
+Parse Config file:/home/linghm/latti-ai-fix/latti-ai/build/gpu/DartConfiguration.tcl
+Test project /home/linghm/latti-ai-fix/latti-ai/build/gpu
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 10
+    Start 10: example-mnist-gpu
+
+10: Test command: /home/linghm/latti-ai-fix/latti-ai/build/gpu/examples/inference "--task-dir" "/home/linghm/latti-ai-fix/latti-ai/examples/test_mnist/task" "--input" "/home/linghm/latti-ai-fix/latti-ai/examples/test_mnist/task/client/img.csv" "--verify" "--gpu"
+10: Working Directory: /home/linghm/latti-ai-fix/latti-ai/build/gpu/examples
+10: Test timeout computed to be: 300
+10: ========== Encrypted Inference ==========
+10: Task directory: /home/linghm/latti-ai-fix/latti-ai/examples/test_mnist/task
+10: Input [input]: /home/linghm/latti-ai-fix/latti-ai/examples/test_mnist/task/client/img.csv
+10: Device:         GPU
+10: Verify mode:    ON (tolerance = 0.1)
+10:
+10: [Step 1/5] Setting up client (key generation)...
+10: [Client] Streaming evaluation keys to "/home/linghm/latti-ai-fix/latti-ai/examples/test_mnist/task/client/eval_context.bin"...
+10: [Client] Bootstrapping: No
+10: [Client] Poly degree: N=16384
+10: [Client] Done.
+10: [Step 2/5] Encrypting input...
+10: [Client] Encrypting input 'input' (dim=2, is_mat=0)...
+10: [Client] Done.
+10: [Step 3/5] Server loading model and importing context...
+10: [Server] Importing evaluation context...
+10: [Server] Bootstrapping: No
+10: [Server] Done.
+10: [Server] Loading model...
+10: [Server] Done.
+10: [Step 4/5] Running encrypted inference...
+10: [Server] Running encrypted inference...
+10: [Server] Device: GPU
+10:
+[                                                            ] 52% [00m:00s<00m:00s] 2458/4669
+[███████████████████████████████▌                            ] 96% [00m:00s<00m:00s] 4488/4669
+[█████████████████████████████████████████████████████████▋  ] 100% [00m:00s<00m:00s] 4669/4669
+[████████████████████████████████████████████████████████████] 100% [00m:00s<00m:00s] 4669/4669
+10: >>> Encrypted inference time: 268 ms
+10: [Server] Done.
+10: [Step 5/5] Decrypting result...
+10: [Client] Decrypting output 'output' (dim=0)...
+10: [Client] Done.
+10:
+10: ========== Results ==========
+10: Encrypted output [output] = [-1.60076201, -0.12976174, 1.95867227, 2.39348839, -1.80344623, ...] (num_outputs=10)
+10: Plaintext output [output] = [-1.60076002, -0.12976115, 1.95867862, 2.39348939, -1.80345280, ...] (num_outputs=10)
+10:
+10: ========== Verification [output] ==========
+10: Elements compared: 10
+10:
+10:    Index         Encrypted         Plaintext         Abs Error
+10: --------------------------------------------------------------
+10:        0       -1.60076201       -1.60076002        0.00000200
+10:        1       -0.12976174       -0.12976115        0.00000059
+10:        2        1.95867227        1.95867862        0.00000636
+10:        3        2.39348839        2.39348939        0.00000101
+10:        4       -1.80344623       -1.80345280        0.00000656
+10:        5        2.71165947        2.71165894        0.00000053
+10:        6       -0.41041898       -0.41042651        0.00000753
+10:        7       -0.56709636       -0.56709357        0.00000280
+10:        8        0.67878023        0.67878267        0.00000244
+10:        9       -0.66384585       -0.66385008        0.00000423
+10: --------------------------------------------------------------
+10: Max absolute error: 0.00000753 (at index 6)
+10: Avg absolute error: 0.00000340
+10: Tolerance:          0.10000000
+10:
+10: Result: PASS
+1/1 Test #10: example-mnist-gpu ................   Passed    6.51 sec
+
+The following tests passed:
+	example-mnist-gpu
+
+100% tests passed, 0 tests failed out of 1
+
+Label Time Summary:
+example        =   6.51 sec*proc (1 test)
+example-gpu    =   6.51 sec*proc (1 test)
+mnist          =   6.51 sec*proc (1 test)
+
+Total Test time (real) =   6.51 sec

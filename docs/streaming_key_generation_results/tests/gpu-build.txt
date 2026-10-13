@@ -1,0 +1,117 @@
+[  1%] Building CXX object inference/lattisense/mega_ag_runners/cpu/CMakeFiles/cpu_mega_ag_runner_obj.dir/cpu_wrapper.cpp.o
+[  6%] Building CXX object inference/lattisense/cxx_sdk_v2/CMakeFiles/cxx_sdk_v2_obj.dir/cxx_fhe_task_cpu.cpp.o
+[  6%] Building CUDA object inference/lattisense/mega_ag_runners/gpu/CMakeFiles/gpu_mega_ag_runner_obj.dir/gpu_wrapper.cu.o
+[  6%] Building CUDA object inference/lattisense/mega_ag_runners/gpu/CMakeFiles/gpu_mega_ag_runner_obj.dir/mega_ag_executors_gpu.cu.o
+[  6%] Built target go_libs
+[  6%] Building C object inference/CMakeFiles/log.dir/lib/log/log.c.o
+[  7%] Building CXX object inference/lattisense/mega_ag_runners/cpu/CMakeFiles/cpu_mega_ag_runner_obj.dir/mega_ag_executors_cpu.cpp.o
+[  8%] Building CXX object inference/lattisense/fhe_ops_lib/CMakeFiles/fhe_ops_lib_obj.dir/fhe_lib_v2.cpp.o
+[ 10%] Building CXX object inference/lattisense/mega_ag_runners/CMakeFiles/mega_ag_obj.dir/mega_ag.cpp.o
+[ 11%] Building CXX object inference/lattisense/fhe_ops_lib/CMakeFiles/fhe_ops_lib_obj.dir/utils.cpp.o
+[ 11%] Building CXX object inference/lattisense/fhe_ops_lib/CMakeFiles/fhe_ops_lib_obj.dir/precision.cpp.o
+[ 12%] Building CXX object inference/lattisense/cxx_sdk_v2/CMakeFiles/cxx_sdk_v2_obj.dir/cxx_fhe_task_gpu.cpp.o
+[ 13%] Building C object inference/lattisense/fhe_ops_lib/CMakeFiles/fhe_ops_lib_obj.dir/bridge.c.o
+[ 14%] Building CXX object inference/lattisense/cxx_sdk_v2/CMakeFiles/cxx_sdk_v2_obj.dir/cxx_fhe_task.cpp.o
+[ 15%] Building C object inference/lattisense/abi/CMakeFiles/abi_obj.dir/c_structs.c.o
+[ 16%] Linking C static library liblog.a
+[ 16%] Built target abi_obj
+[ 17%] Linking C static library libabi.a
+[ 17%] Built target log
+[ 17%] Built target abi
+[ 17%] Built target fhe_ops_lib_obj
+[ 18%] Linking CXX shared library libfhe_ops_lib.so
+[ 18%] Built target fhe_ops_lib
+[ 18%] Built target cxx_sdk_v2_obj
+[ 18%] Built target mega_ag_obj
+[ 18%] Built target cpu_mega_ag_runner_obj
+[ 20%] Linking CXX shared library libcpu_mega_ag_runner.so
+[ 20%] Built target cpu_mega_ag_runner
+[ 20%] Built target gpu_mega_ag_runner_obj
+[ 21%] Linking CUDA device code CMakeFiles/gpu_mega_ag_runner.dir/cmake_device_link.o
+[ 22%] Linking CUDA device code CMakeFiles/lattisense.dir/cmake_device_link.o
+[ 23%] Linking CXX shared library liblattisense.so
+[ 24%] Linking CXX shared library libgpu_mega_ag_runner.so
+[ 24%] Built target gpu_mega_ag_runner
+[ 25%] Linking CXX shared library libcxx_sdk_v2.so
+[ 25%] Built target lattisense
+[ 26%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/cmake_pch.hxx.gch
+[ 26%] Built target cxx_sdk_v2
+[ 27%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/layer.cpp.o
+[ 29%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/activation_layer.cpp.o
+[ 33%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/inverse_multiplexed_conv2d_layer.cpp.o
+[ 33%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/layer_util.cpp.o
+[ 33%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/conv2d_layer.cpp.o
+[ 35%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/dense_packed_layer.cpp.o
+[ 35%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/upsample_layer.cpp.o
+[ 33%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/upsample_nearest_layer.cpp.o
+[ 35%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/conv2d_packed_layer.cpp.o
+[ 37%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/concat_layer.cpp.o
+[ 37%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/inverse_multiplexed_conv2d_layer_depthwise.cpp.o
+[ 38%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/reshape_layer.cpp.o
+[ 40%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/add_layer.cpp.o
+[ 41%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/conv2d_depthwise.cpp.o
+[ 42%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/avgpool2d_layer.cpp.o
+[ 43%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/avgpool1d_layer.cpp.o
+[ 44%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/multiplexed_conv2d_pack_layer.cpp.o
+[ 45%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/multiplexed_conv2d_pack_layer_depthwise.cpp.o
+[ 46%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/poly_relu2d.cpp.o
+[ 47%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/poly_relu1d.cpp.o
+[ 48%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/poly_relu_base.cpp.o
+[ 49%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/mat_poly_base.cpp.o
+[ 50%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/mult_scaler.cpp.o
+[ 51%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/conv1d_packed_layer.cpp.o
+[ 52%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/multiplexed_conv1d_pack_layer.cpp.o
+[ 53%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/multiplexed_conv1d_depthwise_pack_layer.cpp.o
+[ 54%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_block_col_major_transpose.cpp.o
+[ 55%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_block_col_major_ccmm.cpp.o
+[ 56%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_block_col_major_cpmm.cpp.o
+[ 57%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_lower_diag_pcmm.cpp.o
+[ 58%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_lower_diag_ccmm.cpp.o
+[ 60%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_lower_diag_transpose.cpp.o
+[ 61%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_block_col_major_add_pt.cpp.o
+[ 62%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_lower_diagonal_add_pt.cpp.o
+[ 63%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/block_col_major_layernorm.cpp.o
+[ 64%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/batch_dense_packed_layer.cpp.o
+[ 65%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_block_col_major_layernorm.cpp.o
+[ 66%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_upper_diagonal_layernorm.cpp.o
+[ 67%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/block_col_major_polyactrn.cpp.o
+[ 68%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_block_col_major_polyactrn.cpp.o
+[ 69%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_upper_diagonal_polyact.cpp.o
+[ 70%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_upper_diagonal_poly_mult_ct.cpp.o
+[ 71%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_upper_diagonal_poly.cpp.o
+[ 72%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/par_upper_diagonal_softmax.cpp.o
+[ 73%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/__/data_structs/feature.cpp.o
+[ 74%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/__/data_structs/feature1d.cpp.o
+[ 75%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/__/data_structs/feature2d.cpp.o
+[ 76%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/__/data_structs/feature_mat.cpp.o
+[ 77%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/__/data_structs/feature0d.cpp.o
+[ 78%] Building CXX object inference/fhe_layers/CMakeFiles/fhe_layers.dir/__/util.cpp.o
+[ 80%] Linking CXX static library libfhe_layers.a
+[ 80%] Built target fhe_layers
+[ 81%] Building CXX object inference/unittests/CMakeFiles/test_fhe_layers_hetero.dir/test_fhe_layers_hetero.cpp.o
+[ 82%] Building CXX object inference/unittests/CMakeFiles/test_fhe_layers_hetero.dir/ut_util.cpp.o
+[ 83%] Building CXX object inference/inference_task/CMakeFiles/inference_task.dir/inference_process.cpp.o
+[ 84%] Linking CXX static library libinference_task.a
+[ 84%] Built target inference_task
+[ 85%] Building CXX object inference/interface/CMakeFiles/inference_interface.dir/inference_server.cpp.o
+[ 86%] Building CXX object inference/interface/CMakeFiles/inference_interface.dir/inference_client.cpp.o
+[ 88%] Building CXX object inference/unittests/CMakeFiles/test_data_structs.dir/test_data_structs.cpp.o
+[ 88%] Building CXX object inference/unittests/CMakeFiles/test_data_structs.dir/ut_util.cpp.o
+[ 89%] Linking CXX static library libinference_interface.a
+[ 89%] Built target inference_interface
+[ 91%] Building CXX object examples/CMakeFiles/inference.dir/inference.cpp.o
+[ 91%] Building CXX object inference/unittests/CMakeFiles/test_e2e_single_layer.dir/test_e2e_single_layer.cpp.o
+[ 92%] Building CXX object examples/CMakeFiles/streaming_context_file_test.dir/streaming_context_file_test.cpp.o
+[ 93%] Building CXX object inference/unittests/CMakeFiles/test_e2e_multiple_layer.dir/test_e2e_multiple_layer.cpp.o
+[ 94%] Linking CXX executable streaming_context_file_test
+[ 94%] Built target streaming_context_file_test
+[ 95%] Linking CXX executable inference
+[ 95%] Built target inference
+[ 96%] Linking CXX executable test_data_structs
+[ 96%] Built target test_data_structs
+[ 97%] Linking CXX executable test_e2e_multiple_layer
+[ 97%] Built target test_e2e_multiple_layer
+[ 98%] Linking CXX executable test_e2e_single_layer
+[ 98%] Built target test_e2e_single_layer
+[100%] Linking CXX executable test_fhe_layers_hetero
+[100%] Built target test_fhe_layers_hetero

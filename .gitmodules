@@ -1,3 +1,4 @@
 [submodule "inference/lattisense"]
 	path = inference/lattisense
 	url = https://github.com/cipherflow-fhe/lattisense.git
+	branch = feat/streaming-key-generation

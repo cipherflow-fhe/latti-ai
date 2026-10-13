@@ -23,12 +23,14 @@ AI developers can complete end-to-end encrypted inference deployment without und
 
 ## Build & Install
 
+The commands below build `feat/streaming-key-generation`. Both CPU and GPU CMake configuration automatically attach LattiSense and Lattigo to local `feat/streaming-key-generation` branches tracking `origin/feat/streaming-key-generation`, keeping the commits pinned by their parent repositories. Existing branches with different commits must be reconciled before configuring.
+
 ### CPU-Only Build (Without GPU Acceleration)
 
 If GPU acceleration is not needed, use this simplified process:
 
 ```bash
-git clone https://github.com/cipherflow-fhe/latti-ai.git
+git clone --branch feat/streaming-key-generation https://github.com/cipherflow-fhe/latti-ai.git
 cd latti-ai
 git submodule update --init
 git -C inference/lattisense submodule update --init fhe_ops_lib/lattigo
@@ -41,7 +43,7 @@ cmake --build build -j$(nproc)
 #### Step 1: Clone Repository
 
 ```bash
-git clone --recursive https://github.com/cipherflow-fhe/latti-ai.git  # This may take ~6 minutes
+git clone --branch feat/streaming-key-generation --recursive https://github.com/cipherflow-fhe/latti-ai.git  # This may take ~6 minutes
 cd latti-ai
 ```
 

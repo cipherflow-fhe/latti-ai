@@ -124,3 +124,26 @@ ar rcs /tmp/liblatti-streaming-bridge.a /tmp/latti-streaming-bridge.o
 cd inference/lattisense/fhe_ops_lib/lattigo
 CGO_LDFLAGS='-L/tmp -llatti-streaming-bridge' go test ./go_sdk -run '^TestStreaming' -count=1 -v
 ```
+
+## 后续远程发布与 CPU/GPU 构建验证
+
+按后续要求，三个仓库分别执行 `git push -u origin HEAD`，远程均已创建 `feat/streaming-key-generation`，本地 upstream 均为各自的 `origin/feat/streaming-key-generation`。LattiSense 新增提交 `e4e17e2`，在 `.gitmodules` 中配置 Lattigo 的目标分支；顶层同步子模块指针和 LattiSense 的分支配置。
+
+README 的两种构建只在 clone 命令中指定功能分支，保留原有 submodule 初始化与 CMake 编译流程。共用的 `cmake/BindSubmoduleBranch.cmake` 在配置阶段将已初始化的 LattiSense/Lattigo 附着到对应本地分支并设置 upstream，保留当前锁定的提交。已有同名分支若指向不同提交则报错；已经正确绑定时只读 Git 状态。临时 Git fixture 验证了 detached HEAD 自动绑定、远程分支领先时仍保留锁定提交、重复配置不写 index/config，以及不同提交的已有分支不会被重置。
+
+当前服务器为 NVIDIA RTX 5880 Ada Generation，compute capability `8.9`，CUDA toolkit `12.2.140`、驱动 `580.76.05`。直接在主机上使用架构 `89` 完成 GPU 模式完整编译，实际生成 CUDA 对象、`libgpu_mega_ag_runner.so` 和推理示例；CPU 模式也重新配置并完整构建通过。最终两种配置日志都确认 LattiSense 为 `e4e17e2`、Lattigo 为 `cc39b5ae`，各自 tracking 远程同名分支。
+
+| 验证 | 结果 / 日志 |
+| :--- | :--- |
+| CPU 配置及完整构建 | 通过：[配置](streaming_key_generation_results/tests/branch-cpu-configure.txt)、[构建](streaming_key_generation_results/tests/branch-cpu-build.txt) |
+| GPU 配置及完整构建 | 通过：[配置](streaming_key_generation_results/tests/gpu-configure.txt)、[构建](streaming_key_generation_results/tests/gpu-build.txt) |
+| MNIST GPU 端到端 | 通过：[CTest](streaming_key_generation_results/tests/e2e-mnist-gpu.txt)，实际选择 GPU，全部 10 个输出完整且有限，最大绝对误差 `0.00000753 < 0.1`，6.51 秒 |
+
+GPU 构建使用单独输出目录，保留 CPU 构建产物。复现命令：
+
+```bash
+cmake -S . -B build/gpu -DINFERENCE_SDK_ENABLE_GPU=ON \
+  -DLATTISENSE_CUDA_ARCH=89 -DCMAKE_BUILD_TYPE=Release
+cmake --build build/gpu -j 16
+ctest --test-dir build/gpu -R '^example-mnist-gpu$' -V
+```
