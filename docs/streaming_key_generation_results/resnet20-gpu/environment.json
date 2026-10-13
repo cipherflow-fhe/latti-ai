@@ -1,0 +1,145 @@
+{
+  "measured_at_utc": "2026-10-13T10:03:05.275324+00:00",
+  "platform": "Linux-5.15.0-124-generic-x86_64-with-glibc2.39",
+  "cpu_count": 16,
+  "gomaxprocs": 16,
+  "gogc": "100",
+  "gomemlimit": "off",
+  "gpu": true,
+  "gpu_info": "Tue Oct 13 18:03:06 2026       \n+-----------------------------------------------------------------------------------------+\n| NVIDIA-SMI 580.76.05              Driver Version: 580.76.05      CUDA Version: 13.0     |\n+-----------------------------------------+------------------------+----------------------+\n| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |\n| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |\n|                                         |                        |               MIG M. |\n|=========================================+========================+======================|\n|   0  NVIDIA RTX 5880 Ada Gene...    Off |   00000000:6F:00.0 Off |                  Off |\n| 30%   30C    P0             63W /  285W |       0MiB /  49140MiB |      2%      Default |\n|                                         |                        |                  N/A |\n+-----------------------------------------+------------------------+----------------------+\n\n+-----------------------------------------------------------------------------------------+\n| Processes:                                                                              |\n|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |\n|        ID   ID                                                               Usage      |\n|=========================================================================================|\n|  No running processes found                                                             |\n+-----------------------------------------------------------------------------------------+\n",
+  "go_version": "go version go1.24.11 linux/amd64",
+  "commits": {
+    "latti_ai": "3512cfaaceaa163c852763b06d012493bc4f1bb5",
+    "lattisense": "e4e17e2fc4bc8dfdda170876aaf379277996df01",
+    "lattigo": "cc39b5ae7df114358303ba5135a4b75c45556b26"
+  },
+  "source_sha256": "0d4580a0a13e020bcfe169e4e3dc00331753166da33ec9d57b0085ef42f1413b",
+  "measured_source_sha256": "3f6027c1f51ca592d15214f5b399e717c8ad652aad4cfb0815a9713fda3a5dbf",
+  "lattisense_library_sha256": "98e6a8f1301a7e46661028d816a57437599849351ffe5ad309ba3976f3d47b0e",
+  "compiler": [
+    "/usr/bin/c++",
+    "-DSOURCE_PATH=\"/home/linghm/latti-ai-fix/latti-ai/inference\"",
+    "-I/usr/include/hdf5/serial",
+    "-I/home/linghm/latti-ai-fix/latti-ai/inference",
+    "-I/home/linghm/latti-ai-fix/latti-ai/inference/lib",
+    "-I/home/linghm/latti-ai-fix/latti-ai/inference/lattisense",
+    "-I/home/linghm/latti-ai-fix/latti-ai/inference/lattisense/lib",
+    "-I/home/linghm/latti-ai-fix/latti-ai/data_structs",
+    "-maes",
+    "-fopenmp",
+    "-O3",
+    "-DNDEBUG",
+    "-std=gnu++17",
+    "-fPIC",
+    "-D_GLIBCXX_USE_CXX11_ABI=1",
+    "-fopenmp",
+    "-o",
+    "CMakeFiles/inference.dir/inference.cpp.o",
+    "-c",
+    "/home/linghm/latti-ai-fix/latti-ai/examples/inference.cpp"
+  ],
+  "linker": [
+    "/usr/bin/c++",
+    "-maes",
+    "-fopenmp",
+    "-O3",
+    "-DNDEBUG",
+    "-Wl,--dependency-file=CMakeFiles/inference.dir/link.d",
+    "CMakeFiles/inference.dir/inference.cpp.o",
+    "-o",
+    "inference",
+    "-Wl,-rpath,/home/linghm/latti-ai-fix/latti-ai/build/gpu/inference/lattisense:/usr/lib/x86_64-linux-gnu/hdf5/serial",
+    "-Wl,--start-group",
+    "../inference/interface/libinference_interface.a",
+    "../inference/inference_task/libinference_task.a",
+    "../inference/fhe_layers/libfhe_layers.a",
+    "../inference/liblog.a",
+    "-Wl,--end-group",
+    "../inference/lattisense/liblattisense.so",
+    "/usr/lib/x86_64-linux-gnu/hdf5/serial/libhdf5_cpp.so",
+    "/usr/lib/x86_64-linux-gnu/hdf5/serial/libhdf5.so",
+    "/usr/lib/x86_64-linux-gnu/libcrypto.so",
+    "/usr/lib/x86_64-linux-gnu/libcurl.so",
+    "/usr/lib/x86_64-linux-gnu/libpthread.a",
+    "/usr/lib/x86_64-linux-gnu/libsz.so",
+    "/usr/lib/x86_64-linux-gnu/libz.so",
+    "/usr/lib/x86_64-linux-gnu/libdl.a",
+    "-lm",
+    "/usr/lib/gcc/x86_64-linux-gnu/12/libgomp.so",
+    "-ldl",
+    "-lm",
+    "-lrt",
+    "-lstdc++",
+    "/usr/lib/x86_64-linux-gnu/libpthread.a"
+  ],
+  "task_parameters": {
+    "param0": {
+      "poly_modulus_degree": 65536,
+      "n_mult_level": 9,
+      "log_default_scale": 40,
+      "block_shape": [
+        32,
+        32
+      ],
+      "param_name": "N16QP1546H192H32",
+      "pack_num": 4.0
+    }
+  },
+  "task_config": {
+    "task_type": "fhe",
+    "task_num": 1,
+    "server_start_id": 0,
+    "server_end_id": 0,
+    "block_shape": [
+      32,
+      32
+    ],
+    "is_absorb_polyrelu": false,
+    "pack_style": "multiplexed",
+    "task_input_id": [
+      "input"
+    ],
+    "task_output_id": [
+      "output"
+    ],
+    "task_input_param": {
+      "input": {
+        "dim": 2,
+        "channel": 3,
+        "scale": 1.0,
+        "ckks_scale": 1,
+        "shape": [
+          32,
+          32
+        ],
+        "skip": [
+          1,
+          1
+        ],
+        "ckks_parameter_id": "param0",
+        "level": 4,
+        "depth": -1,
+        "pack_num": 32
+      }
+    },
+    "task_output_param": {
+      "output": {
+        "dim": 0,
+        "channel": 10,
+        "scale": 1.0,
+        "ckks_scale": 1,
+        "skip": 1024,
+        "ckks_parameter_id": "param0",
+        "level": 0,
+        "depth": -1,
+        "pack_num": 32
+      }
+    },
+    "server_task": {
+      "nn_layers_ct_0": {
+        "enable_fpga": true
+      }
+    },
+    "use_btp": true
+  }
+}

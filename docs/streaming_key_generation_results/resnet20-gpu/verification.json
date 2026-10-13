@@ -1,0 +1,14 @@
+{
+  "gpu_selected": true,
+  "default_streaming_setup": true,
+  "keygen_measured_before_server_import": true,
+  "outputs": [
+    {
+      "output": "output",
+      "count": 10,
+      "finite": true,
+      "max_absolute_error_printed": 0.00042538,
+      "tolerance": 0.1
+    }
+  ]
+}

@@ -147,3 +147,35 @@ cmake -S . -B build/gpu -DINFERENCE_SDK_ENABLE_GPU=ON \
 cmake --build build/gpu -j 16
 ctest --test-dir build/gpu -R '^example-mnist-gpu$' -V
 ```
+
+## ResNet-20 GPU 端到端与密钥生成阶段峰值
+
+2026-10-13，使用 `examples/test_cifar10/task` 的 ResNet-20、RTX 5880 Ada、架构 `89` 的 GPU 构建完成加密输入、服务端 GPU 推理和客户端解密验证。参数为默认 BTP `N16QP1546H192H32`、`N=65536`；客户端仍调用默认 `client.setup()`，逐键生成并发布 `eval_context.bin`，服务端通过文件导入。固定 `GOMAXPROCS=16`、`GOGC=100`、`GOMEMLIMIT=off`，未加入强制 GC。
+
+| 指标 | 实测 |
+| :--- | ---: |
+| 密钥生成及落盘阶段峰值主机 RSS | **1,209,668 KiB = 1181.316 MiB = 1.154 GiB** |
+| setup 前进程峰值 RSS | 14,752 KiB |
+| 默认 setup 耗时（含密钥生成、序列化和文件发布） | 38.4647 秒 |
+| evaluation context 文件大小 | 3,329,929,205 字节 |
+| GPU 加密推理耗时（示例输出） | 6.608 秒 |
+| 完整端到端进程耗时 | 60.07 秒 |
+| 完整端到端进程峰值 RSS（含服务端导入和推理） | 22,549,752 KiB = 21.505 GiB |
+| `output` 数量 | 10，全部完整且为有限数值 |
+| 最大绝对误差 | **0.00042538 < 0.1**，通过 |
+
+测量工具 [measure_example_key_memory.py](../examples/measure_example_key_memory.py) 临时复制已有 `examples/inference.cpp`，仅在 `client.setup()` 前后加入计时和 Linux `getrusage(RUSAGE_SELF).ru_maxrss`，沿用当前构建的编译/链接参数及真实 GPU SDK 库。峰值在 setup 返回后、加密输入及创建/导入服务端 context 前读取，不受后续服务端内存峰值影响；不会将整个端到端进程的峰值当作密钥生成峰值。`ru_maxrss` 是进程启动至该边界的高水位，包含 setup 前的少量加载和配置开销；本次 setup 前峰值仅 14,752 KiB。该指标是主机 RSS；密钥生成仍由 Go 在 CPU 上执行，GPU 用于服务端推理。
+
+仓库中的原示例、默认接口和 SDK 实现未修改。测量时顶层为 `3512cfa`、LattiSense 为 `e4e17e2`、Lattigo 为 `cc39b5ae`。环境、源文件/临时测量源及实际 SDK 库 SHA256、编译/链接参数记录在 [environment.json](streaming_key_generation_results/resnet20-gpu/environment.json)；[阶段峰值](streaming_key_generation_results/resnet20-gpu/keygen-memory.json)、[完整推理日志](streaming_key_generation_results/resnet20-gpu/inference.txt)、[进程 GNU time 日志](streaming_key_generation_results/resnet20-gpu/process.time.txt) 和 [输出核对](streaming_key_generation_results/resnet20-gpu/verification.json) 已保存。原始日志确认测量标记先于 Step 2/3，服务端选择 GPU，所有 10 行输出满足容限。
+
+复现需要 Linux 和已有 CMake Makefiles 构建（提供 `compile_commands.json` 及目标的 `link.txt`）：
+
+```bash
+python3 examples/measure_example_key_memory.py \
+  --build-dir build/gpu \
+  --task-dir examples/test_cifar10/task \
+  --input examples/test_cifar10/task/client/img.csv \
+  --gpu --output-dir /tmp/latti-resnet20-gpu-key-memory
+```
+
+临时测量源和二进制会自动清理。示例发布的评估键文件在本次记录完成后清理，未纳入提交。
