@@ -165,6 +165,10 @@ for galEl in deduplicated galEls:
 
 每次文件写入都必须检查错误。`GenSwitchingKeyForGalois` 内部完成所需的逆自同构转换，调用方传入的 `galEl` 与文件中的标识一致。复用现有 key generator 完成整个循环，不调用会累计全套键的 `GenRotationKeys` / `GenEvaluationKeys`，已经写出的 key 不加入 `context.gk`、`context.evk` 或其他持久容器。
 
+批量 `GenRotationKeys` 与逐键 `GenSwitchingKeyForGalois` 均在完整 Q/P level 分配键，并调用同一 `genrotKey → genSwitchingKey`，包括相同的逆 Galois 变换与分解参数；逐键路径复用现有采样算法。
+
+默认单 goroutine 顺序生成、编码和写出，复用同一个 `kgen` 与 buffer；其 `buffQP`/`buffQ` 和采样器状态不能被并发访问。本仓库的批量 `GenRotationKeys` 已通过 `WorkerPool` 并行生成，流式路径绕过该入口以减少键对象和并发工作区叠加；耗时与峰值 RSS 一起实测。
+
 ### 3. 复用 BTP DtS/StD 成对生成接口
 
 直接调用现有 `btpParams.GenEncapsulationSwitchingKeys(params, sk)`。该接口内部只采样一次 `skSparse`，保证两个方向的切换键匹配，无需在 `ckks/bootstrapping/bootstrapper.go` 新增顺序生成接口或回调：
@@ -298,7 +302,7 @@ auto results = client.decrypt(encrypted_outputs);
 | 普通 CKKS 协议 | 参数长度 BigEndian、`has_sk=0`、`has_pk=0`、RLK/RTKs payload 可由原 advanced deserializer 导入 |
 | BTP 协议 | 参数顺序、`uint16` 键数量、DtS/StD sparse/full 参数编码正确，无多余字节 |
 | 编码兼容 | 单键 payload 直接复用原 serializer；文件由原 deserializer 导入，检查参数、字段、key set 和功能，不要求旋转键排列相同 |
-| Galois 完整性 | BTP 专用旋转、通用正负旋转及共轭键组成的并集与旧路径一致；小参数下执行旋转、共轭和 bootstrap |
+| Galois 完整性与功能等价 | BTP 专用旋转、通用正负旋转及共轭键组成的并集与旧路径一致；小参数下用同一 SK 和密文，分别以批量键与流式键执行旋转、共轭和重线性化，BTP 另验证 bootstrap，按 CKKS 误差容限比较解密结果 |
 | BTP 切换键 | 复用 `GenEncapsulationSwitchingKeys`，验证 DtS/StD 功能及 sparse/full 编码；覆盖 `EphemeralSecretWeight == 0` |
 | 写入失败 | 覆盖短写、磁盘写满、Close/Rename 失败，检查非零返回与 C++ 异常；旧目标保留，临时文件清理或报告清理失败 |
 | 文件读取失败 | 覆盖不存在、空文件、不可表示的长度和读取短于 `tellg` 的文件；不把当前 parser 的缺陷当成已验证的损坏文件处理能力 |
@@ -367,3 +371,5 @@ PK：两个 QP 多项式（文件编码只保存一个分量及 seed）
 | CIFAR-10 精度 | 旧路径历史误差 `0.00044758` | 新路径结果待测，按 tolerance 判定，不能复制旧数字作为新路径实测 |
 
 独立客户端测量应分别记录导出前、每键生成/写出、GC 后和文件提交后的 `HeapAlloc`、`HeapInuse`、RSS、峰值 RSS，并注明 MB/MiB 单位。端到端进程的服务端导入和推理开销另行报告。
+
+Linux 下使用 `/usr/bin/time -v` 的 `Maximum resident set size (kbytes)` 记录独立客户端进程峰值 RSS（KiB），用 `runtime.ReadMemStats` 采集各阶段的 Go 堆指标；循环结束时的堆用量不能替代整个生成及导出过程的峰值。
