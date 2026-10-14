@@ -78,3 +78,5 @@
 Lattigo 全量 `go test ./...` 仍报告基线故障：BFV/CKKS `Marshaller/Parameters/Binary` 长度差异，Ring `ModUp`/`ModDown`，RLWE `SwitchingKey.MarshalBinary` 无限递归。新增持久化和流式定向测试均通过。最终验收报告记录完整命令及限制。
 
 浏览器发布构建由 `inference/interface/wasm/build.sh` 生成 `dist/latti_client.wasm`、匹配 Go 版本的 `wasm_exec.js` 和 Worker/TypeScript API；生成物保留在构建目录，不提交密钥或构建产物。
+
+补充验收证据：`build/gpu/examples/inference --task-dir /tmp/latti-persistence-gpu-mnist-task --gpu --verify` 首次生成并完成 GPU 推理，最大误差 `0.00000601`；同一目录第二次运行从 `full_context.bin` 恢复，最大误差 `0.00000786`。Chromium Worker 刷新恢复测试记录 WASM linear memory `8388608` bytes，恢复后旧密文解密和新输入加密均通过。
