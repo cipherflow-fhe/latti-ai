@@ -21,6 +21,7 @@ import csv
 import os
 import sys
 import tempfile
+import shutil
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 for candidate in [
@@ -33,7 +34,14 @@ for candidate in [
 
 import latti_client
 
-TEST_TASK_DIR = os.path.join(_HERE, 'testdata')
+_TASK_DIR = tempfile.TemporaryDirectory(prefix='latti-persistence-python-')
+TEST_TASK_DIR = _TASK_DIR.name
+shutil.copytree(
+    os.path.join(_HERE, 'testdata'),
+    TEST_TASK_DIR,
+    dirs_exist_ok=True,
+    ignore=shutil.ignore_patterns('eval_context.bin', 'full_context.bin'),
+)
 
 
 def test_import():
@@ -60,7 +68,8 @@ def test_setup():
 
 
 def test_export_eval_context(client):
-    eval_ctx = client.export_eval_context()
+    with open(os.path.join(TEST_TASK_DIR, 'eval_context.bin'), 'rb') as f:
+        eval_ctx = f.read()
     assert isinstance(eval_ctx, bytes) and len(eval_ctx) > 0
 
     with tempfile.NamedTemporaryFile(suffix='.bin', delete=False) as f:
@@ -112,11 +121,10 @@ def test_decrypt(client, encrypted):
 def test_export_full_context(client, eval_ctx):
     full_ctx = client.export_full_context()
     assert isinstance(full_ctx, bytes) and len(full_ctx) > 0
-    # full_ctx includes the secret key; eval_ctx does not. So full_ctx must be strictly larger.
-    # This catches regressions where make_public_context() is inadvertently called.
-    assert len(full_ctx) > len(eval_ctx), f'full_ctx ({len(full_ctx)}) should be larger than eval_ctx ({len(eval_ctx)})'
-    delta_mb = (len(full_ctx) - len(eval_ctx)) / 1024 / 1024
-    print(f'[PASS] export_full_context ({len(full_ctx) / 1024 / 1024:.1f} MB, +{delta_mb:.1f} MB vs eval)')
+    with open(os.path.join(TEST_TASK_DIR, 'full_context.bin'), 'rb') as f:
+        assert full_ctx == f.read(), 'setup must persist the same key pair'
+    assert len(full_ctx) < len(eval_ctx)
+    print(f'[PASS] export_full_context ({len(full_ctx) / 1024 / 1024:.1f} MB)')
     return full_ctx
 
 
@@ -144,8 +152,8 @@ def test_load_full_context_roundtrip(full_ctx):
 def test_release_then_reload_roundtrip(full_ctx):
     """After release(), the client should be reusable via load_full_context()."""
     c = latti_client.InferenceClient(TEST_TASK_DIR)
-    c.setup()
-    c.release()  # frees the freshly-generated context
+    c.load_full_context(full_ctx)
+    c.release()  # frees the restored context
     c.load_full_context(full_ctx)  # restore from saved bytes
 
     csv_path = os.path.join(TEST_TASK_DIR, 'img.csv')

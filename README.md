@@ -226,7 +226,7 @@ Use the `InferenceClient` / `InferenceServer` interface to run encrypted inferen
 
 // Client: generate keys and encrypt input
 InferenceClient client("./task/client");
-client.setup();  // writes ./task/client/eval_context.bin; retains client SK/PK
+client.setup();  // writes eval_context.bin and client-only full_context.bin
 auto encrypted_input = client.encrypt({{"input", "./task/client/img.csv"}});
 
 // Server: import public keys, load model, run inference on serialized ciphertext
@@ -238,6 +238,8 @@ auto encrypted_output = server.evaluate(encrypted_input);  // deserialize input,
 // Client: decrypt result
 auto result = client.decrypt(encrypted_output);  // decrypt and deserialize output ciphertext, with secret key
 ```
+
+`setup()` saves `eval_context.bin` and `full_context.bin` in a fresh client directory. Keep `full_context.bin` locally as a private-key file; `load_full_context()` (Node: `loadFullContext()`) restores the same encryption/decryption keys. The example below restores existing files automatically on subsequent runs.
 
 Run the built example:
 

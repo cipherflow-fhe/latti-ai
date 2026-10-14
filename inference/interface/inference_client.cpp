@@ -17,6 +17,11 @@
  */
 
 #include <iostream>
+#include <cstdio>
+#ifndef _WIN32
+#    include <fcntl.h>
+#    include <unistd.h>
+#endif
 
 #include "interface/inference_client.h"
 #include "data_structs/feature_mat.h"
@@ -167,11 +172,23 @@ void InferenceClient::create_crypto_context() {
     std::cout << "[Client] Bootstrapping: " << (needs_btp_ ? "Yes" : "No") << std::endl;
     std::cout << "[Client] Poly degree: N=" << poly_modulus_degree_ << std::endl;
 
+    create_parameters();
     if (needs_btp_) {
-        btp_param_ = std::make_unique<CkksBtpParameter>(CkksBtpParameter::create_parameter());
         btp_context_ = std::make_unique<CkksBtpContext>(
             CkksBtpContext::create_streaming_context(*btp_param_, (client_dir_ / "eval_context.bin").string()));
         context_ptr_ = btp_context_.get();
+    } else {
+        ckks_context_ = std::make_unique<CkksContext>(
+            CkksContext::create_streaming_context(*ckks_param_, (client_dir_ / "eval_context.bin").string()));
+        context_ptr_ = ckks_context_.get();
+    }
+
+    std::cout << "[Client] Done." << std::endl;
+}
+
+void InferenceClient::create_parameters() {
+    if (needs_btp_) {
+        btp_param_ = std::make_unique<CkksBtpParameter>(CkksBtpParameter::create_parameter());
     } else {
         if (!q_.empty() && !p_.empty()) {
             ckks_param_ =
@@ -182,12 +199,7 @@ void InferenceClient::create_crypto_context() {
         if (log_slots_ > 0) {
             ckks_param_->set_log_slots(log_slots_);
         }
-        ckks_context_ = std::make_unique<CkksContext>(
-            CkksContext::create_streaming_context(*ckks_param_, (client_dir_ / "eval_context.bin").string()));
-        context_ptr_ = ckks_context_.get();
     }
-
-    std::cout << "[Client] Done." << std::endl;
 }
 
 double InferenceClient::get_default_scale() const {
@@ -195,7 +207,29 @@ double InferenceClient::get_default_scale() const {
 }
 
 void InferenceClient::setup() {
+    const auto path = client_dir_ / "full_context.bin";
+    if (std::filesystem::exists(path)) {
+        throw std::runtime_error("[Client] full_context.bin exists; load it or use a new client directory");
+    }
     create_crypto_context();
+    const auto bytes = export_full_context();
+#ifdef _WIN32
+    FILE* file = std::fopen(path.string().c_str(), "wbx");
+#else
+    const int descriptor = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+    FILE* file = descriptor < 0 ? nullptr : ::fdopen(descriptor, "wb");
+    if (!file && descriptor >= 0) {
+        ::close(descriptor);
+    }
+#endif
+    if (!file) {
+        throw std::runtime_error("[Client] Cannot open full_context.bin for writing");
+    }
+    const bool written = std::fwrite(bytes.data(), 1, bytes.size(), file) == bytes.size();
+    const bool closed = std::fclose(file) == 0;
+    if (!written || !closed) {
+        throw std::runtime_error("[Client] Cannot finish writing full_context.bin");
+    }
 }
 
 void InferenceClient::export_eval_context_to_file(const std::string& filepath) const {
@@ -221,11 +255,12 @@ void InferenceClient::release() {
 
 void InferenceClient::load_full_context(const Bytes& full_bytes) {
     std::cout << "[Client] Loading full context (with secret key)..." << std::endl;
+    create_parameters();
     if (needs_btp_) {
-        btp_context_ = std::make_unique<CkksBtpContext>(CkksBtpContext::deserialize(full_bytes));
+        btp_context_ = std::make_unique<CkksBtpContext>(CkksBtpContext::deserialize_client(full_bytes, *btp_param_));
         context_ptr_ = btp_context_.get();
     } else {
-        ckks_context_ = std::make_unique<CkksContext>(CkksContext::deserialize_advanced(full_bytes));
+        ckks_context_ = std::make_unique<CkksContext>(CkksContext::deserialize_client(full_bytes, *ckks_param_));
         context_ptr_ = ckks_context_.get();
     }
     std::cout << "[Client] Done." << std::endl;
@@ -252,15 +287,17 @@ Bytes InferenceClient::export_eval_context() const {
 }
 
 Bytes InferenceClient::export_full_context() const {
+    if (!context_ptr_) {
+        throw std::runtime_error("[Client] setup() or load_full_context() is required before full export");
+    }
     std::cout << "[Client] Exporting full context (with secret key)..." << std::endl;
     Bytes result;
     if (needs_btp_) {
         std::cout << "[Client] Serializing BTP context..." << std::endl;
-        result = btp_context_->serialize();
+        result = btp_context_->serialize_client();
     } else {
-        // No make_public_context() here — keep the SK in the bytes.
         std::cout << "[Client] Serializing CKKS context..." << std::endl;
-        result = ckks_context_->serialize_advanced();
+        result = ckks_context_->serialize_client();
     }
     std::cout << "[Client] Done." << std::endl;
     return result;

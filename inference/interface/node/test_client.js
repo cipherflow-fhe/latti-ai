@@ -38,6 +38,11 @@ async function testSetup(client) {
     assert(promise instanceof Promise);
     await promise;
     assert(fs.statSync(path.join(TEST_TASK_DIR, 'eval_context.bin')).size > 0);
+    const fullPath = path.join(TEST_TASK_DIR, 'full_context.bin');
+    assert(fs.statSync(fullPath).size > 0);
+    if (process.platform !== 'win32') {
+        assert.strictEqual(fs.statSync(fullPath).mode & 0o777, 0o600);
+    }
     console.log(`[PASS] setup (${((Date.now() - start) / 1000).toFixed(1)}s)`);
 }
 
@@ -74,6 +79,7 @@ async function testExportFullContext(client) {
     console.log('\n[TEST] exportFullContext (client SK/PK persistence)');
     const fullCtx = await client.exportFullContext();
     assert(fullCtx.length > 0);
+    assert.deepStrictEqual(fullCtx, fs.readFileSync(path.join(TEST_TASK_DIR, 'full_context.bin')));
     console.log(`[PASS] exportFullContext (${(fullCtx.length / 1024 / 1024).toFixed(1)} MB)`);
     return fullCtx;
 }
@@ -82,7 +88,7 @@ async function testSetupFailure() {
     console.log('\n[TEST] setup publication failure rejects Promise');
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'latti-streaming-failure-'));
     try {
-        fs.cpSync(TEST_TASK_DIR, directory, {recursive: true, filter: p => path.basename(p) !== 'eval_context.bin'});
+        fs.cpSync(TEST_TASK_DIR, directory, {recursive: true, filter: p => !['eval_context.bin', 'full_context.bin'].includes(path.basename(p))});
         // Rename cannot publish a regular file over a directory; the old target must survive.
         fs.mkdirSync(path.join(directory, 'eval_context.bin'));
         const client = new InferenceClient(directory);
@@ -95,11 +101,12 @@ async function testSetupFailure() {
     }
 }
 
-async function testLoadFullContextRoundtrip(taskDir, fullCtx) {
+async function testLoadFullContextRoundtrip(taskDir, fullCtx, originalEncrypted) {
     console.log('\n[TEST] loadFullContext + encrypt + decrypt roundtrip (fresh client)');
     const { InferenceClient } = require('./build/Release/latti_client.node');
     const fresh = new InferenceClient(taskDir);
     await fresh.loadFullContext(fullCtx);
+    await testDecrypt(fresh, originalEncrypted);
 
     const csvPath = path.join(taskDir, 'img.csv');
     const encrypted = await fresh.encrypt({input: csvPath});
@@ -116,6 +123,36 @@ async function testLoadFullContextRoundtrip(taskDir, fullCtx) {
         throw new Error(`max error too large: ${maxError}`);
     }
     console.log(`[PASS] loadFullContext roundtrip (maxError=${maxError.toFixed(6)})`);
+}
+
+async function testPersistenceFailures(client, fullCtx) {
+    const fullPath = path.join(TEST_TASK_DIR, 'full_context.bin');
+    const evalPath = path.join(TEST_TASK_DIR, 'eval_context.bin');
+    const before = fs.statSync(evalPath).mtimeMs;
+    await assert.rejects(client.setup());
+    assert.strictEqual(fs.statSync(evalPath).mtimeMs, before);
+    assert.deepStrictEqual(fs.readFileSync(fullPath), fullCtx);
+    await assert.rejects(client.loadFullContext(fullCtx.subarray(0, fullCtx.length - 1)));
+
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'latti-persistence-failure-'));
+    try {
+        fs.cpSync(TEST_TASK_DIR, directory, {recursive: true, filter: p => !['eval_context.bin', 'full_context.bin'].includes(path.basename(p))});
+        if (!process.argv.includes('--btp')) {
+            const file = path.join(directory, 'ckks_parameter.json');
+            const params = JSON.parse(fs.readFileSync(file));
+            params.param0.poly_modulus_degree = 8192;
+            fs.writeFileSync(file, JSON.stringify(params));
+            await assert.rejects(new InferenceClient(directory).loadFullContext(fullCtx));
+        }
+        // A dangling symlink passes existence checks but cannot be opened for writing.
+        if (process.platform !== 'win32') {
+            fs.symlinkSync(path.join(directory, 'missing', 'full.bin'), path.join(directory, 'full_context.bin'));
+            await assert.rejects(new InferenceClient(directory).setup());
+        }
+    } finally {
+        fs.rmSync(directory, {recursive: true, force: true});
+    }
+    console.log('[PASS] existing keys protected; invalid restore and file failure reject');
 }
 
 async function testReleaseThenReloadRoundtrip(c, taskDir, fullCtx) {
@@ -144,8 +181,9 @@ async function main() {
     const fullCtx = await testExportFullContext(client);
     const encrypted = await testEncrypt(client);
     await testDecrypt(client, encrypted);
-    await testLoadFullContextRoundtrip(TEST_TASK_DIR, fullCtx);
+    await testLoadFullContextRoundtrip(TEST_TASK_DIR, fullCtx, encrypted);
     await testReleaseThenReloadRoundtrip(client, TEST_TASK_DIR, fullCtx);
+    await testPersistenceFailures(client, fullCtx);
     await testSetupFailure();
     console.log('\n=== ALL TESTS PASSED ===\n');
 }

@@ -22,6 +22,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -93,7 +94,18 @@ int main(int argc, char* argv[]) {
     // --- Client side: generate keys and encrypt input ---
     cout << "[Step 1/5] Setting up client (key generation)..." << endl;
     InferenceClient client(task_dir + "/client");
-    client.setup();
+    const string full_context_file = task_dir + "/client/full_context.bin";
+    if (std::filesystem::exists(full_context_file)) {
+        std::ifstream file(full_context_file, std::ios::binary);
+        if (!file)
+            throw std::runtime_error("Cannot read full_context.bin");
+        Bytes full_bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        if (file.bad())
+            throw std::runtime_error("Cannot finish reading full_context.bin");
+        client.load_full_context(full_bytes);
+    } else {
+        client.setup();
+    }
     const string eval_context_file = task_dir + "/client/eval_context.bin";
 
     cout << "[Step 2/5] Encrypting input..." << endl;

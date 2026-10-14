@@ -84,8 +84,8 @@ public:
     InferenceClient(InferenceClient&&) = default;
     InferenceClient& operator=(InferenceClient&&) = default;
 
-    /// Stream evaluation keys to client_dir/eval_context.bin, retaining client SK/PK.
-    /// Returns only after the complete file is closed and published. Calls on this client must be sequential.
+    /// Save eval_context.bin and client-only full_context.bin in a fresh client directory.
+    /// Returns after both files are closed. Calls on this client must be sequential.
     void setup();
 
     /// Generate evaluation keys from the current SK and stream them to a custom destination.
@@ -103,7 +103,7 @@ public:
     Bytes export_eval_context() const;
 
     /// Export the full client state including the secret key.
-    /// Contents: SK + PK and any resident evaluation keys. Streaming clients have no resident evaluation keys.
+    /// Contents: parameters, SK and PK, with all evaluation-key flags zero.
     /// Pair with load_full_context() to restore a client that can both encrypt and decrypt.
     Bytes export_full_context() const;
 
@@ -121,6 +121,7 @@ public:
     std::map<std::string, DecryptedOutput> decrypt(const std::map<std::string, Bytes>& encrypted_outputs) const;
 
 private:
+    void create_parameters();
     std::filesystem::path client_dir_;
 
     int output_skip_ = 0;
