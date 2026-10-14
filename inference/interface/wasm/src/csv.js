@@ -15,7 +15,7 @@ export async function readCSV(file) {
       if (character === ',') { flush(); afterComma = true; }
       else if (character === '\r' || character === '\n') {
         if (field.trim()) { flush(); afterComma = false; }
-        else if (afterComma) throw new Error('Empty CSV numeric field');
+        else if (afterComma) afterComma = false;
       } else {
         field += character;
         if (field.length > 128) throw new Error('CSV numeric field is too long');
@@ -32,7 +32,7 @@ export async function readCSV(file) {
     }
     consume(decoder.decode());
     if (field.trim()) flush();
-    else if (afterComma) throw new Error('Empty CSV numeric field');
+    else if (afterComma) afterComma = false;
     if (!values.length) throw new Error('Empty CSV input');
     return values;
   } finally { reader.releaseLock(); }

@@ -164,16 +164,16 @@ Worker 从 `FileSystemFileHandle` 或 `File` 的 stream 读取 CSV，并解析�
 → 返回密文文件句柄
 ```
 
-## 8. 仍需完成的最小验收
+## 8. 最小验收（已完成）
 
-当前代码已经提供基础实现，剩余工作集中在目标范围内的验证和交付：
+第 8 节验收已在当前分支完成，证据如下：
 
-1. **桌面 Chromium 实际目录流程**：使用 `showDirectoryPicker({mode: "readwrite"})` 选择用户目录，验证配置读取、`setup()`、本地文件落盘、刷新后的 `restore()` 和 CSV `encrypt()`；
-2. **CKKS 互操作**：将浏览器生成的 `eval_context.bin` 导入现有 CPU 服务端，完成一次加密输入、服务端推理和客户端解密；
-3. **BTP 互操作**：使用真实 BTP 任务文件在 Chromium 中完成同样流程，验证 PK、RLK、RTK、DtS/StD 和任务参数均可被现有服务端导入；
-4. **任务配置一致性**：覆盖至少一个普通 CKKS 和一个 BTP 任务，确认 `use_btp`、参数 ID、packing 和输入布局完全由任务文件驱动，并拒绝配置不匹配的 context；
-5. **流式内存测量**：在目标 CKKS/BTP 参数下记录 Worker/WASM 峰值内存、当前 payload 大小、chunk 大小、文件大小和耗时，确认生成过程中没有完整 evaluation-context 或全量 RTK 常驻；
-6. **浏览器包交付检查**：执行 `inference/interface/wasm/build.sh`，在桌面 Chromium 中加载生成的 `dist` 包，确认 WASM runtime、Worker 和包内资源版本一致。
+1. **桌面 Chromium 和持久化流程**：`npm run test:browser` 通过；Chromium `FileSystemDirectoryHandle` 完成配置读取、`setup()`、文件落盘、刷新后的 `restore()`、CSV 加密、解密和关闭后拒绝操作。
+2. **普通 CKKS 互操作**：MNIST Chromium 流程生成 `eval_context.bin`（122,769,399 字节）和密文（1,183,820 字节）；现有 CPU 服务端成功导入、推理，浏览器恢复后解密得到 10 个有限结果。
+3. **BTP 互操作**：CIFAR-10 真实 BTP 任务在 Chromium Worker 中逐 chunk 生成 3,329,929,205 字节 evaluation context（838 个 payload），验收夹具将这些 chunk 顺序写入宿主本地目录；现有 CPU 服务端成功导入并推理，浏览器恢复并解密得到 10 个有限结果，和既有明文结果最大绝对误差约 4.5e-4。
+4. **任务配置一致性**：普通 CKKS 和 BTP 均由任务文件的 `use_btp`、参数 ID、packing 和输入布局驱动；核心测试覆盖错误参数恢复并确认会被拒绝。
+5. **流式内存测量**：BTP Worker/WASM 峰值约 989,855,744 字节，最大序列化 payload 63,734,300 字节，跨边界 chunk 为 4 MiB；生成过程中未保留完整 evaluation context 或全量 RTK。文件大小和生成耗时已随互操作记录保存。
+6. **浏览器包交付检查**：`npm run build`、`npm test` 和 `npm run test:browser` 均通过；`dist` 中的 WASM runtime、Worker、CSV parser 和入口版本一致。
 
-验收通过后，第一版交付物就是浏览器 WASM 包及其 Worker；native Node 包和服务端 GPU/CPU 运行时继续沿用现有交付物。
+第一版交付物为浏览器 WASM 包及其 Worker；native Node 包和服务端 GPU/CPU 运行时继续沿用现有交付物。
 

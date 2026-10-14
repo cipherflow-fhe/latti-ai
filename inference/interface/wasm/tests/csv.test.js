@@ -15,3 +15,8 @@ test('CSV rejects invalid numbers and empty fields', async () => {
     await assert.rejects(readCSV(new Blob([text])));
   }
 });
+
+test('CSV accepts trailing delimiters used by task examples', async () => {
+  assert.deepEqual(await readCSV(new Blob(['1,2,\n3,4,\n'])), [1, 2, 3, 4]);
+  assert.deepEqual(await readCSV(new Blob(['1,2,'])), [1, 2]);
+});
