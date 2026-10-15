@@ -15,7 +15,6 @@ latti-client-wasm-<version>/
     csv.js             # CSV 流式解析器
     wasm_exec.js       # Go WASM 运行时
     latti_client.wasm  # FHE 客户端核心
-  parameters/N16QP1546H192H32/ckks_parameter.json
   package.json
   SHA256SUMS
   README.md
@@ -25,16 +24,15 @@ latti-client-wasm-<version>/
 
 ## 提前生成密钥
 
-将包中的 `parameters/N16QP1546H192H32/` 复制到用户本地。该目录的 `ckks_parameter.json` 使用编译内置的完整 BTP 预设，包含一个参数条目；目录名保持 `N16QP1546H192H32`。首次生成后得到：
+用户只需通过目录选择器选择密钥保存目录。客户端自动使用内置的 `N16QP1546H192H32` 完整 BTP 预设，并创建或打开同名子目录；直接选择已有的 `N16QP1546H192H32` 目录时，会使用该目录。首次生成后得到：
 
 ```text
-N16QP1546H192H32/
-  ckks_parameter.json
+<用户选择的目录>/N16QP1546H192H32/
   secret/full_context.bin
   public/eval_context.bin
 ```
 
-此阶段仅读取参数文件。`setup()` 在 Worker 中串行生成评估键，以 4 MiB chunk 等待磁盘写入，关闭两个文件后返回文件句柄。该预设的 eval 文件约 3.10 GiB，full 文件约 24.3 MiB；请为生成和浏览器写入暂存预留磁盘空间。
+参数 ID 固定为 `param0`，参数由客户端自动指定。`setup()` 在 Worker 中串行生成评估键，以 4 MiB chunk 等待磁盘写入，关闭两个文件后返回文件句柄。该预设的 eval 文件约 3.10 GiB，full 文件约 24.3 MiB；请为生成和浏览器写入暂存预留磁盘空间。
 
 ```js
 import { openBrowserClient } from './vendor/latti-client-wasm/dist/index.js';
@@ -61,11 +59,11 @@ async function generateKeys() {
 }
 ```
 
-目录中已有任一密钥文件时，`setup()` 拒绝覆盖。已有完整密钥通过 `restore()` 恢复；需要另一套密钥时，为该用户选择新的参数目录。只有参数目录的会话支持生成和恢复，CSV 加解密在任务配置加载后调用。
+目录中已有任一密钥文件时，`setup()` 拒绝覆盖。已有完整密钥通过 `restore()` 恢复；需要另一套密钥时，为该用户选择新的密钥保存目录。仅传 `keyDirectory` 的会话支持生成和恢复，CSV 加解密在任务配置加载后调用。
 
 ## 收到任务后恢复和加解密
 
-任务目录提供 `task_config.json` 和 CSV，参数从 `keyDirectory` 读取。任务须使用 `use_btp=true`，输入输出的 `ckks_parameter_id` 引用参数文件中相同的 ID（模板为 `param0`）；形状、level、packing 等布局来自任务文件。同一用户在需求兼容的任务之间复用上述两个密钥文件。
+任务目录提供 `task_config.json` 和 CSV。任务须使用 `use_btp=true`，输入输出的 `ckks_parameter_id` 为内置的 `param0`；形状、level、packing 等布局来自任务文件。同一用户在需求兼容的任务之间复用上述两个密钥文件。
 
 接续上面的变量，按按钮顺序执行：
 
@@ -110,7 +108,7 @@ async function closeClient() {
 
 `inputName` 和 `outputName` 须与任务配置一致。`encrypt()` 写入 `<inputName>.ct.bin`，`decrypt()` 写入 `<outputName>.csv`；文件参数接受 `FileSystemFileHandle` 或 `File`，返回值为文件句柄。一个实例的操作经同一 Worker 串行执行，调用方按顺序 `await`。
 
-网页按服务端业务接口上传 `public/eval_context.bin` 和密文。服务端直接使用现有 `import_eval_context_file()`，加载模型并推理。`secret/full_context.bin` 含 SK 和 PK，仅供本地恢复；上传时明确选择公开文件。参数文件与同一次生成的两个密钥文件应一同保管。
+网页按服务端业务接口上传 `public/eval_context.bin` 和密文。服务端直接使用现有 `import_eval_context_file()`，加载模型并推理。`secret/full_context.bin` 含 SK 和 PK，仅供本地恢复；上传时明确选择公开文件。同一次生成的两个密钥文件应一同保管。
 
 刷新后重新选择密钥目录和任务目录，调用 `restoreClient()`。切换任务时先关闭旧实例，再以相同 `keyDirectory` 和新的 `clientDirectory` 打开并恢复。
 

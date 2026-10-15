@@ -18,7 +18,7 @@ export interface BrowserClient {
 export function openBrowserClient(options: {
   /** Task configuration; required for encryption and decryption. */
   clientDirectory?:FileSystemDirectoryHandle;
-  /** N16QP1546H192H32 directory containing parameters and reusable secret/public contexts. */
+  /** Key storage parent (uses its N16QP1546H192H32 subdirectory), or the preset directory itself. */
   keyDirectory?:FileSystemDirectoryHandle;
   onProgress?:(progress:Progress)=>void;
 }): Promise<BrowserClient>;

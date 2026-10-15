@@ -11,8 +11,6 @@ const artifacts=process.env.LATTI_BROWSER_ARTIFACTS;
 assert(artifacts,'Run via npm run test:pregeneration (isolated native directory chooser)');
 const preset='N16QP1546H192H32';
 const taskRoot=path.join(repo,'examples/test_cifar10/task');
-await mkdir(path.join(artifacts,preset));
-await copyFile(path.join(root,'parameters',preset,'ckks_parameter.json'),path.join(artifacts,preset,'ckks_parameter.json'));
 await mkdir(path.join(artifacts,'resnet20'));
 await copyFile(path.join(taskRoot,'client/task_config.json'),path.join(artifacts,'resnet20/task_config.json'));
 await copyFile(path.join(taskRoot,'client/img.csv'),path.join(artifacts,'resnet20/img.csv'));
@@ -69,7 +67,7 @@ try {
   timer=setInterval(()=>sampleRSS().catch(()=>{}),rss.sampleIntervalMs);
   const setup=await page.evaluate(async()=>{
     const {openBrowserClient}=await import('/dist/index.js');
-    const keyDirectory=await directory.getDirectoryHandle('N16QP1546H192H32');
+    const keyDirectory=directory;
     const metrics={wasmBytes:0,heapBytes:0,payloadBytes:0,chunkBytes:0,inFlightChunks:0,chunks:0};
     let lastLog=0;
     const client=await openBrowserClient({keyDirectory,onProgress:p=>{
@@ -93,6 +91,7 @@ try {
   assert(setup.metrics.chunkBytes<=4*1024**2);
   assert.equal(setup.metrics.inFlightChunks,1);
   assert.equal((await stat(path.join(artifacts,preset,'public/eval_context.bin'))).size,setup.evalBytes);
+  await assert.rejects(stat(path.join(artifacts,preset,'ckks_parameter.json')),{code:'ENOENT'});
   await writeFile(path.join(artifacts,'setup.json'),JSON.stringify({setup,rss,baseline},null,2));
   console.log(JSON.stringify({artifacts,setup,rss,baseline}));
   // Save a ciphertext, then cross a real page reload before decrypting it.

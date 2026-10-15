@@ -42,8 +42,7 @@ try {
       const writer=await (await dir.getFileHandle(name,{create:true})).createWritable();
       await writer.write(text); await writer.close();
     };
-    await write(keys,'ckks_parameter.json',JSON.stringify(config));
-    // A parameter-only session must open without task_config.json.
+    // An empty key directory uses the built-in preset without JSON files.
     const client=await openBrowserClient({keyDirectory:keys});
     for (const [folder,name] of [['public','eval_context.bin'],['secret','full_context.bin']]) {
       const dir=await keys.getDirectoryHandle(folder,{create:true});
@@ -56,7 +55,7 @@ try {
     const task=await root.getDirectoryHandle('pregenerated-task',{create:true});
     const p={dim:0,channel:1,pack_num:1,skip:1,level:1,ckks_parameter_id:'param0'};
     await write(task,'task_config.json',JSON.stringify({use_btp:true,pack_style:'ordinary',task_input_param:{input:p},task_output_param:{output:p}}));
-    // Parameters come from the key directory, not the task directory.
+    // The task resolves param0 from the built-in preset.
     await (await openBrowserClient({clientDirectory:task,keyDirectory:keys})).close();
     await write(task,'task_config.json','');
     await write(task,'ckks_parameter.json',JSON.stringify(config));
@@ -66,13 +65,23 @@ try {
     }
     await task.removeEntry('ckks_parameter.json');
     await write(task,'task_config.json',JSON.stringify({use_btp:true,pack_style:'ordinary',task_input_param:{input:p},task_output_param:{output:p}}));
-    const wrong=await root.getDirectoryHandle('wrong-parameter-name',{create:true});
-    await write(wrong,'ckks_parameter.json',JSON.stringify(config));
-    let rejected=false;try { await openBrowserClient({keyDirectory:wrong}); } catch { rejected=true; }
-    if (!rejected) throw new Error('wrong parameter directory accepted');
-    await write(keys,'ckks_parameter.json',JSON.stringify({...config,extra:config.param0}));
-    rejected=false;try { await openBrowserClient({clientDirectory:task,keyDirectory:keys}); } catch { rejected=true; }
-    if (!rejected) throw new Error('multiple parameter entries accepted');
+    const parent=await root.getDirectoryHandle('user-keys',{create:true});
+    await (await openBrowserClient({keyDirectory:parent})).close();
+    const nested=await parent.getDirectoryHandle('N16QP1546H192H32');
+    const publicDir=await nested.getDirectoryHandle('public',{create:true});
+    await write(publicDir,'eval_context.bin','existing');
+    const rebound=await openBrowserClient({clientDirectory:task,keyDirectory:parent});
+    let rejected=false;try { await rebound.setup(); } catch { rejected=true; }
+    if (!rejected || await (await (await publicDir.getFileHandle('eval_context.bin')).getFile()).text()!=='existing') throw new Error('parent directory key protection failed');
+    await rebound.close();
+    // External parameter files cannot override the fixed-profile path.
+    await write(keys,'ckks_parameter.json','{invalid');
+    await (await openBrowserClient({clientDirectory:task,keyDirectory:keys})).close();
+    for (const {useBTP,feature} of [{useBTP:true,feature:{...p,ckks_parameter_id:'other'}},{useBTP:false,feature:p}]) {
+      await write(task,'task_config.json',JSON.stringify({use_btp:useBTP,pack_style:'ordinary',task_input_param:{input:feature},task_output_param:{output:feature}}));
+      rejected=false;try { await openBrowserClient({clientDirectory:task,keyDirectory:keys}); } catch { rejected=true; }
+      if (!rejected) throw new Error('incompatible task accepted with built-in preset');
+    }
   });
   await page.evaluate(async () => {
     const {openBrowserClient} = await import('/dist/index.js');

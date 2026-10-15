@@ -44,7 +44,7 @@
 
 1. 完成真实目录的完整 N16 BTP setup，记录文件大小、流式指标、耗时和浏览器内存。
 2. 现有 CPU/GPU 服务端直接导入 eval 文件并运行 ResNet-20，浏览器刷新恢复并解密；检查任务误差容限和同一密钥跨布局复用。
-3. 新增参数目录 JSON 模板，更新中文 README 的调用流程及发布 ZIP 内容。
+3. 固定参数内置到浏览器客户端，更新中文 README 的目录选择、调用流程及发布 ZIP 内容。
 4. 运行完整包测试、旧/新浏览器验收、构建、ZIP 内容/校验验证及 `git diff --check`。
 5. 将实际命令、结果和指标写入验收记录，更新本计划执行记录并提交；构建产物与测试密钥保存到 `/tmp`。
 
@@ -59,14 +59,26 @@
 | Worker 与 JS/TS 目录接口 | `15df1e0` | 真实 Chromium 新接口先失败，随后新旧目录流程通过 |
 | 普通 CKKS 参数兼容性 | `fab2a59` | `PN14QP438` 回归用例先失败，修复后加解密通过 |
 | 任务文件边界校验 | `b4fe232` | 空任务的浏览器用例先失败，修复后拒绝无效任务 |
-| 端到端与交付 | 本记录所在的 `test: validate parameter key pregeneration delivery` 提交 | 真实目录 N16 BTP、跨刷新/布局、GPU 推理、发布包校验通过 |
+| 端到端与交付 | `eecdbba` | 真实目录 N16 BTP、跨刷新/布局、GPU 推理、发布包校验通过 |
+| 内置参数与目录简化 | 本次 `feat: use built-in browser key parameters` 提交 | 直接选择保存目录、内置 param0、双文件与任务兼容性验收通过 |
 
 已执行：
 
 - `npm test`：包内 Go 测试与 3 个 CSV 测试通过；
 - `npm run build`、`npm run test:browser`：发布构建、原普通 CKKS 回归与参数目录边界验证通过；
-- `npm run test:pregeneration`：真实 File System Access 目录生成 3,329,929,205 字节 eval 和 25,494,056 字节 full；跨刷新解密旧密文、加密新 CSV、同一密钥绑定标量/ResNet-20 布局通过；现有 GPU 服务端直接导入并推理，最大绝对误差 `0.0004500023 < 0.1`；
-- `npm run package -- /tmp`：ZIP 文件完整性、运行时与源码一致性、中文 README/模板和全部 `SHA256SUMS` 条目通过；
+- `npm run test:pregeneration`：真实 File System Access 目录生成 3,329,929,205 字节 eval 和 25,494,056 字节 full；跨刷新解密旧密文、加密新 CSV、同一密钥绑定标量/ResNet-20 布局通过；现有 GPU 服务端直接导入并推理，最大绝对误差 `0.0004983101 < 0.1`；
+- `npm run package -- /tmp`：ZIP 文件完整性、运行时与源码一致性、中文 README、内置参数及全部 `SHA256SUMS` 条目通过；
 - Python 验收脚本的 Ruff 检查/格式检查、shell/JS 语法检查与 `git diff --check` 通过。
 
-`setup()` 为 173.10 秒；WASM 线性内存峰值 940 MiB，最大 payload 约 60.78 MiB，chunk 4 MiB；250 ms 采样的渲染进程 RSS 合计峰值约 1.28 GiB。指标口径及交付物校验值详见设计规范第 7 节，原始结果为 `/tmp/latti-pregeneration.d0iDGE/report.json`，交付包为 `/tmp/latti-client-wasm-0.1.0.zip`。
+`setup()` 为 174.73 秒；WASM 线性内存峰值 940 MiB，最大 payload 约 60.78 MiB，chunk 4 MiB；250 ms 采样的渲染进程 RSS 合计峰值约 1.28 GiB。指标口径及交付物校验值详见设计规范第 7 节，原始结果为 `/tmp/latti-pregeneration.wtniIX/report.json`，交付包为 `/tmp/latti-client-wasm-0.1.0.zip`。
+
+## 7. 内置参数简化
+
+依据修订后的规范第 1～4 节，修改集中于浏览器 Worker、目录说明和验收夹具：
+
+1. 先以真实 Chromium 证明空目录打开会话因缺少参数 JSON 失败；补充保存目录自动路由、外部配置隔离和 `param0`/BTP 模式校验用例。
+2. Worker 内置固定 `param0` 描述，复用已有核心初始化；选择普通保存目录时自动创建或打开 `N16QP1546H192H32` 子目录，已有同名参数目录直接复用。
+3. 移除发布包的参数模板，同步 JS/TS 目录说明、README 和完整验收夹具。
+4. 验证完整 N16 BTP 真实目录落盘、跨刷新/布局复用、既有 GPU 服务端互操作及发布 ZIP，记录结果后提交。
+
+执行结果：上述简化已完成。新增空目录用例先因参数文件缺失失败，修改后 Chromium 回归及完整 GPU 端到端验收通过；发布 ZIP 已重新生成并核对运行时内容与校验值。

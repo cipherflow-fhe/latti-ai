@@ -1,6 +1,8 @@
 import './wasm_exec.js';
 import { readCSV } from './csv.js';
 
+const presetName='N16QP1546H192H32';
+const fixedParameters=JSON.stringify({param0:{poly_modulus_degree:65536,n_mult_level:9,log_default_scale:40,param_name:presetName}});
 let directory, keyDirectory, taskText, parameterText, ready=false, go;
 const runtimeReady = (async () => {
   go = new Go();
@@ -37,15 +39,13 @@ async function operate({operation,...options}) {
   if (operation === 'open') {
     directory=options.clientDirectory;
     keyDirectory=options.keyDirectory;
-    if (keyDirectory && keyDirectory.name !== 'N16QP1546H192H32') throw new Error('Select the N16QP1546H192H32 key directory');
+    if (keyDirectory && keyDirectory.name !== presetName) keyDirectory=await keyDirectory.getDirectoryHandle(presetName,{create:true});
     [taskText,parameterText]=await Promise.all([
       directory ? read(directory,'task_config.json') : undefined,
-      read(keyDirectory || directory,'ckks_parameter.json'),
+      keyDirectory ? fixedParameters : read(directory,'ckks_parameter.json'),
     ]);
     if (directory && !taskText) throw new Error('Task configuration is required');
-    // Validate the complete fixed profile even when a task is also supplied.
-    if (keyDirectory) core('init-keys',parameterText);
-    if (taskText) initialize();
+    initialize();
     return;
   }
   if (operation === 'setup') {

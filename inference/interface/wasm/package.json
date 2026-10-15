@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Browser Worker client for local FHE key persistence and encryption",
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
-  "files": ["dist", "parameters", "README.md", "SHA256SUMS"],
+  "files": ["dist", "README.md", "SHA256SUMS"],
   "scripts": {
     "build": "bash build.sh",
     "package": "bash package.sh",
