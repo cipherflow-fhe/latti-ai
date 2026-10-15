@@ -22,6 +22,7 @@
 #include <map>
 
 #include "interface/inference_server.h"
+#include "lattisense/mega_ag_runners/gpu/gpu_mem_pool.h"
 #include "data_structs/feature_mat.h"
 
 using namespace lattisense;
@@ -158,10 +159,10 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
     std::cout << "[Server] Bootstrapping: " << (needs_btp_ ? "Yes" : "No") << std::endl;
 
     if (needs_btp_) {
-        eval_btp_context_ = std::make_unique<CkksBtpContext>(CkksBtpContext::deserialize(eval_context));
+        eval_btp_context_ = std::make_shared<CkksBtpContext>(CkksBtpContext::deserialize(eval_context));
         context_ptr_ = eval_btp_context_.get();
     } else {
-        eval_context_ = std::make_unique<CkksContext>(CkksContext::deserialize_advanced(eval_context));
+        eval_context_ = std::make_shared<CkksContext>(CkksContext::deserialize_advanced(eval_context));
         context_ptr_ = eval_context_.get();
     }
 
@@ -181,12 +182,14 @@ void InferenceServer::load_model() {
         fp_->available_keys.push_back(key);
     }
 
-    // Transfer eval context directly to inference engine (no shallow_copy)
-    std::map<std::string, std::unique_ptr<CkksContext>> context_map;
+    // Hand the inference engine a shared reference to the parsed context. The
+    // server keeps its own reference so release_device() can destroy the
+    // engine (and its device state) without losing the host-side parse.
+    std::map<std::string, std::shared_ptr<CkksContext>> context_map;
     if (needs_btp_) {
-        context_map["param0"] = std::move(eval_btp_context_);
+        context_map["param0"] = std::static_pointer_cast<CkksContext>(eval_btp_context_);
     } else {
-        context_map["param0"] = std::move(eval_context_);
+        context_map["param0"] = eval_context_;
     }
     fp_->ckks_contexts = std::move(context_map);
     context_ptr_ = fp_->ckks_contexts["param0"].get();
@@ -198,6 +201,27 @@ void InferenceServer::load_model() {
     fp_->prepare_task();
 
     std::cout << "[Server] Done." << std::endl;
+}
+
+void InferenceServer::release_device() {
+    if (!fp_ && !init_) {
+        return;
+    }
+
+    // Destroy the engine first: every device allocation it owns must be
+    // returned to the pool while the pool is still alive. Then hand the pool
+    // itself back to the driver. The parsed context stays in host memory
+    // because it is shared with this object, so the next load_model() only
+    // has to re-upload it to the device.
+    fp_.reset();
+    init_.reset();
+    context_ptr_ = nullptr;
+
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    if (use_gpu_) {
+        ls::release_device_memory_pool();
+    }
+#endif
 }
 
 std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::string, Bytes>& encrypted_inputs,
