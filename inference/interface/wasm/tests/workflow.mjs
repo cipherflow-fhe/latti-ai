@@ -2,12 +2,21 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 
 const root=path.resolve(import.meta.dirname,'..');
 const repo=path.resolve(root,'../../..');
 const artifacts=process.env.LATTI_BROWSER_ARTIFACTS;
 assert(artifacts,'Run via npm run test:workflow');
+const keyDirectory=process.env.LATTI_WORKFLOW_KEYS;
+async function native(mode){
+  const processHandle=spawn(process.env.PYTHON||'python3',[path.join(root,'tests/workflow-native.py'),mode,artifacts,repo,keyDirectory],{
+    cwd:repo,env:{...process.env,PYTHONPATH:path.join(repo,'inference/interface/python/build'),LD_LIBRARY_PATH:path.join(repo,'build/inference/lattisense')},stdio:'inherit',
+  });
+  assert.equal(await new Promise((resolve,reject)=>{processHandle.once('error',reject);processHandle.once('close',resolve);}),0,'native workflow '+mode+' failed');
+}
+if(keyDirectory)await native('prepare');
 const server=createServer(async(req,res)=>{
   try{
     if(req.url==='/'){
@@ -15,8 +24,10 @@ const server=createServer(async(req,res)=>{
       res.end('<!doctype html><button id="pick">Select test directory</button><script>pick.onclick=async()=>{try{window.directory=await showDirectoryPicker({mode:"readwrite"})}catch(e){window.pickError=e.message}}</script>');return;
     }
     if(req.url==='/favicon.ico'){res.writeHead(204).end();return;}
-    const base=req.url.startsWith('/task/')?path.join(repo,'examples/test_cifar10/task/client'):root;
-    const relative=req.url.startsWith('/task/')?req.url.slice(5):req.url;
+    const taskRequest=req.url.startsWith('/task/'),runtimeRequest=req.url.startsWith('/dist/');
+    const base=taskRequest?(process.env.LATTI_WORKFLOW_TASK||path.join(repo,'examples/test_cifar10/task/client')):
+      runtimeRequest&&process.env.LATTI_WORKFLOW_RUNTIME?process.env.LATTI_WORKFLOW_RUNTIME:root;
+    const relative=taskRequest?req.url.slice(5):runtimeRequest&&process.env.LATTI_WORKFLOW_RUNTIME?req.url.slice(5):req.url;
     const file=path.resolve(base,'.'+relative);
     if(!file.startsWith(base+path.sep))throw Error('invalid path');
     res.setHeader('Content-Type',file.endsWith('.wasm')?'application/wasm':file.endsWith('.json')?'application/json':'text/javascript');
@@ -120,7 +131,7 @@ try{
     const failures=[];
     const cases=[
       ['missing result','filename,label\n001.png,3\n002.png,0\n','0,0,0,6,0,0,0,0,0,0'],
-      ['extra result','filename,label\n','0,0,0,6,0,0,0,0,0,0'],
+      ['wrong sample','filename,label\n002.png,3\n','0,0,0,6,0,0,0,0,0,0'],
       ['duplicate label','filename,label\n001.png,3\n001.png,3\n','0,0,0,6,0,0,0,0,0,0'],
       ['duplicate stem','filename,label\n001.png,3\n001.jpg,3\n','0,0,0,6,0,0,0,0,0,0'],
       ['invalid class','filename,label\n001.png,10\n','0,0,0,6,0,0,0,0,0,0'],
@@ -140,8 +151,70 @@ try{
     const empty=await directory.getDirectoryHandle('empty-logits',{create:true});
     let rejected=false;try{await module.postprocess_batch({inputDirectory:empty,labelFile:new File(['filename,label\n'],'label.csv'),outputDirectory:reports});}catch{rejected=true;}
     if(!rejected)throw Error('empty accuracy accepted');
+    const extra=await directory.getDirectoryHandle('extra-logits',{create:true});
+    await write(extra,'001.csv','0,0,0,6,0,0,0,0,0,0');
+    await write(extra,'002.csv','0,0,0,6,0,0,0,0,0,0');
+    rejected=false;try{await module.postprocess_batch({inputDirectory:extra,labelFile:new File(['filename,label\n001.png,3\n'],'label.csv'),outputDirectory:reports});}catch{rejected=true;}
+    if(!rejected)throw Error('extra result accepted');
+    failures.push('extra result');
     return{total:result.total,correct:result.correct,accuracy:result.accuracy,report,failures};
   });
-  await writeFile(path.join(artifacts,'report.json'),JSON.stringify({preprocessing,postprocessing},null,2));
-  console.log(JSON.stringify({artifacts,preprocessing,postprocessing},null,2));
+  let endToEnd;
+  if(keyDirectory){
+    const encrypted=await page.evaluate(async()=>{
+      const{preprocess_batch}=await import('/task/preprocess.js');
+      const{openBrowserClient}=await import('/dist/index.js');
+      const work=await directory.getDirectoryHandle('cifar10');
+      const csv=await work.getDirectoryHandle('csv',{create:true});
+      await preprocess_batch({inputDirectory:await work.getDirectoryHandle('images'),outputDirectory:csv});
+      const metrics={wasmBytes:0,heapBytes:0},events=[];
+      const client=await openBrowserClient({clientDirectory:await work.getDirectoryHandle('client'),keyDirectory:await work.getDirectoryHandle('N16QP1546H192H32'),onProgress:p=>{
+        for(const name of Object.keys(metrics))metrics[name]=Math.max(metrics[name],p[name]);
+      }});
+      await client.restore();
+      let active=0,peak=0;
+      const encrypt=client.encrypt;
+      client.encrypt=async options=>{
+        events.push({start:options.inputFile.name,time:performance.now()});peak=Math.max(peak,++active);
+        const result=await encrypt(options);active--;
+        events.push({closed:result.name,time:performance.now(),bytes:(await result.getFile()).size});return result;
+      };
+      try{
+        const files=await client.encrypt_batch({inputName:'input',inputDirectory:csv,outputDirectory:await work.getDirectoryHandle('encrypted-inputs',{create:true})});
+        if(files.length!==3||peak!==1||active!==0)throw Error('batch encryption did not process one sample at a time');
+        return{files:files.map(f=>f.name),metrics,events,peak};
+      }finally{await client.close();}
+    });
+    await native('evaluate');
+    await page.reload();
+    await page.locator('#pick').click();
+    await page.waitForFunction(()=>window.directory||window.pickError,{},{timeout:15000});
+    const decrypted=await page.evaluate(async()=>{
+      const{openBrowserClient}=await import('/dist/index.js');
+      const{postprocess_batch}=await import('/task/postprocess.js');
+      const work=await directory.getDirectoryHandle('cifar10');
+      const logits=await work.getDirectoryHandle('logits',{create:true});
+      const metrics={wasmBytes:0,heapBytes:0},events=[];
+      const client=await openBrowserClient({clientDirectory:await work.getDirectoryHandle('client'),keyDirectory:await work.getDirectoryHandle('N16QP1546H192H32'),onProgress:p=>{
+        for(const name of Object.keys(metrics))metrics[name]=Math.max(metrics[name],p[name]);
+      }});
+      await client.restore();
+      const decrypt=client.decrypt;
+      client.decrypt=async options=>{
+        events.push({start:options.ciphertextFile.name,time:performance.now()});
+        const result=await decrypt(options);events.push({closed:result.name,time:performance.now()});return result;
+      };
+      let files;
+      try{files=await client.decrypt_batch({outputName:'output',inputDirectory:await work.getDirectoryHandle('encrypted-results'),outputDirectory:logits});}
+      finally{await client.close();}
+      const result=await postprocess_batch({inputDirectory:logits,labelFile:await work.getFileHandle('label.csv'),outputDirectory:await work.getDirectoryHandle('reports',{create:true})});
+      return{files:files.map(f=>f.name),metrics,events,total:result.total,correct:result.correct,accuracy:result.accuracy};
+    });
+    await native('check');
+    const checked=JSON.parse(await readFile(path.join(artifacts,'cifar10/checked.json'),'utf8'));
+    assert.equal(decrypted.total,checked.total);assert.equal(decrypted.correct,checked.correct);assert.equal(decrypted.accuracy,checked.accuracy);
+    endToEnd={encrypted,decrypted,...checked};
+  }
+  await writeFile(path.join(artifacts,'report.json'),JSON.stringify({passed:true,preprocessing,postprocessing,endToEnd},null,2));
+  console.log(JSON.stringify({artifacts,preprocessing,postprocessing,endToEnd},null,2));
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

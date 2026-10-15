@@ -1,6 +1,6 @@
 # Latti 浏览器 WASM 客户端
 
-这个包提供浏览器端的本地密钥生成、上下文持久化、CSV 加密和结果解密能力，适用于通过 HTTPS 或 `http://localhost` 打开的桌面版 Chrome、Edge 等 Chromium 浏览器普通网页。
+这个包提供浏览器端的本地密钥生成、上下文持久化、单文件及批量 CSV 加密和结果解密能力，适用于通过 HTTPS 或 `http://localhost` 打开的桌面版 Chrome、Edge 等 Chromium 浏览器普通网页。配套 CIFAR-10 任务包提供独立图像预处理和分类评估脚本。
 
 “desktop Chromium web application” 指在桌面版 Chromium 浏览器中运行的 Web 应用。普通网页就符合使用场景，不需要 Electron、系统 WebView、PWA、CEF、Node.js 或本地代理。加解密在浏览器 Dedicated Worker 中执行，文件通过用户授权的 File System Access API 保存到本地磁盘。刷新或重新打开网页后，重新选择目录并调用 `restore()` 即可恢复。
 
@@ -106,11 +106,81 @@ async function closeClient() {
 }
 ```
 
-`inputName` 和 `outputName` 须与任务配置一致。`encrypt()` 写入 `<inputName>.ct.bin`，`decrypt()` 写入 `<outputName>.csv`；文件参数接受 `FileSystemFileHandle` 或 `File`，返回值为文件句柄。一个实例的操作经同一 Worker 串行执行，调用方按顺序 `await`。
+`inputName` 和 `outputName` 须与任务配置一致，表示任务特征名。磁盘输出名从输入文件名自动推导：`001.csv → 001.ct.bin → 001.csv`；后缀匹配忽略大小写，其他名称在完整文件名后追加目标后缀。文件参数接受 `FileSystemFileHandle` 或 `File`，返回值为写入关闭后的文件句柄。一个实例的操作经同一 Worker 串行执行，调用方按顺序 `await`。
 
 网页按服务端业务接口上传 `public/eval_context.bin` 和密文。服务端直接使用现有 `import_eval_context_file()`，加载模型并推理。`secret/full_context.bin` 含 SK 和 PK，仅供本地恢复；上传时明确选择公开文件。同一次生成的两个密钥文件应一同保管。
 
 刷新后重新选择密钥目录和任务目录，调用 `restoreClient()`。切换任务时先关闭旧实例，再以相同 `keyDirectory` 和新的 `clientDirectory` 打开并恢复。
+
+## 图像预处理、批量加解密和准确率
+
+`latti-client-tasks.zip` 中的 CIFAR-10/ResNet-20 任务结构为：
+
+```text
+tasks/resnet20/client/
+  task_config.json
+  ckks_parameter.json
+  img.csv
+  preprocess.js
+  postprocess.js
+```
+
+将任务脚本作为项目受信任静态资源部署；用户选择的本地 `client/` 目录用于读取任务配置。预处理将 `.png`、`.jpg`、`.jpeg` 原图顺序转为 3072 个 CHW 数值的 CSV，复用 `train.py` eval 阶段的 Resize、ToTensor、Normalize 规则。命名采用原图主文件名：`001.png → 001.csv`；批次内主文件名应唯一。
+
+真实标签由用户事先准备在原始数据侧，例如：
+
+```text
+dataset/
+  images/001.png
+  images/002.jpg
+  label.csv
+```
+
+`label.csv` 为 UTF-8，按原图完整文件名关联 CIFAR-10 类别编号：
+
+```csv
+filename,label
+001.png,3
+002.jpg,5
+```
+
+类别 `0–9` 依次为 airplane、automobile、bird、cat、deer、dog、frog、horse、ship、truck。含逗号的文件名用 CSV 双引号包裹。
+
+在各自按钮事件中用 `showDirectoryPicker()` 选取输入/输出目录，用 `showOpenFilePicker()` 选取标注表，再按下面的顺序调用。每个阶段使用独立输出目录；目录句柄及 `labelFile` 均已取得用户授权：
+
+```js
+import { openBrowserClient } from '/vendor/latti-client-wasm/dist/index.js';
+import { preprocess_batch } from '/tasks/resnet20/client/preprocess.js';
+import { postprocess_batch } from '/tasks/resnet20/client/postprocess.js';
+
+await preprocess_batch({ inputDirectory: imageDirectory, outputDirectory: csvDirectory });
+const client = await openBrowserClient({ clientDirectory, keyDirectory });
+try {
+  await client.restore();
+  const encryptedFiles = await client.encrypt_batch({
+    inputName: 'input', inputDirectory: csvDirectory,
+    outputDirectory: encryptedInputDirectory,
+  });
+
+  // 按项目业务接口顺序推理，将结果保存至 encryptedResultDirectory，
+  // 保持样本文件名，例如 001.ct.bin；服务端任务特征名仍为 input/output。
+
+  await client.decrypt_batch({
+    outputName: 'output', inputDirectory: encryptedResultDirectory,
+    outputDirectory: logitsDirectory,
+  });
+} finally {
+  await client.close();
+}
+const { predictionsFile, total, correct, accuracy } = await postprocess_batch({
+  inputDirectory: logitsDirectory, labelFile, outputDirectory: reportDirectory,
+});
+console.log(`${correct}/${total}，准确率 ${(accuracy * 100).toFixed(2)}%`);
+```
+
+`encrypt_batch()`、`decrypt_batch()` 只读取所选目录根层的 `.csv`、`.ct.bin` 文件，按文件名的 JavaScript 字符串顺序处理，分别返回按该顺序排列的文件句柄数组。每次调用写入关闭后才处理下一文件，空目录返回空数组，同名目标沿用覆盖规则。单文件异常关联源文件名并使当前批次 reject；此前成功的文件保留。标注表放在数据侧，模型输入 CSV 目录仅存待加密样本。
+
+`postprocess_batch()` 检查标注与结果一一对应，逐个读取 10 个有限 logits，取 argmax 为预测类别，并列最大值取最小下标。它写入 `reportDirectory/predictions.csv`（`filename,label,prediction,correct`），返回 `total`、`correct` 和 `[0,1]` 范围的 `accuracy=correct/total`。标注表行序可任意排列；文件名匹配负责样本关联。
 
 ## 原任务目录调用
 
@@ -125,9 +195,22 @@ npm ci
 npm test
 npm run build
 npm run test:browser
+npm run test:workflow
 npm run package -- /tmp
 ```
 
 `SHA256SUMS` 可在解压后的包根目录通过 `sha256sum -c SHA256SUMS` 校验。`onProgress` 的 `wasmBytes` 表示 WASM 线性内存，`heapBytes` 表示 Go HeapAlloc，均区别于浏览器进程 RSS。
+
+`npm run package -- /tmp` 输出浏览器运行时 `latti-client-wasm-<version>.zip` 和独立任务包 `latti-client-tasks.zip`。任务脚本使用浏览器 API，随任务包原样部署。
+
+`npm run test:workflow` 在隔离 D-Bus/Xvfb 中通过真实 File System Access API 验证预处理、顺序落盘和分类评估；参考夹具由 `python3 tests/preprocessing-reference.py` 从真实训练 transform 生成。有既有 GPU 服务端、CIFAR-10 数据和固定参数密钥时，可运行完整多样本验收：
+
+```bash
+LATTI_WORKFLOW_KEYS=/path/to/N16QP1546H192H32 \
+LATTI_CIFAR10_DATA=/path/to/data \
+npm run test:workflow
+```
+
+数据目录包含 `cifar-10-batches-py/`。验收复用已有密钥，浏览器串行处理三个真实测试集原图，现有 GPU 服务端逐样本推理，页面刷新后恢复并批量解密，最后独立核对 logits、argmax、预测报告和准确率。结果写入打印出的 `/tmp/latti-workflow.*`。
 
 维护者可在有既有 GPU 服务端构建和 CIFAR-10 task 文件的 Linux 服务器运行 `npm run test:pregeneration`。验收使用隔离的 D-Bus/Xvfb 自动选择 `/tmp` 测试目录并点击浏览器授权，生产 Worker 通过真实 File System Access API 写入超过 3 GiB 的 eval 文件；随后刷新、复用密钥、调用现有 GPU 服务端并解密比较。依赖 `dbus-run-session`、Xvfb、系统 Python 的 `dbus`/`gi`、X11/XTest 和桌面 Chrome；测试脚本仅用于自动化验收。JSON 指标及测试密钥保存在打印出的 `/tmp/latti-pregeneration.*` 目录。

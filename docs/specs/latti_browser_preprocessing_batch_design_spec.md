@@ -1,6 +1,6 @@
 # 浏览器图像预处理、批量加解密与分类评估设计规范
 
-> 状态：待实现。基于现有[浏览器客户端](latti_browser_wasm_client_design_spec.md)和[固定参数密钥预生成](latti_parameter_key_pregeneration_design_spec.md)能力，补充任务预处理、后处理脚本及 JS/TS 批量调用层。
+> 状态：已实现并完成验收（2026-10-15）。基于现有[浏览器客户端](latti_browser_wasm_client_design_spec.md)和[固定参数密钥预生成](latti_parameter_key_pregeneration_design_spec.md)能力，补充任务预处理、后处理脚本及 JS/TS 批量调用层。模块提交及验证记录见[实施计划](../plans/latti_browser_preprocessing_batch_implementation_plan.md)。
 
 ## 1. 目标与流程
 
@@ -261,3 +261,26 @@ Go/WASM 核心、Lattigo、LattiSense、服务端推理接口及二进制协议�
 5. **推理与资源**：多个 CIFAR-10 样本的密文由现有服务端逐个推理，浏览器解密后每个结果 CSV 含 10 个有限数值；与相同预处理输入的明文模型比较，最大绝对误差不超过 `0.1`。批处理过程中仅保留当前样本内容，文件数量增长只增加元数据和句柄列表。
 6. **分类评估**：以已知 logits 和标签验证 argmax、并列最大值取最小下标、逐样本预测报告及 `correct/total`；打乱标注表行序后统计一致。覆盖缺失或多余结果、重复标注、映射重名、越界标签、非法 logits 和空样本集合的校验。真实推理结果按实际解密 logits 计算预测，统计值与对这些 logits 的独立参考计算一致。
 7. **交付**：运行既有 JS/Go 测试、真实 Chromium 目录验收及浏览器包构建，核对任务包包含 `task_config.json`、`preprocess.js`、`postprocess.js`，使用独立 `label.csv` 和发布的浏览器包完成上述流程。
+
+## 10. 实施与验收记录
+
+上述功能已在本地 `feat/streaming-key-generation` 分支实现。新增功能测试先在缺失自动命名、预处理、后处理时失败，随后逐模块实现并验证。修改集中于浏览器 JS/TS、两个任务脚本、交付说明和验收代码。
+
+已执行 `npm test`、`npm run build`、`npm run test:browser`、`npm run test:workflow` 和 `npm run package -- /tmp`。真实目录浏览器验收覆盖根层筛选、字符串排序、文件名冲突、中文与空格、串行写入、异常文件关联、空目录、标签映射、并列 argmax 和非法输入。六组训练 transform 参考夹具包含原尺寸、放大、缩小、非正方形、纯色和 JPEG，本机最大数值误差均为 0；预处理同时保留的已解码图像峰值为 1，完成后为 0。
+
+完整验收使用桌面 Chrome、真实 File System Access API 和现有 RTX 5880 Ada GPU 服务端，复用已有 `N16QP1546H192H32` 密钥。CIFAR-10 测试集的前三个样本依次经历图像预处理、批量加密、GPU 推理、页面刷新与恢复、批量解密、标注比较。交付 ZIP 解压后的运行时及任务脚本也通过相同完整流程：
+
+| 指标 | 从交付 ZIP 运行的验收结果 |
+| --- | --- |
+| 样本数 / 正确数 | 3 / 3 |
+| 真实标签 / 预测分类 | `3,8,8` / `3,8,8` |
+| 本次小批次准确率 | 100% |
+| logits 相对同输入明文推理的最大绝对误差 | `0.0007566196 < 0.1` |
+| 逐样本 GPU 推理耗时 | 6.29、6.29、6.06 秒 |
+| 同时执行的样本加密数 | 1 |
+| 加密会话 WASM 线性内存观测峰值 | 255,852,544 字节，244 MiB |
+| 加密会话 Go HeapAlloc 观测峰值 | 236,934,432 字节，约 225.96 MiB |
+
+内存值来自恢复及单文件进度回调的观测，表示本次批量加密会话；采样口径为 WASM 线性内存和 Go HeapAlloc。分类统计同时由独立 Python/NumPy 参考检查，预测表、argmax 和准确率一致。
+
+完整源码验收报告为 `/tmp/latti-workflow.NO5xT6/report.json`；ZIP 验收报告为 `/tmp/latti-workflow.VI6X3Q/report.json`，日志为 `/tmp/latti-browser-batch-package-validation.log`。交付物为 `/tmp/latti-client-wasm-0.1.0.zip` 和 `/tmp/latti-client-tasks.zip`。已检查 ZIP 完整性、包内 `SHA256SUMS`、运行时和任务脚本与源码一致，任务 ZIP 目录为 `tasks/resnet20/client/`，含任务配置、原示例 CSV 和两个脚本。

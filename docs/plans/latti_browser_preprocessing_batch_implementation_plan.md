@@ -62,8 +62,20 @@
 | 模块 | 状态/提交 | 验证 |
 | --- | --- | --- |
 | 设计规范 | `b3f5e4b` | 格式、引用及现有接口核对 |
-| 实施计划 | 待提交 | 与规范逐模块对应 |
-| 浏览器批量加解密 | 待实施 | 真实 Chromium 与包内测试 |
-| 图像预处理 | 待实施 | 训练 transform 参考与串行落盘 |
-| 分类后处理 | 待实施 | 标签关联、argmax 和准确率 |
-| 端到端与交付 | 待实施 | 多样本 GPU 推理、浏览器后处理及 ZIP |
+| 实施计划 | `f504f3b` | 与规范逐模块对应 |
+| 浏览器批量加解密 | `bcd31e2` | 新命名用例先失败，随后真实 Chromium 与包内测试通过 |
+| 图像预处理 | `427ba06` | 新接口先失败，随后训练 transform 六组参考与真实目录串行落盘通过 |
+| 分类后处理 | `a6d3978` | 新接口先失败，随后标签关联、argmax、准确率和非法输入校验通过 |
+| 端到端与交付 | 本次 `test: validate browser batch inference delivery` 提交 | 三样本 GPU 推理、跨刷新恢复、分类评估和解压后 ZIP 全流程通过 |
+
+全部模块已完成。执行命令及结果：
+
+- `npm test`：包内 Go 测试与 CSV 数值解析测试通过；
+- `npm run build`、`npm run test:browser`：发布构建及真实 Chromium 单文件/批量回归通过；
+- `npm run test:workflow`：六组图像与真实训练 transform 数值对照通过，逐文件读取/关闭顺序与图像释放通过；后处理覆盖乱序标注、CSV 引号、中文、并列 argmax、缺失/多余/重复/越界/非法输入；
+- `LATTI_WORKFLOW_KEYS=/tmp/latti-pregeneration.wtniIX/N16QP1546H192H32 npm run test:workflow`：真实 CIFAR-10 三样本在本地磁盘完成预处理、加密、GPU 推理、跨刷新解密和后处理，源码验收报告为 `/tmp/latti-workflow.NO5xT6/report.json`；
+- `npm run package -- /tmp`：浏览器 ZIP 和 `tasks/resnet20/client/` 任务 ZIP 已生成；检查 CRC、运行时 checksum、所有交付文件与源码一致；
+- 设置 `LATTI_WORKFLOW_RUNTIME` 和 `LATTI_WORKFLOW_TASK` 指向解压后的运行时 `dist/` 和任务 `client/`，复用上述密钥再次运行完整工作流，通过。报告 `/tmp/latti-workflow.VI6X3Q/report.json`，预测与标签均为 `3,8,8`，本次小批次准确率为 100%，相对同输入明文推理的最大 logits 绝对误差为 `0.0007566196 < 0.1`；
+- Python pre-commit Ruff 检查/格式检查、JS/shell 语法检查和 `git diff --check` 通过。
+
+交付 ZIP 为 `/tmp/latti-client-wasm-0.1.0.zip` 和 `/tmp/latti-client-tasks.zip`；SHA-256 分别为 `63053e7510b9ab678bfdb5a6e98c82bc4ec277d72e20288e12240e28fd5cec31` 和 `c6f0311672f29ac60dfb8e298ed0068eb3600b94af5ae19b249e4732f9b114ca`。解压验证信息保存在 `/tmp/latti-browser-batch-package-validation.json`，完整日志为 `/tmp/latti-browser-batch-package-validation.log`。
