@@ -50,4 +50,23 @@
 
 ## 6. 执行记录
 
-实现时按上述模块填写实际提交和验证结果。
+全部模块已完成，实现和提交位于 Latti-AI 本地 `feat/streaming-key-generation` 分支。
+
+| 模块 | 提交 | 验证 |
+| --- | --- | --- |
+| 文档基线 | `3978465` | 规范与现有接口核对 |
+| Go 核心与 WASM 桥接 | `b1f8fda` | 新用例先失败，随后 Go/CSV 测试与 WASM 构建通过 |
+| Worker 与 JS/TS 目录接口 | `15df1e0` | 真实 Chromium 新接口先失败，随后新旧目录流程通过 |
+| 普通 CKKS 参数兼容性 | `fab2a59` | `PN14QP438` 回归用例先失败，修复后加解密通过 |
+| 任务文件边界校验 | `b4fe232` | 空任务的浏览器用例先失败，修复后拒绝无效任务 |
+| 端到端与交付 | 本记录所在的 `test: validate parameter key pregeneration delivery` 提交 | 真实目录 N16 BTP、跨刷新/布局、GPU 推理、发布包校验通过 |
+
+已执行：
+
+- `npm test`：包内 Go 测试与 3 个 CSV 测试通过；
+- `npm run build`、`npm run test:browser`：发布构建、原普通 CKKS 回归与参数目录边界验证通过；
+- `npm run test:pregeneration`：真实 File System Access 目录生成 3,329,929,205 字节 eval 和 25,494,056 字节 full；跨刷新解密旧密文、加密新 CSV、同一密钥绑定标量/ResNet-20 布局通过；现有 GPU 服务端直接导入并推理，最大绝对误差 `0.0004500023 < 0.1`；
+- `npm run package -- /tmp`：ZIP 文件完整性、运行时与源码一致性、中文 README/模板和全部 `SHA256SUMS` 条目通过；
+- Python 验收脚本的 Ruff 检查/格式检查、shell/JS 语法检查与 `git diff --check` 通过。
+
+`setup()` 为 173.10 秒；WASM 线性内存峰值 940 MiB，最大 payload 约 60.78 MiB，chunk 4 MiB；250 ms 采样的渲染进程 RSS 合计峰值约 1.28 GiB。指标口径及交付物校验值详见设计规范第 7 节，原始结果为 `/tmp/latti-pregeneration.d0iDGE/report.json`，交付包为 `/tmp/latti-client-wasm-0.1.0.zip`。

@@ -1,5 +1,7 @@
 # 固定参数的浏览器密钥预生成设计规范
 
+> 状态：已实现并完成验收（2026-10-15）。模块提交及验证记录见[实施计划](../plans/latti_parameter_key_pregeneration_implementation_plan.md)。
+
 ## 1. 目标与参数
 
 桌面 Chrome/Edge 普通网页在 Dedicated Worker 中，使用固定的 `N16QP1546H192H32` 完整预设提前生成一套用户密钥。生成过程仅读取参数配置；收到具体任务后，加载同一套密钥完成 CSV 加密和结果解密。
@@ -99,3 +101,29 @@ Worker 继续以 4 MiB chunk 和背压顺序写入 `public/eval_context.bin`，�
 3. ResNet-20/CIFAR-10 的 BTP 文件由现有服务端直接导入、推理，浏览器新会话恢复后解密，并检查与明文结果的误差。
 4. 真实用户目录的 File System Access API 完成大于 3 GiB 的 eval 文件写入；记录文件大小、chunk/payload 峰值、WASM 线性内存、Go HeapAlloc、耗时及可取得的浏览器 RSS 指标。
 5. Go/CSV 测试、既有浏览器回归、新参数目录浏览器验收、发布构建和 ZIP 校验通过。发布包附中文 README 和参数目录配置模板，说明提前生成、任务绑定及恢复流程。
+
+## 7. 实施与验收记录
+
+实现位于 `inference/interface/wasm/`，复用 Lattigo `clientcontext` 和 LattiSense 服务端接口。Go 核心及 WASM 桥接支持参数独立初始化；Worker 和 JS/TS 接口支持参数目录、任务绑定、双文件保存及恢复。中文 README 和参数模板随浏览器 ZIP 交付。
+
+验收命令在该源码目录执行：`npm test`、`npm run build`、`npm run test:browser`、`npm run test:pregeneration`、`npm run package -- /tmp`，均返回成功。Go/Chromium 测试覆盖参数独立初始化、目录/参数校验、已有任一文件保护、空任务拒绝、错误参数 ID/模式拒绝和原普通 CKKS 路径。
+
+完整验收使用 Linux 桌面 Chrome `147.0.7727.101`、Go `1.24.11` 和 RTX 5880 Ada 的现有 GPU 服务端构建。隔离 D-Bus/Xvfb 自动完成目录选择与浏览器授权，生产 Worker 通过真实 File System Access API 写入 `/tmp/latti-pregeneration.d0iDGE/N16QP1546H192H32/`。参数目录只有配置 JSON 时完成 `setup()`；随后同一密钥分别绑定标量和 CIFAR-10/ResNet-20 任务。页面刷新后旧标量密文解密及新 CSV 加密通过；GPU 服务端直接导入 eval 文件，推理后再次刷新恢复并解密，10 个输出与本次明文计算的最大绝对误差为 `0.0004500023`，低于验收阈值 `0.1`。
+
+| 指标 | 本次结果 |
+| --- | --- |
+| `setup()` 耗时 | 173.10 秒 |
+| `eval_context.bin` | 3,329,929,205 字节，约 3.10 GiB |
+| `full_context.bin` | 25,494,056 字节，约 24.31 MiB |
+| 最大序列化 payload | 63,734,300 字节，约 60.78 MiB |
+| 最大 chunk / 同时写入 chunk | 4 MiB / 1 |
+| 实际写入 chunk 数 | 838 |
+| WASM 线性内存峰值 | 985,661,440 字节，940 MiB |
+| Go HeapAlloc 观测峰值 | 974,063,856 字节，约 928.94 MiB |
+| 渲染进程 RSS 合计观测峰值 | 1,346,000 KiB，约 1.28 GiB |
+| CDP 所列 Chrome 进程 RSS 合计观测峰值 | 1,872,828 KiB，约 1.79 GiB |
+| GPU 推理耗时 | 6.41 秒 |
+
+RSS 在参数会话初始化及 setup 阶段，以 CDP `SystemInfo.getProcessInfo` 的 PID 读取 `/proc/<pid>/status`，每 250 ms 采样，共 695 次。合计包括相应进程中的浏览器开销及共享页；该口径是进程 RSS 采样值。Worker/WASM 的内存另由表中的线性内存和 Go HeapAlloc 表示。磁盘 eval header 已检查为 `has_sk=0`、`has_pk=1`；full 文件经过现有恢复校验，评估键标志为 0。
+
+完整指标、输出及测试文件保存在 `/tmp/latti-pregeneration.d0iDGE/report.json`，执行日志为 `/tmp/latti-pregeneration-final.log`。交付物 `/tmp/latti-client-wasm-0.1.0.zip` 包含运行时、中文 README 和参数目录模板，已核对 ZIP 内容与源码构建产物一致，并通过内部 `SHA256SUMS` 校验；ZIP SHA-256 为 `992a704196920b63ab1a53751f0a90bb6ede929ecfc3e63ee94683e48494ffd8`。
