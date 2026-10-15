@@ -10,7 +10,8 @@
     "package": "bash package.sh",
     "test": "go test ./... && node --test tests/*.test.js",
     "test:browser": "node tests/browser.mjs",
-    "test:pregeneration": "bash tests/pregeneration.sh"
+    "test:pregeneration": "bash tests/pregeneration.sh",
+    "test:workflow": "bash tests/workflow.sh"
   },
   "devDependencies": { "playwright-core": "1.56.1" }
 }
