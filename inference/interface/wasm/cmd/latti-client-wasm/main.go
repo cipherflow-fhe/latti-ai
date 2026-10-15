@@ -38,10 +38,14 @@ func call(_ js.Value, args []js.Value) (result any) {
 	var err error
 	var data any
 	switch args[0].String() {
-	case "init":
+	case "init", "init-keys":
 		stream, payload = nil, nil
 		payloadOffset, payloadPeak = 0, 0
-		client, err = core.NewClient([]byte(args[1].String()), []byte(args[2].String()))
+		if args[0].String() == "init-keys" {
+			client, err = core.NewClient(nil, []byte(args[1].String()))
+		} else {
+			client, err = core.NewClient([]byte(args[1].String()), []byte(args[2].String()))
+		}
 	case "begin":
 		stream, err = client.BeginSetup()
 	case "next":

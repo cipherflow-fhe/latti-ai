@@ -49,7 +49,49 @@ type Client struct {
 	decryptor ckks.Decryptor
 }
 
+type parameterEntry struct {
+	N        int      `json:"poly_modulus_degree"`
+	Q        []uint64 `json:"q"`
+	P        []uint64 `json:"p"`
+	LogSlots int      `json:"log_slots"`
+	Name     string   `json:"param_name"`
+	Levels   int      `json:"n_mult_level"`
+	LogScale int      `json:"log_default_scale"`
+}
+
+func validateFixedParameters(p parameterEntry) error {
+	if p.Name != "N16QP1546H192H32" || p.N != 65536 || p.Levels != 9 || p.LogScale != 40 ||
+		(p.LogSlots != 0 && p.LogSlots != 15) || len(p.Q) != 0 || len(p.P) != 0 {
+		return errors.New("parameters must match the N16QP1546H192H32 preset")
+	}
+	return nil
+}
+
+func newKeyClient(parameterBytes []byte) (*Client, error) {
+	var configurations map[string]parameterEntry
+	if err := json.Unmarshal(parameterBytes, &configurations); err != nil {
+		return nil, err
+	}
+	if len(configurations) != 1 {
+		return nil, errors.New("key generation requires one parameter entry")
+	}
+	for _, entry := range configurations {
+		if err := validateFixedParameters(entry); err != nil {
+			return nil, err
+		}
+	}
+	btp := bootstrapping.N16QP1546H192H32
+	params, err := ckks.NewParametersFromLiteral(btp.SchemeParams)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{Keys: clientcontext.Keys{Params: params, BTP: &btp.BootstrappingParams}}, nil
+}
+
 func NewClient(taskBytes, parameterBytes []byte) (*Client, error) {
+	if len(taskBytes) == 0 {
+		return newKeyClient(parameterBytes)
+	}
 	c := new(Client)
 	if err := json.Unmarshal(taskBytes, &c.Task); err != nil {
 		return nil, err
@@ -66,18 +108,21 @@ func NewClient(taskBytes, parameterBytes []byte) (*Client, error) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	var configurations map[string]struct {
-		N        int      `json:"poly_modulus_degree"`
-		Q        []uint64 `json:"q"`
-		P        []uint64 `json:"p"`
-		LogSlots int      `json:"log_slots"`
-	}
+	var configurations map[string]parameterEntry
 	if err := json.Unmarshal(parameterBytes, &configurations); err != nil {
 		return nil, err
 	}
 	entry, ok := configurations[c.Task.Inputs[names[0]].ParameterID]
 	if !ok {
 		return nil, errors.New("missing CKKS parameter entry")
+	}
+	if entry.Name != "" {
+		if !c.Task.UseBTP {
+			return nil, errors.New("fixed BTP parameter profile requires use_btp=true")
+		}
+		if err := validateFixedParameters(entry); err != nil {
+			return nil, err
+		}
 	}
 	var literal ckks.ParametersLiteral
 	if c.Task.UseBTP {
@@ -117,6 +162,12 @@ func NewClient(taskBytes, parameterBytes []byte) (*Client, error) {
 	c.Keys.Params = params
 	for _, features := range []map[string]FeatureParam{c.Task.Inputs, c.Task.Outputs} {
 		for name, p := range features {
+			if entry.Name != "" {
+				referenced, ok := configurations[p.ParameterID]
+				if !ok || validateFixedParameters(referenced) != nil {
+					return nil, errors.New("task parameter reference does not match the fixed profile")
+				}
+			}
 			if p.Channel == 0 {
 				p.Channel = 1
 			}
@@ -164,6 +215,9 @@ func (c *Client) Restore(data []byte) error {
 }
 
 func (c *Client) Encrypt(name string, values []float64) ([]byte, error) {
+	if len(c.Task.Inputs) == 0 {
+		return nil, errors.New("task configuration is required for encryption")
+	}
 	if c.encryptor == nil {
 		return nil, errors.New("setup or restore required")
 	}
@@ -189,6 +243,9 @@ func (c *Client) Encrypt(name string, values []float64) ([]byte, error) {
 }
 
 func (c *Client) Decrypt(name string, raw []byte) (values []float64, err error) {
+	if len(c.Task.Outputs) == 0 {
+		return nil, errors.New("task configuration is required for decryption")
+	}
 	if c.decryptor == nil {
 		return nil, errors.New("setup or restore required")
 	}
