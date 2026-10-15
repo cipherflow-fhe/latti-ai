@@ -15,4 +15,10 @@ export interface BrowserClient {
   decrypt(options: {outputName:string; ciphertextFile:FileSystemFileHandle | File; outputDirectory:FileSystemDirectoryHandle}): Promise<FileSystemFileHandle>;
   close(): Promise<void>;
 }
-export function openBrowserClient(options: {clientDirectory:FileSystemDirectoryHandle; onProgress?:(progress:Progress)=>void}): Promise<BrowserClient>;
+export function openBrowserClient(options: {
+  /** Task configuration; required for encryption and decryption. */
+  clientDirectory?:FileSystemDirectoryHandle;
+  /** N16QP1546H192H32 directory containing parameters and reusable secret/public contexts. */
+  keyDirectory?:FileSystemDirectoryHandle;
+  onProgress?:(progress:Progress)=>void;
+}): Promise<BrowserClient>;

@@ -1,6 +1,9 @@
-export async function openBrowserClient({clientDirectory,onProgress}) {
+export async function openBrowserClient({clientDirectory,keyDirectory,onProgress}) {
   if (!globalThis.isSecureContext) throw new Error('A secure browser context is required');
-  if (!clientDirectory || clientDirectory.kind !== 'directory') throw new Error('Select a client directory');
+  if (!clientDirectory && !keyDirectory) throw new Error('Select a client or key directory');
+  for (const directory of [clientDirectory,keyDirectory]) {
+    if (directory && directory.kind !== 'directory') throw new Error('Select a directory');
+  }
   const worker = new Worker(new URL('./worker.js',import.meta.url),{type:'module'});
   let nextID = 0, closed = false, queue = Promise.resolve();
   const pending = new Map();
@@ -29,7 +32,7 @@ export async function openBrowserClient({clientDirectory,onProgress}) {
     queue = result.catch(()=>{});
     return result;
   };
-  try { await request('open',{clientDirectory}); }
+  try { await request('open',{clientDirectory,keyDirectory}); }
   catch (error) { worker.terminate(); throw error; }
   return {
     setup: () => request('setup'),

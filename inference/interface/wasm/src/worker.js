@@ -1,7 +1,7 @@
 import './wasm_exec.js';
 import { readCSV } from './csv.js';
 
-let directory, taskText, parameterText, ready=false, go;
+let directory, keyDirectory, taskText, parameterText, ready=false, go;
 const runtimeReady = (async () => {
   go = new Go();
   const {instance} = await WebAssembly.instantiateStreaming(fetch(new URL('./latti_client.wasm',import.meta.url)),go.importObject);
@@ -19,7 +19,9 @@ const progress = (phase,start,bytes,result={}) => postMessage({type:'progress',p
   chunkBytes:result.data?.chunk?.byteLength || 0,inFlightChunks:result.data?.chunk ? 1 : 0,
 }});
 const fileOf = async value => value.kind === 'file' ? value.getFile() : value;
-const read = async name => (await (await directory.getFileHandle(name)).getFile()).text();
+const read = async (dir,name) => (await (await dir.getFileHandle(name)).getFile()).text();
+const initialize = () => taskText ? core('init',taskText,parameterText) : core('init-keys',parameterText);
+const contextDirectory = (name,create=false) => keyDirectory ? keyDirectory.getDirectoryHandle(name,{create}) : directory;
 const validName = name => {
   if (typeof name !== 'string' || !/^[A-Za-z0-9._-]+$/.test(name) || name.includes('..')) throw new Error('Invalid task name');
   return name;
@@ -34,16 +36,28 @@ async function operate({operation,...options}) {
   const start=performance.now();
   if (operation === 'open') {
     directory=options.clientDirectory;
-    [taskText,parameterText]=await Promise.all([read('task_config.json'),read('ckks_parameter.json')]);
-    core('init',taskText,parameterText); return;
+    keyDirectory=options.keyDirectory;
+    if (keyDirectory && keyDirectory.name !== 'N16QP1546H192H32') throw new Error('Select the N16QP1546H192H32 key directory');
+    [taskText,parameterText]=await Promise.all([
+      directory ? read(directory,'task_config.json') : undefined,
+      read(keyDirectory || directory,'ckks_parameter.json'),
+    ]);
+    // Validate the complete fixed profile even when a task is also supplied.
+    if (keyDirectory) core('init-keys',parameterText);
+    if (taskText) initialize();
+    return;
   }
   if (operation === 'setup') {
-    let exists=false;
-    try { await directory.getFileHandle('full_context.bin'); exists=true; }
-    catch (error) { if (error.name !== 'NotFoundError') throw error; }
-    if (exists) throw new Error('full_context.bin exists; restore it or select a new client directory');
+    const secret=await contextDirectory('secret',true);
+    const publicDir=await contextDirectory('public',true);
+    for (const [dir,name] of [[secret,'full_context.bin'],...(keyDirectory ? [[publicDir,'eval_context.bin']] : [])]) {
+      let exists=false;
+      try { await dir.getFileHandle(name); exists=true; }
+      catch (error) { if (error.name !== 'NotFoundError') throw error; }
+      if (exists) throw new Error(name+' exists; restore it or select a new directory');
+    }
     ready=false;
-    const evalContext=await directory.getFileHandle('eval_context.bin',{create:true});
+    const evalContext=await publicDir.getFileHandle('eval_context.bin',{create:true});
     const writer=await evalContext.createWritable();
     let bytes=0;
     try {
@@ -58,17 +72,18 @@ async function operate({operation,...options}) {
       await writer.close();
     } catch (error) {
       await writer.abort().catch(()=>{});
-      core('init',taskText,parameterText); throw error;
+      initialize(); throw error;
     }
     const result=core('full');
-    const fullContext=await directory.getFileHandle('full_context.bin',{create:true});
+    const fullContext=await secret.getFileHandle('full_context.bin',{create:true});
     await writeFile(fullContext,result.data);
     ready=true;
     progress('full-export',start,result.data.byteLength,result);
     return {evalContext,fullContext};
   }
   if (operation === 'restore') {
-    const file=await (await directory.getFileHandle('full_context.bin')).getFile();
+    const secret=await contextDirectory('secret');
+    const file=await (await secret.getFileHandle('full_context.bin')).getFile();
     const result=core('restore',new Uint8Array(await file.arrayBuffer()));
     ready=true;progress('restore',start,file.size,result);return;
   }

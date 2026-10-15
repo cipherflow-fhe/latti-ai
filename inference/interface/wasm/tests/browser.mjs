@@ -34,6 +34,39 @@ page.on('pageerror',error=>console.error('[browser error]',error.message));
 try {
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.evaluate(async () => {
+    const {openBrowserClient}=await import('/dist/index.js');
+    const root=await navigator.storage.getDirectory();
+    const keys=await root.getDirectoryHandle('N16QP1546H192H32',{create:true});
+    const config={param0:{poly_modulus_degree:65536,n_mult_level:9,log_default_scale:40,param_name:'N16QP1546H192H32'}};
+    const write=async (dir,name,text)=>{
+      const writer=await (await dir.getFileHandle(name,{create:true})).createWritable();
+      await writer.write(text); await writer.close();
+    };
+    await write(keys,'ckks_parameter.json',JSON.stringify(config));
+    // A parameter-only session must open without task_config.json.
+    const client=await openBrowserClient({keyDirectory:keys});
+    for (const [folder,name] of [['public','eval_context.bin'],['secret','full_context.bin']]) {
+      const dir=await keys.getDirectoryHandle(folder,{create:true});
+      await write(dir,name,'existing');
+      let rejected=false; try { await client.setup(); } catch { rejected=true; }
+      if (!rejected || await (await (await dir.getFileHandle(name)).getFile()).text()!=='existing') throw new Error('existing parameter keys overwritten');
+      await dir.removeEntry(name);
+    }
+    await client.close();
+    const task=await root.getDirectoryHandle('pregenerated-task',{create:true});
+    const p={dim:0,channel:1,pack_num:1,skip:1,level:1,ckks_parameter_id:'param0'};
+    await write(task,'task_config.json',JSON.stringify({use_btp:true,pack_style:'ordinary',task_input_param:{input:p},task_output_param:{output:p}}));
+    // Parameters come from the key directory, not the task directory.
+    await (await openBrowserClient({clientDirectory:task,keyDirectory:keys})).close();
+    const wrong=await root.getDirectoryHandle('wrong-parameter-name',{create:true});
+    await write(wrong,'ckks_parameter.json',JSON.stringify(config));
+    let rejected=false;try { await openBrowserClient({keyDirectory:wrong}); } catch { rejected=true; }
+    if (!rejected) throw new Error('wrong parameter directory accepted');
+    await write(keys,'ckks_parameter.json',JSON.stringify({...config,extra:config.param0}));
+    rejected=false;try { await openBrowserClient({clientDirectory:task,keyDirectory:keys}); } catch { rejected=true; }
+    if (!rejected) throw new Error('multiple parameter entries accepted');
+  });
+  await page.evaluate(async () => {
     const {openBrowserClient} = await import('/dist/index.js');
     const directory=await (await navigator.storage.getDirectory()).getDirectoryHandle('client',{create:true});
     const param={dim:0,channel:3,pack_num:8,skip:256,level:1,ckks_parameter_id:'p'};
