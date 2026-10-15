@@ -13,6 +13,8 @@ export interface BrowserClient {
   restore(): Promise<void>;
   encrypt(options: {inputName:string; inputFile:FileSystemFileHandle | File; outputDirectory:FileSystemDirectoryHandle}): Promise<FileSystemFileHandle>;
   decrypt(options: {outputName:string; ciphertextFile:FileSystemFileHandle | File; outputDirectory:FileSystemDirectoryHandle}): Promise<FileSystemFileHandle>;
+  encrypt_batch(options: {inputName:string; inputDirectory:FileSystemDirectoryHandle; outputDirectory:FileSystemDirectoryHandle}): Promise<FileSystemFileHandle[]>;
+  decrypt_batch(options: {outputName:string; inputDirectory:FileSystemDirectoryHandle; outputDirectory:FileSystemDirectoryHandle}): Promise<FileSystemFileHandle[]>;
   close(): Promise<void>;
 }
 export function openBrowserClient(options: {

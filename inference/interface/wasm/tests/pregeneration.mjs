@@ -107,7 +107,7 @@ try {
     const {openBrowserClient}=await import('/dist/index.js');
     const client=await openBrowserClient({keyDirectory:await directory.getDirectoryHandle('N16QP1546H192H32'),clientDirectory:await directory.getDirectoryHandle('scalar')});
     await client.restore();
-    const output=await client.decrypt({outputName:'output',ciphertextFile:await directory.getFileHandle('input.ct.bin'),outputDirectory:directory});
+    const output=await client.decrypt({outputName:'output',ciphertextFile:await directory.getFileHandle('old.ct.bin'),outputDirectory:directory});
     const values=(await(await output.getFile()).text()).trim().split(',').map(Number);
     await client.encrypt({inputName:'input',inputFile:new File(['4,5,6'],'new.csv'),outputDirectory:directory});
     await client.close();return values;

@@ -28,6 +28,11 @@ const validName = name => {
   if (typeof name !== 'string' || !/^[A-Za-z0-9._-]+$/.test(name) || name.includes('..')) throw new Error('Invalid task name');
   return name;
 };
+const outputName = (source,extension,suffix) => {
+  const name=source.replace(extension,'')+suffix;
+  if (!name || /[\/\\\0]/.test(name) || name==='.' || name==='..') throw new Error('Invalid output file name');
+  return name;
+};
 async function writeFile(handle,data) {
   const writer = await handle.createWritable();
   try { await writer.write(data); await writer.close(); }
@@ -92,17 +97,20 @@ async function operate({operation,...options}) {
   if (!ready) throw new Error('setup or restore is required');
   if (operation === 'encrypt') {
     const name=validName(options.inputName);
-    const values=await readCSV(await fileOf(options.inputFile));
+    const file=await fileOf(options.inputFile);
+    const filename=outputName(file.name,/\.csv$/i,'.ct.bin');
+    const values=await readCSV(file);
     const result=core('encrypt',name,values);
-    const output=await options.outputDirectory.getFileHandle(name+'.ct.bin',{create:true});
+    const output=await options.outputDirectory.getFileHandle(filename,{create:true});
     await writeFile(output,result.data);
     progress('encrypt',start,result.data.byteLength,result);return output;
   }
   if (operation === 'decrypt') {
     const name=validName(options.outputName);
     const file=await fileOf(options.ciphertextFile);
+    const filename=outputName(file.name,/\.ct\.bin$/i,'.csv');
     const result=core('decrypt',name,new Uint8Array(await file.arrayBuffer()));
-    const output=await options.outputDirectory.getFileHandle(name+'.csv',{create:true});
+    const output=await options.outputDirectory.getFileHandle(filename,{create:true});
     await writeFile(output,Array.from(result.data).join(',')+'\n');
     progress('decrypt',start,file.size,result);return output;
   }

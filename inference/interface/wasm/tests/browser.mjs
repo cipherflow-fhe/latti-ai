@@ -117,7 +117,45 @@ try {
     const before=await (await directory.getFileHandle('eval_context.bin')).getFile();
     let rejected=false; try {await client.setup()} catch {rejected=true}
     if (!rejected || (await (await directory.getFileHandle('eval_context.bin')).getFile()).lastModified!==before.lastModified) throw new Error('existing keys overwritten');
-    await client.encrypt({inputName:'input',inputFile:new File(['4,5,6'],'new.csv'),outputDirectory:directory});
+    const named=await client.encrypt({inputName:'input',inputFile:new File(['4,5,6'],'new.csv'),outputDirectory:directory});
+    if(named.name!=='new.ct.bin'||output.name!=='input.csv')throw new Error('source file names were not preserved');
+    const csvDirectory=await directory.getDirectoryHandle('csv',{create:true});
+    const encryptedDirectory=await directory.getDirectoryHandle('encrypted',{create:true});
+    const decryptedDirectory=await directory.getDirectoryHandle('decrypted',{create:true});
+    const write=async(dir,name,text)=>{
+      const writer=await(await dir.getFileHandle(name,{create:true})).createWritable();
+      await writer.write(text);await writer.close();
+    };
+    const samples={'2.csv':'2,3,4','10.CSV':'10,11,12','1.csv':'1,2,3','图片 空格.csv':'-1,0,1'};
+    for(const[name,text]of Object.entries(samples))await write(csvDirectory,name,text);
+    await write(csvDirectory,'notes.txt','not a CSV');
+    await write(await csvDirectory.getDirectoryHandle('nested',{create:true}),'hidden.csv','9,9,9');
+    const encrypted=await client.encrypt_batch({inputName:'input',inputDirectory:csvDirectory,outputDirectory:encryptedDirectory});
+    if(JSON.stringify(encrypted.map(f=>f.name))!==JSON.stringify(['1.ct.bin','10.ct.bin','2.ct.bin','图片 空格.ct.bin']))throw new Error('batch encryption names or order differ');
+    const decrypted=await client.decrypt_batch({outputName:'output',inputDirectory:encryptedDirectory,outputDirectory:decryptedDirectory});
+    if(JSON.stringify(decrypted.map(f=>f.name))!==JSON.stringify(['1.csv','10.csv','2.csv','图片 空格.csv']))throw new Error('batch decryption names or order differ');
+    for(const file of decrypted){
+      const values=(await(await file.getFile()).text()).trim().split(',').map(Number);
+      const expected=samples[file.name]||samples['10.CSV'];
+      if(values.some((v,i)=>Math.abs(v-Number(expected.split(',')[i]))>0.001))throw new Error('batch roundtrip differs: '+file.name);
+    }
+    const empty=await directory.getDirectoryHandle('empty',{create:true});
+    if((await client.encrypt_batch({inputName:'input',inputDirectory:empty,outputDirectory:encryptedDirectory})).length ||
+       (await client.decrypt_batch({outputName:'output',inputDirectory:empty,outputDirectory:decryptedDirectory})).length)throw new Error('nonempty result for empty directory');
+    const duplicates=await directory.getDirectoryHandle('duplicates',{create:true});
+    await write(duplicates,'same.csv','1,2,3');await write(duplicates,'same.CSV','4,5,6');
+    let duplicateRejected=false;
+    try{await client.encrypt_batch({inputName:'input',inputDirectory:duplicates,outputDirectory:empty});}catch{duplicateRejected=true;}
+    if(!duplicateRejected)throw new Error('duplicate output names accepted');
+    for await(const entry of empty.values())throw new Error('duplicate preflight wrote '+entry.name);
+    const invalid=await directory.getDirectoryHandle('invalid',{create:true});
+    await write(invalid,'broken.csv','NaN');
+    let sourceReported=false;
+    try{await client.encrypt_batch({inputName:'input',inputDirectory:invalid,outputDirectory:encryptedDirectory});}catch(e){sourceReported=e.message.includes('broken.csv');}
+    if(!sourceReported)throw new Error('batch error omitted source file');
+    let unsafeRejected=false;
+    try{await client.encrypt({inputName:'input',inputFile:new File(['1,2,3'],'bad\\name.csv'),outputDirectory:directory});}catch{unsafeRejected=true;}
+    if(!unsafeRejected)throw new Error('unsafe output file name accepted');
     rejected=false;try { await client.encrypt({inputName:'../input',inputFile:new File(['4'],'invalid.csv'),outputDirectory:directory}); } catch {rejected=true}
     if (!rejected) throw new Error('invalid input accepted');
     await client.close();
