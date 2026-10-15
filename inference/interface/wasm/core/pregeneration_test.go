@@ -9,6 +9,29 @@ import (
 
 const fixedParameters = `{"param0":{"poly_modulus_degree":65536,"n_mult_level":9,"log_default_scale":40,"param_name":"N16QP1546H192H32"}}`
 
+func TestLegacyNamedCKKSTask(t *testing.T) {
+	feature := `{"dim":0,"channel":1,"pack_num":1,"skip":1,"level":1,"ckks_parameter_id":"param0"}`
+	task := []byte(`{"use_btp":false,"pack_style":"ordinary","task_input_param":{"input":` + feature + `},"task_output_param":{"output":` + feature + `}}`)
+	client, err := NewClient(task, []byte(`{"param0":{"poly_modulus_degree":16384,"param_name":"PN14QP438"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.Keys.BTP != nil || client.Keys.Params.LogN() != 14 {
+		t.Fatal("legacy named CKKS parameters changed")
+	}
+	if _, err = client.BeginSetup(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := client.Encrypt("input", []float64{1.25})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.Decrypt("output", raw)
+	if err != nil || len(got) != 1 || math.Abs(got[0]-1.25) > 0.001 {
+		t.Fatalf("legacy CKKS round trip: %v, %v", got, err)
+	}
+}
+
 func TestPregenerationRestoresAcrossTaskLayouts(t *testing.T) {
 	keys, err := NewClient(nil, []byte(fixedParameters))
 	if err != nil {

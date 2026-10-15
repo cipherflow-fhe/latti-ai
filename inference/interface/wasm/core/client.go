@@ -116,7 +116,8 @@ func NewClient(taskBytes, parameterBytes []byte) (*Client, error) {
 	if !ok {
 		return nil, errors.New("missing CKKS parameter entry")
 	}
-	if entry.Name != "" {
+	fixedProfile := entry.Name == "N16QP1546H192H32" || (c.Task.UseBTP && entry.Name != "")
+	if fixedProfile {
 		if !c.Task.UseBTP {
 			return nil, errors.New("fixed BTP parameter profile requires use_btp=true")
 		}
@@ -162,7 +163,7 @@ func NewClient(taskBytes, parameterBytes []byte) (*Client, error) {
 	c.Keys.Params = params
 	for _, features := range []map[string]FeatureParam{c.Task.Inputs, c.Task.Outputs} {
 		for name, p := range features {
-			if entry.Name != "" {
+			if fixedProfile {
 				referenced, ok := configurations[p.ParameterID]
 				if !ok || validateFixedParameters(referenced) != nil {
 					return nil, errors.New("task parameter reference does not match the fixed profile")
