@@ -42,6 +42,7 @@ async function operate({operation,...options}) {
       directory ? read(directory,'task_config.json') : undefined,
       read(keyDirectory || directory,'ckks_parameter.json'),
     ]);
+    if (directory && !taskText) throw new Error('Task configuration is required');
     // Validate the complete fixed profile even when a task is also supplied.
     if (keyDirectory) core('init-keys',parameterText);
     if (taskText) initialize();

@@ -58,6 +58,14 @@ try {
     await write(task,'task_config.json',JSON.stringify({use_btp:true,pack_style:'ordinary',task_input_param:{input:p},task_output_param:{output:p}}));
     // Parameters come from the key directory, not the task directory.
     await (await openBrowserClient({clientDirectory:task,keyDirectory:keys})).close();
+    await write(task,'task_config.json','');
+    await write(task,'ckks_parameter.json',JSON.stringify(config));
+    for (const options of [{clientDirectory:task},{clientDirectory:task,keyDirectory:keys}]) {
+      let rejected=false;try { await openBrowserClient(options); } catch { rejected=true; }
+      if (!rejected) throw new Error('empty task configuration accepted');
+    }
+    await task.removeEntry('ckks_parameter.json');
+    await write(task,'task_config.json',JSON.stringify({use_btp:true,pack_style:'ordinary',task_input_param:{input:p},task_output_param:{output:p}}));
     const wrong=await root.getDirectoryHandle('wrong-parameter-name',{create:true});
     await write(wrong,'ckks_parameter.json',JSON.stringify(config));
     let rejected=false;try { await openBrowserClient({keyDirectory:wrong}); } catch { rejected=true; }
