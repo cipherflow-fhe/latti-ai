@@ -37,7 +37,7 @@
 
 对应规范：§2、§6、§9.6。
 
-1. 先增加已知 logits/标签、打乱标注顺序、并列最大值、中文/引号文件名以及缺失/重复/非法输入的浏览器用例，确认后处理缺失时失败。
+1. 先增加已知 logits/标签、打乱标注顺序、并列最大值、中文/逗号文件名和 CSV 引号以及缺失/重复/非法输入的浏览器用例，确认后处理缺失时失败。
 2. 新增任务独立模块 `examples/test_cifar10/task/client/postprocess.js`，读取用户准备的 `filename,label` CSV，按源图名称关联 logits，检查样本集合及类别范围。
 3. 逐文件读取 10 个有限 logits，执行 argmax；顺序写出 `predictions.csv`，关闭后返回文件句柄、total、correct 和 accuracy。
 4. 保持预处理接口；标注表由用户提供并由后处理读取。

@@ -95,6 +95,53 @@ try{
     return{outputs:outputs.map(f=>f.name),events,peak,live,errors};
   });
   assert(preprocessing.outputs.length,'no preprocessed files');
-  await writeFile(path.join(artifacts,'report.json'),JSON.stringify({preprocessing},null,2));
-  console.log(JSON.stringify({artifacts,preprocessing},null,2));
+  const postprocessing=await page.evaluate(async()=>{
+    const module=await import('/task/postprocess.js').catch(()=>({}));
+    if(typeof module.postprocess_batch!=='function')throw Error('postprocess_batch is not implemented');
+    const write=async(dir,name,text)=>{
+      let file;
+      try{file=await dir.getFileHandle(name,{create:true});}catch(error){throw new Error(name+': '+error.message);}
+      const writer=await file.createWritable();await writer.write(text);await writer.close();return file;
+    };
+    const logits=await directory.getDirectoryHandle('logits',{create:true});
+    const reports=await directory.getDirectoryHandle('reports',{create:true});
+    await write(logits,'002.csv','0,0,7,0,0,6,0,0,0,0\n');
+    await write(logits,'图 像,a.csv','0,8,0,0,0,0,0,0,0,8\n');
+    await write(logits,'001.csv','0,0,0,6,0,0,0,0,0,0\n');
+    const labelFile=await write(directory,'label.csv','\uFEFFfilename,label\r\n"图 像,a.png",1\r\n002.jpg,5\r\n001.png,3\r\n');
+    const result=await module.postprocess_batch({inputDirectory:logits,labelFile,outputDirectory:reports});
+    const report=await(await result.predictionsFile.getFile()).text();
+    if(result.total!==3||result.correct!==2||result.accuracy!==2/3)throw Error('incorrect argmax or accuracy');
+    const expected='filename,label,prediction,correct\n001.png,3,3,1\n002.jpg,5,2,0\n"图 像,a.png",1,1,1\n';
+    if(report!==expected)throw Error('prediction report or sample order differs: '+report);
+    const reordered=new File(['filename,label\n001.png,3\n002.jpg,5\n"图 像,a.png",1\n'],'labels.csv');
+    const again=await module.postprocess_batch({inputDirectory:logits,labelFile:reordered,outputDirectory:reports});
+    if(again.accuracy!==result.accuracy||(await(await again.predictionsFile.getFile()).text())!==report)throw Error('label row order affected results');
+    const failures=[];
+    const cases=[
+      ['missing result','filename,label\n001.png,3\n002.png,0\n','0,0,0,6,0,0,0,0,0,0'],
+      ['extra result','filename,label\n','0,0,0,6,0,0,0,0,0,0'],
+      ['duplicate label','filename,label\n001.png,3\n001.png,3\n','0,0,0,6,0,0,0,0,0,0'],
+      ['duplicate stem','filename,label\n001.png,3\n001.jpg,3\n','0,0,0,6,0,0,0,0,0,0'],
+      ['invalid class','filename,label\n001.png,10\n','0,0,0,6,0,0,0,0,0,0'],
+      ['noninteger class','filename,label\n001.png,3.5\n','0,0,0,6,0,0,0,0,0,0'],
+      ['nonfinite logits','filename,label\n001.png,3\n','NaN,0,0,6,0,0,0,0,0,0'],
+      ['short logits','filename,label\n001.png,3\n','0,0,0,6,0,0,0,0,0'],
+      ['empty field','filename,label\n001.png,3\n','0,,0,6,0,0,0,0,0,0'],
+      ['invalid quote','filename,label\n"001.png,3\n','0,0,0,6,0,0,0,0,0,0'],
+      ['unsafe filename','filename,label\n../001.png,3\n','0,0,0,6,0,0,0,0,0,0'],
+    ];
+    for(const[name,labels,values]of cases){
+      const input=await directory.getDirectoryHandle('invalid-'+failures.length,{create:true});
+      await write(input,'001.csv',values);
+      let rejected=false;try{await module.postprocess_batch({inputDirectory:input,labelFile:new File([labels],'label.csv'),outputDirectory:reports});}catch{rejected=true;}
+      if(!rejected)throw Error('accepted '+name);failures.push(name);
+    }
+    const empty=await directory.getDirectoryHandle('empty-logits',{create:true});
+    let rejected=false;try{await module.postprocess_batch({inputDirectory:empty,labelFile:new File(['filename,label\n'],'label.csv'),outputDirectory:reports});}catch{rejected=true;}
+    if(!rejected)throw Error('empty accuracy accepted');
+    return{total:result.total,correct:result.correct,accuracy:result.accuracy,report,failures};
+  });
+  await writeFile(path.join(artifacts,'report.json'),JSON.stringify({preprocessing,postprocessing},null,2));
+  console.log(JSON.stringify({artifacts,preprocessing,postprocessing},null,2));
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
