@@ -1,6 +1,6 @@
 {
   "name": "@latti/client-wasm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Browser Worker client for local FHE key persistence and encryption",
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },

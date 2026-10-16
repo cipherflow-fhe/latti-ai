@@ -19,7 +19,12 @@ printf '%s\n' "$output_dir/$package_name.zip"
 
 task_source="../../../examples/test_cifar10/task/client"
 mkdir -p "$stage_dir/tasks/resnet20/client"
-cp "$task_source/"{task_config.json,ckks_parameter.json,img.csv,preprocess.js,postprocess.js} "$stage_dir/tasks/resnet20/client/"
+cp "$task_source/"{task_config.json,ckks_parameter.json,preprocess.js,postprocess.js} "$stage_dir/tasks/resnet20/client/"
 rm -f "$output_dir/latti-client-tasks.zip"
 (cd "$stage_dir" && zip -qr "$output_dir/latti-client-tasks.zip" tasks)
 printf '%s\n' "$output_dir/latti-client-tasks.zip"
+
+cp -a ../../../../datasets/CIFAR-10/dataset "$stage_dir/dataset"
+rm -f "$output_dir/latti-dataset-cifar10.zip"
+(cd "$stage_dir" && zip -qr "$output_dir/latti-dataset-cifar10.zip" dataset)
+printf '%s\n' "$output_dir/latti-dataset-cifar10.zip"
