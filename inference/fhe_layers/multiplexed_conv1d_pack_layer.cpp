@@ -82,7 +82,7 @@ CkksPlaintext MultiplexedConv1DPackedLayer::generate_weight_pt_for_indices(CkksC
     int base_channel_in = packed_in_idx * n_channel_per_ct;
 
     const auto& mask = kernel_masks_[kernel_idx];
-    vector<double> w(param_.n() / 2, 0.0);
+    vector<double> w(param_.n(), 0.0);
 
     for (int linear_idx = 0; linear_idx < n_block_per_ct * (int)input_block_size; linear_idx++) {
         int t = linear_idx / (int)input_block_size;
@@ -105,7 +105,7 @@ CkksPlaintext MultiplexedConv1DPackedLayer::generate_bias_pt_for_index(CkksConte
     bool needs_rearrange = (skip > 1 || stride > 1);
     int n_block_per_ct = div_ceil(n_channel_per_ct, skip);
     uint32_t input_block_size = cached_input_block_size;
-    vector<double> bias_data(param_.n() / 2, 0.0);
+    vector<double> bias_data(param_.n(), 0.0);
 
     if (!needs_rearrange) {
         // Simple case: idx = wg (weight group index)
@@ -139,7 +139,7 @@ CkksPlaintext MultiplexedConv1DPackedLayer::generate_bias_pt_for_index(CkksConte
 
 CkksPlaintext MultiplexedConv1DPackedLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int t) const {
     uint32_t input_block_size = cached_input_block_size;
-    vector<double> mask(param_.n() / 2, 0.0);
+    vector<double> mask(param_.n(), 0.0);
     for (int out_idx = 0; out_idx < (int)(input_shape / stride); out_idx++) {
         int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip;
         mask[slot_idx] = 1.0;
@@ -190,7 +190,7 @@ void MultiplexedConv1DPackedLayer::prepare_weight() {
         int n_select = std::min(n_block_per_ct, (int)n_channel_out);
         block_select_pt.resize(n_select);
         for (int t = 0; t < n_select; t++) {
-            vector<double> mask(param_.n() / 2, 0.0);
+            vector<double> mask(param_.n(), 0.0);
             for (int out_idx = 0; out_idx < (int)(input_shape / stride); out_idx++) {
                 int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip;
                 mask[slot_idx] = 1.0;

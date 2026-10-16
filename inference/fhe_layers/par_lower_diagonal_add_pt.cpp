@@ -73,7 +73,7 @@ ParLowerDiagonalAddPt::ParLowerDiagonalAddPt(const CkksParameter& param_in,
     assert(head_shape[1] == n_prepad_);
     assert(B_vals_.get_shape()[0] == total_rows_ && B_vals_.get_shape()[1] == n_prepad_);
 
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     validate_lower_diag_geometry(total_rows_, n_prepad_, m_prepad_, H_prepad_, n_slot_);
 
     H_ = next_pow2(H_prepad_);

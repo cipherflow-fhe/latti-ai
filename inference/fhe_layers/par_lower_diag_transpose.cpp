@@ -56,7 +56,7 @@ ParLowerDiagTranspose::ParLowerDiagTranspose(const CkksParameter& param_in,
     n_ = next_pow2(n_prepad_);
     assert(n_ % m_ == 0);
 
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     segment_len_ = H_ * n_;
     assert(segment_len_ > 0);
     assert(n_slot_ % segment_len_ == 0);

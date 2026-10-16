@@ -33,6 +33,6 @@ Feature0DEncrypted ReshapeLayer::call(CkksContext& ctx, const Feature2DEncrypted
     result.skip = (x.shape[0] * x.skip[0]) * (x.shape[1] * x.skip[1]);
     result.level = x.level;
     result.n_channel = x.n_channel;
-    result.n_channel_per_ct = div_ceil(param_.n() / 2, (x.shape[0] * x.skip[0]) * (x.shape[1] * x.skip[1]));
+    result.n_channel_per_ct = div_ceil(param_.n(), (x.shape[0] * x.skip[0]) * (x.shape[1] * x.skip[1]));
     return result;
 }

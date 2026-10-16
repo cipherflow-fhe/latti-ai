@@ -137,7 +137,7 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed_lazy(const Duo& input_s
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
     input_shape_ct_mult[0] = special_input_shape[0] * special_skip[0];
     input_shape_ct_mult[1] = special_input_shape[1] * special_skip[1];
-    N_half = ctx.parameter().n() / 2;
+    N_half = ctx.parameter().n();
     n_block_per_ct = div_ceil(N_half, input_shape_ct_mult[0] * input_shape_ct_mult[1]);
     int valid_skip_0 = special_skip[0] / invalid_fill_in[0];
     int valid_skip_1 = special_skip[1] / invalid_fill_in[1];
@@ -307,7 +307,7 @@ Feature0DEncrypted DensePackedLayer::run_2d_multiplexed(CkksContext& ctx, const 
     result.skip = x.skip;
     result.n_channel = n_out_feature;
     result.dim = x.dim;
-    result.n_channel_per_ct = ctx.parameter().n() / 2 / result.skip;
+    result.n_channel_per_ct = ctx.parameter().n() / result.skip;
     result.level = x.level - 1;
     return result;
 }
@@ -494,7 +494,7 @@ void DensePackedLayer::prepare_weight_for_1d_multiplexed_lazy(uint32_t input_sha
     invalid_fill_1d = invalid_fill_in;
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    N_half = ctx.parameter().n() / 2;
+    N_half = ctx.parameter().n();
 
     uint32_t block_stride = skip_1d;
     uint32_t block_size = input_shape_1d * block_stride;

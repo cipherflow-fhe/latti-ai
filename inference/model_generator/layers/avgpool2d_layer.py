@@ -90,7 +90,7 @@ class Avgpool2DLayer:
             steps: 2^j * skip[1], all powers of 2)
           - floor(log2(n_rot)) rotate_cols calls × 1 primitive each (slot fill,
             steps: 2^r * channel * shape[0] * shape[1], all powers of 2)
-        where n_rot = floor(n / 2 / (channel * shape[0] * shape[1])).
+        where n_rot = floor(n / (channel * shape[0] * shape[1])).
         No rescale, so all ops are at a single level key.
         """
         ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
@@ -98,7 +98,7 @@ class Avgpool2DLayer:
 
         log2_stride_0 = int(math.ceil(math.log2(self.stride[0]))) if self.stride[0] > 1 else 0
         log2_stride_1 = int(math.ceil(math.log2(self.stride[1]))) if self.stride[1] > 1 else 0
-        n_rot = int(np.floor(n / 2 / (self.channel * self.shape[0] * self.shape[1])))
+        n_rot = int(np.floor(n / (self.channel * self.shape[0] * self.shape[1])))
         fill_steps = int(np.floor(np.log2(n_rot))) if n_rot > 1 else 0
         rot_add_per_ct = log2_stride_0 + log2_stride_1 + fill_steps
         ops[lv]['rotate'] += n_ct * rot_add_per_ct
@@ -231,7 +231,7 @@ class Avgpool2DLayer:
             out_skip0 = second_stage_stride[0]
             out_skip1 = second_stage_stride[1]
             n_channel_per_block = out_skip0 * out_skip1
-            n_block_per_ct = (N // 2) // (block_shape[0] * block_shape[1])
+            n_block_per_ct = (N) // (block_shape[0] * block_shape[1])
             n_channel_per_ct_out = n_channel_per_block * n_block_per_ct
             n_out_ct = math.ceil(self.channel / n_channel_per_ct_out)
 
@@ -292,7 +292,7 @@ class Avgpool2DLayer:
         select_tensor_pt[i]: i in min(n_channel, n_channel_per_ct * stride[0] * stride[1])
         Also returns n_channel_per_ct so caller can pass it to call_multiplexed_avgpool().
         """
-        n_channel_per_ct = int(math.ceil(n / 2 / (self.shape[0] * self.shape[1])))
+        n_channel_per_ct = int(math.ceil(n / (self.shape[0] * self.shape[1])))
         out_channels_per_ct = n_channel_per_ct * self.stride[0] * self.stride[1]
         n_select_pt = min(n_channel, out_channels_per_ct)
         select_tensor_pt = [CkksPlaintextNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)]
@@ -300,7 +300,7 @@ class Avgpool2DLayer:
 
     def call_custom_compute_multiplexed_avgpool(self, x: list, avg_data_source, n_channel: int, n: int) -> list:
         """Lazy path for multiplexed avgpool: generate select_tensor_pt on-demand."""
-        n_channel_per_ct = int(math.ceil(n / 2 / (self.shape[0] * self.shape[1])))
+        n_channel_per_ct = int(math.ceil(n / (self.shape[0] * self.shape[1])))
         out_channels_per_ct = n_channel_per_ct * self.stride[0] * self.stride[1]
         n_select_pt = min(n_channel, out_channels_per_ct)
 

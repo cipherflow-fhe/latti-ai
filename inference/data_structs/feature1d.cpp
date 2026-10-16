@@ -38,7 +38,7 @@ void Feature1DEncrypted::pack(Array<double, 2>& feature_mg, bool is_symmetric, d
     shape = feature_mg.get_shape()[1];
 
     uint32_t shape_with_skip = shape * skip;
-    n_channel_per_ct = context->parameter().n() / 2 / shape_with_skip;
+    n_channel_per_ct = context->parameter().n() / shape_with_skip;
     uint32_t n_ct = div_ceil(n_channel, n_channel_per_ct);
 
     data.clear();
@@ -90,7 +90,7 @@ void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, bo
     n_channel = feature_mg.get_shape()[0];
     shape = feature_mg.get_shape()[1];
 
-    int n_slot = context->parameter().n() / 2;
+    int n_slot = context->parameter().n();
 
     // skip already contains invalid_fill: block_stride = skip (not skip*invalid_fill)
     // valid channels per block = skip / invalid_fill

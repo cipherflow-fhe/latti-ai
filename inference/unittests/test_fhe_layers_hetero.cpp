@@ -289,7 +289,7 @@ par_diagonal_total_cts(const CkksParameter& param, Duo shape, Duo head_shape, ui
     uint32_t m = next_pow2_u32(m_prepad);
     uint32_t n = next_pow2_u32(n_prepad);
     uint32_t segment_len = H * n;
-    uint32_t c = (param.n() / 2) / segment_len;
+    uint32_t c = (param.n()) / segment_len;
     uint32_t cts_per_mb = m / c;
     uint32_t packed_extent = n_heads * m_prepad;
     uint32_t packed_total = is_transposed ? shape[0] : shape[1];
@@ -1050,7 +1050,7 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_u
     const int init_level = 17;
     CkksContext context = CkksContext::create_random_context(param);
 
-    const uint32_t n_slot = param.n() / 2;
+    const uint32_t n_slot = param.n();
     const uint32_t n_prepad = 128;
     const uint32_t n_heads = 2;
     const uint32_t m_prepad = 128;
@@ -1201,7 +1201,7 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polytanh_cpp", "[fhe_layers][par_u
     const int init_level = 9;
     CkksContext context = CkksContext::create_random_context(param);
 
-    const uint32_t n_slot = param.n() / 2;
+    const uint32_t n_slot = param.n();
     const uint32_t n_prepad = 128;
     const uint32_t n_heads = 2;
     const uint32_t m_prepad = 128;
@@ -1328,7 +1328,7 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_horner_polygelu_cpp",
     const uint32_t N = 65536;
     CkksParameter param = CkksParameter::create_parameter(N_to_log_n(N));
 
-    const uint32_t n_slot = param.n() / 2;
+    const uint32_t n_slot = param.n();
     const uint32_t n_prepad = 128;
     const uint32_t n_heads = 2;
     const uint32_t m_prepad = 128;
@@ -4040,7 +4040,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_cpmm_square", "[block_
         uint32_t n_h_padded = 1;
         while (n_h_padded < cfg.n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot = res.param.n() / 2;
+        uint32_t n_slot = res.param.n();
         if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
             n_h_padded = cfg.n_heads;
         }
@@ -4113,7 +4113,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         uint32_t n_h_padded = 1;
         while (n_h_padded < cfg.n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot = res.param.n() / 2;
+        uint32_t n_slot = res.param.n();
         if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
             n_h_padded = cfg.n_heads;
         }
@@ -4179,7 +4179,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = res.param.n() / 2;
+    uint32_t n_slot = res.param.n();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
@@ -4244,7 +4244,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = res.param.n() / 2;
+    uint32_t n_slot = res.param.n();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
@@ -4438,7 +4438,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_full_attention", "[blo
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = res.param.n() / 2;
+    uint32_t n_slot = res.param.n();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
@@ -4526,7 +4526,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = this->param.n() / 2;
+    uint32_t n_slot = this->param.n();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
@@ -5836,7 +5836,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = param.n() / 2;
+    uint32_t n_slot = param.n();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
@@ -6002,7 +6002,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         uint32_t n_h_padded = 1;
         while (n_h_padded < n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot = res.param.n() / 2;
+        uint32_t n_slot = res.param.n();
         if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
             n_h_padded = n_heads;
         }
@@ -6121,7 +6121,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         uint32_t n_h_padded = 1;
         while (n_h_padded < n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot = res.param.n() / 2;
+        uint32_t n_slot = res.param.n();
         if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
             n_h_padded = n_heads;
         }
@@ -6184,7 +6184,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = res.param.n() / 2;
+    uint32_t n_slot = res.param.n();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
@@ -6284,7 +6284,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = res.param.n() / 2;
+    uint32_t n_slot = res.param.n();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
@@ -6357,7 +6357,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         uint32_t n_h_padded = 1;
         while (n_h_padded < n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot = res.param.n() / 2;
+        uint32_t n_slot = res.param.n();
         if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
             n_h_padded = n_heads;
         }

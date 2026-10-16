@@ -77,7 +77,7 @@ void PolyRelu2D::prepare_weight() {
         for (int n_packed_out_channel_idx = 0; n_packed_out_channel_idx < n_packed_out_channel;
              n_packed_out_channel_idx++) {
             const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
-            vector<double> feature_tmp_pack(ctx_copy.parameter().n() / 2);
+            vector<double> feature_tmp_pack(ctx_copy.parameter().n());
             for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
                 int block_i = linear_idx / (block_shape[0] * block_shape[1]);
                 int residual = linear_idx % (block_shape[0] * block_shape[1]);
@@ -113,7 +113,7 @@ void PolyRelu2D::prepare_weight_lazy() {
 
 CkksPlaintext
 PolyRelu2D::generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
-    vector<double> feature_tmp_pack(N / 2, 0.0);
+    vector<double> feature_tmp_pack(N, 0.0);
 
     for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         int block_i = linear_idx / (block_shape[0] * block_shape[1]);
@@ -144,7 +144,7 @@ PolyRelu2D::generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_pack
 
 CkksPlaintext
 PolyRelu2D::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
-    vector<double> feature_tmp_pack(N / 2, 0.0);
+    vector<double> feature_tmp_pack(N, 0.0);
     if (is_ordinary_pack) {
         for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
             int channel_idx = n_packed_out_channel_idx * n_channel_per_ct + ch;
@@ -219,7 +219,17 @@ std::vector<CkksCiphertext> PolyRelu2D::run_core(CkksContext& ctx, const std::ve
         } else {
             result[x_idx] = ctx_copy.add(result[x_idx], weight_pt[0][x_idx]);
         }
-        result[x_idx].set_scale(ctx_copy.parameter().default_scale());
+        const double default_scale = ctx_copy.parameter().default_scale();
+        if (!std::isfinite(default_scale)) {
+            throw std::runtime_error("PolyRelu2D received a non-finite default scale: layer_level=" +
+                                     std::to_string(level_) + ", order=" + std::to_string(order) +
+                                     ", ciphertext_index=" + std::to_string(x_idx) +
+                                     ", context_log_n=" + std::to_string(ctx_copy.parameter().log_n()) +
+                                     ", ring_type=" +
+                                     std::to_string(static_cast<int>(ctx_copy.parameter().ring_type())) +
+                                     ", q0=" + std::to_string(ctx_copy.parameter().q().front()));
+        }
+        result[x_idx].set_scale(default_scale);
     });
     return result;
 }
@@ -301,7 +311,7 @@ void PolyRelu2D::prepare_weight_bsgs() {
         for (int n_packed_out_channel_idx = 0; n_packed_out_channel_idx < n_packed_out_channel;
              n_packed_out_channel_idx++) {
             const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
-            vector<double> feature_tmp_pack(ctx_copy.parameter().n() / 2);
+            vector<double> feature_tmp_pack(ctx_copy.parameter().n());
 
             if (is_ordinary_pack) {
                 for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
@@ -358,7 +368,7 @@ void PolyRelu2D::prepare_weight_hornor() {
         for (int n_packed_out_channel_idx = 0; n_packed_out_channel_idx < n_packed_out_channel;
              n_packed_out_channel_idx++) {
             const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
-            vector<double> feature_tmp_pack(ctx_copy.parameter().n() / 2);
+            vector<double> feature_tmp_pack(ctx_copy.parameter().n());
             if (is_ordinary_pack) {
                 for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
                     int channel_idx = n_packed_out_channel_idx * n_channel_per_ct + ch;
@@ -414,7 +424,7 @@ void PolyRelu2D::prepare_weight_hornor_lazy() {
 
 CkksPlaintext
 PolyRelu2D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
-    vector<double> feature_tmp_pack(N / 2, 0.0);
+    vector<double> feature_tmp_pack(N, 0.0);
 
     if (is_ordinary_pack) {
         for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {

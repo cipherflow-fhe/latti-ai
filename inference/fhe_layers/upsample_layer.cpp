@@ -40,7 +40,7 @@ UpsampleLayer::UpsampleLayer(const CkksParameter& param_in,
 void UpsampleLayer::prepare_data() {
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
     vector<double> zero_vector;
-    zero_vector.resize(ctx.parameter().n() / 2);
+    zero_vector.resize(ctx.parameter().n());
     zero_vector_encoded = ls_compat::encode(ctx, zero_vector, level_, ctx.parameter().default_scale());
 }
 

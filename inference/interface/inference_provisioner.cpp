@@ -161,7 +161,9 @@ fhe::CkksParameter InferenceProvisioner::make_parameter() const {
             int log_default_scale = pj.value("log_default_scale", 40);
             auto q = pj.at("q").get<std::vector<uint64_t>>();
             auto p = pj.at("p").get<std::vector<uint64_t>>();
-            return fhe::CkksParameter::create_custom_parameter(log_n, log_default_scale, q, p);
+            auto ring_type = static_cast<fhe::RingType>(pj.value("ring_type", 1));
+            return fhe::CkksParameter::create_custom_parameter(log_n, log_default_scale, q, p,
+                                                               ring_type);
         }
     }
 
@@ -169,6 +171,7 @@ fhe::CkksParameter InferenceProvisioner::make_parameter() const {
     const auto& first_input = task_config_.at("task_input_param").begin().value();
     const std::string ckks_param_id = first_input.at("ckks_parameter_id").get<std::string>();
     const auto& entry = ckks_config_.at(ckks_param_id);
+    const auto ring_type = static_cast<fhe::RingType>(entry.value("ring_type", 1));
     const int poly_modulus_degree = entry.at("poly_modulus_degree").get<int>();
     int log_n = 0;
     while ((1LL << log_n) < poly_modulus_degree) log_n++;
@@ -185,9 +188,10 @@ fhe::CkksParameter InferenceProvisioner::make_parameter() const {
     if (entry.contains("q") && entry.contains("p")) {
         const auto q = entry.at("q").get<std::vector<uint64_t>>();
         const auto p = entry.at("p").get<std::vector<uint64_t>>();
-        return fhe::CkksParameter::create_custom_parameter(log_n, log_default_scale, q, p);
+        return fhe::CkksParameter::create_custom_parameter(
+            log_n, log_default_scale, q, p, ring_type);
     }
-    return fhe::CkksParameter::create_parameter(log_n);
+    return fhe::CkksParameter::create_parameter(log_n, ring_type);
 }
 
 void InferenceProvisioner::setup_or_load_keys() {

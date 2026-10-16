@@ -39,7 +39,7 @@ ParBlockColMajorTranspose::ParBlockColMajorTranspose(const CkksParameter& param_
     m_ = m;
     n_ = n;
 
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
     assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
     n_h_padded_ = next_pow2(n_heads);

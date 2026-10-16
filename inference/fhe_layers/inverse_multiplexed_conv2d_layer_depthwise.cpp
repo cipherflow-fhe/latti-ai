@@ -103,7 +103,7 @@ void InverseMultiplexedConv2DLayerDepthwise::prepare_weight_lazy() {
     cached_total_block_size = prod(block_shape);
     if (need_repack) {
         Duo out_skip = block_shape / (input_shape_ / stride_);
-        vector<double> mask_vec(N / 2, 0.0);
+        vector<double> mask_vec(N, 0.0);
         for (uint32_t row = 0; row < block_shape[0]; row += out_skip[0]) {
             for (uint32_t col = 0; col < block_shape[1]; col += out_skip[1]) {
                 mask_vec[row * block_shape[1] + col] = 1.0;
@@ -159,7 +159,7 @@ CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_for_ind
     int j_end = std::min((int)block_shape[1], (int)block_shape[1] - step[1]);
 
     double w_val = weight_.get(out_channel_idx, 0, kernel_idx[0], kernel_idx[1]);
-    vector<double> w(N / 2, 0.0);
+    vector<double> w(N, 0.0);
     for (int i_s = i_start; i_s < i_end; ++i_s) {
         for (int j_s = j_start; j_s < j_end; ++j_s) {
             w[i_s * (int)block_shape[1] + j_s] = w_val;
@@ -170,7 +170,7 @@ CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_for_ind
 
 CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_bias_pt_for_index(CkksContext& ctx,
                                                                                       int out_channel_idx) const {
-    vector<double> bias_vec(N / 2, 0.0);
+    vector<double> bias_vec(N, 0.0);
     for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         bias_vec[linear_idx] = bias_.get(out_channel_idx);
     }
@@ -179,7 +179,7 @@ CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_bias_pt_for_index
 
 CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_repack_mask_pt(CkksContext& ctx) const {
     Duo out_skip = block_shape / (input_shape_ / stride_);
-    vector<double> mask_vec(N / 2, 0.0);
+    vector<double> mask_vec(N, 0.0);
     for (uint32_t row = 0; row < block_shape[0]; row += out_skip[0]) {
         for (uint32_t col = 0; col < block_shape[1]; col += out_skip[1]) {
             mask_vec[row * block_shape[1] + col] = 1.0;
@@ -290,7 +290,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayerDepthwise::run_core(CkksCont
     if (need_repack) {
         Duo out_skip = block_shape / (input_shape_ / stride_);
         uint32_t n_channel_per_block = prod(out_skip);
-        uint32_t n_block_per_ct_out = (N / 2) / prod(block_shape);
+        uint32_t n_block_per_ct_out = N / prod(block_shape);
         uint32_t n_channel_per_ct_repack = n_channel_per_block * n_block_per_ct_out;
         uint32_t n_out_ct = div_ceil(n_out_channel_, n_channel_per_ct_repack);
 

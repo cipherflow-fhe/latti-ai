@@ -132,6 +132,130 @@ def _shape_of(data):
     return [len(data)] + sub if isinstance(sub, list) else [len(data)]
 
 
+def _native_ci_pack_num(feature, n_slots, style='ordinary'):
+    dim = feature.get('dim')
+    if dim == 0:
+        skip = feature.get('skip', 1)
+        skip = skip[0] if isinstance(skip, list) else skip
+        return max(1, n_slots // int(skip))
+    if dim == 1:
+        skip = feature.get('skip', 1)
+        skip = skip[0] if isinstance(skip, list) else skip
+        if style == 'multiplexed':
+            fill = feature.get('invalid_fill', 1)
+            skip = fill[0] if isinstance(fill, list) else fill
+        return max(1, n_slots // (int(feature['shape'][0]) * int(skip)))
+    if dim == 2:
+        skip = feature.get('skip', [1, 1])
+        if style == 'multiplexed':
+            # Multiplexing fills the gaps between spatial samples with other
+            # channels. Only invalid_fill reserves unused slots.
+            skip = feature.get('invalid_fill', [1, 1])
+        return max(
+            1,
+            n_slots
+            // (int(feature['shape'][0]) * int(feature['shape'][1]) * int(skip[0]) * int(skip[1])),
+        )
+    return feature.get('pack_num', 1)
+
+
+def _enable_native_ci_packing(task_dir, n_slots):
+    paths = [
+        Path(task_dir) / 'server' / 'nn_layers_ct_0.json',
+        Path(task_dir) / 'server' / 'task_config.json',
+        Path(task_dir) / 'client' / 'task_config.json',
+    ]
+    for path in paths:
+        if not path.exists():
+            continue
+        with path.open('r', encoding='utf-8') as fp:
+            config = json.load(fp)
+        style = config.get('pack_style')
+        if style is None:
+            task_config_path = Path(task_dir) / 'server' / 'task_config.json'
+            with task_config_path.open(encoding='utf-8') as fp:
+                style = json.load(fp).get('pack_style', 'ordinary')
+        features = config.get('feature')
+        if features is not None:
+            for feature in features.values():
+                feature['pack_num'] = _native_ci_pack_num(feature, n_slots, style)
+        for section in ('task_input_param', 'task_output_param'):
+            for feature in config.get(section, {}).values():
+                feature['pack_num'] = _native_ci_pack_num(feature, n_slots, style)
+        config['ci_packing'] = 'native'
+        with path.open('w', encoding='utf-8') as fp:
+            json.dump(config, fp, indent=4, ensure_ascii=False)
+
+
+def _validate_gpu_key_adaptation(output_dir):
+    """Check that graph key metadata matches the v6 ABI key partitions.
+
+    The GPU ABI has separate ordinary and bootstrap Galois-key arguments.
+    Catching a mixed graph here is much clearer than failing later during
+    device key import.
+    """
+    graph_path = Path(output_dir) / 'compiled_mega_ag.json'
+    signature_path = Path(output_dir) / 'task_signature.json'
+    if not graph_path.exists() or not signature_path.exists():
+        return
+
+    with graph_path.open(encoding='utf-8') as fp:
+        graph = json.load(fp)
+    with signature_path.open(encoding='utf-8') as fp:
+        signature = json.load(fp)
+
+    ordinary = {}
+    bootstrap = {}
+    for node_id, node in graph.get('data', {}).items():
+        if node.get('type') != 'glk':
+            continue
+        element = node.get('galois_element')
+        if element is None:
+            raise ValueError(f'Galois graph node {node_id!r} is missing galois_element')
+        target = bootstrap if node.get('key_role') == 'bootstrap' else ordinary
+        element = int(element)
+        level = int(node.get('level', -1))
+        previous = target.setdefault(element, level)
+        if previous != level:
+            group = 'bootstrap' if target is bootstrap else 'ordinary'
+            raise ValueError(
+                f'Inconsistent {group} Galois key level for element {element}: '
+                f'{previous} and {level}'
+            )
+
+    key_sig = signature.get('key', {})
+    sig_ordinary = {int(k): int(v) for k, v in key_sig.get('glk', {}).items()}
+    sig_bootstrap = {
+        int(k.removeprefix('evk_glk_')): int(v)
+        for k, v in key_sig.get('ckks_btp_evk', {}).items()
+        if k.startswith('evk_glk_')
+    }
+
+    if ordinary != sig_ordinary:
+        raise ValueError(
+            'Ordinary Galois key metadata does not match task_signature.json: '
+            f'graph={ordinary}, signature={sig_ordinary}'
+        )
+    if bootstrap != sig_bootstrap:
+        raise ValueError(
+            'Bootstrap Galois key metadata does not match task_signature.json: '
+            f'graph={bootstrap}, signature={sig_bootstrap}'
+        )
+
+    ordinary_order = [int(x) for x in key_sig.get('glk_order', [])]
+    bootstrap_order = [int(x) for x in key_sig.get('ckks_btp_glk_order', [])]
+    if set(ordinary_order) != set(ordinary):
+        raise ValueError('glk_order does not enumerate exactly the ordinary Galois keys')
+    if set(bootstrap_order) != set(bootstrap):
+        raise ValueError('ckks_btp_glk_order does not enumerate exactly the bootstrap Galois keys')
+
+    print(
+        '[GPU key adaptation] PASS: '
+        f'{len(ordinary)} ordinary and {len(bootstrap)} bootstrap Galois keys '
+        'are separately represented.'
+    )
+
+
 def _compat_process_custom_task(
     input_args=None,
     output_args=None,
@@ -261,7 +385,6 @@ _add_meta_forward_props(
 # from inference.model_generator.deploy_cmds import gen_custom_task  # noqa: E402
 from inference.model_generator.deploy_cmds import gen_custom_task  # noqa: E402
 
-
 def main():
     parser = argparse.ArgumentParser(description='Generate mega_ag instructions for a task.')
     parser.add_argument(
@@ -287,6 +410,12 @@ def main():
         choices=['eager', 'runtime_lazy'],
         default=None,
         help='Encrypted parameter loading mode for server_provisioned_runner. Defaults to task_config or eager.',
+    )
+    parser.add_argument(
+        '--ci-packing',
+        choices=['native'],
+        default='native',
+        help='Use all N CI slots and regenerate feature packing metadata.',
     )
     args = parser.parse_args()
 
@@ -337,6 +466,12 @@ def main():
         task_config = json.load(f)
     style = task_config.get('pack_style', 'ordinary')
 
+    # Packing controls the number of graph inputs and intermediate ciphertexts;
+    # normalize it before constructing the graph, including on the first run.
+    from inference.model_generator.deploy_cmds import set_param
+    ci_param = set_param(param_name)
+    _enable_native_ci_packing(task_dir, 1 << ci_param.log_max_slots())
+
     # Read server config to find ergs with GPU acceleration enabled.
     server_config_path = os.path.join(task_dir, 'server', 'task_config.json')
     with open(server_config_path, 'r', encoding='utf-8') as f:
@@ -383,6 +518,49 @@ def main():
                 )
             else:
                 gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style, lazy=True)
+
+    # Keep the client/runtime parameter JSON aligned with the graph generated above.
+    fhe_parameter_path = os.path.join(output_dir, 'fhe_parameter.json')
+    if os.path.exists(fhe_parameter_path):
+        with open(fhe_parameter_path, 'r', encoding='utf-8') as f:
+            fhe_parameter = json.load(f)
+        for config_path in (os.path.join(task_dir, 'client', 'ckks_parameter.json'),
+                            os.path.join(task_dir, 'server', 'ckks_parameter.json')):
+            if not os.path.exists(config_path):
+                continue
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            for entry in config.values():
+                entry['q'] = fhe_parameter['q']
+                entry['p'] = fhe_parameter['p']
+                entry['log_default_scale'] = fhe_parameter['log_default_scale']
+                entry['poly_modulus_degree'] = 1 << int(fhe_parameter['log_n'])
+                entry['n_mult_level'] = len(fhe_parameter['q']) - 1
+                entry['ring_type'] = fhe_parameter.get('ring_type', int(_v6_types.RingType.ConjugateInvariant))
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=4)
+
+        # nn_layers_ct_0.json also carries a top-level CKKS description.  Keep
+        # it synchronized with fhe_parameter.json; otherwise generated layer
+        # metadata can retain the old Standard-ring N/level plan while the
+        # runtime uses the CI context.
+        nn_layers_path = os.path.join(task_dir, 'server', 'nn_layers_ct_0.json')
+        if os.path.exists(nn_layers_path):
+            with open(nn_layers_path, 'r', encoding='utf-8') as f:
+                nn_layers = json.load(f)
+            for entry in nn_layers.get('ckks_parameter', {}).values():
+                entry['poly_modulus_degree'] = 1 << int(fhe_parameter['log_n'])
+                entry['n_mult_level'] = len(fhe_parameter['q']) - 1
+                entry['log_default_scale'] = fhe_parameter['log_default_scale']
+            with open(nn_layers_path, 'w', encoding='utf-8') as f:
+                json.dump(nn_layers, f, indent=4)
+        ci_log_n = int(fhe_parameter['log_n'])
+        _enable_native_ci_packing(task_dir, 1 << ci_log_n)
+
+    if args.deployment_mode == 'server_provisioned_runner':
+        _validate_gpu_key_adaptation(output_dir)
+    else:
+        _validate_gpu_key_adaptation(ergs_path)
 
     print(f'Done: mega_ag generated for {output_dir}.')
 

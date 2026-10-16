@@ -23,6 +23,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.lattisense.frontend import custom_task as ckks_task
 from inference.model_generator.layers.encrypted_param_ops import (
     add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
@@ -109,7 +110,7 @@ class DensePackedLayer:
 
         input_ct_shape = [input_shape[0]*skip[0], input_shape[1]*skip[1]]
         block_size = input_ct_shape[0] * input_ct_shape[1]  (power of 2)
-        n_num_pre_ct = ceil(N/2 / (block_size))
+        n_num_pre_ct = ceil(N / (block_size))
         n_block_input = ceil(n_channel / (n_num_pre_ct * n_channel_per_block)) * n_num_pre_ct
         n_packed_out = ceil(n_out_channel / n_num_pre_ct)
 
@@ -127,8 +128,8 @@ class DensePackedLayer:
         lv = level
 
         input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
-        N_half = int(n / 2)
-        n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
+        N_slots = int(n)
+        n_num_pre_ct = int(np.ceil(N_slots / (input_ct_shape[0] * input_ct_shape[1])))
         valid_skip_0 = self.skip[0] // self.invalid_fill[0]
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
         n_channel_per_block = valid_skip_0 * valid_skip_1
@@ -155,7 +156,7 @@ class DensePackedLayer:
         """Count FHE primitive operations in call_1d_multiplexed(), grouped by level.
 
         block_size = shape * skip  (power of 2)
-        n_block_per_ct = N/2 // block_size
+        n_block_per_ct = N // block_size
         n_valid_per_ct = n_block_per_ct * (skip // invalid_fill)
         n_actual_channels = n_in_channel // shape
         n_block_input = ceil(n_actual_channels / n_valid_per_ct) * n_block_per_ct
@@ -173,12 +174,12 @@ class DensePackedLayer:
         ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
         lv = level
 
-        N_half = n // 2
+        N_slots = n
         shape = int(self.input_shape[0])
         skip_val = int(self.skip[0])
         invalid_fill_val = int(self.invalid_fill[0])
         block_size = shape * skip_val
-        n_block_per_ct = N_half // block_size
+        n_block_per_ct = N_slots // block_size
         valid_sub = skip_val // invalid_fill_val
         n_valid_per_ct = n_block_per_ct * valid_sub
         n_actual_channels = self.n_in_channel // shape
@@ -242,8 +243,8 @@ class DensePackedLayer:
         bias_pt[i]: i in n_packed_out_feature_for_mult_pack
         """
         input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
-        N_half = int(n / 2)
-        n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
+        N_slots = int(n)
+        n_num_pre_ct = int(np.ceil(N_slots / (input_ct_shape[0] * input_ct_shape[1])))
         valid_skip_0 = self.skip[0] // self.invalid_fill[0]
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
         n_channel_per_block = valid_skip_0 * valid_skip_1
@@ -260,8 +261,8 @@ class DensePackedLayer:
     def make_param_ct_nodes_multiplexed(self, layer_id, n, level: int):
         """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes_multiplexed()."""
         input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
-        N_half = int(n / 2)
-        n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
+        N_slots = int(n)
+        n_num_pre_ct = int(np.ceil(N_slots / (input_ct_shape[0] * input_ct_shape[1])))
         valid_skip_0 = self.skip[0] // self.invalid_fill[0]
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
         n_channel_per_block = valid_skip_0 * valid_skip_1
@@ -371,6 +372,7 @@ class DensePackedLayer:
         """Corresponds to C++ run_core_0d with lazy weight generation."""
         bsgs_bs = int(math.ceil(math.sqrt(self.pack)))
         bsgs_gs = int(math.ceil(self.pack / bsgs_bs))
+        node_prefix = f'encode_pt_{dense_data_source.id}'
 
         # Baby-step rotations for each input CT
         baby_rots = []
@@ -394,7 +396,9 @@ class DensePackedLayer:
                     for b in range(b_end):
                         d = g * bsgs_bs + b
                         weight_idx = ct_in * self.pack + d
-                        w_pt = CkksPlaintextNode(f'encode_pt_{out_idx}_{weight_idx}')
+                        w_pt = CkksPlaintextNode(f'{node_prefix}_{out_idx}_{weight_idx}')
+                        # Match DensePackedLayer::modified_scale for normal dense.
+                        w_pt.metadata.scale = float(ckks_task.g_param.q[x[0].metadata.level])
                         custom_compute(
                             inputs=[dense_data_source],
                             output=w_pt,
@@ -421,7 +425,7 @@ class DensePackedLayer:
                         total = add(total, inner)
 
             total = rescale(total)
-            b_pt = CkksPlaintextNode(f'encode_pt_{out_idx}')
+            b_pt = CkksPlaintextNode(f'{node_prefix}_bias_{out_idx}')
             custom_compute(
                 inputs=[dense_data_source],
                 output=b_pt,
@@ -436,8 +440,8 @@ class DensePackedLayer:
         """Corresponds to C++ run_core_mult_pack + run_multiplexed."""
         input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
         x_size = len(x)
-        N_half = int(n / 2)
-        n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
+        N_slots = int(n)
+        n_num_pre_ct = int(np.ceil(N_slots / (input_ct_shape[0] * input_ct_shape[1])))
 
         valid_skip_0 = self.skip[0] // self.invalid_fill[0]
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
@@ -491,8 +495,8 @@ class DensePackedLayer:
         """2D multiplexed dense path with encrypted offline parameters."""
         input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
         x_size = len(x)
-        N_half = int(n / 2)
-        n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
+        N_slots = int(n)
+        n_num_pre_ct = int(np.ceil(N_slots / (input_ct_shape[0] * input_ct_shape[1])))
 
         valid_skip_0 = self.skip[0] // self.invalid_fill[0]
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
@@ -550,7 +554,7 @@ class DensePackedLayer:
         skip already contains invalid_fill, so:
           block_stride  = skip                              (NOT skip * invalid_fill)
           block_size    = shape * skip
-          n_block_per_ct = N_half // block_size
+          n_block_per_ct = N_slots // block_size
           valid_sub      = skip // invalid_fill             (valid sub_pos per block)
           n_valid_per_ct = n_block_per_ct * valid_sub       (channels with actual data)
           n_actual_ch    = n_in_channel // shape              (flattened → channel count)
@@ -560,13 +564,13 @@ class DensePackedLayer:
         weight_pt[i][j]: i in n_packed_out, j in n_block_input
         bias_pt[i]:       i in n_packed_out
         """
-        N_half = n // 2
+        N_slots = n
         shape = int(self.input_shape[0])
         skip_val = int(self.skip[0])
         invalid_fill_val = int(self.invalid_fill[0])
         block_stride = skip_val  # skip already contains invalid_fill
         block_size = shape * block_stride  # = shape * skip
-        n_block_per_ct = N_half // block_size
+        n_block_per_ct = N_slots // block_size
         valid_sub = skip_val // invalid_fill_val  # valid sub_pos per block
         n_valid_per_ct = n_block_per_ct * valid_sub  # channels with actual data
         # n_in_channel is the flattened count (channels * spatial_length); divide by shape to get
@@ -584,12 +588,12 @@ class DensePackedLayer:
 
     def make_param_ct_nodes_1d_multiplexed(self, layer_id, n, level: int):
         """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes_1d_multiplexed()."""
-        N_half = n // 2
+        N_slots = n
         shape = int(self.input_shape[0])
         skip_val = int(self.skip[0])
         invalid_fill_val = int(self.invalid_fill[0])
         block_size = shape * skip_val
-        n_block_per_ct = N_half // block_size
+        n_block_per_ct = N_slots // block_size
         valid_sub = skip_val // invalid_fill_val
         n_valid_per_ct = n_block_per_ct * valid_sub
         n_actual_channels = self.n_in_channel // shape
@@ -612,13 +616,13 @@ class DensePackedLayer:
           block_size   = shape * skip
         Rotation unit is block_size; fold over block_size after accumulation.
         """
-        N_half = n // 2
+        N_slots = n
         shape = int(self.input_shape[0])
         skip_val = int(self.skip[0])
         invalid_fill_val = int(self.invalid_fill[0])
         block_stride = skip_val  # skip already contains invalid_fill
         block_size = shape * block_stride  # = shape * skip
-        n_block_per_ct = N_half // block_size
+        n_block_per_ct = N_slots // block_size
         valid_sub = skip_val // invalid_fill_val  # valid sub_pos per block
         n_valid_per_ct = n_block_per_ct * valid_sub  # channels with actual data
         # n_in_channel is flattened (channels * spatial_length); divide by shape to get actual channel count.
@@ -658,12 +662,12 @@ class DensePackedLayer:
 
     def call_param_ct_1d_multiplexed(self, x: list[DataNode], weight_ct, bias_ct, n, input_is_plaintext: bool = False):
         """1D multiplexed dense path with encrypted offline parameters."""
-        N_half = n // 2
+        N_slots = n
         shape = int(self.input_shape[0])
         skip_val = int(self.skip[0])
         invalid_fill_val = int(self.invalid_fill[0])
         block_size = shape * skip_val
-        n_block_per_ct = N_half // block_size
+        n_block_per_ct = N_slots // block_size
         valid_sub = skip_val // invalid_fill_val
         n_valid_per_ct = n_block_per_ct * valid_sub
         n_actual_channels = self.n_in_channel // shape
@@ -702,13 +706,13 @@ class DensePackedLayer:
 
     def call_1d_multiplexed_custom_compute(self, x: list, dense_data_source, n):
         """Corresponds to C++ run_1d_multiplexed with lazy weight generation."""
-        N_half = n // 2
+        N_slots = n
         shape = int(self.input_shape[0])
         skip_val = int(self.skip[0])
         invalid_fill_val = int(self.invalid_fill[0])
         block_stride = skip_val
         block_size = shape * block_stride
-        n_block_per_ct = N_half // block_size
+        n_block_per_ct = N_slots // block_size
         valid_sub = skip_val // invalid_fill_val
         n_valid_per_ct = n_block_per_ct * valid_sub
         n_actual_channels = self.n_in_channel // shape
@@ -729,6 +733,7 @@ class DensePackedLayer:
                 offset = rot_idx % n_block_per_ct
                 x_ct_list.append(rotated_cts[group][offset])
                 w_pt = CkksPlaintextNode(f'encode_pt_{out_group}_{rot_idx}')
+                w_pt.metadata.scale = float(ckks_task.g_param.q[x[0].metadata.level])
                 custom_compute(
                     inputs=[dense_data_source],
                     output=w_pt,
@@ -761,8 +766,8 @@ class DensePackedLayer:
         """Corresponds to C++ run_core_mult_pack with lazy weight generation."""
         input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
         x_size = len(x)
-        N_half = int(n / 2)
-        n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
+        N_slots = int(n)
+        n_num_pre_ct = int(np.ceil(N_slots / (input_ct_shape[0] * input_ct_shape[1])))
 
         valid_skip_0 = self.skip[0] // self.invalid_fill[0]
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
@@ -799,6 +804,7 @@ class DensePackedLayer:
                 offset = in_feature_idx % n_num_pre_ct
                 x_ct = rotated_cts[group][offset]
                 w_pt = CkksPlaintextNode(f'encode_pt_{packed_out_feature_idx}_{in_feature_idx}')
+                w_pt.metadata.scale = float(ckks_task.g_param.q[x_ct.metadata.level])
                 custom_compute(
                     inputs=[dense_data_source],
                     output=w_pt,

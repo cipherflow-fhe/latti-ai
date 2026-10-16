@@ -173,7 +173,7 @@ CkksPlaintext MultiplexedConv2DPackedLayerDepthwise::generate_bias_pt_for_index(
     const Duo bias_block_shape = bias_shape * cached_bias_skip;
     const uint32_t bias_block_size = prod(bias_block_shape);
     const uint32_t bias_skip_prod = prod(cached_bias_skip);
-    vector<double> bias_vec(N / 2, 0.0);
+    vector<double> bias_vec(N, 0.0);
 
     for (uint32_t linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         const Duo block_pos = div_mod(linear_idx, bias_block_size);
@@ -222,7 +222,7 @@ MultiplexedConv2DPackedLayerDepthwise::generate_mask_pt_for_indices(CkksContext&
     //   source[(j + step_k) mod slots] = target[j]
     // matches the SDK convention rotate(c, k)[j] = c[(j+k) mod slots], so that
     // rotate(source * s, step_k) reproduces target * rotate(s, step_k).
-    const int32_t slots = static_cast<int32_t>(param_.n() / 2);
+    const int32_t slots = static_cast<int32_t>(param_.n());
     const int32_t shift = ((step_k % slots) + slots) % slots;
     vector<double> source(static_cast<size_t>(slots), 0.0);
     for (size_t j = 0; j < target.size(); ++j) {

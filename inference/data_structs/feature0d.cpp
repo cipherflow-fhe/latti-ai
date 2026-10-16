@@ -35,7 +35,7 @@ void Feature0DEncrypted::pack(const Array<double, 1>& feature_mg,
                               double scale_in,
                               uint32_t skip_in) {
     uint32_t n_in_features = feature_mg.get_size();
-    uint32_t n_slots = context->parameter().n() / 2;
+    uint32_t n_slots = context->parameter().n();
     n_channel = n_in_features;
     skip = skip_in;
     batch_packed = false;
@@ -69,7 +69,7 @@ void Feature0DEncrypted::batch_pack(const Array<double, 2>& matrix, uint32_t d, 
     if (batch == 0 || feature_dim == 0)
         throw invalid_argument("Feature0DEncrypted::batch_pack requires a non-empty matrix");
 
-    uint32_t n_slot = context->parameter().n() / 2;
+    uint32_t n_slot = context->parameter().n();
     uint32_t chunk_size = d * d;
     if (d == 0 || (d & (d - 1)) != 0 || n_slot < chunk_size || n_slot % chunk_size != 0) {
         throw invalid_argument("Feature0DEncrypted::batch_pack requires power-of-two d and n_slot divisible by d*d");
@@ -129,7 +129,7 @@ void Feature0DEncrypted::batch_pack(const Array<double, 2>& matrix, uint32_t d, 
 }
 
 Array<double, 2> Feature0DEncrypted::batch_unpack(uint32_t batch, uint32_t feature_dim, uint32_t d) const {
-    uint32_t n_slot = context->parameter().n() / 2;
+    uint32_t n_slot = context->parameter().n();
     uint32_t chunk_size = d * d;
     if (d == 0 || (d & (d - 1)) != 0 || n_slot < chunk_size || n_slot % chunk_size != 0)
         throw invalid_argument("Feature0DEncrypted::batch_unpack requires power-of-two d and n_slot divisible by d*d");
@@ -171,7 +171,7 @@ Array<double, 2> Feature0DEncrypted::batch_unpack(uint32_t batch, uint32_t featu
 
 void Feature0DEncrypted::pack_cyclic(const std::vector<double>& feature_mg, bool is_symmetric, double scale_in) {
     uint32_t n_in_features = feature_mg.size();
-    uint32_t n_slots = context->parameter().n() / 2;
+    uint32_t n_slots = context->parameter().n();
     batch_packed = false;
     batch_size = 0;
     batch_feature_dim = 0;
@@ -212,7 +212,10 @@ Feature0DEncrypted Feature0DEncrypted::refresh_ciphertext() const {
     result.batch_feature_dim = batch_feature_dim;
     result.batch_block_size = batch_block_size;
     for (int i = 0; i < data.size(); i++) {
-        result.data.push_back(ctx->bootstrap(data[i]));
+        auto refreshed = ctx->bootstrap(data[i]);
+        // Keep every refreshed ciphertext on the canonical CKKS scale.
+        refreshed.set_scale(ctx->parameter().default_scale());
+        result.data.push_back(move(refreshed));
     }
     return result;
 }
@@ -276,7 +279,7 @@ Feature0DEncrypted Feature0DEncrypted::copy() const {
 Feature0DShare::Feature0DShare(uint64_t q, int s) : FeatureShare{q, s} {}
 
 void Feature0DEncrypted::to_share(Feature0DEncrypted* share0, Feature0DShare* share1) const {
-    int n_slot = context->parameter().n() / 2;
+    int n_slot = context->parameter().n();
     share1->data.resize({data.size() * n_slot});
     share0->n_channel = n_channel;
     share0->n_channel_per_ct = n_channel_per_ct;
@@ -375,7 +378,7 @@ void Feature0DEncrypted::deserialize(const Bytes& bytes) {
 }
 
 void Feature0DShare::to_encrypted(Feature0DEncrypted* encrypted_share, Feature0DEncrypted* encrypted, int level) {
-    int n_slot = encrypted_share->context->parameter().n() / 2;
+    int n_slot = encrypted_share->context->parameter().n();
     int n_ct = data.get_size() / n_slot;
     encrypted->data.clear();
     encrypted->n_channel = encrypted_share->n_channel;
@@ -394,7 +397,7 @@ void Feature0DShare::to_encrypted(Feature0DEncrypted* encrypted_share, Feature0D
 }
 
 Array<uint64_t, 1> Feature0DEncrypted::encrypt_from_share(const Feature0DShare& share, int n_channel) {
-    int n_slot = context->parameter().n() / 2;
+    int n_slot = context->parameter().n();
     uint32_t skip = 1;
     this->skip = skip;
 
@@ -431,7 +434,7 @@ void Feature0DEncrypted::decompress() {
 }
 
 Feature0DEncrypted Feature0DEncrypted::combine_with_share(const Feature0DShare& share) const {
-    int n_slot = context->parameter().n() / 2;
+    int n_slot = context->parameter().n();
     Feature0DEncrypted result(this->context, this->level);
     result.n_channel = this->n_channel;
     result.n_channel_per_ct = this->n_channel_per_ct;
@@ -457,7 +460,7 @@ Feature0DEncrypted Feature0DEncrypted::combine_with_share(const Feature0DShare& 
 Feature0DEncrypted Feature0DEncrypted::combine_with_share_new_protocol(const Feature0DShare& share,
                                                                        const Feature0DEncrypted& f2d,
                                                                        const Bytes& b1) const {
-    int n_slot = context->parameter().n() / 2;
+    int n_slot = context->parameter().n();
     Feature0DEncrypted result(this->context, this->level);
     result.n_channel = this->n_channel;
     result.n_channel_per_ct = this->n_channel_per_ct;
@@ -495,7 +498,7 @@ Feature0DEncrypted Feature0DEncrypted::combine_with_share_new_protocol(const Fea
 }
 
 void Feature0DEncrypted::split_to_shares(Feature0DEncrypted* share0, Feature0DShare* share1) const {
-    int n_slot = context->parameter().n() / 2;
+    int n_slot = context->parameter().n();
     double share_scale = pow(2, share1->scale_ord);
     int r_bitlength = 40;
     int feature_bitlength = ENC_TO_SHARE_SCALE_BIT + 1;
@@ -538,7 +541,7 @@ void Feature0DEncrypted::split_to_shares(Feature0DEncrypted* share0, Feature0DSh
 }
 
 void Feature0DEncrypted::split_to_shares_reshape(Feature0DEncrypted* share0, Feature0DShare* share1) const {
-    int n_slot = context->parameter().n() / 2;
+    int n_slot = context->parameter().n();
     double share_scale = pow(2, share1->scale_ord);
     int r_bitlength = 40;
     int feature_bitlength = ENC_TO_SHARE_SCALE_BIT + 1;

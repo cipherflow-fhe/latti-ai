@@ -50,7 +50,7 @@ ParBlockColMajorLNStats::ParBlockColMajorLNStats(const CkksParameter& param,
     n_heads_ = n_heads;
     cols_per_head_ = total_dim_ / n_heads_;
     n_h_padded_ = next_power_of_2(n_heads);
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
     assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
 
@@ -293,7 +293,7 @@ ParBlockColMajorLNXCentered::ParBlockColMajorLNXCentered(const CkksParameter& pa
     n_heads_ = n_heads;
     cols_per_head_ = total_dim_ / n_heads_;
     n_h_padded_ = next_power_of_2(n_heads);
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
     assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
 
@@ -449,7 +449,7 @@ ParBlockColMajorLNMinimaxInit::ParBlockColMajorLNMinimaxInit(const CkksParameter
     : Layer(param), c0_(c0), c1_(c1), c2_(c2) {
     level_ = input_level;
     d_ = block_size;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     chunk_size_ = d_ * d_;
 }
 
@@ -529,7 +529,7 @@ ParBlockColMajorLNGoldschmidt::ParBlockColMajorLNGoldschmidt(const CkksParameter
     : Layer(param) {
     level_ = input_level;
     d_ = block_size;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     chunk_size_ = d_ * d_;
 }
 
@@ -635,7 +635,7 @@ ParBlockColMajorLNAffine::ParBlockColMajorLNAffine(const CkksParameter& param,
     n_heads_ = n_heads;
     cols_per_head_ = shape[1] / n_heads_;
     n_h_padded_ = next_power_of_2(n_heads);
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
     assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
 

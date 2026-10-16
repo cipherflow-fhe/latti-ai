@@ -162,7 +162,7 @@ class InverseMultiplexedConv2DLayer:
             out_skip0 = self.block_shape[0] // output_shape0
             out_skip1 = self.block_shape[1] // output_shape1
             n_channel_per_block = out_skip0 * out_skip1
-            n_block_per_ct_repack = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_block_per_ct_repack = N // (self.block_shape[0] * self.block_shape[1])
             n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct_repack
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 
@@ -351,7 +351,7 @@ class InverseMultiplexedConv2DLayer:
             out_skip0 = self.block_shape[0] // output_shape0
             out_skip1 = self.block_shape[1] // output_shape1
             n_channel_per_block = out_skip0 * out_skip1
-            n_block_per_ct = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_block_per_ct = N // (self.block_shape[0] * self.block_shape[1])
             n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 
@@ -552,7 +552,7 @@ class InverseMultiplexedConv2DLayer:
             out_skip0 = self.block_shape[0] // output_shape0
             out_skip1 = self.block_shape[1] // output_shape1
             n_channel_per_block = out_skip0 * out_skip1
-            n_block_per_ct = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_block_per_ct = N // (self.block_shape[0] * self.block_shape[1])
             n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 
@@ -712,7 +712,7 @@ class InverseMultiplexedConv2DLayer:
             out_skip0 = self.block_shape[0] // output_shape0
             out_skip1 = self.block_shape[1] // output_shape1
             n_channel_per_block = out_skip0 * out_skip1
-            n_block_per_ct = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_block_per_ct = N // (self.block_shape[0] * self.block_shape[1])
             n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 

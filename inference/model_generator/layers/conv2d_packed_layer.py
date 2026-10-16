@@ -21,6 +21,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.lattisense.frontend import custom_task as ckks_task
 from inference.model_generator.layers.encrypted_param_ops import (
     add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
@@ -132,6 +133,9 @@ class Conv2DPackedLayer:
         return rotated_x
 
     def call_custom_compute(self, x: list[CkksCiphertextNode], conv_data_source) -> list[CkksCiphertextNode]:
+        # Plaintext node IDs are graph-global. Namespace them by the layer's
+        # custom-data node so separate Conv2D layers cannot collide.
+        node_prefix = f'encode_pt_{conv_data_source.id}'
         rotated_x: list[CkksCiphertextNode] = list()
         for x_ct in x:
             rotated_x += Conv2DPackedLayer.populate_rotations_1_side(
@@ -149,7 +153,12 @@ class Conv2DPackedLayer:
                     for j in range(self.kernel_shape[1]):
                         index = i * self.kernel_shape[1] + j
                         x_ct = rotated_x_2d[in_channel_idx][index]
-                        w_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}_{in_channel_idx}_{index}')
+                        w_pt = CkksPlaintextNode(
+                            f'{node_prefix}_{packed_out_channel_idx}_{in_channel_idx}_{index}'
+                        )
+                        # Match Conv2DPackedLayer::weight_scale_: rescaling
+                        # removes q[level], rather than the default scale.
+                        w_pt.metadata.scale = float(ckks_task.g_param.q[x_ct.metadata.level])
                         custom_compute(
                             inputs=[conv_data_source],
                             output=w_pt,
@@ -166,7 +175,7 @@ class Conv2DPackedLayer:
                         w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             partial_sum = rescale(partial_sum)
-            b_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}')
+            b_pt = CkksPlaintextNode(f'{node_prefix}_bias_{packed_out_channel_idx}')
             custom_compute(
                 inputs=[conv_data_source],
                 output=b_pt,

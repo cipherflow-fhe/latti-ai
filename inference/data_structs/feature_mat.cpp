@@ -36,7 +36,11 @@ FeatureMatEncrypted FeatureMatEncrypted::refresh_ciphertext() const {
     FeatureMatEncrypted result(ctx, new_level);
     result.data.resize(data.size());
     parallel_for(data.size(), th_nums, *ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        result.data[ct_idx] = ctx_copy.bootstrap(data[ct_idx]);
+        auto refreshed = ctx_copy.bootstrap(data[ct_idx]);
+        // Bootstrap preserves its input metadata scale. Normalize it so that
+        // rescale rounding errors cannot accumulate across refreshes.
+        refreshed.set_scale(ctx_copy.parameter().default_scale());
+        result.data[ct_idx] = move(refreshed);
         assert(new_level == result.data[ct_idx].level());
     });
     result.shape = shape;
@@ -58,7 +62,7 @@ void FeatureMatEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
     matmul_block_size = d;
     uint32_t num_block_rows = div_ceil(m, d);
     uint32_t num_block_cols = div_ceil(n_cols, d);
-    int n_slot = context->parameter().n() / 2;
+    int n_slot = context->parameter().n();
     uint32_t chunk_size = d * d;
     const int N_THREAD = 4;
 
@@ -156,7 +160,7 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
     uint32_t n = cols_per_head * n_heads;  // columns per megablock
     uint32_t K_col = div_ceil(total_cols, n);
     uint32_t n_h_padded = next_power_of_2(n_heads);
-    int n_slot = context->parameter().n() / 2;
+    int n_slot = context->parameter().n();
     const int N_THREAD = 4;
 
     // Determine chunk sizing and n_heads_per_chunk(S)
@@ -238,7 +242,7 @@ Array<double, 2>
 FeatureMatEncrypted::par_block_col_major_unpack(uint32_t m, uint32_t n_per_head, uint32_t d, uint32_t n_heads) const {
     uint32_t total_cols = shape[1];
     uint32_t n_h_padded = next_power_of_2(n_heads);
-    int n_slot = context->parameter().n() / 2;
+    int n_slot = context->parameter().n();
     const int N_THREAD = 4;
 
     uint32_t S, chunk_size, n_cts_per_block_idx;
@@ -337,7 +341,7 @@ void FeatureMatEncrypted::par_diagonal_pack(const Array<double, 2>& matrix,
     assert(n >= m);
     assert(n % m == 0);
 
-    uint32_t n_slot = context->parameter().n() / 2;
+    uint32_t n_slot = context->parameter().n();
     assert(n_slot % (H * n) == 0);
     uint32_t c = n_slot / (H * n);
     assert(m % c == 0);
@@ -426,7 +430,7 @@ Array<double, 2> FeatureMatEncrypted::par_diagonal_unpack(uint32_t n_heads,
 
     assert(n % m == 0);
 
-    uint32_t n_slot = context->parameter().n() / 2;
+    uint32_t n_slot = context->parameter().n();
     assert(n_slot % (H * n) == 0);
     uint32_t c = n_slot / (H * n);
     assert(m % c == 0);

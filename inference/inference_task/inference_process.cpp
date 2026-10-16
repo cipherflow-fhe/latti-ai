@@ -23,6 +23,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 
 using namespace std;
 using namespace lattisense;
@@ -54,13 +56,14 @@ UPtr<CkksParameter> make_ckks_parameter_from_json(const json& param_json) {
     }
 
     UPtr<CkksParameter> param;
+    const auto ring_type = static_cast<RingType>(param_json.value("ring_type", 1));
     if (param_json.contains("q") && param_json.contains("p")) {
         const auto q = param_json.at("q").get<vector<uint64_t>>();
         const auto p = param_json.at("p").get<vector<uint64_t>>();
         param = MakeU<CkksParameter>(
-            CkksParameter::create_custom_parameter(log_n, log_default_scale, q, p));
+            CkksParameter::create_custom_parameter(log_n, log_default_scale, q, p, ring_type));
     } else {
-        param = MakeU<CkksParameter>(CkksParameter::create_parameter(log_n));
+        param = MakeU<CkksParameter>(CkksParameter::create_parameter(log_n, ring_type));
     }
     // v6 移除了 set_log_slots()；plaintext 的 log_slots 由 metadata 决定，不影响参数。
     return param;
@@ -255,7 +258,7 @@ static uint32_t par_diagonal_ct_count(const CkksParameter& param,
     const uint32_t n = next_pow2_u32(n_prepad);
     const uint32_t m = next_pow2_u32(m_prepad);
     const uint32_t segment_len = H * n;
-    const uint32_t n_slot = param.n() / 2;
+    const uint32_t n_slot = param.n();
     if (segment_len == 0 || n_slot % segment_len != 0) {
         throw runtime_error("invalid par_diagonal segment layout");
     }
@@ -1539,11 +1542,29 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                 FeatureNode d_input_node(json_features[feature_input[0]]);
                 const FeatureEncrypted& feature_node = _get_feature(feature_input[0]);
                 FeatureNode output_feature_node(json_features[feature_output_id]);
+                auto check_bootstrap_scales = [&](const auto& ciphertexts) {
+                    for (size_t ct_idx = 0; ct_idx < ciphertexts.size(); ++ct_idx) {
+                        const double scale = ciphertexts[ct_idx].scale();
+                        if (!std::isfinite(scale)) {
+                            throw runtime_error("non-finite scale before bootstrapping: layer=" + key +
+                                                ", input_feature=" + feature_input[0] +
+                                                ", ciphertext_index=" + to_string(ct_idx) +
+                                                ", feature_level=" + to_string(feature_node.level) +
+                                                ", ciphertext_level=" + to_string(ciphertexts[ct_idx].level()) +
+                                                ", scale=" + to_string(scale) +
+                                                ", context_log_n=" + to_string(context.parameter().log_n()) +
+                                                ", ring_type=" +
+                                                to_string(static_cast<int>(context.parameter().ring_type())));
+                        }
+                    }
+                };
                 if (d_input_node.is_mat) {
                     const FeatureMatEncrypted& inputMat = dynamic_cast<const FeatureMatEncrypted&>(feature_node);
+                    check_bootstrap_scales(inputMat.data);
                     result = MakeU<FeatureMatEncrypted>(inputMat.refresh_ciphertext());
                 } else if (feature_node.dim == 2) {
                     const Feature2DEncrypted& input2D = dynamic_cast<const Feature2DEncrypted&>(feature_node);
+                    check_bootstrap_scales(input2D.data);
                     Feature2DEncrypted refresh_result = input2D.refresh_ciphertext();
                     if (maximum_refreshed_level > output_feature_node.level) {
                         result = MakeU<Feature2DEncrypted>(
@@ -1553,6 +1574,7 @@ void InferenceProcess::run_task_sdk(bool enable_mpc) {
                     }
                 } else if (feature_node.dim == 0) {
                     const Feature0DEncrypted& input0D = dynamic_cast<const Feature0DEncrypted&>(feature_node);
+                    check_bootstrap_scales(input0D.data);
                     Feature0DEncrypted refresh_result = input0D.refresh_ciphertext();
                     if (maximum_refreshed_level > output_feature_node.level) {
                         result = MakeU<Feature0DEncrypted>(
@@ -2356,7 +2378,7 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
         uint32_t n_h_padded = 1;
         while (n_h_padded < fp->n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot_val = ckks_contexts.at(first_input.ckks_parameter_id)->parameter().n() / 2;
+        uint32_t n_slot_val = ckks_contexts.at(first_input.ckks_parameter_id)->parameter().n();
         if (n_slot_val >= n_h_padded * par_d * par_d) {
             par_G = 1;
         } else {
@@ -3016,7 +3038,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_
         uint32_t n_h_padded = 1;
         while (n_h_padded < fp->n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot_val = ckks_contexts.at(first_input.ckks_parameter_id)->parameter().n() / 2;
+        uint32_t n_slot_val = ckks_contexts.at(first_input.ckks_parameter_id)->parameter().n();
         if (n_slot_val >= n_h_padded * par_d * par_d) {
             par_G = 1;
         } else {
@@ -3663,7 +3685,23 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             throw runtime_error("encode_pt: unknown op_class: " + op_class);
         }
 
-        local_data[self.id] = make_shared<CkksPlaintext>(move(pt));
+        const auto& output = self.output_nodes.at(0);
+        const auto expected = output->metadata();
+        const auto actual = pt.metadata();
+        if (actual != expected) {
+            auto describe = [](const Metadata& m) {
+                ostringstream out;
+                out << setprecision(17) << "{is_ringt=" << int(m.is_ringt)
+                    << ", is_batched=" << int(m.is_batched) << ", degree=" << m.degree
+                    << ", level=" << m.level << ", log_slots=" << m.log_slots
+                    << ", scale=" << m.scale << ", is_ntt=" << int(m.is_ntt)
+                    << ", mform_bits=" << m.mform_bits << "}";
+                return out.str();
+            };
+            throw runtime_error("encode_pt metadata mismatch for " + output->id +
+                                ": expected=" + describe(expected) + ", actual=" + describe(actual));
+        }
+        local_data[output->id] = make_shared<CkksPlaintext>(move(pt));
     };
 }
 

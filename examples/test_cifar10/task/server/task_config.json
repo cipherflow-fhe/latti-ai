@@ -53,5 +53,6 @@
             "enable_fpga": true
         }
     },
-    "use_btp": true
+    "use_btp": true,
+    "ci_packing": "native"
 }

@@ -2,8 +2,8 @@
     "score": 415.0095774314932,
     "ckks_parameter": {
         "param0": {
-            "poly_modulus_degree": 65536,
-            "n_mult_level": 9,
+            "poly_modulus_degree": 32768,
+            "n_mult_level": 24,
             "log_default_scale": 40,
             "block_shape": [
                 32,
@@ -4706,5 +4706,6 @@
     ],
     "output_feature": [
         "output"
-    ]
+    ],
+    "ci_packing": "native"
 }

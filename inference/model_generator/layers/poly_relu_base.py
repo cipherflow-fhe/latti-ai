@@ -22,6 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.lattisense.frontend import custom_task as ckks_task
 from inference.model_generator.layers.encrypted_param_ops import materialize_encrypted_param
 
 
@@ -262,6 +263,15 @@ class PolyReluBase:
 
             for g in range(giant_steps):
                 target_level = bp_out_level[g]
+                # Match C++ compute_coefficient_scales_bsgs. The default
+                # plaintext scale is insufficient for coefficients at g > 0
+                # and for terms that are followed by a rescale.
+                target_scale = float(ckks_task.g_param.default_scale)
+                if g > 0 and g * baby_steps <= order:
+                    target_scale = (
+                        target_scale * ckks_task.g_param.q[bsgs_output_level + 1]
+                        / x_powers[g * baby_steps].metadata.scale
+                    )
 
                 for b in range(baby_steps):
                     idx = g * baby_steps + b
@@ -269,6 +279,9 @@ class PolyReluBase:
                         break
 
                     w_pt = get_weight(idx, x_idx)
+                    w_pt.metadata.scale = target_scale if b == 0 else (
+                        target_scale * ckks_task.g_param.q[target_level + 1] / x_powers[b].metadata.scale
+                    )
 
                     if b == 0:
                         coeff0_pts[g] = w_pt

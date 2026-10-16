@@ -258,7 +258,7 @@ void ConcatLayer::prepare_mask_data(const CkksParameter& param,
         uint32_t src_cx = src_offset / skip[1];
         uint32_t src_cy = src_offset % skip[1];
 
-        vector<double> mask_vec(N / 2, 0.0);
+        vector<double> mask_vec(N, 0.0);
         for (uint32_t x = 0; x < shape[0]; ++x) {
             for (uint32_t y = 0; y < shape[1]; ++y) {
                 uint32_t slot =
@@ -312,7 +312,7 @@ void ConcatLayer::prepare_mask_data_1d(const CkksParameter& param,
         uint32_t block_idx = n_channel_per_block > 0 ? j_in_ct / n_channel_per_block : 0;
         uint32_t sub_pos = n_channel_per_block > 0 ? j_in_ct % n_channel_per_block : j_in_ct;
 
-        std::vector<double> mask_vec(N / 2, 0.0);
+        std::vector<double> mask_vec(N, 0.0);
         for (uint32_t l = 0; l < L_i; ++l) {
             uint64_t slot = (uint64_t)block_idx * block_size + (uint64_t)l * block_stride + sub_pos;
             if (slot < mask_vec.size()) {
@@ -354,7 +354,7 @@ void ConcatLayer::prepare_mask_data_0d(const CkksParameter& param,
         uint32_t skip_i = input_skip_scalars[input_idx];
         uint64_t src_slot = (uint64_t)(local_ch % pack_i) * skip_i;
 
-        std::vector<double> mask_vec(N / 2, 0.0);
+        std::vector<double> mask_vec(N, 0.0);
         if (src_slot < mask_vec.size()) {
             mask_vec[src_slot] = 1.0;
         }

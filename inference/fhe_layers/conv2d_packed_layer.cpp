@@ -266,7 +266,7 @@ CkksPlaintext Conv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx
     const double encode_pt_scale = weight_scale_;
 
     std::vector<double> packed_weights;
-    packed_weights.reserve(param_.n() / 2);
+    packed_weights.reserve(param_.n());
 
     for (uint32_t pack_idx = 0; pack_idx < n_channel_per_ct_; pack_idx++) {
         const uint32_t out_ch_idx = ct_idx * n_channel_per_ct_ + pack_idx;

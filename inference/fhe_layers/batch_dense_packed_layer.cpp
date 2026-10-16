@@ -50,7 +50,7 @@ BatchDensePackedLayer::BatchDensePackedLayer(const CkksParameter& param_in,
     block_size_ = block_size;
     level_ = level_A;
 
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     chunk_size_ = block_size_ * block_size_;
     if (n_slot_ < chunk_size_ || n_slot_ % chunk_size_ != 0)
         throw invalid_argument("BatchDensePackedLayer requires n_slot divisible by block_size^2");

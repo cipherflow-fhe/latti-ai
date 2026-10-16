@@ -42,7 +42,7 @@ BlockColMajorCPMM::BlockColMajorCPMM(const CkksParameter& param_in,
     n_ = n;
     p_ = p;
 
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     chunk_size_ = d_ * d_;
     assert(n_slot_ % chunk_size_ == 0 && "n_slot must be divisible by block_size^2");
     num_chunks_ = n_slot_ / chunk_size_;

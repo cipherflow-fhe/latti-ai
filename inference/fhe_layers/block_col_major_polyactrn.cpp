@@ -36,7 +36,7 @@ BlockColMajorPolyActRNGamma::BlockColMajorPolyActRNGamma(const CkksParameter& pa
     m_ = shape[0];
     n_ = shape[1];
     d_ = block_size;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     chunk_size_ = d_ * d_;
     num_chunks_ = n_slot_ / chunk_size_;
     num_block_rows_ = div_ceil(m_, d_);
@@ -128,7 +128,7 @@ BlockColMajorPolyActRNPoly::BlockColMajorPolyActRNPoly(const CkksParameter& para
     m_ = shape[0];
     n_ = shape[1];
     d_ = block_size;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     chunk_size_ = d_ * d_;
     num_chunks_ = n_slot_ / chunk_size_;
     num_block_rows_ = div_ceil(m_, d_);

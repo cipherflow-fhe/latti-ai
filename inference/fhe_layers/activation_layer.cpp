@@ -17,7 +17,9 @@
  */
 
 #include "activation_layer.h"
+#include <cmath>
 #include <iostream>
+#include <stdexcept>
 #include "util.h"
 
 using namespace std;
@@ -34,7 +36,15 @@ vector<CkksCiphertext> SquareLayer::call(CkksContext& ctx, const vector<CkksCiph
         auto d_res = ctx_copy.relinearize(d);
         d_res = ctx_copy.rescale(d_res);
         result[ct_idx] = move(d_res);
-        result[ct_idx].set_scale(param_.default_scale());
+        const double default_scale = param_.default_scale();
+        if (!std::isfinite(default_scale)) {
+            throw std::runtime_error("SquareLayer received a non-finite default scale: ciphertext_index=" +
+                                     std::to_string(ct_idx) + ", context_log_n=" +
+                                     std::to_string(ctx_copy.parameter().log_n()) + ", ring_type=" +
+                                     std::to_string(static_cast<int>(ctx_copy.parameter().ring_type())) +
+                                     ", q0=" + std::to_string(ctx_copy.parameter().q().front()));
+        }
+        result[ct_idx].set_scale(default_scale);
     });
     return result;
 }

@@ -4,6 +4,7 @@
 
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 
+#include <algorithm>
 #include <complex>
 #include <vector>
 

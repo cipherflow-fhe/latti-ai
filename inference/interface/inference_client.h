@@ -127,6 +127,8 @@ private:
     int n_slots_ = 0;
     int poly_modulus_degree_ = 0;
     int log_slots_ = -1;
+    int log_default_scale_ = 40;
+    ls::RingType ring_type_ = ls::RingType::ConjugateInvariant;
     std::vector<uint64_t> q_;
     std::vector<uint64_t> p_;
     bool needs_btp_ = false;

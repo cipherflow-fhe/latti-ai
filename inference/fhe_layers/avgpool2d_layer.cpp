@@ -171,7 +171,7 @@ void Avgpool2DLayer::prepare_weight_repack(const CkksParameter& param_in,
 
     // Generate repack mask: 1.0 at every second_stage_stride position within block
     int N = ctx.parameter().n();
-    vector<double> mask_vec(N / 2, 0.0);
+    vector<double> mask_vec(N, 0.0);
     for (uint32_t row = 0; row < block_shape[0]; row += second_stage_stride[0]) {
         for (uint32_t col = 0; col < block_shape[1]; col += second_stage_stride[1]) {
             mask_vec[row * block_shape[1] + col] = 1.0;
@@ -321,7 +321,7 @@ Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x,
         uint32_t out_skip0 = second_stage_stride[0];
         uint32_t out_skip1 = second_stage_stride[1];
         uint32_t n_channel_per_block = out_skip0 * out_skip1;
-        uint32_t n_block_per_ct_out = (N / 2) / (block_shape[0] * block_shape[1]);
+        uint32_t n_block_per_ct_out = N / (block_shape[0] * block_shape[1]);
         uint32_t n_channel_per_ct_repack = n_channel_per_block * n_block_per_ct_out;
         uint32_t n_out_ct = div_ceil(n_channel_, n_channel_per_ct_repack);
 

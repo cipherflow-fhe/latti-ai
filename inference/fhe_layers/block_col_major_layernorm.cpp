@@ -38,7 +38,7 @@ BlockColMajorLNStats::BlockColMajorLNStats(const CkksParameter& param,
     m_ = shape[0];
     n_ = shape[1];
     d_ = block_size;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     chunk_size_ = d_ * d_;
     num_chunks_ = n_slot_ / chunk_size_;
     num_block_rows_ = div_ceil(m_, d_);
@@ -181,7 +181,7 @@ BlockColMajorLNXCentered::BlockColMajorLNXCentered(const CkksParameter& param,
     m_ = shape[0];
     n_ = shape[1];
     d_ = block_size;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     chunk_size_ = d_ * d_;
     num_chunks_ = n_slot_ / chunk_size_;
     num_block_rows_ = div_ceil(m_, d_);
@@ -259,7 +259,7 @@ BlockColMajorLNMinimaxInit::BlockColMajorLNMinimaxInit(const CkksParameter& para
     : Layer(param), c0_(c0), c1_(c1), c2_(c2) {
     level_ = input_level;
     d_ = block_size;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     chunk_size_ = d_ * d_;
 }
 
@@ -329,7 +329,7 @@ BlockColMajorLNGoldschmidt::BlockColMajorLNGoldschmidt(const CkksParameter& para
     : Layer(param) {
     level_ = input_level;
     d_ = block_size;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     chunk_size_ = d_ * d_;
 }
 
@@ -410,7 +410,7 @@ BlockColMajorLNAffine::BlockColMajorLNAffine(const CkksParameter& param,
     m_ = shape[0];
     n_ = shape[1];
     d_ = block_size;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     chunk_size_ = d_ * d_;
     num_chunks_ = n_slot_ / chunk_size_;
     num_block_rows_ = div_ceil(m_, d_);

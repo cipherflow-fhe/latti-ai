@@ -173,7 +173,7 @@ CkksPlaintext MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_reduc
     int kernel_shape_i = kernel_idx / kernel_shape_[1];
     int kernel_shape_j = kernel_idx % kernel_shape_[1];
 
-    vector<double> w(N / 2, 0.0);
+    vector<double> w(N, 0.0);
     for (int linear_idx = 0; linear_idx < n_block_per_ct * cached_input_block_size; ++linear_idx) {
         int t = linear_idx / cached_input_block_size;
         int shape_linear = linear_idx % cached_input_block_size;
@@ -204,7 +204,7 @@ CkksPlaintext MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_reduc
 CkksPlaintext MultiplexedConv2DPackedLayer::generate_bias_pt_for_index_reduct_rot(CkksContext& ctx,
                                                                                        int bpt_idx) const {
     // Same layout as post_skip bias: indexed by n_packed_out_channel
-    vector<double> bias_vec(N / 2, 0.0);
+    vector<double> bias_vec(N, 0.0);
     for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         int j = linear_idx / (input_shape_[0] * skip_[0] * input_shape_[1] * skip_[1]);
         int residual = linear_idx % (input_shape_[0] * skip_[0] * input_shape_[1] * skip_[1]);
@@ -240,7 +240,7 @@ MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, i
     int kernel_idx = k;
 
     const Duo padding_shape = kernel_shape_ / 2;
-    vector<double> w(N / 2, 0.0);
+    vector<double> w(N, 0.0);
     int base_channel_in = packed_in_channel_idx * n_channel_per_ct;
     int kernel_shape_i = kernel_idx / kernel_shape_[1];
     int kernel_shape_j = kernel_idx % kernel_shape_[1];
@@ -276,7 +276,7 @@ CkksPlaintext MultiplexedConv2DPackedLayer::generate_bias_pt_for_index(CkksConte
     const Duo input_shape_ct = input_shape_ * skip_;
     const Duo skip_stride = stride_ * skip_;
 
-    vector<double> bias_vec(N / 2, 0.0);
+    vector<double> bias_vec(N, 0.0);
 
     for (uint32_t linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         const Duo block_pos = div_mod(linear_idx, static_cast<uint32_t>(cached_input_block_size));

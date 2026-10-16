@@ -39,7 +39,7 @@ Feature1DEncrypted Avgpool1DLayer::run_adaptive_avgpool(CkksContext& ctx, const 
     result.data.resize(x_size);
     uint32_t skip = x.skip;
     uint32_t shape = x.shape;
-    int n_rot = (ctx.parameter().n() / 2) / (x.n_channel * x.shape);
+    int n_rot = (ctx.parameter().n()) / (x.n_channel * x.shape);
 
     int log2_stride = static_cast<int>(std::ceil(std::log2(stride)));
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {

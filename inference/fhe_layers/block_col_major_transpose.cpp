@@ -36,7 +36,7 @@ BlockColMajorTranspose::BlockColMajorTranspose(const CkksParameter& param_in,
     m_ = m;
     n_ = n;
 
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     chunk_size_ = d_ * d_;
     assert(n_slot_ % chunk_size_ == 0 && "n_slot must be divisible by d^2");
     num_chunks_ = n_slot_ / chunk_size_;

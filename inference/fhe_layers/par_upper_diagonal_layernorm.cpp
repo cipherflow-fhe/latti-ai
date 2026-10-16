@@ -97,7 +97,7 @@ ParUpperDiagonalLNStats::ParUpperDiagonalLNStats(const CkksParameter& param,
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 
     H_ = next_pow2(H_prepad_);
@@ -302,7 +302,7 @@ ParUpperDiagonalLNXCentered::ParUpperDiagonalLNXCentered(const CkksParameter& pa
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 
     H_ = next_pow2(H_prepad_);
@@ -471,7 +471,7 @@ ParUpperDiagonalLNMinimaxInit::ParUpperDiagonalLNMinimaxInit(const CkksParameter
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 
     H_ = next_pow2(H_prepad_);
@@ -595,7 +595,7 @@ ParUpperDiagonalLNGoldschmidt::ParUpperDiagonalLNGoldschmidt(const CkksParameter
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 
     H_ = next_pow2(H_prepad_);
@@ -733,7 +733,7 @@ ParUpperDiagonalLNAffine::ParUpperDiagonalLNAffine(const CkksParameter& param,
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     assert(gamma_vals_.get_size() >= total_cols_);
     assert(beta_vals_.get_size() >= total_cols_);
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);

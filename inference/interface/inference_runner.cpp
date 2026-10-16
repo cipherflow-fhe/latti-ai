@@ -171,7 +171,7 @@ void InferenceRunner::load() {
     } else {
         eval_context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize(eval_context));
     }
-    n_slots_ = eval_context_->parameter().n() / 2;
+    n_slots_ = eval_context_->parameter().n();
     parameter_store_ = std::make_unique<EncryptedParameterStore>(runner_dir_ / "encrypted_model_parameters");
 }
 

@@ -22,6 +22,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
+from inference.lattisense.frontend import custom_task as ckks_task
 from inference.model_generator.layers.encrypted_param_ops import (
     add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
@@ -259,6 +260,7 @@ class MultiplexedConv2DPackedLayer:
         return result
 
     def call_custom_compute(self, x: list[CkksCiphertextNode], conv_data_source) -> list[CkksCiphertextNode]:
+        node_prefix = f'encode_pt_{conv_data_source.id}'
         # 1. Block direction rotation
         block_rotations: list[CkksCiphertextNode] = list()
         for x_ct in x:
@@ -281,7 +283,10 @@ class MultiplexedConv2DPackedLayer:
             w_pt_list = list()
             for j in range(size_1):
                 for k in range(size_2):
-                    w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{j}_{k}')
+                    w_pt = CkksPlaintextNode(
+                        f'{node_prefix}_{ct_idx}_{j}_{k}',
+                        scale=float(ckks_task.g_param.q[x[0].metadata.level]),
+                    )
                     custom_compute(
                         inputs=[conv_data_source],  # All nodes reference the same data source
                         output=w_pt,
@@ -326,7 +331,10 @@ class MultiplexedConv2DPackedLayer:
                         - n_block % self.zero_inserted_skip[1]
                         + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
                     )
-                    m_pt = CkksPlaintextNode(f'encode_pt_mask_{ct_idx}_{i}')
+                    m_pt = CkksPlaintextNode(
+                        f'{node_prefix}_mask_{ct_idx}_{i}',
+                        scale=float(ckks_task.g_param.q[s.metadata.level]),
+                    )
                     custom_compute(
                         inputs=[conv_data_source],
                         output=m_pt,
@@ -358,7 +366,7 @@ class MultiplexedConv2DPackedLayer:
                 res.append(sp)
         for i in range(len(res)):
             bias_idx = i
-            b_pt = CkksPlaintextNode(f'encode_pt_{bias_idx}')
+            b_pt = CkksPlaintextNode(f'{node_prefix}_bias_{bias_idx}')
             custom_compute(
                 inputs=[conv_data_source],
                 output=b_pt,

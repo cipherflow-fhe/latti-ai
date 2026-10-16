@@ -152,10 +152,12 @@ void InferenceClient::read_configuration() {
     std::string ckks_param_id = first_param["ckks_parameter_id"];
     auto& ckks_entry = ckks_config[ckks_param_id];
     poly_modulus_degree_ = ckks_entry["poly_modulus_degree"].get<int>();
-    n_slots_ = poly_modulus_degree_ / 2;
     if (ckks_entry.contains("log_slots")) {
         log_slots_ = ckks_entry["log_slots"].get<int>();
     }
+    log_default_scale_ = ckks_entry.value("log_default_scale", 40);
+    ring_type_ = static_cast<ls::RingType>(ckks_entry.value("ring_type", 1));
+    n_slots_ = poly_modulus_degree_;
     if (ckks_entry.contains("q") && ckks_entry.contains("p")) {
         q_ = ckks_entry["q"].get<std::vector<uint64_t>>();
         p_ = ckks_entry["p"].get<std::vector<uint64_t>>();
@@ -176,29 +178,28 @@ void InferenceClient::create_crypto_context() {
     };
     const int log_n = n_to_log_n(poly_modulus_degree_);
 
-    // BTP 分支：v6 不再有独立的 CkksBtpParameter。
-    // BTP 参数由同一个 CkksParameter 在 create_random_context(..., enable_bootstrapping=true) 时内部派生。
-    // 这里 BTP 的 N2 通常是常规 N 的 2 倍，取 log_n + 1。
+    // Bootstrapping is derived from the residual parameter by the SDK.  In
+    // particular, a CI residual must not be replaced with a CI log_n + 1
+    // parameter: its bootstrap circuit is standard-ring internally.
     if (needs_btp_) {
-        const int btp_log_n = log_n + 1;
-        const int log_default_scale = 40;
+        const int log_default_scale = log_default_scale_;
         if (!q_.empty() && !p_.empty()) {
             btp_param_ = std::make_unique<CkksParameter>(
-                CkksParameter::create_custom_parameter(btp_log_n, log_default_scale, q_, p_));
+                CkksParameter::create_custom_parameter(log_n, log_default_scale, q_, p_, ring_type_));
         } else {
-            btp_param_ = std::make_unique<CkksParameter>(CkksParameter::create_parameter(btp_log_n));
+            btp_param_ = std::make_unique<CkksParameter>(CkksParameter::create_parameter(log_n, ring_type_));
         }
         btp_context_ = std::make_unique<CkksContext>(
             CkksContext::create_random_context(*btp_param_, EncryptorType::PUBLIC_KEY, /*enable_bootstrapping=*/true));
         btp_context_->gen_rotation_keys();
         context_ptr_ = btp_context_.get();
     } else {
-        const int log_default_scale = 40;
+        const int log_default_scale = log_default_scale_;
         if (!q_.empty() && !p_.empty()) {
             ckks_param_ = std::make_unique<CkksParameter>(
-                CkksParameter::create_custom_parameter(log_n, log_default_scale, q_, p_));
+                CkksParameter::create_custom_parameter(log_n, log_default_scale, q_, p_, ring_type_));
         } else {
-            ckks_param_ = std::make_unique<CkksParameter>(CkksParameter::create_parameter(log_n));
+            ckks_param_ = std::make_unique<CkksParameter>(CkksParameter::create_parameter(log_n, ring_type_));
         }
         // v6 移除了 set_log_slots()；plaintext 的 log_slots 由 metadata 决定。
         (void)log_slots_;

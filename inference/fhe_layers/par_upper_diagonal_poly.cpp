@@ -96,7 +96,7 @@ ParUpperDiagonalPoly::ParUpperDiagonalPoly(const CkksParameter& param,
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     assert(coeffs_.get_shape()[1] >= total_cols_);
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 

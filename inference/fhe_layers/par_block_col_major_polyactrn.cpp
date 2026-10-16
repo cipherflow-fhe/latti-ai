@@ -46,7 +46,7 @@ ParBlockColMajorPolyActRNGamma::ParBlockColMajorPolyActRNGamma(const CkksParamet
     assert(gamma_vals_.get_shape()[0] >= total_dim_);
     cols_per_head_ = total_dim_ / (K_ * n_heads_);
     n_h_padded_ = next_pow2(n_heads);
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
     assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
 
@@ -179,7 +179,7 @@ ParBlockColMajorPolyActRNPoly::ParBlockColMajorPolyActRNPoly(const CkksParameter
     assert(total_dim_ % (K_ * n_heads_) == 0);
     cols_per_head_ = total_dim_ / (K_ * n_heads_);
     n_h_padded_ = next_pow2(n_heads);
-    n_slot_ = param_.n() / 2;
+    n_slot_ = param_.n();
     assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
     assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
 

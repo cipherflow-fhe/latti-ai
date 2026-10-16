@@ -203,6 +203,7 @@ class PolyRelu2D(PolyReluBase):
     def call_custom_compute(self, x: list[CkksCiphertextNode], poly_data_source, layer_id: str = ''):
         x = list(x)  # shallow copy to avoid mutating caller's list
         result = list()
+        node_prefix = f'encode_pt_{poly_data_source.id}'
 
         min_required_level = 3 if self.order == 4 else max(self.order - 1, 1)
         for i, ct in enumerate(x):
@@ -218,7 +219,7 @@ class PolyRelu2D(PolyReluBase):
             for i in range(len(x)):
                 res = x[i]
                 for order_idx in range(self.order - 1, 0, -1):
-                    w_pt = CkksPlaintextNode(f'encode_pt_{order_idx}_{i}')
+                    w_pt = CkksPlaintextNode(f'{node_prefix}_{order_idx}_{i}')
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt,
@@ -236,7 +237,7 @@ class PolyRelu2D(PolyReluBase):
                     if res.metadata.level < x[i].metadata.level:
                         x[i] = drop_level(x[i], x[i].metadata.level - res.metadata.level)
                     res = rescale(relin(mult(res, x[i])))
-                w_pt = CkksPlaintextNode(f'encode_pt_{0}_{i}')
+                w_pt = CkksPlaintextNode(f'{node_prefix}_0_{i}')
                 custom_compute(
                     inputs=[poly_data_source],
                     output=w_pt,
@@ -254,7 +255,7 @@ class PolyRelu2D(PolyReluBase):
             result = [0 for i in range(len(x))]
             for x_idx in range(len(x)):
                 if self.order <= 1:
-                    w_pt_1 = CkksPlaintextNode(f'encode_pt_{1}_{x_idx}')
+                    w_pt_1 = CkksPlaintextNode(f'{node_prefix}_1_{x_idx}')
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt_1,
@@ -267,7 +268,7 @@ class PolyRelu2D(PolyReluBase):
                         },
                     )
                     res = rescale(mult(x[x_idx], w_pt_1))
-                    w_pt_0 = CkksPlaintextNode(f'encode_pt_{0}_{x_idx}')
+                    w_pt_0 = CkksPlaintextNode(f'{node_prefix}_0_{x_idx}')
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt_0,
@@ -314,7 +315,7 @@ class PolyRelu2D(PolyReluBase):
 
                             if baby_step == 0:
                                 has_coeff0 = True
-                                w_pt = CkksPlaintextNode(f'encode_pt_{coeff_idx}_{x_idx}')
+                                w_pt = CkksPlaintextNode(f'{node_prefix}_{coeff_idx}_{x_idx}')
                                 custom_compute(
                                     inputs=[poly_data_source],
                                     output=w_pt,
@@ -334,7 +335,7 @@ class PolyRelu2D(PolyReluBase):
                                 if x_copy.metadata.level > target_level:
                                     x_copy = drop_level(x_copy, x_copy.metadata.level - target_level)
 
-                                w_pt = CkksPlaintextNode(f'encode_pt_{coeff_idx}_{x_idx}')
+                                w_pt = CkksPlaintextNode(f'{node_prefix}_{coeff_idx}_{x_idx}')
                                 custom_compute(
                                     inputs=[poly_data_source],
                                     output=w_pt,
@@ -386,11 +387,12 @@ class PolyRelu2D(PolyReluBase):
     def call_bsgs_lazy(self, x: list[CkksCiphertextNode], poly_data_source, layer_id: str = ''):
         """BSGS with on-demand weight generation via custom_compute (lazy/mega mode)."""
         weight_cache = {}
+        node_prefix = f'encode_pt_{poly_data_source.id}'
 
         def get_weight(idx, x_idx):
             key = (idx, x_idx)
             if key not in weight_cache:
-                w_pt = CkksPlaintextNode(f'encode_pt_{idx}_{x_idx}')
+                w_pt = CkksPlaintextNode(f'{node_prefix}_{idx}_{x_idx}')
                 custom_compute(
                     inputs=[poly_data_source],
                     output=w_pt,

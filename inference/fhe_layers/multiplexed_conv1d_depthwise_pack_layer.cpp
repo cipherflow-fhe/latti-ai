@@ -91,7 +91,7 @@ CkksPlaintext
 MultiplexedDWConv1DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int kernel_idx) const {
     uint32_t input_block_size = cached_input_block_size;
     const auto& mask = kernel_masks_[kernel_idx];
-    vector<double> w(param_.n() / 2, 0.0);
+    vector<double> w(param_.n(), 0.0);
 
     // ct_idx corresponds to block 0 of this packed group; we iterate over all
     // n_block_per_ct blocks within the ciphertext.
@@ -122,7 +122,7 @@ MultiplexedDWConv1DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx,
 CkksPlaintext MultiplexedDWConv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int idx) const {
     bool needs_rearrange = (skip > 1 || stride > 1);
     uint32_t input_block_size = cached_input_block_size;
-    vector<double> bias_data(param_.n() / 2, 0.0);
+    vector<double> bias_data(param_.n(), 0.0);
 
     if (!needs_rearrange) {
         // idx == ct_idx (== packed output group index)
@@ -163,7 +163,7 @@ CkksPlaintext MultiplexedDWConv1DPackedLayer::generate_select_tensor_pt_for_inde
     int t = local_ch / (int)skip;
     int j = local_ch % (int)skip;
     uint32_t input_block_size = cached_input_block_size;
-    vector<double> mask(param_.n() / 2, 0.0);
+    vector<double> mask(param_.n(), 0.0);
     for (int out_idx = 0; out_idx < (int)(input_shape / stride); out_idx++) {
         int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip + j;
         mask[slot_idx] = 1.0;
@@ -207,7 +207,7 @@ void MultiplexedDWConv1DPackedLayer::prepare_weight() {
         for (int local_ch = 0; local_ch < (int)min(n_channel_per_ct, n_channel); local_ch++) {
             int t = local_ch / (int)skip;
             int j = local_ch % (int)skip;
-            vector<double> mask(param_.n() / 2, 0.0);
+            vector<double> mask(param_.n(), 0.0);
             for (int out_idx = 0; out_idx < (int)(input_shape / stride); out_idx++) {
                 int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip + j;
                 mask[slot_idx] = 1.0;

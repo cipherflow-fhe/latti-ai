@@ -67,7 +67,7 @@ CkksPlaintext MultScalarLayer::generate_weight_pt_for_index(CkksContext& ctx, in
     const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
     double pack_scale = static_cast<double>(param.q()[level_]);
 
-    vector<double> feature_tmp_pack(param.n() / 2);
+    vector<double> feature_tmp_pack(param.n());
     for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
         int block_i = linear_idx / (block_shape[0] * block_shape[1]);
         int residual = linear_idx % (block_shape[0] * block_shape[1]);
@@ -82,13 +82,7 @@ CkksPlaintext MultScalarLayer::generate_weight_pt_for_index(CkksContext& ctx, in
         int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;
         feature_tmp_pack[index] = weight.get(channel_idx);
     }
-    CkksPlaintext pt(param, plaintext_metadata(/*is_ringt=*/true,
-                                               /*is_batched=*/true,
-                                               /*level=*/0,
-                                               /*log_slots=*/param.log_max_slots(),
-                                               /*scale=*/pack_scale));
-    ctx.encode(feature_tmp_pack, pt);
-    return pt;
+    return ls_compat::encode_ringt(ctx, feature_tmp_pack, pack_scale);
 }
 
 void MultScalarLayer::prepare_weight() {
@@ -104,7 +98,7 @@ void MultScalarLayer::prepare_weight() {
                  [&](CkksContext& ctx_copy, int n_packed_out_channel_idx) {
                      const CkksParameter& param_copy = ctx_copy.parameter();
                      const int total_block_size = n_block_per_ct * block_shape[0] * block_shape[1];
-                     vector<double> feature_tmp_pack(param_copy.n() / 2);
+                     vector<double> feature_tmp_pack(param_copy.n());
                      for (int linear_idx = 0; linear_idx < total_block_size; ++linear_idx) {
                          int block_i = linear_idx / (block_shape[0] * block_shape[1]);
                          int residual = linear_idx % (block_shape[0] * block_shape[1]);
@@ -121,13 +115,8 @@ void MultScalarLayer::prepare_weight() {
                          int index = block_i * block_shape[0] * block_shape[1] + shape_i * block_shape[1] + shape_j;
                          feature_tmp_pack[index] = weight.get(channel_idx);
                      }
-                     CkksPlaintext pt(param_copy, plaintext_metadata(/*is_ringt=*/true,
-                                                                     /*is_batched=*/true,
-                                                                     /*level=*/0,
-                                                                     /*log_slots=*/param_copy.log_max_slots(),
-                                                                     /*scale=*/pack_scale));
-                     ls_compat:ctx_copy.encode(feature_tmp_pack, pt);
-                     weight_pt[n_packed_out_channel_idx] = std::move(pt);
+                     weight_pt[n_packed_out_channel_idx] =
+                         ls_compat::encode_ringt(ctx_copy, feature_tmp_pack, pack_scale);
                  });
 }
 
