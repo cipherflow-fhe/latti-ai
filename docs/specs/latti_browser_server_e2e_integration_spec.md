@@ -23,13 +23,17 @@ examples/test_retina_dkd/
   package_retina.py               # 复用现有 WASM，组装任务包和数据包
   run_browser.mjs                 # Retina 浏览器端自动化验收
   run_server_integration.mjs      # Retina 临时 server 编排器（旧版基线）
+examples/e2e/
+  run_browser.mjs                 # Retina/ResNet20 公共浏览器入口
+  run_server_integration.mjs      # Retina/ResNet20 公共 server 入口
+examples/package_e2e_0_1_2.py     # 组装最终五个子 ZIP 的总交付包
 ```
 
-Retina 的两个验收脚本目前位于 `examples/test_retina_dkd/`，ResNet20 的浏览器工作流
-位于 `inference/interface/wasm/tests/workflow.mjs`。它们可以统一收敛到公共目录
-`examples/e2e/`（按任务配置选择数据、任务和模型），任务目录只保留各自的
-`preprocess.js`、`postprocess.js`。这样两个任务共享同一个联调入口，避免维护两套
-ZIP、文件名和状态轮询逻辑；在迁移完成前，现有 Retina 路径仍可继续验收。
+Retina 的原始验收脚本仍位于 `examples/test_retina_dkd/`，ResNet20 的浏览器工作流仍位于
+`inference/interface/wasm/tests/workflow.mjs`；`examples/e2e/` 已提供按
+`LATTI_E2E_TASK=retina|resnet20` 选择任务的公共入口。任务目录只保留各自的
+`preprocess.js`、`postprocess.js`，两个任务共享同一个联调入口，避免维护两套 ZIP、
+文件名和状态轮询逻辑。
 
 数据包的输入目录为 `dataset/`：
 
