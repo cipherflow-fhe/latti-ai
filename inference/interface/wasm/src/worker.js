@@ -1,5 +1,6 @@
 import './wasm_exec.js';
 import { readCSV } from './csv.js';
+import { makeZip, readZip } from './zip.js';
 
 const presetName='N16QP1546H192H32';
 const fixedParameters=JSON.stringify({param0:{poly_modulus_degree:65536,n_mult_level:9,log_default_scale:40,param_name:presetName}});
@@ -37,6 +38,84 @@ async function writeFile(handle,data) {
   const writer = await handle.createWritable();
   try { await writer.write(data); await writer.close(); }
   catch (error) { await writer.abort().catch(()=>{}); throw error; }
+}
+const csvFiles = async directory => {
+  const files = [];
+  for await (const file of directory.values()) if (file.kind === 'file' && /\.csv$/i.test(file.name)) files.push(file);
+  files.sort((a,b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  return files;
+};
+const caseID = file => {
+  const name = file.name.replace(/\.csv$/i, '');
+  if (!/^[A-Za-z0-9._-]+$/.test(name) || name === '.' || name === '..') throw new Error('Invalid case name: ' + file.name);
+  return name;
+};
+const outputFile = async options => {
+  if (options.outputFile) return options.outputFile;
+  if (!options.outputDirectory) throw new Error('Server mode requires outputFile or outputDirectory');
+  return options.outputDirectory.getFileHandle(options.outputName || 'input.zip', {create: true});
+};
+async function encryptServer(options, start) {
+  const directories = options.inputDirectories;
+  if (!directories || typeof directories !== 'object') throw new Error('Server mode requires inputDirectories');
+  const inputNames = Object.keys(directories).sort();
+  if (!inputNames.length) throw new Error('Server mode requires at least one input');
+  const filesByInput = new Map(), cases = new Map();
+  for (const inputName of inputNames) {
+    validName(inputName);
+    const files = await csvFiles(directories[inputName]);
+    if (!files.length) throw new Error(inputName + ': no CSV inputs found');
+    const byCase = new Map();
+    for (const file of files) {
+      const name = caseID(file), key = name.toLowerCase();
+      if (byCase.has(key)) throw new Error(inputName + ': duplicate case ' + name);
+      byCase.set(key, {name, file});
+      if (!cases.has(key)) cases.set(key, name);
+    }
+    filesByInput.set(inputName, byCase);
+  }
+  for (const [key, name] of cases) for (const inputName of inputNames)
+    if (!filesByInput.get(inputName).has(key)) throw new Error('Case ' + name + ' is missing input ' + inputName);
+  const entries = [], orderedCases = [...cases.values()].sort((a,b) => a < b ? -1 : a > b ? 1 : 0);
+  for (const name of orderedCases) {
+    const key = name.toLowerCase();
+    for (const inputName of inputNames) {
+      const file = filesByInput.get(inputName).get(key).file;
+      const result = core('encrypt', inputName, await readCSV(await fileOf(file)));
+      const entryName = inputNames.length === 1 ? name + '.ct' : name + '__' + inputName + '.ct';
+      entries.push({name: entryName, data: result.data});
+      progress('encrypt', start, result.data.byteLength, result);
+    }
+  }
+  const target = await outputFile(options);
+  await writeFile(target, makeZip(entries));
+  return target;
+}
+async function decryptServer(options, start) {
+  const name = validName(options.outputName);
+  if (!options.inputFile) throw new Error('Server mode requires inputFile');
+  const file = await fileOf(options.inputFile), entries = await readZip(await file.arrayBuffer());
+  const results = [];
+  for (const [entryName, data] of entries) {
+    if (!entryName.endsWith('.result.bin') || entryName.includes('/')) throw new Error('Invalid server result entry: ' + entryName);
+    const caseName = entryName.slice(0, -'.result.bin'.length);
+    if (!/^[A-Za-z0-9._-]+$/.test(caseName) || caseName === '.' || caseName === '..') throw new Error('Invalid server result case: ' + entryName);
+    results.push({caseName, data});
+  }
+  if (!results.length) throw new Error('Server result archive contains no result entries');
+  results.sort((a,b) => a.caseName < b.caseName ? -1 : a.caseName > b.caseName ? 1 : 0);
+  const seen = new Set(), outputs = [];
+  for (const resultEntry of results) {
+    const key = resultEntry.caseName.toLowerCase();
+    if (seen.has(key)) throw new Error('Duplicate server result case: ' + resultEntry.caseName);
+    seen.add(key);
+    const result = core('decrypt', name, resultEntry.data);
+    const output = await options.outputDirectory.getFileHandle(resultEntry.caseName + '.csv', {create: true});
+    await writeFile(output, Array.from(result.data).join(',') + '\n');
+    outputs.push(output);
+    progress('decrypt', start, resultEntry.data.byteLength, result);
+  }
+  return outputs;
 }
 async function operate({operation,...options}) {
   await runtimeReady;
@@ -114,6 +193,8 @@ async function operate({operation,...options}) {
     await writeFile(output,Array.from(result.data).join(',')+'\n');
     progress('decrypt',start,file.size,result);return output;
   }
+  if (operation === 'encrypt-server') return encryptServer(options, start);
+  if (operation === 'decrypt-server') return decryptServer(options, start);
   throw new Error('Unknown client operation');
 }
 let queue=Promise.resolve();

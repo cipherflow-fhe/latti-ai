@@ -139,6 +139,21 @@ try {
       const expected=samples[file.name]||samples['10.CSV'];
       if(values.some((v,i)=>Math.abs(v-Number(expected.split(',')[i]))>0.001))throw new Error('batch roundtrip differs: '+file.name);
     }
+    const {makeZip,readZip}=await import('/dist/zip.js');
+    const serverCsv=await directory.getDirectoryHandle('server-csv',{create:true});
+    await write(serverCsv,'001.csv','1.25,-2,0.03');
+    const inputZip=await directory.getFileHandle('input.zip',{create:true});
+    await client.encrypt_batch({mode:'server',inputDirectories:{input:serverCsv},outputFile:inputZip});
+    const inputEntries=await readZip(new Uint8Array(await (await inputZip.getFile()).arrayBuffer()));
+    if(!inputEntries.has('001.ct')||inputEntries.size!==1)throw new Error('server input ZIP contract differs');
+    const outputZip=await directory.getFileHandle('output.zip',{create:true});
+    const outputBytes=makeZip([{name:'001.result.bin',data:inputEntries.get('001.ct')}]);
+    await write(directory,'output.zip',outputBytes);
+    const serverLogits=await directory.getDirectoryHandle('server-logits',{create:true});
+    const serverFiles=await client.decrypt_batch({mode:'server',outputName:'output',inputFile:outputZip,outputDirectory:serverLogits});
+    if(JSON.stringify(serverFiles.map(f=>f.name))!==JSON.stringify(['001.csv']))throw new Error('server result ZIP contract differs');
+    const serverValues=(await(await serverFiles[0].getFile()).text()).trim().split(',').map(Number);
+    if(serverValues.some((value,i)=>Math.abs(value-[1.25,-2,0.03][i])>0.001))throw new Error('server ZIP roundtrip differs');
     const empty=await directory.getDirectoryHandle('empty',{create:true});
     if((await client.encrypt_batch({inputName:'input',inputDirectory:empty,outputDirectory:encryptedDirectory})).length ||
        (await client.decrypt_batch({outputName:'output',inputDirectory:empty,outputDirectory:decryptedDirectory})).length)throw new Error('nonempty result for empty directory');

@@ -64,8 +64,8 @@ export async function openBrowserClient({clientDirectory,keyDirectory,onProgress
     restore: () => request('restore'),
     encrypt: options => request('encrypt',options),
     decrypt: options => request('decrypt',options),
-    encrypt_batch: options => batch('encrypt',options),
-    decrypt_batch: options => batch('decrypt',options),
+    encrypt_batch: options => options?.mode === 'server' ? request('encrypt-server',options) : batch('encrypt',options),
+    decrypt_batch: options => options?.mode === 'server' ? request('decrypt-server',options) : batch('decrypt',options),
     async close() {
       if (closed) return;
       const result = request('close'); closed = true;

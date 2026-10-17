@@ -35,8 +35,14 @@ function resizeRGB(pixels,width,height) {
 }
 
 export async function preprocess_batch({inputDirectory,outputDirectory}) {
+  // Accept either the dataset root (dataset/images/) or the images directory
+  // itself, so CIFAR and Retina task runners can pass the package dataset path
+  // without a task-specific path rewrite.
+  let imageDirectory=inputDirectory;
+  try{imageDirectory=await inputDirectory.getDirectoryHandle('images');}
+  catch(error){if(error.name!=='NotFoundError')throw error;}
   const files=[];
-  for await(const file of inputDirectory.values())if(file.kind==='file'&&imageExtension.test(file.name))files.push(file);
+  for await(const file of imageDirectory.values())if(file.kind==='file'&&imageExtension.test(file.name))files.push(file);
   files.sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
   const names=new Set();
   for(const file of files){

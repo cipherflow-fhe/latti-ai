@@ -1,6 +1,6 @@
 # Latti 浏览器 WASM 客户端
 
-当前版本为 `0.1.1`。这个包提供浏览器端的本地密钥生成、上下文持久化、单文件及批量 CSV 加密和结果解密能力，适用于通过 HTTPS 或 `http://localhost` 打开的桌面版 Chrome、Edge 等 Chromium 浏览器普通网页。收到任务后的默认主流程为图像预处理、批量加密、服务端推理、批量解密和准确率统计；配套 CIFAR-10 任务包提供独立图像预处理和分类评估脚本，数据包提供原始验证图像及标注。
+当前版本为 `0.1.2`。这个包提供浏览器端的本地密钥生成、上下文持久化、单文件及批量 CSV 加密和结果解密能力，适用于通过 HTTPS 或 `http://localhost` 打开的桌面版 Chrome、Edge 等 Chromium 浏览器普通网页。收到任务后的默认主流程为图像预处理、批量加密、服务端推理、批量解密和准确率统计；配套 CIFAR-10 任务包提供独立图像预处理和分类评估脚本，数据包提供原始验证图像及标注。
 
 “desktop Chromium web application” 指在桌面版 Chromium 浏览器中运行的 Web 应用。普通网页就符合使用场景，不需要 Electron、系统 WebView、PWA、CEF、Node.js 或本地代理。加解密在浏览器 Dedicated Worker 中执行，文件通过用户授权的 File System Access API 保存到本地磁盘。刷新或重新打开网页后，重新选择目录并调用 `restore()` 即可恢复。
 
@@ -138,7 +138,26 @@ console.log(`${correct}/${total}，准确率 ${(accuracy * 100).toFixed(2)}%`);
 
 刷新后重新选择密钥目录和任务目录，打开客户端并调用 `client.restore()`，再继续相应的批量阶段。切换任务时先关闭旧实例，再以相同 `keyDirectory` 和新的 `clientDirectory` 打开并恢复。
 
-`encrypt_batch()`、`decrypt_batch()` 只读取所选目录根层的 `.csv`、`.ct.bin` 文件，按文件名的 JavaScript 字符串顺序处理，分别返回按该顺序排列的文件句柄数组。每次调用写入关闭后才处理下一文件，空目录返回空数组，同名目标沿用覆盖规则。单文件异常关联源文件名并使当前批次 reject；此前成功的文件保留。标注表放在数据侧，模型输入 CSV 目录仅存待加密样本。
+不传 `mode` 时，`encrypt_batch()`、`decrypt_batch()` 保持按目录处理 `.csv`、`.ct.bin` 的兼容行为，按文件名的 JavaScript 字符串顺序处理并返回文件句柄数组。服务端联调使用 `mode: 'server'`，由 WASM 直接读写 server 契约的 ZIP：
+
+```js
+const inputZip = await taskDirectory.getFileHandle('input.zip', {create: true});
+await client.encrypt_batch({
+  mode: 'server',
+  inputDirectories: {input: cifarCsvDirectory},
+  outputFile: inputZip,
+});
+
+await client.decrypt_batch({
+  mode: 'server', outputName: 'output', inputFile: outputZip,
+  outputDirectory: logitsDirectory,
+});
+```
+
+单输入 ZIP 条目为 `<case_id>.ct`，多输入条目为 `<case_id>__<input_name>.ct`；结果 ZIP
+条目为 `<case_id>.result.bin`。服务模式会检查各输入目录的 case 集合完全一致，任务 runner
+不需要重命名密文或实现 ZIP reader/writer。输入 ZIP 使用无压缩存储以保持密文原字节，结果
+ZIP 支持 server 常用的 stored/raw-deflate 条目。
 
 `postprocess_batch()` 检查标注与结果一一对应，逐个读取 10 个有限 logits，取 argmax 为预测类别，并列最大值取最小下标。它写入 `reportDirectory/predictions.csv`（`filename,label,prediction,correct`），返回 `total`、`correct` 和 `[0,1]` 范围的 `accuracy=correct/total`。标注表行序可任意排列；文件名匹配负责样本关联。
 
@@ -161,7 +180,7 @@ npm run package -- /tmp
 
 `SHA256SUMS` 可在解压后的包根目录通过 `sha256sum -c SHA256SUMS` 校验。`onProgress` 的 `wasmBytes` 表示 WASM 线性内存，`heapBytes` 表示 Go HeapAlloc，均区别于浏览器进程 RSS。
 
-`npm run package -- /tmp` 同时输出浏览器运行时 `latti-client-wasm-0.1.1.zip`、独立任务包 `latti-client-tasks.zip` 和验证数据包 `latti-dataset-cifar10.zip`。任务包不含输入 CSV；数据包只包含 `dataset/images/001.png` 至 `010.png` 和 `dataset/label.csv`。任务脚本使用浏览器 API，随任务包原样部署。
+`npm run package -- /tmp` 同时输出浏览器运行时 `latti-client-wasm-0.1.2.zip`、独立任务包 `latti-client-tasks.zip` 和验证数据包 `latti-dataset-cifar10.zip`。任务包不含输入 CSV；数据包只包含 `dataset/images/001.png` 至 `010.png` 和 `dataset/label.csv`。任务脚本使用浏览器 API，随任务包原样部署。
 
 `npm run test:workflow` 在隔离 D-Bus/Xvfb 中通过真实 File System Access API 验证预处理、顺序落盘和分类评估；参考夹具由 `python3 tests/preprocessing-reference.py` 从真实训练 transform 生成。有既有 GPU 服务端、CIFAR-10 数据和固定参数密钥时，可运行完整多样本验收：
 
