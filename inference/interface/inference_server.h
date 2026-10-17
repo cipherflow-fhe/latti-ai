@@ -57,6 +57,12 @@ public:
     /// Load model weights and computation graph.
     void load_model();
 
+    /// Drop the device-side state (GPU memory) while keeping the imported
+    /// evaluation context in host memory. A later load_model() re-creates the
+    /// device state from the retained context, so a long-lived worker can
+    /// release the GPU between tasks without re-importing the context.
+    void release_device();
+
     /// Run encrypted inference on serialized ciphertext inputs.
     /// @param encrypted_inputs  Map of input name -> serialized ciphertext bytes.
     /// @param progress_cb  Optional callback for progress reporting (completed, total).
@@ -79,8 +85,10 @@ private:
     std::vector<std::string> output_keys_;
     std::map<std::string, OutputParam> output_params_;
     ls::CkksContext* context_ptr_ = nullptr;
-    std::unique_ptr<ls::CkksContext> eval_context_;
-    std::unique_ptr<ls::CkksBtpContext> eval_btp_context_;
+    // Shared with InferenceProcess::ckks_contexts so destroying the process
+    // (release_device) does not throw away the parsed host-side context.
+    std::shared_ptr<ls::CkksContext> eval_context_;
+    std::shared_ptr<ls::CkksBtpContext> eval_btp_context_;
 
     std::unique_ptr<InitInferenceProcess> init_;
     std::unique_ptr<InferenceProcess> fp_;

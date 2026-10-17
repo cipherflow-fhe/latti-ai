@@ -125,6 +125,7 @@ PYBIND11_MODULE(latti_inference, m) {
         .def("import_eval_context_file", &InferenceServer::import_eval_context_file, py::arg("filepath"),
              py::call_guard<py::gil_scoped_release>())
         .def("load_model", &InferenceServer::load_model, py::call_guard<py::gil_scoped_release>())
+        .def("release_device", &InferenceServer::release_device, py::call_guard<py::gil_scoped_release>())
         .def(
             "evaluate",
             [](InferenceServer& self, const py::dict& encrypted_inputs, py::object progress_callback) {
