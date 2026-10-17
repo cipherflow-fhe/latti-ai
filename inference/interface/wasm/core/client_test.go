@@ -118,6 +118,29 @@ func TestBTPSetupUsesPublicEvaluationFormat(t *testing.T) {
 	}
 }
 
+func TestScalarWireTreatsRedundantSkipAsMetadata(t *testing.T) {
+	feature := `{"dim":0,"channel":2,"pack_num":2,"skip":16384,"level":0,"ckks_parameter_id":"param0"}`
+	task := []byte(`{"use_btp":true,"pack_style":"multiplexed","task_input_param":{"input":` + feature + `},"task_output_param":{"output":` + feature + `}}`)
+	client, err := NewClient(task, []byte(fixedParameters))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.BeginSetup(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := client.Encrypt("input", []float64{1.25, -2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := client.Decrypt("output", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 2 || math.Abs(values[0]-1.25) > 0.001 || math.Abs(values[1]+2) > 0.001 {
+		t.Fatalf("scalar round trip with repeated skip: %v", values)
+	}
+}
+
 func mustParams(t *testing.T, params ckks.Parameters) []byte {
 	t.Helper()
 	raw, err := params.MarshalBinary()

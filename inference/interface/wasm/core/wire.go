@@ -71,7 +71,12 @@ func unmarshalFeature(raw []byte, params ckks.Parameters, matrix bool) (f featur
 	} else {
 		switch f.dim {
 		case 0:
-			f.skip = []int{read(), read()}
+			// Native scalar features repeat the same skip value in two wire
+			// positions. The second position is legacy metadata, not a
+			// second logical dimension.
+			first := read()
+			_ = read()
+			f.skip = []int{first, 1}
 		case 1:
 			f.shape = []int{read()}
 			f.skip[0] = read()
