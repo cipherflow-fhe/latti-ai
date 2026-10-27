@@ -182,4 +182,3 @@ Provisioner 只需继续校验 signature shape 与 `weight_pt` shape 一致；�
 
 验收时同时记录 weight pt/ct 数量、rotation/add 数量、实际 bundle 字节和端到端
 误差；`O*D*K` 只代表权重项下降，不直接代表 bundle 或延迟按同一比例下降。
-
