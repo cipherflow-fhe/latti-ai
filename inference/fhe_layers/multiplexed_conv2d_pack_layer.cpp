@@ -17,6 +17,7 @@
  */
 
 #include <math.h>
+#include <limits>
 #include "conv2d_layer.h"
 #include "layer_util.h"
 #include "../util.h"
@@ -24,6 +25,21 @@
 
 using namespace std;
 using namespace lattisense;
+
+namespace {
+
+uint32_t next_power_of_two(uint32_t value) {
+    uint32_t result = 1;
+    while (result < value) {
+        if (result > (std::numeric_limits<uint32_t>::max() >> 1)) {
+            throw std::invalid_argument("channel count is too large for periodic packing");
+        }
+        result <<= 1;
+    }
+    return result;
+}
+
+}  // namespace
 
 CkksCiphertext sum_slot(CkksContext& ctx, CkksCiphertext& x, uint32_t m, uint32_t p) {
     CkksCiphertext result = x.copy();
@@ -86,10 +102,62 @@ MultiplexedConv2DPackedLayer::MultiplexedConv2DPackedLayer(const CkksParameter& 
     n_packed_in_channel = div_ceil(n_in_channel_, n_channel_per_ct);
     n_packed_out_channel = div_ceil(n_out_channel_, output_channels_per_ct);
     n_block_per_ct = div_ceil(n_channel_per_ct, prod(skip_));
+
+    const uint32_t skip_product = prod(skip_);
+    if (skip_product > 0 && n_channel_per_ct % skip_product == 0 && n_in_channel_ <= n_channel_per_ct &&
+        n_packed_in_channel == 1 && external_upsample_factor[0] == 1 && external_upsample_factor[1] == 1) {
+        periodic_channel_count_ = max(skip_product, next_power_of_two(n_in_channel_));
+        if (periodic_channel_count_ <= n_channel_per_ct && periodic_channel_count_ % skip_product == 0) {
+            periodic_block_count_ = periodic_channel_count_ / skip_product;
+            use_periodic_pack_ = periodic_block_count_ < n_block_per_ct &&
+                                 n_block_per_ct % periodic_block_count_ == 0;
+        }
+    }
+
     need_repack_ = !(stride_ == Duo{1, 1} && skip_ == Duo{1, 1});
     level_ = level_in;
     weight_scale = param_.get_q(level_) * residual_scale;
     N = param_in.get_n();
+}
+
+uint32_t MultiplexedConv2DPackedLayer::input_block_count() const {
+    return use_periodic_pack_ ? periodic_block_count_ : n_block_per_ct;
+}
+
+uint32_t MultiplexedConv2DPackedLayer::weight_input_count() const {
+    return n_packed_in_channel * input_block_count();
+}
+
+vector<CkksCiphertext>
+MultiplexedConv2DPackedLayer::expand_periodic_inputs(CkksContext& ctx,
+                                                       const vector<CkksCiphertext>& x) const {
+    vector<CkksCiphertext> copied_inputs;
+    copied_inputs.reserve(x.size());
+    if (!use_periodic_pack_) {
+        for (const auto& input : x) {
+            copied_inputs.push_back(input.copy());
+        }
+        return copied_inputs;
+    }
+    if (x.size() != 1) {
+        throw runtime_error("periodic multiplexed conv requires exactly one input ciphertext");
+    }
+    const uint32_t replication_factor = n_block_per_ct / periodic_block_count_;
+    if (replication_factor <= 1 || (replication_factor & (replication_factor - 1)) != 0) {
+        throw runtime_error("periodic multiplexed conv requires a power-of-two block replication factor");
+    }
+
+    const uint32_t input_block_size = prod(input_shape_ * skip_);
+    CkksCiphertext expanded = x[0].copy();
+    for (uint32_t copied_blocks = 1; copied_blocks < replication_factor; copied_blocks <<= 1) {
+        const int64_t step = static_cast<int64_t>(copied_blocks) * periodic_block_count_ * input_block_size;
+        if (step > std::numeric_limits<int32_t>::max()) {
+            throw runtime_error("periodic multiplexed conv rotation step exceeds int32 range");
+        }
+        expanded = ctx.add(expanded, ctx.rotate(expanded, -static_cast<int32_t>(step)));
+    }
+    copied_inputs.push_back(move(expanded));
+    return copied_inputs;
 }
 
 void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation() {
@@ -100,15 +168,16 @@ void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation() {
     weight_pt.clear();
     bias_pt.clear();
     weight_pt.resize(n_weight_pt);
+    const uint32_t input_blocks = weight_input_count();
     for (int i = 0; i < n_weight_pt; i++) {
-        weight_pt[i].resize(n_packed_in_channel * n_block_per_ct);
+        weight_pt[i].resize(input_blocks);
     }
     bias_pt.resize(n_packed_out_channel);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
 
     parallel_for(n_weight_pt, th_nums, ctx, [&](CkksContext& ctx_copy, int weight_pt_num_idx) {
-        for (int j = 0; j < n_packed_in_channel * n_block_per_ct; ++j) {
+        for (uint32_t j = 0; j < input_blocks; ++j) {
             weight_pt[weight_pt_num_idx][j].resize(kernel_size);
             for (int k = 0; k < kernel_size; ++k) {
                 weight_pt[weight_pt_num_idx][j][k] = generate_weight_pt_for_indices(ctx_copy, weight_pt_num_idx, j, k);
@@ -163,8 +232,8 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_
     uint32_t sub_pos = ct_idx % cached_skip_out_prod;
     uint32_t output_ct_group = ct_idx / cached_skip_out_prod;
 
-    int packed_in_channel_idx = j / n_block_per_ct;
-    int block_idx = j % n_block_per_ct;
+    int packed_in_channel_idx = use_periodic_pack_ ? 0 : j / n_block_per_ct;
+    int block_idx = use_periodic_pack_ ? j : j % n_block_per_ct;
     int kernel_idx = k;
 
     const Duo padding_shape = kernel_shape_ / 2;
@@ -188,9 +257,10 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_
             continue;
         }
 
-        uint32_t channel_in = base_channel_in + (block_idx * total_skip + t * total_skip + (shape_j % skip_[1]) +
-                                                 (shape_i % skip_[0]) * skip_[1]) %
-                                                    n_channel_per_ct;
+        const uint32_t channel_offset = block_idx * total_skip + t * total_skip + (shape_j % skip_[1]) +
+                                        (shape_i % skip_[0]) * skip_[1];
+        uint32_t channel_in = use_periodic_pack_ ? (channel_offset % periodic_channel_count_)
+                                                 : base_channel_in + (channel_offset % n_channel_per_ct);
         uint32_t channel_out = output_ct_group * n_block_per_ct * cached_skip_out_prod +
                                ((t + n_block_per_ct) % n_block_per_ct) * cached_skip_out_prod + sub_pos;
 
@@ -234,9 +304,10 @@ MultiplexedConv2DPackedLayer::generate_mask_pt_for_indices_reduct_rot(CkksContex
 
 CkksPlaintextRingt
 MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const {
-    // Extract indices from j
-    int packed_in_channel_idx = j / n_block_per_ct;
-    int block_idx = j % n_block_per_ct;
+    // In periodic mode j is the shift inside the effective channel period;
+    // otherwise it retains the packed-ct/block interpretation.
+    int packed_in_channel_idx = use_periodic_pack_ ? 0 : j / n_block_per_ct;
+    int block_idx = use_periodic_pack_ ? j : j % n_block_per_ct;
     int kernel_idx = k;
 
     const Duo padding_shape = kernel_shape_ / 2;
@@ -259,9 +330,10 @@ MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, i
             continue;
         }
 
-        uint32_t channel_in = base_channel_in + (block_idx * cached_total_skip + t * cached_total_skip +
-                                                 (shape_j % skip_[1]) + (shape_i % skip_[0]) * skip_[1]) %
-                                                    n_channel_per_ct;
+        const uint32_t channel_offset = (block_idx * cached_total_skip + t * cached_total_skip +
+                                         (shape_j % skip_[1]) + (shape_i % skip_[0]) * skip_[1]);
+        uint32_t channel_in = use_periodic_pack_ ? (channel_offset % periodic_channel_count_)
+                                                 : base_channel_in + (channel_offset % n_channel_per_ct);
         uint32_t channel_out = ct_idx * n_block_per_ct + (t + n_block_per_ct) % n_block_per_ct;
 
         if (channel_in < n_in_channel_ && channel_out < n_out_channel_) {
@@ -315,11 +387,13 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core(CkksContext& ctx, 
     vector<CkksCiphertext> result_ct;
     result_ct.resize(n_out_channel_);
 
+    const vector<CkksCiphertext> expanded_x = expand_periodic_inputs(ctx, x);
     vector<CkksCiphertext> input_rotated_x;
-    uint32_t x_size = x.size();
+    uint32_t x_size = expanded_x.size();
     vector<vector<CkksCiphertext>> rotated_tmp(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
-        rotated_tmp[x_id] = populate_rotations_1_side(ctx_copy, x[x_id], n_block_per_ct - 1, input_ct_size);
+        rotated_tmp[x_id] = populate_rotations_1_side(ctx_copy, expanded_x[x_id], input_block_count() - 1,
+                                                       input_ct_size);
     });
     for (auto& y : rotated_tmp) {
         move(y.begin(), y.end(), back_inserter(input_rotated_x));
@@ -416,11 +490,13 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
     vector<CkksCiphertext> result_ct;
     result_ct.resize(n_out_channel_);
 
+    const vector<CkksCiphertext> expanded_x = expand_periodic_inputs(ctx, x);
     vector<CkksCiphertext> input_rotated_x;
-    uint32_t x_size = x.size();
+    uint32_t x_size = expanded_x.size();
     vector<vector<CkksCiphertext>> rotated_tmp(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
-        rotated_tmp[x_id] = populate_rotations_1_side(ctx_copy, x[x_id], n_block_per_ct - 1, input_ct_size);
+        rotated_tmp[x_id] = populate_rotations_1_side(ctx_copy, expanded_x[x_id], input_block_count() - 1,
+                                                       input_ct_size);
     });
     for (auto& y : rotated_tmp) {
         move(y.begin(), y.end(), back_inserter(input_rotated_x));
@@ -444,7 +520,7 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
     }
     parallel_for(n_weight, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         CkksCiphertext s(0);
-        uint32_t n_j = lazy_encoding ? n_packed_in_channel * n_block_per_ct : weight_pt[ct_idx].size();
+        uint32_t n_j = lazy_encoding ? weight_input_count() : weight_pt[ct_idx].size();
         for (int j = 0; j < n_j; j++) {
             uint32_t n_k = lazy_encoding ? cached_kernel_size : weight_pt[ct_idx][j].size();
             for (int k = 0; k < n_k; k++) {
@@ -549,11 +625,13 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core_for_reduct_rot(Ckk
     const uint32_t skip_out_prod = prod(zero_inserted_skip);
 
     // 1. Block direction rotations (same as post_skip)
+    const vector<CkksCiphertext> expanded_x = expand_periodic_inputs(ctx, x);
     vector<CkksCiphertext> input_rotated_x;
-    uint32_t x_size = x.size();
+    uint32_t x_size = expanded_x.size();
     vector<vector<CkksCiphertext>> rotated_tmp(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int x_id) {
-        rotated_tmp[x_id] = populate_rotations_1_side(ctx_copy, x[x_id], n_block_per_ct - 1, prod(input_shape_ct));
+        rotated_tmp[x_id] = populate_rotations_1_side(ctx_copy, expanded_x[x_id], input_block_count() - 1,
+                                                       prod(input_shape_ct));
     });
     for (auto& y : rotated_tmp) {
         move(y.begin(), y.end(), back_inserter(input_rotated_x));

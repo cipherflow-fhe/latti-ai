@@ -72,18 +72,30 @@ public:
 
     bool use_reduct_rot = false;
 
+    // Selected from the public layer shape. This changes only the local
+    // input-shift/weight decomposition; Feature2DEncrypted stays canonical.
+    bool use_periodic_pack() const { return use_periodic_pack_; }
+    uint32_t periodic_block_count() const { return periodic_block_count_; }
+
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
     std::vector<ls::CkksCiphertext> run_core_for_post_skip_rotation(ls::CkksContext& ctx,
                                                                     const std::vector<ls::CkksCiphertext>& x);
     std::vector<ls::CkksCiphertext> run_core_for_reduct_rot(ls::CkksContext& ctx,
                                                             const std::vector<ls::CkksCiphertext>& x);
+    std::vector<ls::CkksCiphertext> expand_periodic_inputs(
+        ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x) const;
+    uint32_t input_block_count() const;
+    uint32_t weight_input_count() const;
 
     int N;
     uint32_t n_channel_per_ct;
     uint32_t n_packed_in_channel;
     uint32_t n_packed_out_channel;
     uint32_t n_block_per_ct;
+    uint32_t periodic_channel_count_ = 0;
+    uint32_t periodic_block_count_ = 0;
+    bool use_periodic_pack_ = false;
     int bias_level_down = 0;
     bool need_repack_;
     double weight_scale;
