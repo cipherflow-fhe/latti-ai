@@ -39,6 +39,14 @@ int read_skip_value(const json& param, int default_value = 1) {
     return skip.get<int>();
 }
 
+uint32_t next_power_of_two(uint32_t value) {
+    uint32_t result = 1;
+    while (result < value) {
+        result <<= 1;
+    }
+    return result;
+}
+
 uint64_t shape_size(const json& sig) {
     const auto shape = sig.at("size").get<std::vector<uint64_t>>();
     return std::accumulate(shape.begin(), shape.end(), uint64_t{1}, std::multiplies<uint64_t>());
@@ -96,6 +104,8 @@ InferenceRunner::~InferenceRunner() = default;
 void InferenceRunner::read_configuration() {
     task_config_ = read_json((runner_dir_ / "task_config.json").string());
     task_signature_ = read_json((runner_dir_ / "task_signature.json").string());
+    const auto layers_path = runner_dir_ / "nn_layers_ct_0.json";
+    nn_layers_ = std::filesystem::exists(layers_path) ? read_json(layers_path.string()) : json::object();
     pack_style_ = task_config_.value("pack_style", std::string("ordinary"));
 
     if (task_config_.value("deployment_mode", std::string("")) != "server_provisioned_runner") {
@@ -160,6 +170,58 @@ void InferenceRunner::read_configuration() {
         }
         output_params_[name] = op;
     }
+}
+
+bool InferenceRunner::use_periodic_multiplexed_input(const std::string& name, const InputParam& param) const {
+    if (pack_style_ != "multiplexed" || nn_layers_.empty() || !nn_layers_.contains("layer") || param.dim != 2) {
+        return false;
+    }
+
+    const uint32_t skip_product = param.skip2d[0] * param.skip2d[1];
+    const uint32_t invalid_fill_product = param.invalid_fill[0] * param.invalid_fill[1];
+    if (skip_product == 0 || invalid_fill_product != 1 || param.height <= 0 || param.width <= 0) {
+        return false;
+    }
+    const uint32_t channel_capacity =
+        static_cast<uint32_t>(n_slots_) /
+        (static_cast<uint32_t>(param.height * param.width) * invalid_fill_product);
+    if (channel_capacity == 0 || channel_capacity % skip_product != 0 || param.channel <= 0 ||
+        div_ceil(static_cast<uint32_t>(param.channel), channel_capacity) != 1) {
+        return false;
+    }
+    const uint32_t block_count = channel_capacity / skip_product;
+    const uint32_t period_channels = std::max(skip_product, next_power_of_two(static_cast<uint32_t>(param.channel)));
+    if (period_channels > channel_capacity || period_channels % skip_product != 0) {
+        return false;
+    }
+    const uint32_t period_blocks = period_channels / skip_product;
+    if (period_blocks >= block_count || block_count % period_blocks != 0) {
+        return false;
+    }
+
+    bool found_consumer = false;
+    for (const auto& item : nn_layers_.at("layer").items()) {
+        const auto& layer = item.value();
+        if (!layer.contains("feature_input") || !layer.at("feature_input").is_array()) {
+            continue;
+        }
+        const auto inputs = layer.at("feature_input").get<std::vector<std::string>>();
+        if (std::find(inputs.begin(), inputs.end(), name) == inputs.end()) {
+            continue;
+        }
+        found_consumer = true;
+        if (layer.value("type", std::string("")) != "conv2d" ||
+            layer.value("style", std::string("ordinary")) != "multiplexed" || layer.value("groups", 1) != 1 ||
+            layer.value("is_big_size", false)) {
+            return false;
+        }
+        if (!layer.contains("upsample_factor_in") || layer.at("upsample_factor_in").size() != 2 ||
+            layer.at("upsample_factor_in")[0].get<uint32_t>() != 1 ||
+            layer.at("upsample_factor_in")[1].get<uint32_t>() != 1) {
+            return false;
+        }
+    }
+    return found_consumer;
 }
 
 void InferenceRunner::load() {
@@ -398,6 +460,7 @@ std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_2d_input(
 
     const Duo skip = param.skip2d;
     const Duo invalid_fill = param.invalid_fill;
+    const uint32_t skip_product = prod(skip);
     const uint32_t n_channel_per_block = prod(skip) / prod(invalid_fill);
     const uint32_t n_channel_per_block_col = skip[1] / invalid_fill[1];
     const uint32_t n_channel_per_ct =
@@ -412,16 +475,23 @@ std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_2d_input(
         throw std::runtime_error("[Runner] encoded multiplexed 2D input count mismatch for " + name + ": expected " +
                                  std::to_string(expected_count) + ", got " + std::to_string(actual_count));
     }
+    const bool periodic_input = use_periodic_multiplexed_input(name, param);
+    const uint32_t period_channels = periodic_input
+                                         ? std::max(skip_product, next_power_of_two(static_cast<uint32_t>(param.channel)))
+                                         : 0;
+    const uint32_t period_blocks = periodic_input ? period_channels / skip_product : 0;
     encoded.reserve(actual_count);
     for (uint32_t ct_idx = 0; ct_idx < actual_count; ++ct_idx) {
         std::vector<double> slots(static_cast<size_t>(n_slots_), 0.0);
         for (uint32_t block_idx = 0; block_idx < n_block_per_ct; ++block_idx) {
+            const uint32_t source_block_idx = periodic_input ? block_idx % period_blocks : block_idx;
             for (uint32_t x0 = 0; x0 < static_cast<uint32_t>(param.height); ++x0) {
                 for (uint32_t x1 = 0; x1 < static_cast<uint32_t>(param.width); ++x1) {
                     for (uint32_t channel_idx_in_block = 0; channel_idx_in_block < n_channel_per_block;
                          ++channel_idx_in_block) {
                         const uint32_t channel_idx =
-                            ct_idx * n_channel_per_ct + block_idx * n_channel_per_block + channel_idx_in_block;
+                            ct_idx * n_channel_per_ct + source_block_idx * n_channel_per_block +
+                            channel_idx_in_block;
                         if (channel_idx >= static_cast<uint32_t>(param.channel)) {
                             continue;
                         }

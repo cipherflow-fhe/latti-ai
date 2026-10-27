@@ -53,6 +53,7 @@ private:
 
     json task_config_;
     json task_signature_;
+    json nn_layers_;
     std::map<std::string, InputParam> input_params_;
     std::map<std::string, OutputParam> output_params_;
     int n_slots_ = 0;
@@ -61,6 +62,7 @@ private:
     std::unique_ptr<EncryptedParameterStore> parameter_store_;
 
     void read_configuration();
+    bool use_periodic_multiplexed_input(const std::string& name, const InputParam& param) const;
     std::vector<fhe::CkksPlaintextRingt>
     encode_plaintext_0d_input(const std::string& name, const std::string& csv_path, const json& sig) const;
     std::vector<fhe::CkksPlaintextRingt>
