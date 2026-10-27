@@ -79,11 +79,11 @@ class BlockColMajorTranspose:
         """Create pre-declared plaintext nodes for transpose diagonals.
 
         Returns:
-            transpose_diag_pt: list of (2d-1) CkksPlaintextRingtNode,
+            transpose_diag_pt: list of (2d-1) CkksPlaintextNode,
                                indexed by k_idx = 0..2d-2 (maps to k = k_idx-(d-1)).
         """
         d = self.d
-        transpose_diag_pt = [CkksPlaintextRingtNode(f'transpose_diag_{layer_id}_{k_idx}') for k_idx in range(2 * d - 1)]
+        transpose_diag_pt = [CkksPlaintextNode(f'transpose_diag_{layer_id}_{k_idx}', is_ringt=True) for k_idx in range(2 * d - 1)]
         return transpose_diag_pt
 
     # ------------------------------------------------------------------ #
@@ -97,7 +97,7 @@ class BlockColMajorTranspose:
 
         Args:
             ct:                 input CkksCiphertextNode at level L.
-            transpose_diag_pt:  list of (2d-1) CkksPlaintextRingtNode.
+            transpose_diag_pt:  list of (2d-1) CkksPlaintextNode.
         """
         d, chunk_size = self.d, self.chunk_size
         x_ct_list = []
@@ -172,7 +172,7 @@ class BlockColMajorTranspose:
         d = self.d
         transpose_diag_pt = []
         for k_idx in range(2 * d - 1):
-            node = CkksPlaintextRingtNode(f'encode_pt_transpose_diag_{k_idx}')
+            node = CkksPlaintextNode(f'encode_pt_transpose_diag_{k_idx}', is_ringt=True)
             custom_compute(
                 inputs=[data_source],
                 output=node,

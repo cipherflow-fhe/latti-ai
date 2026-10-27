@@ -148,8 +148,8 @@ class InverseMultiplexedConv2DLayer:
         # Packing / repack phase
         output_area = self.input_shape[0] / stride0 * self.input_shape[1] / stride1
         n_channel_per_ct_out = 1
-        if 2 * output_area < N:
-            n_channel_per_ct_out = int(N / (2 * output_area))
+        if output_area < N:
+            n_channel_per_ct_out = int(N / (output_area))
 
         if self.need_repack:
             output_shape0 = self.input_shape[0] // self.orig_stride[0]
@@ -157,7 +157,7 @@ class InverseMultiplexedConv2DLayer:
             out_skip0 = self.block_shape[0] // output_shape0
             out_skip1 = self.block_shape[1] // output_shape1
             n_channel_per_block = out_skip0 * out_skip1
-            n_block_per_ct_repack = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_block_per_ct_repack = N // (self.block_shape[0] * self.block_shape[1])
             n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct_repack
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 
@@ -279,8 +279,8 @@ class InverseMultiplexedConv2DLayer:
                                     rotated_x[n_in_channel].append(res_temp)
 
         n_channel_per_ct_out = 1
-        if 2 * self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1] < N:
-            n_channel_per_ct_out = N / (2 * self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1])
+        if self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1] < N:
+            n_channel_per_ct_out = N / (self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1])
         else:
             n_channel_per_ct_out = 1
 
@@ -293,13 +293,13 @@ class InverseMultiplexedConv2DLayer:
                     out_ct_idx = ct_idx * output_step0 * output_step1 + r_i2 * output_step1 + r_j2
                     base_idx = (r_i2 * output_step1 + r_j2) * self.kernel_shape[0] * self.kernel_shape[1]
                     # Use the level of the first rotated_x as reference, ensuring all w_pt have consistent level
-                    reference_level = rotated_x[0][base_idx].level
+                    reference_level = rotated_x[0][base_idx].metadata.level
                     partial_sum: DataNode | None = None
                     x_ct_list = []
                     w_pt_list = []
                     for j in range(0, self.n_in_channel):
                         for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
-                            w_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}_{j}_{k + base_idx}')
+                            w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{j}_{k + base_idx}', is_ringt=True)
                             custom_compute(
                                 inputs=[conv_data_source],  # All nodes reference the same data source
                                 output=w_pt,
@@ -316,7 +316,7 @@ class InverseMultiplexedConv2DLayer:
                             w_pt_list.append(w_pt)
                     partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
                     s = rescale(partial_sum)
-                    b_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}')
+                    b_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}', is_ringt=True)
                     custom_compute(
                         inputs=[conv_data_source],  # Reference same data source
                         output=b_pt,
@@ -346,12 +346,12 @@ class InverseMultiplexedConv2DLayer:
             out_skip0 = self.block_shape[0] // output_shape0
             out_skip1 = self.block_shape[1] // output_shape1
             n_channel_per_block = out_skip0 * out_skip1
-            n_block_per_ct = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_block_per_ct = N // (self.block_shape[0] * self.block_shape[1])
             n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 
             # Shared mask: select row%out_skip==0 && col%out_skip==0
-            repack_mask = CkksPlaintextRingtNode('repack_mask')
+            repack_mask = CkksPlaintextNode('repack_mask', is_ringt=True)
             custom_compute(
                 inputs=[conv_data_source],
                 output=repack_mask,
@@ -422,18 +422,18 @@ class InverseMultiplexedConv2DLayer:
         weight_pt[k][n][i]: k in n_out_channel, n in n_in_channel,
                             i in kernel_size * output_step[0] * output_step[1]
         bias_pt[i]: i in n_out_channel
-        repack_mask_pt: a single CkksPlaintextRingtNode if need_repack, else None
+        repack_mask_pt: a single CkksPlaintextNode if need_repack, else None
         """
         inner = self.kernel_shape[0] * self.kernel_shape[1] * self.output_step[0] * self.output_step[1]
         weight_pt = [
             [
-                [CkksPlaintextRingtNode(f'convw_{layer_id}_{k}_{n}_{i}') for i in range(inner)]
+                [CkksPlaintextNode(f'convw_{layer_id}_{k}_{n}_{i}', is_ringt=True) for i in range(inner)]
                 for n in range(self.n_in_channel)
             ]
             for k in range(self.n_out_channel)
         ]
-        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_out_channel)]
-        repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}') if self.need_repack else None
+        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}', is_ringt=True) for i in range(self.n_out_channel)]
+        repack_mask_pt = CkksPlaintextNode(f'repack_mask_{layer_id}', is_ringt=True) if self.need_repack else None
         return weight_pt, bias_pt, repack_mask_pt
 
     def call(
@@ -488,8 +488,8 @@ class InverseMultiplexedConv2DLayer:
                                     rotated_x[n_in_channel].append(res_temp)
 
         n_channel_per_ct_out = 1
-        if 2 * self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1] < N:
-            n_channel_per_ct_out = N / (2 * self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1])
+        if self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1] < N:
+            n_channel_per_ct_out = N / (self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1])
         else:
             n_channel_per_ct_out = 1
 
@@ -533,7 +533,7 @@ class InverseMultiplexedConv2DLayer:
             out_skip0 = self.block_shape[0] // output_shape0
             out_skip1 = self.block_shape[1] // output_shape1
             n_channel_per_block = out_skip0 * out_skip1
-            n_block_per_ct = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_block_per_ct = N // (self.block_shape[0] * self.block_shape[1])
             n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 

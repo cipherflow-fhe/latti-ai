@@ -74,6 +74,8 @@ class FheParameter:
             'param_name': self.name,
             'q': self.q,
             'p': self.p,
+            'ring_type': 1,
+            'n_slots': self.n_slots,
         }
 
     def __repr__(self) -> str:
@@ -85,176 +87,52 @@ class FheParameter:
 
 
 # Candidate FHE parameter sets sourced from:
-#   inference/lattisense/fhe_ops_lib/lattigo/ckks/params.go              (no-BTP)
-#   inference/lattisense/fhe_ops_lib/lattigo/ckks/bootstrapping/default_params.go  (BTP)
+#   inference/lattisense/frontend/parameter.json
 #
-# No-BTP sets (PN13QP218 … PN16QP1761): standard 128-bit-secure CKKS parameters.
-#   poly_modulus_degree = 2^LogN
-#   max_level           = len(Q) - 1  (number of multiplicative levels)
-#   log_default_scale = log2(DefaultScale), the bit-length of the per-level scale modulus
+# The default parameter sets are conjugate-invariant CKKS parameters. In this
+# ring the number of slots equals the polynomial degree N (the standard ring
+# only provides N/2 slots), so n_slots = 2^log_n.
 #
-# BTP set (N16QP1546H192H32): bootstrapping parameters with H=192 sparse secret.
-#   The Q chain has 25 primes; the first 10 are the residual (usable) levels;
-#   the remaining 15 are consumed by the bootstrapping circuit itself.
-#   max_level = 9  (residual levels after bootstrapping overhead)
-
-# PN13QP218: LogN=13, logQP=218, 128-bit classic security
-# Q: 1×33-bit + 5×30-bit, P: 1×35-bit, LogSlots=12
-PN13QP218 = FheParameter(
-    name='PN13QP218',
-    poly_modulus_degree=8192,
-    max_level=5,
-    log_default_scale=30,
-    q=[0x1FFFEC001, 0x3FFF4001, 0x3FFE8001, 0x40020001, 0x40038001, 0x3FFC0001],
-    p=[0x800004001],
-    n_slots=1 << 12,
+# The bootstrap circuit is derived internally by the frontend (degree 16), which
+# requires a residual log_n of 15. Consequently PN15Default is the only residual
+# parameter set usable in BTP mode, and log_n=16 is reserved for the bootstrap
+# circuit itself.
+_PARAMETER_JSON_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    '..',
+    '..',
+    'inference',
+    'lattisense',
+    'frontend',
+    'parameter.json',
 )
 
-# PN14QP438: LogN=14, logQP=438, 128-bit classic security
-# Q: 1×45-bit + 9×34-bit, P: 2×43-bit, LogSlots=13
-PN14QP438 = FheParameter(
-    name='PN14QP438',
-    poly_modulus_degree=16384,
-    max_level=9,
-    log_default_scale=34,
-    q=[
-        0x200000008001,
-        0x400018001,
-        0x3FFFD0001,
-        0x400060001,
-        0x400068001,
-        0x3FFF90001,
-        0x400080001,
-        0x4000A8001,
-        0x400108001,
-        0x3FFEB8001,
-    ],
-    p=[0x7FFFFFD8001, 0x7FFFFFC8001],
-    n_slots=1 << 13,
-)
 
-# PN15QP880: LogN=15, logQP=880, 128-bit classic security
-# Q: 1×50-bit + 17×40-bit, P: 3×50-bit, LogSlots=14
-PN15QP880 = FheParameter(
-    name='PN15QP880',
-    poly_modulus_degree=32768,
-    max_level=17,
-    log_default_scale=40,
-    q=[
-        0x4000000120001,
-        0x10000140001,
-        0xFFFFE80001,
-        0x10000290001,
-        0xFFFFC40001,
-        0x100003E0001,
-        0x10000470001,
-        0x100004B0001,
-        0xFFFFB20001,
-        0x10000500001,
-        0x10000650001,
-        0xFFFF940001,
-        0xFFFF8A0001,
-        0xFFFF820001,
-        0xFFFF780001,
-        0x10000890001,
-        0xFFFF750001,
-        0x10000960001,
-    ],
-    p=[0x40000001B0001, 0x3FFFFFFDF0001, 0x4000000270001],
-    n_slots=1 << 14,
-)
+def _create_default_ckks_param(name: str, log_n: int) -> 'FheParameter':
+    with open(_PARAMETER_JSON_PATH, 'r', encoding='utf8') as f:
+        ckks_params = json.load(f)['CKKS'][str(log_n)]
+    return FheParameter(
+        name=name,
+        poly_modulus_degree=1 << log_n,
+        q=ckks_params['q'],
+        p=ckks_params['p'],
+        n_slots=1 << log_n,
+        max_level=ckks_params['max_level'],
+        log_default_scale=ckks_params['log_default_scale'],
+    )
 
-# PN16QP1761: LogN=16, logQP=1761, 128-bit classic security
-# Q: 1×55-bit + 33×45-bit, P: 4×55-bit, LogSlots=15
-PN16QP1761 = FheParameter(
-    name='PN16QP1761',
-    poly_modulus_degree=65536,
-    max_level=33,
-    log_default_scale=45,
-    q=[
-        0x80000000080001,
-        0x2000000A0001,
-        0x2000000E0001,
-        0x1FFFFFC20001,
-        0x200000440001,
-        0x200000500001,
-        0x200000620001,
-        0x1FFFFF980001,
-        0x2000006A0001,
-        0x1FFFFF7E0001,
-        0x200000860001,
-        0x200000A60001,
-        0x200000AA0001,
-        0x200000B20001,
-        0x200000C80001,
-        0x1FFFFF360001,
-        0x200000E20001,
-        0x1FFFFF060001,
-        0x200000FE0001,
-        0x1FFFFEDE0001,
-        0x1FFFFECA0001,
-        0x1FFFFEB40001,
-        0x200001520001,
-        0x1FFFFE760001,
-        0x2000019A0001,
-        0x1FFFFE640001,
-        0x200001A00001,
-        0x1FFFFE520001,
-        0x200001E80001,
-        0x1FFFFE0C0001,
-        0x1FFFFDEE0001,
-        0x200002480001,
-        0x1FFFFDB60001,
-        0x200002560001,
-    ],
-    p=[0x80000000440001, 0x7FFFFFFFBA0001, 0x80000000500001, 0x7FFFFFFFAA0001],
-    n_slots=1 << 15,
-)
 
-# N16QP1546H192H32: LogN=16, logQP≈1546, sparse secret H=192, ephemeral H=32
-# Q: 1×60-bit Q0 + 9×40-bit residual + 15 bootstrapping primes, P: 5×61-bit
-# Residual Q : 420 bits. Precision : 26.6 bits for 2^15 slots.
-N16QP1546H192H32 = FheParameter(
-    name='N16QP1546H192H32',
-    poly_modulus_degree=65536,
-    max_level=9,
-    log_default_scale=40,
-    q=[
-        0x10000000006E0001,  # 60  Q0
-        0x10000140001,  # 40  residual
-        0xFFFFE80001,  # 40  residual
-        0xFFFFC40001,  # 40  residual
-        0x100003E0001,  # 40  residual
-        0xFFFFB20001,  # 40  residual
-        0x10000500001,  # 40  residual
-        0xFFFF940001,  # 40  residual
-        0xFFFF8A0001,  # 40  residual
-        0xFFFF820001,  # 40  residual
-        0x7FFFE60001,  # 39  StC
-        0x7FFFE40001,  # 39  StC
-        0x7FFFE00001,  # 39  StC
-        0xFFFFFFFFF840001,  # 60  Sine (double angle)
-        0x1000000000860001,  # 60  Sine (double angle)
-        0xFFFFFFFFF6A0001,  # 60  Sine
-        0x1000000000980001,  # 60  Sine
-        0xFFFFFFFFF5A0001,  # 60  Sine
-        0x1000000000B00001,  # 60  Sine
-        0x1000000000CE0001,  # 60  Sine
-        0xFFFFFFFFF2A0001,  # 60  Sine
-        0x100000000060001,  # 56  CtS
-        0xFFFFFFFFF00001,  # 56  CtS
-        0xFFFFFFFFD80001,  # 56  CtS
-        0x1000000002A0001,  # 56  CtS
-    ],
-    p=[
-        0x1FFFFFFFFFE00001,
-        0x1FFFFFFFFFC80001,
-        0x1FFFFFFFFFB40001,
-        0x1FFFFFFFFF500001,
-        0x1FFFFFFFFF420001,
-    ],
-    n_slots=1 << 15,
-)
+# PN12Default: LogN=12, 4096 slots
+PN12Default = _create_default_ckks_param('PN12Default', 12)
+
+# PN13Default: LogN=13, 8192 slots
+PN13Default = _create_default_ckks_param('PN13Default', 13)
+
+# PN14Default: LogN=14, 16384 slots
+PN14Default = _create_default_ckks_param('PN14Default', 14)
+
+# PN15Default: LogN=15, 32768 slots, the only CI residual set usable with bootstrap
+PN15Default = _create_default_ckks_param('PN15Default', 15)
 
 
 class GlobalConfig:
@@ -375,7 +253,7 @@ class FeatureNode:
 
         if self.dim == 0:
             info['skip'] = math.prod(self.sp_info['skip']) * math.prod(self.sp_info['invalid_fill'])
-            info['pack_num'] = math.ceil(config.fhe_param.poly_modulus_degree / 2 / info['skip'])
+            info['pack_num'] = math.ceil(config.fhe_param.poly_modulus_degree / info['skip'])
 
         info['ckks_parameter_id'] = self.ckks_parameter_id
         info['level'] = int(self.level)

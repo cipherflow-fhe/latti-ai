@@ -32,18 +32,18 @@ PolyRelu1D::PolyRelu1D(const CkksParameter& param_in,
                        int shape_in)
     : PolyReluBase(param_in,
                    move(weight_in),
-                   param_in.get_n() / 2 / (shape_in * skip_in),  // n_channel_per_ct for mode 1
+                   param_in.max_slots() / (shape_in * skip_in),  // n_channel_per_ct for mode 1
                    level_in,
                    order_in),
       skip(skip_in), shape(shape_in), shape_with_skip(shape_in * skip_in),
-      n_channel_per_ct_mux(param_in.get_n() / 2 / (shape_in * skip_in) * skip_in) {}
+      n_channel_per_ct_mux(param_in.max_slots() / (shape_in * skip_in) * skip_in) {}
 
 // ---- Mode 1: skip pack ----
 //   channel ch (CT-local), position i → slot = ch * shape_with_skip + i * skip
 //   Weight value is broadcast to all `shape` positions of channel ch.
 
-CkksPlaintextRingt PolyRelu1D::generate_weight_pt_skip1d(CkksContext& ctx, int idx, int ct_idx) const {
-    vector<double> buf(N / 2, 0.0);
+CkksPlaintext PolyRelu1D::generate_weight_pt_skip1d(CkksContext& ctx, int idx, int ct_idx) const {
+    vector<double> buf(N, 0.0);
     for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
         int channel_idx = ct_idx * n_channel_per_ct + ch;
         if (channel_idx >= cached_channel)
@@ -55,16 +55,16 @@ CkksPlaintextRingt PolyRelu1D::generate_weight_pt_skip1d(CkksContext& ctx, int i
         }
     }
     double pack_scale = cached_bsgs_coeff_scale.at(idx);
-    return ctx.encode_ringt(buf, pack_scale);
+    return fhe_api::encode_ringt(ctx, buf, pack_scale);
 }
 
 // ---- Mode 2: multiplexed/interleaved pack ----
-//   n_channel_per_ct_mux = (N/2 / shape_with_skip) * skip
+//   n_channel_per_ct_mux = (N / shape_with_skip) * skip
 //   channel j (CT-local), position i → slot = (j/skip)*shape_with_skip + i*skip + (j%skip)
 //   Weight value is broadcast to all `shape` positions of channel j.
 
-CkksPlaintextRingt PolyRelu1D::generate_weight_pt_mux1d(CkksContext& ctx, int idx, int ct_idx) const {
-    vector<double> buf(N / 2, 0.0);
+CkksPlaintext PolyRelu1D::generate_weight_pt_mux1d(CkksContext& ctx, int idx, int ct_idx) const {
+    vector<double> buf(N, 0.0);
     for (int j = 0; j < n_channel_per_ct_mux; j++) {
         int channel_idx = ct_idx * n_channel_per_ct_mux + j;
         if (channel_idx >= cached_channel)
@@ -77,10 +77,10 @@ CkksPlaintextRingt PolyRelu1D::generate_weight_pt_mux1d(CkksContext& ctx, int id
         }
     }
     double pack_scale = cached_bsgs_coeff_scale.at(idx);
-    return ctx.encode_ringt(buf, pack_scale);
+    return fhe_api::encode_ringt(ctx, buf, pack_scale);
 }
 
-CkksPlaintextRingt PolyRelu1D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int ct_idx) const {
+CkksPlaintext PolyRelu1D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int ct_idx) const {
     if (is_multiplexed)
         return generate_weight_pt_mux1d(ctx, idx, ct_idx);
     return generate_weight_pt_skip1d(ctx, idx, ct_idx);
@@ -141,7 +141,7 @@ Feature1DEncrypted PolyRelu1D::run(CkksContext& ctx, const Feature1DEncrypted& x
     result.shape = x.shape;
     result.skip = x.skip;
     result.data = run_core_bsgs(ctx, x.data);
-    result.level = result.data[0].get_level();
+    result.level = result.data[0].level();
     return result;
 }
 

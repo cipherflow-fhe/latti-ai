@@ -43,7 +43,7 @@ public:
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A);
     Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
 
-    ls::CkksPlaintextRingt generate_pt(ls::CkksContext& ctx, uint32_t bi, uint32_t bj, uint32_t g) const;
+    ls::CkksPlaintext generate_pt(ls::CkksContext& ctx, uint32_t bi, uint32_t bj, uint32_t g) const;
 
 private:
     std::vector<double> build_pt_vec(uint32_t bi, uint32_t bj, uint32_t g) const;
@@ -55,5 +55,5 @@ private:
     Array<double, 2> B_vals_;
 
     // pt_[(bi + num_block_rows_ * bj) * G + g]
-    std::vector<ls::CkksPlaintextRingt> pt_;
+    std::vector<ls::CkksPlaintext> pt_;
 };

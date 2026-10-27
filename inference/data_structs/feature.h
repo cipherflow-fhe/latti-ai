@@ -24,6 +24,7 @@
 #include <array>
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include "../util.h"
+#include "../fhe_api.h"
 
 namespace ls = lattisense;
 
@@ -63,11 +64,6 @@ double uint64_to_double(uint64_t input, double scale, uint64_t ring_mod);
 uint64_t double_to_uint64(double input, double scale, uint64_t ring_mod);
 
 void parallel_for(int n, int n_thread, ls::CkksContext& context, const std::function<void(ls::CkksContext&, int)>& fn);
-
-void parallel_for(int n,
-                  int n_thread,
-                  ls::CkksBtpContext& context,
-                  const std::function<void(ls::CkksBtpContext&, int)>& fn);
 
 void parallel_for_with_extra_level_context(int n,
                                            int n_thread,

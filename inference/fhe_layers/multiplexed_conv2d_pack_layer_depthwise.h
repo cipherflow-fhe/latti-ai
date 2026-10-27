@@ -39,16 +39,16 @@ public:
     virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     virtual std::vector<double> select_tensor(int num) const;
 
-    std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt;
-    std::vector<ls::CkksPlaintextRingt> bias_pt;
-    std::vector<ls::CkksPlaintextRingt> mask_pt;
+    std::vector<std::vector<ls::CkksPlaintext>> weight_pt;
+    std::vector<ls::CkksPlaintext> bias_pt;
+    std::vector<ls::CkksPlaintext> mask_pt;
     bool normal_conv = true;
 
     // Helper functions to generate weights/bias/mask on-demand
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_weight_pt_for_indices(ls::CkksContext& ctx, int n_packed_out_channel_idx, int kernel_idx) const;
-    ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
-    ls::CkksPlaintextRingt generate_mask_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int i) const;
+    ls::CkksPlaintext generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
+    ls::CkksPlaintext generate_mask_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int i) const;
 
     // Getter for n_channel_per_ct (needed for CustomData executors)
     uint32_t get_n_channel_per_ct() const {

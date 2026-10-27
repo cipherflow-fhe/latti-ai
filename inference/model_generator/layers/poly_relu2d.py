@@ -29,6 +29,82 @@ import numpy as np
 op_class = 'PolyRelu2D'
 
 
+def _bsgs_coeff_scales(param, order: int, level: int) -> dict[int, float]:
+    """Mirror C++ PolyReluBase::compute_coefficient_scales_bsgs.
+
+    Returns the encoding scale used by the C++ encoder for each coefficient index,
+    so the lazy encode_pt node metadata matches what the backend actually produces.
+    """
+    S = float(param.default_scale)
+    q = [float(v) for v in param.q]
+    modulus = q[: level + 1]
+
+    # powers[n] = (depth, level, scale)
+    powers: dict[int, tuple[int, int, float]] = {1: (0, level, S)}
+    for n in range(2, order + 1):
+        best_depth = None
+        best_a, best_b = 1, n - 1
+        for a in range(1, n // 2 + 1):
+            b = n - a
+            da, _, sa = powers[a]
+            db, _, sb = powers[b]
+            depth = max(da, db) + 1
+            if best_depth is None or depth < best_depth or (
+                depth == best_depth and abs(a - b) < abs(best_a - best_b)
+            ):
+                best_depth = depth
+                best_a, best_b = a, b
+        _, la, sa = powers[best_a]
+        _, lb, sb = powers[best_b]
+        result_level = min(la, lb) - 1
+        result_scale = sa * sb
+        if result_level >= 0 and result_level + 1 < len(modulus):
+            result_scale /= modulus[result_level + 1]
+        powers[n] = (best_depth, result_level, result_scale)
+
+    baby_steps = int(np.ceil(np.sqrt(order + 1)))
+    giant_steps = int(np.ceil((order + 1) / baby_steps))
+
+    required = set(range(1, baby_steps + 1))
+    for g in range(1, giant_steps):
+        giant_power = g * baby_steps
+        if giant_power <= order:
+            required.add(giant_power)
+
+    max_depth = 0
+    max_power_level = level
+    for p in sorted(required):
+        depth, p_level, _ = powers[p]
+        if depth > max_depth:
+            max_depth = depth
+            max_power_level = p_level
+    bsgs_output_level = max_power_level - 1
+
+    coeff_scale: dict[int, float] = {}
+    for g in range(giant_steps):
+        if g == 0:
+            baby_level = bsgs_output_level
+            baby_scale = S
+        else:
+            giant_power = g * baby_steps
+            if giant_power > order:
+                break
+            _, _, gp_scale = powers[giant_power]
+            baby_level = bsgs_output_level + 1
+            baby_scale = S * q[baby_level] / gp_scale
+
+        start_idx = g * baby_steps
+        end_idx = min(start_idx + baby_steps - 1, order)
+        for idx in range(start_idx, end_idx + 1):
+            baby_step = idx - start_idx
+            if baby_step == 0:
+                coeff_scale[idx] = baby_scale
+            else:
+                _, _, x_scale = powers[baby_step]
+                coeff_scale[idx] = baby_scale * q[baby_level + 1] / x_scale
+    return coeff_scale
+
+
 class PolyRelu2D(PolyReluBase):
     def __init__(
         self, input_shape, order, skip, n_channel_per_ct, upsample_factor: list = [1, 1], block_expansion: list = [1, 1]
@@ -136,10 +212,10 @@ class PolyRelu2D(PolyReluBase):
                 res = rescale(mult(x[i], weight_pt[self.order][i]))
                 for order_idx in range(self.order - 1, 0, -1):
                     res = add(res, weight_pt[order_idx][i])
-                    if res.level > x[i].level:
-                        res = drop_level(res, res.level - x[i].level)
-                    if res.level < x[i].level:
-                        x[i] = drop_level(x[i], x[i].level - res.level)
+                    if res.metadata.level > x[i].metadata.level:
+                        res = drop_level(res, res.metadata.level - x[i].metadata.level)
+                    if res.metadata.level < x[i].metadata.level:
+                        x[i] = drop_level(x[i], x[i].metadata.level - res.metadata.level)
                     res = rescale(relin(mult(res, x[i])))
                 res = add(res, weight_pt[0][i])
                 result.append(res)
@@ -162,8 +238,8 @@ class PolyRelu2D(PolyReluBase):
                             x_powers[i] = rescale(relin(mult(x_powers[half], x_powers[half])))
                         else:
                             y = x_powers[1]
-                            if x_powers[1].level > x_powers[i - 1].level:
-                                y = drop_level(x_powers[1], x_powers[1].level - x_powers[i - 1].level)
+                            if x_powers[1].metadata.level > x_powers[i - 1].metadata.level:
+                                y = drop_level(x_powers[1], x_powers[1].metadata.level - x_powers[i - 1].metadata.level)
                             x_powers[i] = rescale(relin(mult(x_powers[i - 1], y)))
                     x_giant = x_powers[baby_steps]
                     current_giant_power = x_giant
@@ -178,8 +254,8 @@ class PolyRelu2D(PolyReluBase):
                             else:
                                 x_copy = x_powers[baby_step]
 
-                                if x_copy.level > x_powers[1].level - 2 + giant_step:
-                                    x_copy = drop_level(x_copy, (x_copy.level - (x_powers[1].level - 2 + giant_step)))
+                                if x_copy.metadata.level > x_powers[1].metadata.level - 2 + giant_step:
+                                    x_copy = drop_level(x_copy, (x_copy.metadata.level - (x_powers[1].metadata.level - 2 + giant_step)))
 
                                 term = rescale(mult(x_copy, weight_pt[coeff_idx][x_idx]))
                             if baby_step == 0:
@@ -204,21 +280,33 @@ class PolyRelu2D(PolyReluBase):
         x = list(x)  # shallow copy to avoid mutating caller's list
         result = list()
 
+        param = get_fhe_param()
+        lid = layer_id or getattr(poly_data_source, 'id', '')
+        _scale_cache: dict[int, dict[int, float]] = {}
+
+        def coeff_scales(level: int) -> dict[int, float]:
+            if level not in _scale_cache:
+                _scale_cache[level] = _bsgs_coeff_scales(param, self.order, level)
+            return _scale_cache[level]
+
         min_required_level = 3 if self.order == 4 else max(self.order - 1, 1)
         for i, ct in enumerate(x):
-            if ct.level < min_required_level:
+            if ct.metadata.level < min_required_level:
                 raise ValueError(
                     f'PolyReluLayer (order={self.order}): Input ciphertext {i} has insufficient level: '
-                    f'{ct.level} < {min_required_level}. '
+                    f'{ct.metadata.level} < {min_required_level}. '
                     f'Algorithm will consume {min_required_level} levels, causing negative level. '
                     f'Please use bootstrap before this layer or adjust the network depth.'
                 )
 
         if self.order != 4:
             for i in range(len(x)):
+                scales = coeff_scales(x[i].metadata.level)
                 res = x[i]
                 for order_idx in range(self.order - 1, 0, -1):
-                    w_pt = CkksPlaintextRingtNode(f'encode_pt_{order_idx}_{i}')
+                    w_pt = CkksPlaintextNode(
+                        f'encode_pt_{lid}_{order_idx}_{i}', is_ringt=True, scale=scales[order_idx]
+                    )
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt,
@@ -231,12 +319,12 @@ class PolyRelu2D(PolyReluBase):
                         },
                     )
                     res = add(res, w_pt)
-                    if res.level > x[i].level:
-                        res = drop_level(res, res.level - x[i].level)
-                    if res.level < x[i].level:
-                        x[i] = drop_level(x[i], x[i].level - res.level)
+                    if res.metadata.level > x[i].metadata.level:
+                        res = drop_level(res, res.metadata.level - x[i].metadata.level)
+                    if res.metadata.level < x[i].metadata.level:
+                        x[i] = drop_level(x[i], x[i].metadata.level - res.metadata.level)
                     res = rescale(relin(mult(res, x[i])))
-                w_pt = CkksPlaintextRingtNode(f'encode_pt_{0}_{i}')
+                w_pt = CkksPlaintextNode(f'encode_pt_{lid}_{0}_{i}', is_ringt=True, scale=scales[0])
                 custom_compute(
                     inputs=[poly_data_source],
                     output=w_pt,
@@ -254,7 +342,7 @@ class PolyRelu2D(PolyReluBase):
             result = [0 for i in range(len(x))]
             for x_idx in range(len(x)):
                 if self.order <= 1:
-                    w_pt_1 = CkksPlaintextRingtNode(f'encode_pt_{1}_{x_idx}')
+                    w_pt_1 = CkksPlaintextNode(f'encode_pt_{1}_{x_idx}', is_ringt=True)
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt_1,
@@ -267,7 +355,7 @@ class PolyRelu2D(PolyReluBase):
                         },
                     )
                     res = rescale(mult(x[x_idx], w_pt_1))
-                    w_pt_0 = CkksPlaintextRingtNode(f'encode_pt_{0}_{x_idx}')
+                    w_pt_0 = CkksPlaintextNode(f'encode_pt_{0}_{x_idx}', is_ringt=True)
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt_0,
@@ -285,7 +373,8 @@ class PolyRelu2D(PolyReluBase):
                     baby_steps = int(np.ceil(np.sqrt(self.order + 1)))
                     giant_steps = int(np.ceil((self.order + 1) / baby_steps))
 
-                    initial_level = x[x_idx].level
+                    initial_level = x[x_idx].metadata.level
+                    scales = coeff_scales(initial_level)
 
                     x_powers = [0 for i in range(baby_steps + 1)]
                     x_powers[1] = x[x_idx]
@@ -296,8 +385,8 @@ class PolyRelu2D(PolyReluBase):
                             x_powers[i] = rescale(tp)
                         else:
                             y = x_powers[1]
-                            if x_powers[1].level > x_powers[i - 1].level:
-                                y = drop_level(x_powers[1], x_powers[1].level - x_powers[i - 1].level)
+                            if x_powers[1].metadata.level > x_powers[i - 1].metadata.level:
+                                y = drop_level(x_powers[1], x_powers[1].metadata.level - x_powers[i - 1].metadata.level)
                             x_powers[i] = rescale(relin(mult(x_powers[i - 1], y)))
                     x_giant = x_powers[baby_steps]
                     current_giant_power = x_giant
@@ -314,7 +403,9 @@ class PolyRelu2D(PolyReluBase):
 
                             if baby_step == 0:
                                 has_coeff0 = True
-                                w_pt = CkksPlaintextRingtNode(f'encode_pt_{coeff_idx}_{x_idx}')
+                                w_pt = CkksPlaintextNode(
+                                    f'encode_pt_{lid}_{coeff_idx}_{x_idx}', is_ringt=True, scale=scales[coeff_idx]
+                                )
                                 custom_compute(
                                     inputs=[poly_data_source],
                                     output=w_pt,
@@ -331,10 +422,12 @@ class PolyRelu2D(PolyReluBase):
                                 x_copy = x_powers[baby_step]
                                 target_level = initial_level - 2 + giant_step
 
-                                if x_copy.level > target_level:
-                                    x_copy = drop_level(x_copy, x_copy.level - target_level)
+                                if x_copy.metadata.level > target_level:
+                                    x_copy = drop_level(x_copy, x_copy.metadata.level - target_level)
 
-                                w_pt = CkksPlaintextRingtNode(f'encode_pt_{coeff_idx}_{x_idx}')
+                                w_pt = CkksPlaintextNode(
+                                    f'encode_pt_{lid}_{coeff_idx}_{x_idx}', is_ringt=True, scale=scales[coeff_idx]
+                                )
                                 custom_compute(
                                     inputs=[poly_data_source],
                                     output=w_pt,
@@ -385,12 +478,23 @@ class PolyRelu2D(PolyReluBase):
 
     def call_bsgs_lazy(self, x: list[CkksCiphertextNode], poly_data_source, layer_id: str = ''):
         """BSGS with on-demand weight generation via custom_compute (lazy/mega mode)."""
+        param = get_fhe_param()
+        lid = layer_id or getattr(poly_data_source, 'id', '')
         weight_cache = {}
+        _scale_cache: dict[int, dict[int, float]] = {}
+
+        def coeff_scales(level: int) -> dict[int, float]:
+            if level not in _scale_cache:
+                _scale_cache[level] = _bsgs_coeff_scales(param, self.order, level)
+            return _scale_cache[level]
 
         def get_weight(idx, x_idx):
             key = (idx, x_idx)
             if key not in weight_cache:
-                w_pt = CkksPlaintextRingtNode(f'encode_pt_{idx}_{x_idx}')
+                scales = coeff_scales(x[x_idx].metadata.level)
+                w_pt = CkksPlaintextNode(
+                    f'encode_pt_{lid}_{idx}_{x_idx}', is_ringt=True, scale=scales[idx]
+                )
                 custom_compute(
                     inputs=[poly_data_source],
                     output=w_pt,

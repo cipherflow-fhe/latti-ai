@@ -116,7 +116,7 @@ class _ParBlockColMajorLNBase:
         return result
 
     def _make_pt(self, data_source, op_class: str, pt_idx: int, bi: int = 0, bj: int = 0, g: int = 0):
-        node = CkksPlaintextRingtNode(f'encode_pt_{op_class}_{pt_idx}_{bi}_{bj}_{g}')
+        node = CkksPlaintextNode(f'encode_pt_{op_class}_{pt_idx}_{bi}_{bj}_{g}', is_ringt=True)
         custom_compute(
             inputs=[data_source],
             output=node,
@@ -267,7 +267,7 @@ class ParBlockColMajorLNMinimaxInit:
         self.chunk_size = block_size * block_size
 
     def _make_pt(self, data_source, pt_idx: int):
-        node = CkksPlaintextRingtNode(f'encode_pt_{self.op_class}_{pt_idx}')
+        node = CkksPlaintextNode(f'encode_pt_{self.op_class}_{pt_idx}', is_ringt=True)
         custom_compute(
             inputs=[data_source],
             output=node,
@@ -317,7 +317,7 @@ class ParBlockColMajorLNGoldschmidt:
         self.chunk_size = block_size * block_size
 
     def _make_pt(self, data_source, pt_idx: int):
-        node = CkksPlaintextRingtNode(f'encode_pt_{self.op_class}_{pt_idx}')
+        node = CkksPlaintextNode(f'encode_pt_{self.op_class}_{pt_idx}', is_ringt=True)
         custom_compute(
             inputs=[data_source],
             output=node,
@@ -330,8 +330,8 @@ class ParBlockColMajorLNGoldschmidt:
         result = [None] * len(y_cts)
         for bi, y in enumerate(y_cts):
             a = a_cts[bi]
-            if a.level > y.level:
-                a = drop_level(a, a.level - y.level)
+            if a.metadata.level > y.metadata.level:
+                a = drop_level(a, a.metadata.level - y.metadata.level)
 
             ya = rescale(relin(mult(y, a)))
             yy = rescale(relin(mult(y, y)))
@@ -386,8 +386,8 @@ class ParBlockColMajorLNAffine(_ParBlockColMajorLNBase):
 
             yw = rescale(mult(y_cts[bi], gamma_pt[bi][bj][g]))
             xc = x_ct
-            if xc.level > yw.level:
-                xc = drop_level(xc, xc.level - yw.level)
+            if xc.metadata.level > yw.metadata.level:
+                xc = drop_level(xc, xc.metadata.level - yw.metadata.level)
             out = rescale(relin(mult(xc, yw)))
             result[ct_idx] = add(out, beta_add_pt[bi][bj][g])
         return result

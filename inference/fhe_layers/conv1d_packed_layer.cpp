@@ -40,7 +40,7 @@ Conv1DPackedLayer::Conv1DPackedLayer(const CkksParameter& param_in,
     n_channel_per_ct = pack_in;
     level_ = level_in;
     stride = stride_in;
-    weight_scale = param_.get_q(level_) * residual_scale;
+    weight_scale = param_.q()[level_] * residual_scale;
     n_channel_out = weight.get_shape()[0];
     n_channel_in = weight.get_shape()[1];
     kernel_shape = weight.get_shape()[2];
@@ -109,7 +109,7 @@ void Conv1DPackedLayer::prepare_weight_lazy() {
     }
 }
 
-CkksPlaintextRingt Conv1DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const {
+CkksPlaintext Conv1DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const {
     uint32_t shape_ct = input_shape * skip;
     uint32_t rot_n_channel_per_ct = (n_channel_in < n_channel_per_ct) ? n_channel_in : n_channel_per_ct;
 
@@ -117,7 +117,7 @@ CkksPlaintextRingt Conv1DPackedLayer::generate_weight_pt_for_indices(CkksContext
     const double encode_pt_scale = weight_scale;
 
     std::vector<double> packed_weights;
-    packed_weights.reserve(param_.get_n() / 2);
+    packed_weights.reserve(param_.max_slots());
 
     for (int pack_idx = 0; pack_idx < n_channel_per_ct; pack_idx++) {
         int out_channel_idx = ct_idx * n_channel_per_ct + pack_idx;
@@ -134,12 +134,12 @@ CkksPlaintextRingt Conv1DPackedLayer::generate_weight_pt_for_indices(CkksContext
         }
     }
 
-    return ctx.encode_ringt(packed_weights, encode_pt_scale);
+    return fhe_api::encode_ringt(ctx, packed_weights, encode_pt_scale);
 }
 
-CkksPlaintextRingt Conv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const {
+CkksPlaintext Conv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const {
     uint32_t shape_ct = input_shape * skip;
-    const double bias_scale = param_.get_default_scale();
+    const double bias_scale = param_.default_scale();
 
     std::vector<double> packed_bias;
     for (int pack_idx = 0; pack_idx < n_channel_per_ct; pack_idx++) {
@@ -153,7 +153,7 @@ CkksPlaintextRingt Conv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ct
             }
         }
     }
-    return ctx.encode_ringt(packed_bias, bias_scale);
+    return fhe_api::encode_ringt(ctx, packed_bias, bias_scale);
 }
 
 Feature1DEncrypted Conv1DPackedLayer::run(CkksContext& ctx, Feature1DEncrypted& x) {
@@ -203,7 +203,7 @@ void Conv1DPackedLayer::mult_add(CkksContext* ctx,
                                  uint32_t end,
                                  vector<CkksCiphertext>& result) {
     for (int packed_out_channel_idx = start; packed_out_channel_idx < end; packed_out_channel_idx++) {
-        CkksCiphertext accumulator(0);
+        CkksCiphertext accumulator;
 
         for (int in_channel_idx = 0; in_channel_idx < rotated_x.size(); in_channel_idx++) {
             for (int kernel_idx = 0; kernel_idx < kernel_shape; kernel_idx++) {
@@ -212,15 +212,15 @@ void Conv1DPackedLayer::mult_add(CkksContext* ctx,
                 CkksCiphertext product;
                 if (weight_pt.empty()) {
                     // Lazy mode: generate weight on-demand
-                    CkksPlaintextRingt w_pt_rt =
+                    CkksPlaintext w_pt_rt =
                         generate_weight_pt_for_indices(*ctx, packed_out_channel_idx, in_channel_idx, kernel_idx);
-                    auto w_pt = ctx->ringt_to_mul(w_pt_rt, level_);
-                    product = ctx->mult_plain_mul(x_ct, w_pt);
+                    const auto& w_pt = w_pt_rt;
+                    product = ctx->mult(x_ct, w_pt);
                 } else {
                     // Normal mode: use pre-generated weight
                     const auto& w_pt_rt = weight_pt[packed_out_channel_idx][in_channel_idx][kernel_idx];
-                    auto w_pt = ctx->ringt_to_mul(w_pt_rt, level_);
-                    product = ctx->mult_plain_mul(x_ct, w_pt);
+                    const auto& w_pt = w_pt_rt;
+                    product = ctx->mult(x_ct, w_pt);
                 }
 
                 if (in_channel_idx == 0 && kernel_idx == 0) {
@@ -234,12 +234,12 @@ void Conv1DPackedLayer::mult_add(CkksContext* ctx,
         // Add bias
         if (bias_pt.empty()) {
             // Lazy mode: generate bias on-demand
-            CkksPlaintextRingt bias_plaintext = generate_bias_pt_for_index(*ctx, packed_out_channel_idx);
-            accumulator = ctx->add_plain_ringt(accumulator, bias_plaintext);
+            CkksPlaintext bias_plaintext = generate_bias_pt_for_index(*ctx, packed_out_channel_idx);
+            accumulator = ctx->add(accumulator, bias_plaintext);
         } else {
             // Normal mode: use pre-generated bias
             const auto& bias_plaintext = bias_pt[packed_out_channel_idx];
-            accumulator = ctx->add_plain_ringt(accumulator, bias_plaintext);
+            accumulator = ctx->add(accumulator, bias_plaintext);
         }
 
         result[packed_out_channel_idx] = move(accumulator);

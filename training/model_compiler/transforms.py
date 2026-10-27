@@ -416,7 +416,7 @@ def add_btp_layer(dag: nx.DiGraph, upstream_feature: FeatureNode, param_dict: di
         },
     )
 
-    slot_num = param_dict[upstream_feature.ckks_parameter_id].poly_modulus_degree // 2
+    slot_num = param_dict[upstream_feature.ckks_parameter_id].poly_modulus_degree
     dag.nodes[refreshed_feature]['pack_num'] = dag.nodes[upstream_feature]['pack_num']
     refreshed_feature.sp_info = upstream_feature.sp_info.copy()
 
@@ -680,7 +680,7 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
             graph.dag.nodes[succ]['skip'] = [1] * succ.dim
 
         if process_special_info(graph, compute_node, preds, succ):
-            populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)
+            populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree)
             continue
         if succ.dim > 0:
             if isinstance(compute_node, SpatialComputeNode):
@@ -764,7 +764,7 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                     graph.dag.nodes[succ]['skip'][i] = config.block_shape[i] / succ.shape[i]
 
         process_special_info(graph, compute_node, preds, succ)
-        populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)
+        populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree)
 
 
 def combine_convs_with_upsamples(graph: LayerAbstractGraph):

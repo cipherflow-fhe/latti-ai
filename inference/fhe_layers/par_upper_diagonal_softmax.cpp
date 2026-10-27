@@ -75,13 +75,13 @@ bool is_valid_slot(uint32_t ct_idx,
 }
 
 double natural_square_scale(const CkksParameter& param, uint32_t level) {
-    double D = param.get_default_scale();
-    return D / static_cast<double>(param.get_q(level)) * D;
+    double D = param.default_scale();
+    return D / static_cast<double>(param.q()[level]) * D;
 }
 
 double mask_scale_after_natural_square(const CkksParameter& param, uint32_t level) {
-    double D = param.get_default_scale();
-    return static_cast<double>(param.get_q(level)) / D * static_cast<double>(param.get_q(level - 1));
+    double D = param.default_scale();
+    return static_cast<double>(param.q()[level]) / D * static_cast<double>(param.q()[level - 1]);
 }
 
 }  // namespace
@@ -103,7 +103,7 @@ ParUpperDiagonalAddPt::ParUpperDiagonalAddPt(const CkksParameter& param,
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 
     H_ = next_pow2(H_prepad_);
@@ -134,8 +134,8 @@ vector<double> ParUpperDiagonalAddPt::build_constant_vec(uint32_t ct_idx, double
     return vec;
 }
 
-CkksPlaintextRingt ParUpperDiagonalAddPt::generate_pt(CkksContext& ctx, uint32_t ct_idx) const {
-    return ctx.encode_ringt(build_constant_vec(ct_idx, value_), param_.get_default_scale());
+CkksPlaintext ParUpperDiagonalAddPt::generate_pt(CkksContext& ctx, uint32_t ct_idx) const {
+    return fhe_api::encode_ringt(ctx, build_constant_vec(ct_idx, value_), param_.default_scale());
 }
 
 void ParUpperDiagonalAddPt::prepare_weight() {
@@ -164,7 +164,7 @@ FeatureMatEncrypted ParUpperDiagonalAddPt::run(CkksContext& ctx, const FeatureMa
     result.data.resize(total_cts());
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        result.data[idx] = ctx_copy.add_plain_ringt(x.data[idx], pt_[idx]);
+        result.data[idx] = ctx_copy.add(x.data[idx], pt_[idx]);
     });
     return result;
 }
@@ -200,7 +200,7 @@ ParUpperDiagonalMultipleSquare::ParUpperDiagonalMultipleSquare(const CkksParamet
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 
     H_ = next_pow2(H_prepad_);
@@ -231,8 +231,8 @@ vector<double> ParUpperDiagonalMultipleSquare::build_valid_mask(uint32_t ct_idx,
     return mask;
 }
 
-CkksPlaintextRingt ParUpperDiagonalMultipleSquare::generate_mask_pt(CkksContext& ctx, uint32_t ct_idx) const {
-    return ctx.encode_ringt(build_valid_mask(ct_idx, 1.0), mask_scale_after_natural_square(param_, level_));
+CkksPlaintext ParUpperDiagonalMultipleSquare::generate_mask_pt(CkksContext& ctx, uint32_t ct_idx) const {
+    return fhe_api::encode_ringt(ctx, build_valid_mask(ct_idx, 1.0), mask_scale_after_natural_square(param_, level_));
 }
 
 void ParUpperDiagonalMultipleSquare::prepare_weight() {
@@ -251,7 +251,7 @@ FeatureMatEncrypted ParUpperDiagonalMultipleSquare::run(CkksContext& ctx, const 
     assert(x.data.size() == total_cts());
     assert(mask_pt_.size() == total_cts());
 
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     double square_scale = natural_square_scale(param_, level_);
     FeatureMatEncrypted result(&ctx, level_ - 2);
     result.shape = x.shape;
@@ -262,9 +262,9 @@ FeatureMatEncrypted ParUpperDiagonalMultipleSquare::run(CkksContext& ctx, const 
     result.data.resize(total_cts());
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto sq = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(x.data[idx], x.data[idx])), square_scale);
-        auto mask_mul = ctx_copy.ringt_to_mul(mask_pt_[idx], level_ - 1);
-        result.data[idx] = ctx_copy.rescale(ctx_copy.mult_plain_mul(sq, mask_mul), D);
+        auto sq = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(x.data[idx], x.data[idx])));
+        const auto& mask_mul = mask_pt_[idx];
+        result.data[idx] = ctx_copy.rescale(ctx_copy.mult(sq, mask_mul));
     });
 
     result.level = level_ - 2;
@@ -303,7 +303,7 @@ ParUpperDiagonalHeadColSum::ParUpperDiagonalHeadColSum(const CkksParameter& para
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 
     H_ = next_pow2(H_prepad_);
@@ -334,8 +334,8 @@ vector<double> ParUpperDiagonalHeadColSum::build_valid_mask(uint32_t ct_idx, dou
     return mask;
 }
 
-CkksPlaintextRingt ParUpperDiagonalHeadColSum::generate_mask_pt(CkksContext& ctx, uint32_t ct_idx) const {
-    return ctx.encode_ringt(build_valid_mask(ct_idx, 1.0), param_.get_q(level_));
+CkksPlaintext ParUpperDiagonalHeadColSum::generate_mask_pt(CkksContext& ctx, uint32_t ct_idx) const {
+    return fhe_api::encode_ringt(ctx, build_valid_mask(ct_idx, 1.0), param_.q()[level_]);
 }
 
 void ParUpperDiagonalHeadColSum::prepare_weight() {
@@ -362,7 +362,7 @@ FeatureMatEncrypted ParUpperDiagonalHeadColSum::run(CkksContext& ctx, const Feat
     assert(x.data.size() == total_cts());
     assert(mask_pt_.size() == total_cts());
 
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     vector<CkksCiphertext> partial(total_cts());
     parallel_for(total_cts(), th_nums, ctx,
                  [&](CkksContext& ctx_copy, int idx) { partial[idx] = reduce_local_diags(ctx_copy, x.data[idx]); });
@@ -381,8 +381,8 @@ FeatureMatEncrypted ParUpperDiagonalHeadColSum::run(CkksContext& ctx, const Feat
     result.data.resize(total_cts());
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto mask_mul = ctx_copy.ringt_to_mul(mask_pt_[idx], level_);
-        result.data[idx] = ctx_copy.rescale(ctx_copy.mult_plain_mul(head_sum, mask_mul), D);
+        const auto& mask_mul = mask_pt_[idx];
+        result.data[idx] = ctx_copy.rescale(ctx_copy.mult(head_sum, mask_mul));
     });
 
     result.level = level_ - 1;
@@ -426,7 +426,7 @@ ParUpperDiagonalInverseInit::ParUpperDiagonalInverseInit(const CkksParameter& pa
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 
     H_ = next_pow2(H_prepad_);
@@ -457,8 +457,8 @@ vector<double> ParUpperDiagonalInverseInit::build_valid_mask(uint32_t ct_idx, do
     return mask;
 }
 
-CkksPlaintextRingt ParUpperDiagonalInverseInit::generate_two_pt(CkksContext& ctx, uint32_t ct_idx) const {
-    return ctx.encode_ringt(build_valid_mask(ct_idx, 2.0), param_.get_default_scale());
+CkksPlaintext ParUpperDiagonalInverseInit::generate_two_pt(CkksContext& ctx, uint32_t ct_idx) const {
+    return fhe_api::encode_ringt(ctx, build_valid_mask(ct_idx, 2.0), param_.default_scale());
 }
 
 void ParUpperDiagonalInverseInit::prepare_weight() {
@@ -487,7 +487,7 @@ FeatureMatEncrypted ParUpperDiagonalInverseInit::run(CkksContext& ctx, const Fea
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         auto zero = ctx_copy.sub(b.data[idx], b.data[idx]);
-        result.data[idx] = ctx_copy.add_plain_ringt(ctx_copy.sub(zero, b.data[idx]), two_pt_[idx]);
+        result.data[idx] = ctx_copy.add(ctx_copy.sub(zero, b.data[idx]), two_pt_[idx]);
     });
 
     result.level = level_;
@@ -525,7 +525,7 @@ ParUpperDiagonalInverseIter::ParUpperDiagonalInverseIter(const CkksParameter& pa
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 
     H_ = next_pow2(H_prepad_);
@@ -556,15 +556,15 @@ vector<double> ParUpperDiagonalInverseIter::build_valid_mask(uint32_t ct_idx, do
     return mask;
 }
 
-CkksPlaintextRingt ParUpperDiagonalInverseIter::generate_one_pt(CkksContext& ctx, uint32_t ct_idx) const {
-    double D = param_.get_default_scale();
-    double scale = (static_cast<double>(param_.get_q(level_)) / D) * (static_cast<double>(param_.get_q(level_)) / D) *
-                   static_cast<double>(param_.get_q(level_ - 1));
-    return ctx.encode_ringt(build_valid_mask(ct_idx, 1.0), scale);
+CkksPlaintext ParUpperDiagonalInverseIter::generate_one_pt(CkksContext& ctx, uint32_t ct_idx) const {
+    double D = param_.default_scale();
+    double scale = (static_cast<double>(param_.q()[level_]) / D) * (static_cast<double>(param_.q()[level_]) / D) *
+                   static_cast<double>(param_.q()[level_ - 1]);
+    return fhe_api::encode_ringt(ctx, build_valid_mask(ct_idx, 1.0), scale);
 }
 
-CkksPlaintextRingt ParUpperDiagonalInverseIter::generate_two_pt(CkksContext& ctx, uint32_t ct_idx) const {
-    return ctx.encode_ringt(build_valid_mask(ct_idx, 2.0), param_.get_q(level_));
+CkksPlaintext ParUpperDiagonalInverseIter::generate_two_pt(CkksContext& ctx, uint32_t ct_idx) const {
+    return fhe_api::encode_ringt(ctx, build_valid_mask(ct_idx, 2.0), param_.q()[level_]);
 }
 
 void ParUpperDiagonalInverseIter::prepare_weight() {
@@ -591,9 +591,9 @@ ParUpperDiagonalInverseIter::run(CkksContext& ctx, const FeatureMatEncrypted& a,
     assert(one_pt_.size() == total_cts());
     assert(two_pt_.size() == total_cts());
 
-    double D = param_.get_default_scale();
-    double q_L = static_cast<double>(param_.get_q(level_));
-    double q_L1 = static_cast<double>(param_.get_q(level_ - 1));
+    double D = param_.default_scale();
+    double q_L = static_cast<double>(param_.q()[level_]);
+    double q_L1 = static_cast<double>(param_.q()[level_ - 1]);
     double ba_scale = D / q_L * D;
     double one_a_scale = q_L / D * q_L1;
 
@@ -606,15 +606,15 @@ ParUpperDiagonalInverseIter::run(CkksContext& ctx, const FeatureMatEncrypted& a,
     result.data.resize(total_cts());
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto ba = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(b.data[idx], a.data[idx])), ba_scale);  // L-1
+        auto ba = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(b.data[idx], a.data[idx])));  // L-1
 
-        auto one_mul = ctx_copy.ringt_to_mul(one_pt_[idx], level_);
-        auto one_a = ctx_copy.rescale(ctx_copy.mult_plain_mul(a.data[idx], one_mul), one_a_scale);  // L-1
+        const auto& one_mul = one_pt_[idx];
+        auto one_a = ctx_copy.rescale(ctx_copy.mult(a.data[idx], one_mul));  // L-1
 
-        auto product = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(one_a, ba)), D);  // level L-2, scale D
+        auto product = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(one_a, ba)));  // level L-2, scale D
 
-        auto two_mul = ctx_copy.ringt_to_mul(two_pt_[idx], level_);
-        auto two_a = ctx_copy.rescale(ctx_copy.mult_plain_mul(a.data[idx], two_mul), D);  // L-1, scale D
+        const auto& two_mul = two_pt_[idx];
+        auto two_a = ctx_copy.rescale(ctx_copy.mult(a.data[idx], two_mul));  // L-1, scale D
         auto two_a_drop = ctx_copy.drop_level(two_a);
 
         result.data[idx] = ctx_copy.sub(two_a_drop, product);
@@ -658,7 +658,7 @@ ParUpperDiagonalGELU::ParUpperDiagonalGELU(const CkksParameter& param,
     assert(head_shape[0] == n_prepad_);
     m_prepad_ = head_shape[1];
     H_prepad_ = n_heads;
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     validate_upper_diag_geometry(n_prepad_, total_cols_, m_prepad_, H_prepad_, n_slot_);
 
     H_ = next_pow2(H_prepad_);
@@ -689,8 +689,8 @@ vector<double> ParUpperDiagonalGELU::build_valid_mask(uint32_t ct_idx, double va
     return mask;
 }
 
-CkksPlaintextRingt ParUpperDiagonalGELU::generate_mask_pt(CkksContext& ctx, uint32_t ct_idx) const {
-    return ctx.encode_ringt(build_valid_mask(ct_idx, 1.0), mask_scale_after_natural_square(param_, level_));
+CkksPlaintext ParUpperDiagonalGELU::generate_mask_pt(CkksContext& ctx, uint32_t ct_idx) const {
+    return fhe_api::encode_ringt(ctx, build_valid_mask(ct_idx, 1.0), mask_scale_after_natural_square(param_, level_));
 }
 
 void ParUpperDiagonalGELU::prepare_weight() {
@@ -714,7 +714,7 @@ ParUpperDiagonalGELU::run(CkksContext& ctx, const FeatureMatEncrypted& a, const 
     assert(b.data.size() == total_cts());
     assert(mask_pt_.size() == total_cts());
 
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     double product_scale = natural_square_scale(param_, level_);
     FeatureMatEncrypted result(&ctx, level_ - 2);
     result.shape = a.shape;
@@ -725,9 +725,9 @@ ParUpperDiagonalGELU::run(CkksContext& ctx, const FeatureMatEncrypted& a, const 
     result.data.resize(total_cts());
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto product = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(a.data[idx], b.data[idx])), product_scale);
-        auto mask_mul = ctx_copy.ringt_to_mul(mask_pt_[idx], level_ - 1);
-        result.data[idx] = ctx_copy.rescale(ctx_copy.mult_plain_mul(product, mask_mul), D);
+        auto product = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(a.data[idx], b.data[idx])));
+        const auto& mask_mul = mask_pt_[idx];
+        result.data[idx] = ctx_copy.rescale(ctx_copy.mult(product, mask_mul));
     });
 
     result.level = level_ - 2;

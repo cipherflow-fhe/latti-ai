@@ -19,6 +19,7 @@
 #pragma once
 
 #include <cxx_sdk_v2/cxx_fhe_task.h>
+#include "../fhe_api.h"
 #include "util.h"
 
 namespace ls = lattisense;

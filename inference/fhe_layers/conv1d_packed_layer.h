@@ -43,8 +43,8 @@ public:
     virtual Feature1DEncrypted run(ls::CkksContext& ctx, Feature1DEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x);
 
-    ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
-    ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
+    ls::CkksPlaintext generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
+    ls::CkksPlaintext generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
 
     uint32_t input_shape;
     uint32_t skip;
@@ -52,8 +52,8 @@ public:
 
     Array<double, 3> weight;
     Array<double, 1> bias;
-    std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> weight_pt;
-    std::vector<ls::CkksPlaintextRingt> bias_pt;
+    std::vector<std::vector<std::vector<ls::CkksPlaintext>>> weight_pt;
+    std::vector<ls::CkksPlaintext> bias_pt;
     bool normal_conv = true;
 
 private:

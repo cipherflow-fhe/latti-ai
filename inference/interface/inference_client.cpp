@@ -17,6 +17,7 @@
  */
 
 #include <iostream>
+#include <stdexcept>
 
 #include "interface/inference_client.h"
 #include "data_structs/feature_mat.h"
@@ -152,14 +153,12 @@ void InferenceClient::read_configuration() {
     std::string ckks_param_id = first_param["ckks_parameter_id"];
     auto& ckks_entry = ckks_config[ckks_param_id];
     poly_modulus_degree_ = ckks_entry["poly_modulus_degree"].get<int>();
-    n_slots_ = poly_modulus_degree_ / 2;
-    if (ckks_entry.contains("log_slots")) {
-        log_slots_ = ckks_entry["log_slots"].get<int>();
-    }
-    if (ckks_entry.contains("q") && ckks_entry.contains("p")) {
-        q_ = ckks_entry["q"].get<std::vector<uint64_t>>();
-        p_ = ckks_entry["p"].get<std::vector<uint64_t>>();
-    }
+    const int ring_type = ckks_entry.value("ring_type", 1);
+    const int log_n = static_cast<int>(std::log2(poly_modulus_degree_));
+    n_slots_ = ckks_entry.value("n_slots", ring_type == 1 ? poly_modulus_degree_ : poly_modulus_degree_ / 2);
+    log_slots_ = ckks_entry.value("log_slots", ring_type == 1 ? log_n : log_n - 1);
+    q_ = ckks_entry["q"].get<std::vector<uint64_t>>();
+    p_ = ckks_entry["p"].get<std::vector<uint64_t>>();
 }
 
 void InferenceClient::create_crypto_context() {
@@ -167,31 +166,29 @@ void InferenceClient::create_crypto_context() {
     std::cout << "[Client] Bootstrapping: " << (needs_btp_ ? "Yes" : "No") << std::endl;
     std::cout << "[Client] Poly degree: N=" << poly_modulus_degree_ << std::endl;
 
-    if (needs_btp_) {
-        btp_param_ = std::make_unique<CkksBtpParameter>(CkksBtpParameter::create_parameter());
-        btp_context_ = std::make_unique<CkksBtpContext>(CkksBtpContext::create_random_context(*btp_param_));
-        btp_context_->gen_rotation_keys();
-        context_ptr_ = btp_context_.get();
-    } else {
-        if (!q_.empty() && !p_.empty()) {
-            ckks_param_ =
-                std::make_unique<CkksParameter>(CkksParameter::create_custom_parameter(poly_modulus_degree_, q_, p_));
-        } else {
-            ckks_param_ = std::make_unique<CkksParameter>(CkksParameter::create_parameter(poly_modulus_degree_));
-        }
-        if (log_slots_ > 0) {
-            ckks_param_->set_log_slots(log_slots_);
-        }
-        ckks_context_ = std::make_unique<CkksContext>(CkksContext::create_random_context(*ckks_param_));
-        ckks_context_->gen_rotation_keys();
-        context_ptr_ = ckks_context_.get();
+    auto ckks_config = read_json((client_dir_ / "ckks_parameter.json").string());
+    auto& first_param = task_config_["task_input_param"].begin().value();
+    std::string ckks_param_id = first_param["ckks_parameter_id"];
+    auto& ckks_entry = ckks_config[ckks_param_id];
+    const int log_n = static_cast<int>(std::log2(poly_modulus_degree_));
+    const int log_default_scale = ckks_entry.at("log_default_scale").get<int>();
+    const auto ring_type = static_cast<RingType>(ckks_entry.value("ring_type", 1));
+
+    if (q_.empty() || p_.empty()) {
+        throw std::runtime_error("ckks_parameter.json[" + ckks_param_id + "] must define non-empty q and p");
     }
+    ckks_param_ = std::make_unique<CkksParameter>(
+        CkksParameter::create_custom_parameter(log_n, log_default_scale, q_, p_, ring_type));
+    ckks_context_ = std::make_unique<CkksContext>(
+        CkksContext::create_random_context(*ckks_param_, EncryptorType::PUBLIC_KEY, needs_btp_));
+    ckks_context_->gen_rotation_keys();
+    context_ptr_ = ckks_context_.get();
 
     std::cout << "[Client] Done." << std::endl;
 }
 
 double InferenceClient::get_default_scale() const {
-    return context_ptr_->get_parameter().get_default_scale();
+    return context_ptr_->parameter().default_scale();
 }
 
 void InferenceClient::setup() {
@@ -201,56 +198,33 @@ void InferenceClient::setup() {
 void InferenceClient::release() {
     std::cout << "[Client] Releasing in-memory key material..." << std::endl;
     ckks_context_.reset();
-    btp_context_.reset();
     ckks_param_.reset();
-    btp_param_.reset();
     context_ptr_ = nullptr;
     std::cout << "[Client] Done." << std::endl;
 }
 
 void InferenceClient::load_full_context(const Bytes& full_bytes) {
     std::cout << "[Client] Loading full context (with secret key)..." << std::endl;
-    if (needs_btp_) {
-        btp_context_ = std::make_unique<CkksBtpContext>(CkksBtpContext::deserialize(full_bytes));
-        context_ptr_ = btp_context_.get();
-    } else {
-        ckks_context_ = std::make_unique<CkksContext>(CkksContext::deserialize_advanced(full_bytes));
-        context_ptr_ = ckks_context_.get();
-    }
+    ckks_context_ = std::make_unique<CkksContext>(CkksContext::deserialize(full_bytes));
+    context_ptr_ = ckks_context_.get();
     std::cout << "[Client] Done." << std::endl;
 }
 
 Bytes InferenceClient::export_eval_context() const {
     std::cout << "[Client] Exporting evaluation context..." << std::endl;
-    Bytes result;
-    if (needs_btp_) {
-        auto pub_ctx = btp_context_->make_public_context();
-        std::cout << "[Client] Serializing BTP context..." << std::endl;
-        result = pub_ctx.serialize();
-    } else {
-        // For all currently supported task graphs, the server only needs computation keys
-        // (relin + rotation). Drop PK to shrink the upload. NOTE: UpsampleLayer calls
-        // encrypt_asymmetric server-side; if a future task uses that layer, PK must be
-        // included here.
-        auto pub_ctx = ckks_context_->make_public_context(false, true, true);
-        std::cout << "[Client] Serializing CKKS context..." << std::endl;
-        result = pub_ctx.serialize_advanced();
-    }
+    // v6 serialization includes the evaluation keys and, when enabled, the
+    // bootstrapping keys. The secret key is never serialized.
+    Bytes result = ckks_context_->serialize();
     std::cout << "[Client] Done." << std::endl;
     return result;
 }
 
 Bytes InferenceClient::export_full_context() const {
     std::cout << "[Client] Exporting full context (with secret key)..." << std::endl;
-    Bytes result;
-    if (needs_btp_) {
-        std::cout << "[Client] Serializing BTP context..." << std::endl;
-        result = btp_context_->serialize();
-    } else {
-        // No make_public_context() here — keep the SK in the bytes.
-        std::cout << "[Client] Serializing CKKS context..." << std::endl;
-        result = ckks_context_->serialize_advanced();
-    }
+    // NOTE: the v6 SDK deliberately omits secret key material from context
+    // serialization. load_full_context() can therefore only restore the
+    // evaluation-capable part of the client.
+    Bytes result = ckks_context_->serialize();
     std::cout << "[Client] Done." << std::endl;
     return result;
 }
@@ -281,8 +255,7 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
                 }
                 auto csv_array = csv_to_array<2>(csv_path, {(uint64_t)param.width, (uint64_t)param.height});
                 auto input_array = transpose_2d_array(csv_array);
-                input_ct.par_diagonal_pack(input_array, param.n_heads, param.head_shape, true, param.is_transposed,
-                                           false, scale);
+                input_ct.par_diagonal_pack(input_array, param.n_heads, param.head_shape, true, param.is_transposed, scale);
             } else {
                 auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.height, (uint64_t)param.width});
                 if (param.width % param.n_heads != 0) {
@@ -290,23 +263,23 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
                 }
                 uint32_t head_dim = param.head_shape[1] != 0 ? param.head_shape[1] : param.width / param.n_heads;
                 uint32_t d = param.matmul_block_size != 0 ? param.matmul_block_size : head_dim;
-                input_ct.par_block_col_major_pack(input_array, d, param.n_heads, head_dim, false, scale);
+                input_ct.par_block_col_major_pack(input_array, d, param.n_heads, head_dim, scale);
             }
             result[name] = input_ct.serialize();
         } else if (param.dim == 0) {
             auto input_array = csv_to_array<1>(csv_path);
             Feature0DEncrypted input_ct(context_ptr_, param.level);
             uint32_t input_skip = n_slots_ / param.pack_num;
-            input_ct.pack(input_array, false, scale, input_skip);
+            input_ct.pack(input_array, scale, input_skip);
             result[name] = input_ct.serialize();
         } else if (param.dim == 1) {
             auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.channel, (uint64_t)param.length});
             uint32_t skip = param.skip > 0 ? (uint32_t)param.skip : 1;
             Feature1DEncrypted input_ct(context_ptr_, param.level, skip);
             if (pack_style_ == "ordinary") {
-                input_ct.pack(input_array, false, scale);
+                input_ct.pack(input_array, scale);
             } else {
-                input_ct.pack_multiplexed(input_array, false, scale);
+                input_ct.pack_multiplexed(input_array, scale);
             }
             result[name] = input_ct.serialize();
         } else {
@@ -315,14 +288,14 @@ std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string
             Feature2DEncrypted input_ct(context_ptr_, param.level, Duo{1, 1});
 
             if (pack_style_ == "ordinary") {
-                input_ct.pack_multiple_channel(input_array, false, scale);
+                input_ct.pack_multiple_channel(input_array, scale);
             } else if (param.height * param.width > n_slots_) {
                 Duo block_shape = {task_config_["block_shape"][0], task_config_["block_shape"][1]};
                 Duo channel_packing_factor = {(uint32_t)(param.height / block_shape[0]),
                                               (uint32_t)(param.width / block_shape[1])};
-                input_ct.pack_interleaved(input_array, block_shape, channel_packing_factor, false, scale);
+                input_ct.pack_interleaved(input_array, block_shape, channel_packing_factor, scale);
             } else {
-                input_ct.pack_multiplexed(input_array, false, scale);
+                input_ct.pack_multiplexed(input_array, scale);
             }
             result[name] = input_ct.serialize();
         }

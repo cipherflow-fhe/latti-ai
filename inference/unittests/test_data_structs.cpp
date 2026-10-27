@@ -26,7 +26,7 @@ using namespace std;
 using namespace lattisense;
 
 TEST_CASE("Feature2DEncrypted serialization", "") {
-    CkksParameter paramter = CkksParameter::create_parameter(8192);
+    CkksParameter paramter = CkksParameter::create_parameter(13, RingType::ConjugateInvariant);
     CkksContext context = CkksContext::create_random_context(paramter);
 
     uint32_t shape[] = {32, 32};

@@ -148,7 +148,7 @@ class UpsampleNearestLayer:
         """
         out_channels_per_ct = self.n_channel_per_ct // (self.upsample_factor[0] * self.upsample_factor[1])
         n_select_pt = min(out_channels_per_ct, n_channel)
-        return [CkksPlaintextRingtNode(f'upsample_select_pt_{layer_id}_{i}') for i in range(n_select_pt)]
+        return [CkksPlaintextNode(f'upsample_select_pt_{layer_id}_{i}', is_ringt=True) for i in range(n_select_pt)]
 
     def call(self, x: list[CkksCiphertextNode], select_tensor_pt: list, n_channel: int) -> list[CkksCiphertextNode]:
         """
@@ -380,7 +380,7 @@ class UpsampleNearestLayer:
 
                 # Generate select_tensor_pt on-demand and perform mask multiplication (C++ lines 108-111 - Lazy mode)
                 out_channel_pos = channel_id % out_channels_per_ct
-                select_pt = CkksPlaintextRingtNode(f'select_pt_{idx}_{i}_{out_channel_pos}')
+                select_pt = CkksPlaintextNode(f'select_pt_{idx}_{i}_{out_channel_pos}', is_ringt=True)
                 custom_compute(
                     inputs=[data_source],
                     output=select_pt,

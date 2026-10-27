@@ -123,7 +123,7 @@ class Conv2DPackedLayer:
                     for j in range(self.kernel_shape[1]):
                         index = i * self.kernel_shape[1] + j
                         x_ct = rotated_x_2d[in_channel_idx][index]
-                        w_pt = CkksPlaintextRingtNode(f'encode_pt_{packed_out_channel_idx}_{in_channel_idx}_{index}')
+                        w_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}_{in_channel_idx}_{index}', is_ringt=True)
                         custom_compute(
                             inputs=[conv_data_source],
                             output=w_pt,
@@ -140,7 +140,7 @@ class Conv2DPackedLayer:
                         w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             partial_sum = rescale(partial_sum)
-            b_pt = CkksPlaintextRingtNode(f'encode_pt_{packed_out_channel_idx}')
+            b_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}', is_ringt=True)
             custom_compute(
                 inputs=[conv_data_source],
                 output=b_pt,
@@ -156,12 +156,12 @@ class Conv2DPackedLayer:
         index = self.kernel_shape[0] * self.kernel_shape[1]
         weight_pt = [
             [
-                [CkksPlaintextRingtNode(f'convw_{layer_id}_{n}_{m}_{i}') for i in range(index)]
+                [CkksPlaintextNode(f'convw_{layer_id}_{n}_{m}_{i}', is_ringt=True) for i in range(index)]
                 for m in range(self.n_packed_in_channel * self.pack)
             ]
             for n in range(self.n_packed_out_channel)
         ]
-        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_packed_out_channel)]
+        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}', is_ringt=True) for i in range(self.n_packed_out_channel)]
         return weight_pt, bias_pt
 
     def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:

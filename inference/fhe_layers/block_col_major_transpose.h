@@ -30,7 +30,7 @@ public:
 
     // Lazy generation: encode transpose diagonal on demand
     // k_idx: 0..2d-2, maps to k = k_idx - (d-1) in range [-(d-1), d-1]
-    ls::CkksPlaintextRingt generate_transpose_diag_pt(ls::CkksContext& ctx, uint32_t k_idx) const;
+    ls::CkksPlaintext generate_transpose_diag_pt(ls::CkksContext& ctx, uint32_t k_idx) const;
 
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& cts);
@@ -49,5 +49,5 @@ private:
     uint32_t num_block_rows_, num_block_cols_;
 
     // Precomputed: (2d-1) transpose diagonal plaintexts
-    std::vector<ls::CkksPlaintextRingt> transpose_diag_pt_;
+    std::vector<ls::CkksPlaintext> transpose_diag_pt_;
 };

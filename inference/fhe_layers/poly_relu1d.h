@@ -25,12 +25,12 @@
 // Two packing modes, matching Feature1DEncrypted::pack / pack_multiplexed:
 //
 //   Mode 1 — skip pack (wasted slots):
-//     n_channel_per_ct = N/2 / (shape * skip)
+//     n_channel_per_ct = N / (shape * skip)
 //     channel ch (CT-local), position i → slot = ch * shape * skip + i * skip
 //     Remaining (skip-1) slots per position are zero-padded.
 //
 //   Mode 2 — multiplexed/interleaved pack (no wasted slots):
-//     n_channel_per_ct = (N/2 / (shape * skip)) * skip
+//     n_channel_per_ct = (N / (shape * skip)) * skip
 //     channel j (CT-local), position i → slot = (j/skip)*shape*skip + i*skip + (j%skip)
 //     Each block of (shape*skip) slots carries `skip` channels interleaved.
 //
@@ -40,7 +40,7 @@ class PolyRelu1D : public PolyReluBase {
 public:
     // skip_in   : skip of the Feature1DEncrypted
     // shape_in  : shape of the Feature1DEncrypted
-    // For mode 1: n_channel_per_ct = N/2 / (shape*skip)
+    // For mode 1: n_channel_per_ct = N / (shape*skip)
     // For mode 2: call prepare_weight_bsgs_mux / prepare_weight_bsgs_mux_lazy instead
     PolyRelu1D(const ls::CkksParameter& param_in,
                Array<double, 2>&& weight_in,
@@ -64,7 +64,7 @@ public:
     void prepare_weight_bsgs_mux();
     void prepare_weight_bsgs_mux_lazy();
 
-    ls::CkksPlaintextRingt generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int ct_idx) const override;
+    ls::CkksPlaintext generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int ct_idx) const override;
 
     // run uses whichever mode was prepared
     Feature1DEncrypted run(ls::CkksContext& ctx, const Feature1DEncrypted& x);
@@ -79,6 +79,6 @@ private:
     // n_channel_per_ct for mode 2 (larger than mode 1 by factor skip)
     int n_channel_per_ct_mux;
 
-    ls::CkksPlaintextRingt generate_weight_pt_skip1d(ls::CkksContext& ctx, int idx, int ct_idx) const;
-    ls::CkksPlaintextRingt generate_weight_pt_mux1d(ls::CkksContext& ctx, int idx, int ct_idx) const;
+    ls::CkksPlaintext generate_weight_pt_skip1d(ls::CkksContext& ctx, int idx, int ct_idx) const;
+    ls::CkksPlaintext generate_weight_pt_mux1d(ls::CkksContext& ctx, int idx, int ct_idx) const;
 };

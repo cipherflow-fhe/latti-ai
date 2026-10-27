@@ -214,10 +214,10 @@ class PolyReluBase:
 
         level_cost = self.compute_bsgs_level_cost(order)
         for i, ct in enumerate(x):
-            if ct.level < level_cost:
+            if ct.metadata.level < level_cost:
                 raise ValueError(
                     f'{type(self).__name__} (order={order}): Input ciphertext {i} has '
-                    f'insufficient level: {ct.level} < {level_cost}. '
+                    f'insufficient level: {ct.metadata.level} < {level_cost}. '
                     f'BSGS algorithm will consume {level_cost} levels.'
                 )
 
@@ -232,21 +232,21 @@ class PolyReluBase:
                 _, a, b = power_info[i]
                 xa = x_powers[a]
                 xb = x_powers[b]
-                tgt = min(xa.level, xb.level)
-                if xa.level > tgt:
-                    xa = drop_level(xa, xa.level - tgt)
-                if xb.level > tgt:
-                    xb = drop_level(xb, xb.level - tgt)
+                tgt = min(xa.metadata.level, xb.metadata.level)
+                if xa.metadata.level > tgt:
+                    xa = drop_level(xa, xa.metadata.level - tgt)
+                if xb.metadata.level > tgt:
+                    xb = drop_level(xb, xb.metadata.level - tgt)
                 x_powers[i] = rescale(relin(mult(xa, xb)))
 
             # Compute bsgs_output_level
             max_depth = 0
-            max_power_level = x[x_idx].level
+            max_power_level = x[x_idx].metadata.level
             for p in required:
                 d = power_info[p][0]
                 if d > max_depth:
                     max_depth = d
-                    max_power_level = x_powers[p].level
+                    max_power_level = x_powers[p].metadata.level
             bsgs_output_level = max_power_level - 1
 
             bp_out_level = [bsgs_output_level] * giant_steps
@@ -275,8 +275,8 @@ class PolyReluBase:
 
                     baby_poly_has_terms[g] = True
                     x_copy = x_powers[b]
-                    if x_copy.level > target_level + 1:
-                        x_copy = drop_level(x_copy, x_copy.level - (target_level + 1))
+                    if x_copy.metadata.level > target_level + 1:
+                        x_copy = drop_level(x_copy, x_copy.metadata.level - (target_level + 1))
                     term = rescale(mult(x_copy, w_pt))
 
                     if baby_polys[g] is None:
@@ -297,13 +297,13 @@ class PolyReluBase:
 
                 x_giant = x_powers[giant_power]
                 mult_level = bsgs_output_level + 1
-                if x_giant.level > mult_level:
-                    x_giant = drop_level(x_giant, x_giant.level - mult_level)
+                if x_giant.metadata.level > mult_level:
+                    x_giant = drop_level(x_giant, x_giant.metadata.level - mult_level)
 
                 if baby_poly_has_terms[g]:
                     bp = baby_polys[g]
-                    if bp.level > mult_level:
-                        bp = drop_level(bp, bp.level - mult_level)
+                    if bp.metadata.level > mult_level:
+                        bp = drop_level(bp, bp.metadata.level - mult_level)
                     term = rescale(relin(mult(bp, x_giant)))
                 else:
                     if coeff0_pts[g] is not None:
@@ -318,6 +318,6 @@ class PolyReluBase:
     def make_pt_nodes(self, layer_id, n_pack_in_channel):
         """Return weight_pt placeholder list with shape [order+1][n_pack_in_channel]."""
         return [
-            [CkksPlaintextRingtNode(f'poly_reluw_{layer_id}_{i}_{j}') for j in range(n_pack_in_channel)]
+            [CkksPlaintextNode(f'poly_reluw_{layer_id}_{i}_{j}', is_ringt=True) for j in range(n_pack_in_channel)]
             for i in range(self.order + 1)
         ]

@@ -58,7 +58,7 @@ ParLowerDiagCCMM::ParLowerDiagCCMM(const CkksParameter& param_in,
     assert(n_ >= m_);
     assert(n_ % m_ == 0);
 
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     segment_len_ = H_ * n_;
     assert(segment_len_ > 0);
     assert(n_slot_ % segment_len_ == 0);
@@ -216,24 +216,24 @@ void ParLowerDiagCCMM::prepare_weight() {
     }
 }
 
-CkksPlaintextRingt ParLowerDiagCCMM::generate_replication_mask_pt(CkksContext& ctx, uint32_t ell) const {
-    return ctx.encode_ringt(build_replication_mask(ell), param_.get_q(level_));
+CkksPlaintext ParLowerDiagCCMM::generate_replication_mask_pt(CkksContext& ctx, uint32_t ell) const {
+    return fhe_api::encode_ringt(ctx, build_replication_mask(ell), param_.q()[level_]);
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParLowerDiagCCMM::generate_ordinary_route_pt(CkksContext& ctx, uint32_t ell, uint32_t mask_idx) const {
-    double default_scale = param_.get_default_scale();
+    double default_scale = param_.default_scale();
     double route_scale =
-        static_cast<double>(param_.get_q(level_ - 1)) / default_scale * static_cast<double>(param_.get_q(level_ - 2));
-    return ctx.encode_ringt(build_ordinary_route_masks(ell, mask_idx), route_scale);
+        static_cast<double>(param_.q()[level_ - 1]) / default_scale * static_cast<double>(param_.q()[level_ - 2]);
+    return fhe_api::encode_ringt(ctx, build_ordinary_route_masks(ell, mask_idx), route_scale);
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParLowerDiagCCMM::generate_kqt_route_pt(CkksContext& ctx, uint32_t j, uint32_t ell, uint32_t mask_idx) const {
-    double default_scale = param_.get_default_scale();
+    double default_scale = param_.default_scale();
     double route_scale =
-        static_cast<double>(param_.get_q(level_ - 1)) / default_scale * static_cast<double>(param_.get_q(level_ - 2));
-    return ctx.encode_ringt(build_kqt_route_masks(j, ell, mask_idx), route_scale);
+        static_cast<double>(param_.q()[level_ - 1]) / default_scale * static_cast<double>(param_.q()[level_ - 2]);
+    return fhe_api::encode_ringt(ctx, build_kqt_route_masks(j, ell, mask_idx), route_scale);
 }
 
 CkksCiphertext
@@ -244,9 +244,9 @@ ParLowerDiagCCMM::replicate_lower_diag(CkksContext& ctx, const std::vector<CkksC
     assert(ct_idx < B_cts.size());
     assert(mask_idx < replication_mask_pt_.size());
 
-    double default_scale = param_.get_default_scale();
-    auto mask_mul = ctx.ringt_to_mul(replication_mask_pt_[mask_idx], level_);
-    auto replicated = ctx.rescale(ctx.mult_plain_mul(B_cts[ct_idx], mask_mul), default_scale);
+    double default_scale = param_.default_scale();
+    const auto& mask_mul = replication_mask_pt_[mask_idx];
+    auto replicated = ctx.rescale(ctx.mult(B_cts[ct_idx], mask_mul));
     for (uint32_t step = 1; step < c_; step <<= 1) {
         replicated = ctx.add(replicated, ctx.rotate(replicated, (int)(segment_len_ * step)));
     }
@@ -256,18 +256,18 @@ ParLowerDiagCCMM::replicate_lower_diag(CkksContext& ctx, const std::vector<CkksC
 CkksCiphertext ParLowerDiagCCMM::multiply_cts(CkksContext& ctx,
                                               const CkksCiphertext& a_level_l,
                                               const CkksCiphertext& b_level_l_minus_1) const {
-    double default_scale = param_.get_default_scale();
+    double default_scale = param_.default_scale();
     auto a = ctx.drop_level(a_level_l.copy());
     auto product = ctx.mult(a, b_level_l_minus_1);
-    return ctx.rescale(ctx.relinearize(product), default_scale);
+    return ctx.rescale(ctx.relinearize(product));
 }
 
 CkksCiphertext ParLowerDiagCCMM::apply_route_mask(CkksContext& ctx,
                                                   const CkksCiphertext& product_level_l_minus_2,
-                                                  const CkksPlaintextRingt& mask_pt) const {
-    double default_scale = param_.get_default_scale();
-    auto mask_mul = ctx.ringt_to_mul(mask_pt, level_ - 2);
-    return ctx.rescale(ctx.mult_plain_mul(product_level_l_minus_2, mask_mul), default_scale);
+                                                  const CkksPlaintext& mask_pt) const {
+    double default_scale = param_.default_scale();
+    const auto& mask_mul = mask_pt;
+    return ctx.rescale(ctx.mult(product_level_l_minus_2, mask_mul));
 }
 
 std::vector<CkksCiphertext> ParLowerDiagCCMM::run_core(CkksContext& ctx,
@@ -308,8 +308,8 @@ std::vector<CkksCiphertext> ParLowerDiagCCMM::run_core_ordinary(CkksContext& ctx
     vector<CkksCiphertext> C_cts;
     C_cts.reserve(m_c_);
     for (uint32_t j = 0; j < m_c_; j++) {
-        CkksCiphertext ct_C_prime(0);
-        CkksCiphertext ct_C_double_prime(0);
+        CkksCiphertext ct_C_prime;
+        CkksCiphertext ct_C_double_prime;
         bool prime_init = false;
         bool double_prime_init = false;
         uint32_t prev_j = (j + m_c_ - 1) % m_c_;
@@ -382,8 +382,8 @@ std::vector<CkksCiphertext> ParLowerDiagCCMM::run_core_kqt(CkksContext& ctx,
     C_cts.reserve(n_c_);
     for (uint32_t j = 0; j < n_c_; j++) {
         assert(kqt_route_pt_[j].size() == m_);
-        CkksCiphertext ct_C_prime(0);
-        CkksCiphertext ct_C_double_prime(0);
+        CkksCiphertext ct_C_prime;
+        CkksCiphertext ct_C_double_prime;
         bool prime_init = false;
         bool double_prime_init = false;
 

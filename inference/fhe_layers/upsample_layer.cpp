@@ -40,12 +40,12 @@ UpsampleLayer::UpsampleLayer(const CkksParameter& param_in,
 void UpsampleLayer::prepare_data() {
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
     vector<double> zero_vector;
-    zero_vector.resize(ctx.get_parameter().get_n() / 2);
-    zero_vector_encoded = ctx.encode(zero_vector, level_, ctx.get_parameter().get_default_scale());
+    zero_vector.resize(ctx.parameter().max_slots());
+    zero_vector_encoded = fhe_api::encode(ctx, zero_vector, level_, ctx.parameter().default_scale());
 }
 
 Feature2DEncrypted UpsampleLayer::run(CkksContext& ctx, const Feature2DEncrypted& x) {
-    zero_vector_encrypted = ctx.encrypt_asymmetric(zero_vector_encoded);
+    zero_vector_encrypted = ctx.encrypt(zero_vector_encoded);
 
     if (n_channel_per_ct != 1) {
         throw std::runtime_error("invalid n_channel_per_ct value in UpsampleLayer");

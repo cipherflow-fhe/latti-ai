@@ -1852,7 +1852,7 @@ class BtpScoreParam:
             cols_per_head = math.ceil(total_cols / n_heads)
         block_size = config.matmul_block_size or cols_per_head
 
-        n_slot = self.n // 2
+        n_slot = self.n
         n_heads_padded = 1 << (n_heads - 1).bit_length()
         block_slot_size = block_size * block_size
         if block_slot_size <= 0 or n_slot < block_slot_size:
@@ -1895,7 +1895,7 @@ class BtpScoreParam:
         m = 1 << (m_prepad - 1).bit_length()
         n = 1 << (n_prepad - 1).bit_length()
         segment_len = H * n
-        n_slot = self.n // 2
+        n_slot = self.n
         if segment_len <= 0 or n_slot % segment_len != 0:
             raise ValueError(
                 f'Invalid par_diagonal_pack segment for {pred.node_id}: '
@@ -1910,5 +1910,12 @@ class BtpScoreParam:
         return math.ceil(packed_total / packed_extent) * (m // c)
 
     def get_score(self):
-        score = self.ct_num * self._btp_time_table[str(self.n)]
+        # The bootstrap timing tables are keyed by the degree of the
+        # bootstrapping circuit. For the conjugate-invariant residual ring the
+        # circuit degree is twice the residual degree (log_n + 1), e.g.
+        # PN15Default (N=32768) bootstraps in the N=65536 circuit.
+        degree_key = str(self.n)
+        if degree_key not in self._btp_time_table and str(2 * self.n) in self._btp_time_table:
+            degree_key = str(2 * self.n)
+        score = self.ct_num * self._btp_time_table[degree_key]
         return score

@@ -159,7 +159,7 @@ class ParLowerDiagPCMM:
                 for j in range(self.m_c):
                     for ell in range(self.c):
                         for r in range(self.m_c):
-                            node = CkksPlaintextRingtNode(f'encode_pt_A_{mb}_{i}_{j}_{ell}_{r}')
+                            node = CkksPlaintextNode(f'encode_pt_A_{mb}_{i}_{j}_{ell}_{r}', is_ringt=True)
                             custom_compute(
                                 inputs=[data_source],
                                 output=node,
@@ -180,7 +180,7 @@ class ParLowerDiagPCMM:
 
         mask_wrap_pt = []
         for i_idx in range(self.H - 1):
-            node = CkksPlaintextRingtNode(f'encode_pt_mask_wrap_{i_idx}')
+            node = CkksPlaintextNode(f'encode_pt_mask_wrap_{i_idx}', is_ringt=True)
             custom_compute(
                 inputs=[data_source],
                 output=node,
@@ -194,7 +194,7 @@ class ParLowerDiagPCMM:
             bias_pt = []
             for mb in range(self.n_out_mbs):
                 for r in range(self.m_c):
-                    node = CkksPlaintextRingtNode(f'encode_pt_bias_{mb}_{r}')
+                    node = CkksPlaintextNode(f'encode_pt_bias_{mb}_{r}', is_ringt=True)
                     custom_compute(
                         inputs=[data_source],
                         output=node,

@@ -1,0 +1,1809 @@
+{
+    "input_feature": [
+        "input"
+    ],
+    "output_feature": [
+        "output"
+    ],
+    "feature": {
+        "input": {
+            "dim": 2,
+            "channel": 3,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 0
+        },
+        "output": {
+            "dim": 0,
+            "channel": 10,
+            "scale": 1,
+            "skip": 1,
+            "ckks_parameter_id": "param0",
+            "level": -2
+        },
+        "_relu_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -3
+        },
+        "_layer1_layer1_0_relu1_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -6
+        },
+        "_layer1_layer1_0_relu2_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -1
+        },
+        "_layer1_layer1_1_relu1_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -4
+        },
+        "_layer1_layer1_1_relu2_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -1
+        },
+        "_layer1_layer1_2_relu1_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -4
+        },
+        "_layer1_layer1_2_relu2_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -1
+        },
+        "_layer2_layer2_0_relu1_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -4
+        },
+        "_layer2_layer2_0_relu2_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -1
+        },
+        "_layer2_layer2_1_relu1_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -4
+        },
+        "_layer2_layer2_1_relu2_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -1
+        },
+        "_layer2_layer2_2_relu1_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -4
+        },
+        "_layer2_layer2_2_relu2_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -1
+        },
+        "_layer3_layer3_0_relu1_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -4
+        },
+        "_layer3_layer3_0_relu2_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -1
+        },
+        "_layer3_layer3_1_relu1_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -4
+        },
+        "_layer3_layer3_1_relu2_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -1
+        },
+        "_layer3_layer3_2_relu1_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -4
+        },
+        "_layer3_layer3_2_relu2_RangeNormPoly2d_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -1
+        },
+        "_conv1_Conv_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -1
+        },
+        "_layer1_layer1_0_conv1_Conv_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -4
+        },
+        "_layer1_layer1_0_conv2_Conv_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -7
+        },
+        "_layer1_layer1_0_Add_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 1
+        },
+        "_layer1_layer1_1_conv1_Conv_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -2
+        },
+        "_layer1_layer1_1_conv2_Conv_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -5
+        },
+        "_layer1_layer1_1_Add_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 1
+        },
+        "_layer1_layer1_2_conv1_Conv_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -2
+        },
+        "_layer1_layer1_2_conv2_Conv_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -5
+        },
+        "_layer1_layer1_2_Add_output_0": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 1
+        },
+        "_layer2_layer2_0_conv1_Conv_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -2
+        },
+        "_layer2_layer2_0_conv2_Conv_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -5
+        },
+        "_layer2_layer2_0_shortcut_shortcut_0_Conv_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -2
+        },
+        "_layer2_layer2_0_Add_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 1
+        },
+        "_layer2_layer2_1_conv1_Conv_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -2
+        },
+        "_layer2_layer2_1_conv2_Conv_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -5
+        },
+        "_layer2_layer2_1_Add_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 1
+        },
+        "_layer2_layer2_2_conv1_Conv_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -2
+        },
+        "_layer2_layer2_2_conv2_Conv_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -5
+        },
+        "_layer2_layer2_2_Add_output_0": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 1
+        },
+        "_layer3_layer3_0_conv1_Conv_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -2
+        },
+        "_layer3_layer3_0_conv2_Conv_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -5
+        },
+        "_layer3_layer3_0_shortcut_shortcut_0_Conv_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -2
+        },
+        "_layer3_layer3_0_Add_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 1
+        },
+        "_layer3_layer3_1_conv1_Conv_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -2
+        },
+        "_layer3_layer3_1_conv2_Conv_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -5
+        },
+        "_layer3_layer3_1_Add_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 1
+        },
+        "_layer3_layer3_2_conv1_Conv_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -2
+        },
+        "_layer3_layer3_2_conv2_Conv_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -5
+        },
+        "_layer3_layer3_2_Add_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 1
+        },
+        "_avgpool_GlobalAveragePool_output_0": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1,
+            "shape": [
+                1,
+                1
+            ],
+            "skip": [
+                32,
+                32
+            ],
+            "ckks_parameter_id": "param0",
+            "level": -1
+        },
+        "_flatten_Flatten_output_0": {
+            "dim": 0,
+            "channel": 64,
+            "scale": 1,
+            "skip": 1,
+            "ckks_parameter_id": "param0",
+            "level": -1
+        }
+    },
+    "layer": {
+        "_conv1_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 3,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "input"
+            ],
+            "feature_output": [
+                "_conv1_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_241",
+            "bias_path": "onnx::Conv_242"
+        },
+        "_relu_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_conv1_Conv_output_0"
+            ],
+            "feature_output": [
+                "_relu_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "relu.weight"
+        },
+        "_layer1_layer1_0_conv1_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_relu_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_0_conv1_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_244",
+            "bias_path": "onnx::Conv_245"
+        },
+        "_layer1_layer1_0_relu1_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_0_conv1_Conv_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_0_relu1_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer1.0.relu1.weight"
+        },
+        "_layer1_layer1_0_conv2_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_0_relu1_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_0_conv2_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_247",
+            "bias_path": "onnx::Conv_248"
+        },
+        "_layer1_layer1_0_Add": {
+            "type": "add2d",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_0_conv2_Conv_output_0",
+                "_relu_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_0_Add_output_0"
+            ]
+        },
+        "_layer1_layer1_0_relu2_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_0_Add_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_0_relu2_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer1.0.relu2.weight"
+        },
+        "_layer1_layer1_1_conv1_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_0_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_1_conv1_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_250",
+            "bias_path": "onnx::Conv_251"
+        },
+        "_layer1_layer1_1_relu1_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_1_conv1_Conv_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_1_relu1_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer1.1.relu1.weight"
+        },
+        "_layer1_layer1_1_conv2_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_1_relu1_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_1_conv2_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_253",
+            "bias_path": "onnx::Conv_254"
+        },
+        "_layer1_layer1_1_Add": {
+            "type": "add2d",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_1_conv2_Conv_output_0",
+                "_layer1_layer1_0_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_1_Add_output_0"
+            ]
+        },
+        "_layer1_layer1_1_relu2_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_1_Add_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_1_relu2_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer1.1.relu2.weight"
+        },
+        "_layer1_layer1_2_conv1_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_1_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_2_conv1_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_256",
+            "bias_path": "onnx::Conv_257"
+        },
+        "_layer1_layer1_2_relu1_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_2_conv1_Conv_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_2_relu1_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer1.2.relu1.weight"
+        },
+        "_layer1_layer1_2_conv2_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_2_relu1_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_2_conv2_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_259",
+            "bias_path": "onnx::Conv_260"
+        },
+        "_layer1_layer1_2_Add": {
+            "type": "add2d",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_2_conv2_Conv_output_0",
+                "_layer1_layer1_1_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_2_Add_output_0"
+            ]
+        },
+        "_layer1_layer1_2_relu2_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_2_Add_output_0"
+            ],
+            "feature_output": [
+                "_layer1_layer1_2_relu2_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer1.2.relu2.weight"
+        },
+        "_layer2_layer2_0_conv1_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 16,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_2_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_0_conv1_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                2,
+                2
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_262",
+            "bias_path": "onnx::Conv_263"
+        },
+        "_layer2_layer2_0_relu1_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_0_conv1_Conv_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_0_relu1_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer2.0.relu1.weight"
+        },
+        "_layer2_layer2_0_conv2_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_0_relu1_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_0_conv2_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_265",
+            "bias_path": "onnx::Conv_266"
+        },
+        "_layer2_layer2_0_shortcut_shortcut_0_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 16,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer1_layer1_2_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_0_shortcut_shortcut_0_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                2,
+                2
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                1,
+                1
+            ],
+            "weight_path": "onnx::Conv_268",
+            "bias_path": "onnx::Conv_269"
+        },
+        "_layer2_layer2_0_Add": {
+            "type": "add2d",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_0_conv2_Conv_output_0",
+                "_layer2_layer2_0_shortcut_shortcut_0_Conv_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_0_Add_output_0"
+            ]
+        },
+        "_layer2_layer2_0_relu2_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_0_Add_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_0_relu2_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer2.0.relu2.weight"
+        },
+        "_layer2_layer2_1_conv1_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_0_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_1_conv1_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_271",
+            "bias_path": "onnx::Conv_272"
+        },
+        "_layer2_layer2_1_relu1_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_1_conv1_Conv_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_1_relu1_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer2.1.relu1.weight"
+        },
+        "_layer2_layer2_1_conv2_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_1_relu1_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_1_conv2_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_274",
+            "bias_path": "onnx::Conv_275"
+        },
+        "_layer2_layer2_1_Add": {
+            "type": "add2d",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_1_conv2_Conv_output_0",
+                "_layer2_layer2_0_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_1_Add_output_0"
+            ]
+        },
+        "_layer2_layer2_1_relu2_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_1_Add_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_1_relu2_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer2.1.relu2.weight"
+        },
+        "_layer2_layer2_2_conv1_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_1_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_2_conv1_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_277",
+            "bias_path": "onnx::Conv_278"
+        },
+        "_layer2_layer2_2_relu1_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_2_conv1_Conv_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_2_relu1_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer2.2.relu1.weight"
+        },
+        "_layer2_layer2_2_conv2_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_2_relu1_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_2_conv2_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_280",
+            "bias_path": "onnx::Conv_281"
+        },
+        "_layer2_layer2_2_Add": {
+            "type": "add2d",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_2_conv2_Conv_output_0",
+                "_layer2_layer2_1_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_2_Add_output_0"
+            ]
+        },
+        "_layer2_layer2_2_relu2_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_2_Add_output_0"
+            ],
+            "feature_output": [
+                "_layer2_layer2_2_relu2_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer2.2.relu2.weight"
+        },
+        "_layer3_layer3_0_conv1_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 32,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_2_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_0_conv1_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                2,
+                2
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_283",
+            "bias_path": "onnx::Conv_284"
+        },
+        "_layer3_layer3_0_relu1_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_0_conv1_Conv_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_0_relu1_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer3.0.relu1.weight"
+        },
+        "_layer3_layer3_0_conv2_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_0_relu1_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_0_conv2_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_286",
+            "bias_path": "onnx::Conv_287"
+        },
+        "_layer3_layer3_0_shortcut_shortcut_0_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 32,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer2_layer2_2_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_0_shortcut_shortcut_0_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                2,
+                2
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                1,
+                1
+            ],
+            "weight_path": "onnx::Conv_289",
+            "bias_path": "onnx::Conv_290"
+        },
+        "_layer3_layer3_0_Add": {
+            "type": "add2d",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_0_conv2_Conv_output_0",
+                "_layer3_layer3_0_shortcut_shortcut_0_Conv_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_0_Add_output_0"
+            ]
+        },
+        "_layer3_layer3_0_relu2_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_0_Add_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_0_relu2_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer3.0.relu2.weight"
+        },
+        "_layer3_layer3_1_conv1_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_0_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_1_conv1_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_292",
+            "bias_path": "onnx::Conv_293"
+        },
+        "_layer3_layer3_1_relu1_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_1_conv1_Conv_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_1_relu1_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer3.1.relu1.weight"
+        },
+        "_layer3_layer3_1_conv2_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_1_relu1_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_1_conv2_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_295",
+            "bias_path": "onnx::Conv_296"
+        },
+        "_layer3_layer3_1_Add": {
+            "type": "add2d",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_1_conv2_Conv_output_0",
+                "_layer3_layer3_0_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_1_Add_output_0"
+            ]
+        },
+        "_layer3_layer3_1_relu2_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_1_Add_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_1_relu2_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer3.1.relu2.weight"
+        },
+        "_layer3_layer3_2_conv1_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_1_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_2_conv1_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_298",
+            "bias_path": "onnx::Conv_299"
+        },
+        "_layer3_layer3_2_relu1_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_2_conv1_Conv_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_2_relu1_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer3.2.relu1.weight"
+        },
+        "_layer3_layer3_2_conv2_Conv": {
+            "type": "conv2d",
+            "style": "multiplexed",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_2_relu1_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_2_conv2_Conv_output_0"
+            ],
+            "groups": 1,
+            "stride": [
+                1,
+                1
+            ],
+            "is_big_size": false,
+            "kernel_shape": [
+                3,
+                3
+            ],
+            "weight_path": "onnx::Conv_301",
+            "bias_path": "onnx::Conv_302"
+        },
+        "_layer3_layer3_2_Add": {
+            "type": "add2d",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_2_conv2_Conv_output_0",
+                "_layer3_layer3_1_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_2_Add_output_0"
+            ]
+        },
+        "_layer3_layer3_2_relu2_RangeNormPoly2d": {
+            "type": "polyact",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_2_Add_output_0"
+            ],
+            "feature_output": [
+                "_layer3_layer3_2_relu2_RangeNormPoly2d_output_0"
+            ],
+            "order": 4,
+            "weight_path": "layer3.2.relu2.weight"
+        },
+        "_avgpool_GlobalAveragePool": {
+            "type": "avgpool2d",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_layer3_layer3_2_relu2_RangeNormPoly2d_output_0"
+            ],
+            "feature_output": [
+                "_avgpool_GlobalAveragePool_output_0"
+            ],
+            "stride": [
+                8,
+                8
+            ],
+            "kernel_shape": [
+                8,
+                8
+            ],
+            "padding": [
+                0,
+                0
+            ],
+            "weight_path": "_avgpool_GlobalAveragePool.weight",
+            "bias_path": "_avgpool_GlobalAveragePool.bias"
+        },
+        "_flatten_Flatten": {
+            "type": "reshape",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_avgpool_GlobalAveragePool_output_0"
+            ],
+            "feature_output": [
+                "_flatten_Flatten_output_0"
+            ],
+            "shape": [
+                -1,
+                64
+            ]
+        },
+        "_linear_Gemm": {
+            "type": "fc0",
+            "channel_input": 64,
+            "channel_output": 10,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_flatten_Flatten_output_0"
+            ],
+            "feature_output": [
+                "output"
+            ],
+            "weight_path": "linear.weight",
+            "bias_path": "linear.bias"
+        }
+    }
+}

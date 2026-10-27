@@ -50,6 +50,8 @@ export/**/*.json
 export/**/*.csv
 export/**/*.yaml
 
+*.csv
+
 # Generated task files
 config_user.json
 gen_task/*.json

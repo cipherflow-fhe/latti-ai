@@ -88,8 +88,8 @@ MultiplexedConv2DPackedLayer::MultiplexedConv2DPackedLayer(const CkksParameter& 
     n_block_per_ct = div_ceil(n_channel_per_ct, prod(skip_));
     need_repack_ = !(stride_ == Duo{1, 1} && skip_ == Duo{1, 1});
     level_ = level_in;
-    weight_scale = param_.get_q(level_) * residual_scale;
-    N = param_in.get_n();
+    weight_scale = param_.q()[level_] * residual_scale;
+    N = param_in.n();
 }
 
 void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation() {
@@ -155,7 +155,7 @@ void MultiplexedConv2DPackedLayer::prepare_weight_for_post_skip_rotation_lazy() 
     mask_pt.clear();
 }
 
-CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_reduct_rot(CkksContext& ctx,
+CkksPlaintext MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_reduct_rot(CkksContext& ctx,
                                                                                            int ct_idx,
                                                                                            int j,
                                                                                            int k) const {
@@ -173,7 +173,7 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_
     int kernel_shape_i = kernel_idx / kernel_shape_[1];
     int kernel_shape_j = kernel_idx % kernel_shape_[1];
 
-    vector<double> w(N / 2, 0.0);
+    vector<double> w(N, 0.0);
     for (int linear_idx = 0; linear_idx < n_block_per_ct * cached_input_block_size; ++linear_idx) {
         int t = linear_idx / cached_input_block_size;
         int shape_linear = linear_idx % cached_input_block_size;
@@ -198,13 +198,13 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_
             w[linear_idx] = weight_.get(channel_out, channel_in, kernel_shape_i, kernel_shape_j);
         }
     }
-    return ctx.encode_ringt(w, weight_scale);
+    return fhe_api::encode_ringt(ctx, w, weight_scale);
 }
 
-CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_bias_pt_for_index_reduct_rot(CkksContext& ctx,
+CkksPlaintext MultiplexedConv2DPackedLayer::generate_bias_pt_for_index_reduct_rot(CkksContext& ctx,
                                                                                        int bpt_idx) const {
     // Same layout as post_skip bias: indexed by n_packed_out_channel
-    vector<double> bias_vec(N / 2, 0.0);
+    vector<double> bias_vec(N, 0.0);
     for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         int j = linear_idx / (input_shape_[0] * skip_[0] * input_shape_[1] * skip_[1]);
         int residual = linear_idx % (input_shape_[0] * skip_[0] * input_shape_[1] * skip_[1]);
@@ -220,19 +220,19 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_bias_pt_for_index_redu
         int index = j * (input_shape_[0] * skip_[0] * input_shape_[1] * skip_[1]) + h * input_shape_[1] * skip_[1] + k;
         bias_vec[index] = bias_.get(channel);
     }
-    return ctx.encode_ringt(bias_vec, ctx.get_parameter().get_default_scale());
+    return fhe_api::encode_ringt(ctx, bias_vec, ctx.parameter().default_scale());
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 MultiplexedConv2DPackedLayer::generate_mask_pt_for_indices_reduct_rot(CkksContext& ctx, int ct_idx, int i) const {
     // In reduct_rot, block i of ct_idx has channel_local = i * skip_out_prod + sub_pos
     uint32_t sub_pos = ct_idx % cached_skip_out_prod;
     uint32_t channel_local = i * cached_skip_out_prod + sub_pos;
     auto si = select_tensor(channel_local);
-    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_ - 1));
+    return fhe_api::encode_ringt(ctx, si, ctx.parameter().q()[level_ - 1]);
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j, int k) const {
     // Extract indices from j
     int packed_in_channel_idx = j / n_block_per_ct;
@@ -240,7 +240,7 @@ MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, i
     int kernel_idx = k;
 
     const Duo padding_shape = kernel_shape_ / 2;
-    vector<double> w(N / 2, 0.0);
+    vector<double> w(N, 0.0);
     int base_channel_in = packed_in_channel_idx * n_channel_per_ct;
     int kernel_shape_i = kernel_idx / kernel_shape_[1];
     int kernel_shape_j = kernel_idx % kernel_shape_[1];
@@ -269,14 +269,14 @@ MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, i
         }
     }
 
-    return ctx.encode_ringt(w, weight_scale);
+    return fhe_api::encode_ringt(ctx, w, weight_scale);
 }
 
-CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const {
+CkksPlaintext MultiplexedConv2DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const {
     const Duo input_shape_ct = input_shape_ * skip_;
     const Duo skip_stride = stride_ * skip_;
 
-    vector<double> bias_vec(N / 2, 0.0);
+    vector<double> bias_vec(N, 0.0);
 
     for (uint32_t linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         const Duo block_pos = div_mod(linear_idx, static_cast<uint32_t>(cached_input_block_size));
@@ -293,17 +293,17 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_bias_pt_for_index(Ckks
         bias_vec[linear_idx] = bias_.get(channel);
     }
 
-    return ctx.encode_ringt(bias_vec, ctx.get_parameter().get_default_scale());
+    return fhe_api::encode_ringt(ctx, bias_vec, ctx.parameter().default_scale());
 }
 
 // Generate mask vector for block i on-demand.
 // Used in the mask-then-rotate pipeline: the mask keeps sub_pos 0 of block i
 // in `s` (shared across all ct_idx; rotation amount carries the ct_idx-specific
 // target offset).
-CkksPlaintextRingt MultiplexedConv2DPackedLayer::generate_mask_pt_for_indices(CkksContext& ctx, int i) const {
+CkksPlaintext MultiplexedConv2DPackedLayer::generate_mask_pt_for_indices(CkksContext& ctx, int i) const {
     const uint32_t zero_inserted_skip_prod = prod(zero_inserted_skip);
     auto si = select_tensor(i * zero_inserted_skip_prod);
-    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_ - 1));
+    return fhe_api::encode_ringt(ctx, si, ctx.parameter().q()[level_ - 1]);
 }
 
 vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& x) {
@@ -348,12 +348,12 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core(CkksContext& ctx, 
     });
 
     parallel_for(weight_pt.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        CkksCiphertext s(0);
+        CkksCiphertext s;
         for (int j = 0; j < weight_pt[ct_idx].size(); j++) {
             for (int k = 0; k < weight_pt[ct_idx][j].size(); k++) {
                 auto& w_pt_rt = weight_pt[ct_idx][j][k];
-                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
-                auto res = ctx_copy.mult_plain_mul(rotated_x[j][k], w_pt);
+                const auto& w_pt = w_pt_rt;
+                auto res = ctx_copy.mult(rotated_x[j][k], w_pt);
                 if (j == 0 && k == 0) {
                     s = move(res);
                 } else {
@@ -362,7 +362,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core(CkksContext& ctx, 
             }
         }
 
-        s = ctx_copy.rescale(s, ctx_copy.get_parameter().get_default_scale());
+        s = ctx_copy.rescale(s);
         s = sum_slot(ctx_copy, s, skip_[0], skip_[1] * input_shape_[1]);
         vector<int32_t> steps;
         for (int i = 0; i < n_block_per_ct; i++) {
@@ -378,11 +378,11 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core(CkksContext& ctx, 
         auto s_rots = ctx_copy.rotate(s, steps);
         for (int i = 0; i < n_block_per_ct; i++) {
             auto si = select_tensor((ct_idx * n_block_per_ct + i) % output_channels_per_ct);
-            auto p_ss = ctx_copy.encode(si, level_ - 1, ctx_copy.get_parameter().get_q(level_ - 1));
-            auto c_m_s = ctx_copy.mult_plain(s_rots[steps[i]], p_ss);
+            auto p_ss = fhe_api::encode(ctx_copy, si, level_ - 1, ctx_copy.parameter().q()[level_ - 1]);
+            auto c_m_s = ctx_copy.mult(s_rots[steps[i]], p_ss);
             if ((ct_idx * n_block_per_ct + i) < n_out_channel_) {
                 result_ct[ct_idx * n_block_per_ct + i] =
-                    move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
+                    ctx_copy.rescale(c_m_s);
             }
         }
     });
@@ -394,7 +394,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core(CkksContext& ctx, 
         if (p == 0) {
             sp = move(c_m_s);
             int bpt_idx = i / output_channels_per_ct;
-            sp = ctx.add_plain_ringt(sp, bias_pt[bpt_idx]);
+            sp = ctx.add(sp, bias_pt[bpt_idx]);
         } else {
             sp = ctx.add(sp, c_m_s);
         }
@@ -443,18 +443,18 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
         res.resize(n_weight);
     }
     parallel_for(n_weight, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        CkksCiphertext s(0);
+        CkksCiphertext s;
         uint32_t n_j = lazy_encoding ? n_packed_in_channel * n_block_per_ct : weight_pt[ct_idx].size();
         for (int j = 0; j < n_j; j++) {
             uint32_t n_k = lazy_encoding ? cached_kernel_size : weight_pt[ct_idx][j].size();
             for (int k = 0; k < n_k; k++) {
                 CkksCiphertext res;
-                CkksPlaintextRingt gen_w_pt_rt;
+                CkksPlaintext gen_w_pt_rt;
                 if (lazy_encoding)
                     gen_w_pt_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, j, k);
-                const CkksPlaintextRingt& w_pt_rt = lazy_encoding ? gen_w_pt_rt : weight_pt[ct_idx][j][k];
-                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
-                res = ctx_copy.mult_plain_mul(rotated_x[j][k], w_pt);
+                const CkksPlaintext& w_pt_rt = lazy_encoding ? gen_w_pt_rt : weight_pt[ct_idx][j][k];
+                const auto& w_pt = w_pt_rt;
+                res = ctx_copy.mult(rotated_x[j][k], w_pt);
                 if (j == 0 && k == 0) {
                     s = move(res);
                 } else {
@@ -463,7 +463,7 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
             }
         }
 
-        s = ctx_copy.rescale(s, ctx_copy.get_parameter().get_default_scale());
+        s = ctx_copy.rescale(s);
         if (!need_repack_) {
             res[ct_idx] = move(s);
         } else {
@@ -481,14 +481,14 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
                 const int32_t rot_step = -row_offset - col_offset - channel_in_ct % zero_inserted_skip[1] +
                                          i * prod(skip_) * input_feature_size;
 
-                CkksPlaintextRingt gen_m_pt;
+                CkksPlaintext gen_m_pt;
                 if (lazy_encoding) {
                     gen_m_pt = generate_mask_pt_for_indices(ctx_copy, i);
                 }
-                const CkksPlaintextRingt& m_pt_rt = lazy_encoding ? gen_m_pt : mask_pt[i];
-                auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level_ - 1);
-                auto c_m = ctx_copy.mult_plain_mul(s, m_pt);
-                c_m = ctx_copy.rescale(c_m, ctx_copy.get_parameter().get_default_scale());
+                const CkksPlaintext& m_pt_rt = lazy_encoding ? gen_m_pt : mask_pt[i];
+                const auto& m_pt = m_pt_rt;
+                auto c_m = ctx_copy.mult(s, m_pt);
+                c_m = ctx_copy.rescale(c_m);
                 result_ct[ct_idx * n_block_per_ct + i] = ctx_copy.rotate(c_m, rot_step);
             }
         }
@@ -509,11 +509,11 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
         }
     }
     for (int i = 0; i < (int)res.size(); i++) {
-        CkksPlaintextRingt gen_b_pt;
+        CkksPlaintext gen_b_pt;
         if (lazy_encoding)
             gen_b_pt = generate_bias_pt_for_index(ctx, i);
-        const CkksPlaintextRingt& b_pt = lazy_encoding ? gen_b_pt : bias_pt[i];
-        res[i] = ctx.add_plain_ringt(res[i], b_pt);
+        const CkksPlaintext& b_pt = lazy_encoding ? gen_b_pt : bias_pt[i];
+        res[i] = ctx.add(res[i], b_pt);
     }
     return res;
 }
@@ -578,12 +578,12 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core_for_reduct_rot(Ckk
         // No mask needed, directly add bias
         vector<CkksCiphertext> res(n_weight);
         parallel_for(n_weight, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-            CkksCiphertext s(0);
+            CkksCiphertext s;
             for (int j = 0; j < weight_pt[ct_idx].size(); j++) {
                 for (int k = 0; k < weight_pt[ct_idx][j].size(); k++) {
                     auto& w_pt_rt = weight_pt[ct_idx][j][k];
-                    auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
-                    auto mult_res = ctx_copy.mult_plain_mul(rotated_x[j][k], w_pt);
+                    const auto& w_pt = w_pt_rt;
+                    auto mult_res = ctx_copy.mult(rotated_x[j][k], w_pt);
                     if (j == 0 && k == 0) {
                         s = move(mult_res);
                     } else {
@@ -591,8 +591,8 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core_for_reduct_rot(Ckk
                     }
                 }
             }
-            s = ctx_copy.rescale(s, ctx_copy.get_parameter().get_default_scale());
-            res[ct_idx] = ctx.add_plain_ringt(s, bias_pt[ct_idx]);
+            s = ctx_copy.rescale(s);
+            res[ct_idx] = ctx.add(s, bias_pt[ct_idx]);
         });
         return res;
     }
@@ -606,12 +606,12 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core_for_reduct_rot(Ckk
         uint32_t sub_pos = ct_idx % skip_out_prod;
         uint32_t output_ct_group = ct_idx / skip_out_prod;
 
-        CkksCiphertext s(0);
+        CkksCiphertext s;
         for (int j = 0; j < weight_pt[ct_idx].size(); j++) {
             for (int k = 0; k < weight_pt[ct_idx][j].size(); k++) {
                 auto& w_pt_rt = weight_pt[ct_idx][j][k];
-                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
-                auto mult_res = ctx_copy.mult_plain_mul(rotated_x[j][k], w_pt);
+                const auto& w_pt = w_pt_rt;
+                auto mult_res = ctx_copy.mult(rotated_x[j][k], w_pt);
                 if (j == 0 && k == 0) {
                     s = move(mult_res);
                 } else {
@@ -620,7 +620,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core_for_reduct_rot(Ckk
             }
         }
 
-        s = ctx_copy.rescale(s, ctx_copy.get_parameter().get_default_scale());
+        s = ctx_copy.rescale(s);
         s = sum_slot(ctx_copy, s, skip_[0], skip_[1] * input_shape_[1]);
         s = sum_slot(ctx_copy, s, skip_[1], 1);
 
@@ -643,9 +643,9 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core_for_reduct_rot(Ckk
                 // against the post_skip-layout mask_pt for now. reduct_rot has no
                 // prepare_weight function wired up, so this path is effectively dead.
                 auto& m_pt_rt = mask_pt[i];
-                auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level_ - 1);
-                auto c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], m_pt);
-                result_ct[channel_out] = move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
+                const auto& m_pt = m_pt_rt;
+                auto c_m_s = ctx_copy.mult(s_rots[steps[i]], m_pt);
+                result_ct[channel_out] = ctx_copy.rescale(c_m_s);
             }
         }
     });
@@ -659,7 +659,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core_for_reduct_rot(Ckk
         if (p == 0) {
             sp = move(c_m_s);
             int bpt_idx = i / n_channel_per_ct_out;
-            sp = ctx.add_plain_ringt(sp, bias_pt[bpt_idx]);
+            sp = ctx.add(sp, bias_pt[bpt_idx]);
         } else {
             sp = ctx.add(sp, c_m_s);
         }

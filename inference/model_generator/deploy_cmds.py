@@ -20,7 +20,23 @@ import math
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+_repo_root = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_repo_root))
+sys.path.insert(0, str(_repo_root / 'inference' / 'lattisense'))
+
+# The lattiSense frontend uses absolute `frontend.*` imports internally, while
+# this repo imports it as `inference.lattisense.frontend.*`. Alias the leaf
+# modules so set_fhe_param() and the node constructors share one g_param.
+import inference.lattisense.frontend as _latti_frontend
+import frontend
+import frontend.custom_task
+import frontend.types
+
+sys.modules['inference.lattisense.frontend.custom_task'] = frontend.custom_task
+sys.modules['inference.lattisense.frontend.types'] = frontend.types
+_latti_frontend.custom_task = frontend.custom_task
+_latti_frontend.types = frontend.types
+
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.activation_layer import *
 from inference.model_generator.layers.add_pack import *
@@ -83,11 +99,10 @@ from inference.model_generator.layers.par_upper_diagonal_softmax import (
     ParUpperDiagonalMultipleSquare,
 )
 from training.model_compiler.components import (
-    N16QP1546H192H32,
-    PN13QP218,
-    PN14QP438,
-    PN15QP880,
-    PN16QP1761,
+    PN12Default,
+    PN13Default,
+    PN14Default,
+    PN15Default,
 )
 
 
@@ -98,11 +113,10 @@ def read_config(config_path):
 
 
 _FHE_PARAMS = {
-    'PN13QP218': PN13QP218,
-    'PN14QP438': PN14QP438,
-    'PN15QP880': PN15QP880,
-    'PN16QP1761': PN16QP1761,
-    'N16QP1546H192H32': N16QP1546H192H32,
+    'PN12Default': PN12Default,
+    'PN13Default': PN13Default,
+    'PN14Default': PN14Default,
+    'PN15Default': PN15Default,
 }
 
 
@@ -110,19 +124,12 @@ def set_param(param_name):
     if param_name not in _FHE_PARAMS:
         raise ValueError(f'Unsupported FHE parameter name: {param_name!r}')
     fhe = _FHE_PARAMS[param_name]
-    if param_name == 'N16QP1546H192H32':
-        param = CkksBtpParam.create_default_param()
-    else:
-        param = CkksParam.create_custom_param(
-            n=fhe.poly_modulus_degree,
-            q=fhe.q,
-            p=fhe.p,
-            scale=1 << fhe.log_default_scale,
-        )
+    log_n = fhe.poly_modulus_degree.bit_length() - 1
+    param = CkksParam.create_default_param(log_n, RingType.ConjugateInvariant)
     set_fhe_param(param)
 
 
-def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordinary', lazy=False):
+def gen_custom_task(task_path, param_name='PN14Default', use_gpu=True, style='ordinary', lazy=False):
     n = _FHE_PARAMS[param_name].poly_modulus_degree
     set_param(param_name)
     task_config_info = read_config(os.path.join(task_path, 'task_config.json'))
@@ -232,7 +239,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     f"feature '{feature_id}' is already registered with {len(nodes)} ciphertexts, expected {count}"
                 )
             return nodes
-        nodes = [CkksCiphertextNode(feature_id + f'input{k}', level=level) for k in range(count)]
+        nodes = [CkksCiphertextNode(id=feature_id + f'input{k}', level=level) for k in range(count)]
         feature_id_to_nodes_map[feature_id] = nodes
         input_args.append(Argument(feature_id, nodes))
         return nodes
@@ -244,38 +251,38 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
 
     def _pdm_upper_layer(layer_type, shape, head_shape, n_heads, layer_id, layer_config):
         if layer_type == 'pdmstats':
-            return ParUpperDiagonalLNStats(shape, head_shape, n_heads, n // 2)
+            return ParUpperDiagonalLNStats(shape, head_shape, n_heads, n)
         if layer_type == 'pdmcenter':
-            return ParUpperDiagonalLNXCentered(shape, head_shape, n_heads, n // 2)
+            return ParUpperDiagonalLNXCentered(shape, head_shape, n_heads, n)
         if layer_type == 'pdminit':
-            return ParUpperDiagonalLNMinimaxInit(shape, head_shape, n_heads, n // 2)
+            return ParUpperDiagonalLNMinimaxInit(shape, head_shape, n_heads, n)
         if layer_type == 'pdmgs':
-            return ParUpperDiagonalLNGoldschmidt(shape, head_shape, n_heads, n // 2)
+            return ParUpperDiagonalLNGoldschmidt(shape, head_shape, n_heads, n)
         if layer_type == 'pdmaffine':
-            return ParUpperDiagonalLNAffine(shape, head_shape, n_heads, n // 2)
+            return ParUpperDiagonalLNAffine(shape, head_shape, n_heads, n)
         if layer_type == 'pdmgamma':
-            return ParUpperDiagonalPolyActRNGamma(shape, head_shape, n_heads, n // 2)
+            return ParUpperDiagonalPolyActRNGamma(shape, head_shape, n_heads, n)
         if layer_type == 'pdmpoly':
             degree = int(layer_config.get('degree', layer_config.get('order', 2)))
             if degree not in (2, 4):
                 raise ValueError(f"pdmpoly layer '{layer_id}' only supports degree 2 or 4, got {degree}")
-            return ParUpperDiagonalPolyActRNPoly(shape, head_shape, n_heads, n // 2, degree)
+            return ParUpperDiagonalPolyActRNPoly(shape, head_shape, n_heads, n, degree)
         if layer_type == 'pdmupperaddpt':
-            return ParUpperDiagonalAddPt(shape, head_shape, n_heads, n // 2)
+            return ParUpperDiagonalAddPt(shape, head_shape, n_heads, n)
         if layer_type == 'pdmupperpoly':
-            return ParUpperDiagonalPoly(shape, head_shape, n_heads, n // 2, int(layer_config.get('order', 15)))
+            return ParUpperDiagonalPoly(shape, head_shape, n_heads, n, int(layer_config.get('order', 15)))
         if layer_type == 'pdmmulsquare':
-            return ParUpperDiagonalMultipleSquare(shape, head_shape, n_heads, n // 2)
+            return ParUpperDiagonalMultipleSquare(shape, head_shape, n_heads, n)
         if layer_type == 'pdmheadcolsum':
-            return ParUpperDiagonalHeadColSum(shape, head_shape, n_heads, n // 2)
+            return ParUpperDiagonalHeadColSum(shape, head_shape, n_heads, n)
         if layer_type == 'pdminvinit':
-            return ParUpperDiagonalInverseInit(shape, head_shape, n_heads, n // 2)
+            return ParUpperDiagonalInverseInit(shape, head_shape, n_heads, n)
         if layer_type == 'pdminviter':
-            return ParUpperDiagonalInverseIter(shape, head_shape, n_heads, n // 2)
+            return ParUpperDiagonalInverseIter(shape, head_shape, n_heads, n)
         if layer_type == 'pdmctmul':
-            return ParUpperDiagonalGELU(shape, head_shape, n_heads, n // 2)
+            return ParUpperDiagonalGELU(shape, head_shape, n_heads, n)
         if layer_type == 'pdmupperpolymultct':
-            return ParUpperDiagonalPolyMultCt(shape, head_shape, n_heads, n // 2)
+            return ParUpperDiagonalPolyMultCt(shape, head_shape, n_heads, n)
         raise ValueError(f'Unsupported PDM upper layer type: {layer_type}')
 
     def _pdm_upper_shape(feat, head_shape):
@@ -294,7 +301,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         head_shape = _pdm_head_shape(feat, feature_id, layer_id, layer_type)
         if layer_type == 'pdm_add_pt':
             shape, lower_head_shape = _pdm_lower_shape_and_head(feat, feature_id, layer_id, layer_type)
-            return ParLowerDiagonalAddPt(shape, lower_head_shape, n_heads, n // 2)
+            return ParLowerDiagonalAddPt(shape, lower_head_shape, n_heads, n)
         return _pdm_upper_layer(
             layer_type, _pdm_upper_shape(feat, head_shape), head_shape, n_heads, layer_id, layer_config
         )
@@ -302,7 +309,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     def _pdm_feature_ct_count(feat, feature_id, layer_id, layer_type):
         n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_type)
         head_shape = _pdm_head_shape(feat, feature_id, layer_id, layer_type)
-        layer = ParUpperDiagonalPolyActRNGamma(_pdm_upper_shape(feat, head_shape), head_shape, n_heads, n // 2)
+        layer = ParUpperDiagonalPolyActRNGamma(_pdm_upper_shape(feat, head_shape), head_shape, n_heads, n)
         return layer.total_cts
 
     def _pdmpcmm_shapes(layer_config, feat_in, feat_out, input_fid, layer_id):
@@ -335,7 +342,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         errors = []
         for fid_A, shape_A, fid_B, shape_B in candidates:
             try:
-                layer = ParLowerDiagCCMM(shape_A, shape_B, n_heads, _head_dim(layer_id, layer_type), n // 2)
+                layer = ParLowerDiagCCMM(shape_A, shape_B, n_heads, _head_dim(layer_id, layer_type), n)
                 return layer, fid_A, fid_B
             except (AssertionError, ValueError) as exc:
                 errors.append(f'{shape_A} @ {shape_B}: {exc}')
@@ -347,7 +354,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         n_heads = _require_positive_task_config_int('n_heads', consumer_layer_id, consumer_type)
         if consumer_type == 'pdmtranspose':
             shape = _pdm_transpose_shape(feat, feature_id, consumer_layer_id, consumer_type)
-            layer = ParLowerDiagTranspose(shape, n_heads, _head_dim(consumer_layer_id, consumer_type), n // 2)
+            layer = ParLowerDiagTranspose(shape, n_heads, _head_dim(consumer_layer_id, consumer_type), n)
             return layer.m_c
         if consumer_type == 'pdmpcmm':
             feat_out = config_info['feature'][consumer['feature_output'][0]]
@@ -357,7 +364,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 W_T_shape,
                 n_heads,
                 _head_dim(consumer_layer_id, consumer_type),
-                n // 2,
+                n,
                 has_bias='bias_path' in consumer,
             )
             return layer.K_col * layer.m_c
@@ -441,14 +448,14 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     shape_per_head = _par_input_shape(feat, n_heads, split_rows=False, feature_id=input_fid)
                     par_feature_shapes[input_fid] = shape_per_head
                     block_size = _matmul_block_size()
-                    G = _par_group_count(block_size, n_heads, n // 2)
+                    G = _par_group_count(block_size, n_heads, n)
                     n_packed = _par_ct_count(shape_per_head, block_size, G)
                 elif consumer_type == 'parccmm':
                     idx = consumer['feature_input'].index(input_fid)
                     shape_per_head = _par_input_shape(feat, n_heads, split_rows=(idx == 1), feature_id=input_fid)
                     par_feature_shapes[input_fid] = shape_per_head
                     block_size = _matmul_block_size()
-                    G = _par_group_count(block_size, n_heads, n // 2)
+                    G = _par_group_count(block_size, n_heads, n)
                     n_packed = _par_ct_count(shape_per_head, block_size, G)
                 elif consumer_type == 'parcpmm':
                     shape_per_head = _par_input_shape(feat, n_heads, split_rows=False, feature_id=input_fid)
@@ -456,11 +463,11 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     block_size = _matmul_block_size()
                     if shape_per_head[1] > block_size:
                         raise ValueError(f"parcpmm input '{input_fid}' per-head width exceeds matmul_block_size")
-                    G = _par_group_count(block_size, n_heads, n // 2)
+                    G = _par_group_count(block_size, n_heads, n)
                     n_packed = math.ceil(shape_per_head[0] / block_size) * G
                 elif consumer_type == 'pdmtranspose':
                     shape = _pdm_transpose_shape(feat, input_fid, consumer_layer_id, consumer_type)
-                    layer = ParLowerDiagTranspose(shape, n_heads, _head_dim(consumer_layer_id, consumer_type), n // 2)
+                    layer = ParLowerDiagTranspose(shape, n_heads, _head_dim(consumer_layer_id, consumer_type), n)
                     n_packed = layer.m_c
                 elif consumer_type == 'pdmpcmm':
                     feat_out = config_info['feature'][consumer['feature_output'][0]]
@@ -470,7 +477,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         W_T_shape,
                         n_heads,
                         _head_dim(consumer_layer_id, consumer_type),
-                        n // 2,
+                        n,
                         has_bias='bias_path' in consumer,
                     )
                     n_packed = layer.K_col * layer.m_c
@@ -516,7 +523,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     )
                     n_packed = layer.total_cts
                 elif consumer_type in {'pcmstats', 'pcmcenter', 'pcmgamma', 'pcmpoly', 'add', 'add2d', 'pcm_add_pt'}:
-                    shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n // 2, feature_id=input_fid)
+                    shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n, feature_id=input_fid)
                     par_feature_shapes[input_fid] = shape_per_head
                 else:
                     raise ValueError(
@@ -619,13 +626,13 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 _input_shape_1d = config_info['feature'][layer_input_feature_ids[0]]['shape'][0]
                 _skip_1d = skip[0] if isinstance(skip, list) else skip
                 if style == 'multiplexed':
-                    n_packed_in_channel = math.ceil(n_in_channel / math.ceil(n // 2 / _input_shape_1d))
+                    n_packed_in_channel = math.ceil(n_in_channel / math.ceil(n / _input_shape_1d))
                 else:
-                    n_packed_in_channel = math.ceil(n_in_channel / int(n // 2 // _input_shape_1d // _skip_1d))
+                    n_packed_in_channel = math.ceil(n_in_channel / int(n // _input_shape_1d // _skip_1d))
 
             for input_node in layer_input_feature_ids:
                 if input_node not in feature_id_to_nodes_map.keys():
-                    x = [CkksCiphertextNode(input_node + f'input{k}', level=level) for k in range(n_packed_in_channel)]
+                    x = [CkksCiphertextNode(id=input_node + f'input{k}', level=level) for k in range(n_packed_in_channel)]
                     feature_id_to_nodes_map.update({input_node: x})
                     input_args.append(Argument(input_node, x))
 
@@ -789,13 +796,13 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             dim = feat['dim']
 
             feature_id_in_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
-            drop_level_n = feature_id_in_nodes[0].level - level
-            if level < feature_id_in_nodes[0].level:
+            drop_level_n = feature_id_in_nodes[0].metadata.level - level
+            if level < feature_id_in_nodes[0].metadata.level:
                 feature_id_in_nodes = [drop_level(node, drop_level_n) for node in feature_id_in_nodes]
 
             if dim == 0:
                 skip_0d = feat['skip'] if not isinstance(feat['skip'], list) else feat['skip'][0]
-                n_channel_per_ct_0d = int(n // 2 // skip_0d)
+                n_channel_per_ct_0d = int(n // skip_0d)
                 polyrelu = PolyRelu0D(order, skip_0d, n_channel_per_ct_0d)
                 if lazy:
                     poly_data_source = CustomDataNode(type='poly_data_source', id=f'{layer_id}')
@@ -813,7 +820,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 if lazy:
                     poly_data_source = CustomDataNode(type='poly_data_source', id=f'{layer_id}')
                 if style == 'multiplexed':
-                    n_channel_per_ct_1d = int(n // 2 // shape_1d)
+                    n_channel_per_ct_1d = int(n // shape_1d)
                     polyrelu = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
                     if lazy:
                         layer_output_nodes = polyrelu.call_bsgs_mux_lazy(
@@ -823,7 +830,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
                         layer_output_nodes = polyrelu.call_bsgs_mux(feature_id_in_nodes, weight_pt)
                 else:
-                    n_channel_per_ct_1d = int(n // 2 // shape_1d // skip_1d)
+                    n_channel_per_ct_1d = int(n // shape_1d // skip_1d)
                     polyrelu = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
                     if lazy:
                         layer_output_nodes = polyrelu.call_bsgs_skip_lazy(
@@ -858,7 +865,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             groups = layer_config['groups']
             skip_1d = skip[0] if isinstance(skip, list) else skip
             if style == 'multiplexed':
-                n_channel_per_ct = math.ceil(n // 2 / input_shape)
+                n_channel_per_ct = math.ceil(n / input_shape)
                 n_packed_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
                 n_packed_out_channel = math.ceil(n_out_channel / n_channel_per_ct)
                 if groups == n_out_channel and groups != 1:
@@ -925,7 +932,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         if block_select_pt:
                             input_args.append(Argument(f'convm_{layer_id}', block_select_pt))
             else:
-                n_channel_per_ct = int(n // 2 // input_shape // skip_1d)
+                n_channel_per_ct = int(n // input_shape // skip_1d)
                 n_pack_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
                 n_packed_out_channel = math.ceil(n_out_channel / (n_channel_per_ct * stride))
                 conv1d = Conv1DPackedLayer(
@@ -999,8 +1006,8 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         elif layer_config['type'] == 'bootstrapping':
             layer_output_nodes = []
             for node in feature_id_to_nodes_map[layer_input_feature_ids[0]]:
-                if node.level > 0:
-                    node = drop_level(node, node.level)
+                if node.metadata.level > 0:
+                    node = drop_level(node, node.metadata.level)
                 layer_output_nodes.append(bootstrap(node))
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
@@ -1024,7 +1031,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     shape_per_head = par_feature_shapes.get(layer_input_feature_ids[0])
                     if shape_per_head is None:
                         shape_per_head, _, _, _ = _feature_mat_ct_info(
-                            input_feat0, n_heads, n // 2, feature_id=layer_input_feature_ids[0]
+                            input_feat0, n_heads, n, feature_id=layer_input_feature_ids[0]
                         )
                         par_feature_shapes[layer_input_feature_ids[0]] = shape_per_head
 
@@ -1036,7 +1043,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                             _register_feature_nodes(input_fid, n_cts, int(feat['level']))
                         else:
                             input_shape, _, _, n_cts = _feature_mat_ct_info(
-                                feat, n_heads, n // 2, block_size=block_size, feature_id=input_fid
+                                feat, n_heads, n, block_size=block_size, feature_id=input_fid
                             )
                             par_feature_shapes[input_fid] = input_shape
                             _register_feature_nodes(input_fid, n_cts, int(feat['level']))
@@ -1099,7 +1106,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 concat_layer = ConcatLayer()
                 input_node_lists = [feature_id_to_nodes_map[fid] for fid in layer_input_feature_ids]
                 total_channels = sum(input_n_channels)
-                mask_pts = [CkksPlaintextRingtNode(f'concat_mask_{layer_id}_{i}') for i in range(total_channels)]
+                mask_pts = [CkksPlaintextNode(f'concat_mask_{layer_id}_{i}', is_ringt=True) for i in range(total_channels)]
                 layer_output_nodes = concat_layer.call_multiple_inputs_mixed_pack(
                     input_node_lists,
                     input_n_channels,
@@ -1133,7 +1140,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 total_channels = sum(input_n_channels)
 
                 # Create mask plaintext nodes for each global channel
-                mask_pts = [CkksPlaintextRingtNode(f'concat_mask_{layer_id}_{i}') for i in range(total_channels)]
+                mask_pts = [CkksPlaintextNode(f'concat_mask_{layer_id}_{i}', is_ringt=True) for i in range(total_channels)]
 
                 layer_output_nodes = concat_layer.call_multiple_inputs_uneven(
                     input_node_lists, input_n_channels, pack, input_shape, use_skip, mask_pts
@@ -1202,7 +1209,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 need_repack = any(output_shape[i] < block_shape[i] for i in range(len(stride)))
                 repack_mask_pt = None
                 if need_repack:
-                    repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}')
+                    repack_mask_pt = CkksPlaintextNode(f'repack_mask_{layer_id}', is_ringt=True)
                 layer_output_nodes = avgpool.call_interleaved_avgpool(
                     feature_id_to_nodes_map[layer_input_feature_ids[0]],
                     block_expansion,
@@ -1233,11 +1240,11 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         )
                         input_args.append(Argument(f'{layer_id}', [avg_data_source]))
                     elif is_1d:
-                        n_channel_per_ct = int(math.ceil(n / 2 / input_shape[0]))
+                        n_channel_per_ct = int(math.ceil(n / input_shape[0]))
                         out_channels_per_ct = n_channel_per_ct * stride[0]
                         n_select_pt = min(n_in_channel, out_channels_per_ct)
                         select_tensor_pt = [
-                            CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)
+                            CkksPlaintextNode(f'select_pt_{layer_id}_{i}', is_ringt=True) for i in range(n_select_pt)
                         ]
                         layer_output_nodes = avgpool.call_multiplexed_avgpool(
                             feature_id_to_nodes_map[layer_input_feature_ids[0]],
@@ -1256,11 +1263,11 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         )
                         input_args.append(Argument(f'{layer_id}', [avg_data_source]))
                     else:
-                        n_channel_per_ct = int(math.ceil(n / 2 / (input_shape[0] * input_shape[1])))
+                        n_channel_per_ct = int(math.ceil(n / (input_shape[0] * input_shape[1])))
                         out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
                         n_select_pt = min(n_in_channel, out_channels_per_ct)
                         select_tensor_pt = [
-                            CkksPlaintextRingtNode(f'select_pt_{layer_id}_{i}') for i in range(n_select_pt)
+                            CkksPlaintextNode(f'select_pt_{layer_id}_{i}', is_ringt=True) for i in range(n_select_pt)
                         ]
                         layer_output_nodes = avgpool.call_multiplexed_avgpool(
                             feature_id_to_nodes_map[layer_input_feature_ids[0]],
@@ -1276,7 +1283,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             if 'special_info' not in config_info['feature'][layer_input_feature_ids[0]]:
                 # call_skip_0d path — matching test_fc_fc_feature0d Layer 1
                 skip_0d = config_info['feature'][layer_input_feature_ids[0]]['skip']
-                n_channel_per_ct = int(n // 2 // skip_0d)
+                n_channel_per_ct = int(n // skip_0d)
                 pack_0d = n_channel_per_ct
                 n_packed_in_feature = math.ceil(n_in_channel / n_channel_per_ct)
                 n_packed_out_feature = math.ceil(n_out_channel / n_channel_per_ct)
@@ -1314,7 +1321,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     invalid_fill_1d = int(invalid_fill[0])
                     block_stride = skip_1d  # skip already contains invalid_fill
                     block_size = shape_1d * block_stride
-                    n_block_per_ct = int(n // 2) // block_size
+                    n_block_per_ct = int(n) // block_size
                     valid_sub = skip_1d // invalid_fill_1d
                     n_channel_per_ct_1d = n_block_per_ct * valid_sub
                     dense = DensePackedLayer(
@@ -1347,7 +1354,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         n_in_channel,
                         special_shape,
                         special_skip,
-                        math.ceil(n // 2 / (special_shape[0] * special_skip[0] * special_shape[1] * special_skip[1])),
+                        math.ceil(n / (special_shape[0] * special_skip[0] * special_shape[1] * special_skip[1])),
                         n_in_channel,
                         n_out_channel,
                         invalid_fill=invalid_fill,
@@ -1377,13 +1384,13 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 par_feature_shapes[input_fid] = shape_per_head
             block_size = _matmul_block_size()
 
-            partranspose_layer = ParBlockColMajorTranspose(shape_per_head, block_size, n_heads, n // 2)
+            partranspose_layer = ParBlockColMajorTranspose(shape_per_head, block_size, n_heads, n)
             G = partranspose_layer.G
             n_cts_in = partranspose_layer.num_blocks * G
 
             # Register par-type input (deferred from the top of the loop)
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
+                x = [CkksCiphertextNode(id=input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1402,13 +1409,13 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             shape_full = tuple(feat_in['shape'])
             block_size = _matmul_block_size()
 
-            add_pt_layer = ParBlockColMajorAddPt(shape_full, block_size, n_heads, n // 2)
+            add_pt_layer = ParBlockColMajorAddPt(shape_full, block_size, n_heads, n)
 
             n_cts_in = add_pt_layer.total_cts
 
             input_fid = layer_input_feature_ids[0]
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
+                x = [CkksCiphertextNode(id=input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1425,7 +1432,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             input_fid = layer_input_feature_ids[0]
             feat_in = config_info['feature'][input_fid]
             shape = _pdm_transpose_shape(feat_in, input_fid, layer_id, layer_config['type'])
-            layer = ParLowerDiagTranspose(shape, n_heads, _head_dim(layer_id, layer_config['type']), n // 2)
+            layer = ParLowerDiagTranspose(shape, n_heads, _head_dim(layer_id, layer_config['type']), n)
 
             if input_fid not in feature_id_to_nodes_map:
                 _register_feature_nodes(input_fid, layer.m_c, level)
@@ -1462,7 +1469,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 W_T_shape,
                 n_heads,
                 _head_dim(layer_id, layer_config['type']),
-                n // 2,
+                n,
                 has_bias='bias_path' in layer_config,
             )
             n_cts_in = layer.K_col * layer.m_c
@@ -1513,7 +1520,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             W_shape = (shape_A_full[1], feat_out['shape'][1])
 
             has_bias = 'bias_path' in layer_config
-            parcpmm_layer = ParBlockColMajorCPMM(shape_A, W_shape, block_size, n_heads, n // 2, has_bias=has_bias)
+            parcpmm_layer = ParBlockColMajorCPMM(shape_A, W_shape, block_size, n_heads, n, has_bias=has_bias)
 
             # Compute input CT count based on mode
             if parcpmm_layer.mode == 'REDUCE':
@@ -1524,7 +1531,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             # Register par-type input (deferred from the top of the loop)
             input_fid = layer_input_feature_ids[0]
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
+                x = [CkksCiphertextNode(id=input_fid + f'input{j}', level=level) for j in range(n_cts_in)]
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1556,7 +1563,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 shape_B = _par_input_shape(feat_B, n_heads, split_rows=True, feature_id=fid_B)
                 par_feature_shapes[fid_B] = shape_B
 
-            parccmm_layer = ParBlockColMajorCCMM(shape_A, shape_B, block_size, n_heads, n // 2)
+            parccmm_layer = ParBlockColMajorCCMM(shape_A, shape_B, block_size, n_heads, n)
             G = parccmm_layer.G
 
             # Register par-type inputs (deferred from the top of the loop)
@@ -1568,7 +1575,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                         shape_per_head = _par_input_shape(feat, n_heads, split_rows=(idx == 1), feature_id=input_fid)
                         par_feature_shapes[input_fid] = shape_per_head
                     n_cts = _par_ct_count(shape_per_head, block_size, G)
-                    x = [CkksCiphertextNode(input_fid + f'input{j}', level=int(feat['level'])) for j in range(n_cts)]
+                    x = [CkksCiphertextNode(id=input_fid + f'input{j}', level=int(feat['level'])) for j in range(n_cts)]
                     feature_id_to_nodes_map[input_fid] = x
                     input_args.append(Argument(input_fid, x))
 
@@ -1588,10 +1595,10 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feat_in = config_info['feature'][input_fid]
             shape = tuple(feat_in['shape'])
             block_size = _matmul_block_size()
-            layer = ParBlockColMajorLNStats(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
+            layer = ParBlockColMajorLNStats(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n)
 
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                x = [CkksCiphertextNode(id=input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1607,10 +1614,10 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feat_in = config_info['feature'][input_fid]
             shape = tuple(feat_in['shape'])
             block_size = _matmul_block_size()
-            layer = ParBlockColMajorLNXCentered(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
+            layer = ParBlockColMajorLNXCentered(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n)
 
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                x = [CkksCiphertextNode(id=input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1624,7 +1631,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             n_heads = task_config_info.get('n_heads', 1)
             feat_in = config_info['feature'][layer_input_feature_ids[0]]
             block_size = _matmul_block_size()
-            layer = ParBlockColMajorLNMinimaxInit(block_size=block_size, n_slot=n // 2)
+            layer = ParBlockColMajorLNMinimaxInit(block_size=block_size, n_slot=n)
 
             data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
             input_args.append(Argument(f'{layer_id}', [data_source]))
@@ -1638,7 +1645,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             n_heads = task_config_info.get('n_heads', 1)
             feat_in = config_info['feature'][layer_input_feature_ids[0]]
             block_size = _matmul_block_size()
-            layer = ParBlockColMajorLNGoldschmidt(block_size=block_size, n_slot=n // 2)
+            layer = ParBlockColMajorLNGoldschmidt(block_size=block_size, n_slot=n)
 
             data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
             input_args.append(Argument(f'{layer_id}', [data_source]))
@@ -1655,7 +1662,7 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             feat_in = config_info['feature'][layer_input_feature_ids[0]]
             shape = tuple(feat_in['shape'])
             block_size = _matmul_block_size()
-            layer = ParBlockColMajorLNAffine(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
+            layer = ParBlockColMajorLNAffine(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n)
 
             data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
             input_args.append(Argument(f'{layer_id}', [data_source]))
@@ -1682,12 +1689,12 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 shape=shape,
                 block_size=block_size,
                 n_heads=n_heads,
-                n_slot=n // 2,
+                n_slot=n,
                 K=K,
             )
 
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                x = [CkksCiphertextNode(id=input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1715,13 +1722,13 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 shape=shape,
                 block_size=block_size,
                 n_heads=n_heads,
-                n_slot=n // 2,
+                n_slot=n,
                 degree=degree,
                 K=K,
             )
 
             if input_fid not in feature_id_to_nodes_map:
-                x = [CkksCiphertextNode(input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
+                x = [CkksCiphertextNode(id=input_fid + f'input{j}', level=level) for j in range(layer.total_cts)]
                 feature_id_to_nodes_map[input_fid] = x
                 input_args.append(Argument(input_fid, x))
 
@@ -1791,7 +1798,10 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     output_args = [Argument(output_id, feature_id_to_nodes_map[output_id]) for output_id in task_output_feature_ids]
 
     process_custom_task(
-        input_args=input_args, output_args=output_args, output_instruction_path=task_path, fpga_acc=False
+        input_args=input_args,
+        output_args=output_args,
+        output_instruction_path=task_path,
+        processor=Processor.GPU if use_gpu else Processor.CPU,
     )
 
 

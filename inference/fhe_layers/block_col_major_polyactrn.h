@@ -42,7 +42,7 @@ private:
     uint32_t num_block_rows_, num_block_cols_;
     Array<double, 1> gamma_vals_;
 
-    std::vector<ls::CkksPlaintextRingt> gamma_pt_;  // per block-column (bj)
+    std::vector<ls::CkksPlaintext> gamma_pt_;  // per block-column (bj)
 };
 
 // ============================================================
@@ -72,11 +72,11 @@ private:
     Array<double, 2> coeffs_;
 
     // Degree >= 2
-    std::vector<ls::CkksPlaintextRingt> c2_pt_;      // per bj
-    std::vector<ls::CkksPlaintextRingt> c1_pt_;      // per bj
-    std::vector<ls::CkksPlaintextRingt> c0_add_pt_;  // per (bi,bj)
+    std::vector<ls::CkksPlaintext> c2_pt_;      // per bj
+    std::vector<ls::CkksPlaintext> c1_pt_;      // per bj
+    std::vector<ls::CkksPlaintext> c0_add_pt_;  // per (bi,bj)
 
     // Degree 4 only
-    std::vector<ls::CkksPlaintextRingt> c4_pt_;  // per bj
-    std::vector<ls::CkksPlaintextRingt> c3_pt_;  // per bj
+    std::vector<ls::CkksPlaintext> c4_pt_;  // per bj
+    std::vector<ls::CkksPlaintext> c3_pt_;  // per bj
 };

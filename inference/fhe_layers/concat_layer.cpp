@@ -156,14 +156,14 @@ Feature2DEncrypted ConcatLayer::run_multiple_inputs_uneven(CkksContext& ctx,
         uint32_t src_ct_idx = local_ch / n_channel_per_ct;
 
         // Use pre-computed mask plaintext
-        CkksPlaintextMul mask_mul = ctx.ringt_to_mul(mask_pt[global_ch], level);
-        masked_cts[global_ch] = ctx.mult_plain_mul(inputs[input_idx].data[src_ct_idx], mask_mul);
+        const auto& mask_mul = mask_pt[global_ch];
+        masked_cts[global_ch] = ctx.mult(inputs[input_idx].data[src_ct_idx], mask_mul);
     }
 
     // Step 2: Rotate and accumulate into output CTs
     vector<CkksCiphertext> out_data(n_out_ct);
     for (uint32_t out_ct_idx = 0; out_ct_idx < n_out_ct; ++out_ct_idx) {
-        CkksCiphertext sum(0);
+        CkksCiphertext sum;
         bool first_in_ct = true;
 
         for (uint32_t ch_in_ct = 0; ch_in_ct < n_channel_per_ct; ++ch_in_ct) {
@@ -212,7 +212,7 @@ Feature2DEncrypted ConcatLayer::run_multiple_inputs_uneven(CkksContext& ctx,
                 sum = ctx.add(sum, rotated);
             }
         }
-        out_data[out_ct_idx] = ctx.rescale(sum, ctx.get_parameter().get_default_scale());
+        out_data[out_ct_idx] = ctx.rescale(sum);
     }
 
     Feature2DEncrypted result(&ctx, level - 1);
@@ -235,7 +235,7 @@ void ConcatLayer::prepare_mask_data(const CkksParameter& param,
     CkksContext ctx = CkksContext::create_empty_context(param);
     uint32_t n_channel_per_block = prod(skip);
     uint32_t block_size = prod(shape * skip);
-    uint32_t N = param.get_n();
+    uint32_t N = param.n();
 
     uint64_t total_channels = 0;
     for (auto n_ch : input_n_channels)
@@ -258,7 +258,7 @@ void ConcatLayer::prepare_mask_data(const CkksParameter& param,
         uint32_t src_cx = src_offset / skip[1];
         uint32_t src_cy = src_offset % skip[1];
 
-        vector<double> mask_vec(N / 2, 0.0);
+        vector<double> mask_vec(N, 0.0);
         for (uint32_t x = 0; x < shape[0]; ++x) {
             for (uint32_t y = 0; y < shape[1]; ++y) {
                 uint32_t slot =
@@ -267,7 +267,7 @@ void ConcatLayer::prepare_mask_data(const CkksParameter& param,
             }
         }
 
-        mask_pt[global_ch] = ctx.encode_ringt(mask_vec, ctx.get_parameter().get_q(level));
+        mask_pt[global_ch] = fhe_api::encode_ringt(ctx, mask_vec, ctx.parameter().q()[level]);
     }
 }
 
@@ -279,7 +279,7 @@ void ConcatLayer::prepare_mask_data_1d(const CkksParameter& param,
                                        const std::vector<uint32_t>& input_invalid_fills,
                                        int level) {
     CkksContext ctx = CkksContext::create_empty_context(param);
-    uint32_t N = param.get_n();
+    uint32_t N = param.n();
 
     uint64_t total_channels = 0;
     for (auto n_ch : input_n_channels)
@@ -312,14 +312,14 @@ void ConcatLayer::prepare_mask_data_1d(const CkksParameter& param,
         uint32_t block_idx = n_channel_per_block > 0 ? j_in_ct / n_channel_per_block : 0;
         uint32_t sub_pos = n_channel_per_block > 0 ? j_in_ct % n_channel_per_block : j_in_ct;
 
-        std::vector<double> mask_vec(N / 2, 0.0);
+        std::vector<double> mask_vec(N, 0.0);
         for (uint32_t l = 0; l < L_i; ++l) {
             uint64_t slot = (uint64_t)block_idx * block_size + (uint64_t)l * block_stride + sub_pos;
             if (slot < mask_vec.size()) {
                 mask_vec[slot] = 1.0;
             }
         }
-        mask_pt[global_ch] = ctx.encode_ringt(mask_vec, ctx.get_parameter().get_q(level));
+        mask_pt[global_ch] = fhe_api::encode_ringt(ctx, mask_vec, ctx.parameter().q()[level]);
     }
 }
 
@@ -329,7 +329,7 @@ void ConcatLayer::prepare_mask_data_0d(const CkksParameter& param,
                                        const std::vector<uint32_t>& input_skip_scalars,
                                        int level) {
     CkksContext ctx = CkksContext::create_empty_context(param);
-    uint32_t N = param.get_n();
+    uint32_t N = param.n();
 
     uint64_t total_channels = 0;
     for (auto n_ch : input_n_channels)
@@ -354,11 +354,11 @@ void ConcatLayer::prepare_mask_data_0d(const CkksParameter& param,
         uint32_t skip_i = input_skip_scalars[input_idx];
         uint64_t src_slot = (uint64_t)(local_ch % pack_i) * skip_i;
 
-        std::vector<double> mask_vec(N / 2, 0.0);
+        std::vector<double> mask_vec(N, 0.0);
         if (src_slot < mask_vec.size()) {
             mask_vec[src_slot] = 1.0;
         }
-        mask_pt[global_ch] = ctx.encode_ringt(mask_vec, ctx.get_parameter().get_q(level));
+        mask_pt[global_ch] = fhe_api::encode_ringt(ctx, mask_vec, ctx.parameter().q()[level]);
     }
 }
 
