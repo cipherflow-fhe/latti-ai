@@ -69,3 +69,8 @@ cifar10/
 lfw/
 resnet/
 resnet_new/
+
+# Test Dir
+examples/test_retina_dkd/
+examples/test_ViT/
+profiles/
