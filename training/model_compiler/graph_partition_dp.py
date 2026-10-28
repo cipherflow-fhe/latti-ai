@@ -58,6 +58,8 @@ from processor import (
     graph_to_task_config,
 )
 
+from score import encrypted_parameter_storage_enabled
+
 
 def update_bd_node_in_sub(node: FeatureNode, subgraph: nx.DiGraph, remaining_dag: nx.DiGraph) -> FeatureNode:
     pre_computes_sub = list(subgraph.predecessors(node))
@@ -162,6 +164,10 @@ def get_compute_score(
             use_gpu=getattr(config, 'use_gpu', True),
         )
         score = s_param.get_score()
+        if encrypted_parameter_storage_enabled():
+            storage = s_param.get_encrypted_parameter_storage()
+            if storage is not None:
+                score += config.encrypted_parameter_storage_weight * storage['bytes'] / (1 << 30)
         return score
     return 0.0
 

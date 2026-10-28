@@ -18,6 +18,7 @@
 from pathlib import Path
 import copy
 import time
+import json
 
 import networkx as nx
 import numpy as np
@@ -37,6 +38,8 @@ from components import (
 import processor
 from processor import *
 from graph_partition_dp import *
+
+from score import encrypted_parameter_storage_enabled, get_encrypted_parameter_storage_report
 
 MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
 PCM_TO_PDM_TYPES = {
@@ -192,6 +195,10 @@ def try_btp(
 
         # (3) Post-process
         if graph is not None:
+            if encrypted_parameter_storage_enabled():
+                graph.encrypted_parameter_dp_report = get_encrypted_parameter_storage_report(
+                    graph.dag, generate_param_dict_for_graph()
+                )
             graph = post_process(graph)
             valid_results.append((score, graph))
 
@@ -653,6 +660,19 @@ def dump_graph(
     insert_btp_scale_gamma_layers(graph)
     absorb_pcmgamma_layers(graph)
     recompute_final_level(graph)
+    if encrypted_parameter_storage_enabled():
+        report = get_encrypted_parameter_storage_report(graph.dag, generate_param_dict_for_graph())
+        previous = getattr(graph, 'encrypted_parameter_dp_report', report)
+        before = {item['layer_id']: item['counts'] for item in previous['layers']}
+        after = {item['layer_id']: item['counts'] for item in report['layers']}
+        if before != after:
+            raise ValueError('Final level recompute changed encrypted parameter storage from the DP candidate')
+        (output_dir / 'encrypted_parameter_storage_report.json').write_text(
+            json.dumps(report, indent=2) + '\n', encoding='utf-8'
+        )
+        print(f"Encrypted parameter storage: {report['storage_bytes']} bytes; "
+              f"runtime={report['runtime_score']}, refresh={report['refresh_score']}, "
+              f"storage={report['storage_score']}; unaccounted={report['unaccounted']}")
     transforms.insert_drop_level_layers(graph)
     graph.to_json(dict(), str(erg0_path), score=score)
 
@@ -705,6 +725,8 @@ def run_pipeline(
     bert_softmax_later_refinement_denominator_scale: float | None = None,
     use_gpu: bool = True,
     enable_score_cache: bool = True,
+    encrypted_parameter_storage_weight: float = 0.0,
+    deployment_mode: str = 'client_encrypted_input',
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -783,6 +805,12 @@ def run_pipeline(
         f'BACKEND={"gpu" if config.use_gpu else "cpu"}, '
         f'SCORE_CACHE={enable_score_cache}'
     )
+
+    if not math.isfinite(encrypted_parameter_storage_weight) or encrypted_parameter_storage_weight < 0:
+        raise ValueError('encrypted_parameter_storage_weight must be finite and non-negative')
+    if encrypted_parameter_storage_weight and deployment_mode != 'server_provisioned_runner':
+        raise ValueError('Storage scoring requires server_provisioned_runner')
+    config.encrypted_parameter_storage_weight = encrypted_parameter_storage_weight
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
 

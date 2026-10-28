@@ -120,13 +120,14 @@ def read_compile_config(config_path: str) -> dict[str, int | float | str]:
     if mat_pack_style not in MAT_PACK_STYLES:
         raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
     result = {
-        'n_heads': int(data['n_heads']),
-        'head_dim': int(data['head_dim']),
-        'matmul_block_size': int(data['matmul_block_size']),
+        'n_heads': int(data.get('n_heads', 1)),
+        'head_dim': int(data.get('head_dim', 0)),
+        'matmul_block_size': int(data.get('matmul_block_size', 0)),
         'mat_pack_style': mat_pack_style,
         'model_type': str(data.get('model_type', '')),
     }
     for key in (
+        'encrypted_parameter_storage_weight',
         'btp_scale',
         'set_btp_scale',
         'bert_softmax_values_btp_scale',
@@ -324,6 +325,8 @@ Examples:
             bert_softmax_later_refinement_denominator_scale=compile_config.get(
                 'bert_softmax_later_refinement_denominator_scale'
             ),
+            encrypted_parameter_storage_weight=compile_config.get('encrypted_parameter_storage_weight', 0.0),
+            deployment_mode=args.deployment_mode,
             # enable_score_cache=False
         )
 

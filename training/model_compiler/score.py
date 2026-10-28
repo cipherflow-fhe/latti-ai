@@ -14,6 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import math
 import sys
 from pathlib import Path
@@ -915,6 +916,72 @@ mpc_refresh_rate = 1 / 15
 ct_trans_rate = 1 / 10
 
 
+# Fixed calibration: no encryption or serialization is performed during DP.
+with open(Path(__file__).with_name('encrypted_parameter_size.json'), encoding='utf-8') as _size_file:
+    ENCRYPTED_PARAMETER_SIZE = json.load(_size_file)
+
+
+def encrypted_parameter_storage_enabled():
+    return getattr(config, 'encrypted_parameter_storage_weight', 0.0) > 0
+
+
+def encrypted_parameter_bytes(param, level):
+    calibration = ENCRYPTED_PARAMETER_SIZE
+    if param.to_dict() != calibration['parameter']:
+        raise ValueError(f'No encrypted parameter size calibration for {param.name}')
+    if str(level) not in calibration['bytes_per_element']:
+        raise ValueError(f'Uncalibrated encrypted parameter level: {level}')
+    return calibration['bytes_per_element'][str(level)]
+
+
+def get_encrypted_parameter_storage_report(dag, param_dict):
+    """Recount a concrete graph using the same layer interface as the DP score."""
+    report = {
+        'weight': config.encrypted_parameter_storage_weight,
+        'normalization_bytes': 1 << 30,
+        'calibration': ENCRYPTED_PARAMETER_SIZE,
+        'runtime_score': 0.0,
+        'refresh_score': 0.0,
+        'storage_bytes': 0,
+        'layers': [],
+        'unaccounted': [],
+    }
+    public_layers = {'add', 'add2d', 'reshape', 'drop_level', 'avgpool1d', 'avgpool2d',
+                     'concat', 'upsample_nearest', 'resize'}
+    for node in nx.topological_sort(dag):
+        if not isinstance(node, ComputeNode):
+            continue
+        if node.layer_type in {'bootstrapping', 'mpc_refresh'}:
+            if node.layer_type == 'bootstrapping':
+                report['refresh_score'] += BtpScoreParam(
+                    dag, node, param_dict, use_gpu=getattr(config, 'use_gpu', True)
+                ).get_score()
+            else:
+                raise ValueError('Storage reporting currently requires FHE bootstrapping, not MPC refresh')
+            continue
+        if node.layer_type in public_layers:
+            # Reshape/drop-level have no primitive score; preserve existing add/pool scores.
+            if node.layer_type not in {'reshape', 'drop_level', 'concat'}:
+                level = min(dag.nodes[p]['level'] for p in dag.predecessors(node))
+                report['runtime_score'] += FheScoreParam(
+                    dag, node, param_dict, level, use_gpu=getattr(config, 'use_gpu', True)
+                ).get_score()
+            continue
+        level = min(dag.nodes[p]['level'] for p in dag.predecessors(node))
+        score_param = FheScoreParam(dag, node, param_dict, level, use_gpu=getattr(config, 'use_gpu', True))
+        storage = score_param.get_encrypted_parameter_storage()
+        report['runtime_score'] += score_param.get_score()
+        if storage is None:
+            report['unaccounted'].append({'layer_id': node.layer_id, 'type': node.layer_type})
+            continue
+        report['layers'].append({'layer_id': node.layer_id, 'type': node.layer_type,
+                                'input_level': level, 'parameter_use_site_level': score_param.get_parameter_use_site_level(), **storage})
+        report['storage_bytes'] += storage['bytes']
+    report['storage_score'] = report['weight'] * report['storage_bytes'] / report['normalization_bytes']
+    report['total_score'] = report['runtime_score'] + report['refresh_score'] + report['storage_score']
+    return report
+
+
 class FheScoreParam:
     def __init__(
         self,
@@ -927,6 +994,7 @@ class FheScoreParam:
         preds: list[FeatureNode] = list(dag.predecessors(compute_node))
         succs: list[FeatureNode] = list(dag.successors(compute_node))
 
+        self.parameter = param[preds[0].ckks_parameter_id]
         self.dag = dag
         self.acc_rate = 1
         self.compute_node = compute_node
@@ -1026,11 +1094,35 @@ class FheScoreParam:
             )
         return score * self.acc_rate
 
-    def _build_layer_and_get_op_count(self, preds, n, layer_type, style):
-        """Instantiate the matching inference layer and return its get_fhe_op_count() dict.
+    def get_encrypted_parameter_storage(self):
+        counts = self.get_encrypted_param_count()
+        if counts is None:
+            return None
+        return {
+            'counts': counts,
+            'bytes': sum(count * encrypted_parameter_bytes(self.parameter, level)
+                         for level, kinds in counts.items() for count in kinds.values()),
+        }
+
+    def get_parameter_use_site_level(self):
+        # Match transforms.insert_drop_level_layers(): excess input levels are
+        # dropped before the operator, including at a bootstrapping output.
+        output = next(self.dag.successors(self.compute_node))
+        return min(self.input_mult_level,
+                   self.dag.nodes[output]['level'] + self.dag.nodes[self.compute_node]['level_cost'])
+
+    def get_encrypted_param_count(self):
+        preds = list(self.dag.predecessors(self.compute_node))
+        return self._build_layer_and_get_op_count(
+            preds, self.input_degree, self.compute_node.layer_type, config.style, encrypted_param_count=True
+        )
+
+    def _build_layer_and_get_op_count(self, preds, n, layer_type, style, encrypted_param_count=False):
+        """Instantiate the matching inference layer and return operation or parameter counts.
         Returns None if the layer type is not handled here.
         """
         node = self.compute_node
+        parameter_level = self.get_parameter_use_site_level() if encrypted_param_count else self.input_mult_level
         n_in = self.input_channel
         n_out = self.output_channel
         pack = self.pack
@@ -1044,6 +1136,9 @@ class FheScoreParam:
             if config.head_dim > 0 and head_shape[0] == config.head_dim and head_shape[1] != config.head_dim:
                 head_shape = [head_shape[1], head_shape[0]]
             return (head_shape[0], feature.shape[0]), tuple(head_shape)
+
+        if encrypted_param_count and layer_type not in {'conv2d', 'fc0', 'polyact', 'mult_scalar'}:
+            return None
 
         # ── conv2d ──────────────────────────────────────────────────────────
         if layer_type == 'conv2d' and node.dim == 2:
@@ -1081,7 +1176,7 @@ class FheScoreParam:
                         stride,
                         block_shape,
                     )
-                return layer.get_fhe_op_count(self.input_mult_level, n)
+                return None if encrypted_param_count else layer.get_fhe_op_count(self.input_mult_level, n)
 
             if style == 'ordinary':
                 if is_depthwise:
@@ -1108,6 +1203,8 @@ class FheScoreParam:
                         n_packed_in,
                         n_packed_out,
                     )
+                if encrypted_param_count:
+                    return None if is_depthwise else layer.get_encrypted_param_count(parameter_level)
                 return layer.get_fhe_op_count(self.input_mult_level)
 
             # style == 'multiplexed'
@@ -1136,6 +1233,8 @@ class FheScoreParam:
                     n_packed_in,
                     n_packed_out,
                 )
+            if encrypted_param_count:
+                return None if is_depthwise else layer.get_encrypted_param_count(parameter_level)
             return layer.get_fhe_op_count(self.input_mult_level)
 
         # ── conv1d ──────────────────────────────────────────────────────────
@@ -1220,7 +1319,8 @@ class FheScoreParam:
                         n_packed_in_feat,
                         n_packed_out_feat,
                     )
-                    return layer.get_fhe_op_count_skip_0d(n_packed_in_feat, skip_0d, self.input_mult_level)
+                    return (layer.get_encrypted_param_count_skip_0d(parameter_level) if encrypted_param_count
+                            else layer.get_fhe_op_count_skip_0d(n_packed_in_feat, skip_0d, self.input_mult_level))
 
                 elif len(special_shape) == 1:
                     # 1D multiplexed
@@ -1244,7 +1344,8 @@ class FheScoreParam:
                         invalid_fill=[invalid_fill_1d, 1],
                     )
                     n_input_ct = math.ceil(n_in / n_channel_per_ct_1d)
-                    return layer.get_fhe_op_count_1d_multiplexed(n_input_ct, n, self.input_mult_level)
+                    return (layer.get_encrypted_param_count_1d_multiplexed(n, parameter_level) if encrypted_param_count
+                            else layer.get_fhe_op_count_1d_multiplexed(n_input_ct, n, self.input_mult_level))
 
                 else:
                     # 2D multiplexed
@@ -1264,7 +1365,8 @@ class FheScoreParam:
                         invalid_fill=invalid_fill,
                     )
                     n_input_ct = math.ceil(n_in / pack)
-                    return layer.get_fhe_op_count_multiplexed(n_input_ct, n, self.input_mult_level)
+                    return (layer.get_encrypted_param_count_multiplexed(n, parameter_level) if encrypted_param_count
+                            else layer.get_fhe_op_count_multiplexed(n_input_ct, n, self.input_mult_level))
             return None
 
         # ── avgpool ──────────────────────────────────────────────────────────
@@ -1319,27 +1421,32 @@ class FheScoreParam:
                 n_channel_per_ct_0d = int(n // 2 // skip_0d)
                 layer = PolyRelu0D(order, skip_0d, n_channel_per_ct_0d)
                 n_input_ct = n_packed_in
-                return layer.get_fhe_op_count_bsgs_feature0d(n_input_ct, self.input_mult_level)
+                return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
+                    else layer.get_fhe_op_count_bsgs_feature0d(n_input_ct, self.input_mult_level))
             if pred.dim == 1:
                 shape_1d = pred.shape[0]
                 skip_1d = pred.sp_info['skip'][0] if isinstance(pred.sp_info.get('skip'), list) else 1
                 if style == 'multiplexed':
                     n_channel_per_ct_1d = int(n // 2 // shape_1d)
                     layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
-                    return layer.get_fhe_op_count_bsgs_mux(n_packed_in, self.input_mult_level)
+                    return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
+                    else layer.get_fhe_op_count_bsgs_mux(n_packed_in, self.input_mult_level))
                 n_channel_per_ct_1d = int(n // 2 // shape_1d // skip_1d)
                 layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
-                return layer.get_fhe_op_count_bsgs_skip(n_packed_in, self.input_mult_level)
+                return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
+                    else layer.get_fhe_op_count_bsgs_skip(n_packed_in, self.input_mult_level))
             # dim == 2
             input_shape = self.input_shape
             skip = self.input_skip
             layer = PolyRelu2D(input_shape, order, skip, pack)
-            return layer.get_fhe_op_count_bsgs_feature2d(n_packed_in, self.input_mult_level)
+            return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
+                    else layer.get_fhe_op_count_bsgs_feature2d(n_packed_in, self.input_mult_level))
 
         # ── mult_scalar ──────────────────────────────────────────────────────
         elif layer_type == 'mult_scalar':
             layer = MultScalarLayer()
-            return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
+            return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
+                    else layer.get_fhe_op_count(n_packed_in, self.input_mult_level))
 
         # ── add / add2d ──────────────────────────────────────────────────────
         elif layer_type in ('add', 'add2d'):
