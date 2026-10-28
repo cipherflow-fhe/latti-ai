@@ -70,6 +70,28 @@ runs/cifar10/task/
 }
 ```
 
+## Python 环境
+
+仓库当前已验证的 Python 环境是 `/home/linghm/pytorch_venv`（Python 3.10，含
+PyTorch、ONNX、ONNX Runtime、NumPy 和 NetworkX）。从仓库根目录执行 Python
+步骤时，建议显式使用该解释器，并设置 LattiSense 模块路径：
+
+```bash
+cd /home/linghm/project/latti-ai
+export PYTHON_BIN=/home/linghm/pytorch_venv/bin/python
+export PYTHONPATH="$PWD/inference/lattisense${PYTHONPATH:+:$PYTHONPATH}"
+
+$PYTHON_BIN training/run_compile.py --help
+$PYTHON_BIN inference/interface/gen_mega_ag.py --help
+```
+
+文档中的 `python` 命令可替换为 `$PYTHON_BIN`；`run_compile.py` 和
+`gen_mega_ag.py` 都应在仓库根目录运行。Provisioner、Runner 和 decryptor
+是已编译的 C++ 可执行文件，不依赖 Python 虚拟环境；GPU Runner 仍需显式传入
+`--gpu`。如果使用其他虚拟环境，应按
+`inference/lattisense/requirements.txt` 和 `training/requirements.txt` 安装依赖，
+并确认 PyTorch、CUDA、ONNX 版本与当前构建兼容。
+
 ## Quick Start
 
 以下以 CIFAR10 风格目录为例。路径可按实际任务调整。
