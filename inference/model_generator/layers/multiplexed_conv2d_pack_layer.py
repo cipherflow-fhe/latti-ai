@@ -15,6 +15,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+import math
 import numpy as np
 from pathlib import Path
 from collections import defaultdict
@@ -465,6 +466,14 @@ class MultiplexedConv2DPackedLayer:
             n_mask = min(self.n_block_per_ct, self.n_out_channel)
             mask_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(n_mask)]
         return weight_pt, bias_pt, mask_pt
+
+    def get_encrypted_param_count(self, level: int) -> dict[int, dict[str, int]]:
+        """Count stored server-provisioned parameters; masks are Runner-local PTs."""
+        n_weight = math.ceil(self.n_out_channel / self.n_block_per_ct) * self.weight_input_count
+        n_weight *= self.kernel_shape[0] * self.kernel_shape[1]
+        n_bias = math.ceil(self.n_out_channel / (self.stride[0] * self.stride[1] * self.n_channel_per_ct))
+        bias_level = level - (1 if self.stride == [1, 1] and self.skip == [1, 1] else 2)
+        return {level: {'weight': n_weight}, bias_level: {'bias': n_bias}}
 
     def make_param_ct_nodes(self, layer_id, level: int):
         """Return encrypted weight/bias nodes plus encrypted structural masks."""

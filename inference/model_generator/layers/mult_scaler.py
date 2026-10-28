@@ -47,6 +47,10 @@ class MultScalarLayer:
         """Return weight_pt list with n_input_nodes elements."""
         return [CkksPlaintextRingtNode(f'mult_scalar_{layer_id}_{i}') for i in range(n_input_nodes)]
 
+    def get_encrypted_param_count(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
+        """One stored encrypted scalar per input ciphertext."""
+        return {level: {'scalar': n_ct}}
+
     def make_param_ct_nodes(self, layer_id, n_input_nodes, level: int):
         """Return encrypted scalar parameter nodes with the same IDs as make_pt_nodes()."""
         return [CkksCiphertextNode(f'mult_scalar_{layer_id}_{i}', level=level) for i in range(n_input_nodes)]

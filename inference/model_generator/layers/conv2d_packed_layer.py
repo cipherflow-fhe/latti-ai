@@ -190,6 +190,12 @@ class Conv2DPackedLayer:
         bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(self.n_packed_out_channel)]
         return weight_pt, bias_pt
 
+    def get_encrypted_param_count(self, level: int) -> dict[int, dict[str, int]]:
+        """Count parameter ciphertexts at their existing use-site levels."""
+        n_weight = self.n_packed_out_channel * self.n_packed_in_channel * self.pack
+        n_weight *= self.kernel_shape[0] * self.kernel_shape[1]
+        return {level: {'weight': n_weight}, level - 1: {'bias': self.n_packed_out_channel}}
+
     def make_param_ct_nodes(self, layer_id, level: int):
         """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes()."""
         index = self.kernel_shape[0] * self.kernel_shape[1]

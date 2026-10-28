@@ -351,6 +351,14 @@ class PolyReluBase:
                     coeff_levels[idx] = target_level + 1
         return coeff_levels
 
+    def get_encrypted_param_count(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
+        """Count every coefficient instance using the encrypted BSGS level mapping."""
+        counts = {}
+        for coeff_level in self._bsgs_encrypted_coeff_levels(level):
+            group = counts.setdefault(coeff_level, {'coefficient': 0})
+            group['coefficient'] += n_ct
+        return counts
+
     def make_param_ct_nodes(self, layer_id, n_pack_in_channel, input_level: int):
         """Return encrypted polynomial coefficient nodes grouped by coefficient index.
 

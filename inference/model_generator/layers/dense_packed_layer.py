@@ -223,6 +223,29 @@ class DensePackedLayer:
         bias_pt = [CkksPlaintextRingtNode(f'denseb_{layer_id}_{i}') for i in range(self.n_packed_out_feature)]
         return weight_pt, bias_pt
 
+    def get_encrypted_param_count_skip_0d(self, level: int) -> dict[int, dict[str, int]]:
+        return {
+            level: {'weight': self.n_packed_out_feature * self.n_packed_in_feature * self.pack},
+            level - 1: {'bias': self.n_packed_out_feature},
+        }
+
+    def get_encrypted_param_count_multiplexed(self, n, level: int) -> dict[int, dict[str, int]]:
+        input_ct_shape = [int(self.input_shape[i] * self.skip[i]) for i in range(2)]
+        n_num_pre_ct = math.ceil((n // 2) / math.prod(input_ct_shape))
+        n_channel_per_block = math.prod(self.skip[i] // self.invalid_fill[i] for i in range(2))
+        n_channel = self.n_in_channel // math.prod(self.input_shape)
+        n_block_input = math.ceil(n_channel / (n_channel_per_block * n_num_pre_ct)) * n_num_pre_ct
+        n_packed_out = math.ceil(self.n_out_channel / n_num_pre_ct)
+        return {level: {'weight': n_packed_out * n_block_input}, level - 1: {'bias': n_packed_out}}
+
+    def get_encrypted_param_count_1d_multiplexed(self, n, level: int) -> dict[int, dict[str, int]]:
+        n_block_per_ct = (n // 2) // (int(self.input_shape[0]) * int(self.skip[0]))
+        n_valid_per_ct = n_block_per_ct * (int(self.skip[0]) // int(self.invalid_fill[0]))
+        n_actual_channels = self.n_in_channel // int(self.input_shape[0])
+        n_block_input = math.ceil(n_actual_channels / n_valid_per_ct) * n_block_per_ct
+        n_packed_out = math.ceil(self.n_out_channel / n_block_per_ct)
+        return {level: {'weight': n_packed_out * n_block_input}, level - 1: {'bias': n_packed_out}}
+
     def make_param_ct_nodes_skip_0d(self, layer_id, level: int):
         """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes_skip_0d()."""
         weight_ct_size = self.n_packed_in_feature * self.pack
