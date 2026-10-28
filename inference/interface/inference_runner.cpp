@@ -24,6 +24,7 @@
 #include <stdexcept>
 
 #include "interface/runner_bundle_io.h"
+#include "fhe_layers/multiplexed_conv2d_pack_layer.h"
 #include "lattisense/cxx_sdk_v2/cxx_fhe_task.h"
 
 namespace {
@@ -91,6 +92,39 @@ ExecutorFunc create_load_encrypted_param_executor() {
                                      ", got " + std::to_string(value->get_level()));
         }
         output = value;
+    };
+}
+
+ExecutorFunc create_multiplexed_conv_mask_executor() {
+    return [](ExecutionContext& exec_ctx, const std::unordered_map<NodeIndex, std::any>&, std::any& output,
+              const ComputeNode& self) -> void {
+        if (!self.custom_prop.has_value()) {
+            throw std::runtime_error("[Runner] encode_pt mask missing custom properties");
+        }
+        const auto& attrs = self.custom_prop->attributes;
+        if (attrs.value("op_class", std::string()) != "MultiplexedConv2DPackedLayer" ||
+            attrs.value("type", std::string()) != "mask_pt") {
+            throw std::runtime_error("[Runner] unsupported encode_pt node");
+        }
+        fhe::CkksContext* ckks_ctx_ptr = exec_ctx.get_arithmetic_context<fhe::CkksContext>();
+        if (!ckks_ctx_ptr) {
+            ckks_ctx_ptr = exec_ctx.get_arithmetic_context<fhe::CkksBtpContext>();
+        }
+        if (!ckks_ctx_ptr) {
+            throw std::runtime_error("[Runner] encode_pt mask cannot get CKKS context");
+        }
+        const auto read_duo = [&attrs](const char* key) {
+            const auto& value = attrs.at(key);
+            return Duo{value.at(0).get<uint32_t>(), value.at(1).get<uint32_t>()};
+        };
+        const auto mask = MultiplexedConv2DPackedLayer::select_tensor_for_config(
+            read_duo("input_shape"), read_duo("skip"), read_duo("stride"),
+            attrs.at("n_channel_per_ct").get<uint32_t>(), read_duo("external_upsample_factor"),
+            attrs.at("i").get<int>() *
+                prod(read_duo("skip") * read_duo("stride") / read_duo("external_upsample_factor")));
+        const int level = attrs.at("level").get<int>();
+        auto pt = ckks_ctx_ptr->encode_ringt(mask, ckks_ctx_ptr->get_parameter().get_q(level));
+        output = std::make_shared<fhe::CkksPlaintextRingt>(std::move(pt));
     };
 }
 
@@ -638,18 +672,24 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
     if (use_gpu_) {
 #ifdef INFERENCE_SDK_ENABLE_GPU
         lattisense::FheTaskGpu task(runner_dir_.string());
+        std::unordered_map<std::string, ExecutorFunc> custom_executors{
+            {"encode_pt", create_multiplexed_conv_mask_executor()}};
         if (runtime_lazy_parameters) {
-            task.bind_custom_executors({{"load_encrypted_param_ct", create_load_encrypted_param_executor()}});
+            custom_executors["load_encrypted_param_ct"] = create_load_encrypted_param_executor();
         }
+        task.bind_custom_executors(custom_executors);
         task.run(eval_context_.get(), cxx_args, progress_cb, gpu_device_);
 #else
         throw std::runtime_error("[Runner] GPU support is disabled. Reconfigure with -DINFERENCE_SDK_ENABLE_GPU=ON.");
 #endif
     } else {
         lattisense::FheTaskCpu task(runner_dir_.string());
+        std::unordered_map<std::string, ExecutorFunc> custom_executors{
+            {"encode_pt", create_multiplexed_conv_mask_executor()}};
         if (runtime_lazy_parameters) {
-            task.bind_custom_executors({{"load_encrypted_param_ct", create_load_encrypted_param_executor()}});
+            custom_executors["load_encrypted_param_ct"] = create_load_encrypted_param_executor();
         }
+        task.bind_custom_executors(custom_executors);
         task.run(eval_context_.get(), cxx_args, progress_cb);
     }
 
