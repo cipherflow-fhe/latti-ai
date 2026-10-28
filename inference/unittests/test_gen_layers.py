@@ -75,6 +75,12 @@ from inference.model_generator.layers.par_upper_diagonal_softmax import (  # noq
 from training.model_export.onnx_to_json import *  # noqa: E402
 
 
+# Target processor for every generated test task. GPU data marks compute nodes with
+# on_cpu=false, so it cannot be mixed with CPU fixtures (and vice versa): pick one,
+# regenerate when switching. Overridden by the --processor argument of main().
+PROCESSOR = Processor.CPU
+
+
 def export_to_onnx(model, inputs, output_names, onnx_path, dynamic_axes=None, opset_version=18):
     """
     Export the PyTorch model to ONNX format.
@@ -222,7 +228,9 @@ class TestLayerExport(unittest.TestCase):
         shapes = [16, 32, 64]
         for s in shapes:
             print(f'sub-test: s={s}')
-            input_ct = [CkksCiphertextNode(id=f'input_ct_{i}', level=n_in_level) for i in range(int(np.ceil(s * s * 1 / 16384)))]
+            input_ct = [
+                CkksCiphertextNode(id=f'input_ct_{i}', level=n_in_level) for i in range(int(np.ceil(s * s * 1 / 16384)))
+            ]
             square = SquareLayer(level=n_in_level)
             output_ct = square.call(input_ct)
             input_args = list()
@@ -231,7 +239,7 @@ class TestLayerExport(unittest.TestCase):
                 input_args=input_args,
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / f'CKKS_square_{s}_{s}' / f'level_{n_in_level}' / 'server',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_conv2d_packed(self):
@@ -405,7 +413,7 @@ class TestLayerExport(unittest.TestCase):
                                 / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                                 / f'level_{init_level}'
                                 / 'server',
-                                processor=Processor.CPU,
+                                processor=PROCESSOR,
                             )
 
     def test_inverse_mux_conv_repack(self):
@@ -481,7 +489,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                         / f'level_{init_level}'
                         / 'server',
-                        processor=Processor.CPU,
+                        processor=PROCESSOR,
                     )
 
     def test_inverse_mux_dw_conv(self):
@@ -561,7 +569,7 @@ class TestLayerExport(unittest.TestCase):
                                 / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                                 / f'level_{init_level}'
                                 / 'server',
-                                processor=Processor.CPU,
+                                processor=PROCESSOR,
                             )
 
     def test_poly_bsgs(self):
@@ -597,7 +605,7 @@ class TestLayerExport(unittest.TestCase):
                 output_instruction_path=base_path
                 / f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order}'
                 / f'level_{level}',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_fc_pack_skip_feature0d(self):
@@ -630,7 +638,8 @@ class TestLayerExport(unittest.TestCase):
             bsgs_bs = int(np.ceil(np.sqrt(pack)))
             weight_pt_size = n_packed_in_feature * pack
             input_ct = [
-                CkksCiphertextNode(id=f'input_ct_{i}', level=level) for i in range(int(np.ceil(n_in_channel / n_channel_per_ct)))
+                CkksCiphertextNode(id=f'input_ct_{i}', level=level)
+                for i in range(int(np.ceil(n_in_channel / n_channel_per_ct)))
             ]
             weight_pt = [
                 [CkksPlaintextNode(f'weight_pt_{i}_{j}', is_ringt=True) for j in range(weight_pt_size)]
@@ -652,7 +661,7 @@ class TestLayerExport(unittest.TestCase):
                 / f'CKKS_fc_prepare_weight1_1D_pack_skip_{s}_{s}'
                 / f'level_{level}'
                 / 'server',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_fc_fc_feature0d(self):
@@ -681,7 +690,8 @@ class TestLayerExport(unittest.TestCase):
         n_block_input0 = int(np.ceil(n_channel0 / (n_num_pre_ct0 * n_channel_per_block))) * n_num_pre_ct0
 
         input_ct = [
-            CkksCiphertextNode(id=f'input_ct0_{i}', level=init_level) for i in range(int(np.ceil(input_channel / n_slot)))
+            CkksCiphertextNode(id=f'input_ct0_{i}', level=init_level)
+            for i in range(int(np.ceil(input_channel / n_slot)))
         ]
         weight_pt0 = [
             [CkksPlaintextNode(f'weight_pt0_{i}_{j}', is_ringt=True) for j in range(n_block_input0)]
@@ -736,7 +746,7 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_fc_fc_{input_channel}_{output_channel}_{output_channel1}'
             / f'level_{init_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_fc_multiplexed_feature2d(self):
@@ -800,7 +810,7 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_poly_relu_bsgs_feature2d(self):
@@ -819,13 +829,15 @@ class TestLayerExport(unittest.TestCase):
 
         input_ct = [CkksCiphertextNode(id=f'input{k}', level=level) for k in range(n_pack_in_channel)]
         weight_pt0 = [
-            [CkksPlaintextNode(f'poly0w_{i}_{j}', is_ringt=True) for j in range(n_pack_in_channel)] for i in range(order0 + 1)
+            [CkksPlaintextNode(f'poly0w_{i}_{j}', is_ringt=True) for j in range(n_pack_in_channel)]
+            for i in range(order0 + 1)
         ]
         poly_layer0 = PolyRelu2D(input_shape, order0, skip, n_in_channel_per_ct)
         output_ct0 = poly_layer0.call_bsgs_feature2d(input_ct, weight_pt0)
 
         weight_pt1 = [
-            [CkksPlaintextNode(f'poly1w_{i}_{j}', is_ringt=True) for j in range(n_pack_in_channel)] for i in range(order1 + 1)
+            [CkksPlaintextNode(f'poly1w_{i}_{j}', is_ringt=True) for j in range(n_pack_in_channel)]
+            for i in range(order1 + 1)
         ]
         poly_layer1 = PolyRelu2D(input_shape, order1, skip, n_in_channel_per_ct)
         output_ct1 = poly_layer1.call_bsgs_feature2d(output_ct0, weight_pt1)
@@ -853,7 +865,7 @@ class TestLayerExport(unittest.TestCase):
             output_instruction_path=base_path
             / f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order0}_{order1}'
             / f'level_{level}',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_poly_bsgs_feature0d(self):
@@ -894,7 +906,7 @@ class TestLayerExport(unittest.TestCase):
                     output_instruction_path=base_path
                     / f'CKKS_poly_relu_bsgs_feature0d_{n_in_channel}_channel_order_{order}_skip_{skip_val}'
                     / f'level_{level}',
-                    processor=Processor.CPU,
+                    processor=PROCESSOR,
                 )
 
     def test_poly_bsgs_feature1d_skip(self):
@@ -942,7 +954,7 @@ class TestLayerExport(unittest.TestCase):
                         output_args=[Argument('output_ct', output_ct)],
                         output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_skip_{n_in_channel}_channel'
                         f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
-                        processor=Processor.CPU,
+                        processor=PROCESSOR,
                     )
 
     def test_poly_bsgs_feature1d_mux(self):
@@ -988,7 +1000,7 @@ class TestLayerExport(unittest.TestCase):
                         output_args=[Argument('output_ct', output_ct)],
                         output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_mux_{n_in_channel}_channel'
                         f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
-                        processor=Processor.CPU,
+                        processor=PROCESSOR,
                     )
 
     def test_conv1d_layer(self):
@@ -1013,7 +1025,9 @@ class TestLayerExport(unittest.TestCase):
                         n_channel_per_ct = int(N / input_shape / skip)
                         n_pack_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
                         n_packed_out_channel = math.ceil(n_out_channel / (n_channel_per_ct * stride))
-                        input_ct = [CkksCiphertextNode(id=f'input_{k}', level=init_level) for k in range(n_pack_in_channel)]
+                        input_ct = [
+                            CkksCiphertextNode(id=f'input_{k}', level=init_level) for k in range(n_pack_in_channel)
+                        ]
                         conv1d = Conv1DPackedLayer(
                             n_out_channel,
                             n_in_channel,
@@ -1040,7 +1054,7 @@ class TestLayerExport(unittest.TestCase):
                             / f'conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}'
                             / f'level_{init_level}'
                             / 'server',
-                            processor=Processor.CPU,
+                            processor=PROCESSOR,
                         )
 
     def test_mux_conv1d_layer(self):
@@ -1068,15 +1082,22 @@ class TestLayerExport(unittest.TestCase):
                         n_packed_out_channel = math.ceil(n_out_channel / n_channel_per_ct)
                         n_block_per_ct = math.ceil(n_channel_per_ct / skip)
                         n_weight_pt = math.ceil(n_out_channel / n_block_per_ct)
-                        input_ct = [CkksCiphertextNode(id=f'input_{k}', level=init_level) for k in range(n_packed_in_channel)]
+                        input_ct = [
+                            CkksCiphertextNode(id=f'input_{k}', level=init_level) for k in range(n_packed_in_channel)
+                        ]
                         weight_pt = [
                             [
-                                [CkksPlaintextNode(f'weight_pt_{i}_{k}_{j}', is_ringt=True) for k in range(kernel_shape)]
+                                [
+                                    CkksPlaintextNode(f'weight_pt_{i}_{k}_{j}', is_ringt=True)
+                                    for k in range(kernel_shape)
+                                ]
                                 for j in range(n_packed_in_channel * n_block_per_ct)
                             ]
                             for i in range(n_weight_pt)
                         ]
-                        bias_pt = [CkksPlaintextNode(f'bias_pt_{i}', is_ringt=True) for i in range(n_packed_out_channel)]
+                        bias_pt = [
+                            CkksPlaintextNode(f'bias_pt_{i}', is_ringt=True) for i in range(n_packed_out_channel)
+                        ]
                         conv1d = MultiplexedConv1DPackedLayer(
                             n_out_channel,
                             n_in_channel,
@@ -1089,7 +1110,9 @@ class TestLayerExport(unittest.TestCase):
                             n_packed_out_channel,
                         )
                         n_select_pt = min(n_block_per_ct, n_out_channel)
-                        block_select_pt = [CkksPlaintextNode(f'select_pt_{i}', is_ringt=True) for i in range(n_select_pt)]
+                        block_select_pt = [
+                            CkksPlaintextNode(f'select_pt_{i}', is_ringt=True) for i in range(n_select_pt)
+                        ]
                         output_ct = conv1d.call(input_ct, weight_pt, bias_pt, block_select_pt)
 
                         input_args = list()
@@ -1106,7 +1129,7 @@ class TestLayerExport(unittest.TestCase):
                             / f'multiplexed_conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}'
                             / f'level_{init_level}'
                             / 'server',
-                            processor=Processor.CPU,
+                            processor=PROCESSOR,
                         )
 
     def test_add_layer(self):
@@ -1134,7 +1157,7 @@ class TestLayerExport(unittest.TestCase):
                     / f'CKKS_add_layer/ch_{n_channel}_shape_{s}_{s}'
                     / f'level_{level}'
                     / 'server',
-                    processor=Processor.CPU,
+                    processor=PROCESSOR,
                 )
 
     def test_par_block_col_major_add(self):
@@ -1276,7 +1299,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}_{s}'
                         / f'level_{level}'
                         / 'server',
-                        processor=Processor.CPU,
+                        processor=PROCESSOR,
                     )
 
     def test_adaptive_avgpool2d_layer(self):
@@ -1308,7 +1331,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}_{s}'
                         / f'level_{level}'
                         / 'server',
-                        processor=Processor.CPU,
+                        processor=PROCESSOR,
                     )
 
     def test_interleaved_avgpool2d_layer(self):
@@ -1355,7 +1378,7 @@ class TestLayerExport(unittest.TestCase):
                             / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                             / f'level_{level}'
                             / 'server',
-                            processor=Processor.CPU,
+                            processor=PROCESSOR,
                         )
 
     def test_avgpool1d_layer(self):
@@ -1393,7 +1416,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}'
                         / f'level_{level}'
                         / 'server',
-                        processor=Processor.CPU,
+                        processor=PROCESSOR,
                     )
 
     def test_adaptive_avgpool1d_layer(self):
@@ -1425,7 +1448,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}'
                         / f'level_{level}'
                         / 'server',
-                        processor=Processor.CPU,
+                        processor=PROCESSOR,
                     )
 
     def test_mult_scalar_layer(self):
@@ -1452,7 +1475,7 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_mult_scalar/ch_{n_channel}_shape_{s}_{s}'
             / f'level_{level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_mux_dw_conv1d_layer(self):
@@ -1481,7 +1504,9 @@ class TestLayerExport(unittest.TestCase):
                             n_block_per_ct = math.ceil(n_channel_per_ct / skip)
                             n_packed_out = math.ceil(n_channel / n_channel_per_ct)
 
-                            input_ct = [CkksCiphertextNode(id=f'input_{k}', level=init_level) for k in range(n_packed_ct)]
+                            input_ct = [
+                                CkksCiphertextNode(id=f'input_{k}', level=init_level) for k in range(n_packed_ct)
+                            ]
                             # weight_pt[ct_idx][kernel_idx]
                             weight_pt = [
                                 [CkksPlaintextNode(f'weight_pt_{i}_{k}', is_ringt=True) for k in range(kernel_shape)]
@@ -1489,7 +1514,9 @@ class TestLayerExport(unittest.TestCase):
                             ]
                             bias_pt = [CkksPlaintextNode(f'bias_pt_{i}', is_ringt=True) for i in range(n_packed_out)]
                             n_select_pt = min(n_channel_per_ct, n_channel)
-                            block_select_pt = [CkksPlaintextNode(f'select_pt_{i}', is_ringt=True) for i in range(n_select_pt)]
+                            block_select_pt = [
+                                CkksPlaintextNode(f'select_pt_{i}', is_ringt=True) for i in range(n_select_pt)
+                            ]
 
                             conv1d = MultiplexedDWConv1DPackedLayer(
                                 n_channel,
@@ -1516,7 +1543,7 @@ class TestLayerExport(unittest.TestCase):
                                 / f'mux_dw_conv1d_ch_{n_channel}_input_{input_shape}_kernel_{kernel_shape}_skip_{skip}_stride_{stride}'
                                 / f'level_{init_level}'
                                 / 'server',
-                                processor=Processor.CPU,
+                                processor=PROCESSOR,
                             )
 
     def test_fc_1d_multiplexed(self):
@@ -1601,7 +1628,7 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_par_block_col_major_cpmm(self):
@@ -1630,7 +1657,7 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_block_col_major_cpmm' / f'level_{LEVEL}' / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_par_block_col_major_transpose(self):
@@ -1653,7 +1680,7 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_block_col_major_transpose' / f'level_{LEVEL}' / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_par_block_col_major_ccmm(self):
@@ -1685,7 +1712,7 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_block_col_major_ccmm' / f'level_{LEVEL}' / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_par_block_col_major_polyactrn(self):
@@ -1731,7 +1758,7 @@ class TestLayerExport(unittest.TestCase):
                 / f'degree_{degree}'
                 / f'level_{level}'
                 / 'server',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_par_block_col_major_layernorm(self):
@@ -1791,7 +1818,7 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output', output_cts)],
                 output_instruction_path=output_path,
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_par_lower_diag_transpose(self):
@@ -1809,7 +1836,10 @@ class TestLayerExport(unittest.TestCase):
             )
             input_cts = [CkksCiphertextNode(id=f'input_ct_{n_prepad}_{k}', level=level) for k in range(layer.m_c)]
             transpose_mask_pt = [
-                [CkksPlaintextNode(f'transpose_mask_pt_{out_diag_idx}_{mask_idx}', is_ringt=True) for mask_idx in range(2)]
+                [
+                    CkksPlaintextNode(f'transpose_mask_pt_{out_diag_idx}_{mask_idx}', is_ringt=True)
+                    for mask_idx in range(2)
+                ]
                 for out_diag_idx in range(layer.m)
             ]
             output_cts = layer.call(input_cts, transpose_mask_pt)
@@ -1825,7 +1855,7 @@ class TestLayerExport(unittest.TestCase):
                 / f'n_prepad_{n_prepad}'
                 / f'level_{level}'
                 / 'server',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_par_lower_diag_pcmm(self):
@@ -1863,7 +1893,9 @@ class TestLayerExport(unittest.TestCase):
                 for mb in range(layer.K)
             ]
             mask_wrap_pt = [CkksPlaintextNode(f'pcmm_mask_wrap_pt_{i}', is_ringt=True) for i in range(layer.H - 1)]
-            bias_pt = [CkksPlaintextNode(f'pcmm_bias_pt_{idx}', is_ringt=True) for idx in range(layer.n_out_mbs * layer.m_c)]
+            bias_pt = [
+                CkksPlaintextNode(f'pcmm_bias_pt_{idx}', is_ringt=True) for idx in range(layer.n_out_mbs * layer.m_c)
+            ]
             output_cts = layer.call(input_cts, pt_A, mask_wrap_pt, bias_pt)
 
             process_custom_task(
@@ -1879,7 +1911,7 @@ class TestLayerExport(unittest.TestCase):
                 / mode.lower()
                 / f'level_{level}'
                 / 'server',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_par_lower_diag_ccmm(self):
@@ -1917,7 +1949,10 @@ class TestLayerExport(unittest.TestCase):
             if layer.is_kqt:
                 kqt_route_pt = [
                     [
-                        [CkksPlaintextNode(f'ccmm_kqt_route_pt_{j}_{ell}_{mask_idx}', is_ringt=True) for mask_idx in range(4)]
+                        [
+                            CkksPlaintextNode(f'ccmm_kqt_route_pt_{j}_{ell}_{mask_idx}', is_ringt=True)
+                            for mask_idx in range(4)
+                        ]
                         for ell in range(layer.m)
                     ]
                     for j in range(layer.n_c)
@@ -1926,7 +1961,10 @@ class TestLayerExport(unittest.TestCase):
                 route_arg = Argument('kqt_route_pt', kqt_route_pt)
             else:
                 ordinary_route_pt = [
-                    [CkksPlaintextNode(f'ccmm_ordinary_route_pt_{ell}_{mask_idx}', is_ringt=True) for mask_idx in range(4)]
+                    [
+                        CkksPlaintextNode(f'ccmm_ordinary_route_pt_{ell}_{mask_idx}', is_ringt=True)
+                        for mask_idx in range(4)
+                    ]
                     for ell in range(layer.n)
                 ]
                 output_cts = layer.call(A_cts, B_cts, replication_mask_pt, ordinary_route_pt=ordinary_route_pt)
@@ -1941,7 +1979,7 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output', output_cts)],
                 output_instruction_path=base_path / 'CKKS_par_lower_diag_ccmm' / mode / f'level_{level}' / 'server',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_par_lower_diagonal_add_pt(self):
@@ -1964,7 +2002,7 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_lower_diagonal_add_pt' / f'level_{level}' / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_par_upper_diagonal_layernorm_parts(self):
@@ -1997,12 +2035,14 @@ class TestLayerExport(unittest.TestCase):
             / 'stats'
             / f'level_{stats_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
         xcenter_level = 2
         xcenter = ParUpperDiagonalLNXCentered(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
-        input_cts = [CkksCiphertextNode(id=f'ln_xcenter_input_{k}', level=xcenter_level) for k in range(xcenter.total_cts)]
+        input_cts = [
+            CkksCiphertextNode(id=f'ln_xcenter_input_{k}', level=xcenter_level) for k in range(xcenter.total_cts)
+        ]
         h0_mask_pt = CkksPlaintextNode('ln_xcenter_h0_mask_pt', is_ringt=True)
         inv_n_pt = [CkksPlaintextNode(f'ln_xcenter_inv_n_pt_{k}', is_ringt=True) for k in range(xcenter.total_cts)]
         output_cts = xcenter.call(input_cts, h0_mask_pt, inv_n_pt)
@@ -2018,12 +2058,14 @@ class TestLayerExport(unittest.TestCase):
             / 'xcentered'
             / f'level_{xcenter_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
         minimax_level = 2
         minimax = ParUpperDiagonalLNMinimaxInit(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
-        input_cts = [CkksCiphertextNode(id=f'ln_minimax_input_{k}', level=minimax_level) for k in range(minimax.total_cts)]
+        input_cts = [
+            CkksCiphertextNode(id=f'ln_minimax_input_{k}', level=minimax_level) for k in range(minimax.total_cts)
+        ]
         c0_add_pt = [CkksPlaintextNode(f'ln_minimax_c0_add_pt_{k}', is_ringt=True) for k in range(minimax.total_cts)]
         c1_pt = [CkksPlaintextNode(f'ln_minimax_c1_pt_{k}', is_ringt=True) for k in range(minimax.total_cts)]
         c2_norm_pt = [CkksPlaintextNode(f'ln_minimax_c2_norm_pt_{k}', is_ringt=True) for k in range(minimax.total_cts)]
@@ -2041,7 +2083,7 @@ class TestLayerExport(unittest.TestCase):
             / 'minimax'
             / f'level_{minimax_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
         gold_level = 3
@@ -2064,7 +2106,7 @@ class TestLayerExport(unittest.TestCase):
             / 'goldschmidt'
             / f'level_{gold_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
         affine_y_level = 2
@@ -2089,7 +2131,7 @@ class TestLayerExport(unittest.TestCase):
             / 'affine'
             / f'level_{affine_y_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_par_upper_diagonal_polyact(self):
@@ -2113,7 +2155,7 @@ class TestLayerExport(unittest.TestCase):
             / 'gamma'
             / f'level_{gamma_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
         poly_level, degree = 3, 4
@@ -2147,7 +2189,7 @@ class TestLayerExport(unittest.TestCase):
             / f'degree_{degree}'
             / f'level_{poly_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_par_upper_diagonal_poly_stockmeyer(self):
@@ -2177,7 +2219,7 @@ class TestLayerExport(unittest.TestCase):
             / f'order_{order}'
             / f'level_{level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_par_upper_diagonal_poly_mult_ct(self):
@@ -2204,7 +2246,7 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_upper_diagonal_poly_mult_ct' / f'level_{level}' / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_par_upper_diagonal_softmax_helpers(self):
@@ -2229,7 +2271,7 @@ class TestLayerExport(unittest.TestCase):
             / 'add_pt'
             / f'level_{add_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
         square_level = 2
@@ -2250,7 +2292,7 @@ class TestLayerExport(unittest.TestCase):
             / 'multiple_square'
             / f'level_{square_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
         sum_level = 1
@@ -2268,13 +2310,14 @@ class TestLayerExport(unittest.TestCase):
             / 'head_col_sum'
             / f'level_{sum_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
         init_level = 1
         init_layer = ParUpperDiagonalInverseInit(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
         input_cts = [
-            CkksCiphertextNode(id=f'upper_inverse_init_input_{k}', level=init_level) for k in range(init_layer.total_cts)
+            CkksCiphertextNode(id=f'upper_inverse_init_input_{k}', level=init_level)
+            for k in range(init_layer.total_cts)
         ]
         data_source = CustomDataNode(type='upper_inverse_init_data_source', id='_upper_inverse_init_layer')
         output_cts = init_layer.call_custom_compute(input_cts, data_source)
@@ -2286,13 +2329,17 @@ class TestLayerExport(unittest.TestCase):
             / 'inverse_init'
             / f'level_{init_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
         iter_level = 2
         iter_layer = ParUpperDiagonalInverseIter(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
-        a_cts = [CkksCiphertextNode(id=f'upper_inverse_iter_a_{k}', level=iter_level) for k in range(iter_layer.total_cts)]
-        b_cts = [CkksCiphertextNode(id=f'upper_inverse_iter_b_{k}', level=iter_level) for k in range(iter_layer.total_cts)]
+        a_cts = [
+            CkksCiphertextNode(id=f'upper_inverse_iter_a_{k}', level=iter_level) for k in range(iter_layer.total_cts)
+        ]
+        b_cts = [
+            CkksCiphertextNode(id=f'upper_inverse_iter_b_{k}', level=iter_level) for k in range(iter_layer.total_cts)
+        ]
         data_source = CustomDataNode(type='upper_inverse_iter_data_source', id='_upper_inverse_iter_layer')
         output_cts = iter_layer.call_custom_compute(a_cts, b_cts, data_source)
         process_custom_task(
@@ -2307,7 +2354,7 @@ class TestLayerExport(unittest.TestCase):
             / 'inverse_iter'
             / f'level_{iter_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
         gelu_level = 2
@@ -2328,7 +2375,7 @@ class TestLayerExport(unittest.TestCase):
             / 'gelu'
             / f'level_{gelu_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_par_cpmm_square(self):
@@ -2367,7 +2414,7 @@ class TestLayerExport(unittest.TestCase):
                 / f'm_{m}_heads_{n_heads}_dim_{head_dim}'
                 / f'level_{level}'
                 / 'server',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_par_cpmm_square_with_bias(self):
@@ -2407,7 +2454,7 @@ class TestLayerExport(unittest.TestCase):
                 / f'm_{m}_heads_{n_heads}_dim_{head_dim}_wcols_{W_cols}'
                 / f'level_{level}'
                 / 'server',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_par_cpmm_expand_with_bias(self):
@@ -2447,7 +2494,7 @@ class TestLayerExport(unittest.TestCase):
                 / f'm_{m}_heads_{n_heads}_dim_{head_dim}_wcols_{W_cols}'
                 / f'level_{level}'
                 / 'server',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_par_cpmm_reduce_with_bias(self):
@@ -2488,7 +2535,7 @@ class TestLayerExport(unittest.TestCase):
                 / f'm_{m}_heads_{n_heads}_dim_{head_dim}_wrows_{W_rows}'
                 / f'level_{level}'
                 / 'server',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_par_block_qkt_v_attention(self):
@@ -2552,7 +2599,7 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_par_attention_seq{seq_len}_heads{n_heads}_dim{head_dim}'
             / f'level_{init_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_par_cpmm_expand_reduce(self):
@@ -2598,7 +2645,7 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_par_cpmm_expand_reduce_m{m}_heads{n_heads}_dim{head_dim}_K{K_factor}'
             / f'level_{init_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
 
     def test_par_cpmm_expand_polyactrn_reduce(self):
@@ -2667,7 +2714,7 @@ class TestLayerExport(unittest.TestCase):
                 / f'degree_{degree}'
                 / f'level_{init_level}'
                 / 'server',
-                processor=Processor.CPU,
+                processor=PROCESSOR,
             )
 
     def test_par_full_attention(self):
@@ -2772,5 +2819,32 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_par_full_attention_seq{seq_len}_heads{n_heads}_dim{head_dim}'
             / f'level_{init_level}'
             / 'server',
-            processor=Processor.CPU,
+            processor=PROCESSOR,
         )
+
+
+def main():
+    """Generate test data for the selected tests with the requested processor."""
+    import argparse
+    import os
+    import sys
+
+    parser = argparse.ArgumentParser(description='Generate FHE layer unit test data.')
+    parser.add_argument(
+        '--processor',
+        choices=('cpu', 'gpu'),
+        default=os.environ.get('GEN_PROCESSOR', 'cpu'),
+        help='processor the generated tasks should target (default: cpu; env: GEN_PROCESSOR)',
+    )
+    parser.add_argument('tests', nargs='*', help='optional unittest ids, e.g. TestLayerExport.test_sq')
+    args = parser.parse_args()
+
+    global PROCESSOR
+    PROCESSOR = Processor.GPU if args.processor == 'gpu' else Processor.CPU
+    print(f'[test_gen_layers] generating data for processor={args.processor} into {base_path}')
+
+    unittest.main(argv=[sys.argv[0], *args.tests], verbosity=2)
+
+
+if __name__ == '__main__':
+    main()
