@@ -103,10 +103,11 @@ python training/run_compile.py \
   --input ./runs/cifar10/model/trained_poly.onnx \
   --output ./runs/cifar10 \
   --style multiplexed \
-  --deployment-mode server_provisioned_runner
+  --deployment-mode server_provisioned_runner \
+  --config ./training/config/storage_aware_config.json
 ```
 
-该步骤生成常规 `task/server/` 产物，并写出 `task/provisioner/`、`task/runner/` 的基础配置。`--runner-output-dir` 可用于指定 runner 目录，默认是 `<output>/task/runner`。
+该步骤显式读取 `training/config/storage_aware_config.json`，启用 storage-aware level 优化；程序不会自动扫描或默认加载这个文件。它生成常规 `task/server/` 产物，并写出 `task/provisioner/`、`task/runner/` 的基础配置。`--runner-output-dir` 可用于指定 runner 目录，默认是 `<output>/task/runner`。
 
 ### 2. 生成 Runner MegaAG
 
@@ -224,13 +225,7 @@ GPU 下 `wait_inputs` 不会进入 custom executor 参数列表，不会为了�
 如需在编译 DP 目标中加入加密参数存储成本，使用编译配置 JSON 传入权重：
 
 ```bash
-cat > ./training/config/storage_aware_config.json <<'JSON'
-{
-  "encrypted_parameter_storage_weight": 1.0,
-  "encrypted_parameter_storage_normalization_bytes": 1073741824
-}
-JSON
-
+# 如需修改 weight 或 normalization_bytes，再编辑该文件。
 PYTHONPATH=inference/lattisense python training/run_compile.py \
   --input ./runs/cifar10/model/trained_poly.onnx \
   --output ./runs/cifar10_storage_aware \
