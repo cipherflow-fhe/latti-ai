@@ -7,8 +7,13 @@
         16,
         16
     ],
+    "mat_pack_style": "",
+    "model_type": "",
     "is_absorb_polyrelu": false,
-    "pack_style": "ordinary",
+    "pack_style": "multiplexed",
+    "n_heads": 1,
+    "head_dim": 0,
+    "matmul_block_size": 0,
     "task_input_id": [
         "input"
     ],
@@ -30,9 +35,14 @@
                 1
             ],
             "ckks_parameter_id": "param0",
-            "level": 7,
+            "level": 11,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ],
+            "is_transposed": false
         }
     },
     "task_output_param": {
@@ -45,7 +55,8 @@
             "ckks_parameter_id": "param0",
             "level": 0,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 128,
+            "is_transposed": false
         }
     },
     "server_task": {
