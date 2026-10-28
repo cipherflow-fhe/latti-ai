@@ -78,14 +78,14 @@ PyTorch、ONNX、ONNX Runtime、NumPy 和 NetworkX）。从仓库根目录执行
 
 ```bash
 cd /home/linghm/project/latti-ai
-export PYTHON_BIN=/home/linghm/pytorch_venv/bin/python
+source /home/linghm/pytorch_venv/bin/activate
 export PYTHONPATH="$PWD/inference/lattisense${PYTHONPATH:+:$PYTHONPATH}"
 
-$PYTHON_BIN training/run_compile.py --help
-$PYTHON_BIN inference/interface/gen_mega_ag.py --help
+python training/run_compile.py --help
+python inference/interface/gen_mega_ag.py --help
 ```
 
-文档中的 `python` 命令可替换为 `$PYTHON_BIN`；`run_compile.py` 和
+激活环境后直接使用 `python`；`run_compile.py` 和
 `gen_mega_ag.py` 都应在仓库根目录运行。Provisioner、Runner 和 decryptor
 是已编译的 C++ 可执行文件，不依赖 Python 虚拟环境；GPU Runner 仍需显式传入
 `--gpu`。如果使用其他虚拟环境，应按
