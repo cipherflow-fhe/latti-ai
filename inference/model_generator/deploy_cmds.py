@@ -918,9 +918,16 @@ def gen_custom_task(
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                         input_args.append(Argument(f'{layer_id}', [conv_data_source]))
                     elif parameter_mode == 'encrypted_offline':
-                        weight_ct, bias_ct, mask_pt = conv0_layer.make_param_ct_nodes(layer_id, level)
-                        if mask_pt:
-                            _append_parameter_arg(f'convm_{layer_id}', mask_pt)
+                        if deployment_mode == 'server_provisioned_runner':
+                            weight_ct, bias_ct, _ = conv0_layer.make_param_ct_nodes(layer_id, level)
+                            if conv0_layer.stride != [1, 1] or conv0_layer.skip != [1, 1]:
+                                mask_pt = conv0_layer.make_runner_mask_pt_nodes(layer_id, level)
+                            else:
+                                mask_pt = []
+                        else:
+                            weight_ct, bias_ct, mask_pt = conv0_layer.make_param_ct_nodes(layer_id, level)
+                            if mask_pt:
+                                _append_parameter_arg(f'convm_{layer_id}', mask_pt)
                         _append_parameter_arg(f'convw_{layer_id}', weight_ct)
                         _append_parameter_arg(f'convb_{layer_id}', bias_ct)
                         layer_output_nodes = conv0_layer.call_param_ct(

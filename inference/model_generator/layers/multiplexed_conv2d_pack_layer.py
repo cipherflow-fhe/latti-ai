@@ -25,6 +25,7 @@ from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
     add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
+    is_plaintext_input,
     materialize_encrypted_param,
     multiply_with_encrypted_param,
     require_no_plaintext_input_rotation,
@@ -33,6 +34,12 @@ from inference.model_generator.layers.fhe_op_utils import naf_weight
 
 
 op_class = 'MultiplexedConv2DPackedLayer'
+
+
+def _multiply_mask_param(x, mask):
+    if is_plaintext_input(mask):
+        return mult(x, mask)
+    return multiply_with_encrypted_param(x, mask)
 
 
 class MultiplexedConv2DPackedLayer:
@@ -487,6 +494,33 @@ class MultiplexedConv2DPackedLayer:
             mask_ct = [CkksCiphertextNode(f'convm_{layer_id}_{i}', level=level - 1) for i in range(n_mask)]
         return weight_ct, bias_ct, mask_ct
 
+    def make_runner_mask_pt_nodes(self, layer_id, level):
+        """Create Runner-local mask plaintext nodes for server-provisioned execution."""
+        if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:
+            return []
+        n_mask = min(self.n_block_per_ct, self.n_out_channel)
+        mask_pt = []
+        for i in range(n_mask):
+            node = CkksPlaintextRingtNode(f'convm_{layer_id}_{i}')
+            custom_compute(
+                inputs=[],
+                output=node,
+                type='encode_pt',
+                attributes={
+                    'op_class': op_class,
+                    'type': 'mask_pt',
+                    'i': i,
+                    'level': level - 1,
+                    'input_shape': self.input_shape,
+                    'skip': self.skip,
+                    'stride': self.stride,
+                    'n_channel_per_ct': self.n_channel_per_ct,
+                    'external_upsample_factor': self.external_upsample_factor,
+                },
+            )
+            mask_pt.append(node)
+        return mask_pt
+
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mast_pt) -> list[CkksCiphertextNode]:
         # 1. block direction rotation
         x = self._expand_periodic_inputs(x)
@@ -546,7 +580,7 @@ class MultiplexedConv2DPackedLayer:
                         - n_block % self.zero_inserted_skip[1]
                         + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
                     )
-                    c_m = multiply_with_encrypted_param(s, mast_pt[i])
+                    c_m = _multiply_mask_param(s, mast_pt[i])
                     c_m = rescale(c_m)
                     result_ct.append(rotate_cols(c_m, [rot_step])[0])
 
@@ -634,7 +668,7 @@ class MultiplexedConv2DPackedLayer:
                         - n_block % self.zero_inserted_skip[1]
                         + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
                     )
-                    c_m = multiply_with_encrypted_param(s, mast_pt[i])
+                    c_m = _multiply_mask_param(s, mast_pt[i])
                     c_m = rescale(c_m)
                     result_ct.append(rotate_cols(c_m, [rot_step])[0])
 
@@ -719,7 +753,7 @@ class MultiplexedConv2DPackedLayer:
                         - n_block % self.zero_inserted_skip[1]
                         + i * self.skip[0] * self.skip[1] * self.input_shape[0] * self.input_shape[1]
                     )
-                    c_m = multiply_with_encrypted_param(s, mast_pt[i])
+                    c_m = _multiply_mask_param(s, mast_pt[i])
                     c_m = rescale(c_m)
                     result_ct.append(rotate_cols(c_m, [rot_step])[0])
 

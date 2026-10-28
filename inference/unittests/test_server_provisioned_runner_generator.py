@@ -307,6 +307,120 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
 
             self.assertEqual(_data_with_missing_source(mega_ag), [])
 
+    def test_server_runner_multiplexed_masks_are_local_plaintexts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server_dir = root / 'server'
+            server_dir.mkdir()
+            graph = {
+                'feature': {
+                    'input': {
+                        'dim': 2,
+                        'channel': 1,
+                        'scale': 1.0,
+                        'ckks_scale': 1,
+                        'shape': [4, 4],
+                        'skip': [1, 1],
+                        'ckks_parameter_id': 'param0',
+                        'level': 2,
+                        'depth': -1,
+                        'pack_num': 2,
+                    },
+                    'output': {
+                        'dim': 2,
+                        'channel': 2,
+                        'scale': 1.0,
+                        'ckks_scale': 1,
+                        'shape': [2, 2],
+                        'skip': [2, 2],
+                        'ckks_parameter_id': 'param0',
+                        'level': 0,
+                        'depth': -1,
+                        'pack_num': 2,
+                    },
+                },
+                'layer': {
+                    'conv': {
+                        'type': 'conv2d',
+                        'channel_input': 1,
+                        'channel_output': 2,
+                        'kernel_shape': [3, 3],
+                        'groups': 1,
+                        'stride': [2, 2],
+                        'ckks_parameter_id_input': 'param0',
+                        'ckks_parameter_id_output': 'param0',
+                        'feature_input': ['input'],
+                        'feature_output': ['output'],
+                        'weight_path': 'weight',
+                        'bias_path': 'bias',
+                        'is_big_size': False,
+                        'upsample_factor_in': [1, 1],
+                        'style': 'multiplexed',
+                    }
+                },
+                'input_feature': ['input'],
+                'output_feature': ['output'],
+            }
+            task_config = {
+                'task_type': 'fhe',
+                'task_num': 1,
+                'server_start_id': 0,
+                'server_end_id': 0,
+                'block_shape': [4, 4],
+                'pack_style': 'multiplexed',
+                'task_input_id': ['input'],
+                'task_output_id': ['output'],
+                'task_input_param': {'input': graph['feature']['input']},
+                'task_output_param': {'output': graph['feature']['output']},
+                'server_task': {'nn_layers_ct_0': {'enable_fpga': True}},
+                'use_btp': False,
+            }
+            with open(server_dir / 'nn_layers_ct_0.json', 'w', encoding='utf-8') as f:
+                json.dump(graph, f)
+            with open(server_dir / 'task_config.json', 'w', encoding='utf-8') as f:
+                json.dump(task_config, f)
+
+            for loading_mode in ('eager', 'runtime_lazy'):
+                runner_dir = root / f'runner_{loading_mode}'
+                gen_custom_task(
+                    str(server_dir),
+                    param_name='PN13QP218',
+                    style='multiplexed',
+                    parameter_mode='encrypted_offline',
+                    input_mode='plaintext',
+                    deployment_mode='server_provisioned_runner',
+                    parameter_loading_mode=loading_mode,
+                    output_dir=str(runner_dir),
+                )
+                with open(runner_dir / 'task_signature.json', encoding='utf-8') as f:
+                    signature = json.load(f)
+                with open(runner_dir / 'mega_ag.json', encoding='utf-8') as f:
+                    mega_ag = json.load(f)
+                args = signature.get('offline', []) + signature.get('encrypted_parameters', [])
+                self.assertFalse(any(arg['id'].startswith('convm_') for arg in args))
+                mask_nodes = [
+                    node
+                    for node in mega_ag['compute'].values()
+                    if node['type'] == 'encode_pt' and node.get('attributes', {}).get('type') == 'mask_pt'
+                ]
+                self.assertGreater(len(mask_nodes), 0)
+                self.assertTrue(all(node['inputs'] == [] for node in mask_nodes))
+                self.assertTrue(all(node['attributes']['level'] == 1 for node in mask_nodes))
+
+            client_dir = root / 'client_runner'
+            gen_custom_task(
+                str(server_dir),
+                param_name='PN13QP218',
+                style='multiplexed',
+                parameter_mode='encrypted_offline',
+                input_mode='plaintext',
+                deployment_mode='client_encrypted_input',
+                output_dir=str(client_dir),
+            )
+            with open(client_dir / 'task_signature.json', encoding='utf-8') as f:
+                client_signature = json.load(f)
+            self.assertTrue(any(arg['id'].startswith('convm_') for arg in client_signature['offline']))
+
     def test_runtime_lazy_materializes_polyrelu_params(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
