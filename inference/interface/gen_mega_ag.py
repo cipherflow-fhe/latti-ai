@@ -19,6 +19,7 @@
 
 Usage:
     python gen_mega_ag.py --task-dir ./task
+    python gen_mega_ag.py --task-dir ./task --processor cpu
     python gen_mega_ag.py  # defaults to ./task
 """
 
@@ -43,6 +44,13 @@ def main():
         type=str,
         required=True,
         help='Path to the task directory',
+    )
+    parser.add_argument(
+        '--processor',
+        type=str,
+        choices=['cpu', 'gpu'],
+        default='gpu',
+        help='Target processor of the generated instructions: cpu or gpu (default: gpu).',
     )
     args = parser.parse_args()
 
@@ -69,9 +77,10 @@ def main():
     with open(server_config_path, 'r', encoding='utf-8') as f:
         server_config = json.load(f)
 
+    use_gpu = args.processor == 'gpu'
     for erg_name, erg_config in server_config['server_task'].items():
         if erg_config['enable_fpga']:
-            gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style, lazy=True)
+            gen_custom_task(ergs_path, use_gpu=use_gpu, param_name=param_name, style=style, lazy=True)
 
     print(f'Done: mega_ag generated for {task_dir}.')
 
