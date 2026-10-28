@@ -924,6 +924,9 @@ with open(Path(__file__).with_name('encrypted_parameter_size.json'), encoding='u
 def encrypted_parameter_storage_enabled():
     return getattr(config, 'encrypted_parameter_storage_weight', 0.0) > 0
 
+def encrypted_parameter_storage_normalization_bytes():
+    return getattr(config, 'encrypted_parameter_storage_normalization_bytes', 1 << 30)
+
 
 def encrypted_parameter_bytes(param, level):
     calibration = ENCRYPTED_PARAMETER_SIZE
@@ -938,7 +941,7 @@ def get_encrypted_parameter_storage_report(dag, param_dict):
     """Recount a concrete graph using the same layer interface as the DP score."""
     report = {
         'weight': config.encrypted_parameter_storage_weight,
-        'normalization_bytes': 1 << 30,
+        'normalization_bytes': encrypted_parameter_storage_normalization_bytes(),
         'calibration': ENCRYPTED_PARAMETER_SIZE,
         'runtime_score': 0.0,
         'refresh_score': 0.0,

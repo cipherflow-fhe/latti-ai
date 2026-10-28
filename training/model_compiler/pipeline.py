@@ -726,6 +726,7 @@ def run_pipeline(
     use_gpu: bool = True,
     enable_score_cache: bool = True,
     encrypted_parameter_storage_weight: float = 0.0,
+    encrypted_parameter_storage_normalization_bytes: int = 1 << 30,
     deployment_mode: str = 'client_encrypted_input',
 ):
     """
@@ -808,9 +809,12 @@ def run_pipeline(
 
     if not math.isfinite(encrypted_parameter_storage_weight) or encrypted_parameter_storage_weight < 0:
         raise ValueError('encrypted_parameter_storage_weight must be finite and non-negative')
+    if encrypted_parameter_storage_normalization_bytes <= 0:
+        raise ValueError('encrypted_parameter_storage_normalization_bytes must be positive')
     if encrypted_parameter_storage_weight and deployment_mode != 'server_provisioned_runner':
         raise ValueError('Storage scoring requires server_provisioned_runner')
     config.encrypted_parameter_storage_weight = encrypted_parameter_storage_weight
+    config.encrypted_parameter_storage_normalization_bytes = encrypted_parameter_storage_normalization_bytes
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
 

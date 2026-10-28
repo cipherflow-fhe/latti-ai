@@ -128,6 +128,7 @@ def read_compile_config(config_path: str) -> dict[str, int | float | str]:
     }
     for key in (
         'encrypted_parameter_storage_weight',
+        'encrypted_parameter_storage_normalization_bytes',
         'btp_scale',
         'set_btp_scale',
         'bert_softmax_values_btp_scale',
@@ -326,6 +327,7 @@ Examples:
                 'bert_softmax_later_refinement_denominator_scale'
             ),
             encrypted_parameter_storage_weight=compile_config.get('encrypted_parameter_storage_weight', 0.0),
+            encrypted_parameter_storage_normalization_bytes=compile_config.get('encrypted_parameter_storage_normalization_bytes', 1 << 30),
             deployment_mode=args.deployment_mode,
             # enable_score_cache=False
         )

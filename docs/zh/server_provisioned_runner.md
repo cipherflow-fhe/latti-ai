@@ -202,8 +202,11 @@ GPU 下 `wait_inputs` 不会进入 custom executor 参数列表，不会为了�
 如需在编译 DP 目标中加入加密参数存储成本，使用编译配置 JSON 传入权重：
 
 ```bash
-cat > ./runs/cifar10/storage_aware_config.json <<'JSON'
-{"encrypted_parameter_storage_weight": 1.0}
+cat > ./training/config/storage_aware_config.json <<'JSON'
+{
+  "encrypted_parameter_storage_weight": 1.0,
+  "encrypted_parameter_storage_normalization_bytes": 1073741824
+}
 JSON
 
 PYTHONPATH=inference/lattisense python training/run_compile.py \
@@ -211,7 +214,7 @@ PYTHONPATH=inference/lattisense python training/run_compile.py \
   --output ./runs/cifar10_storage_aware \
   --style multiplexed \
   --deployment-mode server_provisioned_runner \
-  --config ./runs/cifar10/storage_aware_config.json
+  --config ./training/config/storage_aware_config.json
 ```
 
 该配置只影响编译阶段的 level/分区选择，不是 Runner 或 Provisioner 的参数；后续
@@ -225,8 +228,10 @@ PYTHONPATH=inference/lattisense python training/run_compile.py \
      + encrypted_parameter_storage_weight * storage_bytes / 2**30
 ```
 
-`storage_bytes` 按实际参数 use-site level 查固定 CKKS 序列化校准表计算，`2**30`
-是 GiB 归一化单位；DP 内不执行加密。当前校准表对应
+`storage_bytes` 按实际参数 use-site level 查固定 CKKS 序列化校准表计算，
+`encrypted_parameter_storage_normalization_bytes`（默认 `2**30`，即 1073741824）
+是归一化单位；DP 内不执行加密。该字段与 weight 一样由上述 JSON 读取并实际参与 DP
+和最终 report 计算。当前校准表对应
 `N16QP1546H192H32`，level 0 到 9 的单密文大小来自 `CkksCiphertext.serialize`。
 因此 weight=1 的含义是每增加 1 GiB 参数存储，在目标中增加 1 个 score 单位，不能
 解释成 1 秒。
