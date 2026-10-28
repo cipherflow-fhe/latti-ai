@@ -2,14 +2,32 @@
     "score": 0.0,
     "ckks_parameter": {
         "param0": {
-            "poly_modulus_degree": 16384,
-            "n_mult_level": 9,
-            "log_default_scale": 34,
-            "block_shape": [
-                16,
-                16
+            "poly_modulus_degree": 32768,
+            "n_mult_level": 12,
+            "log_default_scale": 40,
+            "param_name": "PN15Default",
+            "q": [
+                2251799813554177,
+                1099512938497,
+                1099510054913,
+                1099507695617,
+                1099515691009,
+                1099516870657,
+                1099506515969,
+                1099504549889,
+                1099503894529,
+                1099503370241,
+                1099502714881,
+                1099521458177,
+                1099522375681
             ],
-            "param_name": "PN14QP438",
+            "p": [
+                1125899908022273,
+                1125899903827969,
+                1125899911168001
+            ],
+            "ring_type": 1,
+            "n_slots": 32768,
             "pack_num": 4
         }
     },
@@ -28,13 +46,14 @@
                 1
             ],
             "ckks_parameter_id": "param0",
-            "level": 7,
+            "level": 11,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 128,
             "invalid_fill": [
                 1,
                 1
-            ]
+            ],
+            "is_transposed": false
         },
         "_conv1_Conv_output_0": {
             "dim": 2,
@@ -50,15 +69,16 @@
                 2
             ],
             "ckks_parameter_id": "param0",
-            "level": 6,
+            "level": 9,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 512,
             "invalid_fill": [
-                2,
-                2
-            ]
+                1,
+                1
+            ],
+            "is_transposed": false
         },
-        "_bn1_BatchNormalization_output_0": {
+        "_relu1_RangeNormPoly2d_output_0": {
             "dim": 2,
             "channel": 16,
             "scale": 1.0,
@@ -74,33 +94,12 @@
             "ckks_parameter_id": "param0",
             "level": 6,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 512,
             "invalid_fill": [
-                2,
-                2
-            ]
-        },
-        "_relu1_PolyAct_output_0": {
-            "dim": 2,
-            "channel": 16,
-            "scale": 1.0,
-            "ckks_scale": 1,
-            "shape": [
-                8,
-                8
+                1,
+                1
             ],
-            "skip": [
-                2,
-                2
-            ],
-            "ckks_parameter_id": "param0",
-            "level": 4,
-            "depth": -1,
-            "pack_num": 32,
-            "invalid_fill": [
-                2,
-                2
-            ]
+            "is_transposed": false
         },
         "_conv2_Conv_output_0": {
             "dim": 2,
@@ -116,37 +115,16 @@
                 4
             ],
             "ckks_parameter_id": "param0",
-            "level": 3,
+            "level": 4,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 2048,
             "invalid_fill": [
-                4,
-                4
-            ]
-        },
-        "_bn2_BatchNormalization_output_0": {
-            "dim": 2,
-            "channel": 32,
-            "scale": 1.0,
-            "ckks_scale": 1,
-            "shape": [
-                4,
-                4
+                1,
+                1
             ],
-            "skip": [
-                4,
-                4
-            ],
-            "ckks_parameter_id": "param0",
-            "level": 3,
-            "depth": -1,
-            "pack_num": 32,
-            "invalid_fill": [
-                4,
-                4
-            ]
+            "is_transposed": false
         },
-        "_relu2_PolyAct_output_0": {
+        "_relu2_RangeNormPoly2d_output_0": {
             "dim": 2,
             "channel": 32,
             "scale": 1.0,
@@ -162,11 +140,12 @@
             "ckks_parameter_id": "param0",
             "level": 1,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 2048,
             "invalid_fill": [
-                4,
-                4
-            ]
+                1,
+                1
+            ],
+            "is_transposed": false
         },
         "_flatten_Flatten_output_0": {
             "dim": 0,
@@ -177,15 +156,16 @@
             "ckks_parameter_id": "param0",
             "level": 1,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 128,
+            "is_transposed": false,
             "special_info": {
                 "skip": [
                     4,
                     4
                 ],
                 "invalid_fill": [
-                    4,
-                    4
+                    1,
+                    1
                 ],
                 "shape": [
                     4,
@@ -202,7 +182,8 @@
             "ckks_parameter_id": "param0",
             "level": 0,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 128,
+            "is_transposed": false
         }
     },
     "layer": {
@@ -227,8 +208,8 @@
             "feature_output": [
                 "_conv1_Conv_output_0"
             ],
-            "weight_path": "conv1.weight",
-            "bias_path": "conv1.bias",
+            "weight_path": "onnx::Conv_30",
+            "bias_path": "onnx::Conv_31",
             "is_normal": "1",
             "upsample_factor_in": [
                 1,
@@ -236,14 +217,18 @@
             ],
             "weight_scale": 1,
             "bias_scale": 1,
-            "absorb_type": [],
-            "absorb_path": [],
+            "absorb_type": [
+                "polyact"
+            ],
+            "absorb_path": [
+                "_relu1_RangeNormPoly2d"
+            ],
             "is_big_size": false,
-            "level_cost": 1,
-            "style": "ordinary"
+            "level_cost": 2,
+            "style": "multiplexed"
         },
-        "_bn1_BatchNormalization": {
-            "type": "batchnorm2d",
+        "_relu1_RangeNormPoly2d": {
+            "type": "polyact",
             "channel_input": 16,
             "channel_output": 16,
             "ckks_parameter_id_input": "param0",
@@ -252,25 +237,7 @@
                 "_conv1_Conv_output_0"
             ],
             "feature_output": [
-                "_bn1_BatchNormalization_output_0"
-            ],
-            "weight_path": "bn1.weight",
-            "bias_path": "bn1.bias",
-            "running_mean_path": "bn1.running_mean",
-            "running_var_path": "bn1.running_var",
-            "level_cost": 0
-        },
-        "_relu1_PolyAct": {
-            "type": "polyact",
-            "channel_input": 16,
-            "channel_output": 16,
-            "ckks_parameter_id_input": "param0",
-            "ckks_parameter_id_output": "param0",
-            "feature_input": [
-                "_bn1_BatchNormalization_output_0"
-            ],
-            "feature_output": [
-                "_relu1_PolyAct_output_0"
+                "_relu1_RangeNormPoly2d_output_0"
             ],
             "weight_path": "relu1.weight",
             "zero_skip": [
@@ -279,8 +246,9 @@
             ],
             "is_big_size": false,
             "is_absorb_polyrelu": false,
-            "level_cost": 2,
-            "order": 2,
+            "style": "multiplexed",
+            "level_cost": 3,
+            "order": 4,
             "weight_scale": 1,
             "weight_scale_list": [
                 1,
@@ -306,13 +274,13 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_relu1_PolyAct_output_0"
+                "_relu1_RangeNormPoly2d_output_0"
             ],
             "feature_output": [
                 "_conv2_Conv_output_0"
             ],
-            "weight_path": "conv2.weight",
-            "bias_path": "conv2.bias",
+            "weight_path": "onnx::Conv_33",
+            "bias_path": "onnx::Conv_34",
             "is_normal": "1",
             "upsample_factor_in": [
                 1,
@@ -320,14 +288,18 @@
             ],
             "weight_scale": 1,
             "bias_scale": 1,
-            "absorb_type": [],
-            "absorb_path": [],
+            "absorb_type": [
+                "polyact"
+            ],
+            "absorb_path": [
+                "_relu2_RangeNormPoly2d"
+            ],
             "is_big_size": false,
-            "level_cost": 1,
-            "style": "ordinary"
+            "level_cost": 2,
+            "style": "multiplexed"
         },
-        "_bn2_BatchNormalization": {
-            "type": "batchnorm2d",
+        "_relu2_RangeNormPoly2d": {
+            "type": "polyact",
             "channel_input": 32,
             "channel_output": 32,
             "ckks_parameter_id_input": "param0",
@@ -336,25 +308,7 @@
                 "_conv2_Conv_output_0"
             ],
             "feature_output": [
-                "_bn2_BatchNormalization_output_0"
-            ],
-            "weight_path": "bn2.weight",
-            "bias_path": "bn2.bias",
-            "running_mean_path": "bn2.running_mean",
-            "running_var_path": "bn2.running_var",
-            "level_cost": 0
-        },
-        "_relu2_PolyAct": {
-            "type": "polyact",
-            "channel_input": 32,
-            "channel_output": 32,
-            "ckks_parameter_id_input": "param0",
-            "ckks_parameter_id_output": "param0",
-            "feature_input": [
-                "_bn2_BatchNormalization_output_0"
-            ],
-            "feature_output": [
-                "_relu2_PolyAct_output_0"
+                "_relu2_RangeNormPoly2d_output_0"
             ],
             "weight_path": "relu2.weight",
             "zero_skip": [
@@ -363,8 +317,9 @@
             ],
             "is_big_size": false,
             "is_absorb_polyrelu": false,
-            "level_cost": 2,
-            "order": 2,
+            "style": "multiplexed",
+            "level_cost": 3,
+            "order": 4,
             "weight_scale": 1,
             "weight_scale_list": [
                 1,
@@ -381,7 +336,7 @@
             "ckks_parameter_id_input": "param0",
             "ckks_parameter_id_output": "param0",
             "feature_input": [
-                "_relu2_PolyAct_output_0"
+                "_relu2_RangeNormPoly2d_output_0"
             ],
             "feature_output": [
                 "_flatten_Flatten_output_0"
@@ -410,7 +365,7 @@
             "absorb_type": [],
             "absorb_path": [],
             "level_cost": 1,
-            "style": "ordinary"
+            "style": "multiplexed"
         }
     },
     "mpc_parameter": {
