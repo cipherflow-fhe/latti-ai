@@ -58,9 +58,20 @@ CkksCiphertext sum_slot(CkksContext& ctx, CkksCiphertext& x, uint32_t m, uint32_
 }
 
 vector<double> MultiplexedConv2DPackedLayer::select_tensor(int num) const {
-    const Duo input_shape_ct = input_shape_ * skip_;
-    const Duo skip_stride = skip_ * stride_;
+    return select_tensor_for_config(input_shape_, skip_, stride_, n_channel_per_ct, external_upsample_factor, num);
+}
+
+vector<double> MultiplexedConv2DPackedLayer::select_tensor_for_config(const Duo& input_shape,
+                                                                       const Duo& skip,
+                                                                       const Duo& stride,
+                                                                       uint32_t n_channel_per_ct,
+                                                                       const Duo& external_upsample_factor,
+                                                                       int num) {
+    const Duo input_shape_ct = input_shape * skip;
+    const Duo skip_stride = skip * stride;
+    const Duo zero_inserted_skip = skip * stride / external_upsample_factor;
     const uint32_t zero_inserted_skip_prod = prod(zero_inserted_skip);
+    const uint32_t n_block_per_ct = div_ceil(n_channel_per_ct, prod(skip));
 
     vector<double> tensor;
     for (int block_idx = 0; block_idx < n_block_per_ct; ++block_idx) {

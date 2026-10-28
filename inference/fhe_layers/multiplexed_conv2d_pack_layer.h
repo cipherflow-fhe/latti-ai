@@ -48,6 +48,12 @@ public:
     virtual Feature2DEncrypted run_for_post_skip_rotation(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     virtual Feature2DEncrypted run_for_reduct_rot(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     virtual std::vector<double> select_tensor(int num) const;
+    static std::vector<double> select_tensor_for_config(const Duo& input_shape,
+                                                        const Duo& skip,
+                                                        const Duo& stride,
+                                                        uint32_t n_channel_per_ct,
+                                                        const Duo& external_upsample_factor,
+                                                        int num);
 
     std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> weight_pt;
     std::vector<ls::CkksPlaintextRingt> bias_pt;

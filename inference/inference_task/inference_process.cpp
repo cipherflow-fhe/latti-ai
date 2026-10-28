@@ -3354,13 +3354,31 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         int j = attrs.value("j", 0);
         int k = attrs.value("k", 0);
         int l = attrs.value("l", 0);
+        CkksPlaintextRingt pt;
+
+        if (op_class == "MultiplexedConv2DPackedLayer" && type == "mask_pt" && self.input_nodes.empty()) {
+            const auto input_shape_attr = attrs.at("input_shape");
+            const auto skip_attr = attrs.at("skip");
+            const auto stride_attr = attrs.at("stride");
+            const auto external_upsample_attr = attrs.value("external_upsample_factor", json::array({1, 1}));
+            const Duo input_shape = {input_shape_attr.at(0).get<uint32_t>(), input_shape_attr.at(1).get<uint32_t>()};
+            const Duo skip = {skip_attr.at(0).get<uint32_t>(), skip_attr.at(1).get<uint32_t>()};
+            const Duo stride = {stride_attr.at(0).get<uint32_t>(), stride_attr.at(1).get<uint32_t>()};
+            const Duo external_upsample_factor = {external_upsample_attr.at(0).get<uint32_t>(),
+                                                  external_upsample_attr.at(1).get<uint32_t>()};
+            const int mask_level = attrs.at("level").get<int>();
+            auto mask = MultiplexedConv2DPackedLayer::select_tensor_for_config(
+                input_shape, skip, stride, attrs.at("n_channel_per_ct").get<uint32_t>(), external_upsample_factor,
+                i * prod(skip * stride / external_upsample_factor));
+            pt = ckks_ctx.encode_ringt(mask, ckks_ctx.get_parameter().get_q(mask_level));
+            output = make_shared<CkksPlaintextRingt>(move(pt));
+            return;
+        }
 
         NodeIndex input_node_idx = self.input_nodes[0]->index;
         auto raw_ptr = any_cast<shared_ptr<fhe_ops_lib::CustomData>>(inputs.at(input_node_idx));
         auto* custom_data = raw_ptr.get();
         void* layer_ptr = custom_data->get_typed_data<void>();
-
-        CkksPlaintextRingt pt;
 
         if (op_class == "Conv2DPackedLayer") {
             auto* layer = static_cast<Conv2DPackedLayer*>(layer_ptr);
