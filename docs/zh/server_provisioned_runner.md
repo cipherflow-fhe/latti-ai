@@ -196,3 +196,42 @@ GPU 下 `wait_inputs` 不会进入 custom executor 参数列表，不会为了�
 - eval context 必须覆盖 MegaAG 中所有 relin、rotation/galois 和 bootstrapping key 需求。
 - 不要把每个 term 都改成“先 rescale 再累加”的通用写法，除非原 layer 的 `run_core` 本来就是这个轨迹；否则会改变 level/scale 语义。
 - `client_encrypted_input` 默认流程仍然保留，未显式指定 `--deployment-mode server_provisioned_runner` 时使用旧模式。
+
+## 存储感知 level 优化（可选）
+
+如需在编译 DP 目标中加入加密参数存储成本，使用编译配置 JSON 传入权重：
+
+```bash
+cat > ./runs/cifar10/storage_aware_config.json <<'JSON'
+{"encrypted_parameter_storage_weight": 1.0}
+JSON
+
+PYTHONPATH=inference/lattisense python training/run_compile.py \
+  --input ./runs/cifar10/model/trained_poly.onnx \
+  --output ./runs/cifar10_storage_aware \
+  --style multiplexed \
+  --deployment-mode server_provisioned_runner \
+  --config ./runs/cifar10/storage_aware_config.json
+```
+
+该配置只影响编译阶段的 level/分区选择，不是 Runner 或 Provisioner 的参数；后续
+`gen_mega_ag.py`、Provisioner 和 Runner 命令不变。权重必须是有限的非负数，且只对
+`server_provisioned_runner` 生效。省略配置或设置为 `0` 即保持原有优化目标。
+
+编译器使用如下目标：
+
+```text
+总分 = runtime_score + refresh_score
+     + encrypted_parameter_storage_weight * storage_bytes / 2**30
+```
+
+`storage_bytes` 按实际参数 use-site level 查固定 CKKS 序列化校准表计算，`2**30`
+是 GiB 归一化单位；DP 内不执行加密。当前校准表对应
+`N16QP1546H192H32`，level 0 到 9 的单密文大小来自 `CkksCiphertext.serialize`。
+因此 weight=1 的含义是每增加 1 GiB 参数存储，在目标中增加 1 个 score 单位，不能
+解释成 1 秒。
+
+推荐先用 `0`、`0.5`、`1.0` 做小规模编译比较：`1.0` 是当前 ResNet20 验收使用值，
+在参数 payload 和 BTP/运行代价之间取得了可观察的折中。若存储成本优先可提高到
+`2.0` 或更高，但应重新验收 refresh 数量和 GPU 延迟；若延迟优先，使用 `0` 或较小
+权重。不同硬件、序列化版本或模型应重新校准后再比较 weight。
