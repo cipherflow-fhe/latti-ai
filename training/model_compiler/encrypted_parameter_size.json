@@ -1,6 +1,6 @@
 {
   "version": "latti-ai.encrypted-parameter-size.v1",
-  "source": "periodic server_provisioned_runner manifest v2; CkksCiphertext.serialize",
+  "source": "periodic server_provisioned_runner manifest v2; seed levels 10/11 measured with encrypt_asymmetric + CkksCiphertext.serialize using the same parameter",
   "parameter": {
     "poly_modulus_degree": 65536,
     "n_mult_level": 9,
@@ -51,6 +51,8 @@
     "6": 4980763,
     "7": 5636124,
     "8": 6291485,
-    "9": 6946846
+    "9": 6946846,
+    "10": 7585823,
+    "11": 8224800
   }
 }

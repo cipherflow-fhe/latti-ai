@@ -19,6 +19,7 @@ from pathlib import Path
 import copy
 import time
 import json
+import logging
 
 import networkx as nx
 import numpy as np
@@ -53,6 +54,24 @@ def _pack_pcm_type(layer_type: str) -> str:
     return layer_type
 
 
+def set_seed_weight_subgrid_stride(graph: LayerAbstractGraph) -> None:
+    stride = getattr(config, 'seed_weight_subgrid_stride', [1, 1])
+    if config.style != 'multiplexed' or stride == [1, 1]:
+        return
+    for node in graph.dag.nodes:
+        if (
+            isinstance(node, components.ConvComputeNode)
+            and node.layer_type == 'conv2d' and node.dim == 2 and node.groups == 1
+            and not node.is_big_size and not node.is_conv_transpose
+        ):
+            input_feature = next(graph.dag.predecessors(node))
+            if all(size % step == 0 for size, step in zip(input_feature.shape, stride)):
+                node.seed_weight_subgrid_stride = list(stride)
+            else:
+                logging.debug('Seed weights disabled for %s: stride %s does not divide %s',
+                              node.layer_id, stride, input_feature.shape)
+
+
 def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     """
     Prepare graph for compilation (common preparation steps)
@@ -84,6 +103,7 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     transforms.combine_convs_with_upsamples(pt_graph)
     transforms.process_polyact(pt_graph)
     transforms.set_level_costs(pt_graph)
+    set_seed_weight_subgrid_stride(pt_graph)
 
     transforms.absorb_scale(pt_graph)
 
@@ -728,6 +748,7 @@ def run_pipeline(
     encrypted_parameter_storage_weight: float = 0.0,
     encrypted_parameter_storage_normalization_bytes: int = 1 << 30,
     deployment_mode: str = 'client_encrypted_input',
+    seed_weight_subgrid_stride: list[int] | tuple[int, int] = (1, 1),
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -763,6 +784,16 @@ def run_pipeline(
         config.matmul_block_size = matmul_block_size
     config.mat_pack_style = mat_pack_style
     config.model_type = model_type
+    seed_stride = seed_weight_subgrid_stride
+    if not (
+        isinstance(seed_stride, (list, tuple)) and len(seed_stride) == 2
+        and all(type(step) is int and step > 0 and (step & (step - 1)) == 0 for step in seed_stride)
+    ):
+        logging.debug('Invalid seed_weight_subgrid_stride %r; using [1, 1]', seed_stride)
+        seed_stride = [1, 1]
+    if deployment_mode != 'server_provisioned_runner':
+        seed_stride = [1, 1]
+    config.seed_weight_subgrid_stride = list(seed_stride)
     config.set_btp_scale = set_btp_scale
     if bert_softmax_values_btp_scale is not None:
         config.bert_softmax_values_btp_scale = float(bert_softmax_values_btp_scale)
@@ -789,6 +820,7 @@ def run_pipeline(
         f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
         f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
         f'MAT_PACK_STYLE={config.mat_pack_style}, MODEL_TYPE={config.model_type}, '
+        f'SEED_WEIGHT_SUBGRID_STRIDE={config.seed_weight_subgrid_stride}, '
         f'SET_BTP_SCALE={config.set_btp_scale}, '
         f'BERT_SOFTMAX_VALUES_BTP_SCALE={config.bert_softmax_values_btp_scale}, '
         f'BERT_SOFTMAX_DENOMINATOR_BTP_SCALE={config.bert_softmax_denominator_btp_scale}, '

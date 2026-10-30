@@ -1222,6 +1222,8 @@ class LayerAbstractGraph:
                     'absorb_path': absorb_path,
                     'is_big_size': layer.is_big_size,
                 }
+                if hasattr(layer, 'seed_weight_subgrid_stride'):
+                    layers[layer_id]['seed_weight_subgrid_stride'] = layer.seed_weight_subgrid_stride
                 if hasattr(layer, 'synthetic_source'):
                     layers[layer_id]['synthetic_source'] = layer.synthetic_source
                     if layer.synthetic_source == 'avgpool1d':

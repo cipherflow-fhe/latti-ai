@@ -111,7 +111,7 @@ def write_server_provisioned_runner_layout(task_dir: Path, runner_output_dir: Pa
         shutil.copy2(h5_src, provisioner_dir / 'model_parameters.h5')
 
 
-def read_compile_config(config_path: str) -> dict[str, int | float | str]:
+def read_compile_config(config_path: str) -> dict[str, int | float | str | list[int]]:
     if not config_path:
         return {}
     with open(config_path, 'r', encoding='utf-8') as f:
@@ -125,6 +125,7 @@ def read_compile_config(config_path: str) -> dict[str, int | float | str]:
         'matmul_block_size': int(data.get('matmul_block_size', 0)),
         'mat_pack_style': mat_pack_style,
         'model_type': str(data.get('model_type', '')),
+        'seed_weight_subgrid_stride': data.get('seed_weight_subgrid_stride', [1, 1]),
     }
     for key in (
         'encrypted_parameter_storage_weight',
@@ -198,7 +199,7 @@ Examples:
         '--config',
         type=str,
         default='',
-        help='Compile config JSON path containing n_heads, head_dim, matmul_block_size, mat_pack_style',
+        help='Compile config JSON path containing packing, seed_weight_subgrid_stride, and storage scoring options',
     )
 
     parser.add_argument(
@@ -329,6 +330,7 @@ Examples:
             encrypted_parameter_storage_weight=compile_config.get('encrypted_parameter_storage_weight', 0.0),
             encrypted_parameter_storage_normalization_bytes=compile_config.get('encrypted_parameter_storage_normalization_bytes', 1 << 30),
             deployment_mode=args.deployment_mode,
+            seed_weight_subgrid_stride=compile_config.get('seed_weight_subgrid_stride', [1, 1]),
             # enable_score_cache=False
         )
 

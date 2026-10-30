@@ -1,6 +1,6 @@
 # Multiplexed Conv2D 交错子网格 seed weight 设计规范
 
-状态：设计规范，未实现。本文严格限定在现有
+状态：设计规范，包含全局编译配置与旋转方向约定。本文严格限定在现有
 `MultiplexedConv2DPackedLayer` 的参数生成、post-skip-rotation 执行和
 `runtime_lazy` 参数加载路径内，目标是减少空间重复权重的离线密文数量。
 
@@ -45,6 +45,39 @@ is_power_of_two(a) && is_power_of_two(b)
 子网格判断在逻辑 `(h,w)` 上进行，物理旋转量沿用现有
 `[B,H,sh,W,sw]` 布局。`a`、`b` 大于逻辑尺寸、不能整除尺寸或不是 2 的幂时，
 直接走旧的 `prepare_*` / `run_*` / `generate_*` 路径。
+
+### 2.1 全局编译配置与分发
+
+通过 `training/run_compile.py --config <json>` 指定全局 `(a,b)`，字段名称沿用
+算子入口。仓库的 `training/config/storage_aware_config.json` 示例为：
+
+```json
+{
+  "encrypted_parameter_storage_weight": 1.0,
+  "encrypted_parameter_storage_normalization_bytes": 1073741824,
+  "seed_weight_subgrid_stride": [2, 2]
+}
+```
+
+配置文件必须由 `--config` 显式传入，程序不自动查找该文件。可将 `[2,2]` 改成
+其他合法的 `[a,b]`；代码默认仍为 `[1,1]`。省略字段或设为 `[1,1]` 时不添加
+逐层 seed 字段，保持旧图和参数格式。非法类型、非正数或非 2 幂的全局值回退
+`[1,1]` 并记录 debug 信息；不能整除某层逻辑空间尺寸的值只在该层回退。
+
+该全局入口用于 `server_provisioned_runner` 的普通 multiplexed Conv2D；ordinary、
+depthwise、inverse/ConvTranspose 和其他卷积实现继续使用原路径。编译器在布局和
+层类型确定后、DP 评分之前，把该值写入适用卷积节点的
+`seed_weight_subgrid_stride` 属性；全局值不作为 DP 搜索变量，也不改变 activation
+的 `level_cost` 或主图最高 feature level。
+
+评分和导出必须使用同一份节点属性：`score.py` 构造卷积算子时传入该值，同时
+调用该算子的 op count 与 encrypted parameter count；导出的
+`nn_layers_ct_0.json` 在对应卷积层记录该字段，并复制到 Provisioner/Runner
+任务目录。Python MegaAG 生成器与 C++ 参数生成器从逐层字段读取值，Runner 从
+MegaAG 中的恢复操作及公开 mask 属性获得布局。这样模型产物完整记录 `(a,b)`，
+运行阶段不依赖 training 配置文件。
+
+只在导出 JSON 后补写 `(a,b)` 会使 DP 仍按旧布局计费，不符合此分发约定。
 
 ## 3. seed 布局与索引
 
@@ -140,6 +173,31 @@ CkksPlaintextRingt generate_mask_pt_for_seed_indices(
 `shifted_i/shifted_j`、`zero_inserted_skip` 和物理槽位规则计算，保持与旧
 `generate_weight_pt_for_indices()` 相同的有效 kernel 系数。
 
+### 5.1 旋转符号与跨 block 污染
+
+当前 `rotate_cols(x, s)` 的正数表示左旋，即
+`rotate_cols(x,s)[t] = x[(t+s) mod slot_count]`。按原始子网格坐标
+`r = subgrid // b`、`c = subgrid % b`，从低位到高位执行复制：
+
+```text
+行方向第 i 位：delta_h = 2^i * skip[0] * (input_shape[1] * skip[1])
+                step_h = -delta_h  if ((r >> i) & 1) == 0 else +delta_h
+
+列方向第 i 位：delta_w = 2^i * skip[1]
+                step_w = -delta_w  if ((c >> i) & 1) == 0 else +delta_w
+
+每一步：weight = weight + rotate_cols(weight, step)
+```
+
+原始坐标对应位为 0 时向右复制，为 1 时向左复制，确保复制落在同一个空间
+tile 内。例如 `a=2,r=0` 的偶数行应通过负旋转复制到其后的奇数行。反向旋转
+会跨过行或 channel block 边界，把相邻通道的系数带进来；后续 kernel boundary
+mask 无法修复这种系数污染。该规则同样适用于 `1x1`，不能依赖 padding mask
+掩盖错误。旋转步长必须保留物理 `skip`，不能直接使用逻辑像素步长。
+
+回归测试应为不同 block、不同 skip 内位置和不同子网格设置不同系数，逐槽比较
+恢复结果；全 1 权重不足以暴露跨 block 污染。
+
 ## 6. level 与 scale 规范
 
 设旧路径在 use-site 需要目标 weight PT `W_L`，其 level 为 `L`、scale 为
@@ -185,9 +243,20 @@ scale 常量覆盖现有 `param_.get_q(level)` 或 layer 的 `weight_scale`。
   写入模型参数 bundle。mask 的结构信息属于当前卷积公开布局，不作为模型参数
   保密边界的一部分。
 
+加密参数的 Python 图入口为 `call_param_ct()`；明文输入首层转入
+`call_param_ct_plaintext_input()`。`runtime_lazy` 通过
+`materialize_encrypted_param()` 为参数节点插入 `load_encrypted_param_ct` custom
+操作，在 activation 就绪后按需加载 seed CT，同一参数节点只插入一次加载。
+`call_custom_compute()` 服务于明文参数的 lazy 编码；加密参数的按需加载由上述
+公共 helper 完成，无需给两个 `call_param_ct*()` 接口分别新增 custom compute 入口。
+
 manifest 可以保存 seed 的顺序和文件 offset，但不得保存一份独立的完整
 `(seed_id,r,c)` 映射表；该索引由算子按稳定公式重建。旧 manifest 或没有 seed
 metadata 时必须回退旧参数读取路径。
+
+修改 `(a,b)` 或 seed 布局实现后，必须重新生成 MegaAG，并重新运行 Provisioner
+生成匹配的参数包。参数的 shape、数量或 level 相同不代表 seed 内容兼容，不能
+据此复用旧参数包。
 
 ## 8. 计数、score 与接口兼容
 
@@ -202,9 +271,16 @@ bias、poly、dense、scalar 和未启用 seed 的卷积保持原计数。存储
 额外 rescale 不计入加密参数存储，但必须加入该层的 FHE op count / runtime score。
 `(1,1)` 的 count、score 和 manifest 必须与现有实现逐项一致。
 
-本规范不要求把 `(a,b)` 加入 DP 搜索。第一版由模型生成配置显式传递，默认旧值；
-如果后续增加候选，只能复用同一个算子接口和 op count，不在 compiler 重写布局
-公式。
+两次公开 mask 乘法均计为 CT×PT 的 `mult_plain`。第一次 mask 乘法和 rescale
+计在 seed 初始 level，复制旋转与加法计在第一次 rescale 后的 level；一般 kernel
+的第二次 mask 乘法和 rescale 也计在该 level。参数及 seed 恢复的计费 level 必须
+与插入 drop-level 后的实际 use-site 一致。存储校准覆盖所需的 seed 初始 level；
+例如 N16QP1546H192H32 的 feature 最高 level 为 9，一般 kernel 的 seed 可以在
+现有 modulus chain 上使用 level 10、11，对应密文序列化大小必须单独实测记录。
+
+本规范不要求把 `(a,b)` 加入 DP 搜索。第一版由第 2.1 节的全局编译配置显式传递，
+未指定时使用 `[1,1]`；如果后续增加候选，只能复用同一个算子接口和 op count，
+不在 compiler 重写布局公式。
 
 ## 9. 验收计划
 
@@ -225,6 +301,11 @@ bias、poly、dense、scalar 和未启用 seed 的卷积保持原计数。存储
 7. **存储收益与成本**：报告 seed payload、完整 bundle、FHE 推理时间、额外
    BTP/level 变化；以 `(1,1)` 为 baseline，确认启用 seed 确实减少参数 payload，
    并记录 mask/旋转成本上升。
+8. **全局配置分发**：覆盖省略字段、`[1,1]`、`[2,2]`、其他合法组合及非法值；
+   检查支持层的导出字段、DP count/score 和 MegaAG 参数数量一致，不适用层保持旧
+   布局；验证 level 10、11 的 seed 存储计费不受 feature 最高 level 限制。
+9. **旋转方向**：覆盖非均匀 channel block/skip 系数、多种子网格和 `1x1` kernel，
+   逐槽检查复制不跨 block 污染。
 
 成功标准是：旧路径完全兼容；一般 kernel 的 seed 展开与旧 PT 数值一致；seed
 加密参数可被 eager/lazy Runner 正确读取；最终 FHE 输出正确；bundle 下降和新增

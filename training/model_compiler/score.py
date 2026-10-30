@@ -1235,9 +1235,12 @@ class FheScoreParam:
                     pack,
                     n_packed_in,
                     n_packed_out,
+                    seed_weight_subgrid_stride=getattr(node, 'seed_weight_subgrid_stride', [1, 1]),
                 )
             if encrypted_param_count:
                 return None if is_depthwise else layer.get_encrypted_param_count(parameter_level)
+            if not is_depthwise and layer.use_seed_weight_pack:
+                return layer.get_fhe_op_count(self.get_parameter_use_site_level())
             return layer.get_fhe_op_count(self.input_mult_level)
 
         # ── conv1d ──────────────────────────────────────────────────────────

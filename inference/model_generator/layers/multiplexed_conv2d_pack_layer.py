@@ -181,12 +181,14 @@ class MultiplexedConv2DPackedLayer:
         mask = seed_masks[subgrid][kernel_index][0]
         weight = _multiply_mask_param(weight, mask)
         weight = rescale(weight)
+        # Positive steps rotate left: copy a zero bit to the right, and a one
+        # bit to the left, so replication stays within each spatial tile.
         for bit in range(int(np.log2(a))):
             step = (1 << bit) * self.skip[0] * self.input_shape_ct[1]
-            weight = add(weight, rotate_cols(weight, [step if ((r >> bit) & 1) == 0 else -step])[0])
+            weight = add(weight, rotate_cols(weight, [-step if ((r >> bit) & 1) == 0 else step])[0])
         for bit in range(int(np.log2(b))):
             step = (1 << bit) * self.skip[1]
-            weight = add(weight, rotate_cols(weight, [step if ((c >> bit) & 1) == 0 else -step])[0])
+            weight = add(weight, rotate_cols(weight, [-step if ((c >> bit) & 1) == 0 else step])[0])
         if self.kernel_shape != [1, 1]:
             weight = _multiply_mask_param(weight, seed_masks[subgrid][kernel_index][1])
             weight = rescale(weight)
@@ -305,12 +307,12 @@ class MultiplexedConv2DPackedLayer:
                 np.log2(self.seed_weight_subgrid_stride[1])
             )
             seed_level = lv + self.seed_weight_level_cost
-            ops[seed_level]['mult'] += seed_masks
+            ops[seed_level]['mult_plain'] += seed_masks
             ops[seed_level]['rescale'] += seed_masks
-            ops[seed_level]['rotate'] += seed_masks * copies
-            ops[seed_level]['add'] += seed_masks * copies
+            ops[seed_level - 1]['rotate'] += seed_masks * copies
+            ops[seed_level - 1]['add'] += seed_masks * copies
             if self.kernel_shape != [1, 1]:
-                ops[seed_level - 1]['mult'] += seed_masks
+                ops[seed_level - 1]['mult_plain'] += seed_masks
                 ops[seed_level - 1]['rescale'] += seed_masks
 
         if self.stride[0] == 1 and self.stride[1] == 1 and self.skip[0] == 1 and self.skip[1] == 1:

@@ -109,6 +109,13 @@ python training/run_compile.py \
 
 该步骤显式读取 `training/config/storage_aware_config.json`，启用 storage-aware level 优化；程序不会自动扫描或默认加载这个文件。它生成常规 `task/server/` 产物，并写出 `task/provisioner/`、`task/runner/` 的基础配置。`--runner-output-dir` 可用于指定 runner 目录，默认是 `<output>/task/runner`。
 
+示例配置还通过 `seed_weight_subgrid_stride: [2,2]` 为适用的 multiplexed Conv2D
+指定全局 `(a,b)`。可在该文件中修改为其他合法值；省略字段或设为 `[1,1]` 时关闭
+seed packing。编译器在 DP 评分前应用该配置，并将逐层配置写入导出文件，后续运行
+不再读取 training 配置。适用范围与回退规则见
+[seed weight 设计规范](../spec/interleaved_subgrid_weight_seed_packing.md#21-全局编译配置与分发)。
+修改 `(a,b)` 或 seed 布局实现后，须重新编译、生成 MegaAG 并运行 Provisioner。
+
 ### 2. 生成 Runner MegaAG
 
 ```bash
@@ -225,7 +232,7 @@ GPU 下 `wait_inputs` 不会进入 custom executor 参数列表，不会为了�
 如需在编译 DP 目标中加入加密参数存储成本，使用编译配置 JSON 传入权重：
 
 ```bash
-# 如需修改 weight 或 normalization_bytes，再编辑该文件。
+# 在该文件中修改存储评分权重、归一化单位或 seed_weight_subgrid_stride。
 PYTHONPATH=inference/lattisense python training/run_compile.py \
   --input ./runs/cifar10/model/trained_poly.onnx \
   --output ./runs/cifar10_storage_aware \
@@ -234,9 +241,11 @@ PYTHONPATH=inference/lattisense python training/run_compile.py \
   --config ./training/config/storage_aware_config.json
 ```
 
-该配置只影响编译阶段的 level/分区选择，不是 Runner 或 Provisioner 的参数；后续
-`gen_mega_ag.py`、Provisioner 和 Runner 命令不变。权重必须是有限的非负数，且只对
-`server_provisioned_runner` 生效。省略配置或设置为 `0` 即保持原有优化目标。
+存储评分字段影响编译阶段的 level/分区选择；同一文件中的
+`seed_weight_subgrid_stride` 则控制 seed 布局，并参与 runtime 和存储评分。
+后续 `gen_mega_ag.py`、Provisioner 和 Runner 命令不变。存储权重必须是有限的
+非负数，且只对 `server_provisioned_runner` 生效；省略该权重或设为 `0` 时，
+优化目标不计存储成本，seed 是否启用仍由 `(a,b)` 决定。
 
 编译器使用如下目标：
 
@@ -249,7 +258,8 @@ PYTHONPATH=inference/lattisense python training/run_compile.py \
 `encrypted_parameter_storage_normalization_bytes`（默认 `2**30`，即 1073741824）
 是归一化单位；DP 内不执行加密。该字段与 weight 一样由上述 JSON 读取并实际参与 DP
 和最终 report 计算。当前校准表对应
-`N16QP1546H192H32`，level 0 到 9 的单密文大小来自 `CkksCiphertext.serialize`。
+`N16QP1546H192H32`，level 0 到 11 的单密文大小来自 `CkksCiphertext.serialize`，
+其中 level 10、11 用于 seed 恢复前的参数密文。
 因此 weight=1 的含义是每增加 1 GiB 参数存储，在目标中增加 1 个 score 单位，不能
 解释成 1 秒。
 

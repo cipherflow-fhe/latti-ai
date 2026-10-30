@@ -16,6 +16,9 @@
 
 """Verify storage scoring at candidate levels and after inserted level drops."""
 import copy
+import contextlib
+import io
+import json
 import sys
 import tempfile
 import unittest
@@ -106,7 +109,77 @@ class StorageScoreTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'No encrypted parameter size calibration'):
             encrypted_parameter_bytes(parameter, 3)
         with self.assertRaisesRegex(ValueError, 'Uncalibrated encrypted parameter level'):
-            encrypted_parameter_bytes(self.params['param0'], 10)
+            encrypted_parameter_bytes(self.params['param0'], 12)
+
+    def test_seed_weights_use_the_configured_layout_in_both_scores(self):
+        from pipeline import set_seed_weight_subgrid_stride
+
+        config.seed_weight_subgrid_stride = [2, 4]
+        baseline = self.score_param().get_encrypted_parameter_storage()
+        set_seed_weight_subgrid_stride(self.graph)
+        score_param = self.score_param()
+        self.assertEqual(self.conv.seed_weight_subgrid_stride, [2, 4])
+        self.assertEqual(score_param.get_encrypted_param_count(), {5: {'weight': 18}, 2: {'bias': 1}})
+        self.assertLess(score_param.get_encrypted_parameter_storage()['bytes'], baseline['bytes'])
+        self.assertGreater(score_param.get_score(), 0)
+        expected = score_param.get_encrypted_param_count()
+        runtime = score_param.get_score()
+        insert_drop_level_layers(self.graph)
+        self.assertEqual(self.score_param().get_encrypted_param_count(), expected)
+        self.assertEqual(self.score_param().get_score(), runtime)
+
+    def test_seed_storage_above_feature_level_limit(self):
+        self.conv.seed_weight_subgrid_stride = [2, 2]
+        self.graph.dag.nodes[self.output]['level'] = 7
+        self.assertEqual(self.score_param().get_encrypted_param_count(), {11: {'weight': 36}, 8: {'bias': 1}})
+        self.assertEqual(self.score_param().get_encrypted_parameter_storage()['bytes'],
+                         36 * 8224800 + 6291485)
+
+    def test_seed_config_reading_and_pipeline_defaults(self):
+        import pipeline
+        from training.run_compile import read_compile_config
+
+        with tempfile.TemporaryDirectory() as output_dir:
+            config_path = Path(output_dir) / 'config.json'
+            for values, expected in [({}, [1, 1]), ({'seed_weight_subgrid_stride': [2, 4]}, [2, 4])]:
+                config_path.write_text(json.dumps(values))
+                self.assertEqual(read_compile_config(str(config_path))['seed_weight_subgrid_stride'], expected)
+            for stride in ([2, 4], [1, 1], [0, 2], [-2, 2], [3, 2], [2], [2.0, 2], [True, 2], None):
+                with self.subTest(stride=stride), contextlib.redirect_stdout(io.StringIO()), \
+                        patch.object(pipeline.LayerAbstractGraph, 'from_json', return_value=self.graph), \
+                        patch.object(pipeline, 'try_no_btp', return_value=(True, self.graph, 0.0)), \
+                        patch.object(pipeline, 'dump_graph'):
+                    pipeline.run_pipeline(
+                        1, Path('unused.json'), Path(output_dir), deployment_mode='server_provisioned_runner',
+                        seed_weight_subgrid_stride=stride,
+                    )
+                    self.assertEqual(config.seed_weight_subgrid_stride, [2, 4] if stride == [2, 4] else [1, 1])
+
+    def test_seed_config_is_exported_and_unsupported_layers_keep_legacy_layout(self):
+        from pipeline import set_seed_weight_subgrid_stride
+
+        config.seed_weight_subgrid_stride = [2, 4]
+        self.conv.parameter_paths = {'weight': 'weight', 'bias': 'bias'}
+        set_seed_weight_subgrid_stride(self.graph)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'graph.json'
+            self.graph.to_json({}, str(path))
+            self.assertEqual(json.loads(path.read_text())['layer']['conv']['seed_weight_subgrid_stride'], [2, 4])
+        for attrs in ({'groups': 16}, {'is_big_size': True}, {'is_conv_transpose': True}, {'dim': 1}):
+            graph = copy.deepcopy(self.graph)
+            node = next(n for n in graph.dag if isinstance(n, ConvComputeNode))
+            del node.seed_weight_subgrid_stride
+            for key, value in attrs.items():
+                setattr(node, key, value)
+            set_seed_weight_subgrid_stride(graph)
+            self.assertFalse(hasattr(node, 'seed_weight_subgrid_stride'))
+        for style, stride in [('ordinary', [2, 4]), ('multiplexed', [1, 1]), ('multiplexed', [16, 2])]:
+            del self.conv.seed_weight_subgrid_stride
+            config.style, config.seed_weight_subgrid_stride = style, stride
+            set_seed_weight_subgrid_stride(self.graph)
+            self.assertFalse(hasattr(self.conv, 'seed_weight_subgrid_stride'))
+            # Restore only the test fixture for the next case.
+            self.conv.seed_weight_subgrid_stride = [2, 4]
 
 
 if __name__ == '__main__':
