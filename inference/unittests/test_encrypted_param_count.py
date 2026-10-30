@@ -53,6 +53,22 @@ class EncryptedParamCountTest(unittest.TestCase):
         weights, bias = layer.make_param_ct_nodes('test', 5)
         self.assert_counts(layer.get_encrypted_param_count(5), {'weight': weights, 'bias': bias})
 
+    def test_seed_stride_routing_and_counts(self):
+        legacy = MultiplexedConv2DPackedLayer(32, 16, [8, 8], [3, 3], [1, 1], [1, 1], 32, 1, 1)
+        seed = MultiplexedConv2DPackedLayer(
+            32, 16, [8, 8], [3, 3], [1, 1], [1, 1], 32, 1, 1,
+            seed_weight_subgrid_stride=[2, 2],
+        )
+        self.assertFalse(legacy.use_seed_weight_pack)
+        self.assertTrue(seed.use_seed_weight_pack)
+        self.assertEqual(seed.seed_weight_input_count, 4)
+        self.assertEqual(seed.seed_weight_level_cost, 2)
+        self.assertEqual(seed.get_encrypted_param_count(5), {7: {'weight': 36}, 4: {'bias': 1}})
+        for stride in ([1, 1], [3, 2], [16, 2], [2, 4]):
+            layer = MultiplexedConv2DPackedLayer(32, 16, [8, 8], [1, 1], [1, 1], [1, 1], 32, 1, 1,
+                                                   seed_weight_subgrid_stride=stride)
+            self.assertEqual(layer.use_seed_weight_pack, stride == [2, 4])
+
     def test_poly_and_scalar(self):
         for order in [2, 3, 7, 15]:
             layer = PolyRelu2D([8, 8], order, [1, 1], 32)

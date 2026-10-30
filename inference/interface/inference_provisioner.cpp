@@ -227,6 +227,10 @@ InferenceProvisioner::parse_parameter_argument(const std::string& arg_id, const 
     if (starts_with(source_id, "convw_")) {
         info.layer_id = source_id.substr(std::string("convw_").size());
         info.param_kind = "weight";
+        if (init.json_layers.contains(info.layer_id) &&
+            init.json_layers.at(info.layer_id).contains("seed_weight_subgrid_stride")) {
+            info.param_kind = "seed_weight";
+        }
         return info;
     }
     if (starts_with(source_id, "convb_")) {
@@ -296,7 +300,7 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
 
     const auto& layer_cfg = init.json_layers.at(info.layer_id);
     const std::string layer_type = layer_cfg.at("type").get<std::string>();
-    const bool is_weight = info.param_kind == "weight";
+    const bool is_weight = info.param_kind == "weight" || info.param_kind == "seed_weight";
     const bool is_bias = info.param_kind == "bias";
     const bool is_mask = info.param_kind == "mask";
 
@@ -392,7 +396,9 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                         const int out_idx = static_cast<int>(flat_idx / (shape[1] * shape[2]));
                         const int in_idx = static_cast<int>((flat_idx / shape[2]) % shape[1]);
                         const int kernel_idx = static_cast<int>(flat_idx % shape[2]);
-                        ringt = layer.generate_weight_pt_for_indices(context, out_idx, in_idx, kernel_idx);
+                        ringt = layer.use_seed_weight_pack()
+                                    ? layer.generate_weight_pt_for_seed_indices(context, out_idx, in_idx, kernel_idx)
+                                    : layer.generate_weight_pt_for_indices(context, out_idx, in_idx, kernel_idx);
                     } else if (is_bias) {
                         if (!is_bias || shape.size() != 1) {
                             throw std::runtime_error("[Provisioner] multiplexed conv bias signature must be rank 1: " +

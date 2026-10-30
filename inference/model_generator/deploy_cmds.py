@@ -860,7 +860,7 @@ def gen_custom_task(
                     if lazy:
                         conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
                         layer_output_nodes = conv0_layer.call_custom_compute(
-                            feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source, level
                         )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                         input_args.append(Argument(f'{layer_id}', [conv_data_source]))
@@ -877,10 +877,14 @@ def gen_custom_task(
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                     else:
                         weight_pt, bias_pt = conv0_layer.make_pt_nodes(layer_id)
+                        seed_mask_pt = conv0_layer.make_seed_mask_pt_nodes(layer_id, level)
                         input_args.append(Argument(f'convw_{layer_id}', weight_pt))
                         input_args.append(Argument(f'convb_{layer_id}', bias_pt))
+                        if seed_mask_pt:
+                            input_args.append(Argument(f'convseedm_{layer_id}', seed_mask_pt))
                         layer_output_nodes = conv0_layer.call(
-                            feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt,
+                            [], seed_mask_pt=seed_mask_pt
                         )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                 if style == 'multiplexed':
@@ -908,12 +912,13 @@ def gen_custom_task(
                             pack,
                             n_packed_in_channel,
                             n_packed_out_channel,
+                            seed_weight_subgrid_stride=layer_config.get('seed_weight_subgrid_stride', [1, 1]),
                         )
 
                     if lazy:
                         conv_data_source = CustomDataNode(type='conv_data_source', id=f'{layer_id}')
                         layer_output_nodes = conv0_layer.call_custom_compute(
-                            feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], conv_data_source, level
                         )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                         input_args.append(Argument(f'{layer_id}', [conv_data_source]))
@@ -928,6 +933,7 @@ def gen_custom_task(
                             weight_ct, bias_ct, mask_pt = conv0_layer.make_param_ct_nodes(layer_id, level)
                             if mask_pt:
                                 _append_parameter_arg(f'convm_{layer_id}', mask_pt)
+                        seed_mask_pt = conv0_layer.make_seed_mask_pt_nodes(layer_id, level)
                         _append_parameter_arg(f'convw_{layer_id}', weight_ct)
                         _append_parameter_arg(f'convb_{layer_id}', bias_ct)
                         layer_output_nodes = conv0_layer.call_param_ct(
@@ -936,16 +942,21 @@ def gen_custom_task(
                             bias_ct,
                             mask_pt,
                             input_is_plaintext=_feature_input_is_plaintext(layer_input_feature_ids[0]),
+                            seed_mask_pt=seed_mask_pt,
                         )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                     else:
                         weight_pt, bias_pt, mask_pt = conv0_layer.make_pt_nodes(layer_id)
+                        seed_mask_pt = conv0_layer.make_seed_mask_pt_nodes(layer_id, level)
                         if mask_pt:
                             input_args.append(Argument(f'convm_{layer_id}', mask_pt))
+                        if seed_mask_pt:
+                            input_args.append(Argument(f'convseedm_{layer_id}', seed_mask_pt))
                         input_args.append(Argument(f'convw_{layer_id}', weight_pt))
                         input_args.append(Argument(f'convb_{layer_id}', bias_pt))
                         layer_output_nodes = conv0_layer.call(
-                            feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, mask_pt
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, mask_pt,
+                            seed_mask_pt=seed_mask_pt
                         )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 

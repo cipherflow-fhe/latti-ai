@@ -103,7 +103,8 @@ ExecutorFunc create_multiplexed_conv_mask_executor() {
         }
         const auto& attrs = self.custom_prop->attributes;
         if (attrs.value("op_class", std::string()) != "MultiplexedConv2DPackedLayer" ||
-            attrs.value("type", std::string()) != "mask_pt") {
+            (attrs.value("type", std::string()) != "mask_pt" &&
+             attrs.value("type", std::string()) != "seed_mask_pt")) {
             throw std::runtime_error("[Runner] unsupported encode_pt node");
         }
         fhe::CkksContext* ckks_ctx_ptr = exec_ctx.get_arithmetic_context<fhe::CkksContext>();
@@ -117,11 +118,22 @@ ExecutorFunc create_multiplexed_conv_mask_executor() {
             const auto& value = attrs.at(key);
             return Duo{value.at(0).get<uint32_t>(), value.at(1).get<uint32_t>()};
         };
-        const auto mask = MultiplexedConv2DPackedLayer::select_tensor_for_config(
+        std::vector<double> mask;
+        if (attrs.value("type", std::string()) == "seed_mask_pt") {
+            const bool kernel = attrs.value("mask_kind", std::string()) == "kernel";
+            const auto kernel_shape = read_duo("kernel_shape");
+            mask = MultiplexedConv2DPackedLayer::seed_mask_tensor_for_config(
+                read_duo("input_shape"), read_duo("skip"), read_duo("stride"),
+                attrs.at("n_channel_per_ct").get<uint32_t>(), read_duo("external_upsample_factor"),
+                attrs.at("seed_a").get<uint32_t>(), attrs.at("seed_b").get<uint32_t>(),
+                attrs.at("subgrid").get<int>(), attrs.at("kernel_index").get<int>(), kernel_shape, kernel);
+        } else {
+            mask = MultiplexedConv2DPackedLayer::select_tensor_for_config(
             read_duo("input_shape"), read_duo("skip"), read_duo("stride"),
             attrs.at("n_channel_per_ct").get<uint32_t>(), read_duo("external_upsample_factor"),
             attrs.at("i").get<int>() *
                 prod(read_duo("skip") * read_duo("stride") / read_duo("external_upsample_factor")));
+        }
         const int level = attrs.at("level").get<int>();
         auto pt = ckks_ctx_ptr->encode_ringt(mask, ckks_ctx_ptr->get_parameter().get_q(level));
         output = std::make_shared<fhe::CkksPlaintextRingt>(std::move(pt));

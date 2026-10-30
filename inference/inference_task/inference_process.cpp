@@ -1173,7 +1173,11 @@ void InitInferenceProcess::_init_multiplexed_conv_layer(const string& key,
         } else {
             auto mux_conv_layer = MakeU<MultiplexedConv2DPackedLayer>(
                 param, feature_input.shape, move(weight), move(bias), stride, feature_input.skip,
-                feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale, upsample_factor_in);
+                feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale, upsample_factor_in,
+                [&layer]() {
+                    const auto value = layer.value("seed_weight_subgrid_stride", std::vector<uint32_t>{1, 1});
+                    return Duo{value.at(0), value.at(1)};
+                }());
             _prepare_layer(key, move(mux_conv_layer));
         }
     } else {
@@ -3356,7 +3360,8 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         int l = attrs.value("l", 0);
         CkksPlaintextRingt pt;
 
-        if (op_class == "MultiplexedConv2DPackedLayer" && type == "mask_pt" && self.input_nodes.empty()) {
+        if (op_class == "MultiplexedConv2DPackedLayer" &&
+            (type == "mask_pt" || type == "seed_mask_pt") && self.input_nodes.empty()) {
             const auto input_shape_attr = attrs.at("input_shape");
             const auto skip_attr = attrs.at("skip");
             const auto stride_attr = attrs.at("stride");
@@ -3367,9 +3372,20 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             const Duo external_upsample_factor = {external_upsample_attr.at(0).get<uint32_t>(),
                                                   external_upsample_attr.at(1).get<uint32_t>()};
             const int mask_level = attrs.at("level").get<int>();
-            auto mask = MultiplexedConv2DPackedLayer::select_tensor_for_config(
+            vector<double> mask;
+            if (type == "seed_mask_pt") {
+                const auto kernel_shape_attr = attrs.at("kernel_shape");
+                const Duo kernel_shape = {kernel_shape_attr.at(0).get<uint32_t>(), kernel_shape_attr.at(1).get<uint32_t>()};
+                mask = MultiplexedConv2DPackedLayer::seed_mask_tensor_for_config(
+                    input_shape, skip, stride, attrs.at("n_channel_per_ct").get<uint32_t>(), external_upsample_factor,
+                    attrs.at("seed_a").get<uint32_t>(), attrs.at("seed_b").get<uint32_t>(),
+                    attrs.at("subgrid").get<int>(), attrs.at("kernel_index").get<int>(), kernel_shape,
+                    attrs.value("mask_kind", string()) == "kernel");
+            } else {
+                mask = MultiplexedConv2DPackedLayer::select_tensor_for_config(
                 input_shape, skip, stride, attrs.at("n_channel_per_ct").get<uint32_t>(), external_upsample_factor,
                 i * prod(skip * stride / external_upsample_factor));
+            }
             pt = ckks_ctx.encode_ringt(mask, ckks_ctx.get_parameter().get_q(mask_level));
             output = make_shared<CkksPlaintextRingt>(move(pt));
             return;
@@ -3411,7 +3427,9 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         } else if (op_class == "MultiplexedConv2DPackedLayer") {
             auto* layer = static_cast<MultiplexedConv2DPackedLayer*>(layer_ptr);
             if (type == "weight_pt")
-                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j, k);
+                pt = layer->use_seed_weight_pack()
+                         ? layer->generate_weight_pt_for_seed_indices(ckks_ctx, i, j, k)
+                         : layer->generate_weight_pt_for_indices(ckks_ctx, i, j, k);
             else if (type == "bias_pt")
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
             else

@@ -32,7 +32,8 @@ public:
                                  uint32_t n_channel_per_ct_in,
                                  uint32_t level_in,
                                  double residual_scale = 1.0,
-                                 const Duo& external_upsample_factor_in = {1, 1});
+                                 const Duo& external_upsample_factor_in = {1, 1},
+                                 const Duo& seed_weight_subgrid_stride_in = {1, 1});
 
     void prepare_weight() override {
         prepare_weight_for_post_skip_rotation();
@@ -54,6 +55,12 @@ public:
                                                         uint32_t n_channel_per_ct,
                                                         const Duo& external_upsample_factor,
                                                         int num);
+    static std::vector<double> seed_mask_tensor_for_config(const Duo& input_shape, const Duo& skip,
+                                                           const Duo& stride, uint32_t n_channel_per_ct,
+                                                           const Duo& external_upsample_factor, uint32_t a,
+                                                           uint32_t b, int subgrid, int kernel_index,
+                                                           const Duo& kernel_shape,
+                                                           bool kernel_boundary);
 
     std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> weight_pt;
     std::vector<ls::CkksPlaintextRingt> bias_pt;
@@ -67,6 +74,7 @@ public:
 
     // Helper functions to generate weights/bias/mask on-demand (post_skip_rotation path)
     ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
+    ls::CkksPlaintextRingt generate_weight_pt_for_seed_indices(ls::CkksContext& ctx, int ct_idx, int j, int k) const;
     ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
     ls::CkksPlaintextRingt generate_mask_pt_for_indices(ls::CkksContext& ctx, int i) const;
 
@@ -82,6 +90,7 @@ public:
     // input-shift/weight decomposition; Feature2DEncrypted stays canonical.
     bool use_periodic_pack() const { return use_periodic_pack_; }
     uint32_t periodic_block_count() const { return periodic_block_count_; }
+    bool use_seed_weight_pack() const { return use_seed_weight_pack_; }
 
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
@@ -102,6 +111,8 @@ private:
     uint32_t periodic_channel_count_ = 0;
     uint32_t periodic_block_count_ = 0;
     bool use_periodic_pack_ = false;
+    Duo seed_weight_subgrid_stride_ = {1, 1};
+    bool use_seed_weight_pack_ = false;
     int bias_level_down = 0;
     bool need_repack_;
     double weight_scale;
@@ -121,6 +132,8 @@ private:
     int cached_skip_prod = 0;
     int cached_bias_n_channel_per_ct = 0;
     int cached_total_block_size = 0;
+    std::vector<double> generate_weight_values_for_indices(int ct_idx, int j, int k,
+                                                            bool apply_kernel_boundary) const;
     // For reduct_rot
     uint32_t cached_skip_out_prod = 0;
 };
