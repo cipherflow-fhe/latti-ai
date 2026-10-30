@@ -29,12 +29,13 @@ from inference.model_generator.layers.encrypted_param_ops import (
     multiply_with_encrypted_param,
 )
 from inference.model_generator.layers.fhe_op_utils import naf_weight
+from inference.model_generator.layers.kernel_seed_packing import KernelSeedPacking, inverse_kernel_positions
 
 
 op_class = 'InverseMultiplexedConv2DLayer'
 
 
-class InverseMultiplexedConv2DLayer:
+class InverseMultiplexedConv2DLayer(KernelSeedPacking):
     rotate_num = 0
     add_num = 0
     mult_num = 0
@@ -50,6 +51,7 @@ class InverseMultiplexedConv2DLayer:
         kernel_shape,
         stride,
         block_shape,
+        seed_weight_subgrid_stride=(1, 1),
     ):
         self.n_out_channel: int = n_out_channel
         self.n_in_channel: int = n_in_channel
@@ -81,6 +83,12 @@ class InverseMultiplexedConv2DLayer:
             input_shape[1] // (block_shape[1] * self.stride[1]),
         ]
 
+        self._init_kernel_seed_packing(
+            seed_weight_subgrid_stride, block_shape, [1, 1], 1,
+            [step for _, step in inverse_kernel_positions(kernel_shape, self.stride, self.output_step, self.padding)],
+            op_class,
+        )
+
     def get_fhe_op_count(self, level: int, N: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call(), grouped by level.
 
@@ -108,6 +116,7 @@ class InverseMultiplexedConv2DLayer:
           naf_weight(channel_idx * output_pixels) = naf_weight(channel_idx).
         """
         ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        self.add_seed_recovery_ops(ops, level, self.n_out_channel * self.n_in_channel)
         lv = level
 
         pad0, pad1 = self.padding[0], self.padding[1]
@@ -430,7 +439,7 @@ class InverseMultiplexedConv2DLayer:
         bias_pt[i]: i in n_out_channel
         repack_mask_pt: a single CkksPlaintextRingtNode if need_repack, else None
         """
-        inner = self.kernel_shape[0] * self.kernel_shape[1] * self.output_step[0] * self.output_step[1]
+        inner = self.seed_weight_kernel_count
         weight_pt = [
             [
                 [CkksPlaintextRingtNode(f'convw_{layer_id}_{k}_{n}_{i}') for i in range(inner)]
@@ -442,12 +451,18 @@ class InverseMultiplexedConv2DLayer:
         repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}') if self.need_repack else None
         return weight_pt, bias_pt, repack_mask_pt
 
+    def get_encrypted_param_count(self, level):
+        counts = defaultdict(dict)
+        counts[level + self.seed_weight_level_cost]['weight'] = self.n_out_channel * self.n_in_channel * self.seed_weight_kernel_count
+        counts[level - 1]['bias'] = self.n_out_channel
+        return dict(counts)
+
     def make_param_ct_nodes(self, layer_id, level: int):
         """Return encrypted weight/bias nodes plus plaintext repack mask."""
-        inner = self.kernel_shape[0] * self.kernel_shape[1] * self.output_step[0] * self.output_step[1]
+        inner = self.seed_weight_kernel_count
         weight_ct = [
             [
-                [CkksCiphertextNode(f'convw_{layer_id}_{k}_{n}_{i}', level=level) for i in range(inner)]
+                [CkksCiphertextNode(f'convw_{layer_id}_{k}_{n}_{i}', level=level + self.seed_weight_level_cost) for i in range(inner)]
                 for n in range(self.n_in_channel)
             ]
             for k in range(self.n_out_channel)
@@ -457,7 +472,7 @@ class InverseMultiplexedConv2DLayer:
         return weight_ct, bias_ct, repack_mask_pt
 
     def call(
-        self, x: list[CkksCiphertextNode], weight_pt, bias_pt, N: int, repack_mask_pt=None
+        self, x: list[CkksCiphertextNode], weight_pt, bias_pt, N: int, repack_mask_pt=None, seed_mask_pt=None
     ) -> list[CkksCiphertextNode]:
         pad0 = self.padding[0]
         pad1 = self.padding[1]
@@ -527,7 +542,7 @@ class InverseMultiplexedConv2DLayer:
                     for j in range(0, len(weight_pt[ct_idx])):
                         for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
                             x_ct_list.append(rotated_x[j][k + base_idx])
-                            w_pt_list.append(weight_pt[ct_idx][j][k + base_idx])
+                            w_pt_list.append(self.kernel_weight(weight_pt[ct_idx][j], k + base_idx, seed_mask_pt))
                     partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
                     s = rescale(partial_sum)
                     s = add(s, bias_pt[ct_idx])
@@ -622,6 +637,7 @@ class InverseMultiplexedConv2DLayer:
         N: int,
         repack_mask_pt=None,
         input_is_plaintext: bool = False,
+        seed_mask_pt=None,
     ) -> list[CkksCiphertextNode]:
         pad0 = self.padding[0]
         pad1 = self.padding[1]
@@ -688,7 +704,8 @@ class InverseMultiplexedConv2DLayer:
                     for j in range(0, len(weight_ct[ct_idx])):
                         for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
                             source = rotated_x[j][k + base_idx]
-                            weight = weight_ct[ct_idx][j][k + base_idx]
+                            weight = self.kernel_weight(weight_ct[ct_idx][j], k + base_idx, seed_mask_pt,
+                                                        source[0] if input_is_plaintext else source)
                             if input_is_plaintext:
                                 # R_s(x) * w = R_s(x * R_-s(w)); rotate only CTs.
                                 plain, step = source
@@ -716,7 +733,7 @@ class InverseMultiplexedConv2DLayer:
                         zero_cts = []
                         for idx in range(total):
                             if idx not in used:
-                                source = (multiply_with_encrypted_param(x[idx], weight_ct[0][0][0])
+                                source = (multiply_with_encrypted_param(x[idx], self.kernel_weight(weight_ct[0][0], 0, seed_mask_pt, x[idx]))
                                           if input_is_plaintext else x[idx])
                                 zero_cts.append(sub(source, source))
                         if zero_cts:

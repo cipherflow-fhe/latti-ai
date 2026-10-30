@@ -1168,6 +1168,7 @@ class FheScoreParam:
                         kernel_shape,
                         stride,
                         block_shape,
+                        seed_weight_subgrid_stride=getattr(node, 'seed_weight_subgrid_stride', [1, 1]),
                     )
                 else:
                     layer = InverseMultiplexedConv2DLayer(
@@ -1178,8 +1179,12 @@ class FheScoreParam:
                         kernel_shape,
                         stride,
                         block_shape,
+                        seed_weight_subgrid_stride=getattr(node, 'seed_weight_subgrid_stride', [1, 1]),
                     )
-                return None if encrypted_param_count else layer.get_fhe_op_count(self.input_mult_level, n)
+                if encrypted_param_count:
+                    return layer.get_encrypted_param_count(parameter_level)
+                return layer.get_fhe_op_count(
+                    self.get_parameter_use_site_level() if layer.use_seed_weight_pack else self.input_mult_level, n)
 
             if style == 'ordinary':
                 if is_depthwise:
@@ -1223,6 +1228,7 @@ class FheScoreParam:
                     n_in_channel_per_ct,
                     n_packed_in,
                     n_packed_out,
+                    seed_weight_subgrid_stride=getattr(node, 'seed_weight_subgrid_stride', [1, 1]),
                 )
             else:
                 layer = MultiplexedConv2DPackedLayer(
@@ -1238,8 +1244,8 @@ class FheScoreParam:
                     seed_weight_subgrid_stride=getattr(node, 'seed_weight_subgrid_stride', [1, 1]),
                 )
             if encrypted_param_count:
-                return None if is_depthwise else layer.get_encrypted_param_count(parameter_level)
-            if not is_depthwise and layer.use_seed_weight_pack:
+                return layer.get_encrypted_param_count(parameter_level)
+            if layer.use_seed_weight_pack:
                 return layer.get_fhe_op_count(self.get_parameter_use_site_level())
             return layer.get_fhe_op_count(self.input_mult_level)
 

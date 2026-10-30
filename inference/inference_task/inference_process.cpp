@@ -17,6 +17,7 @@
  */
 
 #include "inference_process.h"
+#include "../fhe_layers/interleaved_seed.h"
 #include "../lattisense/cxx_sdk_v2/cxx_fhe_task.h"
 #include <algorithm>
 #include <cmath>
@@ -1155,6 +1156,9 @@ void InitInferenceProcess::_init_multiplexed_conv_layer(const string& key,
     Duo stride = {layer["stride"][0], layer["stride"][1]};
     Duo upsample_factor_in = {layer["upsample_factor_in"][0], layer["upsample_factor_in"][1]};
 
+    const auto seed_value = layer.value("seed_weight_subgrid_stride", std::vector<uint32_t>{1, 1});
+    const Duo seed_stride = {seed_value.at(0), seed_value.at(1)};
+
     if (layer["groups"] == 1) {
         if (is_big_size) {
             Duo next_stride = {block_expansion[0] / stride[0], block_expansion[1] / stride[1]};
@@ -1168,16 +1172,13 @@ void InitInferenceProcess::_init_multiplexed_conv_layer(const string& key,
             }
             auto inv_conv_layer =
                 MakeU<InverseMultiplexedConv2DLayer>(param, feature_input.shape, move(weight), move(bias), padding,
-                                                     stride, block_shape_in, feature_input.level, residual_scale);
+                                                     stride, block_shape_in, feature_input.level, residual_scale, seed_stride);
             _prepare_layer(key, move(inv_conv_layer));
         } else {
             auto mux_conv_layer = MakeU<MultiplexedConv2DPackedLayer>(
                 param, feature_input.shape, move(weight), move(bias), stride, feature_input.skip,
                 feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale, upsample_factor_in,
-                [&layer]() {
-                    const auto value = layer.value("seed_weight_subgrid_stride", std::vector<uint32_t>{1, 1});
-                    return Duo{value.at(0), value.at(1)};
-                }());
+                seed_stride);
             _prepare_layer(key, move(mux_conv_layer));
         }
     } else {
@@ -1193,12 +1194,12 @@ void InitInferenceProcess::_init_multiplexed_conv_layer(const string& key,
             }
             auto inv_dw_conv_layer = MakeU<InverseMultiplexedConv2DLayerDepthwise>(
                 param, feature_input.shape, move(weight), move(bias), padding, stride, block_shape_in,
-                feature_input.level, residual_scale);
+                feature_input.level, residual_scale, seed_stride);
             _prepare_layer(key, move(inv_dw_conv_layer));
         } else {
             auto mux_dw_layer = MakeU<MultiplexedConv2DPackedLayerDepthwise>(
                 param, feature_input.shape, move(weight), move(bias), stride, feature_input.skip,
-                feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale);
+                feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale, seed_stride);
             _prepare_layer(key, move(mux_dw_layer));
         }
     }
@@ -3359,6 +3360,25 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         int k = attrs.value("k", 0);
         int l = attrs.value("l", 0);
         CkksPlaintextRingt pt;
+
+        if (type == "seed_mask_pt" && self.input_nodes.empty() &&
+            (op_class == "MultiplexedConv2DPackedLayerDepthwise" ||
+             op_class == "InverseMultiplexedConv2DLayer" ||
+             op_class == "InverseMultiplexedConv2DLayerDepthwise")) {
+            const auto read_duo = [&attrs](const char* key) {
+                return Duo{attrs.at(key).at(0).get<uint32_t>(), attrs.at(key).at(1).get<uint32_t>()};
+            };
+            const auto& step = attrs.at("seed_step");
+            const auto mask = interleaved_seed::mask(
+                read_duo("seed_shape"), read_duo("seed_skip"), attrs.at("seed_blocks").get<uint32_t>(),
+                ckks_ctx.get_parameter().get_n() / 2,
+                Duo{attrs.at("seed_a").get<uint32_t>(), attrs.at("seed_b").get<uint32_t>()},
+                attrs.at("subgrid").get<int>(), DuoInt{step.at(0).get<int>(), step.at(1).get<int>()},
+                attrs.value("mask_kind", string()) == "kernel");
+            pt = ckks_ctx.encode_ringt(mask, ckks_ctx.get_parameter().get_q(attrs.at("level").get<int>()));
+            output = make_shared<CkksPlaintextRingt>(move(pt));
+            return;
+        }
 
         if (op_class == "MultiplexedConv2DPackedLayer" &&
             (type == "mask_pt" || type == "seed_mask_pt") && self.input_nodes.empty()) {

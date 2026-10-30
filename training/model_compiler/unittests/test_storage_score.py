@@ -165,7 +165,7 @@ class StorageScoreTest(unittest.TestCase):
             path = Path(tmp) / 'graph.json'
             self.graph.to_json({}, str(path))
             self.assertEqual(json.loads(path.read_text())['layer']['conv']['seed_weight_subgrid_stride'], [2, 4])
-        for attrs in ({'groups': 16}, {'is_big_size': True}, {'is_conv_transpose': True}, {'dim': 1}):
+        for attrs in ({'groups': 16}, {'is_conv_transpose': True}, {'dim': 1}):
             graph = copy.deepcopy(self.graph)
             node = next(n for n in graph.dag if isinstance(n, ConvComputeNode))
             del node.seed_weight_subgrid_stride
@@ -180,6 +180,32 @@ class StorageScoreTest(unittest.TestCase):
             self.assertFalse(hasattr(self.conv, 'seed_weight_subgrid_stride'))
             # Restore only the test fixture for the next case.
             self.conv.seed_weight_subgrid_stride = [2, 4]
+
+    def test_depthwise_and_inverse_share_seed_config_and_storage_scoring(self):
+        from pipeline import set_seed_weight_subgrid_stride
+
+        config.seed_weight_subgrid_stride = [2, 4]
+        config.block_shape = [4, 4]
+        baseline = copy.deepcopy(self.graph)
+        for big in (False, True):
+            for depthwise in (False, True):
+                with self.subTest(big=big, depthwise=depthwise):
+                    self.graph = copy.deepcopy(baseline)
+                    self.conv = next(n for n in self.graph.dag if isinstance(n, ConvComputeNode))
+                    self.output = next(self.graph.dag.successors(self.conv))
+                    self.conv.is_big_size = big
+                    self.conv.groups = 16 if depthwise else 1
+                    self.conv.channel_output = 16 if depthwise else 32
+                    self.output.channel = self.conv.channel_output
+                    set_seed_weight_subgrid_stride(self.graph)
+                    self.assertEqual(self.conv.seed_weight_subgrid_stride, [2, 4])
+                    param = self.score_param()
+                    counts = param.get_encrypted_param_count()
+                    self.assertGreater(sum(c.get('weight', 0) for c in counts.values()), 0)
+                    self.assertGreater(param.get_encrypted_parameter_storage()['bytes'], 0)
+                    self.assertGreater(param.get_score(), 0)
+                    insert_drop_level_layers(self.graph)
+                    self.assertEqual(self.score_param().get_encrypted_param_count(), counts)
 
 
 if __name__ == '__main__':

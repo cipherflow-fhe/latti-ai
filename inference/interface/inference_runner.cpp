@@ -25,6 +25,7 @@
 
 #include "interface/runner_bundle_io.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer.h"
+#include "fhe_layers/interleaved_seed.h"
 #include "lattisense/cxx_sdk_v2/cxx_fhe_task.h"
 
 namespace {
@@ -102,9 +103,14 @@ ExecutorFunc create_multiplexed_conv_mask_executor() {
             throw std::runtime_error("[Runner] encode_pt mask missing custom properties");
         }
         const auto& attrs = self.custom_prop->attributes;
-        if (attrs.value("op_class", std::string()) != "MultiplexedConv2DPackedLayer" ||
+        const auto op_class = attrs.value("op_class", std::string());
+        const bool kernel_seed = op_class == "MultiplexedConv2DPackedLayerDepthwise" ||
+                                 op_class == "InverseMultiplexedConv2DLayer" ||
+                                 op_class == "InverseMultiplexedConv2DLayerDepthwise";
+        if ((op_class != "MultiplexedConv2DPackedLayer" && !kernel_seed) ||
             (attrs.value("type", std::string()) != "mask_pt" &&
-             attrs.value("type", std::string()) != "seed_mask_pt")) {
+             attrs.value("type", std::string()) != "seed_mask_pt") ||
+            (kernel_seed && attrs.value("type", std::string()) != "seed_mask_pt")) {
             throw std::runtime_error("[Runner] unsupported encode_pt node");
         }
         fhe::CkksContext* ckks_ctx_ptr = exec_ctx.get_arithmetic_context<fhe::CkksContext>();
@@ -119,7 +125,15 @@ ExecutorFunc create_multiplexed_conv_mask_executor() {
             return Duo{value.at(0).get<uint32_t>(), value.at(1).get<uint32_t>()};
         };
         std::vector<double> mask;
-        if (attrs.value("type", std::string()) == "seed_mask_pt") {
+        if (kernel_seed) {
+            const auto& step = attrs.at("seed_step");
+            mask = interleaved_seed::mask(
+                read_duo("seed_shape"), read_duo("seed_skip"), attrs.at("seed_blocks").get<uint32_t>(),
+                ckks_ctx_ptr->get_parameter().get_n() / 2,
+                Duo{attrs.at("seed_a").get<uint32_t>(), attrs.at("seed_b").get<uint32_t>()},
+                attrs.at("subgrid").get<int>(), DuoInt{step.at(0).get<int>(), step.at(1).get<int>()},
+                attrs.value("mask_kind", std::string()) == "kernel");
+        } else if (attrs.value("type", std::string()) == "seed_mask_pt") {
             const bool kernel = attrs.value("mask_kind", std::string()) == "kernel";
             const auto kernel_shape = read_duo("kernel_shape");
             mask = MultiplexedConv2DPackedLayer::seed_mask_tensor_for_config(

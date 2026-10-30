@@ -61,15 +61,17 @@ def set_seed_weight_subgrid_stride(graph: LayerAbstractGraph) -> None:
     for node in graph.dag.nodes:
         if (
             isinstance(node, components.ConvComputeNode)
-            and node.layer_type == 'conv2d' and node.dim == 2 and node.groups == 1
-            and not node.is_big_size and not node.is_conv_transpose
+            and node.layer_type == 'conv2d' and node.dim == 2
+            and (node.groups == 1 or node.groups == node.channel_input == node.channel_output)
+            and not node.is_conv_transpose
         ):
             input_feature = next(graph.dag.predecessors(node))
-            if all(size % step == 0 for size, step in zip(input_feature.shape, stride)):
+            seed_shape = config.block_shape if node.is_big_size else input_feature.shape
+            if all(size % step == 0 for size, step in zip(seed_shape, stride)):
                 node.seed_weight_subgrid_stride = list(stride)
             else:
                 logging.debug('Seed weights disabled for %s: stride %s does not divide %s',
-                              node.layer_id, stride, input_feature.shape)
+                              node.layer_id, stride, seed_shape)
 
 
 def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:

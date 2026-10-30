@@ -101,6 +101,7 @@ private:
     std::vector<ls::CkksCiphertext> expand_periodic_inputs(
         ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x) const;
     uint32_t input_block_count() const;
+    uint32_t legacy_weight_input_count() const;
     uint32_t weight_input_count() const;
 
     int N;

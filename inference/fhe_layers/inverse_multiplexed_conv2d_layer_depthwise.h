@@ -31,7 +31,8 @@ public:
                                            const Duo& stride_in,
                                            const Duo& block_shape_in,
                                            uint32_t level_in,
-                                           double residual_scale = 1.0);
+                                           double residual_scale = 1.0,
+                                          const Duo& seed_weight_subgrid_stride_in = {1, 1});
     void prepare_weight() override;
     void prepare_weight_lazy() override;
 
@@ -49,6 +50,18 @@ public:
     ls::CkksPlaintextRingt generate_repack_mask_pt(ls::CkksContext& ctx) const;
     std::vector<uint32_t> get_used_input_indices() const;
 
+    ls::CkksPlaintextRingt generate_weight_pt_for_seed_indices(ls::CkksContext& ctx, int ct_idx, int seed_kernel) const;
+    ls::CkksPlaintextRingt generate_mask_pt_for_seed_indices(ls::CkksContext& ctx, int subgrid,
+                                                            int kernel_index, bool boundary) const;
+    bool use_seed_weight_pack() const { return use_seed_weight_pack_; }
+    uint32_t seed_weight_kernel_count() const {
+        const uint32_t count = prod(kernel_shape_) * prod(output_step);
+        return use_seed_weight_pack_ ? div_ceil(count, prod(seed_weight_subgrid_stride_)) : count;
+    }
+    uint32_t seed_weight_level_cost() const {
+        return use_seed_weight_pack_ ? (kernel_shape_ != Duo{1, 1} || pad_ != DuoInt{0, 0} ? 2 : 1) : 0;
+    }
+
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
 
@@ -61,6 +74,10 @@ private:
     std::vector<int32_t> input_rotate_steps;
     std::vector<int> input_rotate_units;
     std::vector<int> input_rotate_ranges;
+    Duo seed_weight_subgrid_stride_;
+    bool use_seed_weight_pack_ = false;
+    std::vector<double> generate_weight_values_for_indices(int ct_idx, int kernel_index, bool boundary) const;
+    std::vector<double> seed_mask_values(int subgrid, int kernel_index, bool boundary) const;
     double weight_scale;
 
     // Cached values for on-demand generation

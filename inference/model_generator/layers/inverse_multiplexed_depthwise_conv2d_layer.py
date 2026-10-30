@@ -25,22 +25,25 @@ from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
     add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
-    require_no_plaintext_input_rotation,
+    materialize_encrypted_param,
+    multiply_with_encrypted_param,
 )
 from inference.model_generator.layers.fhe_op_utils import naf_weight
+from inference.model_generator.layers.kernel_seed_packing import KernelSeedPacking, inverse_kernel_positions
 
 
 op_class = 'InverseMultiplexedConv2DLayerDepthwise'
 
 
-class InverseMultiplexedDepthwiseConv2DLayer:
+class InverseMultiplexedDepthwiseConv2DLayer(KernelSeedPacking):
     rotate_num = 0
     add_num = 0
     mult_num = 0
     rescale_num = 0
     drop_level_num = 0
 
-    def __init__(self, n_channel, input_shape, padding, kernel_shape, stride, block_shape):
+    def __init__(self, n_channel, input_shape, padding, kernel_shape, stride, block_shape,
+                 seed_weight_subgrid_stride=(1, 1)):
         self.n_out_channel: int = n_channel
         self.n_in_channel: int = n_channel
         self.input_shape: list[int] = input_shape
@@ -70,6 +73,12 @@ class InverseMultiplexedDepthwiseConv2DLayer:
             input_shape[0] // (block_shape[0] * self.stride[0]),
             input_shape[1] // (block_shape[1] * self.stride[1]),
         ]
+
+        self._init_kernel_seed_packing(
+            seed_weight_subgrid_stride, block_shape, [1, 1], 1,
+            [step for _, step in inverse_kernel_positions(kernel_shape, self.stride, self.output_step, self.padding)],
+            op_class,
+        )
 
     def get_used_input_indices(self) -> set:
         """Return the set of input CT indices that are actually used in the convolution."""
@@ -292,7 +301,7 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         bias_pt[i]: i in n_out_channel
         repack_mask_pt: CkksPlaintextRingtNode if need_repack, else None
         """
-        inner = self.kernel_shape[0] * self.kernel_shape[1] * self.output_step[0] * self.output_step[1]
+        inner = self.seed_weight_kernel_count
         weight_pt = [
             [CkksPlaintextRingtNode(f'convw_{layer_id}_{k}_{i}') for i in range(inner)]
             for k in range(self.n_out_channel)
@@ -301,11 +310,17 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}') if self.need_repack else None
         return weight_pt, bias_pt, repack_mask_pt
 
+    def get_encrypted_param_count(self, level):
+        counts = defaultdict(dict)
+        counts[level + self.seed_weight_level_cost]['weight'] = self.n_out_channel * self.seed_weight_kernel_count
+        counts[level - 1]['bias'] = self.n_out_channel
+        return dict(counts)
+
     def make_param_ct_nodes(self, layer_id, level: int):
         """Return encrypted weight/bias nodes plus plaintext repack mask."""
-        inner = self.kernel_shape[0] * self.kernel_shape[1] * self.output_step[0] * self.output_step[1]
+        inner = self.seed_weight_kernel_count
         weight_ct = [
-            [CkksCiphertextNode(f'convw_{layer_id}_{k}_{i}', level=level) for i in range(inner)]
+            [CkksCiphertextNode(f'convw_{layer_id}_{k}_{i}', level=level + self.seed_weight_level_cost) for i in range(inner)]
             for k in range(self.n_out_channel)
         ]
         bias_ct = [CkksCiphertextNode(f'convb_{layer_id}_{i}', level=level - 1) for i in range(self.n_out_channel)]
@@ -328,6 +343,7 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         Stage 3b (normal pack): step = -k * output_pixels; naf_weight(k * 2^m) == naf_weight(k).
         """
         ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        self.add_seed_recovery_ops(ops, level, self.n_out_channel)
         lv = level
 
         pad0 = self.padding[0]
@@ -425,7 +441,7 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         return dict(ops)
 
     def call(
-        self, x: list[CkksCiphertextNode], weight_pt, bias_pt, N: int, conv_data_source=None, repack_mask_pt=None
+        self, x: list[CkksCiphertextNode], weight_pt, bias_pt, N: int, conv_data_source=None, repack_mask_pt=None, seed_mask_pt=None
     ) -> list[CkksCiphertextNode]:
         pad0 = self.padding[0]
         pad1 = self.padding[1]
@@ -492,7 +508,7 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                     # Depthwise: no inner j loop, weight_pt[ct_idx] is 1D [kernel], not 2D [in_ch][kernel]
                     for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
                         x_ct_list.append(rotated_x[ct_idx][k + base_idx])
-                        w_pt_list.append(weight_pt[ct_idx][k + base_idx])
+                        w_pt_list.append(self.kernel_weight(weight_pt[ct_idx], k + base_idx, seed_mask_pt))
                     partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
                     s = rescale(partial_sum)
                     s = add(s, bias_pt[ct_idx])
@@ -587,8 +603,8 @@ class InverseMultiplexedDepthwiseConv2DLayer:
         N: int,
         repack_mask_pt=None,
         input_is_plaintext: bool = False,
+        seed_mask_pt=None,
     ) -> list[CkksCiphertextNode]:
-        require_no_plaintext_input_rotation(op_class, input_is_plaintext, True)
 
         pad0 = self.padding[0]
         pad1 = self.padding[1]
@@ -629,7 +645,9 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                                         stride1 * output_step1
                                     )
                                     step = int(row_step * block_shape1 + col_step)
-                                    if step == 0:
+                                    if input_is_plaintext:
+                                        res_temp = (x[in_ct_idx], step)
+                                    elif step == 0:
                                         res_temp = x[in_ct_idx]
                                     else:
                                         res_temp = rotate_cols(x[in_ct_idx], [step])[0]
@@ -651,9 +669,28 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                     out_ct_idx = ct_idx * output_step0 * output_step1 + r_i2 * output_step1 + r_j2
                     base_idx = (r_i2 * output_step1 + r_j2) * self.kernel_shape[0] * self.kernel_shape[1]
                     for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
-                        x_terms.append(rotated_x[ct_idx][k + base_idx])
-                        w_terms.append(weight_ct[ct_idx][k + base_idx])
-                    s = accumulate_encrypted_param_terms(x_terms, w_terms)
+                        source = rotated_x[ct_idx][k + base_idx]
+                        weight = self.kernel_weight(
+                            weight_ct[ct_idx], k + base_idx, seed_mask_pt,
+                            source[0] if input_is_plaintext else source)
+                        if input_is_plaintext:
+                            plain, step = source
+                            weight = materialize_encrypted_param(weight, plain)
+                            if step:
+                                weight = rotate_cols(weight, [-step])[0]
+                            term = mult(weight, plain)
+                            if step:
+                                term = rotate_cols(term, [step])[0]
+                            x_terms.append(term)
+                        else:
+                            x_terms.append(source)
+                            w_terms.append(weight)
+                    if input_is_plaintext:
+                        s = x_terms[0]
+                        for term in x_terms[1:]:
+                            s = add(s, term)
+                    else:
+                        s = accumulate_encrypted_param_terms(x_terms, w_terms)
                     s = rescale(s)
                     s = add_encrypted_param_bias(s, bias_ct[ct_idx])
                     if ct_idx == 0 and r_i2 == 0 and r_j2 == 0:
@@ -662,7 +699,12 @@ class InverseMultiplexedDepthwiseConv2DLayer:
                         zero_cts = []
                         for idx in range(total):
                             if idx not in used:
-                                zero_cts.append(sub(x[idx], x[idx]))
+                                if input_is_plaintext:
+                                    zero = multiply_with_encrypted_param(
+                                        x[idx], self.kernel_weight(weight_ct[0], 0, seed_mask_pt, x[idx]))
+                                    zero_cts.append(sub(zero, zero))
+                                else:
+                                    zero_cts.append(sub(x[idx], x[idx]))
                         if zero_cts:
                             sum_zero = zero_cts[0]
                             for zc in zero_cts[1:]:

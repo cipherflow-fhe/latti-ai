@@ -1,8 +1,8 @@
 # Multiplexed Conv2D 交错子网格 seed weight 设计规范
 
-状态：设计规范，包含全局编译配置与旋转方向约定。本文严格限定在现有
-`MultiplexedConv2DPackedLayer` 的参数生成、post-skip-rotation 执行和
-`runtime_lazy` 参数加载路径内，目标是减少空间重复权重的离线密文数量。
+状态：设计规范，包含全局编译配置与旋转方向约定。本文覆盖 multiplexed
+普通卷积、depthwise 卷积以及 inverse multiplexed 卷积的参数生成、执行和
+`runtime_lazy` 参数加载路径，目标是减少空间重复权重的离线密文数量。
 
 ## 1. 目标与非目标
 
@@ -14,9 +14,11 @@ seed weight，再在 use-site 恢复为现有卷积乘法需要的 weight PT。`
 不生成 seed、mask 或额外旋转。非正数、非法或不适用于当前空间布局的值不通过 seed 路径；
 为保持旧任务兼容，算子回退旧路径并记录 debug 信息，不改变输出图结构。
 
-本版覆盖普通 multiplexed Conv2D 的一般 kernel shape，包括 `1x1`、`3x3` 和
-其他已有算子支持的 kernel；不新增 depthwise、inverse、reduct-rot 或其他卷积
-实现。除 seed 恢复所需操作外，不改变 activation 的 level 排程、输出布局、
+本版覆盖 multiplexed 普通 Conv2D 和 depthwise Conv2D 的一般 kernel shape，包括
+`1x1`、`3x3` 和其他已有算子支持的 kernel，并覆盖 inverse multiplexed 普通
+卷积和 depthwise 卷积。普通 multiplexed 保持输入 block 轴布局；depthwise
+和 inverse 沿最内层 kernel 轴打包并保留其他外轴。reduct-rot 和其他未列出的
+卷积实现仍回退旧路径。除 seed 恢复所需操作外，不改变 activation 的 level 排程、输出布局、
 stride、skip 或 external upsample 语义。
 
 不做跨层/跨输出通道 seed 共享，不引入独立映射表，不在第一版让 DP 搜索任意
@@ -24,7 +26,8 @@ stride、skip 或 external upsample 语义。
 
 ## 2. 算子入口与最小路由
 
-在 C++ 和 Python 翻译层的 `MultiplexedConv2DPackedLayer` 构造函数增加可选参数：
+在 C++ 和 Python 翻译层的普通/depthwise multiplexed 与 inverse multiplexed
+Conv2D 构造函数增加可选参数：
 
 ```text
 seed_weight_subgrid_stride: [a, b] = [1, 1]
@@ -37,9 +40,12 @@ Python 层将该参数传递给 C++ 层和参数计数接口；未提供时行�
 ```text
 is_power_of_two(a) && is_power_of_two(b)
 && (a > 1 || b > 1)
-&& input_shape[0] % a == 0
-&& input_shape[1] % b == 0
+&& seed_shape[0] % a == 0
+&& seed_shape[1] % b == 0
 ```
+
+普通和 depthwise multiplexed 使用 `seed_shape=input_shape`；inverse 使用
+`seed_shape=block_shape`，整除检查必须与实际 seed 空间一致。
 
 `skip` 造成的物理空间尺寸使用现有 `input_shape * skip` 和槽位步长规则；seed
 子网格判断在逻辑 `(h,w)` 上进行，物理旋转量沿用现有
@@ -64,8 +70,9 @@ is_power_of_two(a) && is_power_of_two(b)
 逐层 seed 字段，保持旧图和参数格式。非法类型、非正数或非 2 幂的全局值回退
 `[1,1]` 并记录 debug 信息；不能整除某层逻辑空间尺寸的值只在该层回退。
 
-该全局入口用于 `server_provisioned_runner` 的普通 multiplexed Conv2D；ordinary、
-depthwise、inverse/ConvTranspose 和其他卷积实现继续使用原路径。编译器在布局和
+该全局入口用于 `server_provisioned_runner` 的 multiplexed 普通 Conv2D、
+depthwise Conv2D 和 inverse multiplexed Conv2D；ConvTranspose 和其他卷积实现
+继续使用原路径。编译器在布局和
 层类型确定后、DP 评分之前，把该值写入适用卷积节点的
 `seed_weight_subgrid_stride` 属性；全局值不作为 DP 搜索变量，也不改变 activation
 的 `level_cost` 或主图最高 feature level。
@@ -88,43 +95,65 @@ r = h mod a
 c = w mod b
 ```
 
-一个 seed 包含最多 `a*b` 个逻辑 weight 向量，未使用的尾部子网格填零。seed
+普通 multiplexed 的一个 seed 包含最多 `a*b` 个同一 kernel 位置的逻辑 weight
+向量；depthwise/inverse 按第 3.1 节沿 kernel 轴合并。未使用的尾部子网格填零。seed
 的向量值不包含卷积边界置零；它只保存对应 kernel/channel 位置的系数。由
 `ct_idx`、输入 block `j`、kernel index `k` 推导 seed 序号、`(r,c)` 和尾部有效性，
 不创建持久映射表。seed 数量按当前 weight PT 组织规则计算：
 
 ```text
-seed_count = ceil(legacy_weight_count / (a*b))
+seed_count_per_outer_row = ceil(packed_axis_count / (a*b))
 ```
 
-这里的 `legacy_weight_count` 必须复用现有 `weight_input_count()`、输出 CT 分组、
-`n_block_per_ct` 和 kernel size 规则；seed 只减少空间重复，不改变通道打包。
+总数须乘回保留的外轴，不能先将所有参数展平再取整。普通 multiplexed 的
+`packed_axis_count` 是旧输入 block 数；depthwise/inverse 是逻辑 kernel 数。
+seed 只减少空间重复，不改变通道打包。
 
-### 3.1 seed 重复请求与唯一参数实体
+### 3.1 depthwise 与 inverse 的 kernel 轴布局
 
-`generate_weight_pt_for_seed_indices(ct_idx, j, k)` 的三个输入描述一次 legacy
-weight 的请求位置，不直接作为 seed 参数的唯一身份。不同的 `(ct_idx,j,k)` 可能
-属于同一个 seed；因此 seed 必须使用可重建的 canonical key：
+depthwise 和 inverse 不把不同输入 block 合并到同一 seed，而是保留外轴后仅沿
+kernel 轴合并。设逻辑 kernel 顺序为 `k=0..K-1`，则：
 
 ```text
-SeedKey = (layer_id, output_ct_group, input_seed_group, kernel_index,
-           seed_level, a, b)
+seed_k = floor(k / (a*b))
+subgrid = k mod (a*b)
+seed_count = ceil(K / (a*b))
 ```
 
-其中 `output_ct_group`、`input_seed_group` 和 `kernel_index` 由现有 block/kernel
-分组规则计算，`(r,c)` 子网格是该 seed 内的逻辑偏移，不再创建独立映射表。对于
+depthwise 的外轴是输入/输出 ciphertext，inverse 普通卷积的外轴是
+`(out_channel, in_channel)`，inverse depthwise 的外轴是 `out_channel`。inverse
+的 `K = kh*kw*prod(output_step)`，kernel 顺序必须复用 inverse 原有枚举顺序；
+边界 step 由该枚举的实际 inverse 分解计算，不能套用普通卷积的 kernel shift。
+子网格 mask 使用 `shape=block_shape`、`skip=[1,1]` 和一个 block；depthwise
+mask 使用其输入 shape、skip 和 `n_block_per_ct`。尾部子网格为零填充。
+
+### 3.2 seed 重复请求与唯一参数实体
+
+生成接口接受 canonical seed index：普通 multiplexed 的
+`generate_weight_pt_for_seed_indices(ct_idx, seed_j, k)` 中 `seed_j` 已经是压缩
+后的输入 block 索引；depthwise/inverse 的最后一个索引是 `seed_k`。运行时的
+逻辑请求先按分组公式映射到该索引和 subgrid，不能把 legacy 索引直接传给生成接口。
+不同逻辑请求可共享同一 seed，其身份为：
+
+```text
+SeedKey = (layer_id, outer_axes, seed_index, seed_level, a, b)
+```
+
+其中 `outer_axes` 是普通卷积的 output/input block 或 depthwise/inverse 的
+channel 外轴，`seed_index` 由对应轴的分组规则计算；`(r,c)` 子网格是该 seed
+内的逻辑偏移，不再创建独立映射表。对于
 同一 `SeedKey`：
 
 - eager 生成只调用一次 seed weight PT 生成函数，并在内存中复用结果；
 - Provisioner 只加密一次、manifest 只写一个 seed argument 和一组 elements；
-- runtime_lazy 以 `SeedKey` 为缓存键，多个 `(ct_idx,j,k)` 请求共享已加载 seed，
-  缓存失效后仍可按同一公式重新生成；
+- 加密参数 runtime_lazy 以 canonical 参数节点及其 argument/flat index 加载
+  seed，多个逻辑请求共享同一加载节点；
 - 如果同一逻辑 seed 在不同 use-site level、参数集或 layer instance 使用，必须
   使用不同 key 和不同密文实例，不能跨 level 复用。
 
-manifest 记录 seed 的 canonical 参数和元素顺序；Runner 根据算子参数重新计算
-`SeedKey` 与子网格索引。这样既消除重复加密和落盘，也不引入完整的请求到 seed
-映射表。
+manifest 记录 seed 的 canonical argument、元素顺序、level 和 `param_kind`；
+逐层 JSON 保存 `(a,b)`，MegaAG 固化恢复操作及公开 mask 属性。Runner 直接执行
+该图，不在运行时重新解释训练配置，也不维护独立的请求到 seed 映射表。
 
 ## 4. 生成接口与执行路径
 
@@ -138,6 +167,10 @@ CkksPlaintextRingt generate_mask_pt_for_seed_indices(
     CkksContext&, int ct_idx, int j, int k, SeedMaskKind) const;
 ```
 
+普通 multiplexed 的 seed index 位于输入 block 轴；depthwise 的 seed index
+位于 kernel 轴；inverse 同时保留 output/input channel 外轴，并将
+`kernel_shape * output_step` 展平后沿 kernel 轴分组。
+
 这两个接口既服务 eager 离线 PT 生成，也服务 runtime_lazy 的按需生成。现有
 `generate_weight_pt_for_indices()` 和 `generate_mask_pt_for_indices()` 保留为旧
 路径；seed 路径只在 `use_seed_weight_pack_` 为真时调用新 helper。无需强制新增
@@ -150,6 +183,11 @@ CkksPlaintextRingt generate_mask_pt_for_seed_indices(
 - `prepare_weight_for_post_skip_rotation_lazy()`
 - `run_core_for_post_skip_rotation()`
 - `run_for_post_skip_rotation()`
+
+depthwise/inverse 对应的 `prepare_weight()`、`run_core()` 和 Python
+`call_param_ct()` 使用同一 seed 恢复路由。`server_provisioned_runner` 的加密
+参数图通过 `load_encrypted_param_ct` 取得 seed CT，再以公开 mask 和旋转恢复
+逻辑 weight；不为每个 `call_param_ct*()` 另设 custom compute executor。
 
 其他 `reduct_rot` 路径在本版回退旧逻辑，避免同时改变两套旋转布局。seed 分支
 最终必须产生与旧路径相同形状、相同 level、相同 scale 的 weight PT，后面的
@@ -209,6 +247,9 @@ kernel mask 次数决定。公开 mask 使用对应 level 的 q 作为 scale：
 | `1x1` | `L+1` | 第一次 mask：`q_{L+1}` | rescale 到 `L` | `W_L`, `S_target` |
 | 一般 kernel | `L+2` | 第一次：`q_{L+2}`；第二次 kernel boundary mask：`q_{L+1}` | 分别到 `L+1`、`L` | `W_L`, `S_target` |
 
+inverse 的 `1x1` 若因显式 padding 产生非零边界 step，也使用两次 mask 和
+`L+2`；判定依据是实际 inverse kernel 枚举。
+
 在现有 CKKS rescale 约定下，`S_target × q_{L+2}` 经第一次 rescale 回到
 `S_target`，第二次同理；`1x1` 只有一次 `S_target × q_{L+1}`。seed PT 不应
 预先乘 q 或使用另一套固定 scale。seed CT 加密时保留该 `S_target`，只提高
@@ -229,22 +270,22 @@ scale 常量覆盖现有 `param_.get_q(level)` 或 layer 的 `weight_scale`。
 
 ## 7. eager、runtime_lazy 与参数加密
 
-- eager：`prepare_weight_for_post_skip_rotation()` 生成 seed 参数并保存 seed
-  PT/CT；执行前或首次使用时按第 5 节恢复，不再保存完整空间重复 weight。
-- runtime_lazy：`prepare_weight_for_post_skip_rotation_lazy()` 只生成 seed
-  参数描述；Runner 按 `ct_idx,j,k` 请求 seed，通过同一
-  `generate_weight_pt_for_seed_indices()` 和 mask helper 在线物化。相同 seed
-  的并发请求可以缓存，但缓存不是正确性依赖。
+- C++ 明文参数 eager：`prepare_weight_for_post_skip_rotation()` 或对应层的
+  `prepare_weight()` 保存 seed PT，`run_core*()` 在 host 解码、恢复并重新编码
+  当前使用的逻辑 weight；该路径不执行 PT×PT 的 FHE 操作。
+- C++ 明文参数 lazy：`prepare_weight*_lazy()` 初始化布局和 scale，
+  `run_core*()` 按需调用 seed 生成与恢复 helper。
 - 加密参数模式：Provisioner 使用同一 generate 接口生成 seed PT，再按 seed
   初始 level 加密为 seed CT。manifest 的 parameter kind 标记为 seed weight，
-  并记录 seed 的逻辑来源、初始 level、subgrid stride 和有效 kernel shape；
-  不把展开后的权重重复写入 bundle。
+  并记录 layer、argument、初始 level 和元素布局；subgrid stride、kernel shape
+  由逐层 JSON 和 MegaAG 属性记录。不把展开后的权重重复写入 bundle。
 - Runner 只接收 seed CT 和公开 mask 生成所需的非敏感元数据；mask 不加密、不
   写入模型参数 bundle。mask 的结构信息属于当前卷积公开布局，不作为模型参数
   保密边界的一部分。
 
-加密参数的 Python 图入口为 `call_param_ct()`；明文输入首层转入
-`call_param_ct_plaintext_input()`。`runtime_lazy` 通过
+加密参数的 Python 图入口为 `call_param_ct()`；multiplexed 的明文输入转入
+`call_param_ct_plaintext_input()`，inverse 在 `call_param_ct(input_is_plaintext=True)`
+中转动参数 CT 和乘积 CT 来实现相同计算。`runtime_lazy` 通过
 `materialize_encrypted_param()` 为参数节点插入 `load_encrypted_param_ct` custom
 操作，在 activation 就绪后按需加载 seed CT，同一参数节点只插入一次加载。
 `call_custom_compute()` 服务于明文参数的 lazy 编码；加密参数的按需加载由上述
@@ -263,7 +304,7 @@ metadata 时必须回退旧参数读取路径。
 Python layer 增加与现有 `get_encrypted_param_count*()` 风格一致的 seed 计数：
 
 ```text
-seed_count = ceil(legacy_weight_count / (a*b))
+seed_count = product(outer_axes) * ceil(packed_axis_count / (a*b))
 ```
 
 bias、poly、dense、scalar 和未启用 seed 的卷积保持原计数。存储计费按 seed

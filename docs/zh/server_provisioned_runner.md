@@ -109,9 +109,10 @@ python training/run_compile.py \
 
 该步骤显式读取 `training/config/storage_aware_config.json`，启用 storage-aware level 优化；程序不会自动扫描或默认加载这个文件。它生成常规 `task/server/` 产物，并写出 `task/provisioner/`、`task/runner/` 的基础配置。`--runner-output-dir` 可用于指定 runner 目录，默认是 `<output>/task/runner`。
 
-示例配置还通过 `seed_weight_subgrid_stride: [4,4]` 为适用的 multiplexed Conv2D
-指定全局 `(a,b)`。可在该文件中修改为其他合法值；省略字段或设为 `[1,1]` 时关闭
-seed packing。编译器在 DP 评分前应用该配置，并将逐层配置写入导出文件，后续运行
+示例配置还通过 `seed_weight_subgrid_stride: [4,4]` 为适用的 multiplexed 普通
+Conv2D、depthwise Conv2D 和 inverse Conv2D 指定全局 `(a,b)`。普通卷积沿输入
+block 轴打包，depthwise/inverse 沿 kernel 轴打包。可在该文件中修改为其他合法值；
+省略字段或设为 `[1,1]` 时关闭 seed packing。编译器在 DP 评分前应用该配置，并将逐层配置写入导出文件，后续运行
 不再读取 training 配置。适用范围与回退规则见
 [seed weight 设计规范](../spec/interleaved_subgrid_weight_seed_packing.md#21-全局编译配置与分发)。
 修改 `(a,b)` 或 seed 布局实现后，须重新编译、生成 MegaAG 并运行 Provisioner。
@@ -148,7 +149,7 @@ python inference/interface/gen_mega_ag.py \
   --gpu
 ```
 
-Runner 读取明文 CSV 输入，将输入编码为 plaintext/ringt argument，执行 MegaAG，并把输出密文序列化到 `--output-cipher`。在 `eager` 模式下，Runner 启动计算前整包反序列化 offline encrypted parameters；在 `runtime_lazy` 模式下，计算图运行到参数 use-site 时才通过 `load_encrypted_param_ct` 节点按元素读取并反序列化所需密文。
+Runner 读取明文 CSV 输入，将输入编码为 plaintext/ringt argument，执行 MegaAG，并把输出密文序列化到 `--output-cipher`。在 `eager` 模式下，Runner 启动计算前整包反序列化 offline encrypted parameters；在 `runtime_lazy` 模式下，计算图运行到参数 use-site 时才通过 `load_encrypted_param_ct` 节点按元素读取并反序列化所需密文。depthwise 和 inverse 的 `call_param_ct()` 路径同样使用该公共加载节点；公开 seed mask 由 Runner 的 `encode_pt` executor 生成，不需要为每个 `call_param_ct*()` 增加 custom compute。
 
 GPU 运行需要先用 `-DINFERENCE_SDK_ENABLE_GPU=ON` 构建，并在运行命令中显式传入 `--gpu`；CPU 运行时省略 `--gpu`。多输入任务可以使用 `--input name=path` 形式显式绑定输入名。
 

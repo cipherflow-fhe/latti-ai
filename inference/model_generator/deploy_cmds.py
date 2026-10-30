@@ -780,6 +780,7 @@ def gen_custom_task(
                         kernel_shape,
                         stride,
                         block_shape,
+                        seed_weight_subgrid_stride=layer_config.get('seed_weight_subgrid_stride', [1, 1]),
                     )
                 else:
                     big_conv = InverseMultiplexedConv2DLayer(
@@ -790,6 +791,7 @@ def gen_custom_task(
                         kernel_shape,
                         stride,
                         block_shape,
+                        seed_weight_subgrid_stride=layer_config.get('seed_weight_subgrid_stride', [1, 1]),
                     )
 
                 if lazy:
@@ -807,23 +809,29 @@ def gen_custom_task(
                     _append_parameter_arg(f'convb_{layer_id}', bias_ct)
                     if repack_mask_pt is not None:
                         input_args.append(Argument(f'repack_mask_{layer_id}', [repack_mask_pt]))
+                    seed_mask_pt = big_conv.make_seed_mask_pt_nodes(layer_id, level)
                     layer_output_nodes = big_conv.call_param_ct(
                         feature_id_to_nodes_map[layer_input_feature_ids[0]],
                         weight_ct,
                         bias_ct,
                         n,
                         repack_mask_pt=repack_mask_pt,
+                        seed_mask_pt=seed_mask_pt,
                         input_is_plaintext=_feature_input_is_plaintext(layer_input_feature_ids[0]),
                     )
                     feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                 else:
                     weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes(layer_id)
+                    seed_mask_pt = big_conv.make_seed_mask_pt_nodes(layer_id, level)
+                    if seed_mask_pt:
+                        input_args.append(Argument(f'convseedm_{layer_id}', seed_mask_pt))
                     layer_output_nodes = big_conv.call(
                         feature_id_to_nodes_map[layer_input_feature_ids[0]],
                         weight_pt,
                         bias_pt,
                         n,
                         repack_mask_pt=repack_mask_pt,
+                        seed_mask_pt=seed_mask_pt,
                     )
                     feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                     input_args.append(Argument(f'convw_{layer_id}', weight_pt))
@@ -901,6 +909,7 @@ def gen_custom_task(
                             n_in_channel_per_ct,
                             n_packed_in_channel,
                             n_packed_out_channel,
+                            seed_weight_subgrid_stride=layer_config.get('seed_weight_subgrid_stride', [1, 1]),
                         )
                     else:
                         conv0_layer = MultiplexedConv2DPackedLayer(
@@ -934,8 +943,7 @@ def gen_custom_task(
                             weight_ct, bias_ct, mask_pt = conv0_layer.make_param_ct_nodes(layer_id, level)
                             if mask_pt:
                                 _append_parameter_arg(f'convm_{layer_id}', mask_pt)
-                        seed_kwargs = ({'seed_mask_pt': conv0_layer.make_seed_mask_pt_nodes(layer_id, level)}
-                                       if not is_depthwise else {})
+                        seed_kwargs = {'seed_mask_pt': conv0_layer.make_seed_mask_pt_nodes(layer_id, level)}
                         _append_parameter_arg(f'convw_{layer_id}', weight_ct)
                         _append_parameter_arg(f'convb_{layer_id}', bias_ct)
                         layer_output_nodes = conv0_layer.call_param_ct(
@@ -949,8 +957,7 @@ def gen_custom_task(
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                     else:
                         weight_pt, bias_pt, mask_pt = conv0_layer.make_pt_nodes(layer_id)
-                        seed_mask_pt = (conv0_layer.make_seed_mask_pt_nodes(layer_id, level)
-                                        if not is_depthwise else [])
+                        seed_mask_pt = conv0_layer.make_seed_mask_pt_nodes(layer_id, level)
                         if mask_pt:
                             input_args.append(Argument(f'convm_{layer_id}', mask_pt))
                         if seed_mask_pt:
@@ -959,7 +966,7 @@ def gen_custom_task(
                         input_args.append(Argument(f'convb_{layer_id}', bias_pt))
                         layer_output_nodes = conv0_layer.call(
                             feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, mask_pt,
-                            **({'seed_mask_pt': seed_mask_pt} if not is_depthwise else {})
+                            seed_mask_pt=seed_mask_pt
                         )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 

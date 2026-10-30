@@ -22,6 +22,7 @@
 #include "layer_util.h"
 #include "../util.h"
 #include "multiplexed_conv2d_pack_layer.h"
+#include "interleaved_seed.h"
 
 using namespace std;
 using namespace lattisense;
@@ -177,10 +178,14 @@ uint32_t MultiplexedConv2DPackedLayer::input_block_count() const {
 }
 
 uint32_t MultiplexedConv2DPackedLayer::weight_input_count() const {
-    const uint32_t legacy_count = n_packed_in_channel * input_block_count();
+    const uint32_t legacy_count = legacy_weight_input_count();
     if (!use_seed_weight_pack_) return legacy_count;
     const uint32_t group = seed_weight_subgrid_stride_[0] * seed_weight_subgrid_stride_[1];
     return (legacy_count + group - 1) / group;
+}
+
+uint32_t MultiplexedConv2DPackedLayer::legacy_weight_input_count() const {
+    return n_packed_in_channel * input_block_count();
 }
 
 vector<CkksCiphertext>
@@ -502,12 +507,33 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core(CkksContext& ctx, 
         }
     });
 
+    const uint32_t legacy_weight_count = legacy_weight_input_count();
+    const uint32_t seed_group = prod(seed_weight_subgrid_stride_);
+    auto restored_weight = [&](CkksContext& ctx_copy, int ct_idx, int logical_j,
+                               int kernel_idx) {
+        const int stored_j = use_seed_weight_pack_ ? logical_j / seed_group : logical_j;
+        const auto& stored = weight_pt[ct_idx][stored_j][kernel_idx];
+        if (!use_seed_weight_pack_) return ctx_copy.ringt_to_mul(stored, level_);
+        const int subgrid = logical_j % seed_group;
+        const auto subgrid_mask = seed_mask_tensor_for_config(
+            input_shape_, skip_, stride_, n_channel_per_ct, external_upsample_factor,
+            seed_weight_subgrid_stride_[0], seed_weight_subgrid_stride_[1], subgrid, kernel_idx,
+            kernel_shape_, false);
+        const auto boundary_mask = seed_mask_tensor_for_config(
+            input_shape_, skip_, stride_, n_channel_per_ct, external_upsample_factor,
+            seed_weight_subgrid_stride_[0], seed_weight_subgrid_stride_[1], subgrid, kernel_idx,
+            kernel_shape_, true);
+        auto restored = interleaved_seed::restore_plaintext(
+            ctx_copy, stored, subgrid_mask, boundary_mask, input_shape_, skip_,
+            seed_weight_subgrid_stride_, subgrid, level_, weight_scale);
+        return ctx_copy.ringt_to_mul(restored, level_);
+    };
+
     parallel_for(weight_pt.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         CkksCiphertext s(0);
-        for (int j = 0; j < weight_pt[ct_idx].size(); j++) {
-            for (int k = 0; k < weight_pt[ct_idx][j].size(); k++) {
-                auto& w_pt_rt = weight_pt[ct_idx][j][k];
-                auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
+        for (uint32_t j = 0; j < legacy_weight_count; j++) {
+            for (int k = 0; k < cached_kernel_size; k++) {
+                auto w_pt = restored_weight(ctx_copy, ct_idx, j, k);
                 auto res = ctx_copy.mult_plain_mul(rotated_x[j][k], w_pt);
                 if (j == 0 && k == 0) {
                     s = move(res);
@@ -601,17 +627,32 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
     }
     parallel_for(n_weight, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         CkksCiphertext s(0);
-        uint32_t n_j = lazy_encoding ? weight_input_count() : weight_pt[ct_idx].size();
+        const uint32_t legacy_count = legacy_weight_input_count();
+        uint32_t n_j = legacy_count;
         for (int j = 0; j < n_j; j++) {
-            uint32_t n_k = lazy_encoding ? cached_kernel_size : weight_pt[ct_idx][j].size();
+            uint32_t n_k = cached_kernel_size;
             for (int k = 0; k < n_k; k++) {
                 CkksCiphertext res;
                 CkksPlaintextRingt gen_w_pt_rt;
-                if (lazy_encoding)
+                const int stored_j = use_seed_weight_pack_ ? j / prod(seed_weight_subgrid_stride_) : j;
+                if (lazy_encoding) {
                     gen_w_pt_rt = use_seed_weight_pack_
-                                  ? generate_weight_pt_for_seed_indices(ctx_copy, ct_idx, j, k)
-                                  : generate_weight_pt_for_indices(ctx_copy, ct_idx, j, k);
-                const CkksPlaintextRingt& w_pt_rt = lazy_encoding ? gen_w_pt_rt : weight_pt[ct_idx][j][k];
+                                      ? generate_weight_pt_for_seed_indices(ctx_copy, ct_idx, stored_j, k)
+                                      : generate_weight_pt_for_indices(ctx_copy, ct_idx, j, k);
+                }
+                const CkksPlaintextRingt& stored = lazy_encoding ? gen_w_pt_rt : weight_pt[ct_idx][stored_j][k];
+                CkksPlaintextRingt restored;
+                if (use_seed_weight_pack_) {
+                    const int subgrid = j % prod(seed_weight_subgrid_stride_);
+                    const auto mask = [&](bool boundary) {
+                        return seed_mask_tensor_for_config(input_shape_, skip_, stride_, n_channel_per_ct,
+                            external_upsample_factor, seed_weight_subgrid_stride_[0], seed_weight_subgrid_stride_[1],
+                            subgrid, k, kernel_shape_, boundary);
+                    };
+                    restored = interleaved_seed::restore_plaintext(ctx_copy, stored, mask(false), mask(true),
+                        input_shape_, skip_, seed_weight_subgrid_stride_, subgrid, level_, weight_scale);
+                }
+                const CkksPlaintextRingt& w_pt_rt = use_seed_weight_pack_ ? restored : stored;
                 auto w_pt = ctx_copy.ringt_to_mul(w_pt_rt, level_);
                 res = ctx_copy.mult_plain_mul(rotated_x[j][k], w_pt);
                 if (j == 0 && k == 0) {

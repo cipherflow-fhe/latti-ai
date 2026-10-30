@@ -360,7 +360,9 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                             const int out_idx = static_cast<int>(flat_idx / (shape[1] * shape[2]));
                             const int in_idx = static_cast<int>((flat_idx / shape[2]) % shape[1]);
                             const int weight_idx = static_cast<int>(flat_idx % shape[2]);
-                            ringt = layer.generate_weight_pt_for_indices(context, out_idx, in_idx, weight_idx);
+                            ringt = layer.use_seed_weight_pack()
+                                        ? layer.generate_weight_pt_for_seed_indices(context, out_idx, in_idx, weight_idx)
+                                        : layer.generate_weight_pt_for_indices(context, out_idx, in_idx, weight_idx);
                         } else {
                             if (!is_bias || shape.size() != 1) {
                                 throw std::runtime_error("[Provisioner] inverse conv bias signature must be rank 1: " +
@@ -377,7 +379,9 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                             }
                             const int out_idx = static_cast<int>(flat_idx / shape[1]);
                             const int weight_idx = static_cast<int>(flat_idx % shape[1]);
-                            ringt = layer.generate_weight_pt_for_indices(context, out_idx, weight_idx);
+                            ringt = layer.use_seed_weight_pack()
+                                        ? layer.generate_weight_pt_for_seed_indices(context, out_idx, weight_idx)
+                                        : layer.generate_weight_pt_for_indices(context, out_idx, weight_idx);
                         } else {
                             if (!is_bias || shape.size() != 1) {
                                 throw std::runtime_error(
@@ -423,7 +427,9 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                         }
                         const int ct_idx = static_cast<int>(flat_idx / shape[1]);
                         const int kernel_idx = static_cast<int>(flat_idx % shape[1]);
-                        ringt = layer.generate_weight_pt_for_indices(context, ct_idx, kernel_idx);
+                        ringt = layer.use_seed_weight_pack()
+                                    ? layer.generate_weight_pt_for_seed_indices(context, ct_idx, kernel_idx)
+                                    : layer.generate_weight_pt_for_indices(context, ct_idx, kernel_idx);
                     } else if (is_bias) {
                         if (!is_bias || shape.size() != 1) {
                             throw std::runtime_error(
@@ -559,6 +565,9 @@ void InferenceProvisioner::write_encrypted_argument(const std::filesystem::path&
 }
 
 void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_arg) {
+    if (!std::filesystem::is_regular_file(server_dir_ / "model_parameters.h5")) {
+        throw std::runtime_error("[Provisioner] model_parameters.h5 is missing in " + server_dir_.string());
+    }
     setup_or_load_keys();
 
     const std::filesystem::path runner_dir(runner_dir_arg);

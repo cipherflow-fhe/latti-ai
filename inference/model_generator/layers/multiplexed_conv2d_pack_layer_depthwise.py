@@ -30,12 +30,13 @@ from inference.model_generator.layers.encrypted_param_ops import (
     require_no_plaintext_input_rotation,
 )
 from inference.model_generator.layers.fhe_op_utils import naf_weight
+from inference.model_generator.layers.kernel_seed_packing import KernelSeedPacking
 
 
 op_class = 'MultiplexedConv2DPackedLayerDepthwise'
 
 
-class MultiplexedConv2DPackedLayerDepthwise:
+class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
     rotate_num = 0
     add_num = 0
     mult_num = 0
@@ -54,6 +55,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
         n_packed_in_channel,
         n_packed_out_channel,
         upsample_factor: list = [1, 1],
+        seed_weight_subgrid_stride=(1, 1),
     ):
         self.n_out_channel: int = n_out_channel
         self.n_in_channel: int = n_in_channel
@@ -76,11 +78,17 @@ class MultiplexedConv2DPackedLayerDepthwise:
         self.input_shape_ct = [input_shape[0] * skip[0], input_shape[1] * skip[1]]
         self.input_rotate_units = [skip[0] * self.input_shape_ct[1], skip[1] * 1]
         self.input_rotate_ranges = [padding_shape[1], padding_shape[0]]
-        self.n_block_per_ct: int = int(np.floor(n_channel_per_ct / (skip[0] * skip[1])))
+        self.n_block_per_ct: int = int(np.ceil(n_channel_per_ct / (skip[0] * skip[1])))
         self.upsample_factor: list = upsample_factor
         self.zero_inserted_skip: list = [1, 1]
         self.zero_inserted_skip[0] = self.skip[0] * self.stride[0] / self.upsample_factor[0]
         self.zero_inserted_skip[1] = self.skip[1] * self.stride[1] / self.upsample_factor[1]
+
+        self._init_kernel_seed_packing(
+            seed_weight_subgrid_stride, input_shape, skip, self.n_block_per_ct,
+            [[h - kernel_shape[0] // 2, w - kernel_shape[1] // 2]
+             for h in range(kernel_shape[0]) for w in range(kernel_shape[1])], op_class,
+        )
 
     def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call(), grouped by level.
@@ -110,6 +118,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
           (at level-2): rotate_stride + accumulate + bias adds.
         """
         ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
+        self.add_seed_recovery_ops(ops, level, self.n_packed_in_channel)
         lv = level
 
         kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
@@ -231,7 +240,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
         mask_pt[i]: i in n_out_channel (each (ct_idx, channel_in_ct) needs its own
                     source-position mask; empty list if stride==1)
         """
-        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
+        kernel_size = self.seed_weight_kernel_count
         weight_pt = [
             [CkksPlaintextRingtNode(f'convw_{layer_id}_{j}_{k}') for k in range(kernel_size)]
             for j in range(self.n_packed_in_channel)
@@ -246,11 +255,19 @@ class MultiplexedConv2DPackedLayerDepthwise:
             mask_pt = []
         return weight_pt, bias_pt, mask_pt
 
+    def get_encrypted_param_count(self, level):
+        counts = defaultdict(dict)
+        counts[level + self.seed_weight_level_cost]['weight'] = self.n_packed_in_channel * self.seed_weight_kernel_count
+        counts[level - (1 if self.stride == [1, 1] else 2)]['bias'] = self.n_packed_out_channel
+        if self.stride != [1, 1]:
+            counts[level - 1]['mask'] = self.n_out_channel
+        return dict(counts)
+
     def make_param_ct_nodes(self, layer_id, level: int):
         """Return encrypted weight/bias nodes plus encrypted structural masks."""
-        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
+        kernel_size = self.seed_weight_kernel_count
         weight_ct = [
-            [CkksCiphertextNode(f'convw_{layer_id}_{j}_{k}', level=level) for k in range(kernel_size)]
+            [CkksCiphertextNode(f'convw_{layer_id}_{j}_{k}', level=level + self.seed_weight_level_cost) for k in range(kernel_size)]
             for j in range(self.n_packed_in_channel)
         ]
         import math as _math
@@ -266,7 +283,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
             mask_pt = []
         return weight_ct, bias_ct, mask_pt
 
-    def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mast_pt) -> list[CkksCiphertextNode]:
+    def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mast_pt, seed_mask_pt=None) -> list[CkksCiphertextNode]:
         # 1. Kernel direction rotation
         kernel_rotations = self.gen_rotated_x(x)
         # 2. Result computation and organization
@@ -276,8 +293,8 @@ class MultiplexedConv2DPackedLayerDepthwise:
             partial_sum: DataNode | None = None
             x_ct_list = list()
             w_pt_list = list()
-            for j in range(len(weight_pt[ct_idx])):
-                w_pt = weight_pt[ct_idx][j]
+            for j in range(self.kernel_weight_count):
+                w_pt = self.kernel_weight(weight_pt[ct_idx], j, seed_mask_pt)
                 x_ct_list.append(kernel_rotations[ct_idx][j])
                 w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
@@ -339,10 +356,10 @@ class MultiplexedConv2DPackedLayerDepthwise:
         return res
 
     def call_param_ct(
-        self, x: list[DataNode], weight_ct, bias_ct, mast_pt, input_is_plaintext: bool = False
+        self, x: list[DataNode], weight_ct, bias_ct, mast_pt, input_is_plaintext: bool = False, seed_mask_pt=None
     ) -> list[CkksCiphertextNode]:
         if input_is_plaintext:
-            return self.call_param_ct_plaintext_input(x, weight_ct, bias_ct, mast_pt)
+            return self.call_param_ct_plaintext_input(x, weight_ct, bias_ct, mast_pt, seed_mask_pt=seed_mask_pt)
 
         rotations_needed = self.kernel_shape[0] > 1 or self.kernel_shape[1] > 1
         require_no_plaintext_input_rotation(op_class, input_is_plaintext, rotations_needed)
@@ -353,9 +370,9 @@ class MultiplexedConv2DPackedLayerDepthwise:
         for ct_idx in range(len(weight_ct)):
             x_terms = []
             w_terms = []
-            for j in range(len(weight_ct[ct_idx])):
+            for j in range(self.kernel_weight_count):
                 x_terms.append(kernel_rotations[ct_idx][j])
-                w_terms.append(weight_ct[ct_idx][j])
+                w_terms.append(self.kernel_weight(weight_ct[ct_idx], j, seed_mask_pt, kernel_rotations[ct_idx][j]))
             s = accumulate_encrypted_param_terms(x_terms, w_terms)
             s = rescale(s)
             if self.stride[0] == 1 and self.stride[1] == 1:
@@ -412,16 +429,16 @@ class MultiplexedConv2DPackedLayerDepthwise:
                 res.append(sp)
         return res
 
-    def call_param_ct_plaintext_input(self, x: list[DataNode], weight_ct, bias_ct, mast_pt) -> list[CkksCiphertextNode]:
+    def call_param_ct_plaintext_input(self, x: list[DataNode], weight_ct, bias_ct, mast_pt, seed_mask_pt=None) -> list[CkksCiphertextNode]:
         kernel_steps = self.kernel_rotation_steps()
         res: list = list()
         result_ct = list()
         for ct_idx in range(len(weight_ct)):
             partial_sum = None
             base_x = x[ct_idx]
-            for j in range(len(weight_ct[ct_idx])):
+            for j in range(self.kernel_weight_count):
                 total_step = int(kernel_steps[j])
-                w = weight_ct[ct_idx][j]
+                w = self.kernel_weight(weight_ct[ct_idx], j, seed_mask_pt, base_x)
                 w = materialize_encrypted_param(w, base_x)
                 if total_step != 0:
                     w = rotate_cols(w, [-total_step])[0]
