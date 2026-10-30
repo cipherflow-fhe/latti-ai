@@ -7,12 +7,11 @@
 ## 1. 目标与非目标
 
 目标是把现有卷积权重 PT 中沿空间位置重复的向量，按 `(a,b)` 子网格交错放入
-seed weight，再在 use-site 恢复为现有卷积乘法需要的 weight PT。`a`、`b` 是
-正整数，只有在二者都是 2 的幂、`a` 或 `b` 至少一个大于 1，且分别整除当前
+seed weight，再在 use-site 恢复为现有卷积乘法需要的 weight PT。`a`、`b` 必须是正整数，只有在二者都是 2 的幂、`a` 或 `b` 至少一个大于 1，且分别整除当前
 逻辑空间尺寸时才启用 seed 路径；否则保持现有实现和参数格式。
 
 默认构造参数为 `seed_weight_subgrid_stride = {1, 1}`。`(1,1)` 永远回退旧路径，
-不生成 seed、mask 或额外旋转。非法或不适用于当前空间布局的值不通过 seed 路径；
+不生成 seed、mask 或额外旋转。非正数、非法或不适用于当前空间布局的值不通过 seed 路径；
 为保持旧任务兼容，算子回退旧路径并记录 debug 信息，不改变输出图结构。
 
 本版覆盖普通 multiplexed Conv2D 的一般 kernel shape，包括 `1x1`、`3x3` 和
@@ -68,6 +67,32 @@ seed_count = ceil(legacy_weight_count / (a*b))
 这里的 `legacy_weight_count` 必须复用现有 `weight_input_count()`、输出 CT 分组、
 `n_block_per_ct` 和 kernel size 规则；seed 只减少空间重复，不改变通道打包。
 
+### 3.1 seed 重复请求与唯一参数实体
+
+`generate_weight_pt_for_seed_indices(ct_idx, j, k)` 的三个输入描述一次 legacy
+weight 的请求位置，不直接作为 seed 参数的唯一身份。不同的 `(ct_idx,j,k)` 可能
+属于同一个 seed；因此 seed 必须使用可重建的 canonical key：
+
+```text
+SeedKey = (layer_id, output_ct_group, input_seed_group, kernel_index,
+           seed_level, a, b)
+```
+
+其中 `output_ct_group`、`input_seed_group` 和 `kernel_index` 由现有 block/kernel
+分组规则计算，`(r,c)` 子网格是该 seed 内的逻辑偏移，不再创建独立映射表。对于
+同一 `SeedKey`：
+
+- eager 生成只调用一次 seed weight PT 生成函数，并在内存中复用结果；
+- Provisioner 只加密一次、manifest 只写一个 seed argument 和一组 elements；
+- runtime_lazy 以 `SeedKey` 为缓存键，多个 `(ct_idx,j,k)` 请求共享已加载 seed，
+  缓存失效后仍可按同一公式重新生成；
+- 如果同一逻辑 seed 在不同 use-site level、参数集或 layer instance 使用，必须
+  使用不同 key 和不同密文实例，不能跨 level 复用。
+
+manifest 记录 seed 的 canonical 参数和元素顺序；Runner 根据算子参数重新计算
+`SeedKey` 与子网格索引。这样既消除重复加密和落盘，也不引入完整的请求到 seed
+映射表。
+
 ## 4. 生成接口与执行路径
 
 优先在同一个卷积类内增加最小的路由和 helper，而不是复制完整执行类。建议接口
@@ -118,18 +143,23 @@ CkksPlaintextRingt generate_mask_pt_for_seed_indices(
 ## 6. level 与 scale 规范
 
 设旧路径在 use-site 需要目标 weight PT `W_L`，其 level 为 `L`、scale 为
-`S_target`。seed 恢复必须在不改变 activation 路径的前提下回到 `W_L`：
+`S_target`。seed weight PT 直接以 `S_target` 编码；seed CT 的初始 level 由
+kernel mask 次数决定。公开 mask 使用对应 level 的 q 作为 scale：
 
-| 路径 | seed 初始 level | mask 次数 | 每次 mask 后 | 最终结果 |
-| --- | ---: | ---: | ---: | --- |
-| `1x1` | `L+1` | 1 | rescale 到 `L` | `W_L`, `S_target` |
-| 一般 kernel | `L+2` | 2 | 分别 `L+1`、`L` | `W_L`, `S_target` |
+| 路径 | seed 初始 level | mask 顺序及 mask scale | 每次 mask 后 | 最终结果 |
+| --- | ---: | --- | --- | --- |
+| `1x1` | `L+1` | 第一次 mask：`q_{L+1}` | rescale 到 `L` | `W_L`, `S_target` |
+| 一般 kernel | `L+2` | 第一次：`q_{L+2}`；第二次 kernel boundary mask：`q_{L+1}` | 分别到 `L+1`、`L` | `W_L`, `S_target` |
+
+在现有 CKKS rescale 约定下，`S_target × q_{L+2}` 经第一次 rescale 回到
+`S_target`，第二次同理；`1x1` 只有一次 `S_target × q_{L+1}`。seed PT 不应
+预先乘 q 或使用另一套固定 scale。seed CT 加密时保留该 `S_target`，只提高
+初始 level；mask 的 q scale 由 `param_.get_q()` 在实际乘法 level 生成。
 
 seed level 不得超过底层 CKKS modulus chain；主图最高 feature level 不因 seed
-路径提高。mask 的 level 必须与相乘时的 CT level 对齐，scale 使用现有参数 q、
-默认 scale 和 `weight_scale` 规则反推，确保每次 `mult + rescale` 后的 scale
-是下一阶段要求的 scale，最后一次得到 `S_target`。禁止用新的固定 scale 常量
-覆盖现有 `param_.get_q(level)` 或 layer 的 `weight_scale`。
+路径提高。实现必须在 eager、runtime_lazy、Provisioner 和 Runner 中共享这套
+level/scale 计算，并验证每次 `mult + rescale` 后的 level/scale；禁止用新的固定
+scale 常量覆盖现有 `param_.get_q(level)` 或 layer 的 `weight_scale`。
 
 实现应提供一个局部的 scale/level 计算函数，或直接复用现有 `ringt_to_mul`、
 `encode`、`rescale` 的参数规则；该函数必须同时被 eager PT 生成、runtime_lazy
