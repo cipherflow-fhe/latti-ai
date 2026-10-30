@@ -109,7 +109,7 @@ python training/run_compile.py \
 
 该步骤显式读取 `training/config/storage_aware_config.json`，启用 storage-aware level 优化；程序不会自动扫描或默认加载这个文件。它生成常规 `task/server/` 产物，并写出 `task/provisioner/`、`task/runner/` 的基础配置。`--runner-output-dir` 可用于指定 runner 目录，默认是 `<output>/task/runner`。
 
-示例配置还通过 `seed_weight_subgrid_stride: [2,2]` 为适用的 multiplexed Conv2D
+示例配置还通过 `seed_weight_subgrid_stride: [4,4]` 为适用的 multiplexed Conv2D
 指定全局 `(a,b)`。可在该文件中修改为其他合法值；省略字段或设为 `[1,1]` 时关闭
 seed packing。编译器在 DP 评分前应用该配置，并将逐层配置写入导出文件，后续运行
 不再读取 training 配置。适用范围与回退规则见

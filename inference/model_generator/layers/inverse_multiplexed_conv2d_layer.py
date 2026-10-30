@@ -25,7 +25,8 @@ from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
     add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
-    require_no_plaintext_input_rotation,
+    materialize_encrypted_param,
+    multiply_with_encrypted_param,
 )
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 
@@ -622,8 +623,6 @@ class InverseMultiplexedConv2DLayer:
         repack_mask_pt=None,
         input_is_plaintext: bool = False,
     ) -> list[CkksCiphertextNode]:
-        require_no_plaintext_input_rotation(op_class, input_is_plaintext, True)
-
         pad0 = self.padding[0]
         pad1 = self.padding[1]
         stride0 = self.stride[0]
@@ -663,7 +662,9 @@ class InverseMultiplexedConv2DLayer:
                                         stride1 * output_step1
                                     )
                                     step = int(row_step * block_shape1 + col_step)
-                                    if step == 0:
+                                    if input_is_plaintext:
+                                        res_temp = (x[in_ct_idx], step)
+                                    elif step == 0:
                                         res_temp = x[in_ct_idx]
                                     else:
                                         res_temp = rotate_cols(x[in_ct_idx], [step])[0]
@@ -686,9 +687,27 @@ class InverseMultiplexedConv2DLayer:
                     base_idx = (r_i2 * output_step1 + r_j2) * self.kernel_shape[0] * self.kernel_shape[1]
                     for j in range(0, len(weight_ct[ct_idx])):
                         for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
-                            x_terms.append(rotated_x[j][k + base_idx])
-                            w_terms.append(weight_ct[ct_idx][j][k + base_idx])
-                    s = accumulate_encrypted_param_terms(x_terms, w_terms)
+                            source = rotated_x[j][k + base_idx]
+                            weight = weight_ct[ct_idx][j][k + base_idx]
+                            if input_is_plaintext:
+                                # R_s(x) * w = R_s(x * R_-s(w)); rotate only CTs.
+                                plain, step = source
+                                weight = materialize_encrypted_param(weight, plain)
+                                if step:
+                                    weight = rotate_cols(weight, [-step])[0]
+                                term = mult(weight, plain)
+                                if step:
+                                    term = rotate_cols(term, [step])[0]
+                                x_terms.append(term)
+                            else:
+                                x_terms.append(source)
+                                w_terms.append(weight)
+                    if input_is_plaintext:
+                        s = x_terms[0]
+                        for term in x_terms[1:]:
+                            s = add(s, term)
+                    else:
+                        s = accumulate_encrypted_param_terms(x_terms, w_terms)
                     s = rescale(s)
                     s = add_encrypted_param_bias(s, bias_ct[ct_idx])
                     if ct_idx == 0 and r_i2 == 0 and r_j2 == 0:
@@ -697,7 +716,9 @@ class InverseMultiplexedConv2DLayer:
                         zero_cts = []
                         for idx in range(total):
                             if idx not in used:
-                                zero_cts.append(sub(x[idx], x[idx]))
+                                source = (multiply_with_encrypted_param(x[idx], weight_ct[0][0][0])
+                                          if input_is_plaintext else x[idx])
+                                zero_cts.append(sub(source, source))
                         if zero_cts:
                             sum_zero = zero_cts[0]
                             for zc in zero_cts[1:]:

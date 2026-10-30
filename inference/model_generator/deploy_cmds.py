@@ -889,7 +889,8 @@ def gen_custom_task(
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                 if style == 'multiplexed':
                     n_in_channel_per_ct = pack
-                    if groups == n_out_channel and groups != 1:
+                    is_depthwise = groups == n_out_channel and groups != 1
+                    if is_depthwise:
                         conv0_layer = MultiplexedConv2DPackedLayerDepthwise(
                             n_out_channel,
                             n_in_channel,
@@ -923,7 +924,7 @@ def gen_custom_task(
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                         input_args.append(Argument(f'{layer_id}', [conv_data_source]))
                     elif parameter_mode == 'encrypted_offline':
-                        if deployment_mode == 'server_provisioned_runner':
+                        if deployment_mode == 'server_provisioned_runner' and not is_depthwise:
                             weight_ct, bias_ct, _ = conv0_layer.make_param_ct_nodes(layer_id, level)
                             if conv0_layer.stride != [1, 1] or conv0_layer.skip != [1, 1]:
                                 mask_pt = conv0_layer.make_runner_mask_pt_nodes(layer_id, level)
@@ -933,7 +934,8 @@ def gen_custom_task(
                             weight_ct, bias_ct, mask_pt = conv0_layer.make_param_ct_nodes(layer_id, level)
                             if mask_pt:
                                 _append_parameter_arg(f'convm_{layer_id}', mask_pt)
-                        seed_mask_pt = conv0_layer.make_seed_mask_pt_nodes(layer_id, level)
+                        seed_kwargs = ({'seed_mask_pt': conv0_layer.make_seed_mask_pt_nodes(layer_id, level)}
+                                       if not is_depthwise else {})
                         _append_parameter_arg(f'convw_{layer_id}', weight_ct)
                         _append_parameter_arg(f'convb_{layer_id}', bias_ct)
                         layer_output_nodes = conv0_layer.call_param_ct(
@@ -942,12 +944,13 @@ def gen_custom_task(
                             bias_ct,
                             mask_pt,
                             input_is_plaintext=_feature_input_is_plaintext(layer_input_feature_ids[0]),
-                            seed_mask_pt=seed_mask_pt,
+                            **seed_kwargs,
                         )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                     else:
                         weight_pt, bias_pt, mask_pt = conv0_layer.make_pt_nodes(layer_id)
-                        seed_mask_pt = conv0_layer.make_seed_mask_pt_nodes(layer_id, level)
+                        seed_mask_pt = (conv0_layer.make_seed_mask_pt_nodes(layer_id, level)
+                                        if not is_depthwise else [])
                         if mask_pt:
                             input_args.append(Argument(f'convm_{layer_id}', mask_pt))
                         if seed_mask_pt:
@@ -956,7 +959,7 @@ def gen_custom_task(
                         input_args.append(Argument(f'convb_{layer_id}', bias_pt))
                         layer_output_nodes = conv0_layer.call(
                             feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, mask_pt,
-                            seed_mask_pt=seed_mask_pt
+                            **({'seed_mask_pt': seed_mask_pt} if not is_depthwise else {})
                         )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 

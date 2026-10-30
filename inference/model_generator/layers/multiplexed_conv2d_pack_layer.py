@@ -205,7 +205,7 @@ class MultiplexedConv2DPackedLayer:
             per_ct = []
             for seed_j in range(self.seed_weight_input_count):
                 per_subgrid = []
-                for subgrid in range(group):
+                for subgrid in range(min(group, self.weight_input_count - seed_j * group)):
                     per_kernel = []
                     for kernel_index in range(kernel_size):
                         attrs = {

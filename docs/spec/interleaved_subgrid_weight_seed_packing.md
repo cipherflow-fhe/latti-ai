@@ -55,11 +55,11 @@ is_power_of_two(a) && is_power_of_two(b)
 {
   "encrypted_parameter_storage_weight": 1.0,
   "encrypted_parameter_storage_normalization_bytes": 1073741824,
-  "seed_weight_subgrid_stride": [2, 2]
+  "seed_weight_subgrid_stride": [4, 4]
 }
 ```
 
-配置文件必须由 `--config` 显式传入，程序不自动查找该文件。可将 `[2,2]` 改成
+配置文件必须由 `--config` 显式传入，程序不自动查找该文件。可将 `[4,4]` 改成
 其他合法的 `[a,b]`；代码默认仍为 `[1,1]`。省略字段或设为 `[1,1]` 时不添加
 逐层 seed 字段，保持旧图和参数格式。非法类型、非正数或非 2 幂的全局值回退
 `[1,1]` 并记录 debug 信息；不能整除某层逻辑空间尺寸的值只在该层回退。

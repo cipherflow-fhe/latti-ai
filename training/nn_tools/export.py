@@ -455,6 +455,7 @@ def _resolve_activation_cls(name: str):
 
     _map = {
         'relu': nn.ReLU,
+        'relu6': nn.ReLU6,
         'silu': nn.SiLU,
         'gelu': nn.GELU,
     }
