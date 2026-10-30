@@ -443,11 +443,12 @@ class MultiplexedConv2DPackedLayer:
 
         n_pack_in_channel = int(np.ceil(self.n_in_channel / self.n_channel_per_ct))
         size_0 = int(np.ceil(self.n_out_channel / self.n_block_per_ct))
-        size_1 = int(self.seed_weight_input_count)
+        # The custom runtime encoder emits a plaintext weight directly.  Keep this
+        # path on the legacy full-weight representation; seed expansion requires
+        # ciphertext-level mask/rotation operations and is handled by call() and
+        # call_param_ct() where the parameter is a ciphertext.
+        size_1 = int(self.weight_input_count)
         size_2 = int(self.kernel_shape[0] * self.kernel_shape[1])
-        seed_masks = self.make_seed_mask_pt_nodes(
-            getattr(conv_data_source, 'id', 'custom'), level=level
-        ) if self.use_seed_weight_pack else []
         for ct_idx in range(size_0):
             partial_sum: DataNode | None = None
             x_ct_list = list()
@@ -461,15 +462,8 @@ class MultiplexedConv2DPackedLayer:
                         type='encode_pt',
                         attributes={'op_class': op_class, 'type': 'weight_pt', 'i': ct_idx, 'j': j, 'k': k},
                     )
-                    for sub in range(self.seed_weight_group_size if self.use_seed_weight_pack else 1):
-                        source_j = j * self.seed_weight_group_size + sub if self.use_seed_weight_pack else j
-                        if source_j >= self.weight_input_count:
-                            continue
-                        w = w_pt
-                        if self.use_seed_weight_pack:
-                            w = self._expand_seed_weight(w, sub, k, seed_masks[ct_idx][j])
-                        x_ct_list.append(kernel_rotations[source_j][k])
-                        w_pt_list.append(w)
+                    x_ct_list.append(kernel_rotations[j][k])
+                    w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             s = rescale(partial_sum)
             s = self.sum_slot(s, self.skip[0], self.skip[1] * self.input_shape[1])

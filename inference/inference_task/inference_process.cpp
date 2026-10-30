@@ -3427,9 +3427,7 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         } else if (op_class == "MultiplexedConv2DPackedLayer") {
             auto* layer = static_cast<MultiplexedConv2DPackedLayer*>(layer_ptr);
             if (type == "weight_pt")
-                pt = layer->use_seed_weight_pack()
-                         ? layer->generate_weight_pt_for_seed_indices(ckks_ctx, i, j, k)
-                         : layer->generate_weight_pt_for_indices(ckks_ctx, i, j, k);
+                pt = layer->generate_weight_pt_for_indices(ckks_ctx, i, j, k);
             else if (type == "bias_pt")
                 pt = layer->generate_bias_pt_for_index(ckks_ctx, i);
             else
