@@ -29,3 +29,7 @@ void write_binary_file(const std::filesystem::path& path, const Bytes& bytes);
 
 void write_named_bytes_bundle(const std::filesystem::path& path, const std::map<std::string, Bytes>& values);
 std::map<std::string, Bytes> read_named_bytes_bundle(const std::filesystem::path& path);
+
+// Public layout geometry is derived from the compiled graph, never a training config.
+json parameter_layout_metadata(const json& graph, const std::string& layer_id, const json& signature);
+void validate_parameter_manifest(const json& manifest, const json& signature, const json& graph);

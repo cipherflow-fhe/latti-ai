@@ -115,7 +115,12 @@ class MobileNetEncryptedParamsTest(unittest.TestCase):
                     params = sig.get('encrypted_parameters', sig['offline'])
                     self.assertTrue(all(p['type'] == 'ct' for p in params))
                     if case['groups'] > 1 and not case['is_big_size']:
-                        self.assertIn('convm_conv', {p['id'] for p in params})
+                        self.assertNotIn('convm_conv', {p['id'] for p in params})
+                        masks = [c['attributes'] for c in mega['compute'].values()
+                                 if c['type'] == 'encode_pt' and c['attributes']['type'] == 'mask_pt']
+                        self.assertEqual({(m['ct_idx'], m['local_idx']) for m in masks},
+                                         {(0, 0), (0, 1), (1, 0)})
+                        self.assertTrue(all(m['level'] == feat['level'] - 1 for m in masks))
                     loads = [c for c in mega['compute'].values() if c['type'] == 'load_encrypted_param_ct']
                     self.assertEqual(bool(loads), mode == 'runtime_lazy')
                     for load in loads:

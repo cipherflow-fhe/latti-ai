@@ -25,6 +25,7 @@ from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
     add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
+    is_plaintext_input,
     materialize_encrypted_param,
     multiply_with_encrypted_param,
     require_no_plaintext_input_rotation,
@@ -34,6 +35,12 @@ from inference.model_generator.layers.kernel_seed_packing import KernelSeedPacki
 
 
 op_class = 'MultiplexedConv2DPackedLayerDepthwise'
+
+
+def _multiply_mask_param(x, mask):
+    if is_plaintext_input(mask):
+        return mult(x, mask)
+    return multiply_with_encrypted_param(x, mask)
 
 
 class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
@@ -56,6 +63,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
         n_packed_out_channel,
         upsample_factor: list = [1, 1],
         seed_weight_subgrid_stride=(1, 1),
+        seed_weight_layout='kernel',
     ):
         self.n_out_channel: int = n_out_channel
         self.n_in_channel: int = n_in_channel
@@ -89,6 +97,30 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
             [[h - kernel_shape[0] // 2, w - kernel_shape[1] // 2]
              for h in range(kernel_shape[0]) for w in range(kernel_shape[1])], op_class,
         )
+        if seed_weight_layout not in ('kernel', 'joint'):
+            raise ValueError(f'Unsupported depthwise seed layout: {seed_weight_layout}')
+        self.seed_weight_layout = seed_weight_layout
+        if seed_weight_layout == 'joint' and self.n_packed_in_channel * self.kernel_weight_count == 1:
+            self.use_seed_weight_pack = False
+
+    @property
+    def joint_seed_weights(self):
+        return self.use_seed_weight_pack and self.seed_weight_layout == 'joint'
+
+    @property
+    def seed_request_count(self):
+        return self.n_packed_in_channel * self.kernel_weight_count if self.joint_seed_weights else self.kernel_weight_count
+
+    @property
+    def weight_storage_shape(self):
+        if self.joint_seed_weights:
+            return [1, (self.seed_request_count + self.seed_weight_group_size - 1) // self.seed_weight_group_size]
+        return [self.n_packed_in_channel, self.seed_weight_kernel_count]
+
+    def weight_for_request(self, weights, channel_group, kernel, seed_masks=None, trigger=None):
+        request = channel_group * self.kernel_weight_count + kernel if self.joint_seed_weights else kernel
+        row = weights[0] if self.joint_seed_weights else weights[channel_group]
+        return self.kernel_weight(row, kernel, seed_masks, trigger, request_index=request)
 
     def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call(), grouped by level.
@@ -240,10 +272,10 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
         mask_pt[i]: i in n_out_channel (each (ct_idx, channel_in_ct) needs its own
                     source-position mask; empty list if stride==1)
         """
-        kernel_size = self.seed_weight_kernel_count
+        rows, kernel_size = self.weight_storage_shape
         weight_pt = [
             [CkksPlaintextRingtNode(f'convw_{layer_id}_{j}_{k}') for k in range(kernel_size)]
-            for j in range(self.n_packed_in_channel)
+            for j in range(rows)
         ]
         import math as _math
 
@@ -257,18 +289,18 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
 
     def get_encrypted_param_count(self, level):
         counts = defaultdict(dict)
-        counts[level + self.seed_weight_level_cost]['weight'] = self.n_packed_in_channel * self.seed_weight_kernel_count
-        counts[level - (1 if self.stride == [1, 1] else 2)]['bias'] = self.n_packed_out_channel
-        if self.stride != [1, 1]:
-            counts[level - 1]['mask'] = self.n_out_channel
+        counts[level + self.seed_weight_level_cost]['weight'] = int(np.prod(self.weight_storage_shape))
+        n_bias = (self.n_out_channel + self.n_channel_per_ct * np.prod(self.stride) - 1) // (
+            self.n_channel_per_ct * np.prod(self.stride))
+        counts[level - (1 if self.stride == [1, 1] else 2)]['bias'] = int(n_bias)
         return dict(counts)
 
     def make_param_ct_nodes(self, layer_id, level: int):
         """Return encrypted weight/bias nodes plus encrypted structural masks."""
-        kernel_size = self.seed_weight_kernel_count
+        rows, kernel_size = self.weight_storage_shape
         weight_ct = [
             [CkksCiphertextNode(f'convw_{layer_id}_{j}_{k}', level=level + self.seed_weight_level_cost) for k in range(kernel_size)]
-            for j in range(self.n_packed_in_channel)
+            for j in range(rows)
         ]
         import math as _math
 
@@ -283,18 +315,38 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
             mask_pt = []
         return weight_ct, bias_ct, mask_pt
 
+    def make_runner_mask_pt_nodes(self, layer_id, level):
+        """Encode the legacy source-position masks using only public geometry."""
+        if self.stride == [1, 1]:
+            return []
+        masks = []
+        for channel in range(self.n_out_channel):
+            ct_idx, local_idx = divmod(channel, self.n_channel_per_ct)
+            node = CkksPlaintextRingtNode(f'convm_{layer_id}_{channel}')
+            custom_compute(
+                inputs=[], output=node, type='encode_pt',
+                attributes={
+                    'op_class': op_class, 'type': 'mask_pt',
+                    'ct_idx': ct_idx, 'local_idx': local_idx, 'level': level - 1,
+                    'input_shape': self.input_shape, 'skip': self.skip,
+                    'stride': self.stride, 'n_channel_per_ct': self.n_channel_per_ct,
+                },
+            )
+            masks.append(node)
+        return masks
+
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, mast_pt, seed_mask_pt=None) -> list[CkksCiphertextNode]:
         # 1. Kernel direction rotation
         kernel_rotations = self.gen_rotated_x(x)
         # 2. Result computation and organization
         res: list = list()
         result_ct = list()
-        for ct_idx in range(len(weight_pt)):
+        for ct_idx in range(self.n_packed_in_channel):
             partial_sum: DataNode | None = None
             x_ct_list = list()
             w_pt_list = list()
             for j in range(self.kernel_weight_count):
-                w_pt = self.kernel_weight(weight_pt[ct_idx], j, seed_mask_pt)
+                w_pt = self.weight_for_request(weight_pt, ct_idx, j, seed_mask_pt)
                 x_ct_list.append(kernel_rotations[ct_idx][j])
                 w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
@@ -334,7 +386,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                         steps.append(-rot_step)
                 for i in range(self.n_channel_per_ct):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
-                        c_m = multiply_with_encrypted_param(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
+                        c_m = _multiply_mask_param(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
                         c_m = rescale(c_m)
                         result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
         if self.stride[0] == 1:
@@ -367,12 +419,12 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
         kernel_rotations = self.gen_rotated_x(x)
         res: list = list()
         result_ct = list()
-        for ct_idx in range(len(weight_ct)):
+        for ct_idx in range(self.n_packed_in_channel):
             x_terms = []
             w_terms = []
             for j in range(self.kernel_weight_count):
                 x_terms.append(kernel_rotations[ct_idx][j])
-                w_terms.append(self.kernel_weight(weight_ct[ct_idx], j, seed_mask_pt, kernel_rotations[ct_idx][j]))
+                w_terms.append(self.weight_for_request(weight_ct, ct_idx, j, seed_mask_pt, kernel_rotations[ct_idx][j]))
             s = accumulate_encrypted_param_terms(x_terms, w_terms)
             s = rescale(s)
             if self.stride[0] == 1 and self.stride[1] == 1:
@@ -408,7 +460,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                         steps.append(-rot_step)
                 for i in range(self.n_channel_per_ct):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
-                        c_m = multiply_with_encrypted_param(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
+                        c_m = _multiply_mask_param(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
                         c_m = rescale(c_m)
                         result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
         if self.stride[0] == 1:
@@ -433,12 +485,12 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
         kernel_steps = self.kernel_rotation_steps()
         res: list = list()
         result_ct = list()
-        for ct_idx in range(len(weight_ct)):
+        for ct_idx in range(self.n_packed_in_channel):
             partial_sum = None
             base_x = x[ct_idx]
             for j in range(self.kernel_weight_count):
                 total_step = int(kernel_steps[j])
-                w = self.kernel_weight(weight_ct[ct_idx], j, seed_mask_pt, base_x)
+                w = self.weight_for_request(weight_ct, ct_idx, j, seed_mask_pt, base_x)
                 w = materialize_encrypted_param(w, base_x)
                 if total_step != 0:
                     w = rotate_cols(w, [-total_step])[0]
@@ -482,7 +534,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                         steps.append(-rot_step)
                 for i in range(self.n_channel_per_ct):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
-                        c_m = multiply_with_encrypted_param(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
+                        c_m = _multiply_mask_param(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
                         c_m = rescale(c_m)
                         result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
         if self.stride[0] == 1:

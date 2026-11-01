@@ -32,7 +32,8 @@ public:
                                           uint32_t n_channel_per_ct_in,
                                           uint32_t level_in,
                                           double residual_scale = 1.0,
-                                          const Duo& seed_weight_subgrid_stride_in = {1, 1});
+                                          const Duo& seed_weight_subgrid_stride_in = {1, 1},
+                                          bool joint_seed_requests = false);
 
     void prepare_weight() override;
     void prepare_weight_lazy() override;
@@ -50,6 +51,9 @@ public:
     generate_weight_pt_for_indices(ls::CkksContext& ctx, int n_packed_out_channel_idx, int kernel_idx) const;
     ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
     ls::CkksPlaintextRingt generate_mask_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int i) const;
+    static std::vector<double> mask_tensor_for_config(const Duo& input_shape, const Duo& skip,
+                                                     const Duo& stride, uint32_t channels_per_ct,
+                                                     uint32_t slots, int ct_idx, int local_idx);
 
     // Getter for n_channel_per_ct (needed for CustomData executors)
     uint32_t get_n_channel_per_ct() const {
@@ -60,6 +64,12 @@ public:
     ls::CkksPlaintextRingt generate_mask_pt_for_seed_indices(ls::CkksContext& ctx, int subgrid,
                                                             int kernel_index, bool boundary) const;
     bool use_seed_weight_pack() const { return use_seed_weight_pack_; }
+    bool joint_seed_weights() const { return use_seed_weight_pack_ && joint_seed_requests_; }
+    uint32_t seed_weight_count() const {
+        return joint_seed_weights()
+            ? div_ceil(n_packed_in_channel * prod(kernel_shape_), prod(seed_weight_subgrid_stride_))
+            : n_packed_in_channel * seed_weight_kernel_count();
+    }
     uint32_t seed_weight_kernel_count() const {
         const uint32_t count = prod(kernel_shape_);
         return use_seed_weight_pack_ ? div_ceil(count, prod(seed_weight_subgrid_stride_)) : count;
@@ -69,6 +79,8 @@ public:
     }
 
 private:
+    static std::vector<double> select_tensor_for_config(const Duo& input_shape, const Duo& skip,
+                                                       const Duo& stride, uint32_t channels_per_ct, int num);
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
     uint32_t n_channel_per_ct;
     uint32_t n_packed_in_channel;
@@ -77,6 +89,7 @@ private:
     bool need_repack_;
     Duo seed_weight_subgrid_stride_;
     bool use_seed_weight_pack_ = false;
+    bool joint_seed_requests_ = false;
     std::vector<double> generate_weight_values_for_indices(int ct_idx, int kernel_index, bool boundary) const;
     std::vector<double> seed_mask_values(int subgrid, int kernel_index, bool boundary) const;
     double weight_scale;

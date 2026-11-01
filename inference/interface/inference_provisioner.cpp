@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <numeric>
@@ -312,7 +313,25 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
 
         if (starts_with(arg_id, "dense")) {
             auto& layer = init.get_layer<DensePackedLayer>(info.layer_id);
-            if (is_weight) {
+            const bool tile_seed = layer_cfg.contains("dense_seed_tiles") &&
+                layer_cfg.at("dense_seed_tiles").at(is_weight ? "weight" : "bias").get<bool>();
+            if (tile_seed) {
+                const auto& layout = layer_cfg.at("dense_seed_tiles");
+                const auto duo = [&layout](const char* key) {
+                    return Duo{layout.at(key).at(0).get<uint32_t>(), layout.at(key).at(1).get<uint32_t>()};
+                };
+                layer.validate_tile_geometry(duo("input_shape"), duo("skip"), duo("invalid_fill"),
+                    layout.at("slots").get<uint32_t>(), duo("weight_shape"), layout.at("use_site_level").get<int>());
+                const uint64_t group = layout.at("group_size").get<uint64_t>();
+                if (!group || group != prod(duo("tile_grid")) || duo("tile_grid") != duo("invalid_fill"))
+                    throw std::runtime_error("[Provisioner] invalid dense tile group");
+                const auto original = duo("weight_shape");
+                const uint64_t expected = div_ceil(uint64_t(original[0]) * (is_weight ? original[1] : 1), group);
+                const auto expected_shape = is_weight ? std::vector<uint64_t>{1, expected} : std::vector<uint64_t>{expected};
+                if (shape != expected_shape || encrypt_level != layout.at("use_site_level").get<int>() + (is_weight ? 1 : 0))
+                    throw std::runtime_error("[Provisioner] dense tile shape or level mismatch: " + arg_id);
+                ringt = layer.generate_tile_seed(context, flat_idx, is_bias);
+            } else if (is_weight) {
                 if (shape.size() != 2) {
                     throw std::runtime_error("[Provisioner] dense weight signature must be rank 2: " + arg_id);
                 }
@@ -357,6 +376,11 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                                 throw std::runtime_error(
                                     "[Provisioner] inverse conv weight signature must be rank 3: " + arg_id);
                             }
+                            if (shape[0] != n_out_channel || shape[1] != layer.weight_.get_shape()[1] ||
+                                shape[2] != layer.seed_weight_kernel_count())
+                                throw std::runtime_error("[Provisioner] inverse seed shape mismatch: " + arg_id);
+                            if (encrypt_level != init.json_features.at(layer_cfg.at("feature_input").at(0).get<std::string>()).at("level").get<int>() + layer.seed_weight_level_cost())
+                                throw std::runtime_error("[Provisioner] inverse seed level mismatch: " + arg_id);
                             const int out_idx = static_cast<int>(flat_idx / (shape[1] * shape[2]));
                             const int in_idx = static_cast<int>((flat_idx / shape[2]) % shape[1]);
                             const int weight_idx = static_cast<int>(flat_idx % shape[2]);
@@ -377,6 +401,10 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                                 throw std::runtime_error(
                                     "[Provisioner] inverse depthwise conv weight signature must be rank 2: " + arg_id);
                             }
+                            if (shape[0] != n_out_channel || shape[1] != layer.seed_weight_kernel_count())
+                                throw std::runtime_error("[Provisioner] inverse depthwise seed shape mismatch: " + arg_id);
+                            if (encrypt_level != init.json_features.at(layer_cfg.at("feature_input").at(0).get<std::string>()).at("level").get<int>() + layer.seed_weight_level_cost())
+                                throw std::runtime_error("[Provisioner] inverse depthwise seed level mismatch: " + arg_id);
                             const int out_idx = static_cast<int>(flat_idx / shape[1]);
                             const int weight_idx = static_cast<int>(flat_idx % shape[1]);
                             ringt = layer.use_seed_weight_pack()
@@ -397,6 +425,11 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                             throw std::runtime_error(
                                 "[Provisioner] multiplexed conv weight signature must be rank 3: " + arg_id);
                         }
+                        if (layer.joint_seed_weights() &&
+                            (shape[0] != 1 || shape[1] != layer.seed_weight_count() || shape[2] != 1))
+                            throw std::runtime_error("[Provisioner] multiplexed joint seed shape mismatch: " + arg_id);
+                        if (encrypt_level != init.json_features.at(layer_cfg.at("feature_input").at(0).get<std::string>()).at("level").get<int>() + layer.seed_weight_level_cost())
+                            throw std::runtime_error("[Provisioner] multiplexed seed level mismatch: " + arg_id);
                         const int out_idx = static_cast<int>(flat_idx / (shape[1] * shape[2]));
                         const int in_idx = static_cast<int>((flat_idx / shape[2]) % shape[1]);
                         const int kernel_idx = static_cast<int>(flat_idx % shape[2]);
@@ -425,6 +458,11 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                             throw std::runtime_error(
                                 "[Provisioner] multiplexed depthwise conv weight signature must be rank 2: " + arg_id);
                         }
+                        if (layer.joint_seed_weights() && (shape[0] != 1 || shape[1] != layer.seed_weight_count())) {
+                            throw std::runtime_error("[Provisioner] depthwise joint seed shape mismatch: " + arg_id);
+                        }
+                        if (encrypt_level != init.json_features.at(layer_cfg.at("feature_input").at(0).get<std::string>()).at("level").get<int>() + layer.seed_weight_level_cost())
+                            throw std::runtime_error("[Provisioner] depthwise seed level mismatch: " + arg_id);
                         const int ct_idx = static_cast<int>(flat_idx / shape[1]);
                         const int kernel_idx = static_cast<int>(flat_idx % shape[1]);
                         ringt = layer.use_seed_weight_pack()
@@ -505,7 +543,25 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                 ringt = layer.generate_weight_pt_for_bsgs(context, info.coeff_idx, ct_idx);
             } else {
                 auto& layer = init.get_layer<PolyRelu2D>(info.layer_id);
-                ringt = layer.generate_weight_pt_for_bsgs(context, info.coeff_idx, ct_idx);
+                if (layer_cfg.contains("poly_seed_layout")) {
+                    const auto& layout = layer_cfg.at("poly_seed_layout");
+                    const auto duo = [&layout](const char* key) {
+                        return Duo{layout.at(key).at(0).get<uint32_t>(), layout.at(key).at(1).get<uint32_t>()};
+                    };
+                    const uint32_t group = layout.at("group_size").get<uint32_t>();
+                    const int groups = layout.at("channel_groups").get<int>();
+                    const bool packed = layout.at("packed_degrees").at(info.coeff_idx).get<bool>();
+                    const int target = layout.at("use_site_levels").at(info.coeff_idx).get<int>();
+                    layer.validate_seed_geometry(duo("input_shape"), duo("skip"), layout.at("blocks").get<uint32_t>(),
+                                                 layout.at("slots").get<uint32_t>(), groups, info.coeff_idx, target);
+                    if (!group || group != prod(duo("stride")) || encrypt_level != target + packed ||
+                        shape[0] != (packed ? div_ceil(groups, group) : groups))
+                        throw std::runtime_error("[Provisioner] polynomial seed shape or level mismatch: " + arg_id);
+                    ringt = packed ? layer.generate_channel_seed(context, info.coeff_idx, ct_idx, duo("stride")) :
+                                     layer.generate_weight_pt_for_bsgs(context, info.coeff_idx, ct_idx);
+                } else {
+                    ringt = layer.generate_weight_pt_for_bsgs(context, info.coeff_idx, ct_idx);
+                }
             }
         } else if (info.param_kind == "mult_scalar_weight") {
             if (shape.size() != 1) {
@@ -519,6 +575,12 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
 
         auto pt = context.ringt_to_pt(ringt, encrypt_level);
         encrypted.push_back(context.encrypt_asymmetric(pt));
+        if (sig.contains("scale")) {
+            const double expected = sig.at("scale").get<double>();
+            if (!std::isfinite(expected) || expected <= 0 ||
+                std::abs(encrypted.back().get_scale() / expected - 1.0) > 1e-10)
+                throw std::runtime_error("[Provisioner] parameter scale mismatch: " + arg_id);
+        }
     }
     return encrypted;
 }
@@ -599,6 +661,7 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
     init.init_parameters(task_config_.value("use_btp", false));
     init.is_lazy = true;
     init.load_model_prepare();
+    const auto graph = read_json((server_dir_ / "nn_layers_ct_0.json").string());
 
     if (runtime_lazy && !task_signature_.contains("encrypted_parameters")) {
         throw std::runtime_error("[Provisioner] runtime_lazy requires task_signature.encrypted_parameters");
@@ -615,6 +678,24 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
         const auto info = parse_parameter_argument(arg_id, init);
         auto encrypted = encrypt_parameter_argument(arg_id, sig, *context_, init);
         write_encrypted_argument(parameter_root, arg_id, encrypted, manifest, sig, info, runtime_lazy);
+        manifest["arguments"][arg_id]["scale"] = encrypted.front().get_scale();
+        const auto layout = parameter_layout_metadata(graph, info.layer_id, sig);
+        if (sig.contains("layout") && nlohmann::json(sig.at("layout")) != nlohmann::json(layout))
+            throw std::runtime_error("[Provisioner] parameter layout mismatch: " + arg_id);
+        if (!layout.is_null()) manifest["arguments"][arg_id]["layout"] = layout;
+        const auto& layer_cfg = init.json_layers.at(info.layer_id);
+        if (starts_with(arg_id, "dense") && layer_cfg.contains("dense_seed_tiles")) {
+            const auto& layout = layer_cfg.at("dense_seed_tiles");
+            if (layout.at(info.param_kind).get<bool>()) {
+                auto& entry = manifest["arguments"][arg_id];
+                entry["use_site_level"] = layout.at("use_site_level").get<int>() - (info.param_kind == "bias" ? 1 : 0);
+            }
+        }
+        if (info.param_kind == "poly_coeff" && layer_cfg.contains("poly_seed_layout")) {
+            auto& entry = manifest["arguments"][arg_id];
+            entry["degree"] = info.coeff_idx;
+            entry["use_site_level"] = layer_cfg.at("poly_seed_layout").at("use_site_levels").at(info.coeff_idx);
+        }
     }
 
     write_json_file(parameter_root / "manifest.json", manifest);

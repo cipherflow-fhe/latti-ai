@@ -15,6 +15,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+import math
 import numpy as np
 from pathlib import Path
 from collections import defaultdict
@@ -23,6 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.poly_relu_base import PolyReluBase
+from inference.model_generator.layers.encrypted_param_ops import materialize_encrypted_param
+from inference.model_generator.layers.kernel_seed_packing import restore_subgrid
 
 import numpy as np
 
@@ -31,7 +34,8 @@ op_class = 'PolyRelu2D'
 
 class PolyRelu2D(PolyReluBase):
     def __init__(
-        self, input_shape, order, skip, n_channel_per_ct, upsample_factor: list = [1, 1], block_expansion: list = [1, 1]
+        self, input_shape, order, skip, n_channel_per_ct, upsample_factor: list = [1, 1], block_expansion: list = [1, 1],
+        seed_layout=None,
     ):
         self.input_shape = input_shape
         self.order = order
@@ -39,6 +43,7 @@ class PolyRelu2D(PolyReluBase):
         self.n_channel_per_ct = n_channel_per_ct
         self.upsample_factor = upsample_factor
         self.block_expansion = block_expansion
+        self.poly_seed_layout = seed_layout
 
         if input_shape[0] & (input_shape[0] - 1) != 0 or input_shape[1] & (input_shape[1] - 1) != 0:
             raise ValueError(f'input_shape must be powers of 2, got: [{input_shape[0]}, {input_shape[1]}]')
@@ -52,6 +57,86 @@ class PolyRelu2D(PolyReluBase):
         self.block_shape[1] = int(self.input_shape[1] * self.skip[1] / self.block_expansion[1])
         if self.block_shape[0] & (self.block_shape[0] - 1) != 0 or self.block_shape[1] & (self.block_shape[1] - 1) != 0:
             raise ValueError(f'block_shape must be powers of 2, got: [{self.block_shape[0]}, {self.block_shape[1]}]')
+
+    def choose_seed_layout(self, stride, n, n_ct, level, bytes_at_level):
+        self.poly_seed_layout = None
+        if (stride == [1, 1] or self.upsample_factor != [1, 1] or self.block_expansion != [1, 1]
+                or any(a <= 0 or a & (a - 1) or h % a for h, a in zip(self.input_shape, stride))
+                or (n // 2) % math.prod(self.block_shape)):
+            return None
+        capacity = math.prod(stride)
+        levels = self._bsgs_encrypted_coeff_levels(level)
+        packed = []
+        for target in levels:
+            try:
+                packed.append(math.ceil(n_ct / capacity) * bytes_at_level(target + 1) < n_ct * bytes_at_level(target))
+            except (KeyError, ValueError):
+                packed.append(False)
+        if any(packed):
+            self.poly_seed_layout = {
+                'input_shape': list(self.input_shape), 'skip': list(self.skip),
+                'blocks': math.ceil(self.n_channel_per_ct / math.prod(self.skip)), 'slots': n // 2,
+                'stride': list(stride), 'group_size': capacity, 'channel_groups': n_ct,
+                'use_site_levels': levels, 'packed_degrees': packed,
+            }
+        return self.poly_seed_layout
+
+    def get_encrypted_param_count(self, n_ct, level):
+        if not self.poly_seed_layout:
+            return super().get_encrypted_param_count(n_ct, level)
+        layout = self.poly_seed_layout
+        counts = defaultdict(lambda: {'coefficient': 0})
+        for target, packed in zip(self._bsgs_encrypted_coeff_levels(level), layout['packed_degrees']):
+            counts[target + packed]['coefficient'] += math.ceil(n_ct / layout['group_size']) if packed else n_ct
+        return dict(counts)
+
+    def make_param_ct_nodes(self, layer_id, n_pack_in_channel, input_level):
+        if not self.poly_seed_layout:
+            return super().make_param_ct_nodes(layer_id, n_pack_in_channel, input_level)
+        layout = self.poly_seed_layout
+        levels = self._bsgs_encrypted_coeff_levels(input_level)
+        if (layout['channel_groups'] != n_pack_in_channel or layout['use_site_levels'] != levels
+                or layout['input_shape'] != list(self.input_shape) or layout['skip'] != list(self.skip)
+                or self.upsample_factor != [1, 1] or self.block_expansion != [1, 1]):
+            raise ValueError('polynomial seed metadata does not match graph')
+        return [[CkksCiphertextNode(f'poly_reluw_{layer_id}_{degree}_{j}', level=target + packed)
+                 for j in range(math.ceil(n_pack_in_channel / layout['group_size']) if packed else n_pack_in_channel)]
+                for degree, (target, packed) in enumerate(zip(levels, layout['packed_degrees']))]
+
+    def call_bsgs_param_ct(self, x, weight_ct):
+        if not self.poly_seed_layout:
+            return super().call_bsgs_param_ct(x, weight_ct)
+        layout = self.poly_seed_layout
+
+        def get_weight(degree, channel_group):
+            if not layout['packed_degrees'][degree]:
+                return materialize_encrypted_param(weight_ct[degree][channel_group], x[channel_group])
+            q, s = divmod(channel_group, layout['group_size'])
+            seed = materialize_encrypted_param(weight_ct[degree][q], x[channel_group])
+            mask = CkksPlaintextRingtNode(f'{seed.id}_mask_{s}')
+            custom_compute(inputs=[], output=mask, type='encode_pt', attributes={
+                'op_class': op_class, 'type': 'seed_mask_pt', 'mask_kind': 'subgrid',
+                'seed_shape': self.input_shape, 'seed_skip': self.skip, 'seed_blocks': layout['blocks'],
+                'seed_a': layout['stride'][0], 'seed_b': layout['stride'][1],
+                'seed_step': [0, 0], 'subgrid': s, 'degree': degree,
+                'level': layout['use_site_levels'][degree] + 1,
+            })
+            return restore_subgrid(seed, mask, self.input_shape, self.skip, layout['stride'], s)
+
+        return self._run_bsgs_core_param_ct(x, get_weight)
+
+    def get_fhe_op_count(self, n_ct, level):
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0},
+                          super().get_fhe_op_count(n_ct, level))
+        if self.poly_seed_layout:
+            copies = sum(a.bit_length() - 1 for a in self.poly_seed_layout['stride'])
+            for target, packed in zip(self._bsgs_encrypted_coeff_levels(level), self.poly_seed_layout['packed_degrees']):
+                if packed:
+                    ops[target + 1]['mult_plain'] += n_ct
+                    ops[target + 1]['rescale'] += n_ct
+                    ops[target]['rotate'] += n_ct * copies
+                    ops[target]['add'] += n_ct * copies
+        return dict(ops)
 
     def get_fhe_op_count_call(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call() for n_ct input ciphertexts, grouped by level.

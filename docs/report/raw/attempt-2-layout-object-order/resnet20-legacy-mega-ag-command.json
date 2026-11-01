@@ -1,0 +1,17 @@
+{
+  "command": [
+    "/home/linghm/pytorch_venv/bin/python",
+    "/home/linghm/project/latti-ai/inference/interface/gen_mega_ag.py",
+    "--task-dir",
+    "/tmp/latti-param-compression-acceptance/resnet20/legacy/task",
+    "--deployment-mode",
+    "server_provisioned_runner",
+    "--parameter-loading-mode",
+    "runtime_lazy"
+  ],
+  "cwd": "/home/linghm/project/latti-ai",
+  "returncode": 0,
+  "wall_ms": 1071.9988909550011,
+  "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-mega-ag.log",
+  "peak_rss_kib": 99752
+}

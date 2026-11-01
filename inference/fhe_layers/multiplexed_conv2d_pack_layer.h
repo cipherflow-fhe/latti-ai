@@ -33,7 +33,8 @@ public:
                                  uint32_t level_in,
                                  double residual_scale = 1.0,
                                  const Duo& external_upsample_factor_in = {1, 1},
-                                 const Duo& seed_weight_subgrid_stride_in = {1, 1});
+                                 const Duo& seed_weight_subgrid_stride_in = {1, 1},
+                                 bool joint_seed_requests = false);
 
     void prepare_weight() override {
         prepare_weight_for_post_skip_rotation();
@@ -91,6 +92,14 @@ public:
     bool use_periodic_pack() const { return use_periodic_pack_; }
     uint32_t periodic_block_count() const { return periodic_block_count_; }
     bool use_seed_weight_pack() const { return use_seed_weight_pack_; }
+    bool joint_seed_weights() const { return use_seed_weight_pack_ && joint_seed_requests_; }
+    uint32_t seed_weight_level_cost() const {
+        return use_seed_weight_pack_ ? (kernel_shape_ != Duo{1, 1} ? 2 : 1) : 0;
+    }
+    uint32_t seed_weight_count() const {
+        return div_ceil(div_ceil(n_out_channel_, n_block_per_ct) * legacy_weight_input_count() * prod(kernel_shape_),
+                        prod(seed_weight_subgrid_stride_));
+    }
 
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
@@ -114,6 +123,7 @@ private:
     bool use_periodic_pack_ = false;
     Duo seed_weight_subgrid_stride_ = {1, 1};
     bool use_seed_weight_pack_ = false;
+    bool joint_seed_requests_ = false;
     int bias_level_down = 0;
     bool need_repack_;
     double weight_scale;

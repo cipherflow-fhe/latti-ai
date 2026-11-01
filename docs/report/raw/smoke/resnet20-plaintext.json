@@ -1,0 +1,31 @@
+{
+  "onnx": "runs/cifar10/model/trained_poly.onnx",
+  "input_csv": "examples/test_cifar10/task/client/img.csv",
+  "provider": "CPUExecutionProvider",
+  "preparation_wall_ms": 2273.673415184021,
+  "plaintext_wall_ms": 1.1603529565036297,
+  "samples": [
+    {
+      "warmup": true,
+      "wall_ms": 1.6565071418881416
+    },
+    {
+      "warmup": false,
+      "wall_ms": 1.1603529565036297
+    },
+    {
+      "warmup": false,
+      "wall_ms": 1.291078981012106
+    },
+    {
+      "warmup": false,
+      "wall_ms": 1.1570737697184086
+    }
+  ],
+  "output_counts": {
+    "output": 10
+  },
+  "top1": {
+    "output": 3
+  }
+}

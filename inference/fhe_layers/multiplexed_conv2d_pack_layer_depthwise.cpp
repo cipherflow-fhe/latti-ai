@@ -36,7 +36,8 @@ MultiplexedConv2DPackedLayerDepthwise::MultiplexedConv2DPackedLayerDepthwise(con
                                                                              uint32_t n_channel_per_ct_in,
                                                                              uint32_t level_in,
                                                                              double residual_scale,
-                                                                             const Duo& seed_weight_subgrid_stride_in)
+                                                                             const Duo& seed_weight_subgrid_stride_in,
+                                                                             bool joint_seed_requests)
     : Conv2DLayer(param_in, input_shape_in, move(weight_in), move(bias_in), stride_in) {
     skip_ = skip_in;
     if ((skip_[0] & (skip_[0] - 1)) != 0 || (skip_[1] & (skip_[1] - 1)) != 0) {
@@ -55,20 +56,23 @@ MultiplexedConv2DPackedLayerDepthwise::MultiplexedConv2DPackedLayerDepthwise(con
     weight_scale = param_.get_q(level_) * residual_scale;
     seed_weight_subgrid_stride_ = seed_weight_subgrid_stride_in;
     use_seed_weight_pack_ = interleaved_seed::valid_stride(seed_weight_subgrid_stride_, input_shape_);
+    joint_seed_requests_ = joint_seed_requests;
+    if (joint_seed_requests_ && n_packed_in_channel * prod(kernel_shape_) == 1) use_seed_weight_pack_ = false;
 }
 
 void MultiplexedConv2DPackedLayerDepthwise::prepare_weight() {
     prepare_weight_lazy();
 
-    int kernel_size = seed_weight_kernel_count();
+    const int rows = joint_seed_weights() ? 1 : n_packed_in_channel;
+    const int kernel_size = joint_seed_weights() ? seed_weight_count() : seed_weight_kernel_count();
     weight_pt.clear();
     bias_pt.clear();
-    weight_pt.resize(n_packed_in_channel);
+    weight_pt.resize(rows);
     bias_pt.resize(n_packed_out_channel);
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
 
-    parallel_for(n_packed_in_channel, th_nums, ctx, [&](CkksContext& ctx_copy, int n_packed_out_channel_idx) {
+    parallel_for(rows, th_nums, ctx, [&](CkksContext& ctx_copy, int n_packed_out_channel_idx) {
         weight_pt[n_packed_out_channel_idx].resize(kernel_size);
         for (int kernel_idx = 0; kernel_idx < kernel_size; ++kernel_idx) {
             weight_pt[n_packed_out_channel_idx][kernel_idx] =
@@ -120,12 +124,17 @@ void MultiplexedConv2DPackedLayerDepthwise::prepare_weight_lazy() {
 }
 
 vector<double> MultiplexedConv2DPackedLayerDepthwise::select_tensor(int num) const {
-    const Duo input_shape_ct = input_shape_ * skip_;
-    const Duo stride_skip = stride_ * skip_;
+    return select_tensor_for_config(input_shape_, skip_, stride_, n_channel_per_ct, num);
+}
+
+vector<double> MultiplexedConv2DPackedLayerDepthwise::select_tensor_for_config(
+    const Duo& input_shape, const Duo& skip, const Duo& stride, uint32_t channels_per_ct, int num) {
+    const Duo input_shape_ct = input_shape * skip;
+    const Duo stride_skip = stride * skip;
     const uint32_t stride_skip_prod = prod(stride_skip);
 
     vector<double> tensor;
-    for (int block_idx = 0; block_idx < n_block_per_ct; ++block_idx) {
+    for (int block_idx = 0; block_idx < div_ceil(channels_per_ct, prod(skip)); ++block_idx) {
         for (const Duo& input_pos : duo_range(input_shape_ct)) {
             if (block_idx * stride_skip_prod + stride_skip[0] * (input_pos[0] % stride_skip[0]) +
                     (input_pos[1] % stride_skip[0]) ==
@@ -177,9 +186,16 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayerDepthwise::generate_weight_pt_for
 }
 
 CkksPlaintextRingt MultiplexedConv2DPackedLayerDepthwise::generate_weight_pt_for_seed_indices(CkksContext& ctx, int ct_idx, int seed_kernel) const {
-    auto seed = interleaved_seed::pack_kernels(cached_kernel_size, seed_kernel, seed_weight_subgrid_stride_,
-        input_shape_, skip_, n_block_per_ct, param_.get_n() / 2, [&](int kernel_index) {
-            return generate_weight_values_for_indices(ct_idx, kernel_index, false);
+    const int requests = joint_seed_weights() ? n_packed_in_channel * cached_kernel_size : cached_kernel_size;
+    if (ct_idx < 0 || (joint_seed_weights() ? ct_idx != 0 : ct_idx >= static_cast<int>(n_packed_in_channel)) ||
+        seed_kernel < 0 || seed_kernel >= static_cast<int>(div_ceil(requests, prod(seed_weight_subgrid_stride_)))) {
+        throw std::out_of_range("depthwise seed request index");
+    }
+    auto seed = interleaved_seed::pack_kernels(requests, seed_kernel, seed_weight_subgrid_stride_,
+        input_shape_, skip_, n_block_per_ct, param_.get_n() / 2, [&](int request) {
+            const int group = joint_seed_weights() ? request / cached_kernel_size : ct_idx;
+            const int kernel = request % cached_kernel_size;
+            return generate_weight_values_for_indices(group, kernel, false);
         });
     return ctx.encode_ringt(seed, weight_scale);
 }
@@ -225,35 +241,49 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayerDepthwise::generate_bias_pt_for_i
 
 CkksPlaintextRingt
 MultiplexedConv2DPackedLayerDepthwise::generate_mask_pt_for_indices(CkksContext& ctx, int ct_idx, int i) const {
-    const uint32_t output_channels_per_ct = n_channel_per_ct * prod(stride_);
-    const uint32_t stride_skip_prod = prod(skip_ * stride_);
-    const uint32_t skip_prod = prod(skip_);
-    const uint32_t input_feature_size = prod(input_shape_);
+    return ctx.encode_ringt(mask_tensor_for_config(input_shape_, skip_, stride_, n_channel_per_ct,
+                                                 param_.get_n() / 2, ct_idx, i),
+                            ctx.get_parameter().get_q(level_ - 1));
+}
 
-    // Recompute step_k for the aligned channel index (matches run_core's steps[i/skip_[0]]).
-    const int32_t i_aligned = (i / static_cast<int>(skip_[0])) * static_cast<int>(skip_[0]);
-    const int32_t channel_idx = ct_idx * static_cast<int>(n_channel_per_ct) + i_aligned;
+vector<double> MultiplexedConv2DPackedLayerDepthwise::mask_tensor_for_config(
+    const Duo& input_shape, const Duo& skip, const Duo& stride, uint32_t channels_per_ct,
+    uint32_t slots_in, int ct_idx, int i) {
+    if (slots_in == 0 || prod(skip) == 0 || prod(stride) == 0 || channels_per_ct == 0 ||
+        ct_idx < 0 || i < 0 || i >= static_cast<int>(channels_per_ct) ||
+        uint64_t(div_ceil(channels_per_ct, prod(skip))) * prod(input_shape * skip) > slots_in) {
+        throw std::invalid_argument("invalid depthwise mask geometry or index");
+    }
+    const int32_t slots = static_cast<int32_t>(slots_in);
+    const uint32_t output_channels_per_ct = channels_per_ct * prod(stride);
+    const uint32_t stride_skip_prod = prod(skip * stride);
+    const uint32_t skip_prod = prod(skip);
+    const uint32_t input_feature_size = prod(input_shape);
+
+    // Recompute step_k for the aligned channel index (matches run_core's steps[i/skip[0]]).
+    const int32_t i_aligned = (i / static_cast<int>(skip[0])) * static_cast<int>(skip[0]);
+    const int32_t channel_idx = ct_idx * static_cast<int>(channels_per_ct) + i_aligned;
     const int32_t rotated_block = channel_idx / static_cast<int32_t>(stride_skip_prod);
     const int32_t rotated_residual = channel_idx % static_cast<int32_t>(stride_skip_prod);
-    const int32_t rotated_row = rotated_residual / static_cast<int32_t>(stride_[0] * skip_[0]);
-    const int32_t rotated_col = rotated_residual % static_cast<int32_t>(stride_[0] * skip_[0]);
+    const int32_t rotated_row = rotated_residual / static_cast<int32_t>(stride[0] * skip[0]);
+    const int32_t rotated_col = rotated_residual % static_cast<int32_t>(stride[0] * skip[0]);
     const int32_t base_block = channel_idx / static_cast<int32_t>(skip_prod);
     const int32_t base_residual = channel_idx % static_cast<int32_t>(skip_prod);
-    const int32_t base_row = base_residual / static_cast<int32_t>(skip_[0]);
-    const int32_t base_col = base_residual % static_cast<int32_t>(skip_[0]);
+    const int32_t base_row = base_residual / static_cast<int32_t>(skip[0]);
+    const int32_t base_col = base_residual % static_cast<int32_t>(skip[0]);
     const int32_t rot_step = (rotated_block - base_block) * static_cast<int32_t>(skip_prod * input_feature_size) +
-                             (rotated_row - base_row) * static_cast<int32_t>(skip_[0] * input_shape_[0]) +
+                             (rotated_row - base_row) * static_cast<int32_t>(skip[0] * input_shape[0]) +
                              (rotated_col - base_col);
     const int32_t step_k = -rot_step;
 
     // Target-position mask (legacy select_tensor layout).
-    auto target = select_tensor((ct_idx * n_channel_per_ct + i) % output_channels_per_ct);
+    auto target = select_tensor_for_config(input_shape, skip, stride, channels_per_ct,
+                                           (ct_idx * channels_per_ct + i) % output_channels_per_ct);
 
     // Source-position mask = vec_rotate(target, -step_k) on the full slot vector:
     //   source[(j + step_k) mod slots] = target[j]
     // matches the SDK convention rotate(c, k)[j] = c[(j+k) mod slots], so that
     // rotate(source * s, step_k) reproduces target * rotate(s, step_k).
-    const int32_t slots = static_cast<int32_t>(param_.get_n() / 2);
     const int32_t shift = ((step_k % slots) + slots) % slots;
     vector<double> source(static_cast<size_t>(slots), 0.0);
     for (size_t j = 0; j < target.size(); ++j) {
@@ -261,7 +291,7 @@ MultiplexedConv2DPackedLayerDepthwise::generate_mask_pt_for_indices(CkksContext&
             source[(static_cast<int32_t>(j) + shift) % slots] = target[j];
         }
     }
-    return ctx.encode_ringt(source, ctx.get_parameter().get_q(level_ - 1));
+    return source;
 }
 
 vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksContext& ctx,
@@ -296,11 +326,13 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksConte
             CkksCiphertext r_tmp;
             if (use_seed_weight_pack_) {
                     const int logical_kernel = k;
-                    const int seed_index = logical_kernel / prod(seed_weight_subgrid_stride_);
-                    const int subgrid = logical_kernel % prod(seed_weight_subgrid_stride_);
+                    const int request = joint_seed_weights() ? ct_idx * n_k + k : k;
+                    const int stored_group = joint_seed_weights() ? 0 : ct_idx;
+                    const int seed_index = request / prod(seed_weight_subgrid_stride_);
+                    const int subgrid = request % prod(seed_weight_subgrid_stride_);
                     CkksPlaintextRingt generated;
-                    if (weight_pt.empty()) generated = generate_weight_pt_for_seed_indices(ctx_copy, ct_idx, seed_index);
-                    const auto& seed = weight_pt.empty() ? generated : weight_pt[ct_idx][seed_index];
+                    if (weight_pt.empty()) generated = generate_weight_pt_for_seed_indices(ctx_copy, stored_group, seed_index);
+                    const auto& seed = weight_pt.empty() ? generated : weight_pt[stored_group][seed_index];
                     auto restored = interleaved_seed::restore_plaintext(ctx_copy, seed,
                         seed_mask_values(subgrid, logical_kernel, false), seed_mask_values(subgrid, logical_kernel, true),
                         input_shape_, skip_, seed_weight_subgrid_stride_, subgrid, level_, weight_scale);

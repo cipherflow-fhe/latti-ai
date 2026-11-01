@@ -1,0 +1,31 @@
+{
+  "onnx": "/home/linghm/project/latti-ai/runs/cifar10/model/trained_poly.onnx",
+  "input_csv": "/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+  "provider": "CPUExecutionProvider",
+  "preparation_wall_ms": 2475.060299038887,
+  "plaintext_wall_ms": 1.1961203999817371,
+  "samples": [
+    {
+      "warmup": true,
+      "wall_ms": 2.419434953480959
+    },
+    {
+      "warmup": false,
+      "wall_ms": 1.195570919662714
+    },
+    {
+      "warmup": false,
+      "wall_ms": 1.314288005232811
+    },
+    {
+      "warmup": false,
+      "wall_ms": 1.1961203999817371
+    }
+  ],
+  "output_counts": {
+    "output": 10
+  },
+  "top1": {
+    "output": 3
+  }
+}

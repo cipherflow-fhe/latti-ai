@@ -1,0 +1,14 @@
+{
+  "command": [
+    "/home/linghm/project/latti-ai/build/tools/provision_encrypted_runner_bundle",
+    "--task-dir",
+    "/tmp/latti-param-compression-acceptance/resnet20/compressed/task",
+    "--out",
+    "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/runner"
+  ],
+  "cwd": "/home/linghm/project/latti-ai",
+  "returncode": 0,
+  "wall_ms": 76215.3507382609,
+  "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-provision.log",
+  "peak_rss_kib": 26956716
+}

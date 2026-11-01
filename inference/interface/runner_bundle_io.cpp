@@ -19,6 +19,7 @@
 #include "interface/runner_bundle_io.h"
 
 #include <fstream>
+#include <cmath>
 #include <stdexcept>
 
 #include "util/serial.h"
@@ -28,6 +29,54 @@ namespace {
 const std::string kNamedBytesBundleMagic = "latti-ai.runner-output.v1";
 
 }  // namespace
+
+json parameter_layout_metadata(const json& graph, const std::string& layer_id, const json& signature) {
+    const auto& layer = graph.at("layer").at(layer_id);
+    const auto id = signature.at("id").get<std::string>();
+    if (id.rfind("dense", 0) == 0 && layer.contains("dense_seed_tiles"))
+        return layer.at("dense_seed_tiles");
+    if (id.rfind("poly_reluw_", 0) == 0 && layer.contains("poly_seed_layout"))
+        return layer.at("poly_seed_layout");
+    if (id.rfind("convw_", 0) != 0 || !layer.contains("seed_weight_subgrid_stride")) return nullptr;
+    return {{"kind", layer.value("seed_weight_layout", std::string("kernel"))},
+            {"stride", layer.at("seed_weight_subgrid_stride")},
+            {"group_size", layer.at("seed_weight_subgrid_stride").at(0).get<uint64_t>() *
+                           layer.at("seed_weight_subgrid_stride").at(1).get<uint64_t>()},
+            {"kernel_shape", layer.at("kernel_shape")}, {"storage_shape", signature.at("size")},
+            {"input_geometry", graph.at("feature").at(layer.at("feature_input").at(0).get<std::string>())},
+            {"output_geometry", graph.at("feature").at(layer.at("feature_output").at(0).get<std::string>())}};
+}
+
+void validate_parameter_manifest(const json& manifest, const json& signature, const json& graph) {
+    const auto& parameters = signature.contains("encrypted_parameters") ? signature.at("encrypted_parameters") : signature.at("offline");
+    size_t expected_count = 0;
+    for (const auto& sig : parameters) {
+        if (sig.at("type") != "ct") continue;
+        ++expected_count;
+        const auto id = sig.at("id").get<std::string>();
+        const auto& arg = manifest.at("arguments").at(id);
+        for (const auto* key : {"size", "level", "type"}) {
+            if (arg.at(key) != sig.at(key)) throw std::runtime_error("Parameter manifest/signature mismatch: " + id + " " + key);
+        }
+        // Layouts are JSON objects: insertion order is not part of their contract.
+        if (arg.contains("layout") && nlohmann::json(arg.at("layout")) !=
+            nlohmann::json(parameter_layout_metadata(graph, arg.at("layer_id"), sig)))
+            throw std::runtime_error("Parameter manifest/graph layout mismatch: " + id);
+        if (sig.contains("layout") && (!arg.contains("layout") ||
+            nlohmann::json(sig.at("layout")) != nlohmann::json(arg.at("layout"))))
+            throw std::runtime_error("Parameter manifest/signature layout mismatch: " + id);
+        if (sig.contains("scale") && !arg.contains("scale"))
+            throw std::runtime_error("Missing parameter scale: " + id);
+        if (arg.contains("scale")) {
+            const double scale = arg.at("scale").get<double>();
+            if (!std::isfinite(scale) || scale <= 0) throw std::runtime_error("Invalid parameter scale: " + id);
+            if (sig.contains("scale") && std::abs(scale / sig.at("scale").get<double>() - 1.0) > 1e-10)
+                throw std::runtime_error("Parameter manifest/signature scale mismatch: " + id);
+        }
+    }
+    if (manifest.at("arguments").size() != expected_count)
+        throw std::runtime_error("Parameter manifest has unexpected arguments");
+}
 
 Bytes read_binary_file(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);

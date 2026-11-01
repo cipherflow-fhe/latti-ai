@@ -68,6 +68,11 @@ public:
                                                                     int packed_out_feature_idx,
                                                                     int n_block_input_idx) const;
     ls::CkksPlaintextRingt generate_bias_pt_mult_pack_for_index(ls::CkksContext& ctx, int packed_out_feature_idx) const;
+    std::vector<double> generate_weight_values_mult_pack(int out_idx, int input_idx) const;
+    std::vector<double> generate_bias_values_mult_pack(int out_idx) const;
+    ls::CkksPlaintextRingt generate_tile_seed(ls::CkksContext& ctx, uint32_t seed_index, bool bias) const;
+    void validate_tile_geometry(const Duo& shape, const Duo& skip, const Duo& invalid_fill,
+                                uint32_t slots, const Duo& weight_shape, int use_site_level) const;
 
     // Helper functions for prepare_weight_for_1d_multiplexed_lazy
     ls::CkksPlaintextRingt

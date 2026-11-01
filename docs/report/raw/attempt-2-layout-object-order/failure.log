@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/home/linghm/project/latti-ai/tools/benchmark_server_provisioned_runner.py", line 357, in <module>
+    main()
+  File "/home/linghm/project/latti-ai/tools/benchmark_server_provisioned_runner.py", line 350, in main
+    bench.model(model)
+  File "/home/linghm/project/latti-ai/tools/benchmark_server_provisioned_runner.py", line 263, in model
+    run = self.run([self.args.build_dir / 'examples/inference', '--task-dir', task / 'runner',
+  File "/home/linghm/project/latti-ai/tools/benchmark_server_provisioned_runner.py", line 204, in run
+    raise RuntimeError(f'Command failed; see {log}')
+RuntimeError: Command failed; see /home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-0-runner.log

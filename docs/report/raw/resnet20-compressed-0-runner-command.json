@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/home/linghm/project/latti-ai/build/examples/inference",
+    "--task-dir",
+    "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/runner",
+    "--deployment-mode",
+    "server_provisioned_runner",
+    "--input",
+    "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+    "--output-cipher",
+    "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+    "--gpu"
+  ],
+  "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+  "returncode": 0,
+  "wall_ms": 26397.887269966304,
+  "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-0-runner.log",
+  "peak_rss_kib": 19296016
+}

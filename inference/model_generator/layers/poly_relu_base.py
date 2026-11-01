@@ -351,6 +351,26 @@ class PolyReluBase:
                     coeff_levels[idx] = target_level + 1
         return coeff_levels
 
+    def bsgs_coefficient_scales(self, input_level, param):
+        """Match C++ power scales, including q-dependent drift before rescale."""
+        info = self._compute_power_info(self.order)
+        powers = {1: (input_level, float(param.scale))}
+        for degree in range(2, self.order + 1):
+            _, a, b = info[degree]
+            level = min(powers[a][0], powers[b][0]) - 1
+            powers[degree] = (level, powers[a][1] * powers[b][1] / param.q[level + 1])
+        baby = int(np.ceil(np.sqrt(self.order + 1)))
+        levels = self._bsgs_encrypted_coeff_levels(input_level)
+        scales = []
+        for degree, level in enumerate(levels):
+            group, step = divmod(degree, baby)
+            target_level = levels[group * baby]
+            target_scale = float(param.scale)
+            if group:
+                target_scale = target_scale * param.q[target_level] / powers[group * baby][1]
+            scales.append(target_scale if not step else target_scale * param.q[level] / powers[step][1])
+        return scales
+
     def get_encrypted_param_count(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
         """Count every coefficient instance using the encrypted BSGS level mapping."""
         counts = {}

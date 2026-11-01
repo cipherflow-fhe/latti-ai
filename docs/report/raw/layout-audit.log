@@ -1,0 +1,4 @@
+mobilenet-compressed 4883697767 88 layers: counts/levels/bytes match
+mobilenet-legacy 49947018835 88 layers: counts/levels/bytes match
+resnet20-compressed 993679628 48 layers: counts/levels/bytes match
+resnet20-legacy 4588616340 48 layers: counts/levels/bytes match

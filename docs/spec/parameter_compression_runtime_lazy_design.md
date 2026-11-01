@@ -1,7 +1,7 @@
 # 参数密文压缩与 runtime-lazy GPU 验收设计规范
 
-状态：待实现设计。本文基于此前的 depthwise / inverse seed 和非卷积参数调研，
-定义代码修改和验收流程。
+状态：已实现并完成本文规定的两模型 GPU 验收，见[验收记录](../report/acceptance_summary.md)。
+本文基于此前的 depthwise / inverse seed 和非卷积参数调研，定义实现和验收要求。
 
 本文的目标是减少 `server_provisioned_runner`、
 `encrypted_offline`、`runtime_lazy` 模式的参数密文 bundle，同时保持现有

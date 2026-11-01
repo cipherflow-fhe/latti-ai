@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/home/linghm/project/latti-ai/build/examples/inference",
+    "--task-dir",
+    "/tmp/latti-param-compression-acceptance/mobilenet/legacy/task/runner",
+    "--deployment-mode",
+    "server_provisioned_runner",
+    "--input",
+    "input=/home/linghm/project/latti-ai/examples/test_imagenet/task/client/img.csv",
+    "--output-cipher",
+    "/tmp/latti-param-compression-acceptance/mobilenet/legacy/output.ct",
+    "--gpu"
+  ],
+  "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+  "returncode": 0,
+  "wall_ms": 248793.667441234,
+  "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-3-runner.log",
+  "peak_rss_kib": 27831780
+}

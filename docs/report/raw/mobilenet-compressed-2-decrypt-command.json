@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+    "--task-dir",
+    "/tmp/latti-param-compression-acceptance/mobilenet/compressed/task/provisioner",
+    "--cipher",
+    "/tmp/latti-param-compression-acceptance/mobilenet/compressed/output.ct",
+    "--output-csv",
+    "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-2-logits.csv"
+  ],
+  "cwd": "/home/linghm/project/latti-ai",
+  "returncode": 0,
+  "wall_ms": 20484.892832115293,
+  "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-2-decrypt.log",
+  "peak_rss_kib": 15121040
+}

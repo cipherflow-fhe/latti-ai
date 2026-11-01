@@ -1,0 +1,14 @@
+{
+  "command": [
+    "/home/linghm/project/latti-ai/build/tools/provision_encrypted_runner_bundle",
+    "--task-dir",
+    "/tmp/latti-param-compression-acceptance/mobilenet/legacy/task",
+    "--out",
+    "/tmp/latti-param-compression-acceptance/mobilenet/legacy/task/runner"
+  ],
+  "cwd": "/home/linghm/project/latti-ai",
+  "returncode": 0,
+  "wall_ms": 1251929.6953808516,
+  "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-provision.log",
+  "peak_rss_kib": 44773068
+}

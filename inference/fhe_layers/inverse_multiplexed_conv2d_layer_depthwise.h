@@ -32,7 +32,8 @@ public:
                                            const Duo& block_shape_in,
                                            uint32_t level_in,
                                            double residual_scale = 1.0,
-                                          const Duo& seed_weight_subgrid_stride_in = {1, 1});
+                                          const Duo& seed_weight_subgrid_stride_in = {1, 1},
+                                  bool canonical_seed_kernels = false);
     void prepare_weight() override;
     void prepare_weight_lazy() override;
 
@@ -55,7 +56,7 @@ public:
                                                             int kernel_index, bool boundary) const;
     bool use_seed_weight_pack() const { return use_seed_weight_pack_; }
     uint32_t seed_weight_kernel_count() const {
-        const uint32_t count = prod(kernel_shape_) * prod(output_step);
+        const uint32_t count = prod(kernel_shape_) * (canonical_seed_kernels_ ? 1 : prod(output_step));
         return use_seed_weight_pack_ ? div_ceil(count, prod(seed_weight_subgrid_stride_)) : count;
     }
     uint32_t seed_weight_level_cost() const {
@@ -76,6 +77,7 @@ private:
     std::vector<int> input_rotate_ranges;
     Duo seed_weight_subgrid_stride_;
     bool use_seed_weight_pack_ = false;
+    bool canonical_seed_kernels_ = false;
     std::vector<double> generate_weight_values_for_indices(int ct_idx, int kernel_index, bool boundary) const;
     std::vector<double> seed_mask_values(int subgrid, int kernel_index, bool boundary) const;
     double weight_scale;

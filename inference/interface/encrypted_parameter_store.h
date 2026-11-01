@@ -19,11 +19,11 @@
 #pragma once
 
 #include <filesystem>
+#include <list>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "fhe_ops_lib/fhe_lib_v2.h"
@@ -31,11 +31,14 @@
 
 class EncryptedParameterStore {
 public:
-    explicit EncryptedParameterStore(std::filesystem::path root);
+    // Account retained ciphertexts by their serialized payload size. Graph-held
+    // shared_ptrs remain valid after eviction and are released by the executor.
+    explicit EncryptedParameterStore(std::filesystem::path root, uint64_t cache_capacity_bytes = 64ULL << 20);
 
     bool has_argument(const std::string& arg_id) const;
     std::vector<fhe_ops_lib::CkksCiphertext>& load_argument(const std::string& arg_id);
     std::shared_ptr<fhe_ops_lib::CkksCiphertext> load_element(const std::string& arg_id, uint64_t flat_index);
+    json cache_statistics() const;
     const json& manifest() const {
         return manifest_;
     }
@@ -50,14 +53,26 @@ private:
         std::string id;
         std::filesystem::path file;
         int level = -1;
+        double scale = 0.0;  // Absent in legacy manifests.
         std::vector<uint64_t> shape;
         std::vector<ElementSpan> elements;
+    };
+
+    using ElementKey = std::pair<std::string, uint64_t>;
+    struct CachedElement {
+        std::shared_ptr<fhe_ops_lib::CkksCiphertext> value;
+        uint64_t bytes;
+        std::list<ElementKey>::iterator position;
     };
 
     std::filesystem::path root_;
     json manifest_;
     std::map<std::string, Entry> entries_;
     std::map<std::string, std::vector<fhe_ops_lib::CkksCiphertext>> cache_;
-    std::unordered_map<std::string, std::vector<std::shared_ptr<fhe_ops_lib::CkksCiphertext>>> element_cache_;
-    std::mutex mutex_;
+    std::map<ElementKey, CachedElement> element_cache_;
+    std::list<ElementKey> lru_;
+    uint64_t cache_capacity_bytes_;
+    uint64_t cache_bytes_ = 0, peak_cache_bytes_ = 0;
+    uint64_t canonical_loads_ = 0, cache_hits_ = 0, cache_evictions_ = 0;
+    mutable std::mutex mutex_;
 };

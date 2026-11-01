@@ -43,7 +43,7 @@ class InverseMultiplexedDepthwiseConv2DLayer(KernelSeedPacking):
     drop_level_num = 0
 
     def __init__(self, n_channel, input_shape, padding, kernel_shape, stride, block_shape,
-                 seed_weight_subgrid_stride=(1, 1)):
+                 seed_weight_subgrid_stride=(1, 1), seed_weight_layout='kernel'):
         self.n_out_channel: int = n_channel
         self.n_in_channel: int = n_channel
         self.input_shape: list[int] = input_shape
@@ -73,6 +73,10 @@ class InverseMultiplexedDepthwiseConv2DLayer(KernelSeedPacking):
             input_shape[0] // (block_shape[0] * self.stride[0]),
             input_shape[1] // (block_shape[1] * self.stride[1]),
         ]
+
+        if seed_weight_layout not in ('kernel', 'canonical'):
+            raise ValueError(f'Unsupported inverse seed layout: {seed_weight_layout}')
+        self.seed_weight_layout = seed_weight_layout
 
         self._init_kernel_seed_packing(
             seed_weight_subgrid_stride, block_shape, [1, 1], 1,

@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -30,17 +31,21 @@
 int main(int argc, char* argv[]) {
     std::string task_dir;
     std::string cipher_path;
+    std::string output_csv;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--task-dir") == 0 && i + 1 < argc) {
             task_dir = argv[++i];
         } else if (std::strcmp(argv[i], "--cipher") == 0 && i + 1 < argc) {
             cipher_path = argv[++i];
+        } else if (std::strcmp(argv[i], "--output-csv") == 0 && i + 1 < argc) {
+            output_csv = argv[++i];
         }
     }
 
     if (task_dir.empty() || cipher_path.empty()) {
-        std::cerr << "Usage: " << argv[0] << " --task-dir <task-root/provisioner> --cipher <output.ct>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " --task-dir <task-root/provisioner> --cipher <output.ct>"
+                  << " [--output-csv <full-logits.csv>]" << std::endl;
         return 1;
     }
 
@@ -55,6 +60,21 @@ int main(int argc, char* argv[]) {
         decryptor.load_full_context(read_binary_file(secret_context_path));
         auto encrypted_outputs = read_named_bytes_bundle(cipher_path);
         auto results = decryptor.decrypt(encrypted_outputs);
+
+        if (!output_csv.empty()) {
+            std::ofstream csv(output_csv);
+            if (!csv) throw std::runtime_error("Cannot open output CSV: " + output_csv);
+            csv << "output,index,value\n" << std::setprecision(std::numeric_limits<double>::max_digits10);
+            for (const auto& [name, result] : results) {
+                std::string escaped_name;
+                for (char c : name) escaped_name += c == '"' ? "\"\"" : std::string(1, c);
+                for (size_t i = 0; i < result.output.size(); ++i) {
+                    csv << '"' << escaped_name << "\"," << i << ',' << result.output[i] << '\n';
+                }
+            }
+            csv.close();
+            if (!csv) throw std::runtime_error("Cannot write output CSV: " + output_csv);
+        }
 
         for (const auto& [name, result] : results) {
             std::cout << "Decrypted output [" << name << "] = [";

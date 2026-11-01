@@ -38,6 +38,7 @@ from inference.model_generator.layers.conv1d_packed_layer import Conv1DPackedLay
 from inference.model_generator.layers.conv2d_depthwise import Conv2DPackedDepthwiseLayer
 from inference.model_generator.layers.conv2d_packed_layer import Conv2DPackedLayer
 from inference.model_generator.layers.dense_packed_layer import DensePackedLayer
+from inference.model_generator.layers.kernel_seed_packing import choose_convolution_seed_layout
 from inference.model_generator.layers.inverse_multiplexed_conv2d_layer import InverseMultiplexedConv2DLayer
 from inference.model_generator.layers.inverse_multiplexed_depthwise_conv2d_layer import (
     InverseMultiplexedDepthwiseConv2DLayer,
@@ -1101,11 +1102,18 @@ class FheScoreParam:
         counts = self.get_encrypted_param_count()
         if counts is None:
             return None
-        return {
+        result = {
             'counts': counts,
             'bytes': sum(count * encrypted_parameter_bytes(self.parameter, level)
                          for level, kinds in counts.items() for count in kinds.values()),
         }
+        if getattr(self, 'dense_seed_tiles', None):
+            result['dense_seed_tiles'] = self.dense_seed_tiles
+        if getattr(self, 'poly_seed_layout', None):
+            result['poly_seed_layout'] = self.poly_seed_layout
+        if getattr(self, 'convolution_seed_layout', None):
+            result['convolution_seed_layout'] = self.convolution_seed_layout
+        return result
 
     def get_parameter_use_site_level(self):
         # Match transforms.insert_drop_level_layers(): excess input levels are
@@ -1169,6 +1177,7 @@ class FheScoreParam:
                         stride,
                         block_shape,
                         seed_weight_subgrid_stride=getattr(node, 'seed_weight_subgrid_stride', [1, 1]),
+                        seed_weight_layout=getattr(node, 'seed_weight_layout', 'kernel'),
                     )
                 else:
                     layer = InverseMultiplexedConv2DLayer(
@@ -1180,7 +1189,11 @@ class FheScoreParam:
                         stride,
                         block_shape,
                         seed_weight_subgrid_stride=getattr(node, 'seed_weight_subgrid_stride', [1, 1]),
+                        seed_weight_layout=getattr(node, 'seed_weight_layout', 'kernel'),
                     )
+                if getattr(node, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
+                    self.convolution_seed_layout = choose_convolution_seed_layout(
+                        layer, self.get_parameter_use_site_level(), lambda lv: encrypted_parameter_bytes(self.parameter, lv))
                 if encrypted_param_count:
                     return layer.get_encrypted_param_count(parameter_level)
                 return layer.get_fhe_op_count(
@@ -1229,6 +1242,7 @@ class FheScoreParam:
                     n_packed_in,
                     n_packed_out,
                     seed_weight_subgrid_stride=getattr(node, 'seed_weight_subgrid_stride', [1, 1]),
+                    seed_weight_layout=getattr(node, 'seed_weight_layout', 'kernel'),
                 )
             else:
                 layer = MultiplexedConv2DPackedLayer(
@@ -1242,7 +1256,11 @@ class FheScoreParam:
                     n_packed_in,
                     n_packed_out,
                     seed_weight_subgrid_stride=getattr(node, 'seed_weight_subgrid_stride', [1, 1]),
+                    seed_weight_layout=getattr(node, 'seed_weight_layout', 'input_blocks'),
                 )
+            if getattr(node, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
+                self.convolution_seed_layout = choose_convolution_seed_layout(
+                    layer, self.get_parameter_use_site_level(), lambda lv: encrypted_parameter_bytes(self.parameter, lv))
             if encrypted_param_count:
                 return layer.get_encrypted_param_count(parameter_level)
             if layer.use_seed_weight_pack:
@@ -1376,6 +1394,10 @@ class FheScoreParam:
                         n_out,
                         invalid_fill=invalid_fill,
                     )
+                    if getattr(config, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
+                        self.dense_seed_tiles = layer.choose_seed_tile_layout(
+                            n, self.get_parameter_use_site_level(),
+                            lambda lv: encrypted_parameter_bytes(self.parameter, lv))
                     n_input_ct = math.ceil(n_in / pack)
                     return (layer.get_encrypted_param_count_multiplexed(n, parameter_level) if encrypted_param_count
                             else layer.get_fhe_op_count_multiplexed(n_input_ct, n, self.input_mult_level))
@@ -1451,8 +1473,14 @@ class FheScoreParam:
             input_shape = self.input_shape
             skip = self.input_skip
             layer = PolyRelu2D(input_shape, order, skip, pack)
+            if (style == 'multiplexed' and not getattr(node, 'is_big_size', False)
+                    and getattr(node, 'zero_skip', [1, 1]) == [1, 1]):
+                self.poly_seed_layout = layer.choose_seed_layout(
+                    getattr(config, 'seed_weight_subgrid_stride', [1, 1]), n, n_packed_in,
+                    self.get_parameter_use_site_level(), lambda lv: encrypted_parameter_bytes(self.parameter, lv))
             return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
-                    else layer.get_fhe_op_count_bsgs_feature2d(n_packed_in, self.input_mult_level))
+                    else layer.get_fhe_op_count_bsgs_feature2d(n_packed_in, self.get_parameter_use_site_level()
+                                                              if layer.poly_seed_layout else self.input_mult_level))
 
         # ── mult_scalar ──────────────────────────────────────────────────────
         elif layer_type == 'mult_scalar':

@@ -1172,13 +1172,14 @@ void InitInferenceProcess::_init_multiplexed_conv_layer(const string& key,
             }
             auto inv_conv_layer =
                 MakeU<InverseMultiplexedConv2DLayer>(param, feature_input.shape, move(weight), move(bias), padding,
-                                                     stride, block_shape_in, feature_input.level, residual_scale, seed_stride);
+                                                     stride, block_shape_in, feature_input.level, residual_scale, seed_stride,
+                    layer.value("seed_weight_layout", std::string("kernel")) == "canonical");
             _prepare_layer(key, move(inv_conv_layer));
         } else {
             auto mux_conv_layer = MakeU<MultiplexedConv2DPackedLayer>(
                 param, feature_input.shape, move(weight), move(bias), stride, feature_input.skip,
                 feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale, upsample_factor_in,
-                seed_stride);
+                seed_stride, layer.value("seed_weight_layout", std::string("input_blocks")) == "joint");
             _prepare_layer(key, move(mux_conv_layer));
         }
     } else {
@@ -1194,12 +1195,14 @@ void InitInferenceProcess::_init_multiplexed_conv_layer(const string& key,
             }
             auto inv_dw_conv_layer = MakeU<InverseMultiplexedConv2DLayerDepthwise>(
                 param, feature_input.shape, move(weight), move(bias), padding, stride, block_shape_in,
-                feature_input.level, residual_scale, seed_stride);
+                feature_input.level, residual_scale, seed_stride,
+                layer.value("seed_weight_layout", std::string("kernel")) == "canonical");
             _prepare_layer(key, move(inv_dw_conv_layer));
         } else {
             auto mux_dw_layer = MakeU<MultiplexedConv2DPackedLayerDepthwise>(
                 param, feature_input.shape, move(weight), move(bias), stride, feature_input.skip,
-                feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale, seed_stride);
+                feature_input.pack_channel_per_ciphertext, feature_input.level, residual_scale, seed_stride,
+                layer.value("seed_weight_layout", std::string("kernel")) == "joint");
             _prepare_layer(key, move(mux_dw_layer));
         }
     }

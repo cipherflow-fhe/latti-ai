@@ -1,0 +1,19 @@
+{
+  "onnx": "/home/linghm/project/latti-ai/runs/imagenet/model/trained_poly.onnx",
+  "input_csv": "/home/linghm/project/latti-ai/examples/test_imagenet/task/client/img.csv",
+  "provider": "CPUExecutionProvider",
+  "preparation_wall_ms": 3145.2582832425833,
+  "plaintext_wall_ms": 16.967284958809614,
+  "samples": [
+    {
+      "warmup": false,
+      "wall_ms": 16.967284958809614
+    }
+  ],
+  "output_counts": {
+    "output": 1000
+  },
+  "top1": {
+    "output": 0
+  }
+}

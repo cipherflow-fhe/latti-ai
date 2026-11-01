@@ -25,6 +25,7 @@
 
 #include "interface/runner_bundle_io.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer.h"
+#include "fhe_layers/multiplexed_conv2d_pack_layer_depthwise.h"
 #include "fhe_layers/interleaved_seed.h"
 #include "lattisense/cxx_sdk_v2/cxx_fhe_task.h"
 
@@ -104,13 +105,20 @@ ExecutorFunc create_multiplexed_conv_mask_executor() {
         }
         const auto& attrs = self.custom_prop->attributes;
         const auto op_class = attrs.value("op_class", std::string());
+        const bool dense_tile = op_class == "DensePackedLayer" && attrs.value("type", std::string()) == "tile_mask_pt";
+        const bool depthwise_mask = op_class == "MultiplexedConv2DPackedLayerDepthwise" &&
+                                    attrs.value("type", std::string()) == "mask_pt";
+        const bool inverse_repack = (op_class == "InverseMultiplexedConv2DLayer" ||
+                                     op_class == "InverseMultiplexedConv2DLayerDepthwise") &&
+                                    attrs.value("type", std::string()) == "repack_mask";
         const bool kernel_seed = op_class == "MultiplexedConv2DPackedLayerDepthwise" ||
+                                 op_class == "PolyRelu2D" ||
                                  op_class == "InverseMultiplexedConv2DLayer" ||
                                  op_class == "InverseMultiplexedConv2DLayerDepthwise";
-        if ((op_class != "MultiplexedConv2DPackedLayer" && !kernel_seed) ||
+        if (!dense_tile && !inverse_repack && ((op_class != "MultiplexedConv2DPackedLayer" && !kernel_seed) ||
             (attrs.value("type", std::string()) != "mask_pt" &&
              attrs.value("type", std::string()) != "seed_mask_pt") ||
-            (kernel_seed && attrs.value("type", std::string()) != "seed_mask_pt")) {
+            (kernel_seed && !depthwise_mask && attrs.value("type", std::string()) != "seed_mask_pt"))) {
             throw std::runtime_error("[Runner] unsupported encode_pt node");
         }
         fhe::CkksContext* ckks_ctx_ptr = exec_ctx.get_arithmetic_context<fhe::CkksContext>();
@@ -125,7 +133,30 @@ ExecutorFunc create_multiplexed_conv_mask_executor() {
             return Duo{value.at(0).get<uint32_t>(), value.at(1).get<uint32_t>()};
         };
         std::vector<double> mask;
-        if (kernel_seed) {
+        if (inverse_repack) {
+            const auto block = read_duo("block_shape");
+            const auto stride = read_duo("stride"), ct_stride = read_duo("ct_stride");
+            if (!prod(ct_stride) || stride[0] % ct_stride[0] || stride[1] % ct_stride[1] ||
+                prod(block) > ckks_ctx_ptr->get_parameter().get_n() / 2)
+                throw std::runtime_error("[Runner] invalid inverse repack geometry");
+            const auto skip = stride / ct_stride;
+            if (!prod(skip)) throw std::runtime_error("[Runner] invalid inverse repack skip");
+            mask.assign(ckks_ctx_ptr->get_parameter().get_n() / 2, 0.0);
+            for (uint32_t row = 0; row < block[0]; row += skip[0])
+                for (uint32_t col = 0; col < block[1]; col += skip[1])
+                    mask[row * block[1] + col] = 1.0;
+        } else if (dense_tile) {
+            if (read_duo("tile_grid") != read_duo("invalid_fill") ||
+                (attrs.at("param_kind") != "weight" && attrs.at("param_kind") != "bias"))
+                throw std::runtime_error("[Runner] invalid dense tile metadata");
+            mask = interleaved_seed::tile_mask(read_duo("input_shape"), read_duo("skip"), read_duo("invalid_fill"),
+                ckks_ctx_ptr->get_parameter().get_n() / 2, attrs.at("subgrid").get<uint32_t>(), attrs.at("param_kind") == "bias");
+        } else if (depthwise_mask) {
+            mask = MultiplexedConv2DPackedLayerDepthwise::mask_tensor_for_config(
+                read_duo("input_shape"), read_duo("skip"), read_duo("stride"),
+                attrs.at("n_channel_per_ct").get<uint32_t>(), ckks_ctx_ptr->get_parameter().get_n() / 2,
+                attrs.at("ct_idx").get<int>(), attrs.at("local_idx").get<int>());
+        } else if (kernel_seed) {
             const auto& step = attrs.at("seed_step");
             mask = interleaved_seed::mask(
                 read_duo("seed_shape"), read_duo("seed_skip"), attrs.at("seed_blocks").get<uint32_t>(),
@@ -295,6 +326,7 @@ void InferenceRunner::load() {
     }
     n_slots_ = eval_context_->get_parameter().get_n() / 2;
     parameter_store_ = std::make_unique<EncryptedParameterStore>(runner_dir_ / "encrypted_model_parameters");
+    validate_parameter_manifest(parameter_store_->manifest(), task_signature_, nn_layers_);
 }
 
 std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_0d_input(const std::string& name,
@@ -719,6 +751,9 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
         task.run(eval_context_.get(), cxx_args, progress_cb);
     }
 
+    if (runtime_lazy_parameters) {
+        std::cout << "[Runner] Parameter cache: " << parameter_store_->cache_statistics().dump() << std::endl;
+    }
     std::map<std::string, Bytes> encrypted_outputs;
     for (size_t i = 0; i < output_features.size(); ++i) {
         encrypted_outputs[output_names[i]] = output_features[i]->serialize();

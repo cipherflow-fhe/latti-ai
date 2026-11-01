@@ -63,6 +63,7 @@ class MultiplexedConv2DPackedLayer:
         n_packed_out_channel,
         external_upsample_factor: list = [1, 1],
         seed_weight_subgrid_stride: list = [1, 1],
+        seed_weight_layout='input_blocks',
     ):
         self.n_out_channel: int = n_out_channel
         self.n_in_channel: int = n_in_channel
@@ -88,6 +89,9 @@ class MultiplexedConv2DPackedLayer:
         self.n_block_per_ct: int = int(np.ceil(n_channel_per_ct / (skip[0] * skip[1])))
         self.external_upsample_factor: list = external_upsample_factor
         self.seed_weight_subgrid_stride = list(seed_weight_subgrid_stride)
+        if seed_weight_layout not in ('input_blocks', 'joint'):
+            raise ValueError(f'Unsupported multiplexed seed layout: {seed_weight_layout}')
+        self.seed_weight_layout = seed_weight_layout
         self.use_seed_weight_pack = self._valid_seed_weight_subgrid_stride()
         self.zero_inserted_skip: list = [1, 1]
         self.zero_inserted_skip[0] = self.skip[0] * self.stride[0] / self.external_upsample_factor[0]
@@ -114,6 +118,42 @@ class MultiplexedConv2DPackedLayer:
                     self.periodic_block_count < self.n_block_per_ct
                     and self.n_block_per_ct % self.periodic_block_count == 0
                 )
+        if self.seed_weight_layout == 'joint' and self.weight_output_count * self.weight_input_count * math.prod(self.kernel_shape) == 1:
+            self.use_seed_weight_pack = False
+
+    @property
+    def joint_seed_weights(self):
+        return self.use_seed_weight_pack and self.seed_weight_layout == 'joint'
+
+    @property
+    def weight_output_count(self):
+        return math.ceil(self.n_out_channel / self.n_block_per_ct)
+
+    @property
+    def weight_storage_shape(self):
+        if self.joint_seed_weights:
+            count = self.weight_output_count * self.weight_input_count * math.prod(self.kernel_shape)
+            return [1, math.ceil(count / self.seed_weight_group_size), 1]
+        return [self.weight_output_count, self.seed_weight_input_count, math.prod(self.kernel_shape)]
+
+    def weight_requests(self):
+        # Preserve the accumulation order for existing input-block layouts.
+        for j in range(math.ceil(self.weight_input_count / (self.seed_weight_group_size if self.use_seed_weight_pack else 1))):
+            for k in range(math.prod(self.kernel_shape)):
+                for sub in range(self.seed_weight_group_size if self.use_seed_weight_pack else 1):
+                    source_j = j * self.seed_weight_group_size + sub if self.use_seed_weight_pack else j
+                    if source_j < self.weight_input_count:
+                        yield source_j, k
+
+    def weight_for_request(self, weights, output_group, input_request, kernel, seed_masks=None, trigger=None):
+        if not self.use_seed_weight_pack:
+            return weights[output_group][input_request][kernel]
+        if self.joint_seed_weights:
+            request = (output_group * self.weight_input_count + input_request) * math.prod(self.kernel_shape) + kernel
+            q, sub = divmod(request, self.seed_weight_group_size)
+            return self._expand_seed_weight(weights[0][q][0], sub, kernel, None, trigger, mask_pair=seed_masks[request])
+        q, sub = divmod(input_request, self.seed_weight_group_size)
+        return self._expand_seed_weight(weights[output_group][q][kernel], sub, kernel, seed_masks[output_group][q], trigger)
 
     def _valid_seed_weight_subgrid_stride(self) -> bool:
         a, b = self.seed_weight_subgrid_stride
@@ -173,12 +213,13 @@ class MultiplexedConv2DPackedLayer:
             copied_blocks <<= 1
         return [expanded]
 
-    def _expand_seed_weight(self, weight, subgrid: int, kernel_index: int, seed_masks, trigger=None):
+    def _expand_seed_weight(self, weight, subgrid: int, kernel_index: int, seed_masks, trigger=None, mask_pair=None):
         if trigger is not None:
             weight = materialize_encrypted_param(weight, trigger)
         a, b = self.seed_weight_subgrid_stride
         r, c = divmod(subgrid, b)
-        mask = seed_masks[subgrid][kernel_index][0]
+        pair = seed_masks[subgrid][kernel_index] if mask_pair is None else mask_pair
+        mask = pair[0]
         weight = _multiply_mask_param(weight, mask)
         weight = rescale(weight)
         # Positive steps rotate left: copy a zero bit to the right, and a one
@@ -190,13 +231,15 @@ class MultiplexedConv2DPackedLayer:
             step = (1 << bit) * self.skip[1]
             weight = add(weight, rotate_cols(weight, [-step if ((c >> bit) & 1) == 0 else step])[0])
         if self.kernel_shape != [1, 1]:
-            weight = _multiply_mask_param(weight, seed_masks[subgrid][kernel_index][1])
+            weight = _multiply_mask_param(weight, pair[1])
             weight = rescale(weight)
         return weight
 
     def make_seed_mask_pt_nodes(self, layer_id, level):
         if not self.use_seed_weight_pack:
             return []
+        if self.joint_seed_weights:
+            return self._make_joint_seed_mask_pt_nodes(layer_id, level)
         masks = []
         group = self.seed_weight_group_size
         seed_level = level + self.seed_weight_level_cost
@@ -233,6 +276,29 @@ class MultiplexedConv2DPackedLayer:
                     per_subgrid.append(per_kernel)
                 per_ct.append(per_subgrid)
             masks.append(per_ct)
+        return masks
+
+    def _make_joint_seed_mask_pt_nodes(self, layer_id, level):
+        masks = []
+        kernels = math.prod(self.kernel_shape)
+        count = self.weight_output_count * self.weight_input_count * kernels
+        for request in range(count):
+            attrs = {
+                'op_class': op_class, 'type': 'seed_mask_pt', 'mask_kind': 'subgrid',
+                'seed_a': self.seed_weight_subgrid_stride[0], 'seed_b': self.seed_weight_subgrid_stride[1],
+                'subgrid': request % self.seed_weight_group_size, 'kernel_index': request % kernels,
+                'level': level + self.seed_weight_level_cost, 'input_shape': self.input_shape,
+                'skip': self.skip, 'stride': self.stride, 'kernel_shape': self.kernel_shape,
+                'n_channel_per_ct': self.n_channel_per_ct, 'external_upsample_factor': self.external_upsample_factor,
+            }
+            first = CkksPlaintextRingtNode(f'convseedm_{layer_id}_{request}_0')
+            custom_compute(inputs=[], output=first, type='encode_pt', attributes=attrs)
+            second = first
+            if kernels > 1:
+                second = CkksPlaintextRingtNode(f'convseedm_{layer_id}_{request}_1')
+                custom_compute(inputs=[], output=second, type='encode_pt',
+                               attributes=dict(attrs, mask_kind='kernel', level=attrs['level'] - 1))
+            masks.append([first, second])
         return masks
 
     def get_fhe_op_count(self, level: int) -> dict[int, dict[str, int]]:
@@ -554,9 +620,7 @@ class MultiplexedConv2DPackedLayer:
         import math as _math
 
         n_pack_in_channel = _math.ceil(self.n_in_channel / self.n_channel_per_ct)
-        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
-        size_0 = _math.ceil(self.n_out_channel / self.n_block_per_ct)
-        size_1 = self.seed_weight_input_count
+        size_0, size_1, kernel_size = self.weight_storage_shape
 
         weight_pt = [
             [
@@ -576,8 +640,7 @@ class MultiplexedConv2DPackedLayer:
 
     def get_encrypted_param_count(self, level: int) -> dict[int, dict[str, int]]:
         """Count stored server-provisioned parameters; masks are Runner-local PTs."""
-        n_weight = math.ceil(self.n_out_channel / self.n_block_per_ct) * self.seed_weight_input_count
-        n_weight *= self.kernel_shape[0] * self.kernel_shape[1]
+        n_weight = math.prod(self.weight_storage_shape)
         weight_level = level + self.seed_weight_level_cost
         n_bias = math.ceil(self.n_out_channel / (self.stride[0] * self.stride[1] * self.n_channel_per_ct))
         bias_level = level - (1 if self.stride == [1, 1] and self.skip == [1, 1] else 2)
@@ -588,9 +651,7 @@ class MultiplexedConv2DPackedLayer:
         import math as _math
 
         n_pack_in_channel = _math.ceil(self.n_in_channel / self.n_channel_per_ct)
-        kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
-        size_0 = _math.ceil(self.n_out_channel / self.n_block_per_ct)
-        size_1 = self.seed_weight_input_count
+        size_0, size_1, kernel_size = self.weight_storage_shape
 
         weight_ct = [
             [
@@ -651,21 +712,11 @@ class MultiplexedConv2DPackedLayer:
         # 3. Result computation and organization
         res: list = list()
         result_ct = list()
-        for ct_idx in range(len(weight_pt)):
-            partial_sum: DataNode | None = None
-            x_ct_list = list()
-            w_pt_list = list()
-            for j in range(len(weight_pt[ct_idx])):
-                for k in range(len(weight_pt[ct_idx][j])):
-                    for sub in range(self.seed_weight_group_size if self.use_seed_weight_pack else 1):
-                        source_j = j * self.seed_weight_group_size + sub if self.use_seed_weight_pack else j
-                        if source_j >= self.weight_input_count:
-                            continue
-                        x_ct_list.append(kernel_rotations[source_j][k])
-                        w_pt = weight_pt[ct_idx][j][k]
-                        if self.use_seed_weight_pack:
-                            w_pt = self._expand_seed_weight(w_pt, sub, k, seed_mask_pt[ct_idx][j])
-                        w_pt_list.append(w_pt)
+        for ct_idx in range(self.weight_output_count):
+            x_ct_list, w_pt_list = [], []
+            for source_j, k in self.weight_requests():
+                x_ct_list.append(kernel_rotations[source_j][k])
+                w_pt_list.append(self.weight_for_request(weight_pt, ct_idx, source_j, k, seed_mask_pt))
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             s = rescale(partial_sum)
             s = self.sum_slot(s, self.skip[0], self.skip[1] * self.input_shape[1])
@@ -747,22 +798,12 @@ class MultiplexedConv2DPackedLayer:
         kernel_rotations = self.gen_rotated_x(block_rotations)
         res: list = list()
         result_ct = list()
-        for ct_idx in range(len(weight_ct)):
-            x_terms = []
-            w_terms = []
-            for j in range(len(weight_ct[ct_idx])):
-                for k in range(len(weight_ct[ct_idx][j])):
-                    for sub in range(self.seed_weight_group_size if self.use_seed_weight_pack else 1):
-                        source_j = j * self.seed_weight_group_size + sub if self.use_seed_weight_pack else j
-                        if source_j >= self.weight_input_count:
-                            continue
-                        w = weight_ct[ct_idx][j][k]
-                        if self.use_seed_weight_pack:
-                            w = self._expand_seed_weight(
-                                w, sub, k, seed_mask_pt[ct_idx][j], kernel_rotations[source_j][k]
-                            )
-                        x_terms.append(kernel_rotations[source_j][k])
-                        w_terms.append(w)
+        for ct_idx in range(self.weight_output_count):
+            x_terms, w_terms = [], []
+            for source_j, k in self.weight_requests():
+                x_terms.append(kernel_rotations[source_j][k])
+                w_terms.append(self.weight_for_request(weight_ct, ct_idx, source_j, k, seed_mask_pt,
+                                                       kernel_rotations[source_j][k]))
             s = accumulate_encrypted_param_terms(x_terms, w_terms)
             s = rescale(s)
             s = self.sum_slot(s, self.skip[0], self.skip[1] * self.input_shape[1])
@@ -832,27 +873,20 @@ class MultiplexedConv2DPackedLayer:
         res: list = list()
         result_ct = list()
 
-        for ct_idx in range(len(weight_ct)):
+        for ct_idx in range(self.weight_output_count):
             partial_sum = None
-            for j in range(len(weight_ct[ct_idx])):
-                for sub in range(self.seed_weight_group_size if self.use_seed_weight_pack else 1):
-                    source_j = j * self.seed_weight_group_size + sub if self.use_seed_weight_pack else j
-                    if source_j >= self.weight_input_count:
-                        continue
-                    base_x = x[source_j // self.input_block_count]
-                    block_step = (source_j % self.input_block_count) * block_unit
-                    for k in range(len(weight_ct[ct_idx][j])):
-                        total_step = int(block_step + kernel_steps[k])
-                        w = weight_ct[ct_idx][j][k]
-                        w = materialize_encrypted_param(w, base_x)
-                        if self.use_seed_weight_pack:
-                            w = self._expand_seed_weight(w, sub, k, seed_mask_pt[ct_idx][j], base_x)
-                        if total_step != 0:
-                            w = rotate_cols(w, [-total_step])[0]
-                        term = mult(w, base_x)
-                        if total_step != 0:
-                            term = rotate_cols(term, [total_step])[0]
-                        partial_sum = term if partial_sum is None else add(partial_sum, term)
+            for source_j, k in self.weight_requests():
+                base_x = x[source_j // self.input_block_count]
+                block_step = (source_j % self.input_block_count) * block_unit
+                total_step = int(block_step + kernel_steps[k])
+                w = self.weight_for_request(weight_ct, ct_idx, source_j, k, seed_mask_pt, base_x)
+                w = materialize_encrypted_param(w, base_x)
+                if total_step != 0:
+                    w = rotate_cols(w, [-total_step])[0]
+                term = mult(w, base_x)
+                if total_step != 0:
+                    term = rotate_cols(term, [total_step])[0]
+                partial_sum = term if partial_sum is None else add(partial_sum, term)
             if partial_sum is None:
                 raise ValueError('Encrypted multiplexed conv accumulation produced no terms')
             s = rescale(partial_sum)

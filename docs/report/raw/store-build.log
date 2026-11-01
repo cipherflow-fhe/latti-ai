@@ -1,0 +1,16 @@
+[  0%] Built target go_libs
+[  2%] Built target cpu_mega_ag_runner_obj
+[  3%] Built target mega_ag_obj
+[  8%] Built target fhe_ops_lib_obj
+[ 12%] Built target cxx_sdk_v2_obj
+[ 15%] Built target log
+[ 16%] Built target abi_obj
+[ 18%] Built target gpu_mega_ag_runner_obj
+[ 21%] Built target lattisense
+[ 86%] Built target fhe_layers
+[ 88%] Built target inference_task
+[ 89%] Building CXX object inference/interface/CMakeFiles/inference_interface.dir/runner_bundle_io.cpp.o
+[ 91%] Linking CXX static library libinference_interface.a
+[ 97%] Built target inference_interface
+[ 98%] Linking CXX executable test_encrypted_parameter_store
+[100%] Built target test_encrypted_parameter_store

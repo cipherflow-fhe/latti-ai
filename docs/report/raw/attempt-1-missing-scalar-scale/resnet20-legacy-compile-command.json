@@ -1,0 +1,21 @@
+{
+  "command": [
+    "/home/linghm/pytorch_venv/bin/python",
+    "/home/linghm/project/latti-ai/training/run_compile.py",
+    "--input",
+    "/home/linghm/project/latti-ai/runs/cifar10/model/trained_poly.onnx",
+    "--output",
+    "/tmp/latti-param-compression-acceptance/resnet20/legacy",
+    "--style",
+    "multiplexed",
+    "--deployment-mode",
+    "server_provisioned_runner",
+    "--config",
+    "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-config.json"
+  ],
+  "cwd": "/home/linghm/project/latti-ai",
+  "returncode": 0,
+  "wall_ms": 3689.5530028268695,
+  "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-compile.log",
+  "peak_rss_kib": 555712
+}

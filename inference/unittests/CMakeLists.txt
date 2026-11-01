@@ -8,6 +8,10 @@ add_executable(test_data_structs
 target_link_libraries(test_data_structs inference_task)
 add_test(NAME test_data_structs COMMAND test_data_structs)
 
+add_executable(test_encrypted_parameter_store test_encrypted_parameter_store.cpp)
+target_link_libraries(test_encrypted_parameter_store inference_interface)
+add_test(NAME test_encrypted_parameter_store COMMAND test_encrypted_parameter_store)
+
 # Copy test_gen_layers.py to build directory
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/test_gen_layers.py

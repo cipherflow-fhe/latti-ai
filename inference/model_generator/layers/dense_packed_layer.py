@@ -27,6 +27,7 @@ from inference.model_generator.layers.encrypted_param_ops import (
     add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
     require_no_plaintext_input_rotation,
+    materialize_encrypted_param,
 )
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 
@@ -45,6 +46,7 @@ class DensePackedLayer:
         n_packed_in_feature,
         n_packed_out_feature,
         invalid_fill=None,
+        seed_tile_layout=None,
     ):
         self.n_out_channel: int = n_out_channel
         self.n_in_channel: int = n_in_channel
@@ -62,6 +64,61 @@ class DensePackedLayer:
         self.n_packed_out_feature: int = n_packed_out_feature
 
         self.mark: int = 0
+        self.seed_tile_layout = seed_tile_layout
+
+    def multiplexed_weight_shape(self, n):
+        blocks = (n // 2) // math.prod(s * k for s, k in zip(self.input_shape, self.skip))
+        channels_per_block = math.prod(s // f for s, f in zip(self.skip, self.invalid_fill))
+        channels = self.n_in_channel // math.prod(self.input_shape)
+        return [math.ceil(self.n_out_channel / blocks),
+                math.ceil(channels / (channels_per_block * blocks)) * blocks]
+
+    def choose_seed_tile_layout(self, n, level, bytes_at_level):
+        """Choose disjoint residue tiles from public invalid-fill geometry."""
+        self.seed_tile_layout = None
+        if (len(self.input_shape) != 2 or any(s <= 0 or f <= 0 or s % f for s, f in zip(self.skip, self.invalid_fill))
+                or (n // 2) % math.prod(s * k for s, k in zip(self.input_shape, self.skip))):
+            return None
+        capacity = math.prod(self.invalid_fill)
+        if capacity <= 1:
+            return None
+        rows, columns = self.multiplexed_weight_shape(n)
+        counts = {'weight': rows * columns, 'bias': rows}
+        enabled = {}
+        for kind, count in counts.items():
+            target = level if kind == 'weight' else level - 1
+            try:
+                enabled[kind] = math.ceil(count / capacity) * bytes_at_level(target + 1) < count * bytes_at_level(target)
+            except (KeyError, ValueError):
+                enabled[kind] = False
+        if not any(enabled.values()):
+            return None
+        self.seed_tile_layout = {
+            'tile_grid': list(self.invalid_fill), 'group_size': capacity,
+            'input_shape': list(self.input_shape), 'skip': list(self.skip),
+            'invalid_fill': list(self.invalid_fill), 'slots': n // 2,
+            'weight_shape': [rows, columns], 'use_site_level': level,
+            **enabled,
+        }
+        return self.seed_tile_layout
+
+    def tile_parameter(self, parameters, request, kind, trigger):
+        layout = self.seed_tile_layout
+        group, sub = divmod(request, layout['group_size'])
+        seed = parameters[group] if kind == 'bias' else parameters[0][group]
+        seed = materialize_encrypted_param(seed, trigger)
+        level = layout['use_site_level'] + (kind == 'weight')
+        mask = CkksPlaintextRingtNode(f'{seed.id}_{kind}_tile_{sub}')
+        custom_compute(inputs=[], output=mask, type='encode_pt', attributes={
+            'op_class': op_class, 'type': 'tile_mask_pt', 'param_kind': kind,
+            'input_shape': self.input_shape, 'skip': self.skip, 'invalid_fill': self.invalid_fill,
+            'tile_grid': layout['tile_grid'], 'subgrid': sub, 'level': level,
+        })
+        restored = rescale(mult(seed, mask))
+        r, c = divmod(sub, layout['tile_grid'][1])
+        delta = (r * (self.skip[0] // self.invalid_fill[0]) * self.input_shape[1] * self.skip[1]
+                 + c * (self.skip[1] // self.invalid_fill[1]))
+        return rotate_cols(restored, [delta])[0] if delta else restored
 
     def get_fhe_op_count_skip_0d(self, n_input_ct: int, skip_0d: int, level: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call_skip_0d(), grouped by level.
@@ -149,6 +206,19 @@ class DensePackedLayer:
         ops[lv]['add'] += n_packed_out * log2_block  # fold adds
         ops[lv]['add'] += n_packed_out  # bias
 
+        if self.seed_tile_layout:
+            layout = self.seed_tile_layout
+            for kind, count, target in [('weight', n_packed_out * n_block_input, level),
+                                        ('bias', n_packed_out, level - 1)]:
+                if not layout[kind]:
+                    continue
+                ops[target + 1]['mult_plain'] += count
+                ops[target + 1]['rescale'] += count
+                for request in range(count):
+                    r, c = divmod(request % layout['group_size'], layout['tile_grid'][1])
+                    delta = r * valid_skip_0 * input_ct_shape[1] + c * valid_skip_1
+                    ops[target]['rotate'] += naf_weight(delta)
+
         return dict(ops)
 
     def get_fhe_op_count_1d_multiplexed(self, n_input_ct: int, n: int, level: int) -> dict[int, dict[str, int]]:
@@ -230,6 +300,13 @@ class DensePackedLayer:
         }
 
     def get_encrypted_param_count_multiplexed(self, n, level: int) -> dict[int, dict[str, int]]:
+        if self.seed_tile_layout:
+            result = defaultdict(dict)
+            rows, columns = self.multiplexed_weight_shape(n)
+            for kind, count, target in [('weight', rows * columns, level), ('bias', rows, level - 1)]:
+                packed = self.seed_tile_layout[kind]
+                result[target + packed][kind] = math.ceil(count / self.seed_tile_layout['group_size']) if packed else count
+            return dict(result)
         input_ct_shape = [int(self.input_shape[i] * self.skip[i]) for i in range(2)]
         n_num_pre_ct = math.ceil((n // 2) / math.prod(input_ct_shape))
         n_channel_per_block = math.prod(self.skip[i] // self.invalid_fill[i] for i in range(2))
@@ -282,6 +359,21 @@ class DensePackedLayer:
 
     def make_param_ct_nodes_multiplexed(self, layer_id, n, level: int):
         """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes_multiplexed()."""
+        if self.seed_tile_layout:
+            layout = self.seed_tile_layout
+            if (layout['weight_shape'] != self.multiplexed_weight_shape(n) or layout['slots'] != n // 2
+                    or layout['use_site_level'] != level or layout['input_shape'] != self.input_shape
+                    or layout['skip'] != self.skip or layout['invalid_fill'] != self.invalid_fill
+                    or layout['tile_grid'] != self.invalid_fill or layout['group_size'] != math.prod(self.invalid_fill)):
+                raise ValueError('Dense seed tile metadata does not match the use site')
+            rows, columns = layout['weight_shape']
+            weight_rows, weight_cols = ((1, math.ceil(rows * columns / layout['group_size']))
+                                        if layout['weight'] else (rows, columns))
+            weights = [[CkksCiphertextNode(f'densew_{layer_id}_{i}_{j}', level=level + layout['weight'])
+                        for j in range(weight_cols)] for i in range(weight_rows)]
+            biases = [CkksCiphertextNode(f'denseb_{layer_id}_{i}', level=level - 1 + layout['bias'])
+                      for i in range(math.ceil(rows / layout['group_size']) if layout['bias'] else rows)]
+            return weights, biases
         input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
         N_half = int(n / 2)
         n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
@@ -549,15 +641,21 @@ class DensePackedLayer:
         for packed_out_feature_idx in range(n_packed_out_feature_for_mult_pack):
             x_terms = []
             w_terms = []
-            for in_feature_idx in range(len(weight_ct[packed_out_feature_idx])):
+            for in_feature_idx in range(n_block_input):
                 group = in_feature_idx // n_num_pre_ct
                 offset = in_feature_idx % n_num_pre_ct
                 x_terms.append(rotated_cts[group][offset])
-                w_terms.append(weight_ct[packed_out_feature_idx][in_feature_idx])
+                if self.seed_tile_layout and self.seed_tile_layout['weight']:
+                    w_terms.append(self.tile_parameter(weight_ct, packed_out_feature_idx * n_block_input + in_feature_idx,
+                                                       'weight', x_terms[-1]))
+                else:
+                    w_terms.append(weight_ct[packed_out_feature_idx][in_feature_idx])
 
             s = accumulate_encrypted_param_terms(x_terms, w_terms)
             s = rescale(s)
-            s = add_encrypted_param_bias(s, bias_ct[packed_out_feature_idx])
+            bias = (self.tile_parameter(bias_ct, packed_out_feature_idx, 'bias', s)
+                    if self.seed_tile_layout and self.seed_tile_layout['bias'] else bias_ct[packed_out_feature_idx])
+            s = add_encrypted_param_bias(s, bias)
             n_fold = block_size
             while n_fold > 1:
                 rotated = rotate_cols(s, n_fold // 2)

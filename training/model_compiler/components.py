@@ -1224,6 +1224,8 @@ class LayerAbstractGraph:
                 }
                 if hasattr(layer, 'seed_weight_subgrid_stride'):
                     layers[layer_id]['seed_weight_subgrid_stride'] = layer.seed_weight_subgrid_stride
+                if hasattr(layer, 'seed_weight_layout'):
+                    layers[layer_id]['seed_weight_layout'] = layer.seed_weight_layout
                 if hasattr(layer, 'synthetic_source'):
                     layers[layer_id]['synthetic_source'] = layer.synthetic_source
                     if layer.synthetic_source == 'avgpool1d':
@@ -1471,6 +1473,8 @@ class LayerAbstractGraph:
                     'absorb_type': absorb_type,
                     'absorb_path': absorb_path,
                 }
+                if hasattr(layer, 'dense_seed_tiles'):
+                    layers[layer_id]['dense_seed_tiles'] = layer.dense_seed_tiles
             if 'batchnorm' in layer_type:
                 layers[layer_id] = {
                     'type': layer_type,
@@ -1570,6 +1574,8 @@ class LayerAbstractGraph:
                 # layers[layer_id]['weight_path'] = layer_id + '.weight'
                 layers[layer_id]['weight_path'] = layer.path
                 layers[layer_id]['zero_skip'] = layer.zero_skip
+                if hasattr(layer, 'poly_seed_layout'):
+                    layers[layer_id]['poly_seed_layout'] = layer.poly_seed_layout
                 layers[layer_id]['is_big_size'] = layer.is_big_size
                 layers[layer_id]['is_absorb_polyrelu'] = IS_ABSORB_POLYRELU
                 layers[layer_id]['style'] = config.style

@@ -69,6 +69,7 @@ def set_seed_weight_subgrid_stride(graph: LayerAbstractGraph) -> None:
             seed_shape = config.block_shape if node.is_big_size else input_feature.shape
             if all(size % step == 0 for size, step in zip(seed_shape, stride)):
                 node.seed_weight_subgrid_stride = list(stride)
+                node.seed_weight_layout = 'canonical' if node.is_big_size else 'joint'
             else:
                 logging.debug('Seed weights disabled for %s: stride %s does not divide %s',
                               node.layer_id, stride, seed_shape)
@@ -696,6 +697,24 @@ def dump_graph(
               f"runtime={report['runtime_score']}, refresh={report['refresh_score']}, "
               f"storage={report['storage_score']}; unaccounted={report['unaccounted']}")
     transforms.insert_drop_level_layers(graph)
+    if getattr(config, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
+        final_report = get_encrypted_parameter_storage_report(graph.dag, generate_param_dict_for_graph())
+        convolution_layouts = {item['layer_id']: item['convolution_seed_layout'] for item in final_report['layers']
+                               if 'convolution_seed_layout' in item}
+        for node in graph.dag.nodes:
+            if isinstance(node, components.ConvComputeNode) and node.layer_id in convolution_layouts:
+                layout = convolution_layouts[node.layer_id]
+                node.seed_weight_subgrid_stride = layout['stride']
+        layouts = {item['layer_id']: item['dense_seed_tiles'] for item in final_report['layers']
+                   if 'dense_seed_tiles' in item}
+        for node in graph.dag.nodes:
+            if isinstance(node, components.DenseComputeNode) and node.layer_id in layouts:
+                node.dense_seed_tiles = layouts[node.layer_id]
+        poly_layouts = {item['layer_id']: item['poly_seed_layout'] for item in final_report['layers']
+                        if 'poly_seed_layout' in item}
+        for node in graph.dag.nodes:
+            if isinstance(node, components.ActivationComputeNode) and node.layer_id in poly_layouts:
+                node.poly_seed_layout = poly_layouts[node.layer_id]
     graph.to_json(dict(), str(erg0_path), score=score)
 
     if use_btp:

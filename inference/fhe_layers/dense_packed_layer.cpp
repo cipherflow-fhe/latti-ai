@@ -17,6 +17,7 @@
  */
 
 #include "dense_packed_layer.h"
+#include "interleaved_seed.h"
 #include "conv2d_layer.h"
 #include "layer_util.h"
 #include "util.h"
@@ -149,6 +150,12 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed_lazy(const Duo& input_s
 CkksPlaintextRingt DensePackedLayer::generate_weight_pt_mult_pack_for_indices(CkksContext& ctx,
                                                                               int packed_out_feature_idx,
                                                                               int n_block_input_idx) const {
+    return ctx.encode_ringt(generate_weight_values_mult_pack(packed_out_feature_idx, n_block_input_idx), modified_scale);
+}
+
+vector<double> DensePackedLayer::generate_weight_values_mult_pack(int packed_out_feature_idx, int n_block_input_idx) const {
+    if (packed_out_feature_idx < 0 || packed_out_feature_idx >= static_cast<int>(div_ceil(n_out_feature, n_block_per_ct)) ||
+        n_block_input_idx < 0 || n_block_input_idx >= n_block_input) throw std::out_of_range("dense weight index");
     int valid_skip_0 = special_skip[0] / special_invalid_fill[0];
     int valid_skip_1 = special_skip[1] / special_invalid_fill[1];
     int n_channel_per_block = valid_skip_0 * valid_skip_1;
@@ -180,11 +187,17 @@ CkksPlaintextRingt DensePackedLayer::generate_weight_pt_mult_pack_for_indices(Ck
             }
         }
     }
-    return ctx.encode_ringt(w, modified_scale);
+    return w;
 }
 
 CkksPlaintextRingt DensePackedLayer::generate_bias_pt_mult_pack_for_index(CkksContext& ctx,
                                                                           int packed_out_feature_idx) const {
+    return ctx.encode_ringt(generate_bias_values_mult_pack(packed_out_feature_idx), ctx.get_parameter().get_default_scale());
+}
+
+vector<double> DensePackedLayer::generate_bias_values_mult_pack(int packed_out_feature_idx) const {
+    if (packed_out_feature_idx < 0 || packed_out_feature_idx >= static_cast<int>(div_ceil(n_out_feature, n_block_per_ct)))
+        throw std::out_of_range("dense bias index");
     vector<double> b(N_half, 0);
     for (int i = 0; i < N_half; i++) {
         int block_i = packed_out_feature_idx * n_block_per_ct + i / (input_shape_ct_mult[0] * input_shape_ct_mult[1]);
@@ -195,7 +208,27 @@ CkksPlaintextRingt DensePackedLayer::generate_bias_pt_mult_pack_for_index(CkksCo
             b[i] = bias.get(block_i);
         }
     }
-    return ctx.encode_ringt(b, ctx.get_parameter().get_default_scale());
+    return b;
+}
+
+CkksPlaintextRingt DensePackedLayer::generate_tile_seed(CkksContext& ctx, uint32_t seed_index, bool bias_seed) const {
+    if (normal_dense || is_1d_multiplexed || n_block_per_ct <= 0) throw std::invalid_argument("dense tile seed requires multiplexed 2D geometry");
+    const uint32_t outputs = div_ceil(n_out_feature, n_block_per_ct);
+    auto values = interleaved_seed::pack_tiles(outputs * (bias_seed ? 1 : n_block_input), seed_index,
+        special_input_shape, special_skip, special_invalid_fill, N_half, [&](uint32_t request) {
+            return bias_seed ? generate_bias_values_mult_pack(request) :
+                generate_weight_values_mult_pack(request / n_block_input, request % n_block_input);
+        });
+    return ctx.encode_ringt(values, bias_seed ? param_.get_default_scale() : modified_scale);
+}
+
+void DensePackedLayer::validate_tile_geometry(const Duo& shape, const Duo& skip_in, const Duo& invalid_fill,
+                                               uint32_t slots, const Duo& weight_shape, int use_site_level) const {
+    if (normal_dense || is_1d_multiplexed || n_block_per_ct <= 0 || shape != special_input_shape ||
+        skip_in != special_skip || invalid_fill != special_invalid_fill || slots != static_cast<uint32_t>(N_half) ||
+        weight_shape != Duo{div_ceil(n_out_feature, n_block_per_ct), static_cast<uint32_t>(n_block_input)} ||
+        use_site_level != static_cast<int>(level_)) throw std::invalid_argument("dense tile metadata does not match layer");
+    interleaved_seed::tile_mask(shape, skip_in, invalid_fill, slots, 0, false);
 }
 
 void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_in,

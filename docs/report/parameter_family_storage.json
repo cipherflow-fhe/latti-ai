@@ -1,0 +1,118 @@
+{
+  "resnet20": {
+    "legacy": {
+      "multiplexed weight": {
+        "count": 1940,
+        "bytes": 4209749112
+      },
+      "multiplexed bias": {
+        "count": 21,
+        "bytes": 26296769
+      },
+      "poly coefficient": {
+        "count": 95,
+        "bytes": 283756776
+      },
+      "mult-scalar": {
+        "count": 7,
+        "bytes": 14336158
+      },
+      "Dense weight": {
+        "count": 32,
+        "bytes": 53478080
+      },
+      "Dense bias": {
+        "count": 1,
+        "bytes": 999445
+      }
+    },
+    "compressed": {
+      "multiplexed weight": {
+        "count": 127,
+        "bytes": 579718423
+      },
+      "multiplexed bias": {
+        "count": 21,
+        "bytes": 49463780
+      },
+      "poly coefficient": {
+        "count": 95,
+        "bytes": 343525698
+      },
+      "mult-scalar": {
+        "count": 7,
+        "bytes": 17645731
+      },
+      "Dense weight": {
+        "count": 1,
+        "bytes": 2326551
+      },
+      "Dense bias": {
+        "count": 1,
+        "bytes": 999445
+      }
+    }
+  },
+  "mobilenet": {
+    "legacy": {
+      "multiplexed weight": {
+        "count": 13360,
+        "bytes": 32433813552
+      },
+      "multiplexed bias": {
+        "count": 198,
+        "bytes": 213880918
+      },
+      "poly coefficient": {
+        "count": 1245,
+        "bytes": 5266685399
+      },
+      "depthwise weight": {
+        "count": 1359,
+        "bytes": 6154406847
+      },
+      "depthwise bias": {
+        "count": 95,
+        "bytes": 364939619
+      },
+      "Dense weight": {
+        "count": 3000,
+        "bytes": 5013570000
+      },
+      "Dense bias": {
+        "count": 500,
+        "bytes": 499722500
+      }
+    },
+    "compressed": {
+      "multiplexed weight": {
+        "count": 877,
+        "bytes": 2657997432
+      },
+      "multiplexed bias": {
+        "count": 198,
+        "bytes": 211226706
+      },
+      "poly coefficient": {
+        "count": 200,
+        "bytes": 954651868
+      },
+      "depthwise weight": {
+        "count": 93,
+        "bytes": 555616860
+      },
+      "depthwise bias": {
+        "count": 95,
+        "bytes": 381487484
+      },
+      "Dense weight": {
+        "count": 47,
+        "bytes": 109347897
+      },
+      "Dense bias": {
+        "count": 8,
+        "bytes": 13369520
+      }
+    }
+  }
+}

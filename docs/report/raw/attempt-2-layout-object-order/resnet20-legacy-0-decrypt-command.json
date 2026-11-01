@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+    "--task-dir",
+    "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/provisioner",
+    "--cipher",
+    "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+    "--output-csv",
+    "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-0-logits.csv"
+  ],
+  "cwd": "/home/linghm/project/latti-ai",
+  "returncode": 0,
+  "wall_ms": 15424.597553908825,
+  "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-0-decrypt.log",
+  "peak_rss_kib": 15119548
+}

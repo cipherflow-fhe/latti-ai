@@ -1,0 +1,17 @@
+{
+  "command": [
+    "/home/linghm/pytorch_venv/bin/python",
+    "/home/linghm/project/latti-ai/inference/interface/gen_mega_ag.py",
+    "--task-dir",
+    "/tmp/latti-param-compression-acceptance/mobilenet/compressed/task",
+    "--deployment-mode",
+    "server_provisioned_runner",
+    "--parameter-loading-mode",
+    "runtime_lazy"
+  ],
+  "cwd": "/home/linghm/project/latti-ai",
+  "returncode": 0,
+  "wall_ms": 25336.876809131354,
+  "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-mega-ag.log",
+  "peak_rss_kib": 1474868
+}

@@ -7,6 +7,49 @@
 // Public layout operations shared by multiplexed and inverse seed weights.
 namespace interleaved_seed {
 
+// Dense support is sparse in the channel residues inside each physical pixel.
+// Packing moves it right by delta; CKKS Rot(+delta) moves it back left.
+inline uint32_t tile_offset(const Duo& shape, const Duo& skip, const Duo& invalid_fill, uint32_t tile) {
+    if (!prod(shape) || !prod(skip) || !prod(invalid_fill) || skip[0] % invalid_fill[0] ||
+        skip[1] % invalid_fill[1] || tile >= prod(invalid_fill)) {
+        throw std::invalid_argument("invalid dense tile geometry or index");
+    }
+    return (tile / invalid_fill[1]) * (skip[0] / invalid_fill[0]) * shape[1] * skip[1] +
+           (tile % invalid_fill[1]) * (skip[1] / invalid_fill[1]);
+}
+
+inline std::vector<double> tile_mask(const Duo& shape, const Duo& skip, const Duo& invalid_fill,
+                                      uint32_t slots, uint32_t tile, bool bias) {
+    const uint32_t delta = tile_offset(shape, skip, invalid_fill, tile);
+    const Duo physical = shape * skip;
+    const uint32_t block_size = prod(physical);
+    if (slots == 0 || slots % block_size) throw std::invalid_argument("dense tiles require full physical blocks");
+    std::vector<double> mask(slots, 0.0);
+    for (uint32_t i = 0; i < slots; ++i) {
+        const uint32_t h = (i % block_size) / physical[1], w = i % physical[1];
+        if (bias ? (h == 0 && w == 0) :
+            (h % skip[0] < skip[0] / invalid_fill[0] && w % skip[1] < skip[1] / invalid_fill[1])) {
+            mask[i + delta] = 1.0;
+        }
+    }
+    return mask;
+}
+
+template <typename GenerateValues>
+std::vector<double> pack_tiles(uint32_t count, uint32_t seed_index, const Duo& shape, const Duo& skip,
+                                 const Duo& invalid_fill, uint32_t slots, GenerateValues generate) {
+    const uint32_t group = prod(invalid_fill);
+    if (!group || seed_index >= div_ceil(count, group)) throw std::out_of_range("dense tile seed index");
+    std::vector<double> seed(slots, 0.0);
+    for (uint32_t sub = 0; sub < group && seed_index * group + sub < count; ++sub) {
+        const auto source = generate(seed_index * group + sub);
+        if (source.size() != slots) throw std::invalid_argument("dense tile source slot count");
+        const uint32_t delta = tile_offset(shape, skip, invalid_fill, sub);
+        for (uint32_t i = 0; i < slots; ++i) seed[(i + delta) % slots] += source[i];
+    }
+    return seed;
+}
+
 inline bool valid_stride(const Duo& stride, const Duo& shape) {
     return stride[0] && stride[1] && !(stride[0] & (stride[0] - 1)) &&
            !(stride[1] & (stride[1] - 1)) && stride != Duo{1, 1} &&

@@ -20,6 +20,7 @@ import unittest
 from pathlib import Path
 
 from inference.model_generator.deploy_cmds import gen_custom_task
+from training.model_compiler.components import PN13QP218
 
 
 def _feature(level: int):
@@ -212,6 +213,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
             self.assertEqual(offline_by_id['mult_scalar_scale']['phase'], 'offline')
             self.assertEqual(offline_by_id['mult_scalar_scale']['level'], 1)
             self.assertEqual(offline_by_id['mult_scalar_scale']['size'], [1])
+            self.assertEqual(offline_by_id['mult_scalar_scale']['scale'], PN13QP218.q[1])
 
             compute_types = {node['type'] for node in mega_ag['compute'].values()}
             self.assertIn('mult', compute_types)
@@ -582,6 +584,8 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
             self.assertEqual([arg['id'] for arg in signature['offline']], ['encrypted_parameter_store'])
             encrypted_param_ids = {arg['id'] for arg in signature['encrypted_parameters']}
             self.assertEqual(encrypted_param_ids, {'densew_fc1', 'denseb_fc1', 'mult_scalar_scale'})
+            scalar = next(arg for arg in signature['encrypted_parameters'] if arg['id'] == 'mult_scalar_scale')
+            self.assertEqual(scalar['scale'], PN13QP218.q[1])
             load_nodes = [node for node in mega_ag['compute'].values() if node['type'] == 'load_encrypted_param_ct']
             loaded_arg_ids = {node['attributes']['arg_id'] for node in load_nodes}
             self.assertEqual(loaded_arg_ids, encrypted_param_ids)

@@ -124,6 +124,7 @@ def set_param(param_name):
         )
         param.scale = 1 << fhe.log_default_scale
     set_fhe_param(param)
+    return param
 
 
 def gen_custom_task(
@@ -149,7 +150,7 @@ def gen_custom_task(
     elif parameter_mode in {'plaintext_eager', 'encrypted_offline'}:
         lazy = False
     n = _FHE_PARAMS[param_name].poly_modulus_degree
-    set_param(param_name)
+    fhe_param = set_param(param_name)
     task_config_info = read_config(os.path.join(task_path, 'task_config.json'))
     deployment_mode = deployment_mode or task_config_info.get('deployment_mode', 'client_encrypted_input')
     if parameter_loading_mode is None:
@@ -302,13 +303,37 @@ def gen_custom_task(
         if not flat_nodes:
             raise ValueError(f'No encrypted parameter nodes for {effective_id}')
         first = flat_nodes[0]
-        return {
+        signature = {
             'id': effective_id,
             'source_id': source_id,
             'type': first.type.value if isinstance(first.type, DataType) else first.type,
             'size': _shape(nodes),
             'level': first.level,
         }
+        # These scales are independent of seed storage level. Match the existing
+        # C++ generators instead of replacing a learned parameter's scale by S.
+        if source_id.startswith(('convw_', 'densew_', 'mult_scalar_')):
+            signature['scale'] = float(fhe_param.q[level])
+        elif source_id.startswith(('convb_', 'denseb_')):
+            signature['scale'] = float(fhe_param.scale)
+        elif source_id.startswith('poly_reluw_'):
+            degree = int(source_id.rsplit('_', 1)[1])
+            input_level = feature_id_in_nodes[0].level
+            signature['scale'] = polyrelu.bsgs_coefficient_scales(input_level, fhe_param)[degree]
+        if source_id.startswith('dense') and 'dense_seed_tiles' in layer_config:
+            signature['layout'] = layer_config['dense_seed_tiles']
+        elif source_id.startswith('poly_reluw_') and 'poly_seed_layout' in layer_config:
+            signature['layout'] = layer_config['poly_seed_layout']
+        elif source_id.startswith('convw_') and 'seed_weight_subgrid_stride' in layer_config:
+            stride = layer_config['seed_weight_subgrid_stride']
+            signature['layout'] = {
+                'kind': layer_config.get('seed_weight_layout', 'kernel'), 'stride': stride,
+                'group_size': math.prod(stride), 'storage_shape': signature['size'],
+                'kernel_shape': layer_config['kernel_shape'],
+                'input_geometry': config_info['feature'][layer_input_feature_ids[0]],
+                'output_geometry': config_info['feature'][layer_output_feature_ids[0]],
+            }
+        return signature
 
     def _append_parameter_arg(arg_id, nodes):
         if parameter_mode == 'encrypted_offline':
@@ -325,10 +350,10 @@ def gen_custom_task(
                     extra += 1
             encrypted_parameter_effective_ids.add(effective_id)
             arg = Argument(effective_id, nodes)
+            encrypted_parameter_signature.append(_parameter_signature(effective_id, arg_id, nodes))
             if runtime_lazy_parameters:
                 if encrypted_parameter_store_node is None:
                     raise ValueError('runtime_lazy parameter store node was not initialized')
-                encrypted_parameter_signature.append(_parameter_signature(effective_id, arg_id, nodes))
                 for flat_index, node in enumerate(_flatten_nodes(nodes)):
                     node.encrypted_parameter_store_node = encrypted_parameter_store_node
                     node.encrypted_parameter_arg_id = effective_id
@@ -781,6 +806,7 @@ def gen_custom_task(
                         stride,
                         block_shape,
                         seed_weight_subgrid_stride=layer_config.get('seed_weight_subgrid_stride', [1, 1]),
+                        seed_weight_layout=layer_config.get('seed_weight_layout', 'kernel'),
                     )
                 else:
                     big_conv = InverseMultiplexedConv2DLayer(
@@ -792,6 +818,7 @@ def gen_custom_task(
                         stride,
                         block_shape,
                         seed_weight_subgrid_stride=layer_config.get('seed_weight_subgrid_stride', [1, 1]),
+                        seed_weight_layout=layer_config.get('seed_weight_layout', 'kernel'),
                     )
 
                 if lazy:
@@ -807,8 +834,7 @@ def gen_custom_task(
                     weight_ct, bias_ct, repack_mask_pt = big_conv.make_param_ct_nodes(layer_id, level)
                     _append_parameter_arg(f'convw_{layer_id}', weight_ct)
                     _append_parameter_arg(f'convb_{layer_id}', bias_ct)
-                    if repack_mask_pt is not None:
-                        input_args.append(Argument(f'repack_mask_{layer_id}', [repack_mask_pt]))
+                    repack_mask_pt = big_conv.make_runner_repack_mask_pt_node(layer_id, level)
                     seed_mask_pt = big_conv.make_seed_mask_pt_nodes(layer_id, level)
                     layer_output_nodes = big_conv.call_param_ct(
                         feature_id_to_nodes_map[layer_input_feature_ids[0]],
@@ -910,6 +936,7 @@ def gen_custom_task(
                             n_packed_in_channel,
                             n_packed_out_channel,
                             seed_weight_subgrid_stride=layer_config.get('seed_weight_subgrid_stride', [1, 1]),
+                            seed_weight_layout=layer_config.get('seed_weight_layout', 'kernel'),
                         )
                     else:
                         conv0_layer = MultiplexedConv2DPackedLayer(
@@ -923,6 +950,7 @@ def gen_custom_task(
                             n_packed_in_channel,
                             n_packed_out_channel,
                             seed_weight_subgrid_stride=layer_config.get('seed_weight_subgrid_stride', [1, 1]),
+                            seed_weight_layout=layer_config.get('seed_weight_layout', 'input_blocks'),
                         )
 
                     if lazy:
@@ -933,12 +961,9 @@ def gen_custom_task(
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                         input_args.append(Argument(f'{layer_id}', [conv_data_source]))
                     elif parameter_mode == 'encrypted_offline':
-                        if deployment_mode == 'server_provisioned_runner' and not is_depthwise:
+                        if deployment_mode == 'server_provisioned_runner':
                             weight_ct, bias_ct, _ = conv0_layer.make_param_ct_nodes(layer_id, level)
-                            if conv0_layer.stride != [1, 1] or conv0_layer.skip != [1, 1]:
-                                mask_pt = conv0_layer.make_runner_mask_pt_nodes(layer_id, level)
-                            else:
-                                mask_pt = []
+                            mask_pt = conv0_layer.make_runner_mask_pt_nodes(layer_id, level)
                         else:
                             weight_ct, bias_ct, mask_pt = conv0_layer.make_param_ct_nodes(layer_id, level)
                             if mask_pt:
@@ -1055,7 +1080,9 @@ def gen_custom_task(
 
             else:  # dim == 2
                 input_shape = feat['shape']
-                polyrelu = PolyRelu2D(input_shape, order, skip, pack)
+                polyrelu = PolyRelu2D(input_shape, order, skip, pack,
+                                     seed_layout=layer_config.get('poly_seed_layout')
+                                     if parameter_mode == 'encrypted_offline' else None)
                 if lazy:
                     poly_data_source = CustomDataNode(type='poly_data_source', id=f'{layer_id}')
                     layer_output_nodes = polyrelu.call_bsgs_lazy(feature_id_in_nodes, poly_data_source, layer_id)
@@ -1605,6 +1632,7 @@ def gen_custom_task(
                         n_in_channel,
                         n_out_channel,
                         invalid_fill=invalid_fill,
+                        seed_tile_layout=layer_config.get('dense_seed_tiles') if parameter_mode == 'encrypted_offline' else None,
                     )
                     if lazy:
                         dense_data_source = CustomDataNode(type='fc_data_source', id=f'{layer_id}')
@@ -2067,6 +2095,13 @@ def gen_custom_task(
             {'encrypted_parameters': encrypted_parameter_signature} if runtime_lazy_parameters else None
         ),
     )
+    if parameter_mode == 'encrypted_offline' and not runtime_lazy_parameters:
+        signature_path = Path(output_dir) / 'task_signature.json'
+        signature = json.loads(signature_path.read_text())
+        contracts = {arg['id']: arg for arg in encrypted_parameter_signature}
+        for arg in signature['offline']:
+            arg.update(contracts[arg['id']])
+        signature_path.write_text(json.dumps(signature, indent=4) + '\n')
 
 
 if __name__ == '__main__':
