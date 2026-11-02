@@ -24,6 +24,7 @@
 #include <string>
 
 #include "data_structs/feature.h"
+#include "inference_task/inference_process.h"
 #include "interface/encrypted_parameter_store.h"
 #include "interface/inference_client.h"
 #include "lattisense/cxx_sdk_v2/cxx_fhe_task.h"
@@ -60,6 +61,7 @@ private:
     std::string pack_style_;
     std::unique_ptr<fhe::CkksContext> eval_context_;
     std::unique_ptr<EncryptedParameterStore> parameter_store_;
+    std::shared_ptr<InitInferenceProcess> public_matrix_layers_;
 
     void read_configuration();
     bool use_periodic_multiplexed_input(const std::string& name, const InputParam& param) const;

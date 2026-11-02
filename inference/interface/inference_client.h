@@ -42,6 +42,7 @@ struct OutputParam {
     int length = 0;             // dim=1 only
     Duo invalid_fill = {1, 1};  // dim=2 only
     bool is_mat = false;
+    bool select_first_token = false;
     Duo head_shape = {0, 0};
     uint32_t matmul_block_size = 0;
     uint32_t n_heads = 0;

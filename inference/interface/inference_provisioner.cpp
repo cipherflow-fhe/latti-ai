@@ -22,6 +22,7 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <exception>
 #include <iostream>
 #include <numeric>
 #include <stdexcept>
@@ -225,6 +226,16 @@ InferenceProvisioner::parse_parameter_argument(const std::string& arg_id, const 
     ParameterArgumentInfo info;
     const std::string source_id = strip_use_site_suffix(arg_id);
     info.source_id = source_id;
+    if (starts_with(source_id, "matrix_")) {
+        for (const auto& item : init.json_layers.items()) {
+            if (starts_with(source_id, "matrix_" + item.key() + "_") && item.key().size() > info.layer_id.size())
+                info.layer_id = item.key();
+        }
+        if (!info.layer_id.empty()) {
+            info.param_kind = "matrix_parameter";
+            return info;
+        }
+    }
     if (starts_with(source_id, "convw_")) {
         info.layer_id = source_id.substr(std::string("convw_").size());
         info.param_kind = "weight";
@@ -311,7 +322,15 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
     for (uint64_t flat_idx = 0; flat_idx < count; ++flat_idx) {
         fhe::CkksPlaintextRingt ringt;
 
-        if (starts_with(arg_id, "dense")) {
+        if (info.param_kind == "matrix_parameter") {
+            const auto& generator = sig.at("generator");
+            if (generator.at("op_class") == "InputZero") {
+                ringt = context.encode_ringt(std::vector<double>(context.get_parameter().get_n() / 2, 0.0),
+                                             context.get_parameter().get_default_scale());
+            } else {
+                ringt = generate_matrix_parameter(context, &init.get_layer<Layer>(info.layer_id), generator);
+            }
+        } else if (starts_with(arg_id, "dense")) {
             auto& layer = init.get_layer<DensePackedLayer>(info.layer_id);
             const bool tile_seed = layer_cfg.contains("dense_seed_tiles") &&
                 layer_cfg.at("dense_seed_tiles").at(is_weight ? "weight" : "bias").get<bool>();
@@ -668,34 +687,57 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
     }
     const auto& parameter_sigs =
         runtime_lazy ? task_signature_.at("encrypted_parameters") : task_signature_.at("offline");
-    for (const auto& sig : parameter_sigs) {
-        const std::string arg_id = sig.at("id").get<std::string>();
-        if (sig.at("type").get<std::string>() != "ct") {
-            throw std::runtime_error("[Provisioner] encrypted_offline only supports ciphertext offline args: " +
-                                     arg_id);
+    for (size_t first = 0; first < parameter_sigs.size();) {
+        // Matrix descriptors each contain one ciphertext. Bound parallel
+        // provisioning to eight of these small, independent arguments.
+        size_t batch_size = 1;
+        if (starts_with(parameter_sigs[first].at("id").get<std::string>(), "matrix_")) {
+            while (batch_size < 8 && first + batch_size < parameter_sigs.size() &&
+                   starts_with(parameter_sigs[first + batch_size].at("id").get<std::string>(), "matrix_"))
+                ++batch_size;
         }
-        std::cout << "[Provisioner] Encrypting offline parameter " << arg_id << "..." << std::endl;
-        const auto info = parse_parameter_argument(arg_id, init);
-        auto encrypted = encrypt_parameter_argument(arg_id, sig, *context_, init);
-        write_encrypted_argument(parameter_root, arg_id, encrypted, manifest, sig, info, runtime_lazy);
-        manifest["arguments"][arg_id]["scale"] = encrypted.front().get_scale();
-        const auto layout = parameter_layout_metadata(graph, info.layer_id, sig);
-        if (sig.contains("layout") && nlohmann::json(sig.at("layout")) != nlohmann::json(layout))
-            throw std::runtime_error("[Provisioner] parameter layout mismatch: " + arg_id);
-        if (!layout.is_null()) manifest["arguments"][arg_id]["layout"] = layout;
-        const auto& layer_cfg = init.json_layers.at(info.layer_id);
-        if (starts_with(arg_id, "dense") && layer_cfg.contains("dense_seed_tiles")) {
-            const auto& layout = layer_cfg.at("dense_seed_tiles");
-            if (layout.at(info.param_kind).get<bool>()) {
+        std::vector<std::vector<fhe::CkksCiphertext>> batch(batch_size);
+        std::vector<std::exception_ptr> errors(batch_size);
+        parallel_for(batch_size, batch_size, *context_, [&](fhe::CkksContext& ctx, int i) {
+            try {
+                const auto& sig = parameter_sigs[first + i];
+                batch[i] = encrypt_parameter_argument(sig.at("id").get<std::string>(), sig, ctx, init);
+            } catch (...) {
+                errors[i] = std::current_exception();
+            }
+        });
+        for (size_t i = 0; i < batch_size; ++i) {
+            if (errors[i]) std::rethrow_exception(errors[i]);
+            const auto& sig = parameter_sigs[first + i];
+            const std::string arg_id = sig.at("id").get<std::string>();
+            if (sig.at("type").get<std::string>() != "ct") {
+                throw std::runtime_error("[Provisioner] encrypted_offline only supports ciphertext offline args: " +
+                                         arg_id);
+            }
+            std::cout << "[Provisioner] Encrypting offline parameter " << arg_id << "..." << std::endl;
+            const auto info = parse_parameter_argument(arg_id, init);
+            auto& encrypted = batch[i];
+            write_encrypted_argument(parameter_root, arg_id, encrypted, manifest, sig, info, runtime_lazy);
+            manifest["arguments"][arg_id]["scale"] = encrypted.front().get_scale();
+            const auto layout = parameter_layout_metadata(graph, info.layer_id, sig);
+            if (sig.contains("layout") && nlohmann::json(sig.at("layout")) != nlohmann::json(layout))
+                throw std::runtime_error("[Provisioner] parameter layout mismatch: " + arg_id);
+            if (!layout.is_null()) manifest["arguments"][arg_id]["layout"] = layout;
+            const auto& layer_cfg = init.json_layers.at(info.layer_id);
+            if (starts_with(arg_id, "dense") && layer_cfg.contains("dense_seed_tiles")) {
+                const auto& layout = layer_cfg.at("dense_seed_tiles");
+                if (layout.at(info.param_kind).get<bool>()) {
+                    auto& entry = manifest["arguments"][arg_id];
+                    entry["use_site_level"] = layout.at("use_site_level").get<int>() - (info.param_kind == "bias" ? 1 : 0);
+                }
+            }
+            if (info.param_kind == "poly_coeff" && layer_cfg.contains("poly_seed_layout")) {
                 auto& entry = manifest["arguments"][arg_id];
-                entry["use_site_level"] = layout.at("use_site_level").get<int>() - (info.param_kind == "bias" ? 1 : 0);
+                entry["degree"] = info.coeff_idx;
+                entry["use_site_level"] = layer_cfg.at("poly_seed_layout").at("use_site_levels").at(info.coeff_idx);
             }
         }
-        if (info.param_kind == "poly_coeff" && layer_cfg.contains("poly_seed_layout")) {
-            auto& entry = manifest["arguments"][arg_id];
-            entry["degree"] = info.coeff_idx;
-            entry["use_site_level"] = layer_cfg.at("poly_seed_layout").at("use_site_levels").at(info.coeff_idx);
-        }
+        first += batch_size;
     }
 
     write_json_file(parameter_root / "manifest.json", manifest);

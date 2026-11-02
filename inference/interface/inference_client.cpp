@@ -72,6 +72,7 @@ void InferenceClient::read_configuration() {
         op.channel = param.value("channel", 1);
         op.is_mat = param.value("data_type", std::string("")) == "feature_mat";
         op.is_transposed = param.value("is_transposed", true);
+        op.select_first_token = param.value("select_first_token", false);
         if (op.is_mat) {
             op.height = param["shape"][0];
             op.width = param["shape"][1];
@@ -421,6 +422,12 @@ InferenceClient::decrypt(const std::map<std::string, Bytes>& encrypted_outputs) 
             }
             auto dec_1d = decrypted.to_array_1d();
             result.output = std::vector<double>(dec_1d.data(), dec_1d.data() + dec_1d.size());
+        }
+        if (param.is_mat && param.select_first_token) {
+            const size_t channels = param.is_transposed ? param.height : param.width;
+            if (result.output.size() < channels)
+                throw std::runtime_error("[Client] CLS output is shorter than its channel count: " + name);
+            result.output.resize(channels);
         }
         result.num_outputs = result.output.size();
         results[name] = std::move(result);

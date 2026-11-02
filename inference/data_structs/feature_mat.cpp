@@ -302,13 +302,11 @@ FeatureMatEncrypted::par_block_col_major_unpack(uint32_t m, uint32_t n_per_head,
     return result;
 }
 
-void FeatureMatEncrypted::par_diagonal_pack(const Array<double, 2>& matrix,
-                                            uint32_t n_heads,
-                                            const Duo& head_shape_in,
-                                            bool is_lower,
-                                            bool is_transposed,
-                                            bool is_symmetric,
-                                            double scale_in) {
+vector<vector<double>> FeatureMatEncrypted::par_diagonal_slots(const Array<double, 2>& matrix,
+                                                               uint32_t n_heads,
+                                                               const Duo& head_shape_in,
+                                                               bool is_lower,
+                                                               bool is_transposed) {
     uint32_t H_prepad = n_heads;
     assert(H_prepad > 0);
 
@@ -341,7 +339,6 @@ void FeatureMatEncrypted::par_diagonal_pack(const Array<double, 2>& matrix,
     assert(m % c == 0);
     uint32_t cts_per_mb = m / c;
     uint32_t total_vecs = n_mb * cts_per_mb;
-    const int N_THREAD = 4;
 
     vector<vector<double>> packed_vecs(total_vecs);
 
@@ -377,6 +374,19 @@ void FeatureMatEncrypted::par_diagonal_pack(const Array<double, 2>& matrix,
         }
     }
 
+    return packed_vecs;
+}
+
+void FeatureMatEncrypted::par_diagonal_pack(const Array<double, 2>& matrix,
+                                            uint32_t n_heads,
+                                            const Duo& head_shape_in,
+                                            bool is_lower,
+                                            bool is_transposed,
+                                            bool is_symmetric,
+                                            double scale_in) {
+    auto packed_vecs = par_diagonal_slots(matrix, n_heads, head_shape_in, is_lower, is_transposed);
+    const uint32_t total_vecs = packed_vecs.size();
+    const int N_THREAD = 4;
     data.clear();
     data_compress.clear();
     if (is_symmetric) {

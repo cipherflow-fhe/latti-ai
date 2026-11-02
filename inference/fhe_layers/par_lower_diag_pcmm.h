@@ -36,6 +36,8 @@ public:
     std::vector<ls::CkksPlaintextRingt> bias_pt_;
     ls::CkksPlaintextRingt
     generate_pt_A(ls::CkksContext& ctx, uint32_t mb, uint32_t i, uint32_t j, uint32_t ell, uint32_t r) const;
+    static ls::CkksPlaintextRingt mask_wrap_for_config(ls::CkksContext& ctx, uint32_t H, uint32_t n,
+                                                       uint32_t level, uint32_t i_idx);
     ls::CkksPlaintextRingt generate_mask_wrap_pt(ls::CkksContext& ctx, uint32_t i_idx) const;
     ls::CkksPlaintextRingt generate_bias_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t r) const;
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& X_T);

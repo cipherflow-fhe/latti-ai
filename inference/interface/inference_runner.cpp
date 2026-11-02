@@ -98,14 +98,36 @@ ExecutorFunc create_load_encrypted_param_executor() {
     };
 }
 
-ExecutorFunc create_multiplexed_conv_mask_executor() {
-    return [](ExecutionContext& exec_ctx, const std::unordered_map<NodeIndex, std::any>&, std::any& output,
+ExecutorFunc create_multiplexed_conv_mask_executor(std::shared_ptr<InitInferenceProcess> matrix_layers) {
+    return [matrix_layers](ExecutionContext& exec_ctx, const std::unordered_map<NodeIndex, std::any>&, std::any& output,
               const ComputeNode& self) -> void {
         if (!self.custom_prop.has_value()) {
             throw std::runtime_error("[Runner] encode_pt mask missing custom properties");
         }
         const auto& attrs = self.custom_prop->attributes;
         const auto op_class = attrs.value("op_class", std::string());
+        if (attrs.contains("layer_id") && matrix_layers) {
+            auto* context = exec_ctx.get_arithmetic_context<fhe::CkksContext>();
+            if (!context) context = exec_ctx.get_arithmetic_context<fhe::CkksBtpContext>();
+            if (!context) throw std::runtime_error("[Runner] matrix encode_pt cannot get CKKS context");
+            const auto layer_id = attrs.at("layer_id").get<std::string>();
+            fhe::CkksPlaintextRingt pt;
+            if (op_class == "ParLowerDiagPCMM" && attrs.at("type") == "mask_wrap_pt") {
+                const auto& layer = matrix_layers->json_layers.at(layer_id);
+                const auto fid = layer.at("feature_input")[0].get<std::string>();
+                const auto& feature = matrix_layers->json_features.at(fid);
+                const auto& head = feature.at("head_shape");
+                const auto sequence_length = head[0].get<uint32_t>() == matrix_layers->head_dim ?
+                    head[1].get<uint32_t>() : head[0].get<uint32_t>();
+                pt = ParLowerDiagPCMM::mask_wrap_for_config(*context,
+                    next_power_of_two(matrix_layers->n_heads), next_power_of_two(sequence_length),
+                    feature.at("level").get<uint32_t>(), attrs.at("i_idx").get<uint32_t>());
+            } else {
+                pt = generate_matrix_parameter(*context, &matrix_layers->get_layer<Layer>(layer_id), attrs);
+            }
+            output = std::make_shared<fhe::CkksPlaintextRingt>(std::move(pt));
+            return;
+        }
         const bool upsample_mask = op_class == "UpsampleNearestLayer" && attrs.value("type", std::string()) == "mask_pt";
         const bool concat_mask = op_class == "ConcatLayer" && attrs.value("type", std::string()) == "mask_0d_pt";
         const bool dense_tile = op_class == "DensePackedLayer" && attrs.value("type", std::string()) == "tile_mask_pt";
@@ -229,7 +251,15 @@ void InferenceRunner::read_configuration() {
         ip.channel = param.value("channel", 1);
         ip.skip = read_skip_value(param);
         ip.pack_num = param.value("pack_num", 0);
-        if (ip.dim == 1) {
+        ip.is_mat = param.value("data_type", std::string()) == "feature_mat";
+        ip.is_transposed = param.value("is_transposed", true);
+        if (ip.is_mat) {
+            ip.height = param.at("shape")[0].get<int>();
+            ip.width = param.at("shape")[1].get<int>();
+            ip.head_shape = {param.at("head_shape")[0].get<uint32_t>(), param.at("head_shape")[1].get<uint32_t>()};
+            ip.n_heads = param.value("n_heads", task_config_.value("n_heads", 1u));
+            ip.matmul_block_size = param.value("matmul_block_size", task_config_.value("matmul_block_size", 0u));
+        } else if (ip.dim == 1) {
             ip.length = param.at("shape")[0].get<int>();
             if (param.contains("invalid_fill")) {
                 ip.invalid_fill[0] = param.at("invalid_fill")[0].get<uint32_t>();
@@ -253,7 +283,15 @@ void InferenceRunner::read_configuration() {
         op.channel = param.value("channel", 1);
         op.pack_num = param.value("pack_num", 0);
         op.skip = read_skip_value(param);
-        if (op.dim == 1) {
+        op.is_mat = param.value("data_type", std::string()) == "feature_mat";
+        op.is_transposed = param.value("is_transposed", true);
+        if (op.is_mat) {
+            op.height = param.at("shape")[0].get<int>();
+            op.width = param.at("shape")[1].get<int>();
+            op.head_shape = {param.at("head_shape")[0].get<uint32_t>(), param.at("head_shape")[1].get<uint32_t>()};
+            op.n_heads = param.value("n_heads", task_config_.value("n_heads", 1u));
+            op.matmul_block_size = param.value("matmul_block_size", task_config_.value("matmul_block_size", 0u));
+        } else if (op.dim == 1) {
             op.length = param.at("shape")[0].get<int>();
             if (param.contains("invalid_fill")) {
                 op.invalid_fill[0] = param.at("invalid_fill")[0].get<uint32_t>();
@@ -335,6 +373,11 @@ void InferenceRunner::load() {
         eval_context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize_advanced(eval_context));
     }
     n_slots_ = eval_context_->get_parameter().get_n() / 2;
+    if (task_config_.value("mat_pack_style", std::string()) == "par_diagonal_pack") {
+        public_matrix_layers_ = std::make_shared<InitInferenceProcess>(runner_dir_.string(), false);
+        public_matrix_layers_->init_parameters(task_config_.value("use_btp", false));
+        public_matrix_layers_->load_public_matrix_layers();
+    }
     parameter_store_ = std::make_unique<EncryptedParameterStore>(runner_dir_ / "encrypted_model_parameters");
     validate_parameter_manifest(parameter_store_->manifest(), task_signature_, nn_layers_);
 }
@@ -648,7 +691,18 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
             throw std::runtime_error("[Runner] Unknown input name: " + id);
         }
         const InputParam& param = param_it->second;
-        if (param.dim == 0) {
+        if (param.is_mat) {
+            if (!public_matrix_layers_) throw std::runtime_error("[Runner] unsupported matrix packing style");
+            auto csv = csv_to_array<2>(csv_it->second, {(uint64_t)param.width, (uint64_t)param.height});
+            FeatureMatEncrypted input(eval_context_.get(), param.level);
+            auto packed = input.par_diagonal_slots(transpose_2d_array(csv), param.n_heads, param.head_shape,
+                                                   true, param.is_transposed);
+            if (packed.size() != shape_size(sig)) throw std::runtime_error("[Runner] matrix input count mismatch");
+            std::vector<fhe::CkksPlaintextRingt> encoded;
+            for (const auto& slots : packed)
+                encoded.push_back(eval_context_->encode_ringt(slots, eval_context_->get_parameter().get_default_scale()));
+            online_inputs.push_back(std::move(encoded));
+        } else if (param.dim == 0) {
             online_inputs.push_back(encode_plaintext_0d_input(id, csv_it->second, sig));
         } else if (param.dim == 1) {
             online_inputs.push_back(encode_plaintext_1d_input(id, csv_it->second, sig));
@@ -686,7 +740,17 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
         const uint64_t count = shape_size(sig);
         const double scale = eval_context_->get_parameter().get_default_scale();
 
-        if (param.dim == 0) {
+        if (param.is_mat) {
+            auto output = std::make_unique<FeatureMatEncrypted>(eval_context_.get(), level);
+            output->shape = {static_cast<uint32_t>(param.height), static_cast<uint32_t>(param.width)};
+            output->head_shape = param.head_shape;
+            output->matmul_block_size = param.matmul_block_size;
+            for (uint64_t i = 0; i < count; ++i)
+                output->data.push_back(eval_context_->new_ciphertext(level, scale));
+            cxx_args.push_back(lattisense::CxxVectorArgument{id, &output->data});
+            output_names.push_back(id);
+            output_features.push_back(std::move(output));
+        } else if (param.dim == 0) {
             auto output = std::make_unique<Feature0DEncrypted>(eval_context_.get(), level);
             output->skip = param.skip;
             output->n_channel_per_ct = param.pack_num > 0 ? static_cast<uint32_t>(param.pack_num) :
@@ -741,7 +805,7 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
 #ifdef INFERENCE_SDK_ENABLE_GPU
         lattisense::FheTaskGpu task(runner_dir_.string());
         std::unordered_map<std::string, ExecutorFunc> custom_executors{
-            {"encode_pt", create_multiplexed_conv_mask_executor()}};
+            {"encode_pt", create_multiplexed_conv_mask_executor(public_matrix_layers_)}};
         if (runtime_lazy_parameters) {
             custom_executors["load_encrypted_param_ct"] = create_load_encrypted_param_executor();
         }
@@ -753,7 +817,7 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
     } else {
         lattisense::FheTaskCpu task(runner_dir_.string());
         std::unordered_map<std::string, ExecutorFunc> custom_executors{
-            {"encode_pt", create_multiplexed_conv_mask_executor()}};
+            {"encode_pt", create_multiplexed_conv_mask_executor(public_matrix_layers_)}};
         if (runtime_lazy_parameters) {
             custom_executors["load_encrypted_param_ct"] = create_load_encrypted_param_executor();
         }

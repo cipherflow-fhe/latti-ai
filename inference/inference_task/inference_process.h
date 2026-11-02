@@ -113,6 +113,7 @@ public:
 
     virtual void init_parameters(bool is_bootstrapping = false);
     virtual void load_model_prepare();
+    void load_public_matrix_layers();
 
     template <typename T> T& get_layer(const std::string& key) {
         auto it = ckks_layers_.find(key);
@@ -297,3 +298,5 @@ private:
     std::unique_ptr<lattisense::FheTaskCpu> fhe_task_cpu_;
     std::unordered_map<std::string, ExecutorFunc> task_custom_executors_;
 };
+
+ls::CkksPlaintextRingt generate_matrix_parameter(ls::CkksContext& context, Layer* layer, const json& attributes);

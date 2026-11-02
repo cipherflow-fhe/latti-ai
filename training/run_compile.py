@@ -111,6 +111,38 @@ def write_server_provisioned_runner_layout(task_dir: Path, runner_output_dir: Pa
         shutil.copy2(h5_src, provisioner_dir / 'model_parameters.h5')
 
 
+def write_matrix_output_selections(onnx_path: Path, task_dir: Path) -> None:
+    """Defer CLS selection through tokenwise ops, retaining the packed geometry."""
+    import onnx
+    from onnx import helper
+    from model_export.operations import format_id
+
+    selected = set()
+    model = onnx.load(onnx_path)
+    tokenwise = {'Linear', 'CustomTanh', 'CustomGELU', 'CustomLayerNorm', 'PolyActRN'}
+    for node in model.graph.node:
+        attrs = {a.name: helper.get_attribute_value(a) for a in node.attribute}
+        if attrs.get('select_first_token'):
+            if node.op_type != 'Linear':
+                raise ValueError(f'Unsupported CLS selection at {node.name}')
+            selected.update(node.output)
+        elif selected.intersection(node.input):
+            if node.op_type not in tokenwise:
+                raise ValueError(f'Cannot defer CLS selection through {node.op_type}: {node.name}')
+            selected.update(node.output)
+    outputs = {format_id(o.name) for o in model.graph.output if o.name in selected}
+    if not outputs:
+        return
+    for path in task_dir.glob('*/task_config.json'):
+        config = read_json_file(path)
+        for name in outputs.intersection(config.get('task_output_param', {})):
+            param = config['task_output_param'][name]
+            if param.get('data_type') != 'feature_mat':
+                raise ValueError(f'CLS selection requires a feature_mat output: {name}')
+            param['select_first_token'] = True
+        write_json_file(path, config)
+
+
 def read_compile_config(config_path: str) -> dict[str, int | float | str | list[int]]:
     if not config_path:
         return {}
@@ -344,6 +376,8 @@ Examples:
             )
 
         if onnx_path is not None and task_dir.exists():
+            if feature_mat:
+                write_matrix_output_selections(onnx_path, task_dir)
             json_path = task_dir / 'server' / 'nn_layers_ct_0.json'
             h5_path = task_dir / 'server' / 'model_parameters.h5'
             if json_path.exists():
