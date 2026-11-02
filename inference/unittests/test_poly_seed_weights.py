@@ -47,7 +47,6 @@ class PolySeedTest(unittest.TestCase):
         for shape, zero, expansion, stride, groups in [
             ([16, 16], [1, 1], [1, 1], [1, 1], 5),
             ([16, 16], [2, 1], [1, 1], [2, 2], 5),
-            ([16, 16], [1, 1], [2, 1], [2, 2], 5),
             ([1, 16], [1, 1], [1, 1], [2, 2], 5),
             ([16, 16], [1, 1], [1, 1], [2, 2], 1),
         ]:
@@ -55,6 +54,22 @@ class PolySeedTest(unittest.TestCase):
             self.assertIsNone(layer.choose_seed_layout(stride, 16384, groups, 5, lambda lv: (lv + 1) * 100))
         layer = PolyRelu2D([16, 16], 4, [1, 1], 32)
         self.assertIsNone(layer.choose_seed_layout([2, 2], 16384, 5, 5, lambda lv: 100 ** lv))
+
+    def test_big_rectangular_blocks_use_physical_seed_geometry(self):
+        task.set_fhe_param(task.CkksParam.create_default_param(16384))
+        layer = PolyRelu2D([128, 128], 8, [1, 1], 1, block_expansion=[2, 1])
+        layout = layer.choose_seed_layout([16, 16], 16384, 6, 8, lambda lv: (lv + 1) * 100)
+        self.assertEqual(layout['input_shape'], [64, 128])
+        self.assertEqual(layout['blocks'], 1)
+        self.assertEqual(layout['channel_groups'], 6)
+        weights = layer.make_param_ct_nodes('big', 6, 8)
+        self.assertEqual([len(row) for row in weights], [1] * 9)
+        result = layer.call_bsgs_param_ct([task.CkksCiphertextNode(f'x{i}', level=8) for i in range(6)], weights)
+        self.assertEqual([node.level for node in result], [4] * 6)
+        masks = [n for n in task.g_dag.nodes if getattr(n, 'type', None) == 'encode_pt']
+        self.assertEqual(len(masks), 54)
+        for mask in masks:
+            self.assertEqual(mask.attributes['seed_shape'], [64, 128])
 
     def test_degree_scales_keep_modulus_drift_at_equal_levels(self):
         layer = PolyRelu2D([16, 16], 4, [1, 1], 32)

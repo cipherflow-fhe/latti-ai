@@ -98,6 +98,28 @@ class DenseSeedTileTest(unittest.TestCase):
                                    ([128, 128], [4, 4], [2, 2])]:
             layer = dense.DensePackedLayer(1, 1, shape, skip, 1, 1, 1, invalid_fill=fill)
             self.assertIsNone(layer.choose_seed_tile_layout(16384, 3, lambda lv: (lv + 1) * 100))
+
+    def test_concat_0d_uses_tiles_without_folding_invalid_slots(self):
+        task.set_fhe_param(task.CkksParam.create_default_param(16384))
+        slots, inputs, outputs, level = 8192, 3, 5, 1
+        layer = dense.DensePackedLayer(outputs, inputs, [1, 1], [1, slots], 1, inputs, outputs,
+                                       invalid_fill=[1, slots])
+        layout = layer.choose_seed_tile_layout(2 * slots, level, lambda lv: (lv + 1) * 100)
+        self.assertEqual(layout['weight_shape'], [outputs, inputs])
+        weights, biases = layer.make_param_ct_nodes_skip_0d('concat', level)
+        self.assertEqual([len(weights), len(weights[0]), len(biases)], [1, 1, 1])
+        self.assertEqual(layer.get_encrypted_param_count_skip_0d(level), {2: {'weight': 1}, 1: {'bias': 1}})
+        for plaintext in (False, True):
+            task.g_dag.clear()
+            node_type = task.CkksPlaintextNode if plaintext else task.CkksCiphertextNode
+            x = [node_type(f'x{i}', level=level) for i in range(inputs)]
+            with patch.object(dense, 'rotate_cols', wraps=dense.rotate_cols) as rotate:
+                result = layer.call_param_ct_skip_0d(x, weights, biases, slots, input_is_plaintext=plaintext)
+            self.assertEqual([node.level for node in result], [0] * outputs)
+            # Only restoration rotates; no spatial fold can broadcast a 0D result into invalid slots.
+            self.assertEqual([call.args[1][0] for call in rotate.call_args_list],
+                             [step for out in range(outputs)
+                              for step in [*(out * inputs + i for i in range(inputs)), out] if step])
         layer = dense.DensePackedLayer(1, 1, [1, 1], [64, 64], 2, 1, 1, invalid_fill=[4, 4])
         self.assertIsNone(layer.choose_seed_tile_layout(16384, 3, lambda lv: 100 ** lv))
 

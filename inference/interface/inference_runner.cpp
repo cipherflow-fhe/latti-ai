@@ -105,6 +105,7 @@ ExecutorFunc create_multiplexed_conv_mask_executor() {
         }
         const auto& attrs = self.custom_prop->attributes;
         const auto op_class = attrs.value("op_class", std::string());
+        const bool concat_mask = op_class == "ConcatLayer" && attrs.value("type", std::string()) == "mask_0d_pt";
         const bool dense_tile = op_class == "DensePackedLayer" && attrs.value("type", std::string()) == "tile_mask_pt";
         const bool depthwise_mask = op_class == "MultiplexedConv2DPackedLayerDepthwise" &&
                                     attrs.value("type", std::string()) == "mask_pt";
@@ -115,7 +116,7 @@ ExecutorFunc create_multiplexed_conv_mask_executor() {
                                  op_class == "PolyRelu2D" ||
                                  op_class == "InverseMultiplexedConv2DLayer" ||
                                  op_class == "InverseMultiplexedConv2DLayerDepthwise";
-        if (!dense_tile && !inverse_repack && ((op_class != "MultiplexedConv2DPackedLayer" && !kernel_seed) ||
+        if (!concat_mask && !dense_tile && !inverse_repack && ((op_class != "MultiplexedConv2DPackedLayer" && !kernel_seed) ||
             (attrs.value("type", std::string()) != "mask_pt" &&
              attrs.value("type", std::string()) != "seed_mask_pt") ||
             (kernel_seed && !depthwise_mask && attrs.value("type", std::string()) != "seed_mask_pt"))) {
@@ -133,7 +134,10 @@ ExecutorFunc create_multiplexed_conv_mask_executor() {
             return Duo{value.at(0).get<uint32_t>(), value.at(1).get<uint32_t>()};
         };
         std::vector<double> mask;
-        if (inverse_repack) {
+        if (concat_mask) {
+            mask.assign(ckks_ctx_ptr->get_parameter().get_n() / 2, 0.0);
+            mask.at(attrs.at("slot").get<uint64_t>()) = 1.0;
+        } else if (inverse_repack) {
             const auto block = read_duo("block_shape");
             const auto stride = read_duo("stride"), ct_stride = read_duo("ct_stride");
             if (!prod(ct_stride) || stride[0] % ct_stride[0] || stride[1] % ct_stride[1] ||

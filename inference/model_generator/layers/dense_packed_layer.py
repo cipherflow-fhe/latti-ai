@@ -159,6 +159,15 @@ class DensePackedLayer:
 
         ops[lv]['add'] += self.n_packed_out_feature  # bias
 
+        if self.seed_tile_layout:
+            for kind, count, target in [('weight', self.n_out_channel * n_input_ct, level),
+                                        ('bias', self.n_out_channel, level - 1)]:
+                if self.seed_tile_layout[kind]:
+                    ops[target + 1]['mult_plain'] += count
+                    ops[target + 1]['rescale'] += count
+                    ops[target]['rotate'] += sum(naf_weight(u % self.seed_tile_layout['group_size'])
+                                                  for u in range(count))
+
         return dict(ops)
 
     def get_fhe_op_count_multiplexed(self, n_input_ct: int, n: int, level: int) -> dict[int, dict[str, int]]:
@@ -294,6 +303,8 @@ class DensePackedLayer:
         return weight_pt, bias_pt
 
     def get_encrypted_param_count_skip_0d(self, level: int) -> dict[int, dict[str, int]]:
+        if self.seed_tile_layout:
+            return self.get_encrypted_param_count_multiplexed(self.seed_tile_layout['slots'] * 2, level)
         return {
             level: {'weight': self.n_packed_out_feature * self.n_packed_in_feature * self.pack},
             level - 1: {'bias': self.n_packed_out_feature},
@@ -325,6 +336,10 @@ class DensePackedLayer:
 
     def make_param_ct_nodes_skip_0d(self, layer_id, level: int):
         """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes_skip_0d()."""
+        if self.seed_tile_layout:
+            if self.pack != 1:
+                raise ValueError('0D Dense tiles require one feature per ciphertext')
+            return self.make_param_ct_nodes_multiplexed(layer_id, self.seed_tile_layout['slots'] * 2, level)
         weight_ct_size = self.n_packed_in_feature * self.pack
         weight_ct = [
             [CkksCiphertextNode(f'densew_{layer_id}_{m}_{i}', level=level) for i in range(weight_ct_size)]
@@ -440,9 +455,45 @@ class DensePackedLayer:
         self, x: list[DataNode], weight_ct, bias_ct, skip_0d: int, input_is_plaintext: bool = False
     ):
         """0D dense path with encrypted offline parameters."""
+        if self.seed_tile_layout:
+            if self.pack != 1 or skip_0d != self.seed_tile_layout['slots']:
+                raise ValueError('0D Dense tiles require one feature per ciphertext')
+            result = []
+            for out_idx in range(self.n_packed_out_feature):
+                weights = [self.tile_parameter(weight_ct, out_idx * len(x) + i, 'weight', node)
+                           if self.seed_tile_layout['weight'] else weight_ct[out_idx][i]
+                           for i, node in enumerate(x)]
+                total = rescale(accumulate_encrypted_param_terms(x, weights))
+                bias = (self.tile_parameter(bias_ct, out_idx, 'bias', total)
+                        if self.seed_tile_layout['bias'] else bias_ct[out_idx])
+                result.append(add_encrypted_param_bias(total, bias))
+            return result
         bsgs_bs = int(math.ceil(math.sqrt(self.pack)))
         bsgs_gs = int(math.ceil(self.pack / bsgs_bs))
-        require_no_plaintext_input_rotation(op_class, input_is_plaintext, bsgs_bs > 1)
+        if input_is_plaintext:
+            result = []
+            for out_idx in range(self.n_packed_out_feature):
+                total = None
+                for ct_in, base_x in enumerate(x):
+                    for g in range(bsgs_gs):
+                        inner = None
+                        for b in range(min(bsgs_bs, self.pack - g * bsgs_bs)):
+                            d = g * bsgs_bs + b
+                            weight = materialize_encrypted_param(weight_ct[out_idx][ct_in * self.pack + d], base_x)
+                            step = b * skip_0d
+                            if step:
+                                weight = rotate_cols(weight, [-step])[0]
+                            term = mult(weight, base_x)
+                            if step:
+                                term = rotate_cols(term, [step])[0]
+                            inner = term if inner is None else add(inner, term)
+                        if g:
+                            inner = rotate_cols(inner, [g * bsgs_bs * skip_0d])[0]
+                        total = inner if total is None else add(total, inner)
+                if total is None:
+                    raise ValueError('Encrypted dense accumulation produced no terms')
+                result.append(add_encrypted_param_bias(rescale(total), bias_ct[out_idx]))
+            return result
 
         baby_rots = []
         for node in x:

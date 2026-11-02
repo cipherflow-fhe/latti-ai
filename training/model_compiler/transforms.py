@@ -761,7 +761,7 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
             graph.dag.nodes[succ]['skip'] = [1] * preds[0].dim
             if any(succ.shape[i] < config.block_shape[i] for i in range(succ.dim)):
                 for i in range(preds[0].dim):
-                    graph.dag.nodes[succ]['skip'][i] = config.block_shape[i] / succ.shape[i]
+                    graph.dag.nodes[succ]['skip'][i] = max(1, config.block_shape[i] // succ.shape[i])
 
         process_special_info(graph, compute_node, preds, succ)
         populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)

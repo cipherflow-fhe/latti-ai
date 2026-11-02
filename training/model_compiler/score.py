@@ -951,7 +951,7 @@ def get_encrypted_parameter_storage_report(dag, param_dict):
         'unaccounted': [],
     }
     public_layers = {'add', 'add2d', 'reshape', 'drop_level', 'avgpool1d', 'avgpool2d',
-                     'concat', 'upsample_nearest', 'resize'}
+                     'concat', 'concat2d', 'upsample_nearest', 'resize'}
     for node in nx.topological_sort(dag):
         if not isinstance(node, ComputeNode):
             continue
@@ -965,7 +965,7 @@ def get_encrypted_parameter_storage_report(dag, param_dict):
             continue
         if node.layer_type in public_layers:
             # Reshape/drop-level have no primitive score; preserve existing add/pool scores.
-            if node.layer_type not in {'reshape', 'drop_level', 'concat'}:
+            if node.layer_type not in {'reshape', 'drop_level', 'concat', 'concat2d'}:
                 level = min(dag.nodes[p]['level'] for p in dag.predecessors(node))
                 report['runtime_score'] += FheScoreParam(
                     dag, node, param_dict, level, use_gpu=getattr(config, 'use_gpu', True)
@@ -1335,7 +1335,7 @@ class FheScoreParam:
                 special_shape = sp_info.get('shape', [1, 1])
                 if not (pred_com and pred.has_sp_info):
                     # call_skip_0d path
-                    skip_0d = sp_info['skip'][0] if isinstance(sp_info.get('skip'), list) else 1
+                    skip_0d = self.dag.nodes[pred]['skip'][0]
                     n_channel_per_ct = int(n // 2 // skip_0d)
                     pack_0d = n_channel_per_ct
                     n_packed_in_feat = math.ceil(n_in / n_channel_per_ct)
@@ -1344,11 +1344,16 @@ class FheScoreParam:
                         n_out,
                         n_in,
                         [1, 1],
-                        [1, 1],
+                        [1, skip_0d],
                         pack_0d,
                         n_packed_in_feat,
                         n_packed_out_feat,
+                        invalid_fill=[1, skip_0d],
                     )
+                    if pack_0d == 1 and getattr(config, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
+                        self.dense_seed_tiles = layer.choose_seed_tile_layout(
+                            n, self.get_parameter_use_site_level(),
+                            lambda lv: encrypted_parameter_bytes(self.parameter, lv))
                     return (layer.get_encrypted_param_count_skip_0d(parameter_level) if encrypted_param_count
                             else layer.get_fhe_op_count_skip_0d(n_packed_in_feat, skip_0d, self.input_mult_level))
 
@@ -1451,7 +1456,7 @@ class FheScoreParam:
             pred = preds[0]
             order = getattr(node, 'order', 0)
             if pred.dim == 0:
-                skip_0d = pred.sp_info['skip'][0] if isinstance(pred.sp_info.get('skip'), list) else 1
+                skip_0d = self.dag.nodes[pred]['skip'][0]
                 n_channel_per_ct_0d = int(n // 2 // skip_0d)
                 layer = PolyRelu0D(order, skip_0d, n_channel_per_ct_0d)
                 n_input_ct = n_packed_in
@@ -1472,9 +1477,10 @@ class FheScoreParam:
             # dim == 2
             input_shape = self.input_shape
             skip = self.input_skip
-            layer = PolyRelu2D(input_shape, order, skip, pack)
-            if (style == 'multiplexed' and not getattr(node, 'is_big_size', False)
-                    and getattr(node, 'zero_skip', [1, 1]) == [1, 1]):
+            block_expansion = [math.ceil(input_shape[i] / config.block_shape[i]) for i in range(2)]
+            n_packed_in = math.ceil(n_in / pack) * math.prod(block_expansion)
+            layer = PolyRelu2D(input_shape, order, skip, pack, block_expansion=block_expansion)
+            if (style == 'multiplexed' and getattr(node, 'zero_skip', [1, 1]) == [1, 1]):
                 self.poly_seed_layout = layer.choose_seed_layout(
                     getattr(config, 'seed_weight_subgrid_stride', [1, 1]), n, n_packed_in,
                     self.get_parameter_use_site_level(), lambda lv: encrypted_parameter_bytes(self.parameter, lv))

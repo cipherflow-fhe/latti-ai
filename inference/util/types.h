@@ -34,6 +34,7 @@ using Array1DUint = std::vector<uint64_t>;
 
 using Bytes = std::vector<uint8_t>;
 
+// Spatial Duo values use {height, width}; row-major offsets are row * width + column.
 using Duo = std::array<uint32_t, 2>;
 using DuoInt = std::array<int32_t, 2>;
 

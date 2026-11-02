@@ -99,6 +99,33 @@ class InterleavedSeedWeightsTest(unittest.TestCase):
                             self.assertEqual(len(producer.wait_inputs), 1)
                         self.assertEqual(weights[0][0][0].level, level + layer.seed_weight_level_cost)
 
+    def test_public_seed_masks_are_shared_across_parameter_requests(self):
+        for layout in ('input_blocks', 'joint'):
+            with self.subTest(layout=layout):
+                task.g_dag.clear()
+                task.set_fhe_param(task.CkksParam.create_default_param(16384))
+                layer = conv.MultiplexedConv2DPackedLayer(
+                    8, 8, [4, 4], [3, 3], [1, 1], [1, 1], 4, 2, 2,
+                    seed_weight_subgrid_stride=[2, 2], seed_weight_layout=layout,
+                )
+                masks = layer.make_seed_mask_pt_nodes('shared', 4)
+                pairs = masks if layout == 'joint' else [
+                    pair for group in masks for seed in group for subgrid in seed for pair in subgrid]
+                subgrids = {pair[0] for pair in pairs}
+                boundaries = {pair[1] for pair in pairs}
+                self.assertEqual(len(subgrids), 4)
+                self.assertEqual(len(boundaries), 9)
+                self.assertGreater(len(pairs), len(subgrids) + len(boundaries))
+                for mask in subgrids | boundaries:
+                    producer, = task.g_dag.predecessors(mask)
+                    self.assertEqual(producer.type, 'encode_pt')
+                    attrs = producer.attributes
+                    self.assertEqual(attrs['level'], 5 if attrs['mask_kind'] == 'kernel' else 6)
+                    self.assertEqual(attrs['subgrid' if attrs['mask_kind'] == 'kernel' else 'kernel_index'], 0)
+                other_masks = layer.make_seed_mask_pt_nodes('other_layer', 4)
+                other_first = other_masks[0][0] if layout == 'joint' else other_masks[0][0][0][0][0]
+                self.assertNotIn(other_first, subgrids)
+
     def test_seed_expansion_restores_weight_level_zero(self):
         task.set_fhe_param(task.CkksParam.create_default_param(16384))
         for kernel in ([1, 1], [3, 3], [1, 5]):

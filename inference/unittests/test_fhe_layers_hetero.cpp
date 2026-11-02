@@ -381,55 +381,122 @@ TEST_CASE("dense tile seeds preserve sparse weights and bias before fold", "[den
     }
 }
 
+TEST_CASE("0D dense tiles preserve slot zero and ignore invalid input slots", "[dense_tile]") {
+    auto& resources = SharedHeteroResources::get();
+    auto& ctx = resources.context;
+    const auto& param = resources.param;
+    const uint32_t slots = param.get_n() / 2, inputs = 3, outputs = 5;
+    const int level = 1;
+    auto weight = gen_random_array<2>({outputs, inputs}, 0.1);
+    auto bias = gen_random_array<1>({outputs}, 0.1);
+    std::vector<double> expected(outputs);
+    for (uint32_t out = 0; out < outputs; ++out) {
+        expected[out] = bias.get(out);
+        for (uint32_t in = 0; in < inputs; ++in) expected[out] += weight.get(out, in) * (in + 1) * 0.25;
+    }
+    DensePackedLayer layer(param, std::move(weight), std::move(bias), 1, level, 0);
+    layer.prepare_weight_0d_skip_lazy(slots);
+    REQUIRE(layer.normal_dense);
+    layer.validate_tile_geometry({1, 1}, {1, slots}, {1, slots}, slots, {outputs, inputs}, level);
+    auto weights = ctx.encrypt_asymmetric(ctx.ringt_to_pt(layer.generate_tile_seed(ctx, 0, false), level + 1));
+    auto biases = ctx.encrypt_asymmetric(ctx.ringt_to_pt(layer.generate_tile_seed(ctx, 0, true), level));
+    const auto restore = [&](const CkksCiphertext& seed, uint32_t sub, bool bias_seed) {
+        const int target = level - bias_seed;
+        auto mask = ctx.encode_ringt(interleaved_seed::tile_mask({1, 1}, {1, slots}, {1, slots},
+            slots, sub, bias_seed), param.get_q(target + 1));
+        auto restored = ctx.rescale(ctx.mult_plain_mul(seed, ctx.ringt_to_mul(mask, target + 1)), seed.get_scale());
+        if (sub) restored = ctx.rotate(restored, sub);
+        REQUIRE(restored.get_level() == target);
+        const auto legacy = bias_seed ? layer.generate_bias_0d_pt_for_index(ctx, sub) :
+            layer.generate_weight_0d_pt_for_indices(ctx, sub / inputs, sub % inputs);
+        const auto wanted = ctx.decode(ctx.ringt_to_pt(legacy, target));
+        const auto actual = ctx.decode(ctx.decrypt(restored));
+        double error = 0;
+        for (uint32_t i = 0; i < slots; ++i) error = std::max(error, std::abs(wanted[i] - actual[i]));
+        REQUIRE(error < 1e-5);
+        return restored;
+    };
+    for (uint32_t out = 0; out < outputs; ++out) {
+        CkksCiphertext sum;
+        for (uint32_t in = 0; in < inputs; ++in) {
+            std::vector<double> values(slots, 0.75);  // Deliberately nonzero invalid positions.
+            values[0] = (in + 1) * 0.25;
+            auto w = restore(weights, out * inputs + in, false);
+            auto term = ctx.mult_plain_mul(w, ctx.ringt_to_mul(ctx.encode_ringt(values, param.get_default_scale()), level));
+            if (in) sum = ctx.add(sum, term);
+            else sum = std::move(term);
+        }
+        sum = ctx.rescale(sum, param.get_default_scale());
+        sum = ctx.add(sum, restore(biases, out, true));
+        const auto actual = ctx.decode(ctx.decrypt(sum));
+        REQUIRE(actual[0] == Approx(expected[out]).margin(1e-5));
+        double invalid = 0;
+        for (uint32_t i = 1; i < slots; ++i) invalid = std::max(invalid, std::abs(actual[i]));
+        REQUIRE(invalid < 1e-5);
+    }
+}
+
 TEST_CASE("polynomial channel seeds keep degree scale and tail support", "[poly_seed]") {
     auto& resources = SharedHeteroResources::get();
     auto& ctx = resources.context;
     const auto& param = resources.param;
-    const Duo shape{16, 16}, skip{2, 2}, stride{2, 2};
-    const int slots = param.get_n() / 2, groups = 5, channels_per_ct = slots / prod(shape), level = 5;
-    PolyRelu2D layer(param, shape, 4, gen_random_array<2>({5, static_cast<uint64_t>(4 * channels_per_ct + 1)}, 0.1),
-                     skip, channels_per_ct, level);
-    layer.prepare_weight_bsgs_lazy();
-    const std::vector<int> targets{2, 3, 3, 3, 4};
-    std::vector<double> degree_scales;
-    for (int degree = 0; degree <= 4; ++degree) {
-        const int target = targets[degree];
-        layer.validate_seed_geometry(shape, skip, channels_per_ct / prod(skip), slots, groups, degree, target);
-        REQUIRE_THROWS(layer.validate_seed_geometry(shape, skip, channels_per_ct / prod(skip), slots, groups, degree, target + 1));
-        for (int u = 0; u < groups; ++u) {
-            INFO("degree=" << degree << " channel_group=" << u);
-            const auto reference = ctx.ringt_to_pt(layer.generate_weight_pt_for_bsgs(ctx, degree, u), target);
-            const double scale = ctx.encrypt_asymmetric(reference).get_scale();
-            if (!u) degree_scales.push_back(scale);
-            auto seed = ctx.encrypt_asymmetric(ctx.ringt_to_pt(layer.generate_channel_seed(ctx, degree, u / 4, stride), target + 1));
-            REQUIRE(seed.get_scale() == Approx(scale).epsilon(1e-10));
-            const auto saved_seed = seed.serialize(param);
-            const int sub = u % 4;
-            auto values = interleaved_seed::mask(shape, skip, channels_per_ct / prod(skip), slots, stride, sub, {0, 0}, false);
-            auto mask = ctx.encode_ringt(values, param.get_q(target + 1));
-            auto restored = ctx.rescale(ctx.mult_plain_mul(seed, ctx.ringt_to_mul(mask, target + 1)), scale);
-            const int units[2] = {static_cast<int>(skip[0] * shape[1] * skip[1]), static_cast<int>(skip[1])};
-            const int residues[2] = {sub / 2, sub % 2};
-            for (int dim = 0; dim < 2; ++dim)
-                restored = ctx.add(restored, ctx.rotate(restored, residues[dim] ? units[dim] : -units[dim]));
-            REQUIRE(seed.serialize(param) == saved_seed);
-            REQUIRE(restored.get_level() == target);
-            REQUIRE(restored.get_scale() == Approx(scale).epsilon(1e-10));
-            const auto actual = ctx.decode(ctx.decrypt(restored)), expected = ctx.decode(reference);
-            double error = 0;
-            for (int i = 0; i < slots; ++i) error = std::max(error, std::abs(actual[i] - expected[i]));
-            REQUIRE(error < 1e-5);
+    for (bool big : {false, true}) {
+        const Duo shape = big ? Duo{128, 128} : Duo{16, 16};
+        const Duo expansion = big ? Duo{2, 1} : Duo{1, 1};
+        const Duo physical = shape / expansion;
+        const Duo skip = big ? Duo{1, 1} : Duo{2, 2};
+        const Duo stride = big ? Duo{16, 16} : Duo{2, 2};
+        const int slots = param.get_n() / 2, groups = big ? 6 : 5;
+        const int channels_per_ct = big ? 1 : slots / prod(shape), level = 5;
+        const int channels = big ? 3 : 4 * channels_per_ct + 1;
+        PolyRelu2D layer(param, shape, 4, gen_random_array<2>({5, static_cast<uint64_t>(channels)}, 0.1),
+                         skip, channels_per_ct, level, {1, 1}, expansion);
+        layer.prepare_weight_bsgs_lazy();
+        const std::vector<int> targets{2, 3, 3, 3, 4};
+        std::vector<double> degree_scales;
+        for (int degree = 0; degree <= 4; ++degree) {
+            const int target = targets[degree];
+            layer.validate_seed_geometry(physical, skip, channels_per_ct / prod(skip), slots, groups, degree, target);
+            REQUIRE_THROWS(layer.validate_seed_geometry(physical, skip, channels_per_ct / prod(skip), slots, groups, degree, target + 1));
+            for (int u = 0; u < groups; ++u) {
+                INFO("big=" << big << " degree=" << degree << " channel_group=" << u);
+                const auto reference = ctx.ringt_to_pt(layer.generate_weight_pt_for_bsgs(ctx, degree, u), target);
+                const double scale = ctx.encrypt_asymmetric(reference).get_scale();
+                if (!u) degree_scales.push_back(scale);
+                auto seed = ctx.encrypt_asymmetric(ctx.ringt_to_pt(layer.generate_channel_seed(ctx, degree, u / prod(stride), stride), target + 1));
+                REQUIRE(seed.get_scale() == Approx(scale).epsilon(1e-10));
+                const auto saved_seed = seed.serialize(param);
+                const int sub = u % prod(stride);
+                auto values = interleaved_seed::mask(physical, skip, channels_per_ct / prod(skip), slots, stride, sub, {0, 0}, false);
+                auto mask = ctx.encode_ringt(values, param.get_q(target + 1));
+                auto restored = ctx.rescale(ctx.mult_plain_mul(seed, ctx.ringt_to_mul(mask, target + 1)), scale);
+                const int units[2] = {static_cast<int>(skip[0] * physical[1] * skip[1]), static_cast<int>(skip[1])};
+                const int residues[2] = {sub / static_cast<int>(stride[1]), sub % static_cast<int>(stride[1])};
+                for (int dim = 0; dim < 2; ++dim)
+                    for (int bit = 0; (1u << bit) < stride[dim]; ++bit) {
+                        int step = units[dim] * (1 << bit);
+                        restored = ctx.add(restored, ctx.rotate(restored, (residues[dim] & (1 << bit)) ? step : -step));
+                    }
+                REQUIRE(seed.serialize(param) == saved_seed);
+                REQUIRE(restored.get_level() == target);
+                REQUIRE(restored.get_scale() == Approx(scale).epsilon(1e-10));
+                const auto actual = ctx.decode(ctx.decrypt(restored)), expected = ctx.decode(reference);
+                double error = 0;
+                for (int i = 0; i < slots; ++i) error = std::max(error, std::abs(actual[i] - expected[i]));
+                // Broadcasting 256 subgrids amplifies CKKS noise at this test parameter scale.
+                REQUIRE(error < (big ? 1e-4 : 1e-5));
+            }
+            REQUIRE_THROWS(layer.generate_channel_seed(ctx, degree, div_ceil(groups, prod(stride)), stride));
+            const auto tail = ctx.decode(ctx.ringt_to_pt(layer.generate_channel_seed(ctx, degree, (groups - 1) / prod(stride), stride), target + 1));
+            for (int sub = (groups - 1) % prod(stride) + 1; sub < static_cast<int>(prod(stride)); ++sub) {
+                const auto mask = interleaved_seed::mask(physical, skip, channels_per_ct / prod(skip), slots, stride, sub, {0, 0}, false);
+                double maximum = 0;
+                for (int i = 0; i < slots; ++i) if (mask[i]) maximum = std::max(maximum, std::abs(tail[i]));
+                REQUIRE(maximum < 1e-6);
+            }
         }
-        REQUIRE_THROWS(layer.generate_channel_seed(ctx, degree, 2, stride));
-        const auto tail = ctx.decode(ctx.ringt_to_pt(layer.generate_channel_seed(ctx, degree, 1, stride), target + 1));
-        for (int sub = 1; sub < 4; ++sub) {
-            const auto mask = interleaved_seed::mask(shape, skip, channels_per_ct / prod(skip), slots, stride, sub, {0, 0}, false);
-            double maximum = 0;
-            for (int i = 0; i < slots; ++i) if (mask[i]) maximum = std::max(maximum, std::abs(tail[i]));
-            REQUIRE(maximum < 1e-6);
-        }
+        REQUIRE(std::abs(degree_scales[0] / degree_scales[3] - 1.0) > 1e-8);
     }
-    REQUIRE(std::abs(degree_scales[0] / degree_scales[3] - 1.0) > 1e-8);
 }
 
 TEST_CASE("inverse canonical seeds preserve each execution boundary", "[inverse_canonical]") {
@@ -5486,6 +5553,55 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool2d_layer", "", He
         FOR_EACH_SECTION(uint32_t n_channel, channels, "n_channel=" + to_string(n_channel)) {
             FOR_EACH_SECTION_IF(uint32_t s, shapes, s >= stride[0], "shape=" + to_string(s) + "x" + to_string(s)) {
                 run_adaptive_avgpool_test(n_channel, s, stride);
+            }
+        }
+    }
+}
+
+TEST_CASE("rectangular_polynomial_channel_layout", "[spatial]") {
+    auto param = CkksParameter::create_parameter(8192);
+    auto ctx = CkksContext::create_random_context(param);
+    const Duo shape{4, 8};
+    const int level = 5, channels = 11, order = 4;
+    for (const Duo skip : {Duo{1, 2}, Duo{2, 4}}) {
+        auto values = gen_random_array<3>({channels, shape[0], shape[1]}, 0.25);
+        auto coefficients = gen_random_array<2>({order + 1, channels}, 0.1);
+        Feature2DEncrypted input(&ctx, level, skip);
+        input.pack_multiplexed(values, false, param.get_default_scale());
+        PolyRelu2D layer(param, shape, order, move(coefficients), skip, input.n_channel_per_ct, level);
+        auto expected = layer.run_plaintext_for_non_absorb_case(values);
+        for (bool lazy : {false, true}) {
+            if (lazy)
+                layer.prepare_weight_bsgs_lazy();
+            else
+                layer.prepare_weight_bsgs();
+            auto actual = layer.run_bsgs(ctx, input).unpack_multiplexed();
+            INFO("skip=" << skip[0] << "," << skip[1] << " lazy=" << lazy);
+            REQUIRE(compare(expected, actual).max_error < 1e-5);
+        }
+    }
+}
+
+TEST_CASE("rectangular_adaptive_avgpool", "[spatial]") {
+    auto param = CkksParameter::create_parameter(8192);
+    auto ctx = CkksContext::create_random_context(param);
+    ctx.gen_rotation_keys();
+    const Duo skip{2, 4}, stride{2, 4};
+    for (const Duo shape : {Duo{4, 8}, Duo{8, 4}}) {
+        auto values = gen_random_array<3>({8, shape[0], shape[1]}, 1.0);
+        Feature2DEncrypted input(&ctx, 1, skip);
+        input.pack_multiplexed(values, false, param.get_default_scale());
+        Avgpool2DLayer layer(shape, stride);
+        auto output = layer.run_adaptive_avgpool(ctx, input).unpack_multiplexed();
+        for (uint32_t channel = 0; channel < 8; ++channel) {
+            for (uint32_t h = 0; h < shape[0] / stride[0]; ++h) {
+                for (uint32_t w = 0; w < shape[1] / stride[1]; ++w) {
+                    double expected = 0;
+                    for (uint32_t dh = 0; dh < stride[0]; ++dh)
+                        for (uint32_t dw = 0; dw < stride[1]; ++dw)
+                            expected += values.get(channel, h * stride[0] + dh, w * stride[1] + dw);
+                    REQUIRE(std::abs(output.get(channel, h, w) - expected) < 1e-4);
+                }
             }
         }
     }

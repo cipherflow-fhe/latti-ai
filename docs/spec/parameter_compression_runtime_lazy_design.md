@@ -1,6 +1,8 @@
 # 参数密文压缩与 runtime-lazy GPU 验收设计规范
 
-状态：已实现并完成本文规定的两模型 GPU 验收，见[验收记录](../report/acceptance_summary.md)。
+状态：此前两模型 GPU 验收见[验收记录](../report/acceptance_summary.md)；
+`[16,16]` 配置、0D Dense tile 和大图 Poly 扩展已通过编译及局部密文测试；
+Retina 参数加密导出成功，整网 GPU 推理因内存不足未完成，尚未通过验收。
 本文基于此前的 depthwise / inverse seed 和非卷积参数调研，定义实现和验收要求。
 
 本文的目标是减少 `server_provisioned_runner`、
@@ -19,7 +21,7 @@ CKKS 参数、主图 level、明文输入接口和输出语义。它不要求所
 {
   "encrypted_parameter_storage_weight": 1.0,
   "encrypted_parameter_storage_normalization_bytes": 1073741824,
-  "seed_weight_subgrid_stride": [4, 4]
+  "seed_weight_subgrid_stride": [16, 16]
 }
 ```
 
@@ -182,14 +184,33 @@ Dense bias 复用同一 tile 网格，恢复后仍在原来的 fold 之前以稀
 则保留当前 Dense 参数布局。布局参数和 tile 数必须写入逐层 metadata，不能让
 Runner 猜测。
 
+concat 后没有 `special_info` 的 0D Dense，当 `pack_num=1` 且
+`skip=slots` 时，也复用此 sparse tile 布局。其有效支撑只有 slot 0，使用
+`input_shape=[1,1]`、`skip=invalid_fill=[1,slots]`，容量为 `slots`。
+按 `(output,input)` 顺序打包 weight，按 output 顺序打包 bias；恢复后仍执行
+原有 0D 求和，不增加空间 fold，也不广播输出到 invalid 位置。
+输入 invalid 位置可含无效数字；恢复出的 weight 在这些位置为零。
+每个 weight seed 的 scale 保持原 `modified_scale`，level 为 `L+1`；
+bias seed 的 scale 为原 `default_scale`，level 为 `L`。选择 PT 分别以
+`q(L+1)`、`q(L)` 编码，rescale 后恢复到 weight `L`、bias `L-1`。
+评分读取 DAG 的实际 0D skip，与导出图一致，不能使用 `sp_info` 的默认 skip。
+
 ### 3.3 多项式系数：只在同 degree 且 scale 相容时打包
 
 固定 `(layer_id, degree, geometry, use_site_level, coefficient_scale)`，将 channel
 group 作为 seed 的 logical request。保留 BSGS 的 degree 外轴和每 degree 的
 实际 scale；不能把五个 degree 直接展平，也不能仅因 level 相同就假设 scale 相同。
 
-该方案覆盖已能证明支撑集相容的 multiplexed 2D 层；`zero_skip`、ordinary
-packing 或 block expansion 不符合条件的层继续使用现有布局。已有 MobileNet 样本中
+大图 multiplexed 2D Poly 同样按实际物理 block 打包：
+`seed_shape=input_shape/block_expansion`，mask、复制旋转与 metadata 都使用此
+shape，行步长为 `skip[0]*seed_shape[1]*skip[1]`。每 degree 的请求数为
+`ceil(channels/pack_num)*prod(block_expansion)`，保持原有空间 block 和通道枚举。
+同一通道的不同空间 block 仍按各自请求恢复，不改变主图布局。
+seed level 为该 degree 的 use-site level 加一，scale 复用原 BSGS coefficient
+scale；选择 PT 使用 seed level 的 `q`。恢复不增加 feature 主图乘法深度。
+
+`zero_skip`、ordinary packing 或物理 block 不满足 subgrid 整除条件的层继续
+使用现有布局。已有 MobileNet 样本中
 35 个 order-4 层的候选是 1,245 个 CT 到 200 个 seed 的静态估算，实际导出后
 仍须按 manifest 重新核对。
 
@@ -221,6 +242,9 @@ packing 或 block expansion 不符合条件的层继续使用现有布局。已�
 
 Python graph 必须在导出时固定 seed argument 的 shape、level、scale、布局几何、
 outer axes、group size 和 tile geometry；Runner 不读取训练配置推断这些字段。
+普通 multiplexed 的 public seed mask 按实际几何和编码 level 共享：subgrid mask
+不依赖 kernel index，boundary mask 不依赖 subgrid。不得按每个私有参数请求重复
+创建相同的公开 mask 节点，否则无输入的编码节点会提前累积大量主机内存。
 
 ### 4.2 C++ 参数生成、Provisioner 和 Runner
 

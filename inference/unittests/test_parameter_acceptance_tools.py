@@ -20,6 +20,25 @@ from summarize_parameter_bundle import element_lengths
 
 
 class ParameterAcceptanceToolsTest(unittest.TestCase):
+    def test_named_csv_inputs_follow_model_names_and_shapes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inputs = [helper.make_tensor_value_info(name, onnx.TensorProto.FLOAT, [1, count])
+                      for name, count in [('short', 2), ('long', 3)]]
+            graph = helper.make_graph([helper.make_node('Concat', ['short', 'long'], ['output'], axis=1)],
+                                      'multi_input', inputs,
+                                      [helper.make_tensor_value_info('output', onnx.TensorProto.FLOAT, [1, 5])])
+            onnx.save(helper.make_model(graph, opset_imports=[helper.make_opsetid('', 17)], ir_version=8),
+                      root / 'model.onnx')
+            np.savetxt(root / 'short.csv', [2, 3], delimiter=',')
+            np.savetxt(root / 'long.csv', [5, 7, 11], delimiter=',')
+            paths = {'long': root / 'long.csv', 'short': root / 'short.csv'}
+            outputs, report = evaluate(root / 'model.onnx', paths, warmup=0, repeats=1)
+            np.testing.assert_array_equal(outputs['output'], [2, 3, 5, 7, 11])
+            self.assertEqual(report['input_csv'], {k: str(v) for k, v in paths.items()})
+            with self.assertRaisesRegex(ValueError, 'names'):
+                evaluate(root / 'model.onnx', {'short': paths['short']}, warmup=0, repeats=1)
+
     def test_complete_logits_and_finite_values_are_required(self):
         reference = {('output', i): float(i + 1) for i in range(1000)}
         result = metrics(reference, dict(reference))

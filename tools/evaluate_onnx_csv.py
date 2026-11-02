@@ -97,12 +97,20 @@ def evaluate(onnx_path, csv_path, warmup=1, repeats=3):
     options.intra_op_num_threads = 8
     session = ort.InferenceSession(model.SerializeToString(), sess_options=options, providers=['CPUExecutionProvider'])
     inputs = session.get_inputs()
-    if len(inputs) != 1:
-        raise ValueError('The CSV evaluator requires a single model input')
-    shape = [d if isinstance(d, int) else 1 for d in inputs[0].shape]
-    dtype = helper.tensor_dtype_to_np_dtype(model.graph.input[0].type.tensor_type.elem_type)
-    values = np.loadtxt(csv_path, delimiter=',', dtype=dtype).reshape(shape)
-    feeds = {inputs[0].name: values}
+    if isinstance(csv_path, dict):
+        paths = csv_path
+    elif len(inputs) == 1:
+        paths = {inputs[0].name: csv_path}
+    else:
+        raise ValueError('Multiple model inputs require named CSV paths')
+    if set(paths) != {meta.name for meta in inputs}:
+        raise ValueError('CSV input names do not match model inputs')
+    feeds = {}
+    for meta in inputs:
+        shape = [d if isinstance(d, int) else 1 for d in meta.shape]
+        tensor = next(x for x in model.graph.input if x.name == meta.name)
+        dtype = helper.tensor_dtype_to_np_dtype(tensor.type.tensor_type.elem_type)
+        feeds[meta.name] = np.loadtxt(paths[meta.name], delimiter=',', dtype=dtype).reshape(shape)
     preparation_ms = (time.perf_counter() - started) * 1000
     samples, outputs = [], None
     for i in range(warmup + repeats):
@@ -113,7 +121,9 @@ def evaluate(onnx_path, csv_path, warmup=1, repeats=3):
     if not all(np.isfinite(v).all() for v in results.values()):
         raise ValueError('Plaintext logits contain nonfinite values')
     return results, {
-        'onnx': str(onnx_path), 'input_csv': str(csv_path), 'provider': 'CPUExecutionProvider',
+        'onnx': str(onnx_path),
+        'input_csv': {name: str(path) for name, path in paths.items()} if isinstance(csv_path, dict) else str(csv_path),
+        'provider': 'CPUExecutionProvider',
         'preparation_wall_ms': preparation_ms,
         'plaintext_wall_ms': statistics.median(s['wall_ms'] for s in samples if not s['warmup']),
         'samples': samples, 'output_counts': {name: len(v) for name, v in results.items()},
@@ -132,7 +142,9 @@ def write_logits(path, outputs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--onnx', type=Path, required=True)
-    parser.add_argument('--input-csv', type=Path, required=True)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument('--input-csv', type=Path)
+    inputs.add_argument('--input', action='append', metavar='NAME=CSV', help='Named input; repeat for multiple inputs')
     parser.add_argument('--output-csv', type=Path, required=True)
     parser.add_argument('--warmup', type=int, default=1)
     parser.add_argument('--repeats', type=int, default=3)
@@ -140,7 +152,15 @@ def main():
     args = parser.parse_args()
     if args.warmup < 0 or args.repeats < 1:
         parser.error('warmup must be nonnegative and repeats must be positive')
-    outputs, report = evaluate(args.onnx, args.input_csv, args.warmup, args.repeats)
+    paths = args.input_csv
+    if args.input:
+        paths = {}
+        for binding in args.input:
+            name, sep, path = binding.partition('=')
+            if not sep or not name or not path or name in paths:
+                parser.error('Each input must be a unique NAME=CSV binding')
+            paths[name] = Path(path)
+    outputs, report = evaluate(args.onnx, paths, args.warmup, args.repeats)
     write_logits(args.output_csv, outputs)
     text = json.dumps(report, indent=2) + '\n'
     if args.report:

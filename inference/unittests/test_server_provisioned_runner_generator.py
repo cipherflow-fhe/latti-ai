@@ -53,6 +53,46 @@ def _data_with_missing_source(mega_ag):
 
 
 class TestServerProvisionedRunnerGenerator(unittest.TestCase):
+    def test_concat_0d_masks_are_runner_local_in_runtime_lazy(self):
+        for second_pack in (4, 8):
+            with self.subTest(second_pack=second_pack), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                server, runner = root / 'server', root / 'runner'
+                server.mkdir()
+                features = {}
+                layers = {}
+                for name, pack in [('a', 4), ('b', second_pack)]:
+                    for fid, level in [(name, 3), (name + '_hidden', 2)]:
+                        features[fid] = dict(_feature(level), channel=3, pack_num=pack, skip=4096 // pack)
+                    layers[name + '_fc'] = dict(type='fc0', feature_input=[name],
+                        feature_output=[name + '_hidden'], channel_input=3, channel_output=3)
+                features['output'] = dict(_feature(1), channel=6, pack_num=4, skip=1024)
+                layers['concat'] = dict(type='concat2d', feature_input=['a_hidden', 'b_hidden'],
+                    feature_output=['output'], channel_input=3, channel_output=6)
+                graph = dict(feature=features, layer=layers, input_feature=['a', 'b'], output_feature=['output'])
+                config = dict(task_type='fhe', task_num=1, pack_style='multiplexed', block_shape=[1, 1],
+                    task_input_id=['a', 'b'], task_output_id=['output'],
+                    task_input_param={n: features[n] for n in ['a', 'b']},
+                    task_output_param={'output': features['output']}, use_btp=False)
+                (server / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
+                (server / 'task_config.json').write_text(json.dumps(config))
+                gen_custom_task(str(server), param_name='PN13QP218', style='multiplexed',
+                    parameter_mode='encrypted_offline', input_mode='plaintext',
+                    deployment_mode='server_provisioned_runner',
+                    parameter_loading_mode='runtime_lazy', output_dir=str(runner))
+                signature = json.loads((runner / 'task_signature.json').read_text())
+                mega = json.loads((runner / 'mega_ag.json').read_text())
+                self.assertEqual([a['id'] for a in signature['online']], ['a', 'b', 'output'])
+                self.assertFalse(any('mask' in a['id'] for a in signature['encrypted_parameters']))
+                masks = [n for n in mega['compute'].values()
+                         if n['type'] == 'encode_pt' and n.get('attributes', {}).get('op_class') == 'ConcatLayer']
+                self.assertEqual(len(masks), 6)
+                self.assertEqual([m['attributes']['slot'] for m in masks],
+                                 [0, 1024, 2048, 0, 4096 // second_pack, 8192 // second_pack])
+                self.assertTrue(all(m['attributes']['level'] == 2 for m in masks))
+                self.assertTrue(all(m['inputs'] == [] and m.get('wait_inputs', []) == [] for m in masks))
+                self.assertEqual(_data_with_missing_source(mega), [])
+
     def test_two_dense_layers_use_plaintext_input_and_offline_ct_params(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

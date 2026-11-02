@@ -81,6 +81,46 @@ class StorageScoreTest(unittest.TestCase):
         self.assertEqual(report['unaccounted'], [])
         self.assertEqual(report['layers'][0]['counts'], expected)
 
+    def test_concat2d_is_public_in_final_storage_report(self):
+        self.conv.layer_type = 'concat2d'
+        report = get_encrypted_parameter_storage_report(self.graph.dag, self.params)
+        self.assertEqual(report['unaccounted'], [])
+        self.assertEqual(report['layers'], [])
+        self.assertEqual(report['storage_bytes'], 0)
+
+    def test_concat_0d_dense_scores_the_exported_skip_and_sparse_tiles(self):
+        config.seed_weight_subgrid_stride = [16, 16]
+        slots = self.params['param0'].poly_modulus_degree // 2
+        self.input.dim = self.output.dim = 0
+        self.conv.layer_type = 'fc0'
+        self.conv.channel_input, self.conv.channel_output = 96, 64
+        self.graph.dag.nodes[self.input].update(skip=[slots], pack_num=1)
+        self.graph.dag.nodes[self.output].update(skip=[slots], pack_num=1, level=0)
+        self.graph.dag.nodes[self.conv]['level_cost'] = 1
+        score = self.score_param()
+        self.assertEqual(score.get_encrypted_param_count(), {2: {'weight': 1}, 1: {'bias': 1}})
+        self.assertEqual(score.dense_seed_tiles['weight_shape'], [64, 96])
+        self.assertEqual(score.dense_seed_tiles['skip'], [1, slots])
+        config.seed_weight_subgrid_stride = [1, 1]
+        self.assertEqual(self.score_param().get_encrypted_param_count(),
+                         {1: {'weight': 6144}, 0: {'bias': 64}})
+
+    def test_big_poly_counts_spatial_blocks_in_each_degree(self):
+        config.seed_weight_subgrid_stride = [16, 16]
+        config.block_shape = [128, 256]
+        self.input.shape = self.output.shape = [256, 256]
+        self.conv.layer_type = 'polyact'
+        self.conv.order = 8
+        self.conv.channel_input = self.conv.channel_output = 64
+        self.graph.dag.nodes[self.input].update(skip=[1, 1], pack_num=1)
+        self.graph.dag.nodes[self.output].update(skip=[1, 1], pack_num=1, level=4)
+        self.graph.dag.nodes[self.conv]['level_cost'] = 4
+        score = self.score_param()
+        self.assertEqual(score.get_encrypted_param_count(), {5: {'coefficient': 1},
+                                                            6: {'coefficient': 4}, 7: {'coefficient': 4}})
+        self.assertEqual(score.poly_seed_layout['channel_groups'], 128)
+        self.assertEqual(score.poly_seed_layout['input_shape'], [128, 256])
+
     def test_cache_distinguishes_successor_levels(self):
         partitioner = GraphPartitioner(self.graph.dag, temperature=0)
         first = partitioner.get_compute_score_cached(self.graph.dag, self.conv)

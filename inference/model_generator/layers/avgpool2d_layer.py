@@ -45,15 +45,14 @@ class Avgpool2DLayer:
 
         call() per ct:
           - (stride[0]-1) rotations + (stride[0]-1) adds  (horizontal accumulation)
-          - log2(stride[0]) rotations + log2(stride[0]) adds  (binary fold)
-        Note: call() only folds along one dimension (stride[0]), matching the code.
+          - log2(stride[1]) rotations + log2(stride[1]) adds  (width fold)
         No rescale, so all ops are at a single level key.
         """
         ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
         lv = level
 
         stride = self.stride[0]
-        rot_add_per_ct = (stride - 1) + int(math.log2(stride))
+        rot_add_per_ct = (stride - 1) + int(math.log2(self.stride[1]))
         ops[lv]['rotate'] += n_ct * rot_add_per_ct
         ops[lv]['add'] += n_ct * rot_add_per_ct
 
@@ -64,9 +63,9 @@ class Avgpool2DLayer:
         for i in range(len(x)):
             rr = x[i]
             for j in range(1, self.stride[0]):
-                ri = rotate_cols(x[i], [j * self.shape[0]])[0]
+                ri = rotate_cols(x[i], [j * self.shape[1]])[0]
                 rr = add(rr, ri)
-            step = self.stride[0]
+            step = self.stride[1]
             while step > 1:
                 step = int(step)
                 ri = rotate_cols(rr, [step // 2])[0]
@@ -85,7 +84,7 @@ class Avgpool2DLayer:
 
         Per ct:
           - log2(stride[0]) rotate_cols calls × 1 primitive each (height accumulation,
-            steps: 2^i * shape[0] * skip[0] * skip[1], all powers of 2)
+            steps: 2^i * shape[1] * skip[0] * skip[1], all powers of 2)
           - log2(stride[1]) rotate_cols calls × 1 primitive each (width accumulation,
             steps: 2^j * skip[1], all powers of 2)
           - floor(log2(n_rot)) rotate_cols calls × 1 primitive each (slot fill,
@@ -117,7 +116,7 @@ class Avgpool2DLayer:
         for idx in range(0, x_size):
             res = x[idx]
             for i in range(log2_stride_0 - 1, 0 - 1, -1):
-                ct_tmp = rotate_cols(res, (2**i) * self.shape[0] * self.skip[0] * self.skip[1])
+                ct_tmp = rotate_cols(res, (2**i) * self.shape[1] * self.skip[0] * self.skip[1])
                 res = add(res, ct_tmp[0])
 
             for j in range(log2_stride_1 - 1, 0 - 1, -1):

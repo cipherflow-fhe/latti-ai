@@ -80,6 +80,12 @@ void DensePackedLayer::prepare_weight_0d_skip_lazy(uint32_t skip_0d) {
     bsgs_bs = (uint32_t)ceil(sqrt((double)n_channel_per_ct));
     bsgs_gs = div_ceil(n_channel_per_ct, bsgs_bs);
 
+    // A single 0D feature occupies slot zero; the remaining slots are sparse tiles.
+    if (normal_dense && n_channel_per_ct == 1 && skip_0d == param_.get_n() / 2) {
+        prepare_weight_for_2d_multiplexed_lazy({1, 1}, {1, skip_0d}, {1, skip_0d});
+        normal_dense = true;
+    }
+
     if (!normal_dense) {
         modified_scale = modified_scale * ENC_TO_SHARE_SCALE / param_.get_default_scale();
     }
@@ -212,7 +218,7 @@ vector<double> DensePackedLayer::generate_bias_values_mult_pack(int packed_out_f
 }
 
 CkksPlaintextRingt DensePackedLayer::generate_tile_seed(CkksContext& ctx, uint32_t seed_index, bool bias_seed) const {
-    if (normal_dense || is_1d_multiplexed || n_block_per_ct <= 0) throw std::invalid_argument("dense tile seed requires multiplexed 2D geometry");
+    if ((normal_dense && n_channel_per_ct != 1) || is_1d_multiplexed || n_block_per_ct <= 0) throw std::invalid_argument("dense tile seed requires sparse 2D geometry");
     const uint32_t outputs = div_ceil(n_out_feature, n_block_per_ct);
     auto values = interleaved_seed::pack_tiles(outputs * (bias_seed ? 1 : n_block_input), seed_index,
         special_input_shape, special_skip, special_invalid_fill, N_half, [&](uint32_t request) {
@@ -224,7 +230,7 @@ CkksPlaintextRingt DensePackedLayer::generate_tile_seed(CkksContext& ctx, uint32
 
 void DensePackedLayer::validate_tile_geometry(const Duo& shape, const Duo& skip_in, const Duo& invalid_fill,
                                                uint32_t slots, const Duo& weight_shape, int use_site_level) const {
-    if (normal_dense || is_1d_multiplexed || n_block_per_ct <= 0 || shape != special_input_shape ||
+    if ((normal_dense && n_channel_per_ct != 1) || is_1d_multiplexed || n_block_per_ct <= 0 || shape != special_input_shape ||
         skip_in != special_skip || invalid_fill != special_invalid_fill || slots != static_cast<uint32_t>(N_half) ||
         weight_shape != Duo{div_ceil(n_out_feature, n_block_per_ct), static_cast<uint32_t>(n_block_input)} ||
         use_site_level != static_cast<int>(level_)) throw std::invalid_argument("dense tile metadata does not match layer");

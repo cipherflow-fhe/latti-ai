@@ -60,8 +60,9 @@ class PolyRelu2D(PolyReluBase):
 
     def choose_seed_layout(self, stride, n, n_ct, level, bytes_at_level):
         self.poly_seed_layout = None
-        if (stride == [1, 1] or self.upsample_factor != [1, 1] or self.block_expansion != [1, 1]
-                or any(a <= 0 or a & (a - 1) or h % a for h, a in zip(self.input_shape, stride))
+        seed_shape = [self.block_shape[i] // self.skip[i] for i in range(2)]
+        if (stride == [1, 1] or self.upsample_factor != [1, 1]
+                or any(a <= 0 or a & (a - 1) or h % a for h, a in zip(seed_shape, stride))
                 or (n // 2) % math.prod(self.block_shape)):
             return None
         capacity = math.prod(stride)
@@ -74,7 +75,7 @@ class PolyRelu2D(PolyReluBase):
                 packed.append(False)
         if any(packed):
             self.poly_seed_layout = {
-                'input_shape': list(self.input_shape), 'skip': list(self.skip),
+                'input_shape': seed_shape, 'skip': list(self.skip),
                 'blocks': math.ceil(self.n_channel_per_ct / math.prod(self.skip)), 'slots': n // 2,
                 'stride': list(stride), 'group_size': capacity, 'channel_groups': n_ct,
                 'use_site_levels': levels, 'packed_degrees': packed,
@@ -96,8 +97,8 @@ class PolyRelu2D(PolyReluBase):
         layout = self.poly_seed_layout
         levels = self._bsgs_encrypted_coeff_levels(input_level)
         if (layout['channel_groups'] != n_pack_in_channel or layout['use_site_levels'] != levels
-                or layout['input_shape'] != list(self.input_shape) or layout['skip'] != list(self.skip)
-                or self.upsample_factor != [1, 1] or self.block_expansion != [1, 1]):
+                or layout['input_shape'] != [self.block_shape[i] // self.skip[i] for i in range(2)]
+                or layout['skip'] != list(self.skip) or self.upsample_factor != [1, 1]):
             raise ValueError('polynomial seed metadata does not match graph')
         return [[CkksCiphertextNode(f'poly_reluw_{layer_id}_{degree}_{j}', level=target + packed)
                  for j in range(math.ceil(n_pack_in_channel / layout['group_size']) if packed else n_pack_in_channel)]
@@ -116,12 +117,12 @@ class PolyRelu2D(PolyReluBase):
             mask = CkksPlaintextRingtNode(f'{seed.id}_mask_{s}')
             custom_compute(inputs=[], output=mask, type='encode_pt', attributes={
                 'op_class': op_class, 'type': 'seed_mask_pt', 'mask_kind': 'subgrid',
-                'seed_shape': self.input_shape, 'seed_skip': self.skip, 'seed_blocks': layout['blocks'],
+                'seed_shape': layout['input_shape'], 'seed_skip': self.skip, 'seed_blocks': layout['blocks'],
                 'seed_a': layout['stride'][0], 'seed_b': layout['stride'][1],
                 'seed_step': [0, 0], 'subgrid': s, 'degree': degree,
                 'level': layout['use_site_levels'][degree] + 1,
             })
-            return restore_subgrid(seed, mask, self.input_shape, self.skip, layout['stride'], s)
+            return restore_subgrid(seed, mask, layout['input_shape'], self.skip, layout['stride'], s)
 
         return self._run_bsgs_core_param_ct(x, get_weight)
 

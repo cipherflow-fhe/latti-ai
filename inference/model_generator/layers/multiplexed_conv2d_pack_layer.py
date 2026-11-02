@@ -16,6 +16,7 @@
 
 import sys
 import math
+import json
 import numpy as np
 from pathlib import Path
 from collections import defaultdict
@@ -41,6 +42,19 @@ def _multiply_mask_param(x, mask):
     if is_plaintext_input(mask):
         return mult(x, mask)
     return multiply_with_encrypted_param(x, mask)
+
+
+def _public_seed_mask(cache, node_id, attributes):
+    # Subgrid selection does not depend on the kernel; boundary selection does
+    # not depend on the subgrid. Reuse only identical public masks and scales.
+    attributes = dict(attributes)
+    attributes['subgrid' if attributes['mask_kind'] == 'kernel' else 'kernel_index'] = 0
+    key = json.dumps(attributes, sort_keys=True)
+    if key not in cache:
+        node = CkksPlaintextRingtNode(node_id)
+        custom_compute(inputs=[], output=node, type='encode_pt', attributes=attributes)
+        cache[key] = node
+    return cache[key]
 
 
 class MultiplexedConv2DPackedLayer:
@@ -85,7 +99,7 @@ class MultiplexedConv2DPackedLayer:
         padding_shape = [kernel_shape[0] // 2, kernel_shape[1] // 2]
         self.input_shape_ct = [input_shape[0] * skip[0], input_shape[1] * skip[1]]
         self.input_rotate_units = [skip[0] * self.input_shape_ct[1], skip[1] * 1]
-        self.input_rotate_ranges = [padding_shape[1], padding_shape[0]]
+        self.input_rotate_ranges = [padding_shape[0], padding_shape[1]]
         self.n_block_per_ct: int = int(np.ceil(n_channel_per_ct / (skip[0] * skip[1])))
         self.external_upsample_factor: list = external_upsample_factor
         self.seed_weight_subgrid_stride = list(seed_weight_subgrid_stride)
@@ -241,6 +255,7 @@ class MultiplexedConv2DPackedLayer:
         if self.joint_seed_weights:
             return self._make_joint_seed_mask_pt_nodes(layer_id, level)
         masks = []
+        cache = {}
         group = self.seed_weight_group_size
         seed_level = level + self.seed_weight_level_cost
         kernel_size = self.kernel_shape[0] * self.kernel_shape[1]
@@ -260,18 +275,14 @@ class MultiplexedConv2DPackedLayer:
                             'kernel_shape': self.kernel_shape, 'n_channel_per_ct': self.n_channel_per_ct,
                             'external_upsample_factor': self.external_upsample_factor,
                         }
-                        first = CkksPlaintextRingtNode(
-                            f'convseedm_{layer_id}_{_ct_idx}_{seed_j}_{subgrid}_{kernel_index}_0'
-                        )
-                        custom_compute(inputs=[], output=first, type='encode_pt', attributes=attrs)
+                        first = _public_seed_mask(cache,
+                            f'convseedm_{layer_id}_{_ct_idx}_{seed_j}_{subgrid}_{kernel_index}_0', attrs)
                         if self.kernel_shape == [1, 1]:
                             second = first
                         else:
-                            second = CkksPlaintextRingtNode(
-                                f'convseedm_{layer_id}_{_ct_idx}_{seed_j}_{subgrid}_{kernel_index}_1'
-                            )
                             kernel_attrs = dict(attrs, mask_kind='kernel', level=seed_level - 1)
-                            custom_compute(inputs=[], output=second, type='encode_pt', attributes=kernel_attrs)
+                            second = _public_seed_mask(cache,
+                                f'convseedm_{layer_id}_{_ct_idx}_{seed_j}_{subgrid}_{kernel_index}_1', kernel_attrs)
                         per_kernel.append([first, second])
                     per_subgrid.append(per_kernel)
                 per_ct.append(per_subgrid)
@@ -280,6 +291,7 @@ class MultiplexedConv2DPackedLayer:
 
     def _make_joint_seed_mask_pt_nodes(self, layer_id, level):
         masks = []
+        cache = {}
         kernels = math.prod(self.kernel_shape)
         count = self.weight_output_count * self.weight_input_count * kernels
         for request in range(count):
@@ -291,13 +303,11 @@ class MultiplexedConv2DPackedLayer:
                 'skip': self.skip, 'stride': self.stride, 'kernel_shape': self.kernel_shape,
                 'n_channel_per_ct': self.n_channel_per_ct, 'external_upsample_factor': self.external_upsample_factor,
             }
-            first = CkksPlaintextRingtNode(f'convseedm_{layer_id}_{request}_0')
-            custom_compute(inputs=[], output=first, type='encode_pt', attributes=attrs)
+            first = _public_seed_mask(cache, f'convseedm_{layer_id}_{request}_0', attrs)
             second = first
             if kernels > 1:
-                second = CkksPlaintextRingtNode(f'convseedm_{layer_id}_{request}_1')
-                custom_compute(inputs=[], output=second, type='encode_pt',
-                               attributes=dict(attrs, mask_kind='kernel', level=attrs['level'] - 1))
+                second = _public_seed_mask(cache, f'convseedm_{layer_id}_{request}_1',
+                                          dict(attrs, mask_kind='kernel', level=attrs['level'] - 1))
             masks.append([first, second])
         return masks
 

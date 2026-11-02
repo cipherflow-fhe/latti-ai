@@ -44,9 +44,9 @@ Feature2DEncrypted Avgpool2DLayer::run(CkksContext& ctx, const Feature2DEncrypte
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         CkksCiphertext y = x.data[ct_idx].copy();
         for (int j = 1; j < stride[0]; j++) {
-            y = ctx_copy.add(y, ctx_copy.rotate(x.data[ct_idx], j * shape[0]));
+            y = ctx_copy.add(y, ctx_copy.rotate(x.data[ct_idx], j * shape[1]));
         }
-        int step = stride[0];
+        int step = stride[1];
         CkksCiphertext r;
         while (step > 1) {
             r = ctx_copy.rotate(y, step / 2);
@@ -78,7 +78,7 @@ Feature2DEncrypted Avgpool2DLayer::run_adaptive_avgpool(CkksContext& ctx, const 
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         result.data[idx] = x.data[idx].copy();
         for (int i = log2_stride_0 - 1; i >= 0; --i) {
-            auto ct_tmp = ctx_copy.rotate(result.data[idx], (int)pow(2, i) * shape[0] * skip[0] * skip[1]);
+            auto ct_tmp = ctx_copy.rotate(result.data[idx], (int)pow(2, i) * shape[1] * skip[0] * skip[1]);
             result.data[idx] = ctx_copy.add(result.data[idx], ct_tmp);
         }
         for (int j = log2_stride_1 - 1; j >= 0; --j) {

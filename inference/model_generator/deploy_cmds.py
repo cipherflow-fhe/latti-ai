@@ -1081,6 +1081,7 @@ def gen_custom_task(
             else:  # dim == 2
                 input_shape = feat['shape']
                 polyrelu = PolyRelu2D(input_shape, order, skip, pack,
+                                     block_expansion=[math.ceil(input_shape[i] / block_shape[i]) for i in range(2)],
                                      seed_layout=layer_config.get('poly_seed_layout')
                                      if parameter_mode == 'encrypted_offline' else None)
                 if lazy:
@@ -1341,6 +1342,26 @@ def gen_custom_task(
 
             mixed_pack = len(set(input_packs)) > 1
 
+            def concat_masks():
+                masks = []
+                for fid, channels, input_pack in zip(layer_input_feature_ids, input_n_channels, input_packs):
+                    feat = config_info['feature'][fid]
+                    for local_ch in range(channels):
+                        mask = CkksPlaintextRingtNode(f'concat_mask_{layer_id}_{len(masks)}')
+                        if parameter_mode == 'encrypted_offline':
+                            if feat['dim'] != 0:
+                                _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
+                            sk = feat.get('skip', 1)
+                            slot = (local_ch % input_pack) * int(sk[0] if isinstance(sk, list) else sk)
+                            source = feature_id_to_nodes_map[fid][local_ch // input_pack]
+                            custom_compute(inputs=[], output=mask, type='encode_pt',
+                                           attributes={'op_class': 'ConcatLayer', 'type': 'mask_0d_pt',
+                                                       'slot': slot, 'level': source.level})
+                        masks.append(mask)
+                if parameter_mode != 'encrypted_offline':
+                    input_args.append(Argument(f'concat_mask_{layer_id}', masks))
+                return masks
+
             if mixed_pack:
                 # Mixed-pack path: inputs come with different pack_num; neither the
                 # fast merge nor the uneven-same-pack path works. Use the general
@@ -1357,8 +1378,7 @@ def gen_custom_task(
 
                 concat_layer = ConcatLayer()
                 input_node_lists = [feature_id_to_nodes_map[fid] for fid in layer_input_feature_ids]
-                total_channels = sum(input_n_channels)
-                mask_pts = [CkksPlaintextRingtNode(f'concat_mask_{layer_id}_{i}') for i in range(total_channels)]
+                mask_pts = concat_masks()
                 layer_output_nodes = concat_layer.call_multiple_inputs_mixed_pack(
                     input_node_lists,
                     input_n_channels,
@@ -1369,7 +1389,6 @@ def gen_custom_task(
                     mask_pts,
                 )
                 feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-                input_args.append(Argument(f'concat_mask_{layer_id}', mask_pts))
             elif has_uneven:
                 # Uneven path: per-channel mask+rotate+add
                 concat_layer = ConcatLayer()
@@ -1389,16 +1408,13 @@ def gen_custom_task(
                 else:
                     input_shape = first_feat['shape']
                     use_skip = skip
-                total_channels = sum(input_n_channels)
-
                 # Create mask plaintext nodes for each global channel
-                mask_pts = [CkksPlaintextRingtNode(f'concat_mask_{layer_id}_{i}') for i in range(total_channels)]
+                mask_pts = concat_masks()
 
                 layer_output_nodes = concat_layer.call_multiple_inputs_uneven(
                     input_node_lists, input_n_channels, pack, input_shape, use_skip, mask_pts
                 )
                 feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-                input_args.append(Argument(f'concat_mask_{layer_id}', mask_pts))
             else:
                 # Fast path: concat is a runtime-only operation, just merge node lists
                 layer_output_nodes = []
@@ -1543,10 +1559,12 @@ def gen_custom_task(
                     n_out_channel,
                     n_in_channel,
                     [1, 1],
-                    [1, 1],
+                    [1, skip_0d],
                     pack_0d,
                     n_packed_in_feature,
                     n_packed_out_feature,
+                    invalid_fill=[1, skip_0d],
+                    seed_tile_layout=layer_config.get('dense_seed_tiles') if parameter_mode == 'encrypted_offline' else None,
                 )
                 if lazy:
                     dense_data_source = CustomDataNode(type='fc_data_source', id=f'{layer_id}')

@@ -87,7 +87,7 @@ void PolyRelu2D::prepare_weight() {
 
                 int channel_idx =
                     n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
-                    block_i * skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
+                    block_i * skip_prod + (skip[1] * (shape_i % skip[0]) + shape_j % skip[1]);
                 if (channel_idx >= channel || (shape_i % pre_skip[0]) >= skip[0] || (shape_j % pre_skip[1]) >= skip[1])
                     continue;
 
@@ -123,7 +123,7 @@ PolyRelu2D::generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_pack
         int shape_j = residual % block_shape[1];
 
         int channel_idx = n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
-                          block_i * cached_skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
+                          block_i * cached_skip_prod + (skip[1] * (shape_i % skip[0]) + shape_j % skip[1]);
         if (channel_idx >= cached_channel || (shape_i % pre_skip[0]) >= skip[0] || (shape_j % pre_skip[1]) >= skip[1])
             continue;
 
@@ -166,7 +166,7 @@ PolyRelu2D::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx,
             int shape_j = residual % block_shape[1];
 
             int channel_idx = n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
-                              block_i * cached_skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
+                              block_i * cached_skip_prod + (skip[1] * (shape_i % skip[0]) + shape_j % skip[1]);
             if (channel_idx >= cached_channel || (shape_i % pre_skip[0]) >= skip[0] ||
                 (shape_j % pre_skip[1]) >= skip[1])
                 continue;
@@ -328,7 +328,7 @@ void PolyRelu2D::prepare_weight_bsgs() {
 
                     int channel_idx =
                         n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
-                        block_i * skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
+                        block_i * skip_prod + (skip[1] * (shape_i % skip[0]) + shape_j % skip[1]);
                     if (channel_idx >= channel || (shape_i % pre_skip[0]) >= skip[0] ||
                         (shape_j % pre_skip[1]) >= skip[1])
                         continue;
@@ -384,7 +384,7 @@ void PolyRelu2D::prepare_weight_hornor() {
 
                     int channel_idx =
                         n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
-                        block_i * skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
+                        block_i * skip_prod + (skip[1] * (shape_i % skip[0]) + shape_j % skip[1]);
                     if (channel_idx >= channel || (shape_i % pre_skip[0]) >= skip[0] ||
                         (shape_j % pre_skip[1]) >= skip[1])
                         continue;
@@ -445,7 +445,7 @@ vector<double> PolyRelu2D::generate_weight_values_for_bsgs(int idx, int n_packed
             int shape_j = residual % block_shape[1];
 
             int channel_idx = n_packed_out_channel_idx * n_channel_per_ct / block_expansion[0] / block_expansion[1] +
-                              block_i * cached_skip_prod + (skip[0] * (shape_i % skip[0]) + shape_j % skip[0]);
+                              block_i * cached_skip_prod + (skip[1] * (shape_i % skip[0]) + shape_j % skip[1]);
             if (channel_idx >= cached_channel || (shape_i % pre_skip[0]) >= skip[0] ||
                 (shape_j % pre_skip[1]) >= skip[1])
                 continue;
@@ -460,20 +460,21 @@ vector<double> PolyRelu2D::generate_weight_values_for_bsgs(int idx, int n_packed
 
 void PolyRelu2D::validate_seed_geometry(const Duo& shape, const Duo& skip_in, uint32_t blocks,
                                         uint32_t slots, int groups, int degree, int use_site_level) const {
-    if (is_ordinary_pack || zero_skip != Duo{1, 1} || block_expansion != Duo{1, 1} ||
-        input_shape != shape || skip != skip_in || blocks != static_cast<uint32_t>(n_block_per_ct) ||
+    const Duo seed_shape{block_shape[0] / skip[0], block_shape[1] / skip[1]};
+    if (is_ordinary_pack || zero_skip != Duo{1, 1} ||
+        seed_shape != shape || skip != skip_in || blocks != static_cast<uint32_t>(n_block_per_ct) ||
         slots != N / 2 || groups != cached_n_packed_out_channel ||
         use_site_level != cached_bsgs_level_order.at(degree))
         throw std::invalid_argument("polynomial seed metadata does not match layer");
 }
 
 CkksPlaintextRingt PolyRelu2D::generate_channel_seed(CkksContext& ctx, int degree, int seed, const Duo& stride) const {
-    if (!interleaved_seed::valid_stride(stride, input_shape) || is_ordinary_pack ||
-        zero_skip != Duo{1, 1} || block_expansion != Duo{1, 1})
+    const Duo seed_shape{block_shape[0] / skip[0], block_shape[1] / skip[1]};
+    if (!interleaved_seed::valid_stride(stride, seed_shape) || is_ordinary_pack || zero_skip != Duo{1, 1})
         throw std::invalid_argument("polynomial seed geometry unsupported");
     if (seed < 0 || seed >= static_cast<int>(div_ceil(cached_n_packed_out_channel, prod(stride))))
         throw std::out_of_range("polynomial seed index");
-    auto values = interleaved_seed::pack_kernels(cached_n_packed_out_channel, seed, stride, input_shape, skip,
+    auto values = interleaved_seed::pack_kernels(cached_n_packed_out_channel, seed, stride, seed_shape, skip,
         n_block_per_ct, N / 2, [&](uint32_t group) { return generate_weight_values_for_bsgs(degree, group); });
     return ctx.encode_ringt(values, cached_bsgs_coeff_scale.at(degree));
 }
