@@ -478,7 +478,7 @@ void PolyRelu0D::prepare_weight_0d_skip_lazy() {
 
 // ---- Mode 1: direct 0D skip pack ----
 
-CkksPlaintext PolyRelu0D::generate_weight_pt_skip0d(CkksContext& ctx, int idx, int ct_idx) const {
+CkksPlaintext PolyRelu0D::generate_weight_pt_skip0d(CkksContext& ctx, int idx, int ct_idx, double scale) const {
     vector<double> feature_tmp_pack(N, 0.0);
     for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
         int channel_idx = ct_idx * n_channel_per_ct + ch;
@@ -486,7 +486,7 @@ CkksPlaintext PolyRelu0D::generate_weight_pt_skip0d(CkksContext& ctx, int idx, i
             continue;
         feature_tmp_pack[ch * ciphertext_skip] = weight.get(idx, channel_idx);
     }
-    double pack_scale = cached_bsgs_coeff_scale.at(idx);
+    double pack_scale = scale == 0 ? cached_bsgs_coeff_scale.at(idx) : scale;
     return fhe_api::encode_ringt(ctx, feature_tmp_pack, pack_scale);
 }
 
@@ -496,7 +496,7 @@ CkksPlaintext PolyRelu0D::generate_weight_pt_skip0d(CkksContext& ctx, int idx, i
 //   channel ch in CT at block ch, position (h,k):
 //   slot = ch * block_size + h * W * s0 * s1 + k * s1
 
-CkksPlaintext PolyRelu0D::generate_weight_pt_multiplexed(CkksContext& ctx, int idx, int ct_idx) const {
+CkksPlaintext PolyRelu0D::generate_weight_pt_multiplexed(CkksContext& ctx, int idx, int ct_idx, double scale) const {
     vector<double> feature_tmp_pack(N, 0.0);
     int H = special_input_shape[0], W = special_input_shape[1];
     int s0 = special_skip[0], s1 = special_skip[1];
@@ -513,7 +513,7 @@ CkksPlaintext PolyRelu0D::generate_weight_pt_multiplexed(CkksContext& ctx, int i
             }
         }
     }
-    double pack_scale = cached_bsgs_coeff_scale.at(idx);
+    double pack_scale = scale == 0 ? cached_bsgs_coeff_scale.at(idx) : scale;
     return fhe_api::encode_ringt(ctx, feature_tmp_pack, pack_scale);
 }
 
@@ -547,10 +547,10 @@ void PolyRelu0D::prepare_weight_2d_multiplexed_lazy(const Duo& input_shape_in, c
     weight_pt.clear();
 }
 
-CkksPlaintext PolyRelu0D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int ct_idx) const {
+CkksPlaintext PolyRelu0D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int ct_idx, double scale) const {
     if (is_multiplexed)
-        return generate_weight_pt_multiplexed(ctx, idx, ct_idx);
-    return generate_weight_pt_skip0d(ctx, idx, ct_idx);
+        return generate_weight_pt_multiplexed(ctx, idx, ct_idx, scale);
+    return generate_weight_pt_skip0d(ctx, idx, ct_idx, scale);
 }
 
 Feature0DEncrypted PolyRelu0D::run(CkksContext& ctx, const Feature0DEncrypted& x) {

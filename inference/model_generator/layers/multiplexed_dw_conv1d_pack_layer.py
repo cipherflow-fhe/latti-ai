@@ -170,7 +170,7 @@ class MultiplexedDWConv1DPackedLayer:
             x_ct_list = []
             w_pt_list = []
             for k in range(self.kernel_shape):
-                w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{k}', is_ringt=True)
+                w_pt = CkksPlaintextNode(f'encode_pt_{conv_data_source.id}_{ct_idx}_{k}', is_ringt=True)
                 custom_compute(
                     inputs=[conv_data_source],
                     output=w_pt,

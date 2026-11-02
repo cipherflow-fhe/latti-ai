@@ -2,15 +2,32 @@
     "score": 1796.0189963109617,
     "ckks_parameter": {
         "param0": {
-            "poly_modulus_degree": 65536,
-            "n_mult_level": 9,
+            "poly_modulus_degree": 32768,
+            "n_mult_level": 12,
             "log_default_scale": 40,
-            "block_shape": [
-                128,
-                128
+            "param_name": "PN15Default",
+            "q": [
+                2251799813554177,
+                1099512938497,
+                1099510054913,
+                1099507695617,
+                1099515691009,
+                1099516870657,
+                1099506515969,
+                1099504549889,
+                1099503894529,
+                1099503370241,
+                1099502714881,
+                1099521458177,
+                1099522375681
             ],
-            "param_name": "N16QP1546H192H32",
-            "pack_num": 4
+            "p": [
+                1125899908022273,
+                1125899903827969,
+                1125899911168001
+            ],
+            "ring_type": 1,
+            "n_slots": 32768
         }
     },
     "feature": {
@@ -3415,6 +3432,666 @@
             "level": 0,
             "depth": -1,
             "pack_num": 2
+        },
+        "_features_features_1_conv_conv_3_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 16,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                128,
+                128
+            ],
+            "skip": [
+                1,
+                1
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 2,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_2_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 96,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                64,
+                64
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 8,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_3_conv_conv_3_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 144,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                64,
+                64
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 8,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_4_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 144,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                64,
+                64
+            ],
+            "skip": [
+                2,
+                2
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 8,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_4_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 144,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 32,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_4_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 32,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_5_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 192,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 32,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_5_Add_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 32,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 32,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_6_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 192,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 32,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_7_conv_conv_2_poly_PolyAct_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 192,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                32,
+                32
+            ],
+            "skip": [
+                4,
+                4
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 32,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_7_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                8,
+                8
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_8_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 384,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                8,
+                8
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_8_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                8,
+                8
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_9_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 384,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                8,
+                8
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_9_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                8,
+                8
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_10_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 384,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                8,
+                8
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_10_conv_conv_3_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 384,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                8,
+                8
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_10_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 64,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                8,
+                8
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_11_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 384,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                8,
+                8
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_11_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 96,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                8,
+                8
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_12_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 576,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                8,
+                8
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_13_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 576,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                8,
+                8
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_13_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 576,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                16,
+                16
+            ],
+            "skip": [
+                8,
+                8
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 128,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_14_conv_conv_3_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 576,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                16,
+                16
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 512,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_14_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 160,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                16,
+                16
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 512,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_15_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 960,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                16,
+                16
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 512,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_15_Add_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 160,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                16,
+                16
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 512,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_16_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 960,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                16,
+                16
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 512,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_16_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 160,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                16,
+                16
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 512,
+            "invalid_fill": [
+                1,
+                1
+            ]
+        },
+        "_features_features_17_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level": {
+            "dim": 2,
+            "channel": 960,
+            "scale": 1.0,
+            "ckks_scale": 1,
+            "shape": [
+                8,
+                8
+            ],
+            "skip": [
+                16,
+                16
+            ],
+            "ckks_parameter_id": "param0",
+            "level": 12,
+            "depth": -1,
+            "pack_num": 512,
+            "invalid_fill": [
+                1,
+                1
+            ]
         }
     },
     "layer": {
@@ -3596,9 +4273,23 @@
                 "_features_features_1_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_1_conv_conv_3_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_1_conv_conv_3_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 16,
+            "channel_output": 16,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_1_conv_conv_3_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_1_conv_conv_3_Conv_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_2_conv_conv_0_Conv": {
             "type": "conv2d",
@@ -3742,9 +4433,23 @@
                 "_features_features_2_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
+                "_features_features_2_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_2_conv_conv_5_poly_PolyAct_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 96,
+            "channel_output": 96,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_2_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_2_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
-            "level_cost": -8
+            "level_cost": 3
         },
         "_features_features_2_conv_conv_6_Conv_drop_level_idx0_ts1774592594003962": {
             "type": "drop_level",
@@ -3922,9 +4627,23 @@
                 "_features_features_3_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_3_conv_conv_3_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_3_conv_conv_3_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 144,
+            "channel_output": 144,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_3_conv_conv_3_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_3_conv_conv_3_Conv_output_0_refreshed"
             ],
-            "level_cost": -7
+            "level_cost": 3
         },
         "_features_features_3_conv_conv_5_poly_PolyAct_drop_level_idx0_ts1774592594003912": {
             "type": "drop_level",
@@ -4067,9 +4786,23 @@
                 "_features_features_4_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_4_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_4_conv_conv_0_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 144,
+            "channel_output": 144,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_4_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_4_conv_conv_0_Conv_output_0_refreshed"
             ],
-            "level_cost": -8
+            "level_cost": 3
         },
         "_features_features_4_conv_conv_2_poly_PolyAct_drop_level_idx0_ts1774592594003878": {
             "type": "drop_level",
@@ -4191,9 +4924,23 @@
                 "_features_features_4_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
+                "_features_features_4_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_4_conv_conv_5_poly_PolyAct_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 144,
+            "channel_output": 144,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_4_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_4_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
-            "level_cost": -2
+            "level_cost": 3
         },
         "_features_features_4_conv_conv_6_Conv_drop_level_idx0_ts1774592594003833": {
             "type": "drop_level",
@@ -4255,9 +5002,23 @@
                 "_features_features_4_conv_conv_6_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_4_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_4_conv_conv_6_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_4_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_4_conv_conv_6_Conv_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_5_conv_conv_0_Conv": {
             "type": "conv2d",
@@ -4415,9 +5176,23 @@
                 "_features_features_5_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
+                "_features_features_5_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_5_conv_conv_5_poly_PolyAct_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 192,
+            "channel_output": 192,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_5_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_5_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
-            "level_cost": -2
+            "level_cost": 3
         },
         "_features_features_5_conv_conv_6_Conv_drop_level_idx0_ts1774592594003806": {
             "type": "drop_level",
@@ -4494,9 +5269,23 @@
                 "_features_features_5_Add_output_0"
             ],
             "feature_output": [
+                "_features_features_5_Add_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_5_Add_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 32,
+            "channel_output": 32,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_5_Add_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_5_Add_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_6_conv_conv_0_Conv": {
             "type": "conv2d",
@@ -4654,9 +5443,23 @@
                 "_features_features_6_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
+                "_features_features_6_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_6_conv_conv_5_poly_PolyAct_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 192,
+            "channel_output": 192,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_6_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_6_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
-            "level_cost": -7
+            "level_cost": 3
         },
         "_features_features_6_conv_conv_6_Conv_drop_level_idx0_ts1774592594003854": {
             "type": "drop_level",
@@ -4799,9 +5602,23 @@
                 "_features_features_7_conv_conv_2_poly_PolyAct_output_0"
             ],
             "feature_output": [
+                "_features_features_7_conv_conv_2_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_7_conv_conv_2_poly_PolyAct_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 192,
+            "channel_output": 192,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_7_conv_conv_2_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_7_conv_conv_2_poly_PolyAct_output_0_refreshed"
             ],
-            "level_cost": -7
+            "level_cost": 3
         },
         "_features_features_7_conv_conv_3_Conv_drop_level_idx0_ts1774592594003771": {
             "type": "drop_level",
@@ -4929,9 +5746,23 @@
                 "_features_features_7_conv_conv_6_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_7_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_7_conv_conv_6_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_7_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_7_conv_conv_6_Conv_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_8_conv_conv_0_Conv_drop_level_idx0_ts1774592593128950": {
             "type": "drop_level",
@@ -4993,9 +5824,23 @@
                 "_features_features_8_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_8_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_8_conv_conv_0_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 384,
+            "channel_output": 384,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_8_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_8_conv_conv_0_Conv_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_8_conv_conv_2_poly_PolyAct": {
             "type": "polyact",
@@ -5139,9 +5984,23 @@
                 "_features_features_8_conv_conv_6_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_8_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_8_conv_conv_6_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_8_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_8_conv_conv_6_Conv_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_8_Add": {
             "type": "add2d",
@@ -5218,9 +6077,23 @@
                 "_features_features_9_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_9_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_9_conv_conv_0_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 384,
+            "channel_output": 384,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_9_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_9_conv_conv_0_Conv_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_9_conv_conv_2_poly_PolyAct": {
             "type": "polyact",
@@ -5364,9 +6237,23 @@
                 "_features_features_9_conv_conv_6_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_9_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_9_conv_conv_6_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_9_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_9_conv_conv_6_Conv_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_9_Add": {
             "type": "add2d",
@@ -5443,9 +6330,23 @@
                 "_features_features_10_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_10_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_10_conv_conv_0_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 384,
+            "channel_output": 384,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_10_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_10_conv_conv_0_Conv_output_0_refreshed"
             ],
-            "level_cost": -4
+            "level_cost": 3
         },
         "_features_features_10_conv_conv_2_poly_PolyAct_drop_level_idx0_ts1774592594004014": {
             "type": "drop_level",
@@ -5537,9 +6438,23 @@
                 "_features_features_10_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_10_conv_conv_3_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_10_conv_conv_3_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 384,
+            "channel_output": 384,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_10_conv_conv_3_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_10_conv_conv_3_Conv_output_0_refreshed"
             ],
-            "level_cost": -5
+            "level_cost": 3
         },
         "_features_features_10_conv_conv_5_poly_PolyAct_drop_level_idx0_ts1774592594003744": {
             "type": "drop_level",
@@ -5631,9 +6546,23 @@
                 "_features_features_10_conv_conv_6_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_10_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_10_conv_conv_6_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 64,
+            "channel_output": 64,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_10_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_10_conv_conv_6_Conv_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_10_Add": {
             "type": "add2d",
@@ -5792,9 +6721,23 @@
                 "_features_features_11_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
+                "_features_features_11_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_11_conv_conv_5_poly_PolyAct_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 384,
+            "channel_output": 384,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_11_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_11_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
-            "level_cost": -2
+            "level_cost": 3
         },
         "_features_features_11_conv_conv_6_Conv_drop_level_idx0_ts1774592594003596": {
             "type": "drop_level",
@@ -5856,9 +6799,23 @@
                 "_features_features_11_conv_conv_6_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_11_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_11_conv_conv_6_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 96,
+            "channel_output": 96,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_11_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_11_conv_conv_6_Conv_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_12_conv_conv_0_Conv": {
             "type": "conv2d",
@@ -6016,9 +6973,23 @@
                 "_features_features_12_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
+                "_features_features_12_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_12_conv_conv_5_poly_PolyAct_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 576,
+            "channel_output": 576,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_12_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_12_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_12_conv_conv_6_Conv": {
             "type": "conv2d",
@@ -6131,9 +7102,23 @@
                 "_features_features_13_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_13_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_13_conv_conv_0_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 576,
+            "channel_output": 576,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_13_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_13_conv_conv_0_Conv_output_0_refreshed"
             ],
-            "level_cost": -7
+            "level_cost": 3
         },
         "_features_features_13_conv_conv_2_poly_PolyAct_drop_level_idx0_ts1774592594003703": {
             "type": "drop_level",
@@ -6255,9 +7240,23 @@
                 "_features_features_13_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
+                "_features_features_13_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_13_conv_conv_5_poly_PolyAct_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 576,
+            "channel_output": 576,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_13_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_13_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_13_conv_conv_6_Conv": {
             "type": "conv2d",
@@ -6422,9 +7421,23 @@
                 "_features_features_14_conv_conv_3_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_14_conv_conv_3_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_14_conv_conv_3_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 576,
+            "channel_output": 576,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_14_conv_conv_3_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_14_conv_conv_3_Conv_output_0_refreshed"
             ],
-            "level_cost": -5
+            "level_cost": 3
         },
         "_features_features_14_conv_conv_5_poly_PolyAct_drop_level_idx0_ts1774592594003507": {
             "type": "drop_level",
@@ -6516,9 +7529,23 @@
                 "_features_features_14_conv_conv_6_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_14_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_14_conv_conv_6_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 160,
+            "channel_output": 160,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_14_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_14_conv_conv_6_Conv_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_15_conv_conv_0_Conv": {
             "type": "conv2d",
@@ -6568,7 +7595,7 @@
             "feature_output": [
                 "_features_features_14_conv_conv_6_Conv_output_0_refreshed140643780029760_drop_level_output"
             ],
-            "level_cost": 7
+            "level_cost": 9
         },
         "_features_features_15_conv_conv_2_poly_PolyAct": {
             "type": "polyact",
@@ -6676,9 +7703,23 @@
                 "_features_features_15_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
+                "_features_features_15_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_15_conv_conv_5_poly_PolyAct_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 960,
+            "channel_output": 960,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_15_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_15_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
-            "level_cost": -2
+            "level_cost": 3
         },
         "_features_features_15_conv_conv_6_Conv_drop_level_idx0_ts1774592594003554": {
             "type": "drop_level",
@@ -6755,9 +7796,23 @@
                 "_features_features_15_Add_output_0"
             ],
             "feature_output": [
+                "_features_features_15_Add_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_15_Add_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 160,
+            "channel_output": 160,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_15_Add_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_15_Add_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_16_conv_conv_0_Conv_drop_level_idx0_ts1774592593143871": {
             "type": "drop_level",
@@ -6819,9 +7874,23 @@
                 "_features_features_16_conv_conv_0_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_16_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_16_conv_conv_0_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 960,
+            "channel_output": 960,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_16_conv_conv_0_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_16_conv_conv_0_Conv_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_16_conv_conv_2_poly_PolyAct": {
             "type": "polyact",
@@ -6965,9 +8034,23 @@
                 "_features_features_16_conv_conv_6_Conv_output_0"
             ],
             "feature_output": [
+                "_features_features_16_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_16_conv_conv_6_Conv_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 160,
+            "channel_output": 160,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_16_conv_conv_6_Conv_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_16_conv_conv_6_Conv_output_0_refreshed"
             ],
-            "level_cost": -9
+            "level_cost": 3
         },
         "_features_features_16_Add": {
             "type": "add2d",
@@ -7126,9 +8209,23 @@
                 "_features_features_17_conv_conv_5_poly_PolyAct_output_0"
             ],
             "feature_output": [
+                "_features_features_17_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "level_cost": -12
+        },
+        "_features_features_17_conv_conv_5_poly_PolyAct_output_0_bootstrap_drop_to_planned_level": {
+            "type": "drop_level",
+            "channel_input": 960,
+            "channel_output": 960,
+            "ckks_parameter_id_input": "param0",
+            "ckks_parameter_id_output": "param0",
+            "feature_input": [
+                "_features_features_17_conv_conv_5_poly_PolyAct_output_0_refreshed_bootstrap_max_level"
+            ],
+            "feature_output": [
                 "_features_features_17_conv_conv_5_poly_PolyAct_output_0_refreshed"
             ],
-            "level_cost": -8
+            "level_cost": 3
         },
         "_features_features_17_conv_conv_6_Conv_drop_level_idx0_ts1774592594003391": {
             "type": "drop_level",

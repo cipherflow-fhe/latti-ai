@@ -32,7 +32,7 @@
             "ckks_parameter_id": "param0",
             "level": 7,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 64
         }
     },
     "task_output_param": {
@@ -45,7 +45,7 @@
             "ckks_parameter_id": "param0",
             "level": 0,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 64
         }
     },
     "server_task": {

@@ -42,7 +42,7 @@ PolyRelu1D::PolyRelu1D(const CkksParameter& param_in,
 //   channel ch (CT-local), position i → slot = ch * shape_with_skip + i * skip
 //   Weight value is broadcast to all `shape` positions of channel ch.
 
-CkksPlaintext PolyRelu1D::generate_weight_pt_skip1d(CkksContext& ctx, int idx, int ct_idx) const {
+CkksPlaintext PolyRelu1D::generate_weight_pt_skip1d(CkksContext& ctx, int idx, int ct_idx, double scale) const {
     vector<double> buf(N, 0.0);
     for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
         int channel_idx = ct_idx * n_channel_per_ct + ch;
@@ -54,7 +54,7 @@ CkksPlaintext PolyRelu1D::generate_weight_pt_skip1d(CkksContext& ctx, int idx, i
             buf[block_start + i * skip] = w;
         }
     }
-    double pack_scale = cached_bsgs_coeff_scale.at(idx);
+    double pack_scale = scale == 0 ? cached_bsgs_coeff_scale.at(idx) : scale;
     return fhe_api::encode_ringt(ctx, buf, pack_scale);
 }
 
@@ -63,7 +63,7 @@ CkksPlaintext PolyRelu1D::generate_weight_pt_skip1d(CkksContext& ctx, int idx, i
 //   channel j (CT-local), position i → slot = (j/skip)*shape_with_skip + i*skip + (j%skip)
 //   Weight value is broadcast to all `shape` positions of channel j.
 
-CkksPlaintext PolyRelu1D::generate_weight_pt_mux1d(CkksContext& ctx, int idx, int ct_idx) const {
+CkksPlaintext PolyRelu1D::generate_weight_pt_mux1d(CkksContext& ctx, int idx, int ct_idx, double scale) const {
     vector<double> buf(N, 0.0);
     for (int j = 0; j < n_channel_per_ct_mux; j++) {
         int channel_idx = ct_idx * n_channel_per_ct_mux + j;
@@ -76,14 +76,14 @@ CkksPlaintext PolyRelu1D::generate_weight_pt_mux1d(CkksContext& ctx, int idx, in
             buf[group * shape_with_skip + i * skip + sub_pos] = w;
         }
     }
-    double pack_scale = cached_bsgs_coeff_scale.at(idx);
+    double pack_scale = scale == 0 ? cached_bsgs_coeff_scale.at(idx) : scale;
     return fhe_api::encode_ringt(ctx, buf, pack_scale);
 }
 
-CkksPlaintext PolyRelu1D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int ct_idx) const {
+CkksPlaintext PolyRelu1D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int ct_idx, double scale) const {
     if (is_multiplexed)
-        return generate_weight_pt_mux1d(ctx, idx, ct_idx);
-    return generate_weight_pt_skip1d(ctx, idx, ct_idx);
+        return generate_weight_pt_mux1d(ctx, idx, ct_idx, scale);
+    return generate_weight_pt_skip1d(ctx, idx, ct_idx, scale);
 }
 
 // ---- prepare (eager) ----

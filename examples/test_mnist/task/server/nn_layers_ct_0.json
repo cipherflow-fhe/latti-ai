@@ -5,12 +5,25 @@
             "poly_modulus_degree": 16384,
             "n_mult_level": 9,
             "log_default_scale": 34,
-            "block_shape": [
-                16,
-                16
+            "param_name": "PN14Default",
+            "q": [
+                35184372744193,
+                17180262401,
+                17180393473,
+                17181442049,
+                17183014913,
+                17176854529,
+                17183408129,
+                17183932417,
+                17175674881,
+                17186947073
             ],
-            "param_name": "PN14QP438",
-            "pack_num": 4
+            "p": [
+                17592186175489,
+                8796090007553
+            ],
+            "ring_type": 1,
+            "n_slots": 16384
         }
     },
     "feature": {
@@ -30,7 +43,7 @@
             "ckks_parameter_id": "param0",
             "level": 7,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 64,
             "invalid_fill": [
                 1,
                 1
@@ -52,7 +65,7 @@
             "ckks_parameter_id": "param0",
             "level": 6,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 64,
             "invalid_fill": [
                 2,
                 2
@@ -74,7 +87,7 @@
             "ckks_parameter_id": "param0",
             "level": 6,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 64,
             "invalid_fill": [
                 2,
                 2
@@ -96,7 +109,7 @@
             "ckks_parameter_id": "param0",
             "level": 4,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 64,
             "invalid_fill": [
                 2,
                 2
@@ -118,7 +131,7 @@
             "ckks_parameter_id": "param0",
             "level": 3,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 64,
             "invalid_fill": [
                 4,
                 4
@@ -140,7 +153,7 @@
             "ckks_parameter_id": "param0",
             "level": 3,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 64,
             "invalid_fill": [
                 4,
                 4
@@ -162,7 +175,7 @@
             "ckks_parameter_id": "param0",
             "level": 1,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 64,
             "invalid_fill": [
                 4,
                 4
@@ -177,7 +190,7 @@
             "ckks_parameter_id": "param0",
             "level": 1,
             "depth": -1,
-            "pack_num": 32,
+            "pack_num": 64,
             "special_info": {
                 "skip": [
                     4,
@@ -202,7 +215,7 @@
             "ckks_parameter_id": "param0",
             "level": 0,
             "depth": -1,
-            "pack_num": 32
+            "pack_num": 64
         }
     },
     "layer": {

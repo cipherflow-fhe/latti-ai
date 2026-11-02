@@ -2,6 +2,16 @@
 build/
 vs_build/
 Testing/
+third_party/
+benchmark_logs/
+BERT/
+datasets/
+face_resource/
+retina_degree8/
+logs/
+dataset_imagenet/
+backups/
+docs/diagnostics
 
 # Dependencies
 node_modules/

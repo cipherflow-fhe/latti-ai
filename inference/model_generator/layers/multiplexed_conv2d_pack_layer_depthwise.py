@@ -312,7 +312,10 @@ class MultiplexedConv2DPackedLayerDepthwise:
             x_ct_list = list()
             w_pt_list = list()
             for j in range(k_size):
-                w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{j}', is_ringt=True)
+                w_pt = CkksPlaintextNode(
+                    f'encode_pt_{conv_data_source.id}_{ct_idx}_{j}',
+                    is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]),
+                )
                 custom_compute(
                     inputs=[conv_data_source],
                     output=w_pt,
@@ -359,7 +362,10 @@ class MultiplexedConv2DPackedLayerDepthwise:
 
                 for i in range(self.n_channel_per_ct):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
-                        m_pt = CkksPlaintextNode(f'encode_pt_mask_{ct_idx}_{i}', is_ringt=True)
+                        m_pt = CkksPlaintextNode(
+                            f'encode_pt_mask_{conv_data_source.id}_{ct_idx}_{i}',
+                            is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level - 1]),
+                        )
                         custom_compute(
                             inputs=[conv_data_source],
                             output=m_pt,
@@ -371,7 +377,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
                         result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
         if self.stride[0] == 1:
             for i in range(len(res)):
-                b_pt = CkksPlaintextNode(f'encode_pt_{i}', is_ringt=True)
+                b_pt = CkksPlaintextNode(f'encode_pt_{conv_data_source.id}_bias_{i}', is_ringt=True)
                 custom_compute(
                     inputs=[conv_data_source],
                     output=b_pt,
@@ -387,7 +393,7 @@ class MultiplexedConv2DPackedLayerDepthwise:
             if p == 0:
                 sp = c_m_s
                 btp_idx = int(np.floor(i / (self.stride[0] * self.stride[1] * self.n_channel_per_ct)))
-                b_pt = CkksPlaintextNode(f'encode_pt_{btp_idx}', is_ringt=True)
+                b_pt = CkksPlaintextNode(f'encode_pt_{conv_data_source.id}_bias_{btp_idx}', is_ringt=True)
                 custom_compute(
                     inputs=[conv_data_source],
                     output=b_pt,

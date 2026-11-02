@@ -18,10 +18,10 @@
 """Generate mega_ag instructions for a task.
 
 Usage:
-    python gen_mega_ag.py --task-dir ./task
-    python gen_mega_ag.py  # defaults to ./task
+    python gen_mega_ag.py --task-dir ./task --device cpu
+    python gen_mega_ag.py --task-dir ./task --device gpu
 """
-
+#修改内容：命令终端可以选择执行器对应的推理图的生成
 import argparse
 import json
 import sys
@@ -43,6 +43,10 @@ def main():
         type=str,
         required=True,
         help='Path to the task directory',
+    )
+    parser.add_argument(
+        '--device', choices=('cpu', 'gpu'), default='gpu',
+        help='Target device for the compiled graph (default: gpu). Regenerate when switching devices.',
     )
     args = parser.parse_args()
 
@@ -71,9 +75,9 @@ def main():
 
     for erg_name, erg_config in server_config['server_task'].items():
         if erg_config['enable_fpga']:
-            gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style, lazy=True)
+            gen_custom_task(ergs_path, use_gpu=args.device == 'gpu', param_name=param_name, style=style, lazy=True)
 
-    print(f'Done: mega_ag generated for {task_dir}.')
+    print(f'Done: {args.device} mega_ag generated for {task_dir}.')
 
 
 if __name__ == '__main__':

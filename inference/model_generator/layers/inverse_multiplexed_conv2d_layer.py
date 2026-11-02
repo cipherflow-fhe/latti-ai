@@ -299,7 +299,10 @@ class InverseMultiplexedConv2DLayer:
                     w_pt_list = []
                     for j in range(0, self.n_in_channel):
                         for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
-                            w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{j}_{k + base_idx}', is_ringt=True)
+                            w_pt = CkksPlaintextNode(
+                                f'encode_pt_{conv_data_source.id}_{ct_idx}_{j}_{k + base_idx}',
+                                is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]),
+                            )
                             custom_compute(
                                 inputs=[conv_data_source],  # All nodes reference the same data source
                                 output=w_pt,
@@ -316,7 +319,9 @@ class InverseMultiplexedConv2DLayer:
                             w_pt_list.append(w_pt)
                     partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
                     s = rescale(partial_sum)
-                    b_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}', is_ringt=True)
+                    b_pt = CkksPlaintextNode(
+                        f'encode_pt_{conv_data_source.id}_bias_{out_ct_idx}', is_ringt=True
+                    )
                     custom_compute(
                         inputs=[conv_data_source],  # Reference same data source
                         output=b_pt,
@@ -351,7 +356,9 @@ class InverseMultiplexedConv2DLayer:
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 
             # Shared mask: select row%out_skip==0 && col%out_skip==0
-            repack_mask = CkksPlaintextNode('repack_mask', is_ringt=True)
+            repack_mask = CkksPlaintextNode(
+                'repack_mask', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level - 1])
+            )
             custom_compute(
                 inputs=[conv_data_source],
                 output=repack_mask,

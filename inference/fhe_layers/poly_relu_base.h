@@ -49,7 +49,8 @@ public:
 
     static int compute_bsgs_level_cost(int order);
 
-    virtual ls::CkksPlaintext generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int ct_idx) const = 0;
+    // A zero scale selects the cached BSGS coefficient scale.
+    virtual ls::CkksPlaintext generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int ct_idx, double scale = 0) const = 0;
 
 protected:
     int N;
@@ -106,7 +107,7 @@ public:
     void prepare_weight_2d_multiplexed(const Duo& input_shape_in, const Duo& skip_in);
     void prepare_weight_2d_multiplexed_lazy(const Duo& input_shape_in, const Duo& skip_in);
 
-    ls::CkksPlaintext generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int ct_idx) const override;
+    ls::CkksPlaintext generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int ct_idx, double scale = 0) const override;
 
     Feature0DEncrypted run(ls::CkksContext& ctx, const Feature0DEncrypted& x);
     Array<double, 1> run_plaintext(const Array<double, 1>& x);
@@ -116,10 +117,10 @@ public:
 
 private:
     // Helper for Mode 1 lazy generation
-    ls::CkksPlaintext generate_weight_pt_skip0d(ls::CkksContext& ctx, int idx, int ct_idx) const;
+    ls::CkksPlaintext generate_weight_pt_skip0d(ls::CkksContext& ctx, int idx, int ct_idx, double scale = 0) const;
 
     // Helper for Mode 2 lazy generation
-    ls::CkksPlaintext generate_weight_pt_multiplexed(ls::CkksContext& ctx, int idx, int ct_idx) const;
+    ls::CkksPlaintext generate_weight_pt_multiplexed(ls::CkksContext& ctx, int idx, int ct_idx, double scale = 0) const;
 
     // Cached values for Mode 2 (multiplexed)
     Duo special_input_shape = {0, 0};  // [H, W]

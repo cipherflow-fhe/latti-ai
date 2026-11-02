@@ -2277,7 +2277,7 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
                     cxx_args.push_back(CxxVectorArgument{"poly_reluw_" + key + "_" + to_string(i),
                                                          &(fp->get_layer<PolyRelu1D>(key).weight_pt[i])});
                 }
-            } else {
+            } else if (compute_device != ComputeDevice::CPU) {
                 for (int i = 0; i < fp->get_layer<PolyRelu2D>(key).weight_pt.size(); i++) {
                     cxx_args.push_back(CxxVectorArgument{"poly_reluw_" + key + "_" + to_string(i),
                                                          &(fp->get_layer<PolyRelu2D>(key).weight_pt[i])});
@@ -2324,7 +2324,10 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
     auto layer_data_sources = prepare_layer_data_sources();
     for (auto& [data_key, data_source] : layer_data_sources) {
         const string data_layer_type = fp->json_layers.at(data_key).at("type").get<string>();
-        if (is_pcm_layer_type(data_layer_type) || is_pdm_layer_type(data_layer_type)) {
+        const bool runtime_poly = compute_device == ComputeDevice::CPU &&
+            (data_layer_type == "poly_relu2d" || data_layer_type == "polyact") &&
+            FeatureNode(json_features[fp->json_layers.at(data_key)["feature_input"][0].get<string>()]).dim == 2;
+        if (runtime_poly || is_pcm_layer_type(data_layer_type) || is_pdm_layer_type(data_layer_type)) {
             cxx_args.push_back(CxxVectorArgument{data_key, &data_source});
         }
     }
@@ -3447,7 +3450,24 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             pt = layer->generate_weight_pt_for_bsgs(ckks_ctx, i, j);
         } else if (op_class == "PolyRelu2D") {
             auto* layer = static_cast<PolyRelu2D*>(layer_ptr);
-            pt = layer->generate_weight_pt_for_bsgs(ckks_ctx, i, j);
+            double scale = 0;
+            if (attrs.value("runtime_bsgs_scale", false)) {
+                scale = ckks_ctx.parameter().default_scale();
+                for (const auto* power : {"giant_input", "power_input"}) {
+                    if (!attrs.contains(power))
+                        continue;
+                    const auto& ct = any_cast<const shared_ptr<CkksCiphertext>&>(local_data.at(
+                        self.input_nodes.at(attrs.at(power).get<size_t>())->id));
+                    if (!std::isfinite(ct->scale()) || ct->scale() <= 0)
+                        throw runtime_error("encode_pt: invalid BSGS power scale");
+                    scale *= static_cast<double>(ckks_ctx.parameter().q().at(
+                        attrs.at(string(power) == "giant_input" ? "combine_level" : "term_level").get<size_t>()));
+                    scale /= ct->scale();
+                }
+                if (!std::isfinite(scale) || scale <= 0)
+                    throw runtime_error("encode_pt: invalid BSGS coefficient scale");
+            }
+            pt = layer->generate_weight_pt_for_bsgs(ckks_ctx, i, j, scale);
         } else if (op_class == "UpsampleNearestLayer") {
             auto* layer = static_cast<UpsampleNearestLayer*>(layer_ptr);
             pt = layer->generate_select_tensor_pt_for_index(ckks_ctx, i);

@@ -476,7 +476,8 @@ class PolyRelu2D(PolyReluBase):
         """BSGS with pre-computed weight plaintexts (eager mode)."""
         return self._run_bsgs_core(x, lambda idx, x_idx: weight_pt[idx][x_idx])
 
-    def call_bsgs_lazy(self, x: list[CkksCiphertextNode], poly_data_source, layer_id: str = ''):
+    def call_bsgs_lazy(self, x: list[CkksCiphertextNode], poly_data_source, layer_id: str = '',
+                       runtime_scales: bool = False):
         """BSGS with on-demand weight generation via custom_compute (lazy/mega mode)."""
         param = get_fhe_param()
         lid = layer_id or getattr(poly_data_source, 'id', '')
@@ -488,28 +489,35 @@ class PolyRelu2D(PolyReluBase):
                 _scale_cache[level] = _bsgs_coeff_scales(param, self.order, level)
             return _scale_cache[level]
 
-        def get_weight(idx, x_idx):
+        def get_weight(idx, x_idx, power=None, giant=None, term_level=None, combine_level=None):
             key = (idx, x_idx)
             if key not in weight_cache:
                 scales = coeff_scales(x[x_idx].metadata.level)
                 w_pt = CkksPlaintextNode(
                     f'encode_pt_{lid}_{idx}_{x_idx}', is_ringt=True, scale=scales[idx]
                 )
+                inputs = [poly_data_source]
+                attributes = {'op_class': op_class, 'type': 'weight_pt', 'i': idx, 'j': x_idx}
+                if runtime_scales:
+                    attributes['runtime_bsgs_scale'] = True
+                    if giant is not None:
+                        attributes['giant_input'] = len(inputs)
+                        attributes['combine_level'] = combine_level
+                        inputs.append(giant)
+                    if power is not None:
+                        attributes['power_input'] = len(inputs)
+                        attributes['term_level'] = term_level
+                        inputs.append(power)
                 custom_compute(
-                    inputs=[poly_data_source],
+                    inputs=inputs,
                     output=w_pt,
                     type='encode_pt',
-                    attributes={
-                        'op_class': op_class,
-                        'type': 'weight_pt',
-                        'i': idx,
-                        'j': x_idx,
-                    },
+                    attributes=attributes,
                 )
                 weight_cache[key] = w_pt
             return weight_cache[key]
 
-        return self._run_bsgs_core(x, get_weight)
+        return self._run_bsgs_core(x, get_weight, runtime_weights=runtime_scales)
 
 
 # Backward-compatible alias

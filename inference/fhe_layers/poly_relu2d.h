@@ -45,7 +45,8 @@ public:
     ls::CkksPlaintext
     generate_weight_pt_for_non_absorb_indices(ls::CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
     ls::CkksPlaintext
-    generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int n_packed_out_channel_idx) const override;
+    generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int n_packed_out_channel_idx,
+                                double scale = 0) const override;
 
     Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);

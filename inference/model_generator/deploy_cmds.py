@@ -845,16 +845,18 @@ def gen_custom_task(task_path, param_name='PN14Default', use_gpu=True, style='or
             else:  # dim == 2
                 input_shape = feat['shape']
                 polyrelu = PolyRelu2D(input_shape, order, skip, pack)
-                if lazy:
+                if lazy or not use_gpu:
                     poly_data_source = CustomDataNode(type='poly_data_source', id=f'{layer_id}')
-                    layer_output_nodes = polyrelu.call_bsgs_lazy(feature_id_in_nodes, poly_data_source, layer_id)
+                    layer_output_nodes = polyrelu.call_bsgs_lazy(
+                        feature_id_in_nodes, poly_data_source, layer_id, runtime_scales=not use_gpu
+                    )
                     input_args.append(Argument(f'{layer_id}', [poly_data_source]))
                 else:
                     weight_pt = polyrelu.make_pt_nodes(layer_id, len(feature_id_in_nodes))
                     layer_output_nodes = polyrelu.call_bsgs_feature2d(feature_id_in_nodes, weight_pt)
 
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
-            if not lazy:
+            if not lazy and not (dim == 2 and not use_gpu):
                 for i in range(len(weight_pt)):
                     input_args.append(Argument(f'poly_reluw_{layer_id}_{i}', weight_pt[i]))
 

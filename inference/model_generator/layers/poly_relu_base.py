@@ -198,7 +198,7 @@ class PolyReluBase:
         max_depth = max(power_depth[p] for p in required)
         return max_depth + 1
 
-    def _run_bsgs_core(self, x: list, get_weight):
+    def _run_bsgs_core(self, x: list, get_weight, runtime_weights=False):
         """Core BSGS computation graph. Matches C++ run_core_bsgs.
 
         Args:
@@ -267,7 +267,14 @@ class PolyReluBase:
                     if idx > order:
                         break
 
-                    w_pt = get_weight(idx, x_idx)
+                    if runtime_weights:
+                        w_pt = get_weight(
+                            idx, x_idx, x_powers.get(b),
+                            x_powers[g * baby_steps] if g else None,
+                            target_level + 1, bsgs_output_level + 1,
+                        )
+                    else:
+                        w_pt = get_weight(idx, x_idx)
 
                     if b == 0:
                         coeff0_pts[g] = w_pt

@@ -412,8 +412,8 @@ void PolyRelu2D::prepare_weight_hornor_lazy() {
     weight_pt.clear();
 }
 
-CkksPlaintext
-PolyRelu2D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
+CkksPlaintext PolyRelu2D::generate_weight_pt_for_bsgs(
+    CkksContext& ctx, int idx, int n_packed_out_channel_idx, double scale) const {
     vector<double> feature_tmp_pack(N, 0.0);
 
     if (is_ordinary_pack) {
@@ -446,8 +446,7 @@ PolyRelu2D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int n_packed_
         }
     }
 
-    double pack_scale = cached_bsgs_coeff_scale.at(idx);
-    return fhe_api::encode_ringt(ctx, feature_tmp_pack, pack_scale);
+    return fhe_api::encode_ringt(ctx, feature_tmp_pack, scale == 0 ? cached_bsgs_coeff_scale.at(idx) : scale);
 }
 
 Feature2DEncrypted PolyRelu2D::run_bsgs(CkksContext& ctx, const Feature2DEncrypted& x) {
