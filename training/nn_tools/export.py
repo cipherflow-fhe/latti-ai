@@ -595,8 +595,24 @@ def export_h5_from_onnx(
         return ''
 
     polyact_info = {}
+    for node in onnx_model.graph.node:
+        if node.op_type != 'Simple_Polyrelu':
+            continue
+        degree = _attr_int({a.name: a for a in node.attribute}, 'degree', default=4)
+        channel_count = onnx_weights[node.input[1]].size
+        coefficients = np.zeros((degree + 1, channel_count), dtype=np.float64)
+        for name in node.input[1:]:
+            power = int(name.rsplit('.a', 1)[1])
+            coefficients[power] = onnx_weights[name].reshape(-1)
+        # Explicit monomial coefficients already contain all channel scaling.
+        polyact_info[_format_id(node.name)] = {
+            'coefficients': coefficients, 'running_max': np.ones(channel_count),
+            'upper_bound': 1.0, 'eps': 0.0,
+        }
     for layer_key, layer in layers.items():
         if layer.get('type') != 'polyact':
+            continue
+        if layer_key in polyact_info:
             continue
         wp = layer.get('weight_path', '')
         rk = _rm_key(wp)
@@ -713,6 +729,9 @@ def export_h5_from_onnx(
                 log.warning('polyact info missing: %s', layer_key)
                 continue
             pinfo = polyact_info[layer_key]
+            if 'coefficients' in pinfo:
+                out[wp] = pinfo['coefficients'].flatten()
+                continue
             hermite_coeffs = get_hermite_coeffs_for_module(pinfo['activation_cls'], pinfo['degree'])
             s = pinfo['running_max'] / pinfo['upper_bound'] + pinfo['eps']
             # Conv absorbed 1/s, so polyact receives x' = x/s and must output s*poly(x').

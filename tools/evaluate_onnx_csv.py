@@ -46,6 +46,16 @@ def expand_polynomials(model):
 
     supported = {'RangeNormPoly1d', 'RangeNormPoly2d', 'PolyAct', 'PolyActRNPoly'}
     for node in model.graph.node:
+        if node.op_type == 'Simple_Polyrelu':
+            terms = []
+            for name in node.input[1:]:
+                power = int(name.rsplit('.a', 1)[1])
+                terms.append(name if power == 0 else op('Mul', name, op('Pow', node.input[0], constant(power))))
+            y = terms[0]
+            for term in terms[1:]:
+                y = op('Add', y, term)
+            nodes.append(helper.make_node('Identity', [y], list(node.output)))
+            continue
         if node.op_type not in supported:
             nodes.append(node)
             continue

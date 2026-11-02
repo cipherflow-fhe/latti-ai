@@ -20,6 +20,56 @@ from summarize_parameter_bundle import element_lengths
 
 
 class ParameterAcceptanceToolsTest(unittest.TestCase):
+    def test_explicit_polynomial_coefficients_survive_import_and_export(self):
+        import h5py
+        from training.model_export.onnx_to_json import onnx_to_json
+        from training.nn_tools.export import export_h5_from_onnx
+
+        x = np.linspace(-1.5, 1.5, 12, dtype=np.float32).reshape(1, 2, 2, 3)
+        weights = np.eye(2, dtype=np.float32).reshape(2, 2, 1, 1)
+        bias = np.array([0.25, -0.5], dtype=np.float32)
+        coefficients = {power: np.array(values, dtype=np.float32).reshape(1, 2, 1, 1)
+                        for power, values in {0: [0.7, -0.2], 1: [1.1, 0.3],
+                                              2: [0.4, 0.6], 4: [-0.02, 0.03]}.items()}
+        parameters = {'conv.weight': weights, 'conv.bias': bias,
+                      **{f'act.a{power}': value for power, value in coefficients.items()}}
+        nodes = [helper.make_node('Conv', ['input', 'conv.weight', 'conv.bias'], ['conv_output'],
+                                  name='conv', kernel_shape=[1, 1], strides=[1, 1], pads=[0, 0, 0, 0],
+                                  group=1, dilations=[1, 1]),
+                 helper.make_node('Simple_Polyrelu', ['conv_output', *[f'act.a{p}' for p in coefficients]],
+                                  ['output'], name='activation', domain='custom', degree=4)]
+        graph = helper.make_graph(nodes, 'explicit_polynomial',
+                                  [helper.make_tensor_value_info('input', onnx.TensorProto.FLOAT, x.shape)],
+                                  [helper.make_tensor_value_info('output', onnx.TensorProto.FLOAT, x.shape)],
+                                  [numpy_helper.from_array(value, name) for name, value in parameters.items()])
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid('', 17),
+                                                       helper.make_opsetid('custom', 1)], ir_version=8)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            onnx.save(model, root / 'model.onnx')
+            np.savetxt(root / 'input.csv', x.reshape(-1), delimiter=',')
+            outputs, _ = evaluate(root / 'model.onnx', root / 'input.csv', warmup=0, repeats=1)
+            conv_output = x + bias.reshape(1, 2, 1, 1)
+            expected = sum(value * conv_output ** power for power, value in coefficients.items())
+            np.testing.assert_allclose(outputs['output'], expected.reshape(-1), atol=2e-6)
+            onnx_to_json(str(root / 'model.onnx'), str(root / 'layers.json'), 'multiplexed')
+            layers = json.loads((root / 'layers.json').read_text())
+            self.assertEqual(layers['layer']['activation']['weight_path'], 'act.weight')
+            self.assertEqual(layers['layer']['activation']['order'], 4)
+            # The compiler may attach an absorption edge; explicit coefficients
+            # must leave both convolution weights and biases unchanged.
+            layers['layer']['conv'].update(absorb_path=['activation'], absorb_type=['polyact'])
+            (root / 'layers.json').write_text(json.dumps(layers))
+            export_h5_from_onnx(str(root / 'model.onnx'), str(root / 'layers.json'), str(root / 'params.h5'),
+                                verbose=False)
+            with h5py.File(root / 'params.h5') as params:
+                np.testing.assert_array_equal(params['conv.weight'][:], weights.reshape(-1))
+                np.testing.assert_array_equal(params['conv.bias'][:], bias)
+                actual = params['act.weight'][:].reshape(5, 2)
+                for power in range(5):
+                    np.testing.assert_array_equal(actual[power], coefficients[power].reshape(-1)
+                                                  if power in coefficients else np.zeros(2))
+
     def test_named_csv_inputs_follow_model_names_and_shapes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

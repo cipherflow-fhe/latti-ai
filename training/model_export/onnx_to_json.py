@@ -455,7 +455,7 @@ def onnx_to_json(
                 compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
             case 'RangeNormPoly1d':
                 compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
-            case 'PolyAct':
+            case 'PolyAct' | 'Simple_Polyrelu':
                 compute_node = PolyActComputeNode.from_onnx_node(n, features_nodes)
             case 'PolyActRNPoly':
                 compute_node = PolyActRNPolyComputeNode.from_onnx_node(n, features_nodes)
