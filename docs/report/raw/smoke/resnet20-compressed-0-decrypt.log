@@ -1,6 +1,0 @@
-[Client] Loading full context (with secret key)...
-[Client] Done.
-[Client] Decrypting output 'output' (dim=0)...
-[Client] Done.
-Decrypted output [output] = [-6.14718734, -0.43182041, -1.94143232, 18.92967400, -4.71695671, 9.49083408, -0.28132348, -4.34828910, -2.85463542, -7.80387980] (num_outputs=10)
-Top-1 [output]: index=3, value=18.92967400

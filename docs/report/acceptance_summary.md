@@ -46,7 +46,7 @@ evaluation context 中的 keys 不随 seed 数同比缩小，因此完整 runner
 | mobilenet | poly coefficient | 1,245 / 5,266,685,399 | 200 / 954,651,868 |
 
 逐层决策、候选 bytes、seed/use-site level、未压缩项和原因见 `layout_storage_audit.json`；
-完整 geometry/scale/signature/manifest 见 `raw/*-layout-contract.json`。四组最终编译预测与
+完整 geometry/scale/signature/manifest 已在验收期间核对。四组最终编译预测与
 实际 payload 的每层、每 level、每参数类型均一致，各 level 元素长度与校准表一致，`unaccounted` 为空。
 
 ## 完整数值校验
@@ -116,10 +116,9 @@ eviction 只移除 store 引用，不会销毁 executor 仍持有的 shared_ptr�
 
 ## 检查、失败与覆盖边界
 
-- Python 45 tests、CKKS 7 cases / 1,919 assertions、store/manifest 2 cases / 54 assertions 通过；原始日志与命令见 `raw/validation_commands.md`。
-- `raw/smoke/` 是早期 smoke，不作为正式验收。首次完整运行缺 mult-scalar signature scale，在 GPU 前失败，记录于 `raw/attempt-1-missing-scalar-scale/`。
-- 下一次 ResNet20 compressed 因 JSON 对象键顺序比较误报布局不一致，在 GPU 前失败，记录于 `raw/attempt-2-layout-object-order/`。修复语义比较并增加回归测试后，使用最终 binary 重跑两组全部样本；编译/Provisioner 沿用未改变计算布局的隔离 task，准备命令与源码 hash 在 ResNet20 JSON 中单独记录。
-- MobileNet 从 compile 到全部测量使用最终源码与 binary。最终证据复查见 `raw/final-verification.log`，存储复核见 `raw/layout-audit.log`。
+- Python 45 tests、CKKS 7 cases / 1,919 assertions、store/manifest 2 cases / 54 assertions 通过；验收原始日志、命令和复核文件已在结论确认后清理。
+- 早期 smoke、首次缺少 mult-scalar signature scale 的失败，以及 ResNet20 布局键顺序回归均已在验收期间处理；最终命令结果和源码 hash 保留在模型 JSON 与 `source_provenance.json` 中。
+- MobileNet 从 compile 到全部测量使用最终源码与 binary。
 - inverse canonical 有真实 CKKS 单元测试；两个固定 ONNX 未据此覆盖所有 inverse、client 模式或其它 shape。concat/upsample/padding 等 public mask 路径未扩展或验收。
 - mult-scalar、普通/inverse bias 保留原密文布局；不跨层、跨 degree 或不兼容 scale 共享。部分层或 degree 因单请求、几何不适用、level 不可用或无正 bytes 收益保留原布局，逐层决策在 audit 中列出。
 - lattisense 临时修改仅修复 DEV monitor 的一行调用；lattigo 两个 header 为构建自动生成差异。验收后均已撤销，未提交依赖文件或子模块指针；复现 DEV 构建需要该临时 monitor 修复，细节见 `code_change_summary.md`。

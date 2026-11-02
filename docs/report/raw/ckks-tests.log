@@ -1,4 +1,0 @@
-Filters: [joint_seed],[dense_tile],[poly_seed],[inverse_canonical],[multiplexed_joint],[kernel_seed]
-===============================================================================
-All tests passed (1919 assertions in 7 test cases)
-

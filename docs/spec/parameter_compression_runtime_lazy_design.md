@@ -287,20 +287,11 @@ docs/report/code_change_summary.md
 docs/report/acceptance_summary.md
 docs/report/resnet20_runtime_lazy.json
 docs/report/mobilenet_runtime_lazy.json
-docs/report/raw/
-  <model>-compile.log
-  <model>-mega-ag.log
-  <model>-provision.log
-  <model>-runner.log
-  <model>-decrypt.log
-  <model>-plaintext.log
-  <model>-mem_usage_cpu.csv
-  <model>-mem_usage_gpu.csv
 ```
 
 `code_change_summary.md` 记录修改的 commit、文件、布局几何、参数计数/level
 变化、未采用压缩的层和测试结果；`acceptance_summary.md` 只引用 JSON/CSV 中的实测值，
-说明任何失败、重试和未覆盖的参数类型。原始日志不能只保留截图或手工摘要。
+说明任何失败、重试和未覆盖的参数类型。原始日志用于验收过程，结论确认后可以清理；提交的 JSON/Markdown 报告必须保留可复核的数值、命令结果和来源 hash。
 
 每个模型 JSON 至少包含：
 

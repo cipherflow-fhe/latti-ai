@@ -1,8 +1,0 @@
-{
-  "encrypted_parameter_storage_weight": 1.0,
-  "encrypted_parameter_storage_normalization_bytes": 1073741824,
-  "seed_weight_subgrid_stride": [
-    4,
-    4
-  ]
-}

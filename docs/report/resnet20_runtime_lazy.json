@@ -86,11 +86,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-0-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-0-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 27135.2,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-0-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         },
         {
           "warmup": false,
@@ -117,11 +117,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-1-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-1-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 25482.3,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-1-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         },
         {
           "warmup": false,
@@ -148,11 +148,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-2-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-2-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 24886.9,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-2-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         },
         {
           "warmup": false,
@@ -179,11 +179,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-3-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-3-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 25550.5,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-3-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         }
       ],
       "bundle": {
@@ -1985,14 +1985,14 @@
             "--deployment-mode",
             "server_provisioned_runner",
             "--config",
-            "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-config.json"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 3684.911100193858,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-legacy-compile.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 555836,
-          "archived_command_record": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-legacy-compile-command.json"
+          "archived_command_record": "[raw artifact cleaned after acceptance]"
         },
         {
           "command": [
@@ -2008,9 +2008,9 @@
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 1071.9988909550011,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-legacy-mega-ag.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 99752,
-          "archived_command_record": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-legacy-mega-ag-command.json"
+          "archived_command_record": "[raw artifact cleaned after acceptance]"
         },
         {
           "command": [
@@ -2023,9 +2023,9 @@
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 171523.0776737444,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-legacy-provision.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 27363028,
-          "archived_command_record": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-legacy-provision-command.json"
+          "archived_command_record": "[raw artifact cleaned after acceptance]"
         },
         {
           "command": [
@@ -2043,7 +2043,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 43311.16851232946,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-0-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 17276048
         },
         {
@@ -2054,12 +2054,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-0-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 15467.204824090004,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-0-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15120000
         },
         {
@@ -2078,7 +2078,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 41665.6632036902,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-1-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 18502124
         },
         {
@@ -2089,12 +2089,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-1-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 15428.351977840066,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-1-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15119652
         },
         {
@@ -2113,7 +2113,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 40922.57845122367,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-2-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 18362704
         },
         {
@@ -2124,12 +2124,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-2-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 15358.628782909364,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-2-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15118176
         },
         {
@@ -2148,7 +2148,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 41687.483243178576,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-3-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 18472232
         },
         {
@@ -2159,12 +2159,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-3-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 15375.255153048784,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-3-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15121788
         }
       ],
@@ -2218,11 +2218,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-0-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-0-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 9659.55,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-0-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         },
         {
           "warmup": false,
@@ -2249,11 +2249,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-1-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-1-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 9271.51,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-1-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         },
         {
           "warmup": false,
@@ -2280,11 +2280,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-2-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-2-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 9613.53,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-2-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         },
         {
           "warmup": false,
@@ -2311,11 +2311,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-3-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-3-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 9383.83,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-3-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         }
       ],
       "bundle": {
@@ -4127,14 +4127,14 @@
             "--deployment-mode",
             "server_provisioned_runner",
             "--config",
-            "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-config.json"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 3527.157950680703,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-compressed-compile.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 555612,
-          "archived_command_record": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-compressed-compile-command.json"
+          "archived_command_record": "[raw artifact cleaned after acceptance]"
         },
         {
           "command": [
@@ -4150,9 +4150,9 @@
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 2527.8502497822046,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-compressed-mega-ag.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 179784,
-          "archived_command_record": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-compressed-mega-ag-command.json"
+          "archived_command_record": "[raw artifact cleaned after acceptance]"
         },
         {
           "command": [
@@ -4165,9 +4165,9 @@
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 76215.3507382609,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-compressed-provision.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 26956716,
-          "archived_command_record": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-compressed-provision-command.json"
+          "archived_command_record": "[raw artifact cleaned after acceptance]"
         },
         {
           "command": [
@@ -4185,7 +4185,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 26397.887269966304,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-0-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 19296016
         },
         {
@@ -4196,12 +4196,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-0-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 15441.340858116746,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-0-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15119732
         },
         {
@@ -4220,7 +4220,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 25970.369577407837,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-1-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 20629688
         },
         {
@@ -4231,12 +4231,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-1-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 15597.605322953314,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-1-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15120884
         },
         {
@@ -4255,7 +4255,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 26213.651401922107,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-2-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 19388192
         },
         {
@@ -4266,12 +4266,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-2-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 15410.806300118566,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-2-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15119680
         },
         {
@@ -4290,7 +4290,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 25936.81756639853,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-3-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 19463660
         },
         {
@@ -4301,12 +4301,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-3-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 15394.866412039846,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-3-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15119236
         }
       ],
@@ -4400,14 +4400,14 @@
         "--deployment-mode",
         "server_provisioned_runner",
         "--config",
-        "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-config.json"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 3684.911100193858,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-legacy-compile.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 555836,
-      "archived_command_record": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-legacy-compile-command.json"
+      "archived_command_record": "[raw artifact cleaned after acceptance]"
     },
     {
       "command": [
@@ -4423,9 +4423,9 @@
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 1071.9988909550011,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-legacy-mega-ag.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 99752,
-      "archived_command_record": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-legacy-mega-ag-command.json"
+      "archived_command_record": "[raw artifact cleaned after acceptance]"
     },
     {
       "command": [
@@ -4438,9 +4438,9 @@
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 171523.0776737444,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-legacy-provision.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 27363028,
-      "archived_command_record": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-legacy-provision-command.json"
+      "archived_command_record": "[raw artifact cleaned after acceptance]"
     },
     {
       "command": [
@@ -4455,14 +4455,14 @@
         "--deployment-mode",
         "server_provisioned_runner",
         "--config",
-        "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-config.json"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 3527.157950680703,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-compressed-compile.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 555612,
-      "archived_command_record": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-compressed-compile-command.json"
+      "archived_command_record": "[raw artifact cleaned after acceptance]"
     },
     {
       "command": [
@@ -4478,9 +4478,9 @@
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 2527.8502497822046,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-compressed-mega-ag.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 179784,
-      "archived_command_record": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-compressed-mega-ag-command.json"
+      "archived_command_record": "[raw artifact cleaned after acceptance]"
     },
     {
       "command": [
@@ -4493,9 +4493,9 @@
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 76215.3507382609,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-compressed-provision.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 26956716,
-      "archived_command_record": "/home/linghm/project/latti-ai/docs/report/raw/attempt-2-layout-object-order/resnet20-compressed-provision-command.json"
+      "archived_command_record": "[raw artifact cleaned after acceptance]"
     },
     {
       "command": [
@@ -4513,7 +4513,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 43311.16851232946,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-0-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 17276048
     },
     {
@@ -4524,12 +4524,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-0-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 15467.204824090004,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-0-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15120000
     },
     {
@@ -4548,7 +4548,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 41665.6632036902,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-1-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 18502124
     },
     {
@@ -4559,12 +4559,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-1-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 15428.351977840066,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-1-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15119652
     },
     {
@@ -4583,7 +4583,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 40922.57845122367,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-2-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 18362704
     },
     {
@@ -4594,12 +4594,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-2-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 15358.628782909364,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-2-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15118176
     },
     {
@@ -4618,7 +4618,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 41687.483243178576,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-3-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 18472232
     },
     {
@@ -4629,12 +4629,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-3-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 15375.255153048784,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-legacy-3-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15121788
     },
     {
@@ -4653,7 +4653,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 26397.887269966304,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-0-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 19296016
     },
     {
@@ -4664,12 +4664,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-0-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 15441.340858116746,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-0-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15119732
     },
     {
@@ -4688,7 +4688,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 25970.369577407837,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-1-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 20629688
     },
     {
@@ -4699,12 +4699,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-1-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 15597.605322953314,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-1-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15120884
     },
     {
@@ -4723,7 +4723,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 26213.651401922107,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-2-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 19388192
     },
     {
@@ -4734,12 +4734,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-2-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 15410.806300118566,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-2-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15119680
     },
     {
@@ -4758,7 +4758,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 25936.81756639853,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-3-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 19463660
     },
     {
@@ -4769,18 +4769,18 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-3-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 15394.866412039846,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/resnet20-compressed-3-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15119236
     }
   ],
   "preparation_provenance": {
     "source_sha256": "1080f6321b458e32ee0df40657ce56d538e52c0b76013ec3ef64674f832a13c8",
-    "source_provenance": "raw/attempt-2-layout-object-order/source_provenance.json",
+    "source_provenance": "[raw artifact cleaned after acceptance]",
     "note": "Compiled and provisioned tasks reused. Final binary fixes JSON object key-order comparison only; all GPU/decrypt samples rerun with the final binary."
   },
   "numerical_gate_baseline_max_abs": 0.00017103216088631967

@@ -86,11 +86,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-0-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-0-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 217067.0,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-0-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         },
         {
           "warmup": false,
@@ -117,11 +117,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-1-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-1-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 223232.0,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-1-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         },
         {
           "warmup": false,
@@ -148,11 +148,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-2-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-2-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 220373.0,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-2-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         },
         {
           "warmup": false,
@@ -179,11 +179,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-3-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-3-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 223891.0,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-3-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         }
       ],
       "bundle": {
@@ -3536,12 +3536,12 @@
             "--deployment-mode",
             "server_provisioned_runner",
             "--config",
-            "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-config.json"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 5834.748425986618,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-compile.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 633792
         },
         {
@@ -3558,7 +3558,7 @@
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 13980.067122261971,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-mega-ag.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 853572
         },
         {
@@ -3572,7 +3572,7 @@
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 1251929.6953808516,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-provision.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 44773068
         },
         {
@@ -3591,7 +3591,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 241910.43317969888,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-0-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 28494748
         },
         {
@@ -3602,12 +3602,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/mobilenet/legacy/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-0-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 20463.455077260733,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-0-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15120520
         },
         {
@@ -3626,7 +3626,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 248473.34034508094,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-1-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 28512392
         },
         {
@@ -3637,12 +3637,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/mobilenet/legacy/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-1-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 20377.47955089435,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-1-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15120220
         },
         {
@@ -3661,7 +3661,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 245373.2089130208,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-2-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 28269760
         },
         {
@@ -3672,12 +3672,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/mobilenet/legacy/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-2-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 20180.789758916944,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-2-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15120608
         },
         {
@@ -3696,7 +3696,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 248793.667441234,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-3-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 27831780
         },
         {
@@ -3707,12 +3707,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/mobilenet/legacy/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-3-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 21089.747248217463,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-3-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15120168
         }
       ],
@@ -3766,11 +3766,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-0-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-0-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 64253.1,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-0-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         },
         {
           "warmup": false,
@@ -3797,11 +3797,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-1-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-1-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 64145.8,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-1-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         },
         {
           "warmup": false,
@@ -3828,11 +3828,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-2-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-2-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 67425.4,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-2-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         },
         {
           "warmup": false,
@@ -3859,11 +3859,11 @@
             "byte_accounting": "serialized_ciphertext_payload"
           },
           "monitors": {
-            "cpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-3-mem_usage_cpu.csv",
-            "gpu": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-3-mem_usage_gpu.csv"
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
           },
           "gpu_core_ms": 64895.8,
-          "logits_csv": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-3-logits.csv"
+          "logits_csv": "[raw artifact cleaned after acceptance]"
         }
       ],
       "bundle": {
@@ -7226,12 +7226,12 @@
             "--deployment-mode",
             "server_provisioned_runner",
             "--config",
-            "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-config.json"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 6274.877756368369,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-compile.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 634116
         },
         {
@@ -7248,7 +7248,7 @@
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 25336.876809131354,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-mega-ag.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 1474868
         },
         {
@@ -7262,7 +7262,7 @@
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 190813.14094783738,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-provision.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 27291468
         },
         {
@@ -7281,7 +7281,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 93081.19214978069,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-0-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 36689732
         },
         {
@@ -7292,12 +7292,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/mobilenet/compressed/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-0-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 20291.91592009738,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-0-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15121188
         },
         {
@@ -7316,7 +7316,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 92971.92816622555,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-1-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 36318556
         },
         {
@@ -7327,12 +7327,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/mobilenet/compressed/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-1-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 20542.597792111337,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-1-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15119740
         },
         {
@@ -7351,7 +7351,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 96388.3192264475,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-2-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 36733460
         },
         {
@@ -7362,12 +7362,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/mobilenet/compressed/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-2-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 20484.892832115293,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-2-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15121040
         },
         {
@@ -7386,7 +7386,7 @@
           "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
           "returncode": 0,
           "wall_ms": 93744.15144091472,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-3-runner.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 36622808
         },
         {
@@ -7397,12 +7397,12 @@
             "--cipher",
             "/tmp/latti-param-compression-acceptance/mobilenet/compressed/output.ct",
             "--output-csv",
-            "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-3-logits.csv"
+            "[raw artifact cleaned after acceptance]"
           ],
           "cwd": "/home/linghm/project/latti-ai",
           "returncode": 0,
           "wall_ms": 20393.565960694104,
-          "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-3-decrypt.log",
+          "log": "[raw artifact cleaned after acceptance]",
           "peak_rss_kib": 15119756
         }
       ],
@@ -7496,12 +7496,12 @@
         "--deployment-mode",
         "server_provisioned_runner",
         "--config",
-        "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-config.json"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 5834.748425986618,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-compile.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 633792
     },
     {
@@ -7518,7 +7518,7 @@
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 13980.067122261971,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-mega-ag.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 853572
     },
     {
@@ -7532,7 +7532,7 @@
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 1251929.6953808516,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-provision.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 44773068
     },
     {
@@ -7551,7 +7551,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 241910.43317969888,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-0-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 28494748
     },
     {
@@ -7562,12 +7562,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/mobilenet/legacy/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-0-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 20463.455077260733,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-0-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15120520
     },
     {
@@ -7586,7 +7586,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 248473.34034508094,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-1-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 28512392
     },
     {
@@ -7597,12 +7597,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/mobilenet/legacy/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-1-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 20377.47955089435,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-1-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15120220
     },
     {
@@ -7621,7 +7621,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 245373.2089130208,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-2-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 28269760
     },
     {
@@ -7632,12 +7632,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/mobilenet/legacy/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-2-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 20180.789758916944,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-2-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15120608
     },
     {
@@ -7656,7 +7656,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 248793.667441234,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-3-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 27831780
     },
     {
@@ -7667,12 +7667,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/mobilenet/legacy/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-3-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 21089.747248217463,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-legacy-3-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15120168
     },
     {
@@ -7688,12 +7688,12 @@
         "--deployment-mode",
         "server_provisioned_runner",
         "--config",
-        "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-config.json"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 6274.877756368369,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-compile.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 634116
     },
     {
@@ -7710,7 +7710,7 @@
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 25336.876809131354,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-mega-ag.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 1474868
     },
     {
@@ -7724,7 +7724,7 @@
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 190813.14094783738,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-provision.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 27291468
     },
     {
@@ -7743,7 +7743,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 93081.19214978069,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-0-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 36689732
     },
     {
@@ -7754,12 +7754,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/mobilenet/compressed/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-0-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 20291.91592009738,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-0-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15121188
     },
     {
@@ -7778,7 +7778,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 92971.92816622555,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-1-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 36318556
     },
     {
@@ -7789,12 +7789,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/mobilenet/compressed/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-1-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 20542.597792111337,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-1-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15119740
     },
     {
@@ -7813,7 +7813,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 96388.3192264475,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-2-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 36733460
     },
     {
@@ -7824,12 +7824,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/mobilenet/compressed/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-2-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 20484.892832115293,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-2-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15121040
     },
     {
@@ -7848,7 +7848,7 @@
       "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
       "returncode": 0,
       "wall_ms": 93744.15144091472,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-3-runner.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 36622808
     },
     {
@@ -7859,12 +7859,12 @@
         "--cipher",
         "/tmp/latti-param-compression-acceptance/mobilenet/compressed/output.ct",
         "--output-csv",
-        "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-3-logits.csv"
+        "[raw artifact cleaned after acceptance]"
       ],
       "cwd": "/home/linghm/project/latti-ai",
       "returncode": 0,
       "wall_ms": 20393.565960694104,
-      "log": "/home/linghm/project/latti-ai/docs/report/raw/mobilenet-compressed-3-decrypt.log",
+      "log": "[raw artifact cleaned after acceptance]",
       "peak_rss_kib": 15119756
     }
   ],

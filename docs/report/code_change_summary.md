@@ -22,7 +22,7 @@ global stride 仍由 `training/run_compile.py --config` 读取。
 use-site level 和实际序列化 CT 字节计费。候选不能节省 bytes、几何不适用或 seed
 level 不可用时保持原布局；`[1,1]` 作为无 seed 的对照。最终 level 重算与 DP
 计费不一致时报错。逐层计数、level、候选收益和未采用压缩的层见
-`raw/*-layout-contract.json` 与 `layout_storage_audit.json`。
+`layout_storage_audit.json`。
 
 ## level、scale 与公开 mask
 
@@ -66,8 +66,7 @@ cache 使用 64 MiB 有界 LRU，计费口径为序列化 CT payload；已交给
 ## 检查与覆盖范围
 
 Python 45 项测试通过，C++ CKKS 7 cases / 1,919 assertions 和参数 store
-2 cases / 54 assertions 通过（包括 JSON 对象键顺序不影响布局比较的回归测试）。命令与日志见 `raw/validation_commands.md`、
-`raw/python-tests.log`、`raw/ckks-tests.log`、`raw/store-tests.log`。
+2 cases / 54 assertions 通过（包括 JSON 对象键顺序不影响布局比较的回归测试）。测试结果和验收摘要保留在本目录的 JSON/Markdown 报告中。
 覆盖不同 output/input/channel 值、K=1/3×3、stride/skip、旋转方向、尾组、两个物理
 block、Dense bias pre-fold、degree scale 漂移、eager/lazy、旧 manifest 与 cache eviction。
 
