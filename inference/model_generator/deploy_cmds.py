@@ -89,6 +89,7 @@ from training.model_compiler.components import (
     PN15QP880,
     PN16QP1761,
 )
+from inference.model_generator.layers.encrypted_param_ops import materialize_encrypted_param
 
 
 def read_config(config_path):
@@ -364,6 +365,35 @@ def gen_custom_task(
             arg = Argument(arg_id, nodes)
             input_args.append(arg)
 
+    def _append_matrix_source(data_source, matrix_layer_id):
+        if parameter_mode != 'encrypted_offline':
+            input_args.append(Argument(matrix_layer_id, [data_source]))
+            return
+        counter = 0
+
+        def build(attributes, node_id, use_level):
+            nonlocal counter
+            op_class, kind = attributes['op_class'], attributes['type']
+            encrypted = (
+                (op_class == 'ParLowerDiagPCMM' and kind != 'mask_wrap_pt')
+                or op_class in {'ParLowerDiagonalAddPt', 'ParUpperDiagonalPolyActRNGamma',
+                                'ParUpperDiagonalPolyActRNPoly', 'ParUpperDiagonalPoly',
+                                'ParUpperDiagonalLNMinimaxInit', 'ParUpperDiagonalLNAffine',
+                                'ParUpperDiagonalAddPt'}
+            )
+            if encrypted:
+                node = CkksCiphertextNode(f'{matrix_layer_id}_{node_id}_L{use_level}', level=use_level)
+                _append_parameter_arg(f'matrix_{matrix_layer_id}_{counter}', [node])
+                encrypted_parameter_signature[-1].update(layer_id=matrix_layer_id, generator=attributes)
+                counter += 1
+            else:
+                node = CkksPlaintextRingtNode(f'{matrix_layer_id}_{node_id}_L{use_level}')
+                custom_compute(inputs=[], output=node, type='encode_pt',
+                               attributes={**attributes, 'layer_id': matrix_layer_id})
+            return node
+
+        data_source.matrix_parameter_builder = build
+
     def _unsupported_encrypted_parameter_layer(layer_id, layer_type):
         raise ValueError(
             f"Layer '{layer_id}' ({layer_type}) is not supported by "
@@ -384,8 +414,18 @@ def gen_custom_task(
                 )
             return nodes
         nodes = _make_feature_nodes(feature_id, count, level)
-        feature_id_to_nodes_map[feature_id] = nodes
         input_args.append(Argument(feature_id, nodes))
+        if (parameter_mode == 'encrypted_offline' and _feature_input_is_plaintext(feature_id)
+                and config_info['feature'][feature_id].get('data_type') == 'feature_mat'):
+            # A public plaintext input plus an offline encryption of zero enters
+            # the existing rotation-based matrix algorithms without a level cost.
+            consumer_id = feature_consumers[feature_id][0][0]
+            zero = CkksCiphertextNode(f'{feature_id}_encrypted_zero', level=level)
+            _append_parameter_arg(f'matrix_{consumer_id}_input_zero', [zero])
+            encrypted_parameter_signature[-1].update(
+                layer_id=consumer_id, generator={'op_class': 'InputZero', 'type': 'zero'})
+            nodes = [add(materialize_encrypted_param(zero, pt), pt) for pt in nodes]
+        feature_id_to_nodes_map[feature_id] = nodes
         return nodes
 
     def _remember_pdm_output_head_shape(feature_id):
@@ -721,7 +761,7 @@ def gen_custom_task(
     }
     _FEATURE_MAT_LAYER_TYPES = _PAR_MATRIX_LAYER_TYPES | _PCM_LAYER_TYPES | _PDM_MATRIX_LAYER_TYPES | _PDM_LAYER_TYPES
     _UNSUPPORTED_MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose'}
-    _ENCRYPTED_OFFLINE_UNSUPPORTED_LAYER_TYPES = _FEATURE_MAT_LAYER_TYPES
+    _ENCRYPTED_OFFLINE_UNSUPPORTED_LAYER_TYPES = _PAR_MATRIX_LAYER_TYPES | _PCM_LAYER_TYPES
 
     for layer_id, layer_config in config_info['layer'].items():
         if layer_config['type'] == 'relu2d':
@@ -1750,7 +1790,7 @@ def gen_custom_task(
                 _register_feature_nodes(input_fid, layer.m_c, level)
 
             data_source = CustomDataNode(type='pdmtranspose_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             _remember_pdm_output_head_shape(layer_output_feature_ids[0])
@@ -1764,7 +1804,7 @@ def gen_custom_task(
                 _register_feature_nodes(input_fid, layer.total_cts, level)
 
             data_source = CustomDataNode(type='pdm_add_pt_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             _remember_pdm_output_head_shape(layer_output_feature_ids[0])
@@ -1790,7 +1830,7 @@ def gen_custom_task(
                 _register_feature_nodes(input_fid, n_cts_in, level)
 
             data_source = CustomDataNode(type='pdmpcmm_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             _remember_pdm_output_head_shape(layer_output_feature_ids[0])
@@ -1811,7 +1851,7 @@ def gen_custom_task(
                 _register_feature_nodes(fid_B, layer.m_c if layer.is_kqt else layer.n_c, int(feat_B['level']))
 
             data_source = CustomDataNode(type='pdmccmm_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = layer.call_custom_compute(
                 feature_id_to_nodes_map[fid_A],
                 feature_id_to_nodes_map[fid_B],
@@ -2092,7 +2132,7 @@ def gen_custom_task(
                 data_source_type = 'pdmupper_data_source'
 
             data_source = CustomDataNode(type=data_source_type, id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             if layer_type in {'pdmgs', 'pdmaffine', 'pdminviter', 'pdmctmul', 'pdmupperpolymultct'}:
                 layer_output_nodes = layer.call_custom_compute(
                     feature_id_to_nodes_map[layer_input_feature_ids[0]],
