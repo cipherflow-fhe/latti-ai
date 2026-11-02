@@ -260,7 +260,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
             self.assertIn('relin', compute_types)
             self.assertIn('rescale', compute_types)
 
-    def test_runtime_lazy_uses_store_and_wait_only_load_nodes(self):
+    def test_runtime_lazy_loads_wait_for_real_input_dependencies(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             server_dir = root / 'server'
@@ -341,11 +341,19 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
             self.assertEqual(len(store_indices), 1)
             store_idx = int(next(iter(store_indices)))
             for node in load_nodes:
-                self.assertEqual(node['inputs'], [store_idx])
+                self.assertEqual(node['inputs'][0], store_idx)
+                self.assertEqual(len(node['inputs']), 2)
                 self.assertEqual(len(node['outputs']), 1)
-                self.assertEqual(len(node.get('wait_inputs', [])), 1)
+                self.assertEqual(node.get('wait_inputs', []), [])
                 self.assertIn('arg_id', node['attributes'])
                 self.assertIn('flat_index', node['attributes'])
+
+            # The C++ scheduler only inspects inputs, not wait_inputs. A second
+            # layer load must be blocked when only graph inputs are available.
+            initial = set(mega_ag['inputs']) | set(mega_ag['offline_inputs'])
+            second_load = next(n for n in load_nodes if n['attributes']['arg_id'] == 'densew_fc2')
+            self.assertNotIn(second_load['inputs'][1], initial)
+            self.assertTrue(any(second_load['inputs'][1] in n['outputs'] for n in mega_ag['compute'].values()))
 
             self.assertEqual(_data_with_missing_source(mega_ag), [])
 

@@ -2,7 +2,8 @@
 
 状态：此前两模型 GPU 验收见[验收记录](../report/acceptance_summary.md)；
 `[16,16]` 配置、0D Dense tile 和大图 Poly 扩展已通过编译及局部密文测试；
-Retina 参数加密导出成功，整网 GPU 推理因内存不足未完成，尚未通过验收。
+Retina 在 `[16,16]`、block shape `[128,256]`、明文输入下已完成参数加密 GPU
+整网推理与解密，最大绝对误差 `1.2874e-4`。
 本文基于此前的 depthwise / inverse seed 和非卷积参数调研，定义实现和验收要求。
 
 本文的目标是减少 `server_provisioned_runner`、
@@ -295,6 +296,11 @@ materialize_encrypted_param()
 custom executor 只用于 Runner-local public `encode_pt` mask 和已有的
 `load_encrypted_param_ct`。seed 恢复必须在 graph 中显式表示，保证 lazy loader 能
 看到每个 canonical seed 的首次消费者；不能在 custom compute 内偷偷读 H5 或展开整包。
+首次加载以实际 `inputs=[store, trigger]` 等待消费者输入就绪，不能只写
+当前 C++ reader 不读取的 `wait_inputs` metadata。executor 只读取第一个 store
+输入；GPU 下 trigger 会经已有 ABI bridge 回传，因此需单独测量这部分耗时。
+普通 multiplexed 卷积的新 canonical seed 加载还须等待前一项累加结果；跨输出组
+延续该依赖，限制参数恢复并行度。共享 seed 仍只加载一次，不为后续分支反向添加依赖。
 
 共享 seed 的恢复分支各自执行 mask、rescale 和 rotate；禁止一个分支原地 rescale
 后把同一个 CT 交给另一个分支。参数 store 至少报告：总 canonical loads、cache hits、

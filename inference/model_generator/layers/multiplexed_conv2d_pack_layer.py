@@ -26,7 +26,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
     add_encrypted_param_bias,
-    accumulate_encrypted_param_terms,
     is_plaintext_input,
     materialize_encrypted_param,
     multiply_with_encrypted_param,
@@ -808,13 +807,17 @@ class MultiplexedConv2DPackedLayer:
         kernel_rotations = self.gen_rotated_x(block_rotations)
         res: list = list()
         result_ct = list()
+        load_trigger = None
         for ct_idx in range(self.weight_output_count):
-            x_terms, w_terms = [], []
+            s = None
             for source_j, k in self.weight_requests():
-                x_terms.append(kernel_rotations[source_j][k])
-                w_terms.append(self.weight_for_request(weight_ct, ct_idx, source_j, k, seed_mask_pt,
-                                                       kernel_rotations[source_j][k]))
-            s = accumulate_encrypted_param_terms(x_terms, w_terms)
+                x_node = kernel_rotations[source_j][k]
+                trigger = s if s is not None else (load_trigger if load_trigger is not None else x_node)
+                weight = self.weight_for_request(weight_ct, ct_idx, source_j, k, seed_mask_pt, trigger)
+                weight = materialize_encrypted_param(weight, trigger)
+                term = multiply_with_encrypted_param(x_node, weight)
+                s = term if s is None else add(s, term)
+            load_trigger = s
             s = rescale(s)
             s = self.sum_slot(s, self.skip[0], self.skip[1] * self.input_shape[1])
             s = self.sum_slot(s, self.skip[1], 1)
@@ -883,14 +886,16 @@ class MultiplexedConv2DPackedLayer:
         res: list = list()
         result_ct = list()
 
+        load_trigger = None
         for ct_idx in range(self.weight_output_count):
             partial_sum = None
             for source_j, k in self.weight_requests():
                 base_x = x[source_j // self.input_block_count]
                 block_step = (source_j % self.input_block_count) * block_unit
                 total_step = int(block_step + kernel_steps[k])
-                w = self.weight_for_request(weight_ct, ct_idx, source_j, k, seed_mask_pt, base_x)
-                w = materialize_encrypted_param(w, base_x)
+                trigger = partial_sum if partial_sum is not None else (load_trigger if load_trigger is not None else base_x)
+                w = self.weight_for_request(weight_ct, ct_idx, source_j, k, seed_mask_pt, trigger)
+                w = materialize_encrypted_param(w, trigger)
                 if total_step != 0:
                     w = rotate_cols(w, [-total_step])[0]
                 term = mult(w, base_x)
@@ -899,6 +904,7 @@ class MultiplexedConv2DPackedLayer:
                 partial_sum = term if partial_sum is None else add(partial_sum, term)
             if partial_sum is None:
                 raise ValueError('Encrypted multiplexed conv accumulation produced no terms')
+            load_trigger = partial_sum
             s = rescale(partial_sum)
             s = self.sum_slot(s, self.skip[0], self.skip[1] * self.input_shape[1])
             s = self.sum_slot(s, self.skip[1], 1)

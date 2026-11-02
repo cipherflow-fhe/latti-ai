@@ -43,8 +43,10 @@ def materialize_encrypted_param(param_ct: CkksCiphertextNode, trigger: ParamInpu
 
     arg_id = getattr(param_ct, 'encrypted_parameter_arg_id')
     flat_index = getattr(param_ct, 'encrypted_parameter_flat_index')
+    # The runner schedules real inputs; wait_inputs metadata is not consumed by
+    # its graph reader. The executor only reads the store (the first input).
     custom_compute(
-        inputs=[store_node],
+        inputs=[store_node, trigger],
         output=param_ct,
         type='load_encrypted_param_ct',
         attributes={
@@ -52,7 +54,6 @@ def materialize_encrypted_param(param_ct: CkksCiphertextNode, trigger: ParamInpu
             'flat_index': flat_index,
             'expected_level': param_ct.level,
         },
-        wait_inputs=[trigger],
     )
     param_ct.encrypted_parameter_materialized = True
     return param_ct

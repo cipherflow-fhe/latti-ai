@@ -144,7 +144,8 @@ class KernelSeedWeightsTest(unittest.TestCase):
                             self.assertEqual(len(producers), 1)
                             self.assertEqual(producers[0].type, 'load_encrypted_param_ct')
                             self.assertEqual(producers[0].attributes['expected_level'], node.level)
-                            self.assertEqual(len(producers[0].wait_inputs), 1)
+                            self.assertEqual(len(list(task.g_dag.predecessors(producers[0]))), 2)
+                            self.assertEqual(producers[0].wait_inputs, [])
                         expected = {lv: sum(counts.values())
                                     for lv, counts in layer.get_encrypted_param_count(level).items()}
                         self.assertEqual(actual, expected)

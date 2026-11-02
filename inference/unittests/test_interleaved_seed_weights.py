@@ -19,6 +19,7 @@ from contextlib import ExitStack
 from unittest.mock import patch
 
 import numpy as np
+import networkx as nx
 
 from inference.lattisense.frontend import custom_task as task
 from inference.model_generator.layers import multiplexed_conv2d_pack_layer as conv
@@ -96,8 +97,44 @@ class InterleavedSeedWeightsTest(unittest.TestCase):
                             producer = producers[0]
                             self.assertEqual(producer.type, 'load_encrypted_param_ct')
                             self.assertEqual(producer.attributes['expected_level'], param.level)
-                            self.assertEqual(len(producer.wait_inputs), 1)
+                            self.assertEqual(len(list(task.g_dag.predecessors(producer))), 2)
+                            self.assertEqual(producer.wait_inputs, [])
                         self.assertEqual(weights[0][0][0].level, level + layer.seed_weight_level_cost)
+
+    def test_lazy_seed_loads_wait_for_previous_accumulation(self):
+        for layout in ('input_blocks', 'joint'):
+            for plaintext_input in (False, True):
+                with self.subTest(layout=layout, plaintext_input=plaintext_input):
+                    task.g_dag.clear()
+                    task.g_swk_node_dict.clear()
+                    task.set_fhe_param(task.CkksParam.create_default_param(16384))
+                    layer = conv.MultiplexedConv2DPackedLayer(
+                        8, 8, [4, 4], [3, 3], [1, 1], [1, 1], 4, 2, 2,
+                        seed_weight_subgrid_stride=[2, 2], seed_weight_layout=layout,
+                    )
+                    weights, biases, masks = layer.make_param_ct_nodes('lazy', 4)
+                    seeds = [w for group in weights for row in group for w in row]
+                    store = task.CustomDataNode(type='encrypted_parameter_store', id='store')
+                    for i, param in enumerate(seeds + biases):
+                        param.encrypted_parameter_store_node = store
+                        param.encrypted_parameter_arg_id = 'params'
+                        param.encrypted_parameter_flat_index = i
+                    inputs = [(task.CkksPlaintextRingtNode(f'x{i}') if plaintext_input
+                               else task.CkksCiphertextNode(f'x{i}', level=4)) for i in range(2)]
+                    layer.call_param_ct(inputs, weights, biases, masks,
+                                        input_is_plaintext=plaintext_input,
+                                        seed_mask_pt=layer.make_seed_mask_pt_nodes('lazy', 4))
+                    self.assertTrue(nx.is_directed_acyclic_graph(task.g_dag))
+                    loads = [n for n in task.g_dag if getattr(n, 'type', None) == 'load_encrypted_param_ct'
+                             and next(iter(task.g_dag.successors(n))) in seeds]
+                    self.assertEqual(len(loads), len(seeds))
+                    self.assertGreater(len(loads), 1)
+                    for previous, current in zip(loads, loads[1:]):
+                        trigger = list(task.g_dag.predecessors(current))[1]
+                        self.assertTrue(nx.has_path(task.g_dag, previous, trigger))
+                        producer, = task.g_dag.predecessors(trigger)
+                        self.assertIn(producer.type, (task.OperationType.Add, task.OperationType.Mult,
+                                                      task.OperationType.RotateCol, task.OperationType.Relin))
 
     def test_public_seed_masks_are_shared_across_parameter_requests(self):
         for layout in ('input_blocks', 'joint'):
