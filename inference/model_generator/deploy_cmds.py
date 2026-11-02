@@ -1442,12 +1442,20 @@ def gen_custom_task(
                 input_args.append(Argument(f'{layer_id}', [upsample_data_source]))
             else:
                 select_tensor_pt = upsample_layer.make_pt_nodes(layer_id, n_in_channel)
+                if parameter_mode == 'encrypted_offline':
+                    for i, mask in enumerate(select_tensor_pt):
+                        custom_compute(inputs=[], output=mask, type='encode_pt',
+                                       attributes={'op_class': 'UpsampleNearestLayer', 'type': 'mask_pt',
+                                                   'input_shape': input_shape, 'skip': skip,
+                                                   'upsample_factor': upsample_factor,
+                                                   'n_channel_per_ct': pack, 'level': level, 'i': i})
                 layer_output_nodes = upsample_layer.call(
                     feature_id_to_nodes_map[layer_input_feature_ids[0]],
                     select_tensor_pt,
                     n_in_channel,
                 )
-                input_args.append(Argument(f'upsample_select_pt_{layer_id}', select_tensor_pt))
+                if parameter_mode != 'encrypted_offline':
+                    input_args.append(Argument(f'upsample_select_pt_{layer_id}', select_tensor_pt))
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif 'avgpool' in layer_config['type']:

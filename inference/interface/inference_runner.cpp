@@ -27,6 +27,7 @@
 #include "fhe_layers/multiplexed_conv2d_pack_layer.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer_depthwise.h"
 #include "fhe_layers/interleaved_seed.h"
+#include "fhe_layers/upsample_nearest_layer.h"
 #include "lattisense/cxx_sdk_v2/cxx_fhe_task.h"
 
 namespace {
@@ -105,6 +106,7 @@ ExecutorFunc create_multiplexed_conv_mask_executor() {
         }
         const auto& attrs = self.custom_prop->attributes;
         const auto op_class = attrs.value("op_class", std::string());
+        const bool upsample_mask = op_class == "UpsampleNearestLayer" && attrs.value("type", std::string()) == "mask_pt";
         const bool concat_mask = op_class == "ConcatLayer" && attrs.value("type", std::string()) == "mask_0d_pt";
         const bool dense_tile = op_class == "DensePackedLayer" && attrs.value("type", std::string()) == "tile_mask_pt";
         const bool depthwise_mask = op_class == "MultiplexedConv2DPackedLayerDepthwise" &&
@@ -116,7 +118,7 @@ ExecutorFunc create_multiplexed_conv_mask_executor() {
                                  op_class == "PolyRelu2D" ||
                                  op_class == "InverseMultiplexedConv2DLayer" ||
                                  op_class == "InverseMultiplexedConv2DLayerDepthwise";
-        if (!concat_mask && !dense_tile && !inverse_repack && ((op_class != "MultiplexedConv2DPackedLayer" && !kernel_seed) ||
+        if (!upsample_mask && !concat_mask && !dense_tile && !inverse_repack && ((op_class != "MultiplexedConv2DPackedLayer" && !kernel_seed) ||
             (attrs.value("type", std::string()) != "mask_pt" &&
              attrs.value("type", std::string()) != "seed_mask_pt") ||
             (kernel_seed && !depthwise_mask && attrs.value("type", std::string()) != "seed_mask_pt"))) {
@@ -134,7 +136,11 @@ ExecutorFunc create_multiplexed_conv_mask_executor() {
             return Duo{value.at(0).get<uint32_t>(), value.at(1).get<uint32_t>()};
         };
         std::vector<double> mask;
-        if (concat_mask) {
+        if (upsample_mask) {
+            UpsampleNearestLayer layer(ckks_ctx_ptr->get_parameter(), read_duo("input_shape"), read_duo("skip"),
+                read_duo("upsample_factor"), attrs.at("n_channel_per_ct").get<uint32_t>(), attrs.at("level").get<uint32_t>());
+            mask = layer.select_tensor(attrs.at("i").get<int>());
+        } else if (concat_mask) {
             mask.assign(ckks_ctx_ptr->get_parameter().get_n() / 2, 0.0);
             mask.at(attrs.at("slot").get<uint64_t>()) = 1.0;
         } else if (inverse_repack) {
