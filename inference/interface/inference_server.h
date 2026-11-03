@@ -77,7 +77,6 @@ private:
     std::map<std::string, OutputParam> output_params_;
     ls::CkksContext* context_ptr_ = nullptr;
     std::unique_ptr<ls::CkksContext> eval_context_;
-    std::unique_ptr<ls::CkksBtpContext> eval_btp_context_;
 
     std::unique_ptr<InitInferenceProcess> init_;
     std::unique_ptr<InferenceProcess> fp_;

@@ -46,7 +46,7 @@ BlockColMajorCCMM::BlockColMajorCCMM(const CkksParameter& param_in,
     n_ = n;
     p_ = p;
 
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     chunk_size_ = d_ * d_;
     assert(n_slot_ % chunk_size_ == 0 && "n_slot must be divisible by d^2");
     num_chunks_ = n_slot_ / chunk_size_;
@@ -152,18 +152,18 @@ std::vector<double> BlockColMajorCCMM::build_psi_k_equal_0_diagonals() const {
 void BlockColMajorCCMM::precompute_diagonals() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
 
-    double default_scale = param_.get_default_scale();
-    double sigma_tau_scale = param_.get_q(level_);
+    double default_scale = param_.default_scale();
+    double sigma_tau_scale = param_.q()[level_];
     // Divide before multiply to avoid double overflow
     // multiplying two may exceed double's 53-bit mantissa precision.
-    double psi_scale = param_.get_q(level_ - 2) / default_scale * param_.get_q(level_ - 1);
+    double psi_scale = param_.q()[level_ - 2] / default_scale * param_.q()[level_ - 1];
 
     // Sigma: d diagonal vectors
     sigma_diag_pt_.clear();
     sigma_diag_pt_.reserve(d_);
     for (uint32_t k_idx = 0; k_idx < d_; k_idx++) {
         auto diag_vec = build_sigma_diagonal(k_idx);
-        sigma_diag_pt_.push_back(ctx.encode_ringt(diag_vec, sigma_tau_scale));
+        sigma_diag_pt_.push_back(fhe_api::encode_ringt(ctx, diag_vec, sigma_tau_scale));
     }
 
     // Tau: 2d-1 diagonal vectors, offsets -(d-1) to (d-1)
@@ -171,12 +171,12 @@ void BlockColMajorCCMM::precompute_diagonals() {
     tau_diag_pt_.reserve(2 * d_ - 1);
     for (int offset = -(int)(d_ - 1); offset <= (int)(d_ - 1); offset++) {
         auto diag_vec = build_tau_diagonal(offset);
-        tau_diag_pt_.push_back(ctx.encode_ringt(diag_vec, sigma_tau_scale));
+        tau_diag_pt_.push_back(fhe_api::encode_ringt(ctx, diag_vec, sigma_tau_scale));
     }
 
     // Psi i=0: all-ones vector (identity)
     auto k0_vec = build_psi_k_equal_0_diagonals();
-    psi_k0_pt_ = ctx.encode_ringt(k0_vec, psi_scale);
+    psi_k0_pt_ = fhe_api::encode_ringt(ctx, k0_vec, psi_scale);
 
     // Psi i=1..d-1: pairs of diagonal vectors
     psi_w_k_pt_.clear();
@@ -185,23 +185,23 @@ void BlockColMajorCCMM::precompute_diagonals() {
     psi_w_k_minus_d_pt_.reserve(d_ - 1);
     for (uint32_t i = 1; i < d_; i++) {
         auto [w_k, w_kd] = build_psi_diagonals(i);
-        psi_w_k_pt_.push_back(ctx.encode_ringt(w_k, psi_scale));
-        psi_w_k_minus_d_pt_.push_back(ctx.encode_ringt(w_kd, psi_scale));
+        psi_w_k_pt_.push_back(fhe_api::encode_ringt(ctx, w_k, psi_scale));
+        psi_w_k_minus_d_pt_.push_back(fhe_api::encode_ringt(ctx, w_kd, psi_scale));
     }
 }
 
 // sigma: d rotations + d pt_muls + (d-1) adds + 1 rescale
 // Input level L -> Output level L-1
 CkksCiphertext BlockColMajorCCMM::sigma_on_ct(CkksContext& ctx, const CkksCiphertext& a) const {
-    double default_scale = param_.get_default_scale();
-    CkksCiphertext result(0);
+    double default_scale = param_.default_scale();
+    CkksCiphertext result;
 
     for (uint32_t k_idx = 0; k_idx < d_; k_idx++) {
         int rot_amount = (d_ * k_idx) % chunk_size_;
         CkksCiphertext rotated = (rot_amount == 0) ? a.copy() : ctx.rotate(a, rot_amount);
 
-        auto diag_mul = ctx.ringt_to_mul(sigma_diag_pt_[k_idx], level_);
-        auto product = ctx.mult_plain_mul(rotated, diag_mul);
+        const auto& diag_mul = sigma_diag_pt_[k_idx];
+        auto product = ctx.mult(rotated, diag_mul);
 
         if (k_idx == 0) {
             result = move(product);
@@ -209,14 +209,14 @@ CkksCiphertext BlockColMajorCCMM::sigma_on_ct(CkksContext& ctx, const CkksCipher
             result = ctx.add(result, product);
         }
     }
-    return ctx.rescale(result, default_scale);
+    return ctx.rescale(result);
 }
 
 // tau: (2d-1) rotations + (2d-1) pt_muls + (2d-2) adds + 1 rescale
 // Input level L -> Output level L-1
 CkksCiphertext BlockColMajorCCMM::tau_on_ct(CkksContext& ctx, const CkksCiphertext& b) const {
-    double default_scale = param_.get_default_scale();
-    CkksCiphertext result(0);
+    double default_scale = param_.default_scale();
+    CkksCiphertext result;
 
     int diag_idx = 0;
     for (int offset = -(int)(d_ - 1); offset <= (int)(d_ - 1); offset++) {
@@ -224,8 +224,8 @@ CkksCiphertext BlockColMajorCCMM::tau_on_ct(CkksContext& ctx, const CkksCipherte
         int rot_amount = ((offset % (int)chunk_size_) + (int)chunk_size_) % (int)chunk_size_;
         CkksCiphertext rotated = (rot_amount == 0) ? b.copy() : ctx.rotate(b, rot_amount);
 
-        auto diag_mul = ctx.ringt_to_mul(tau_diag_pt_[diag_idx], level_);
-        auto product = ctx.mult_plain_mul(rotated, diag_mul);
+        const auto& diag_mul = tau_diag_pt_[diag_idx];
+        auto product = ctx.mult(rotated, diag_mul);
 
         if (diag_idx == 0) {
             result = move(product);
@@ -234,7 +234,7 @@ CkksCiphertext BlockColMajorCCMM::tau_on_ct(CkksContext& ctx, const CkksCipherte
         }
         diag_idx++;
     }
-    return ctx.rescale(result, default_scale);
+    return ctx.rescale(result);
 }
 
 // phi^i: rotation by d*i positions (rotation only, no level consumed)
@@ -247,7 +247,7 @@ CkksCiphertext BlockColMajorCCMM::phi_on_ct(CkksContext& ctx, const CkksCipherte
 // psi^i: 2 rotations + 2 pt_muls + 1 add + 1 rescale
 // Input level L-1 -> Output level L-2
 CkksCiphertext BlockColMajorCCMM::psi_on_ct(CkksContext& ctx, const CkksCiphertext& b_tau, int i) const {
-    double default_scale = param_.get_default_scale();
+    double default_scale = param_.default_scale();
     int psi_idx = i - 1;  // psi_w_k_pt_ is 0-indexed for i=1..d-1
 
     // Rotation amounts (chunk-wise)
@@ -257,31 +257,31 @@ CkksCiphertext BlockColMajorCCMM::psi_on_ct(CkksContext& ctx, const CkksCipherte
     CkksCiphertext rotated_k = (rot_k == 0) ? b_tau.copy() : ctx.rotate(b_tau, rot_k);
     CkksCiphertext rotated_kd = (rot_kd == 0) ? b_tau.copy() : ctx.rotate(b_tau, rot_kd);
 
-    auto w_k_mul = ctx.ringt_to_mul(psi_w_k_pt_[psi_idx], level_ - 1);
-    auto w_kd_mul = ctx.ringt_to_mul(psi_w_k_minus_d_pt_[psi_idx], level_ - 1);
+    const auto& w_k_mul = psi_w_k_pt_[psi_idx];
+    const auto& w_kd_mul = psi_w_k_minus_d_pt_[psi_idx];
 
-    auto term1 = ctx.mult_plain_mul(rotated_k, w_k_mul);
-    auto term2 = ctx.mult_plain_mul(rotated_kd, w_kd_mul);
+    auto term1 = ctx.mult(rotated_k, w_k_mul);
+    auto term2 = ctx.mult(rotated_kd, w_kd_mul);
 
-    return ctx.rescale(ctx.add(term1, term2), default_scale);
+    return ctx.rescale(ctx.add(term1, term2));
 }
 
 // block_mult: full block multiply of two d*d block ciphertexts
 // Input level L -> Output level L-3
 CkksCiphertext
 BlockColMajorCCMM::block_mult_ct(CkksContext& ctx, const CkksCiphertext& a, const CkksCiphertext& b) const {
-    double default_scale = param_.get_default_scale();
+    double default_scale = param_.default_scale();
 
     // Step 1: Apply sigma/tau transforms (L -> L-1)
     CkksCiphertext a_sigma = sigma_on_ct(ctx, a);
     CkksCiphertext b_tau = tau_on_ct(ctx, b);
 
     // Step 2: i=0, use all-ones psi_k0 plaintext to scale b_tau
-    auto psi_k0_mul = ctx.ringt_to_mul(psi_k0_pt_, level_ - 1);
-    auto b_0 = ctx.rescale(ctx.mult_plain_mul(b_tau, psi_k0_mul), default_scale);  // L-1 -> L-2
+    const auto& psi_k0_mul = psi_k0_pt_;
+    auto b_0 = ctx.rescale(ctx.mult(b_tau, psi_k0_mul));  // L-1 -> L-2
     auto a_0 = ctx.drop_level(a_sigma.copy());                                     // L-1 -> L-2
     auto ct3_0 = ctx.mult(a_0, b_0);
-    auto result = ctx.rescale(ctx.relinearize(ct3_0), default_scale);  // L-2 -> L-3
+    auto result = ctx.rescale(ctx.relinearize(ct3_0));  // L-2 -> L-3
 
     // Step 2: i=1..d-1, use psi_on_ct for general case
     for (uint32_t i = 1; i < d_; i++) {
@@ -291,7 +291,7 @@ BlockColMajorCCMM::block_mult_ct(CkksContext& ctx, const CkksCiphertext& a, cons
         auto a_i_dropped = ctx.drop_level(a_i);  // L-1 -> L-2
 
         auto ct3_i = ctx.mult(a_i_dropped, b_i);
-        auto prod_i = ctx.rescale(ctx.relinearize(ct3_i), default_scale);  // L-2 -> L-3
+        auto prod_i = ctx.rescale(ctx.relinearize(ct3_i));  // L-2 -> L-3
 
         result = ctx.add(result, prod_i);
     }
@@ -340,30 +340,30 @@ BlockColMajorCCMM::run(CkksContext& ctx, const FeatureMatEncrypted& A, const Fea
 
 // ── Generate methods for encode_pt executor ───────────────────────────────────
 
-CkksPlaintextRingt BlockColMajorCCMM::generate_sigma_pt(CkksContext& ctx, uint32_t k) const {
-    return ctx.encode_ringt(build_sigma_diagonal(k), param_.get_q(level_));
+CkksPlaintext BlockColMajorCCMM::generate_sigma_pt(CkksContext& ctx, uint32_t k) const {
+    return fhe_api::encode_ringt(ctx, build_sigma_diagonal(k), param_.q()[level_]);
 }
 
-CkksPlaintextRingt BlockColMajorCCMM::generate_tau_pt(CkksContext& ctx, uint32_t offset_idx) const {
+CkksPlaintext BlockColMajorCCMM::generate_tau_pt(CkksContext& ctx, uint32_t offset_idx) const {
     int offset = (int)offset_idx - (int)(d_ - 1);  // offset_idx 0..2d-2 → offset -(d-1)..d-1
-    return ctx.encode_ringt(build_tau_diagonal(offset), param_.get_q(level_));
+    return fhe_api::encode_ringt(ctx, build_tau_diagonal(offset), param_.q()[level_]);
 }
 
-CkksPlaintextRingt BlockColMajorCCMM::generate_psi_k0_pt(CkksContext& ctx) const {
-    double psi_scale = param_.get_q(level_ - 2) / param_.get_default_scale() * param_.get_q(level_ - 1);
-    return ctx.encode_ringt(build_psi_k_equal_0_diagonals(), psi_scale);
+CkksPlaintext BlockColMajorCCMM::generate_psi_k0_pt(CkksContext& ctx) const {
+    double psi_scale = param_.q()[level_ - 2] / param_.default_scale() * param_.q()[level_ - 1];
+    return fhe_api::encode_ringt(ctx, build_psi_k_equal_0_diagonals(), psi_scale);
 }
 
-CkksPlaintextRingt BlockColMajorCCMM::generate_psi_wk_pt(CkksContext& ctx, uint32_t i) const {
-    double psi_scale = param_.get_q(level_ - 2) / param_.get_default_scale() * param_.get_q(level_ - 1);
+CkksPlaintext BlockColMajorCCMM::generate_psi_wk_pt(CkksContext& ctx, uint32_t i) const {
+    double psi_scale = param_.q()[level_ - 2] / param_.default_scale() * param_.q()[level_ - 1];
     auto [w_k, w_kd] = build_psi_diagonals(i);
-    return ctx.encode_ringt(w_k, psi_scale);
+    return fhe_api::encode_ringt(ctx, w_k, psi_scale);
 }
 
-CkksPlaintextRingt BlockColMajorCCMM::generate_psi_wkd_pt(CkksContext& ctx, uint32_t i) const {
-    double psi_scale = param_.get_q(level_ - 2) / param_.get_default_scale() * param_.get_q(level_ - 1);
+CkksPlaintext BlockColMajorCCMM::generate_psi_wkd_pt(CkksContext& ctx, uint32_t i) const {
+    double psi_scale = param_.q()[level_ - 2] / param_.default_scale() * param_.q()[level_ - 1];
     auto [w_k, w_kd] = build_psi_diagonals(i);
-    return ctx.encode_ringt(w_kd, psi_scale);
+    return fhe_api::encode_ringt(ctx, w_kd, psi_scale);
 }
 
 Array<double, 2> BlockColMajorCCMM::run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const {

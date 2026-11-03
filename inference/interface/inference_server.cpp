@@ -126,13 +126,8 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
     std::cout << "[Server] Importing evaluation context..." << std::endl;
     std::cout << "[Server] Bootstrapping: " << (needs_btp_ ? "Yes" : "No") << std::endl;
 
-    if (needs_btp_) {
-        eval_btp_context_ = std::make_unique<CkksBtpContext>(CkksBtpContext::deserialize(eval_context));
-        context_ptr_ = eval_btp_context_.get();
-    } else {
-        eval_context_ = std::make_unique<CkksContext>(CkksContext::deserialize_advanced(eval_context));
-        context_ptr_ = eval_context_.get();
-    }
+    eval_context_ = std::make_unique<CkksContext>(CkksContext::deserialize(eval_context));
+    context_ptr_ = eval_context_.get();
 
     std::cout << "[Server] Done." << std::endl;
 }
@@ -152,11 +147,7 @@ void InferenceServer::load_model() {
 
     // Transfer eval context directly to inference engine (no shallow_copy)
     std::map<std::string, std::unique_ptr<CkksContext>> context_map;
-    if (needs_btp_) {
-        context_map["param0"] = std::move(eval_btp_context_);
-    } else {
-        context_map["param0"] = std::move(eval_context_);
-    }
+    context_map["param0"] = std::move(eval_context_);
     fp_->ckks_contexts = std::move(context_map);
     context_ptr_ = fp_->ckks_contexts["param0"].get();
 

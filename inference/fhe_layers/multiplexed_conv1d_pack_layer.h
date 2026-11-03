@@ -44,19 +44,19 @@ public:
     void prepare_weight_for_lazy();
 
     // Helper functions to generate weights/bias on-demand (for lazy mode)
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_weight_pt_for_indices(ls::CkksContext& ctx, int wg, int w_idx, int kernel_idx) const;
-    ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int idx) const;
-    ls::CkksPlaintextRingt generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int t) const;
+    ls::CkksPlaintext generate_bias_pt_for_index(ls::CkksContext& ctx, int idx) const;
+    ls::CkksPlaintext generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int t) const;
 
     Feature1DEncrypted run(ls::CkksContext& ctx, Feature1DEncrypted& x);
     virtual std::vector<double> select_tensor(int num) const;
 
     Array<double, 2> run_plaintext(const Array<double, 2>& x);
 
-    std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> weight_pt;
-    std::vector<ls::CkksPlaintextRingt> bias_pt;
-    std::vector<ls::CkksPlaintextRingt> block_select_pt;
+    std::vector<std::vector<std::vector<ls::CkksPlaintext>>> weight_pt;
+    std::vector<ls::CkksPlaintext> bias_pt;
+    std::vector<ls::CkksPlaintext> block_select_pt;
 
     uint32_t input_shape;
     uint32_t skip;

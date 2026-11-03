@@ -45,7 +45,7 @@ MultiplexedDWConv1DPackedLayer::MultiplexedDWConv1DPackedLayer(const CkksParamet
     n_channel_per_ct = n_channel_per_ct_in;
     level_ = level_in;
 
-    weight_scale = param_.get_q(level_) * residual_scale;
+    weight_scale = param_.q()[level_] * residual_scale;
 
     // weight shape: [n_channel, 1, kernel_shape]
     n_channel = weight.get_shape()[0];
@@ -87,11 +87,11 @@ vector<double> MultiplexedDWConv1DPackedLayer::select_tensor(int num) const {
 //   - No inner loop over packed_in_idx; each ct only uses its own weights.
 // ---------------------------------------------------------------------------
 
-CkksPlaintextRingt
+CkksPlaintext
 MultiplexedDWConv1DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int kernel_idx) const {
     uint32_t input_block_size = cached_input_block_size;
     const auto& mask = kernel_masks_[kernel_idx];
-    vector<double> w(param_.get_n() / 2, 0.0);
+    vector<double> w(param_.max_slots(), 0.0);
 
     // ct_idx corresponds to block 0 of this packed group; we iterate over all
     // n_block_per_ct blocks within the ciphertext.
@@ -110,7 +110,7 @@ MultiplexedDWConv1DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx,
         }
     }
 
-    return ctx.encode_ringt(w, weight_scale);
+    return fhe_api::encode_ringt(ctx, w, weight_scale);
 }
 
 // ---------------------------------------------------------------------------
@@ -119,10 +119,10 @@ MultiplexedDWConv1DPackedLayer::generate_weight_pt_for_indices(CkksContext& ctx,
 // Mirrors the two-path logic from the normal Conv1D layer.
 // ---------------------------------------------------------------------------
 
-CkksPlaintextRingt MultiplexedDWConv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int idx) const {
+CkksPlaintext MultiplexedDWConv1DPackedLayer::generate_bias_pt_for_index(CkksContext& ctx, int idx) const {
     bool needs_rearrange = (skip > 1 || stride > 1);
     uint32_t input_block_size = cached_input_block_size;
-    vector<double> bias_data(param_.get_n() / 2, 0.0);
+    vector<double> bias_data(param_.max_slots(), 0.0);
 
     if (!needs_rearrange) {
         // idx == ct_idx (== packed output group index)
@@ -134,7 +134,7 @@ CkksPlaintextRingt MultiplexedDWConv1DPackedLayer::generate_bias_pt_for_index(Ck
                 }
             }
         }
-        return ctx.encode_ringt(bias_data, ctx.get_parameter().get_default_scale());
+        return fhe_api::encode_ringt(ctx, bias_data, ctx.parameter().default_scale());
     } else {
         // idx == packed output ct index after rearrange
         uint32_t skip_out = skip * stride;
@@ -150,7 +150,7 @@ CkksPlaintextRingt MultiplexedDWConv1DPackedLayer::generate_bias_pt_for_index(Ck
                 }
             }
         }
-        return ctx.encode_ringt(bias_data, ctx.get_parameter().get_q(level_ - 1));
+        return fhe_api::encode_ringt(ctx, bias_data, ctx.parameter().q()[level_ - 1]);
     }
 }
 
@@ -158,17 +158,17 @@ CkksPlaintextRingt MultiplexedDWConv1DPackedLayer::generate_bias_pt_for_index(Ck
 // generate_select_tensor_pt_for_index  (lazy / on-demand)
 // ---------------------------------------------------------------------------
 
-CkksPlaintextRingt MultiplexedDWConv1DPackedLayer::generate_select_tensor_pt_for_index(CkksContext& ctx,
+CkksPlaintext MultiplexedDWConv1DPackedLayer::generate_select_tensor_pt_for_index(CkksContext& ctx,
                                                                                        int local_ch) const {
     int t = local_ch / (int)skip;
     int j = local_ch % (int)skip;
     uint32_t input_block_size = cached_input_block_size;
-    vector<double> mask(param_.get_n() / 2, 0.0);
+    vector<double> mask(param_.max_slots(), 0.0);
     for (int out_idx = 0; out_idx < (int)(input_shape / stride); out_idx++) {
         int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip + j;
         mask[slot_idx] = 1.0;
     }
-    return ctx.encode_ringt(mask, ctx.get_parameter().get_q(level_ - 1));
+    return fhe_api::encode_ringt(ctx, mask, ctx.parameter().q()[level_ - 1]);
 }
 
 // ---------------------------------------------------------------------------
@@ -207,12 +207,12 @@ void MultiplexedDWConv1DPackedLayer::prepare_weight() {
         for (int local_ch = 0; local_ch < (int)min(n_channel_per_ct, n_channel); local_ch++) {
             int t = local_ch / (int)skip;
             int j = local_ch % (int)skip;
-            vector<double> mask(param_.get_n() / 2, 0.0);
+            vector<double> mask(param_.max_slots(), 0.0);
             for (int out_idx = 0; out_idx < (int)(input_shape / stride); out_idx++) {
                 int slot_idx = t * (int)input_block_size + out_idx * (int)stride * (int)skip + j;
                 mask[slot_idx] = 1.0;
             }
-            block_select_pt[local_ch] = ctx.encode_ringt(mask, ctx.get_parameter().get_q(level_ - 1));
+            block_select_pt[local_ch] = fhe_api::encode_ringt(ctx, mask, ctx.parameter().q()[level_ - 1]);
         }
     }
 }
@@ -314,19 +314,19 @@ vector<CkksCiphertext> MultiplexedDWConv1DPackedLayer::run_core(CkksContext& ctx
     vector<CkksCiphertext> result(n_packed_ct);
 
     parallel_for(n_packed_ct, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        CkksCiphertext s(0);
+        CkksCiphertext s;
         bool first = true;
 
         for (int k = 0; k < (int)kernel_shape; k++) {
             CkksCiphertext product;
             if (weight_pt.empty()) {
                 auto w_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, k);
-                auto w = ctx_copy.ringt_to_mul(w_rt, level_);
-                product = ctx_copy.mult_plain_mul(rotated_x[ct_idx][k], w);
+                const auto& w = w_rt;
+                product = ctx_copy.mult(rotated_x[ct_idx][k], w);
             } else {
                 const auto& w_rt = weight_pt[ct_idx][k];
-                auto w = ctx_copy.ringt_to_mul(w_rt, level_);
-                product = ctx_copy.mult_plain_mul(rotated_x[ct_idx][k], w);
+                const auto& w = w_rt;
+                product = ctx_copy.mult(rotated_x[ct_idx][k], w);
             }
 
             if (first) {
@@ -341,7 +341,7 @@ vector<CkksCiphertext> MultiplexedDWConv1DPackedLayer::run_core(CkksContext& ctx
         //            the result for its own channel; summing would mix channels) ========
 
         // ======== 4: rescale ========
-        s = ctx_copy.rescale(s, ctx_copy.get_parameter().get_default_scale());
+        s = ctx_copy.rescale(s);
 
         result[ct_idx] = move(s);
     });
@@ -353,9 +353,9 @@ vector<CkksCiphertext> MultiplexedDWConv1DPackedLayer::run_core(CkksContext& ctx
         for (int ct_idx = 0; ct_idx < (int)n_packed_ct; ct_idx++) {
             if (bias_pt.empty()) {
                 auto b_rt = generate_bias_pt_for_index(ctx, ct_idx);
-                result[ct_idx] = ctx.add_plain_ringt(result[ct_idx], b_rt);
+                result[ct_idx] = ctx.add(result[ct_idx], b_rt);
             } else {
-                result[ct_idx] = ctx.add_plain_ringt(result[ct_idx], bias_pt[ct_idx]);
+                result[ct_idx] = ctx.add(result[ct_idx], bias_pt[ct_idx]);
             }
         }
         return result;
@@ -369,7 +369,7 @@ vector<CkksCiphertext> MultiplexedDWConv1DPackedLayer::run_core(CkksContext& ctx
     vector<CkksCiphertext> merged_result(n_packed_out);
 
     parallel_for(n_packed_out, th_nums, ctx, [&](CkksContext& ctx_copy, int po) {
-        CkksCiphertext combined(0);
+        CkksCiphertext combined;
         bool first = true;
 
         for (int ch_local = 0; ch_local < (int)n_channel_per_ct; ch_local++) {
@@ -386,13 +386,13 @@ vector<CkksCiphertext> MultiplexedDWConv1DPackedLayer::run_core(CkksContext& ctx
             CkksCiphertext masked;
             if (block_select_pt.empty()) {
                 auto bs_pt = generate_select_tensor_pt_for_index(ctx_copy, local_ch);
-                auto bs_pt_rt = ctx_copy.ringt_to_mul(bs_pt, level_ - 1);
-                masked = ctx_copy.mult_plain_mul(result[ct_idx], bs_pt_rt);
+                const auto& bs_pt_rt = bs_pt;
+                masked = ctx_copy.mult(result[ct_idx], bs_pt_rt);
             } else {
-                auto bs_pt = ctx_copy.ringt_to_mul(block_select_pt[local_ch], level_ - 1);
-                masked = ctx_copy.mult_plain_mul(result[ct_idx], bs_pt);
+                const auto& bs_pt = block_select_pt[local_ch];
+                masked = ctx_copy.mult(result[ct_idx], bs_pt);
             }
-            masked = ctx_copy.rescale(masked, ctx_copy.get_parameter().get_default_scale());
+            masked = ctx_copy.rescale(masked);
 
             int group = ch_local / (int)skip_out;
             int ch_offset = ch_local % (int)skip_out;
@@ -414,9 +414,9 @@ vector<CkksCiphertext> MultiplexedDWConv1DPackedLayer::run_core(CkksContext& ctx
 
         if (bias_pt.empty()) {
             auto b_rt = generate_bias_pt_for_index(ctx_copy, po);
-            combined = ctx_copy.add_plain_ringt(combined, b_rt);
+            combined = ctx_copy.add(combined, b_rt);
         } else {
-            combined = ctx_copy.add_plain_ringt(combined, bias_pt[po]);
+            combined = ctx_copy.add(combined, bias_pt[po]);
         }
         merged_result[po] = move(combined);
     });

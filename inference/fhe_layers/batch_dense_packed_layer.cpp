@@ -50,7 +50,7 @@ BatchDensePackedLayer::BatchDensePackedLayer(const CkksParameter& param_in,
     block_size_ = block_size;
     level_ = level_A;
 
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     chunk_size_ = block_size_ * block_size_;
     if (n_slot_ < chunk_size_ || n_slot_ % chunk_size_ != 0)
         throw invalid_argument("BatchDensePackedLayer requires n_slot divisible by block_size^2");
@@ -148,7 +148,7 @@ void BatchDensePackedLayer::precompute_diagonals() {
         for (uint32_t output_block = 0; output_block < n_output_blocks_; output_block++) {
             for (uint32_t group = 0; group < batch_ct_groups_; group++) {
                 uint32_t bias_idx = output_block * batch_ct_groups_ + group;
-                bias_pt_[bias_idx] = ctx.encode_ringt(build_bias(output_block, group), param_.get_default_scale());
+                bias_pt_[bias_idx] = fhe_api::encode_ringt(ctx, build_bias(output_block, group), param_.default_scale());
             }
         }
     }
@@ -159,19 +159,19 @@ void BatchDensePackedLayer::precompute_diagonals() {
 
 CkksCiphertext BatchDensePackedLayer::block_matmul(CkksContext& ctx,
                                                    const RotatedInput& rotations,
-                                                   const vector<CkksPlaintextMul>& diagonal_now,
-                                                   const vector<CkksPlaintextMul>& diagonal_wrap) const {
+                                                   const vector<CkksPlaintext>& diagonal_now,
+                                                   const vector<CkksPlaintext>& diagonal_wrap) const {
     if (diagonal_now.size() != block_size_ || diagonal_wrap.size() != block_size_)
         throw runtime_error("BatchDensePackedLayer diagonal count mismatch");
     if (rotations.baby_now.size() != bsgs_baby_step_ || rotations.baby_wrap.size() != bsgs_baby_step_)
         throw runtime_error("BatchDensePackedLayer rotation count mismatch");
 
-    CkksCiphertext result(0);
+    CkksCiphertext result;
     bool initialized = false;
 
     for (uint32_t giant_index = 0; giant_index < bsgs_giant_steps_; giant_index++) {
-        CkksCiphertext inner_now(0);
-        CkksCiphertext inner_wrap(0);
+        CkksCiphertext inner_now;
+        CkksCiphertext inner_wrap;
         bool now_initialized = false;
         bool wrap_initialized = false;
         uint32_t begin = giant_index * bsgs_baby_step_;
@@ -179,7 +179,7 @@ CkksCiphertext BatchDensePackedLayer::block_matmul(CkksContext& ctx,
 
         for (uint32_t b = 0; b < end - begin; b++) {
             uint32_t k = begin + b;
-            auto now_term = ctx.mult_plain_mul(rotations.baby_now[b], diagonal_now[k]);
+            auto now_term = ctx.mult(rotations.baby_now[b], diagonal_now[k]);
             if (!now_initialized) {
                 inner_now = move(now_term);
                 now_initialized = true;
@@ -190,7 +190,7 @@ CkksCiphertext BatchDensePackedLayer::block_matmul(CkksContext& ctx,
             // k=0 has an all-zero wrapping diagonal and does not need the
             // otherwise unnecessary negative rotation.
             if (k != 0) {
-                auto wrap_term = ctx.mult_plain_mul(rotations.baby_wrap[b], diagonal_wrap[k]);
+                auto wrap_term = ctx.mult(rotations.baby_wrap[b], diagonal_wrap[k]);
                 if (!wrap_initialized) {
                     inner_wrap = move(wrap_term);
                     wrap_initialized = true;
@@ -217,7 +217,7 @@ CkksCiphertext BatchDensePackedLayer::block_matmul(CkksContext& ctx,
         }
     }
 
-    return ctx.rescale(result, ctx.get_parameter().get_default_scale());
+    return ctx.rescale(result);
 }
 
 BatchDensePackedLayer::RotatedInput
@@ -243,9 +243,9 @@ BatchDensePackedLayer::precompute_input_rotations(CkksContext& ctx, const CkksCi
 void BatchDensePackedLayer::encode_diagonals(CkksContext& ctx,
                                              uint32_t input_block,
                                              uint32_t output_block,
-                                             vector<CkksPlaintextMul>& diagonal_now,
-                                             vector<CkksPlaintextMul>& diagonal_wrap) const {
-    double diagonal_scale = param_.get_q(level_);
+                                             vector<CkksPlaintext>& diagonal_now,
+                                             vector<CkksPlaintext>& diagonal_wrap) const {
+    double diagonal_scale = param_.q()[level_];
     diagonal_now.clear();
     diagonal_wrap.clear();
     diagonal_now.reserve(block_size_);
@@ -255,17 +255,15 @@ void BatchDensePackedLayer::encode_diagonals(CkksContext& ctx,
         uint32_t giant = (k / bsgs_baby_step_) * bsgs_baby_step_ * block_size_;
         auto now = shift_plaintext_right(build_diagonal(input_block, output_block, k, false), giant);
         auto wrapping = shift_plaintext_right(build_diagonal(input_block, output_block, k, true), giant);
-        auto now_ringt = ctx.encode_ringt(now, diagonal_scale);
-        auto wrapping_ringt = ctx.encode_ringt(wrapping, diagonal_scale);
-        diagonal_now.push_back(ctx.ringt_to_mul(now_ringt, level_));
-        diagonal_wrap.push_back(ctx.ringt_to_mul(wrapping_ringt, level_));
+        auto now_ringt = fhe_api::encode_ringt(ctx, now, diagonal_scale);
+        auto wrapping_ringt = fhe_api::encode_ringt(ctx, wrapping, diagonal_scale);
+        diagonal_now.push_back(std::move(now_ringt));
+        diagonal_wrap.push_back(std::move(wrapping_ringt));
     }
 }
 
 Feature0DEncrypted BatchDensePackedLayer::run(CkksContext& ctx, const Feature0DEncrypted& A) {
     uint32_t expected_input_cts = n_input_blocks_ * batch_ct_groups_;
-    if (!A.data_compressed.empty())
-        throw invalid_argument("BatchDensePackedLayer requires decompressed input ciphertexts");
     if (!diagonals_prepared_)
         throw runtime_error("BatchDensePackedLayer::precompute_diagonals() was not called");
     if (A.level != level_ || !A.batch_packed || A.batch_size != batch_size_ || A.batch_feature_dim != input_dim_ ||
@@ -288,8 +286,8 @@ Feature0DEncrypted BatchDensePackedLayer::run(CkksContext& ctx, const Feature0DE
         // Convert each diagonal to the multiplication representation once.
         // The resulting plaintexts are read-only and reused by all batch
         // groups and by every output block in this input-block pass.
-        vector<vector<CkksPlaintextMul>> diagonals_now(n_output_blocks_);
-        vector<vector<CkksPlaintextMul>> diagonals_wrap(n_output_blocks_);
+        vector<vector<CkksPlaintext>> diagonals_now(n_output_blocks_);
+        vector<vector<CkksPlaintext>> diagonals_wrap(n_output_blocks_);
         for (uint32_t output_block = 0; output_block < n_output_blocks_; output_block++) {
             encode_diagonals(diagonal_context, input_block, output_block, diagonals_now[output_block],
                              diagonals_wrap[output_block]);
@@ -324,7 +322,7 @@ Feature0DEncrypted BatchDensePackedLayer::run(CkksContext& ctx, const Feature0DE
                              uint32_t output_index = output_block * batch_ct_groups_ + group;
                              uint32_t bias_index = output_index;
                              result.data[output_index] =
-                                 ctx_copy.add_plain_ringt(result.data[output_index], bias_pt_[bias_index]);
+                                 ctx_copy.add(result.data[output_index], bias_pt_[bias_index]);
                          });
         }
     }

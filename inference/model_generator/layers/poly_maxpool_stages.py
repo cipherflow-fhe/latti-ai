@@ -137,9 +137,9 @@ def call_maxpool_stage(stage, nodes, plan, channels, slots, plaintexts):
     """
     shape = plan['output_shape']
     plane = math.prod(shape)
-    if not nodes or len({ct.level for ct in nodes}) != 1:
+    if not nodes or len({ct.metadata.level for ct in nodes}) != 1:
         raise ValueError('MaxPool stage requires nonempty aligned inputs')
-    start = nodes[0].level
+    start = nodes[0].metadata.level
     if plane <= 0 or slots < plane or slots % plane:
         raise ValueError('Invalid MaxPool output plane or slot capacity')
     if stage == 'normalize_taps':
@@ -180,7 +180,7 @@ def call_maxpool_stage(stage, nodes, plan, channels, slots, plaintexts):
         cost = 1
     else:
         raise ValueError(f'Unknown MaxPool stage: {stage}')
-    if any(ct.level != start - cost for ct in result):
+    if any(ct.metadata.level != start - cost for ct in result):
         raise ValueError(f'Incorrect output level for MaxPool stage {stage}')
     return result
 
@@ -201,10 +201,10 @@ def _call_split_round(nodes, plan, split, plaintexts, channels):
     expected = (2 * len(pairs) + len(carries)) if phase == 0 else (3 * len(pairs) + len(carries))
     if len(nodes) != expected * channels:
         raise ValueError('Incomplete MaxPool split live state')
-    output_level = nodes[0].level - plaintexts['level_cost']
+    output_level = nodes[0].metadata.level - plaintexts['level_cost']
 
     def align(group):
-        return [drop_level(ct, ct.level - output_level) if ct.level != output_level else ct
+        return [drop_level(ct, ct.metadata.level - output_level) if ct.metadata.level != output_level else ct
                 for ct in group]
 
     result = []

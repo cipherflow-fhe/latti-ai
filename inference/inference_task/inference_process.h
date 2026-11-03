@@ -146,7 +146,7 @@ public:
     std::map<std::string, UPtr<ls::CkksParameter>> ckks_parameters_;
     // PolyMaxPool2D plaintext arguments.
     // Keys must match the Python DAG task_signature.json.
-    std::map<std::string, std::vector<ls::CkksPlaintextRingt>> maxpool_pt_args_;
+    std::map<std::string, std::vector<ls::CkksPlaintext>> maxpool_pt_args_;
     std::map<std::string, std::vector<ls::CkksPlaintext>> maxpool_full_pt_args_;
 
 private:

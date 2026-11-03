@@ -88,7 +88,7 @@ def binary_max_stockmeyer(
     for x, y, d, p in zip(a, b, diff, sign_approx):
         # Step 4: d * P(d)
         d_aligned = drop_level(
-            d, d.level - p.level
+            d, d.metadata.level - p.metadata.level
         )
         product = rescale(
             relin(mult(d_aligned, p))
@@ -98,7 +98,7 @@ def binary_max_stockmeyer(
         summation = add(x, y)
         summation = drop_level(
             summation,
-            summation.level - product.level
+            summation.metadata.level - product.metadata.level
         )
 
         # Step 6: a + b + d*P(d)
@@ -144,7 +144,7 @@ def repack_maxpool2x2_multiplexed(
     ) // n_channel_per_ct
 
     assert len(x) == expected_n_ct
-    assert all(ct.level >= 1 for ct in x)
+    assert all(ct.metadata.level >= 1 for ct in x)
     assert len(select_tensor_pt) >= min(
         n_channel, out_channels_per_ct
     )
@@ -447,7 +447,7 @@ def call_poly_maxpool_reduction_round(current, round_plan, weights, input_shape,
     n_ct = len(current[0])
     if any(len(group) != n_ct for group in current):
         raise ValueError("Inconsistent round ciphertext counts")
-    levels = {ct.level for group in current for ct in group}
+    levels = {ct.metadata.level for group in current for ct in group}
     chain = weights.get('sign_stages')
     cost = (sum(Poly2D.compute_stockmeyer_level_cost(s['degree']) for s in chain) + 1
             if chain else 7)
@@ -478,11 +478,11 @@ def call_poly_maxpool_reduction_round(current, round_plan, weights, input_shape,
         if len(result) != n_ct:
             raise ValueError("Binary Max ciphertext count mismatch")
 
-        levels = {ct.level for ct in result}
+        levels = {ct.metadata.level for ct in result}
         if len(levels) != 1:
             raise ValueError("Binary Max output levels differ")
 
-        result_level = result[0].level
+        result_level = result[0].metadata.level
 
         if target_level is None:
             target_level = result_level
@@ -500,13 +500,13 @@ def call_poly_maxpool_reduction_round(current, round_plan, weights, input_shape,
         carry = []
 
         for ct in current[carry_index]:
-            if ct.level < target_level:
+            if ct.metadata.level < target_level:
                 raise ValueError("Carry ciphertext level too low")
 
             aligned = ct
-            if ct.level > target_level:
+            if ct.metadata.level > target_level:
                 aligned = drop_level(
-                    ct, ct.level - target_level
+                    ct, ct.metadata.level - target_level
                 )
 
             carry.append(add(aligned, aligned))

@@ -95,7 +95,7 @@ def call_interleaved_normalized_maxpool_taps(x_cts, tap_specs, pt_nodes, channel
     """Return [tap][channel] DAG nodes using explicitly bound branch masks."""
     if len(x_cts) != channels * blocks_per_channel or len(pt_nodes) != len(tap_specs):
         raise ValueError('Interleaved MaxPool input or tap count mismatch')
-    if len({ct.level for ct in x_cts}) != 1:
+    if len({ct.metadata.level for ct in x_cts}) != 1:
         raise ValueError('Interleaved MaxPool input levels differ')
     result = []
     for specs, weights in zip(tap_specs, pt_nodes):

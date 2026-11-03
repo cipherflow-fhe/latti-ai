@@ -207,7 +207,7 @@ class ConcatLayer:
         n_channel_per_ct: int,
         shape: list[int],
         skip: list[int],
-        mask_pts: list[CkksPlaintextRingtNode],
+        mask_pts: list[CkksPlaintextNode],
     ) -> list[CkksCiphertextNode]:
         """
         Concatenate multiple input feature maps with per-channel mask+rotate+add
@@ -312,7 +312,7 @@ class ConcatLayer:
         input_skips: list[int],
         out_pack: int,
         out_skip: int,
-        mask_pts: list[CkksPlaintextRingtNode],
+        mask_pts: list[CkksPlaintextNode],
     ) -> list[CkksCiphertextNode]:
         """Concatenate dim=0 features whose input packs are NOT identical.
 

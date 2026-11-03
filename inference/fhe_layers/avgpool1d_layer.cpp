@@ -39,7 +39,7 @@ Feature1DEncrypted Avgpool1DLayer::run_adaptive_avgpool(CkksContext& ctx, const 
     result.data.resize(x_size);
     uint32_t skip = x.skip;
     uint32_t shape = x.shape;
-    int n_rot = (ctx.get_parameter().get_n() / 2) / (x.n_channel * x.shape);
+    int n_rot = (ctx.parameter().max_slots()) / (x.n_channel * x.shape);
 
     int log2_stride = static_cast<int>(std::ceil(std::log2(stride)));
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
@@ -89,9 +89,9 @@ void Avgpool1DLayer::prepare_weight_lazy(const CkksParameter& param_in,
     level_ = level;
 }
 
-CkksPlaintextRingt Avgpool1DLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int i) const {
+CkksPlaintext Avgpool1DLayer::generate_select_tensor_pt_for_index(CkksContext& ctx, int i) const {
     vector<double> si = select_tensor(i);
-    return ctx.encode_ringt(si, ctx.get_parameter().get_q(level_));
+    return fhe_api::encode_ringt(ctx, si, ctx.parameter().q()[level_]);
 }
 
 void Avgpool1DLayer::prepare_weight(const CkksParameter& param_in,
@@ -111,7 +111,7 @@ void Avgpool1DLayer::prepare_weight(const CkksParameter& param_in,
     select_tensor_pt.resize(n_select_pt);
     for (uint32_t i = 0; i < n_select_pt; i++) {
         vector<double> si = select_tensor(i);
-        CkksPlaintextRingt p_st = ctx.encode_ringt(si, ctx.get_parameter().get_q(level));
+        CkksPlaintext p_st = fhe_api::encode_ringt(ctx, si, ctx.parameter().q()[level]);
         select_tensor_pt[i] = move(p_st);
     }
 }
@@ -150,10 +150,10 @@ Feature1DEncrypted Avgpool1DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
         for (uint32_t i = 0; i < n_valid; i++) {
             int out_channel_pos = (idx * x.n_channel_per_ct + i) % (x.n_channel_per_ct * stride);
             auto& pt_ringt = select_tensor_pt[out_channel_pos];
-            auto pt = ctx_copy.ringt_to_mul(pt_ringt, level_);
-            lattisense::CkksCiphertext c_m_s = ctx_copy.mult_plain_mul(s_rots[steps[i]], pt);
+            const auto& pt = pt_ringt;
+            lattisense::CkksCiphertext c_m_s = ctx_copy.mult(s_rots[steps[i]], pt);
             result_tmp[idx * x.n_channel_per_ct + i] =
-                move(ctx_copy.rescale(c_m_s, ctx_copy.get_parameter().get_default_scale()));
+                ctx_copy.rescale(c_m_s);
         }
     });
     vector<CkksCiphertext> res;

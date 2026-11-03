@@ -36,12 +36,12 @@ public:
                           uint32_t init_level,
                           double value);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> pt_;
+    std::vector<ls::CkksPlaintext> pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
-    ls::CkksPlaintextRingt generate_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
 
 private:
     uint32_t n_prepad_ = 0, total_cols_ = 0, m_prepad_ = 0;
@@ -61,12 +61,12 @@ public:
                                    uint32_t n_heads,
                                    uint32_t init_level);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> mask_pt_;
+    std::vector<ls::CkksPlaintext> mask_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
-    ls::CkksPlaintextRingt generate_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
 
 private:
     uint32_t n_prepad_ = 0, total_cols_ = 0, m_prepad_ = 0;
@@ -85,12 +85,12 @@ public:
                                uint32_t n_heads,
                                uint32_t init_level);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> mask_pt_;
+    std::vector<ls::CkksPlaintext> mask_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
-    ls::CkksPlaintextRingt generate_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
 
 private:
     uint32_t n_prepad_ = 0, total_cols_ = 0, m_prepad_ = 0;
@@ -110,12 +110,12 @@ public:
                                 uint32_t n_heads,
                                 uint32_t init_level);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> two_pt_;
+    std::vector<ls::CkksPlaintext> two_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& b);
     Array<double, 2> run_plaintext(const Array<double, 2>& b) const;
 
-    ls::CkksPlaintextRingt generate_two_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_two_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
 
 private:
     uint32_t n_prepad_ = 0, total_cols_ = 0, m_prepad_ = 0;
@@ -134,14 +134,14 @@ public:
                                 uint32_t n_heads,
                                 uint32_t init_level);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> one_pt_;
-    std::vector<ls::CkksPlaintextRingt> two_pt_;
+    std::vector<ls::CkksPlaintext> one_pt_;
+    std::vector<ls::CkksPlaintext> two_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& a, const FeatureMatEncrypted& b);
     Array<double, 2> run_plaintext(const Array<double, 2>& a, const Array<double, 2>& b) const;
 
-    ls::CkksPlaintextRingt generate_one_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
-    ls::CkksPlaintextRingt generate_two_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_one_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_two_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
 
 private:
     uint32_t n_prepad_ = 0, total_cols_ = 0, m_prepad_ = 0;
@@ -160,12 +160,12 @@ public:
                          uint32_t n_heads,
                          uint32_t init_level);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> mask_pt_;
+    std::vector<ls::CkksPlaintext> mask_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& a, const FeatureMatEncrypted& b);
     Array<double, 2> run_plaintext(const Array<double, 2>& a, const Array<double, 2>& b) const;
 
-    ls::CkksPlaintextRingt generate_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
 
 private:
     uint32_t n_prepad_ = 0, total_cols_ = 0, m_prepad_ = 0;

@@ -13,14 +13,14 @@ class StageDispatchTest(unittest.TestCase):
     def test_parameter_manifest_matches_polynomial_scales(self):
         import json
         from types import SimpleNamespace
-        import inference.lattisense.frontend.custom_task as custom_task
+        from inference.model_generator.layers.poly_base import custom_task
         from inference.model_generator.layers.poly2d import Poly2D
 
         plan = build_maxpool_plan(
             {'kernel_shape': [3, 3], 'stride': [2, 2], 'padding': [1, 1]}, [256, 256])
         # Nonuniform moduli expose accidental substitution of q[level] for
         # the Stockmeyer coefficient scale.
-        param = SimpleNamespace(n=65536, scale=2.**40,
+        param = SimpleNamespace(n=65536, default_scale=2.**40,
                                 q=[2.**40 + 4096 * i for i in range(10)])
         for round_index in range(4):
             declarations = {}

@@ -36,15 +36,15 @@ public:
                             double eps,
                             double inv_var);
     void prepare_weight() override;
-    ls::CkksPlaintextRingt h0_mask_pt_;
-    std::vector<ls::CkksPlaintextRingt> inv_n_pt_;
-    std::vector<ls::CkksPlaintextRingt> iv_pt_;
-    std::vector<ls::CkksPlaintextRingt> eps_add_pt_;
+    ls::CkksPlaintext h0_mask_pt_;
+    std::vector<ls::CkksPlaintext> inv_n_pt_;
+    std::vector<ls::CkksPlaintext> iv_pt_;
+    std::vector<ls::CkksPlaintext> eps_add_pt_;
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t mb = 0, uint32_t ct_local = 0, uint32_t g = 0) const;
 
 private:
@@ -60,7 +60,7 @@ private:
     ls::CkksCiphertext reduce_cols_in_ct(ls::CkksContext& ctx,
                                          const ls::CkksCiphertext& ct,
                                          double rescale_target,
-                                         const ls::CkksPlaintextRingt& h0_mask_pt) const;
+                                         const ls::CkksPlaintext& h0_mask_pt) const;
 };
 
 class ParUpperDiagonalLNXCentered : public Layer {
@@ -71,13 +71,13 @@ public:
                                 uint32_t n_heads,
                                 uint32_t init_level);
     void prepare_weight() override;
-    ls::CkksPlaintextRingt h0_mask_pt_;
-    std::vector<ls::CkksPlaintextRingt> inv_n_pt_;
+    ls::CkksPlaintext h0_mask_pt_;
+    std::vector<ls::CkksPlaintext> inv_n_pt_;
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t mb = 0, uint32_t ct_local = 0, uint32_t g = 0) const;
 
 private:
@@ -104,14 +104,14 @@ public:
                                   double c1,
                                   double c2);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> c2_norm_pt_;
-    std::vector<ls::CkksPlaintextRingt> c1_pt_;
-    std::vector<ls::CkksPlaintextRingt> c0_add_pt_;
+    std::vector<ls::CkksPlaintext> c2_norm_pt_;
+    std::vector<ls::CkksPlaintext> c1_pt_;
+    std::vector<ls::CkksPlaintext> c0_add_pt_;
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& a_cts);
     Array<double, 2> run_plaintext(const Array<double, 2>& a) const;
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t mb = 0, uint32_t ct_local = 0, uint32_t g = 0) const;
 
 private:
@@ -133,15 +133,15 @@ public:
                                   uint32_t n_heads,
                                   uint32_t input_level);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> three_pt_;
-    std::vector<ls::CkksPlaintextRingt> half_norm_pt_;
+    std::vector<ls::CkksPlaintext> three_pt_;
+    std::vector<ls::CkksPlaintext> half_norm_pt_;
 
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx,
                                         const std::vector<ls::CkksCiphertext>& y_cts,
                                         const std::vector<ls::CkksCiphertext>& a_cts);
     Array<double, 2> run_plaintext(const Array<double, 2>& y, const Array<double, 2>& a) const;
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t mb = 0, uint32_t ct_local = 0, uint32_t g = 0) const;
 
 private:
@@ -165,15 +165,15 @@ public:
                              Array<double, 1>&& gamma,
                              Array<double, 1>&& beta);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> gamma_pt_;
-    std::vector<ls::CkksPlaintextRingt> beta_add_pt_;
+    std::vector<ls::CkksPlaintext> gamma_pt_;
+    std::vector<ls::CkksPlaintext> beta_add_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx,
                             const std::vector<ls::CkksCiphertext>& x_centered,
                             const std::vector<ls::CkksCiphertext>& y_cts);
     Array<double, 2> run_plaintext(const Array<double, 2>& x_centered, const Array<double, 2>& y) const;
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t mb = 0, uint32_t ct_local = 0, uint32_t g = 0) const;
 
 private:

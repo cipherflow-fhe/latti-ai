@@ -53,7 +53,7 @@ class Poly2D(PolyBase):
     def _run_stockmeyer_core(self, x, get_weight):
         if not x:
             return []
-        self.init_stockmeyer(x[0].level)
+        self.init_stockmeyer(x[0].metadata.level)
         powers = self.stockmeyer_powers
         baby = self.stockmeyer_baby_steps
         groups = self.stockmeyer_n_baby_polys
@@ -81,15 +81,15 @@ class Poly2D(PolyBase):
                 acc = None
                 if base + 1 <= self.order:
                     p = xp[1]
-                    if p.level > target + 1:
-                        p = drop_level(p, p.level - target - 1)
+                    if p.metadata.level > target + 1:
+                        p = drop_level(p, p.metadata.level - target - 1)
                     acc = rescale(mult(p, get_weight(base + 1, len(result))))
                     observe(f'trace_baby_{g}_linear', acc, operation='coefficient_mult',
                             operand='input', coefficient=base + 1)
                 if base + 2 <= self.order:
                     p = xp[2]
-                    if p.level > target + 1:
-                        p = drop_level(p, p.level - target - 1)
+                    if p.metadata.level > target + 1:
+                        p = drop_level(p, p.metadata.level - target - 1)
                     term = rescale(mult(p, get_weight(base + 2, len(result))))
                     observe(f'trace_baby_{g}_quadratic', term, operation='coefficient_mult',
                             operand='power_2', coefficient=base + 2)
@@ -98,15 +98,15 @@ class Poly2D(PolyBase):
                             operands=[f'trace_baby_{g}_linear', f'trace_baby_{g}_quadratic'])
                 if base + 3 <= self.order:
                     p = xp[1]
-                    if p.level > target + 2:
-                        p = drop_level(p, p.level - target - 2)
+                    if p.metadata.level > target + 2:
+                        p = drop_level(p, p.metadata.level - target - 2)
                     c3_scale = target / self.stockmeyer_powers[2].scale * float(self._param().q[target + 1])
                     c3x = rescale(mult(p, get_weight(base + 3, len(result))))
                     observe(f'trace_baby_{g}_cubic_linear', c3x, operation='coefficient_mult',
                             operand='input', coefficient=base + 3)
                     x2 = xp[2]
-                    if x2.level > target + 1:
-                        x2 = drop_level(x2, x2.level - target - 1)
+                    if x2.metadata.level > target + 1:
+                        x2 = drop_level(x2, x2.metadata.level - target - 1)
                     term = rescale(relin(mult(c3x, x2)))
                     observe(f'trace_baby_{g}_cubic', term, operation='mult',
                             operands=[f'trace_baby_{g}_cubic_linear', 'power_2'])
@@ -127,16 +127,16 @@ class Poly2D(PolyBase):
                         continue
                     left, right = nodes[i], nodes[i + 1]
                     giant = xp[combine]
-                    if giant.level > left[2] + 1:
-                        giant = drop_level(giant, giant.level - left[2] - 1)
+                    if giant.metadata.level > left[2] + 1:
+                        giant = drop_level(giant, giant.metadata.level - left[2] - 1)
                     observe(f'trace_merge_{combine}_{i//2}_giant', giant,
                             operation='identity', operand=f'power_{combine}')
                     if right[0] is None:
                         term = rescale(mult(giant, get_weight(right[1], len(result))))
                     else:
                         rc = right[0]
-                        if rc.level > left[2] + 1:
-                            rc = drop_level(rc, rc.level - left[2] - 1)
+                        if rc.metadata.level > left[2] + 1:
+                            rc = drop_level(rc, rc.metadata.level - left[2] - 1)
                         observe(f'trace_merge_{combine}_{i//2}_right', rc,
                                 operation='aligned_operand')
                         term = rescale(relin(mult(rc, giant)))

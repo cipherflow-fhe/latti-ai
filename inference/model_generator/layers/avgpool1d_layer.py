@@ -53,14 +53,14 @@ class Avgpool1DLayer:
             (stride accumulation, steps: 2^i * skip, all powers of 2)
           - floor(log2(n_rot)) rotate_cols calls × 1 primitive each (slot fill,
             steps: 2^r * channel * shape, all powers of 2)
-        where n_rot = floor(n / 2 / (channel * shape)).
+        where n_rot = floor(n / (channel * shape)).
         No rescale, so all ops are at a single level key.
         """
         ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
         lv = level
 
         log2_stride = int(math.ceil(math.log2(self.stride))) if self.stride > 1 else 0
-        n_rot = int(np.floor(n / 2 / (self.channel * self.shape)))
+        n_rot = int(np.floor(n / (self.channel * self.shape)))
         fill_steps = int(np.floor(np.log2(n_rot))) if n_rot > 1 else 0
         rot_add_per_ct = log2_stride + fill_steps
         ops[lv]['rotate'] += n_ct * rot_add_per_ct
@@ -71,7 +71,7 @@ class Avgpool1DLayer:
     def run_adaptive_avgpool(self, x: list[DataNode], n: int):
         x_size = len(x)
 
-        n_rot = int(np.floor(n / 2 / (self.channel * self.shape)))
+        n_rot = int(np.floor(n / (self.channel * self.shape)))
 
         log2_stride = int(np.ceil(np.log2(self.stride)))
 
@@ -213,13 +213,13 @@ class Avgpool1DLayer:
 
     def call_custom_compute_multiplexed_avgpool(self, x: list, avg_data_source, n_channel: int, n: int) -> list:
         """Lazy path for 1D multiplexed avgpool: generate select_tensor_pt on-demand."""
-        n_channel_per_ct = int(math.ceil(n / 2 / self.shape))
+        n_channel_per_ct = int(math.ceil(n / self.shape))
         out_channels_per_ct = n_channel_per_ct * self.stride
         n_select_pt = min(n_channel, out_channels_per_ct)
 
         select_tensor_pt = []
         for i in range(n_select_pt):
-            w_pt = CkksPlaintextRingtNode(f'encode_pt_select_1d_{i}')
+            w_pt = CkksPlaintextNode(f'encode_pt_select_1d_{i}', is_ringt=True)
             custom_compute(
                 inputs=[avg_data_source],
                 output=w_pt,

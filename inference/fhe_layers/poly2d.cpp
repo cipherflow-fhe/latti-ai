@@ -1,4 +1,5 @@
 #include "poly2d.h"
+#include "../fhe_api.h"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -37,7 +38,7 @@ Poly2D::Poly2D(const CkksParameter& param,
 }
 
 vector<double> Poly2D::build_weight_vec(int idx, int packed_idx) const {
-    vector<double> out(N / 2, 0.0);
+    vector<double> out(param_.max_slots(), 0.0);
     int n_packed = div_ceil(cached_channel, n_channel_per_ct) * block_expansion[0] * block_expansion[1];
     if (packed_idx < 0 || packed_idx >= n_packed)
         throw out_of_range("Poly2D ciphertext index out of range");
@@ -66,8 +67,8 @@ vector<double> Poly2D::build_weight_vec(int idx, int packed_idx) const {
     return out;
 }
 
-CkksPlaintextRingt Poly2D::generate_weight_pt_for_stockmeyer(CkksContext& ctx, int coeff_idx, int ct_idx) const {
-    return ctx.encode_ringt(build_weight_vec(coeff_idx, ct_idx), get_stockmeyer_coeff_scale().at(coeff_idx));
+CkksPlaintext Poly2D::generate_weight_pt_for_stockmeyer(CkksContext& ctx, int coeff_idx, int ct_idx) const {
+    return fhe_api::encode_ringt(ctx, build_weight_vec(coeff_idx, ct_idx), get_stockmeyer_coeff_scale().at(coeff_idx));
 }
 
 void Poly2D::prepare_weight_stockmeyer() {
@@ -112,27 +113,30 @@ vector<CkksCiphertext> Poly2D::run_core_stockmeyer(CkksContext& ctx, const vecto
             if (kv.first <= 1)
                 continue;
             auto h = xp.at(kv.second.decomp_a).copy();
-            xp[kv.first] = c.rescale(c.relinearize(c.mult(h, h)), c.get_parameter().get_default_scale());
+            xp[kv.first] = c.rescale(c.relinearize(c.mult(h, h)));
         }
         auto drop = [&](CkksCiphertext v, int lv) {
-            while (v.get_level() > lv)
+            while (v.level() > lv)
                 v = c.drop_level(v);
-            if (v.get_level() != lv)
+            if (v.level() != lv)
                 throw runtime_error("Poly2D Stockmeyer level mismatch");
             return v;
         };
-        auto coeff_mul = [&](int idx, int lv) {
+        CkksPlaintext lazy_coefficient;
+        auto coeff_mul = [&](int idx, int lv) -> const CkksPlaintext& {
             auto it = coeff_levels.find(idx);
             if (it == coeff_levels.end() || it->second != lv)
                 throw runtime_error("Poly2D coefficient level mismatch");
-            if (weight_pt.empty())
-                return c.ringt_to_mul(generate_weight_pt_for_stockmeyer(c, idx, xi), lv);
-            return c.ringt_to_mul(weight_pt[idx][xi], lv);
+            if (weight_pt.empty()) {
+                lazy_coefficient = generate_weight_pt_for_stockmeyer(c, idx, xi);
+                return lazy_coefficient;
+            }
+            return weight_pt[idx][xi];
         };
         auto coeff_add = [&](const CkksCiphertext& v, int idx) {
             if (weight_pt.empty())
-                return c.add_plain_ringt(v, generate_weight_pt_for_stockmeyer(c, idx, xi));
-            return c.add_plain_ringt(v, weight_pt[idx][xi]);
+                return c.add(v, generate_weight_pt_for_stockmeyer(c, idx, xi));
+            return c.add(v, weight_pt[idx][xi]);
         };
         vector<Node> nodes;
         for (int b = 0; b < n_baby; ++b) {
@@ -145,13 +149,13 @@ vector<CkksCiphertext> Poly2D::run_core_stockmeyer(CkksContext& ctx, const vecto
             bool initialized = false;
             if (base + 1 <= order) {
                 auto p = drop(xp.at(1).copy(), target + 1);
-                auto term = c.rescale(c.mult_plain_mul(p, coeff_mul(base + 1, p.get_level())), scale);
+                auto term = c.rescale(c.mult(p, coeff_mul(base + 1, p.level())));
                 acc = move(term);
                 initialized = true;
             }
             if (base + 2 <= order) {
                 auto p = drop(xp.at(2).copy(), target + 1);
-                auto term = c.rescale(c.mult_plain_mul(p, coeff_mul(base + 2, p.get_level())), scale);
+                auto term = c.rescale(c.mult(p, coeff_mul(base + 2, p.level())));
                 if (initialized)
                     acc = c.add(acc, term);
                 else
@@ -159,11 +163,10 @@ vector<CkksCiphertext> Poly2D::run_core_stockmeyer(CkksContext& ctx, const vecto
                 initialized = true;
             }
             if (base + 3 <= order) {
-                double c3_scale = (scale / powers.at(2).scale) * c.get_parameter().get_q(target + 1);
                 auto c3x = drop(xp.at(1).copy(), target + 2);
-                c3x = c.rescale(c.mult_plain_mul(c3x, coeff_mul(base + 3, c3x.get_level())), c3_scale);
+                c3x = c.rescale(c.mult(c3x, coeff_mul(base + 3, c3x.level())));
                 auto x2 = drop(xp.at(2).copy(), target + 1);
-                auto term = c.rescale(c.relinearize(c.mult(c3x, x2)), scale);
+                auto term = c.rescale(c.relinearize(c.mult(c3x, x2)));
                 if (initialized)
                     acc = c.add(acc, term);
                 else
@@ -192,9 +195,9 @@ vector<CkksCiphertext> Poly2D::run_core_stockmeyer(CkksContext& ctx, const vecto
                 CkksCiphertext term;
                 if (right.has_ct) {
                     auto rc = drop(right.ct.copy(), left.level + 1);
-                    term = c.rescale(c.relinearize(c.mult(rc, giant)), left.scale);
+                    term = c.rescale(c.relinearize(c.mult(rc, giant)));
                 } else {
-                    term = c.rescale(c.mult_plain_mul(giant, coeff_mul(right.constant, giant.get_level())), left.scale);
+                    term = c.rescale(c.mult(giant, coeff_mul(right.constant, giant.level())));
                 }
                 left.ct = c.add(drop(left.ct.copy(), left.level), term);
                 next.push_back(move(left));
@@ -216,7 +219,7 @@ Feature2DEncrypted Poly2D::run_stockmeyer(CkksContext& ctx, const Feature2DEncry
     result.n_channel = x.n_channel;
     result.n_channel_per_ct = x.n_channel_per_ct;
     result.data = run_core_stockmeyer(ctx, x.data);
-    result.level = result.data.empty() ? get_stockmeyer_output_level() : result.data[0].get_level();
+    result.level = result.data.empty() ? get_stockmeyer_output_level() : result.data[0].level();
     return result;
 }
 

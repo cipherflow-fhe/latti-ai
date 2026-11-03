@@ -32,12 +32,12 @@ public:
                      uint32_t level);
 
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> replication_mask_pt_;
-    std::vector<std::vector<ls::CkksPlaintextRingt>> ordinary_route_pt_;
-    std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>> kqt_route_pt_;
-    ls::CkksPlaintextRingt generate_replication_mask_pt(ls::CkksContext& ctx, uint32_t ell) const;
-    ls::CkksPlaintextRingt generate_ordinary_route_pt(ls::CkksContext& ctx, uint32_t ell, uint32_t mask_idx) const;
-    ls::CkksPlaintextRingt
+    std::vector<ls::CkksPlaintext> replication_mask_pt_;
+    std::vector<std::vector<ls::CkksPlaintext>> ordinary_route_pt_;
+    std::vector<std::vector<std::vector<ls::CkksPlaintext>>> kqt_route_pt_;
+    ls::CkksPlaintext generate_replication_mask_pt(ls::CkksContext& ctx, uint32_t ell) const;
+    ls::CkksPlaintext generate_ordinary_route_pt(ls::CkksContext& ctx, uint32_t ell, uint32_t mask_idx) const;
+    ls::CkksPlaintext
     generate_kqt_route_pt(ls::CkksContext& ctx, uint32_t j, uint32_t ell, uint32_t mask_idx) const;
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A, const FeatureMatEncrypted& B);
     Array<double, 2> run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const;
@@ -65,7 +65,7 @@ private:
                                     const ls::CkksCiphertext& b_level_l_minus_1) const;
     ls::CkksCiphertext apply_route_mask(ls::CkksContext& ctx,
                                         const ls::CkksCiphertext& product_level_l_minus_2,
-                                        const ls::CkksPlaintextRingt& mask_pt) const;
+                                        const ls::CkksPlaintext& mask_pt) const;
 
     uint32_t expected_ct_count_for_head_shape(const Duo& head_shape) const;
 

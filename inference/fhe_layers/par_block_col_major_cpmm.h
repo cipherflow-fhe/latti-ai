@@ -50,18 +50,18 @@ public:
     Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
 
     // Accessors for pre-computed plaintexts (valid after precompute_diagonals())
-    const ls::CkksPlaintextRingt& get_diag_pt(uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const {
+    const ls::CkksPlaintext& get_diag_pt(uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const {
         return diag_pt_[mb][g][bp][k];
     }
-    const ls::CkksPlaintextRingt& get_mask_h0_pt() const {
+    const ls::CkksPlaintext& get_mask_h0_pt() const {
         return mask_h0_pt_;
     }
 
     // Lazy generation: encode on demand without precompute_diagonals()
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_diag_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t g, uint32_t bp, uint32_t k) const;
-    ls::CkksPlaintextRingt generate_mask_h0_pt(ls::CkksContext& ctx) const;
-    ls::CkksPlaintextRingt generate_bias_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t bi, uint32_t g) const;
+    ls::CkksPlaintext generate_mask_h0_pt(ls::CkksContext& ctx) const;
+    ls::CkksPlaintext generate_bias_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t bi, uint32_t g) const;
 
     bool has_bias() const {
         return has_bias_;
@@ -124,13 +124,13 @@ private:
     uint32_t bsgs_gs_;
 
     // diag_pt_[mb][g][bp][k]: per-head diagonal for megablock mb, input group g, output block column bp, rotation k
-    std::vector<std::vector<std::vector<std::vector<ls::CkksPlaintextRingt>>>> diag_pt_;
+    std::vector<std::vector<std::vector<std::vector<ls::CkksPlaintext>>>> diag_pt_;
 
     // Mask plaintext for selecting h=0 after cross-head sum
-    ls::CkksPlaintextRingt mask_h0_pt_;
+    ls::CkksPlaintext mask_h0_pt_;
 
     // Bias support
     bool has_bias_ = false;
     Array<double, 1> bias_vals_;
-    std::vector<ls::CkksPlaintextRingt> bias_pt_;  // indexed [mb * R * G + bi * G + g]
+    std::vector<ls::CkksPlaintext> bias_pt_;  // indexed [mb * R * G + bi * G + g]
 };

@@ -73,7 +73,7 @@ ParLowerDiagonalAddPt::ParLowerDiagonalAddPt(const CkksParameter& param_in,
     assert(head_shape[1] == n_prepad_);
     assert(B_vals_.get_shape()[0] == total_rows_ && B_vals_.get_shape()[1] == n_prepad_);
 
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     validate_lower_diag_geometry(total_rows_, n_prepad_, m_prepad_, H_prepad_, n_slot_);
 
     H_ = next_pow2(H_prepad_);
@@ -108,8 +108,8 @@ std::vector<double> ParLowerDiagonalAddPt::build_pt_vec(uint32_t mb, uint32_t ct
     return pt_vec;
 }
 
-CkksPlaintextRingt ParLowerDiagonalAddPt::generate_pt(CkksContext& ctx, uint32_t mb, uint32_t ct_local) const {
-    return ctx.encode_ringt(build_pt_vec(mb, ct_local), param_.get_default_scale());
+CkksPlaintext ParLowerDiagonalAddPt::generate_pt(CkksContext& ctx, uint32_t mb, uint32_t ct_local) const {
+    return fhe_api::encode_ringt(ctx, build_pt_vec(mb, ct_local), param_.default_scale());
 }
 
 void ParLowerDiagonalAddPt::precompute_pts() {
@@ -137,7 +137,7 @@ FeatureMatEncrypted ParLowerDiagonalAddPt::run(CkksContext& ctx, const FeatureMa
     result.data.resize(pt_.size());
 
     parallel_for(pt_.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
-        result.data[ct_idx] = ctx_copy.add_plain_ringt(A.data[ct_idx], pt_[ct_idx]);
+        result.data[ct_idx] = ctx_copy.add(A.data[ct_idx], pt_[ct_idx]);
     });
 
     return result;

@@ -64,19 +64,16 @@ static std::vector<std::string> load_test_names(const fs::path& base) {
 static const auto single_layer_test_names = load_test_names(single_layer_base_path);
 
 TEST_CASE("cpu/ckks_copy_preserves_scale", "[cpu][ckks_copy]") {
-    auto param = CkksParameter::create_parameter(8192);
-    auto context = CkksContext::create_empty_context(param);
+    auto param = CkksParameter::create_parameter(13, RingType::Standard);
     const double scale = 123456789.25;
-    auto source = context.new_ciphertext(0, scale);
-    auto destination = context.new_ciphertext(0, 1099511627776.);
-    source.copy_to(destination);
-    REQUIRE(destination.get_scale() == scale);
-    REQUIRE(destination.get_level() == source.get_level());
-    auto source3 = context.new_ciphertext3(0, scale);
-    auto destination3 = context.new_ciphertext3(0, 1099511627776.);
-    source3.copy_to(destination3);
-    REQUIRE(destination3.get_scale() == scale);
-    REQUIRE(destination3.get_level() == source3.get_level());
+    for (int degree : {1, 2}) {
+        CkksCiphertext source(param, 0, degree), destination(param, 0, degree);
+        source.set_scale(scale);
+        destination.set_scale(1099511627776.);
+        source.copy(destination);
+        REQUIRE(destination.scale() == scale);
+        REQUIRE(destination.level() == source.level());
+    }
 }
 
 // == Run all (batch) ==========================================================
@@ -1049,7 +1046,7 @@ TEST_CASE("cpu/poly_maxpool_staged_ckks", "[maxpool_staged][e2e]") {
         feature.deserialize(entry.second);
         for (const auto& ct : feature.data) {
             diagnostic_metadata[entry.first].push_back(
-                {{"level", ct.get_level()}, {"scale", ct.get_scale()}});
+                {{"level", ct.level()}, {"scale", ct.scale()}});
         }
     }
     std::ofstream(root / "diagnostic_actual_metadata.json") << diagnostic_metadata.dump(2);

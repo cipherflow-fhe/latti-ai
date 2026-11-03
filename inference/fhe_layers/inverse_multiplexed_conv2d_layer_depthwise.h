@@ -37,16 +37,16 @@ public:
 
     virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
 
-    std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt;
-    std::vector<ls::CkksPlaintextRingt> bias_pt;
-    ls::CkksPlaintextRingt repack_mask_pt;
+    std::vector<std::vector<ls::CkksPlaintext>> weight_pt;
+    std::vector<ls::CkksPlaintext> bias_pt;
+    ls::CkksPlaintext repack_mask_pt;
     bool normal_conv = true;
     bool need_repack = false;
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_weight_pt_for_indices(ls::CkksContext& ctx, int out_channel_idx, int kernel_count) const;
-    ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int out_channel_idx) const;
-    ls::CkksPlaintextRingt generate_repack_mask_pt(ls::CkksContext& ctx) const;
+    ls::CkksPlaintext generate_bias_pt_for_index(ls::CkksContext& ctx, int out_channel_idx) const;
+    ls::CkksPlaintext generate_repack_mask_pt(ls::CkksContext& ctx) const;
     std::vector<uint32_t> get_used_input_indices() const;
 
 private:

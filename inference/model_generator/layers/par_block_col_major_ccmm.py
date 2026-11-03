@@ -268,7 +268,7 @@ class ParBlockColMajorCCMM:
         # sigma: d nodes
         sigma_pt = []
         for k in range(d):
-            node = CkksPlaintextRingtNode(f'encode_pt_sigma_{k}')
+            node = CkksPlaintextNode(f'encode_pt_sigma_{k}', is_ringt=True)
             custom_compute(
                 inputs=[data_source],
                 output=node,
@@ -280,7 +280,7 @@ class ParBlockColMajorCCMM:
         # tau: (2d-1) nodes
         tau_pt = []
         for idx in range(2 * d - 1):
-            node = CkksPlaintextRingtNode(f'encode_pt_tau_{idx}')
+            node = CkksPlaintextNode(f'encode_pt_tau_{idx}', is_ringt=True)
             custom_compute(
                 inputs=[data_source],
                 output=node,
@@ -290,7 +290,7 @@ class ParBlockColMajorCCMM:
             tau_pt.append(node)
 
         # psi_k0: single all-ones node
-        psi_k0_pt = CkksPlaintextRingtNode('encode_pt_psi_k0')
+        psi_k0_pt = CkksPlaintextNode('encode_pt_psi_k0', is_ringt=True)
         custom_compute(
             inputs=[data_source],
             output=psi_k0_pt,
@@ -301,7 +301,7 @@ class ParBlockColMajorCCMM:
         # psi_wk / psi_wkd: (d-1) nodes each
         psi_wk_pt, psi_wkd_pt = [], []
         for i in range(1, d):
-            node_k = CkksPlaintextRingtNode(f'encode_pt_psi_wk_{i}')
+            node_k = CkksPlaintextNode(f'encode_pt_psi_wk_{i}', is_ringt=True)
             custom_compute(
                 inputs=[data_source],
                 output=node_k,
@@ -310,7 +310,7 @@ class ParBlockColMajorCCMM:
             )
             psi_wk_pt.append(node_k)
 
-            node_kd = CkksPlaintextRingtNode(f'encode_pt_psi_wkd_{i}')
+            node_kd = CkksPlaintextNode(f'encode_pt_psi_wkd_{i}', is_ringt=True)
             custom_compute(
                 inputs=[data_source],
                 output=node_kd,

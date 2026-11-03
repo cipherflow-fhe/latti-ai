@@ -48,7 +48,7 @@ public:
                              int level,
                              const Duo& skip_in,
                              const Duo& shape_in);
-    ls::CkksPlaintextRingt generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int i) const;
+    ls::CkksPlaintext generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int i) const;
     Feature2DEncrypted run_multiplexed_avgpool(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     Feature2DEncrypted run_split_avgpool(ls::CkksContext& ctx, const Feature2DEncrypted& x, const Duo block_expansion);
     void prepare_weight_repack(const ls::CkksParameter& param_in,
@@ -56,8 +56,8 @@ public:
                                int level,
                                const Duo& second_stage_stride,
                                const Duo& block_shape_in);
-    std::vector<ls::CkksPlaintextRingt> select_tensor_pt;
-    ls::CkksPlaintextRingt repack_mask_pt;
+    std::vector<ls::CkksPlaintext> select_tensor_pt;
+    ls::CkksPlaintext repack_mask_pt;
     Duo shape;
     Duo stride;
     Duo block_shape;

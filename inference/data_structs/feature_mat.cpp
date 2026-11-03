@@ -28,16 +28,15 @@ FeatureMatEncrypted::FeatureMatEncrypted(CkksContext* context_in, int ct_level) 
 }
 
 FeatureMatEncrypted FeatureMatEncrypted::refresh_ciphertext() const {
-    CkksBtpContext* ctx = dynamic_cast<CkksBtpContext*>(context);
-    if (ctx == nullptr) {
-        throw std::runtime_error("refresh_ciphertext() requires CkksBtpContext");
+    if (!context->enable_bootstrapping()) {
+        throw std::runtime_error("refresh_ciphertext() requires an enabled bootstrapping context");
     }
-    int new_level = 9;
-    FeatureMatEncrypted result(ctx, new_level);
+    int new_level = context->parameter().max_level();
+    FeatureMatEncrypted result(context, new_level);
     result.data.resize(data.size());
-    parallel_for(data.size(), th_nums, *ctx, [&](CkksBtpContext& ctx_copy, int ct_idx) {
+    parallel_for(data.size(), th_nums, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         result.data[ct_idx] = ctx_copy.bootstrap(data[ct_idx]);
-        assert(new_level == result.data[ct_idx].get_level());
+        assert(new_level == result.data[ct_idx].level());
     });
     result.shape = shape;
     result.head_shape = head_shape;
@@ -49,7 +48,6 @@ FeatureMatEncrypted FeatureMatEncrypted::refresh_ciphertext() const {
 
 void FeatureMatEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
                                                uint32_t d,
-                                               bool is_symmetric,
                                                double scale_in) {
     uint32_t m = matrix.get_shape()[0];
     uint32_t n_cols = matrix.get_shape()[1];
@@ -58,7 +56,7 @@ void FeatureMatEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
     matmul_block_size = d;
     uint32_t num_block_rows = div_ceil(m, d);
     uint32_t num_block_cols = div_ceil(n_cols, d);
-    int n_slot = context->get_parameter().get_n() / 2;
+    int n_slot = context->parameter().max_slots();
     uint32_t chunk_size = d * d;
     const int N_THREAD = 4;
 
@@ -87,20 +85,11 @@ void FeatureMatEncrypted::block_col_major_pack(const Array<double, 2>& matrix,
     }
 
     data.clear();
-    data_compress.clear();
-    if (is_symmetric) {
-        data_compress.resize(total_blocks);
-    } else {
-        data.resize(total_blocks);
-    }
+    data.resize(total_blocks);
 
     parallel_for(total_blocks, N_THREAD, *context, [&](CkksContext& ctx_copy, int idx) {
-        auto enc = ctx_copy.encode(block_vecs[idx], level, scale_in);
-        if (is_symmetric) {
-            data_compress[idx] = ctx_copy.encrypt_symmetric_compressed(enc);
-        } else {
-            data[idx] = ctx_copy.encrypt_symmetric(enc);
-        }
+        auto enc = fhe_api::encode(ctx_copy, block_vecs[idx], level, scale_in);
+        data[idx] = ctx_copy.encrypt(enc);
     });
 }
 
@@ -118,7 +107,8 @@ Array<double, 2> FeatureMatEncrypted::block_col_major_unpack(uint32_t m, uint32_
         uint32_t bj = idx / num_block_rows;
 
         CkksPlaintext x_pt = ctx_copy.decrypt(data[idx]);
-        Array1D x_mg = ctx_copy.decode(x_pt);
+        Array1D x_mg;
+        ctx_copy.decode(x_pt, x_mg);
         // Extract first d*d elements (column-major within block)
         for (uint32_t col = 0; col < d; col++) {
             for (uint32_t row = 0; row < d; row++) {
@@ -144,7 +134,6 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
                                                    uint32_t d,
                                                    uint32_t n_heads,
                                                    uint32_t head_dim,
-                                                   bool is_symmetric,
                                                    double scale_in) {
     uint32_t m = matrix.get_shape()[0];
     uint32_t total_cols = matrix.get_shape()[1];
@@ -155,7 +144,7 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
     uint32_t n = cols_per_head * n_heads;  // columns per megablock
     uint32_t K_col = div_ceil(total_cols, n);
     uint32_t n_h_padded = next_power_of_2(n_heads);
-    int n_slot = context->get_parameter().get_n() / 2;
+    int n_slot = context->parameter().max_slots();
     const int N_THREAD = 4;
 
     // Determine chunk sizing and n_heads_per_chunk(S)
@@ -216,20 +205,11 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
     }
 
     data.clear();
-    data_compress.clear();
-    if (is_symmetric) {
-        data_compress.resize(total_vecs);
-    } else {
-        data.resize(total_vecs);
-    }
+    data.resize(total_vecs);
 
     parallel_for(total_vecs, N_THREAD, *context, [&](CkksContext& ctx_copy, int idx) {
-        auto enc = ctx_copy.encode(block_vecs[idx], level, scale_in);
-        if (is_symmetric) {
-            data_compress[idx] = ctx_copy.encrypt_symmetric_compressed(enc);
-        } else {
-            data[idx] = ctx_copy.encrypt_symmetric(enc);
-        }
+        auto enc = fhe_api::encode(ctx_copy, block_vecs[idx], level, scale_in);
+        data[idx] = ctx_copy.encrypt(enc);
     });
 }
 
@@ -237,7 +217,7 @@ Array<double, 2>
 FeatureMatEncrypted::par_block_col_major_unpack(uint32_t m, uint32_t n_per_head, uint32_t d, uint32_t n_heads) const {
     uint32_t total_cols = shape[1];
     uint32_t n_h_padded = next_power_of_2(n_heads);
-    int n_slot = context->get_parameter().get_n() / 2;
+    int n_slot = context->parameter().max_slots();
     const int N_THREAD = 4;
 
     uint32_t S, chunk_size, n_cts_per_block_idx;
@@ -277,8 +257,8 @@ FeatureMatEncrypted::par_block_col_major_unpack(uint32_t m, uint32_t n_per_head,
             uint32_t bj = block_idx / num_block_rows;
 
             CkksPlaintext x_pt = ctx_copy.decrypt(data[vec_idx]);
-            Array1D x_mg = ctx_copy.decode(x_pt);
-
+            Array1D x_mg;
+            ctx_copy.decode(x_pt, x_mg);
             for (uint32_t h_local = 0; h_local < S; h_local++) {
                 uint32_t h = g * S + h_local;
                 if (h >= n_heads)
@@ -307,7 +287,6 @@ void FeatureMatEncrypted::par_diagonal_pack(const Array<double, 2>& matrix,
                                             const Duo& head_shape_in,
                                             bool is_lower,
                                             bool is_transposed,
-                                            bool is_symmetric,
                                             double scale_in) {
     uint32_t H_prepad = n_heads;
     assert(H_prepad > 0);
@@ -335,7 +314,7 @@ void FeatureMatEncrypted::par_diagonal_pack(const Array<double, 2>& matrix,
     assert(n >= m);
     assert(n % m == 0);
 
-    uint32_t n_slot = context->get_parameter().get_n() / 2;
+    uint32_t n_slot = context->parameter().max_slots();
     assert(n_slot % (H * n) == 0);
     uint32_t c = n_slot / (H * n);
     assert(m % c == 0);
@@ -378,20 +357,11 @@ void FeatureMatEncrypted::par_diagonal_pack(const Array<double, 2>& matrix,
     }
 
     data.clear();
-    data_compress.clear();
-    if (is_symmetric) {
-        data_compress.resize(total_vecs);
-    } else {
-        data.resize(total_vecs);
-    }
+    data.resize(total_vecs);
 
     parallel_for(total_vecs, N_THREAD, *context, [&](CkksContext& ctx_copy, int idx) {
-        auto enc = ctx_copy.encode(packed_vecs[idx], level, scale_in);
-        if (is_symmetric) {
-            data_compress[idx] = ctx_copy.encrypt_symmetric_compressed(enc);
-        } else {
-            data[idx] = ctx_copy.encrypt_symmetric(enc);
-        }
+        auto enc = fhe_api::encode(ctx_copy, packed_vecs[idx], level, scale_in);
+        data[idx] = ctx_copy.encrypt(enc);
     });
 }
 
@@ -424,7 +394,7 @@ Array<double, 2> FeatureMatEncrypted::par_diagonal_unpack(uint32_t n_heads,
 
     assert(n % m == 0);
 
-    uint32_t n_slot = context->get_parameter().get_n() / 2;
+    uint32_t n_slot = context->parameter().max_slots();
     assert(n_slot % (H * n) == 0);
     uint32_t c = n_slot / (H * n);
     assert(m % c == 0);
@@ -440,7 +410,8 @@ Array<double, 2> FeatureMatEncrypted::par_diagonal_unpack(uint32_t n_heads,
         uint32_t ct_offset = mb * cts_per_mb;
         parallel_for(cts_per_mb, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_local) {
             CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_offset + ct_local]);
-            Array1D slots = ctx_copy.decode(x_pt);
+            Array1D slots;
+            ctx_copy.decode(x_pt, slots);
             for (uint32_t local_diag = 0; local_diag < c; local_diag++) {
                 uint32_t diag_idx = ct_local * c + local_diag;
                 uint32_t segment_base = local_diag * H * n;
@@ -474,7 +445,7 @@ void FeatureMatEncrypted::decompress() {
     assert(data.size() == 0 && data_compress.size() > 0);
     size_t n_ct = data_compress.size();
     for (size_t i = 0; i < n_ct; i++) {
-        data.push_back(context->compressed_ciphertext_to_ciphertext(data_compress[i]));
+        data.push_back(std::move(data_compress[i]));
     }
     data_compress.clear();
 }
@@ -492,13 +463,13 @@ Bytes FeatureMatEncrypted::serialize() const {
     uint32_t n_ct = data.size();
     ss_write(ss, n_ct);
     for (const CkksCiphertext& ct : data) {
-        Bytes ct_data = ct.serialize(context->get_parameter());
+        Bytes ct_data = ct.serialize();
         ss_write_vector(ss, ct_data);
     }
     uint32_t n_cct = data_compress.size();
     ss_write(ss, n_cct);
-    for (const CkksCompressedCiphertext& cct : data_compress) {
-        Bytes cct_data = cct.serialize(context->get_parameter());
+    for (const CkksCiphertext& cct : data_compress) {
+        Bytes cct_data = cct.serialize();
         ss_write_vector(ss, cct_data);
     }
     return ss_to_bytes(ss);
@@ -527,7 +498,7 @@ void FeatureMatEncrypted::deserialize(const Bytes& bytes) {
     for (uint32_t i = 0; i < n_cct; i++) {
         Bytes cct_data;
         ss_read_vector(ss, &cct_data);
-        data_compress.push_back(CkksCompressedCiphertext::deserialize(cct_data));
+        data_compress.push_back(CkksCiphertext::deserialize(cct_data));
     }
 }
 
@@ -540,11 +511,11 @@ FeatureMatEncrypted FeatureMatEncrypted::drop_level(int n_level_to_drop) const {
     result.data.resize(data.size());
     parallel_for(data.size(), th_nums, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         auto ct_tmp = data[ct_idx].copy();
-        for (int j = 0; j < n_level_to_drop; j++) {
-            ct_tmp = ctx_copy.drop_level(ct_tmp);
+        if (n_level_to_drop > 0) {
+            ct_tmp = ctx_copy.drop_level(ct_tmp, n_level_to_drop);
         }
         result.data[ct_idx] = move(ct_tmp);
-        assert(new_level == result.data[ct_idx].get_level());
+        assert(new_level == result.data[ct_idx].level());
     });
     return result;
 }

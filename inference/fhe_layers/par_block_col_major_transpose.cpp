@@ -39,7 +39,7 @@ ParBlockColMajorTranspose::ParBlockColMajorTranspose(const CkksParameter& param_
     m_ = m;
     n_ = n;
 
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
     assert((d_ & (d_ - 1)) == 0 && "block_size must be a power of 2");
     n_h_padded_ = next_pow2(n_heads);
@@ -128,27 +128,27 @@ std::vector<double> ParBlockColMajorTranspose::build_transpose_diagonal(int k) c
 void ParBlockColMajorTranspose::precompute_diagonals() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
 
-    double transpose_scale = param_.get_q(level_);
+    double transpose_scale = param_.q()[level_];
 
     // Transpose: (2d-1) diagonal vectors, k from -(d-1) to (d-1)
     transpose_diag_pt_.clear();
     transpose_diag_pt_.reserve(2 * d_ - 1);
     for (int k = -(int)(d_ - 1); k <= (int)(d_ - 1); k++) {
         auto diag_vec = build_transpose_diagonal(k);
-        transpose_diag_pt_.push_back(ctx.encode_ringt(diag_vec, transpose_scale));
+        transpose_diag_pt_.push_back(fhe_api::encode_ringt(ctx, diag_vec, transpose_scale));
     }
 }
 
-CkksPlaintextRingt ParBlockColMajorTranspose::generate_transpose_diag_pt(CkksContext& ctx, uint32_t k_idx) const {
+CkksPlaintext ParBlockColMajorTranspose::generate_transpose_diag_pt(CkksContext& ctx, uint32_t k_idx) const {
     int k = (int)k_idx - (int)(d_ - 1);  // k_idx 0..2d-2 -> k -(d-1)..d-1
     auto diag_vec = build_transpose_diagonal(k);
-    return ctx.encode_ringt(diag_vec, param_.get_q(level_));
+    return fhe_api::encode_ringt(ctx, diag_vec, param_.q()[level_]);
 }
 
 // transpose_on_ct with BSGS: (bsgs_bs-1) baby + up to bsgs_gs giant rotations
 // + (2d-1) pt_muls + (2d-2) adds + 1 rescale.  Level L -> L-1.
 CkksCiphertext ParBlockColMajorTranspose::transpose_on_ct(CkksContext& ctx, const CkksCiphertext& ct) const {
-    double default_scale = param_.get_default_scale();
+    double default_scale = param_.default_scale();
     uint32_t S = n_blocks_per_chunk_;
     uint32_t d_sq = d_ * d_;
     int unit = (int)(d_ - 1) * (int)S;
@@ -156,18 +156,18 @@ CkksCiphertext ParBlockColMajorTranspose::transpose_on_ct(CkksContext& ctx, cons
 
     auto baby_rots = populate_rotations_1_side(ctx, ct, bsgs_bs_t_ - 1, unit);
 
-    CkksCiphertext result(0);
+    CkksCiphertext result;
     bool result_init = false;
 
     for (uint32_t g = 0; g < bsgs_gs_t_; g++) {
-        CkksCiphertext inner(0);
+        CkksCiphertext inner;
         bool inner_init = false;
         uint32_t b_end = std::min(bsgs_bs_t_, n_t - g * bsgs_bs_t_);
 
         for (uint32_t b = 0; b < b_end; b++) {
             uint32_t diag_idx = g * bsgs_bs_t_ + b;
-            auto diag_mul = ctx.ringt_to_mul(transpose_diag_pt_[diag_idx], level_);
-            auto product = ctx.mult_plain_mul(baby_rots[b], diag_mul);
+            const auto& diag_mul = transpose_diag_pt_[diag_idx];
+            auto product = ctx.mult(baby_rots[b], diag_mul);
 
             if (!inner_init) {
                 inner = move(product);
@@ -189,7 +189,7 @@ CkksCiphertext ParBlockColMajorTranspose::transpose_on_ct(CkksContext& ctx, cons
             result = ctx.add(result, inner);
         }
     }
-    return ctx.rescale(result, default_scale);
+    return ctx.rescale(result);
 }
 
 // perform block-based transpose for each head parallelly in the multi-head attention module

@@ -6,38 +6,32 @@ TEST_CASE("cpu/maxpool_p1_oracle_control", "[maxpool_p1_control][diagnostic]") {
     const auto config = read_json((root / "control_config.json").string());
     REQUIRE(config.at("alpha").get<int>() == 14);
     const bool bootstrap_input = config.value("bootstrap_input", false);
-    auto param = bootstrap_input ? CkksBtpParameter::create_parameter_45() : CkksBtpParameter::create_parameter();
     const auto expected = read_json((root / "ckks_parameter.json").string()).at("param0");
     const bool custom_precision = config.value("custom_precision", false);
-    auto scheme_param = custom_precision ? CkksParameter::create_custom_parameter(
-        expected.at("poly_modulus_degree").get<uint64_t>(),
+    auto scheme_param = CkksParameter::create_custom_parameter(
+        static_cast<int>(std::log2(expected.at("poly_modulus_degree").get<int>())),
+        expected.at("log_default_scale").get<int>(),
         expected.at("q").get<std::vector<uint64_t>>(),
-        expected.at("p").get<std::vector<uint64_t>>()) : param.get_ckks_parameter().copy();
-    REQUIRE(scheme_param.get_n() == expected.at("poly_modulus_degree").get<int>());
-    for (size_t i = 0; i < expected.at("q").size(); ++i)
-        REQUIRE(scheme_param.get_q(i) == expected.at("q").at(i).get<uint64_t>());
-    for (size_t i = 0; i < expected.at("p").size(); ++i)
-        REQUIRE(scheme_param.get_p(i) == expected.at("p").at(i).get<uint64_t>());
-    std::cout << "[P1 control] create context; custom_precision=" << custom_precision
-              << "; bootstrap_input=" << bootstrap_input << std::endl;
-    std::unique_ptr<CkksContext> plain_context;
-    std::unique_ptr<CkksBtpContext> btp_context;
-    if (custom_precision)
-        plain_context = std::make_unique<CkksContext>(CkksContext::create_random_context(scheme_param));
-    else
-        btp_context = std::make_unique<CkksBtpContext>(CkksBtpContext::create_random_context(param));
-    CkksContext& context = custom_precision ? *plain_context : *btp_context;
+        expected.at("p").get<std::vector<uint64_t>>(),
+        expected.value("ring_type", std::string("standard")) == "conjugate_invariant"
+            ? RingType::ConjugateInvariant : RingType::Standard);
+    auto context = CkksContext::create_random_context(scheme_param, EncryptorType::PUBLIC_KEY, bootstrap_input);
+    auto decode_pt = [&](const CkksPlaintext& pt) {
+        std::vector<double> values;
+        context.decode(pt, values);
+        return values;
+    };
     std::vector<double> input;
     std::ifstream input_file(root / "input.csv");
     double value;
     while (input_file >> value) input.push_back(value);
-    REQUIRE(input.size() == size_t(scheme_param.get_n()/2));
+    REQUIRE(input.size() == size_t(scheme_param.max_slots()));
     const auto coefficients = config.at("coefficients").get<std::vector<double>>();
     const auto scales = config.at("coefficient_scales").get<std::vector<double>>();
     const auto coefficient_levels = config.at("coefficient_levels").get<std::vector<int>>();
     const auto levels = config.at("baby_levels").get<std::vector<int>>();
     const double default_scale = config.at("default_scale");
-    if (!custom_precision) REQUIRE(default_scale == scheme_param.get_default_scale());
+    if (!custom_precision) REQUIRE(default_scale == scheme_param.default_scale());
     const int degree = config.value("degree", 27);
     REQUIRE((degree == 15 || degree == 27 || degree == 29));
     REQUIRE(coefficients.size() == size_t(degree+1));
@@ -45,8 +39,8 @@ TEST_CASE("cpu/maxpool_p1_oracle_control", "[maxpool_p1_control][diagnostic]") {
     REQUIRE(coefficient_levels.size() == coefficients.size());
     REQUIRE(levels.size() == size_t((degree+4)/4));
     const int input_level = config.at("input_level");
-    auto x = context.encrypt_asymmetric(context.encode(input, input_level, config.at("input_scale").get<double>()));
-    auto decode = [&](const CkksCiphertext& ct) { return context.decode(context.decrypt(ct)); };
+    auto x = context.encrypt(fhe_api::encode(context, input, input_level, config.at("input_scale").get<double>()));
+    auto decode = [&](const CkksCiphertext& ct) { return decode_pt(context.decrypt(ct)); };
     auto dump = [&](const std::string& name, const std::vector<double>& values) {
         std::ofstream file(root / (name + ".csv"));
         file.precision(17);
@@ -57,30 +51,30 @@ TEST_CASE("cpu/maxpool_p1_oracle_control", "[maxpool_p1_control][diagnostic]") {
     if (bootstrap_input) {
         REQUIRE_FALSE(custom_precision);
         REQUIRE(input_level == 5);
-        x = context.drop_level(x, x.get_level());
+        x = context.drop_level(x, x.level());
         std::cout << "[P1 control] real bootstrap" << std::endl;
-        x = btp_context->bootstrap(x);
-        REQUIRE(x.get_level() == input_level);
-        REQUIRE(std::abs(x.get_scale()/default_scale-1) < 1e-12);
-        bootstrap_metadata = {{"level", x.get_level()}, {"scale", x.get_scale()}};
+        x = context.bootstrap(x);
+        REQUIRE(x.level() == input_level);
+        REQUIRE(std::abs(x.scale()/default_scale-1) < 1e-12);
+        bootstrap_metadata = {{"level", x.level()}, {"scale", x.scale()}};
     }
     dump("actual_input", decode(x));
-    std::vector<CkksPlaintextRingt> weights;
+    std::vector<CkksPlaintext> weights;
     std::vector<CkksPlaintext> full_weights;
     nlohmann::json coefficient_checks = nlohmann::json::array();
     const bool full_rns = config.value("coefficient_encoding", std::string("ringt")) == "full_rns";
     for (size_t i = 0; i < coefficients.size(); ++i)
-        weights.push_back(context.encode_ringt(std::vector<double>(input.size(), coefficients[i]), scales[i]));
+        weights.push_back(fhe_api::encode_ringt(context, std::vector<double>(input.size(), coefficients[i]), scales[i]));
     for (size_t i = 0; i < coefficients.size(); ++i) {
-        auto decoded = context.decode(context.ringt_to_pt(weights[i], coefficient_levels[i]));
+        auto decoded = decode_pt(weights[i]);
         double ringt_error = 0.;
         for (double v : decoded) ringt_error = std::max(ringt_error, std::abs(v-coefficients[i]));
         nlohmann::json check = {{"index", i}, {"coefficient", coefficients[i]},
             {"scale", scales[i]}, {"ringt_max_error", ringt_error}};
         if (full_rns) {
-            full_weights.push_back(context.encode(std::vector<double>(input.size(), coefficients[i]),
+            full_weights.push_back(fhe_api::encode(context, std::vector<double>(input.size(), coefficients[i]),
                                                   coefficient_levels[i], scales[i]));
-            decoded = context.decode(full_weights.back());
+            decoded = decode_pt(full_weights.back());
             double full_error = 0.;
             for (double v : decoded) full_error = std::max(full_error, std::abs(v-coefficients[i]));
             check["full_rns_max_error"] = full_error;
@@ -89,23 +83,23 @@ TEST_CASE("cpu/maxpool_p1_oracle_control", "[maxpool_p1_control][diagnostic]") {
         coefficient_checks.push_back(check);
     }
     auto align = [&](const CkksCiphertext& ct, int level) {
-        REQUIRE(ct.get_level() >= level);
-        return ct.get_level() == level ? ct.copy() : context.drop_level(ct, ct.get_level()-level);
+        REQUIRE(ct.level() >= level);
+        return ct.level() == level ? ct.copy() : context.drop_level(ct, ct.level()-level);
     };
     auto checked_rescale = [&](const CkksCiphertext& raw) {
-        REQUIRE(raw.get_level() > 0);
-        const double expected_scale = raw.get_scale()/scheme_param.get_q(raw.get_level());
-        auto result = context.rescale(raw,default_scale);
-        REQUIRE(result.get_level() == raw.get_level()-1);
-        REQUIRE(std::abs(result.get_scale()/expected_scale-1) < 1e-12);
+        REQUIRE(raw.level() > 0);
+        const double expected_scale = raw.scale()/scheme_param.q()[raw.level()];
+        auto result = context.rescale(raw);
+        REQUIRE(result.level() == raw.level()-1);
+        REQUIRE(std::abs(result.scale()/expected_scale-1) < 1e-12);
         return result;
     };
     auto mul_weight = [&](const CkksCiphertext& ct, int i) {
-        REQUIRE(ct.get_level() == coefficient_levels.at(i));
+        REQUIRE(ct.level() == coefficient_levels.at(i));
         if (full_rns)
-            return checked_rescale(context.mult_plain(ct, full_weights.at(i)));
-        auto pt = context.ringt_to_mul(weights.at(i), ct.get_level());
-        return checked_rescale(context.mult_plain_mul(ct, pt));
+            return checked_rescale(context.mult(ct, full_weights.at(i)));
+        const auto& pt = weights.at(i);
+        return checked_rescale(context.mult(ct, pt));
     };
     auto product = [&](const CkksCiphertext& a, const CkksCiphertext& b) {
         return checked_rescale(context.relinearize(context.mult(a,b)));
@@ -139,8 +133,8 @@ TEST_CASE("cpu/maxpool_p1_oracle_control", "[maxpool_p1_control][diagnostic]") {
                     }
                 }
                 // Oracle correction depends on the secret key in this test only.
-                auto pt = context.encode(correction, result.get_level(), result.get_scale());
-                result = context.add_plain(result, pt);
+                auto pt = fhe_api::encode(context, correction, result.level(), result.scale());
+                result = context.add(result, pt);
             }
             dump(mode+"_power_"+std::to_string(power), decode(result));
             powers.emplace(power, std::move(result));
@@ -159,31 +153,31 @@ TEST_CASE("cpu/maxpool_p1_oracle_control", "[maxpool_p1_control][diagnostic]") {
                 auto cubic = product(cubic_linear, align(powers.at(2), level+1));
                 sum = context.add(sum,cubic);
             }
-            nodes.push_back(full_rns ? context.add_plain(sum,full_weights.at(base)) :
-                                     context.add_plain_ringt(sum,weights.at(base)));
+            nodes.push_back(full_rns ? context.add(sum,full_weights.at(base)) :
+                                     context.add(sum,weights.at(base)));
         }
         int combine = 4;
         while (nodes.size() > 1) {
             std::vector<CkksCiphertext> next;
             for (size_t i = 0; i < nodes.size(); i += 2) {
                 if (i+1 == nodes.size()) { next.push_back(nodes[i].copy()); continue; }
-                int level = nodes[i].get_level();
+                int level = nodes[i].level();
                 auto term = product(align(nodes[i+1], level+1), align(powers.at(combine), level+1));
                 next.push_back(context.add(nodes[i],term));
             }
             nodes = std::move(next);
             combine *= 2;
         }
-        REQUIRE(nodes[0].get_level() == config.value("output_level", 0));
-        REQUIRE(input_level - nodes[0].get_level() == config.value("level_cost", 5));
-        REQUIRE(std::abs(nodes[0].get_scale()/default_scale-1) < 1e-12);
+        REQUIRE(nodes[0].level() == config.value("output_level", 0));
+        REQUIRE(input_level - nodes[0].level() == config.value("level_cost", 5));
+        REQUIRE(std::abs(nodes[0].scale()/default_scale-1) < 1e-12);
         const auto values = decode(nodes[0]);
         for (double v : values) REQUIRE(std::isfinite(v));
         dump(mode+"_output", values);
-        metadata[mode] = {{"level",nodes[0].get_level()},{"scale",nodes[0].get_scale()}};
+        metadata[mode] = {{"level",nodes[0].level()},{"scale",nodes[0].scale()}};
         if (config.value("binary_finish", false)) {
             REQUIRE(mode == "baseline");
-            REQUIRE(nodes[0].get_level() >= 1);
+            REQUIRE(nodes[0].level() >= 1);
             auto load = [&](const std::string& name) {
                 std::ifstream file(root / (name+".csv"));
                 std::vector<double> data;
@@ -192,17 +186,17 @@ TEST_CASE("cpu/maxpool_p1_oracle_control", "[maxpool_p1_control][diagnostic]") {
                 REQUIRE(data.size() == input.size());
                 return data;
             };
-            const int level = nodes[0].get_level();
-            auto difference = context.encrypt_asymmetric(context.encode(load("binary_difference"), level, default_scale));
-            auto summation = context.encrypt_asymmetric(context.encode(load("binary_sum"), level, default_scale));
+            const int level = nodes[0].level();
+            auto difference = context.encrypt(fhe_api::encode(context, load("binary_difference"), level, default_scale));
+            auto summation = context.encrypt(fhe_api::encode(context, load("binary_sum"), level, default_scale));
             auto term = product(difference,nodes[0]);
-            auto result = context.add(align(summation,term.get_level()),term);
-            REQUIRE(result.get_level() == level-1);
-            REQUIRE(std::abs(result.get_scale()/default_scale-1) < 1e-12);
+            auto result = context.add(align(summation,term.level()),term);
+            REQUIRE(result.level() == level-1);
+            REQUIRE(std::abs(result.scale()/default_scale-1) < 1e-12);
             auto finish_values = decode(result);
             for (double v : finish_values) REQUIRE(std::isfinite(v));
             dump("binary_finish_output",finish_values);
-            metadata["binary_finish"] = {{"level", result.get_level()}, {"scale",result.get_scale()}};
+            metadata["binary_finish"] = {{"level", result.level()}, {"scale",result.scale()}};
         }
     }
     metadata["warning"] = custom_precision ?

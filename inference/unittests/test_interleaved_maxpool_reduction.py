@@ -16,6 +16,8 @@ class Cipher:
     def __init__(self, values, level=32):
         self.values = np.asarray(values)
         self.level = level
+        from types import SimpleNamespace
+        self.metadata = SimpleNamespace(level=level)
 
 
 class InterleavedReductionTest(unittest.TestCase):

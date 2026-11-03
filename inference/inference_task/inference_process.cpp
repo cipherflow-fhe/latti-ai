@@ -17,6 +17,7 @@
  */
 
 #include "inference_process.h"
+#include "../fhe_api.h"
 #include "../lattisense/cxx_sdk_v2/cxx_fhe_task.h"
 #include <algorithm>
 #include <cmath>
@@ -32,22 +33,14 @@ bool normal_output = false;
 namespace {
 
 UPtr<CkksParameter> make_ckks_parameter_from_json(const json& param_json) {
-    const uint64_t n = param_json.at("poly_modulus_degree").get<uint64_t>();
+    const int log_n = static_cast<int>(std::log2(param_json.at("poly_modulus_degree").get<uint32_t>()));
+    const auto q = param_json.at("q").get<vector<uint64_t>>();
+    const auto p = param_json.at("p").get<vector<uint64_t>>();
+    const int log_default_scale = param_json.at("log_default_scale").get<int>();
+    const auto ring_type = static_cast<RingType>(param_json.value("ring_type", 1));
 
-    UPtr<CkksParameter> param;
-    if (param_json.contains("q") && param_json.contains("p")) {
-        const auto q = param_json.at("q").get<vector<uint64_t>>();
-        const auto p = param_json.at("p").get<vector<uint64_t>>();
-        param = MakeU<CkksParameter>(CkksParameter::create_custom_parameter(n, q, p));
-    } else {
-        param = MakeU<CkksParameter>(CkksParameter::create_parameter(n));
-    }
-
-    if (param_json.contains("log_slots")) {
-        param->set_log_slots(param_json.at("log_slots").get<int>());
-    }
-
-    return param;
+    return MakeU<CkksParameter>(
+        CkksParameter::create_custom_parameter(log_n, log_default_scale, q, p, ring_type));
 }
 
 }  // namespace
@@ -249,7 +242,7 @@ static uint32_t par_diagonal_ct_count(const CkksParameter& param,
     const uint32_t n = next_pow2_u32(n_prepad);
     const uint32_t m = next_pow2_u32(m_prepad);
     const uint32_t segment_len = H * n;
-    const uint32_t n_slot = param.get_n() / 2;
+    const uint32_t n_slot = param.max_slots();
     if (segment_len == 0 || n_slot % segment_len != 0) {
         throw runtime_error("invalid par_diagonal segment layout");
     }
@@ -279,21 +272,17 @@ static bool is_pdm_layer_type(const string& layer_type) {
 }
 
 void InitInferenceProcess::init_parameters(bool is_bootstrapping) {
+    (void)is_bootstrapping;
+    // Inference-side parameters come from ckks_parameter.json. fhe_parameter.json is
+    // consumed by lattisense (FheTask) when it loads the task project.
     auto json_params = read_json(project_path / "ckks_parameter.json");
-    if (is_bootstrapping) {
-        for (auto& param : json_params.items()) {
-            string key = param.key();
-            const auto name = param.value().value("param_name", string("N16QP1546H192H32"));
-            if (name != "N16QP1546H192H32" && name != "N16QP1547H192H32" && name != "EXPERIMENTAL_N16S50H192H32")
-                throw runtime_error("Unsupported Bootstrap parameter: " + name);
-            auto btp_param = name == "EXPERIMENTAL_N16S50H192H32" ? CkksBtpParameter::create_parameter_experimental50() : name == "N16QP1547H192H32" ?
-                CkksBtpParameter::create_parameter_45() : CkksBtpParameter::create_parameter();
-            ckks_parameters_[key] = MakeU<CkksParameter>(move(btp_param.get_ckks_parameter()));
-        }
+    if (json_params.contains("poly_modulus_degree")) {
+        // Single parameter object form.
+        ckks_parameters_["param0"] = make_ckks_parameter_from_json(json_params);
     } else {
+        // Map form: {param_id: parameter_json}.
         for (auto& param : json_params.items()) {
-            string key = param.key();
-            ckks_parameters_[key] = make_ckks_parameter_from_json(param.value());
+            ckks_parameters_[param.key()] = make_ckks_parameter_from_json(param.value());
         }
     }
 }
@@ -1282,7 +1271,7 @@ void InitInferenceProcess::_init_fhe_maxpool_stage(const string& key, const json
     FeatureNode in(json_features.at(layer.at("feature_input").at(0).get<string>()));
     auto& param = *ckks_parameters_.at(in.ckks_parameter_id);
     auto ctx = CkksContext::create_empty_context(param);
-    const int slots = param.get_n() / 2;
+    const int slots = param.max_slots();
     const auto manifest = read_json(project_path / "maxpool_stage_parameters.json");
     const auto& declarations = manifest.at(key);
     const string stage = layer.value("maxpool_stage", string());
@@ -1300,7 +1289,7 @@ void InitInferenceProcess::_init_fhe_maxpool_stage(const string& key, const json
             level < 0 || level > in.level || !std::isfinite(value)) {
             throw runtime_error("Invalid MaxPool parameter descriptor: " + name);
         }
-        const double scale = desc.value("scale", double(param.get_q(level)));
+        const double scale = desc.value("scale", double(param.q()[level]));
         if (!std::isfinite(scale) || scale <= 0) throw runtime_error("Invalid MaxPool encoding scale");
         const string kind = desc.at("kind");
         vector<double> values(slots, kind == "constant" ? value : 0.0);
@@ -1318,14 +1307,14 @@ void InitInferenceProcess::_init_fhe_maxpool_stage(const string& key, const json
         }
         if (desc.value("encoding", string("ringt")) == "full_rns") {
             vector<CkksPlaintext> pts;
-            for (int i = 0; i < count; ++i) pts.push_back(ctx.encode(values, level, scale));
+            for (int i = 0; i < count; ++i) pts.push_back(fhe_api::encode(ctx, values, level, scale));
             if (!maxpool_full_pt_args_.emplace(name, std::move(pts)).second)
                 throw runtime_error("Duplicate MaxPool parameter: " + name);
             continue;
         }
-        vector<CkksPlaintextRingt> pts;
+        vector<CkksPlaintext> pts;
         pts.reserve(count);
-        for (int i = 0; i < count; ++i) pts.push_back(ctx.encode_ringt(values, scale));
+        for (int i = 0; i < count; ++i) pts.push_back(fhe_api::encode_ringt(ctx, values, scale));
         if (!maxpool_pt_args_.emplace(name, std::move(pts)).second) {
             throw runtime_error("Duplicate MaxPool parameter: " + name);
         }
@@ -1372,7 +1361,7 @@ void InitInferenceProcess::_init_fhe_maxpool_layer(
         }
 
         CkksParameter& param = *ckks_parameters_.at(in.ckks_parameter_id);
-        const int slots = param.get_n() / 2;
+        const int slots = param.max_slots();
         const int block = shape[0] * shape[1];
         const int n_per_ct = slots / block;
 
@@ -1389,18 +1378,18 @@ void InitInferenceProcess::_init_fhe_maxpool_layer(
         const string prefix = "maxpool_" + key + "_";
         const size_t start_count = maxpool_pt_args_.size();
 
-        auto put = [&](const string& name, vector<CkksPlaintextRingt>&& pts) {
+        auto put = [&](const string& name, vector<CkksPlaintext>&& pts) {
             if (!maxpool_pt_args_.emplace(prefix + name, std::move(pts)).second) {
                 throw runtime_error("Duplicate 3x3 MaxPool parameter: " + name);
             }
         };
 
         auto encode_constant = [&](double value, int lv, int count) {
-            vector<CkksPlaintextRingt> pts;
+            vector<CkksPlaintext> pts;
             vector<double> values(slots, value);
             pts.reserve(count);
             for (int i = 0; i < count; ++i) {
-                pts.push_back(ctx.encode_ringt(values, param.get_q(lv)));
+                pts.push_back(fhe_api::encode_ringt(ctx, values, param.q()[lv]));
             }
             return pts;
         };
@@ -1443,18 +1432,18 @@ void InitInferenceProcess::_init_fhe_maxpool_layer(
                 }
 
                 if (has_valid) {
-                    vector<CkksPlaintextRingt> pts;
+                    vector<CkksPlaintext> pts;
                     pts.push_back(
-                        ctx.encode_ringt(valid_mask, param.get_q(level))
+                        fhe_api::encode_ringt(ctx, valid_mask, param.q()[level])
                     );
                     put("tap_" + std::to_string(tap) + "_valid",
                         std::move(pts));
                 }
 
                 if (has_invalid) {
-                    vector<CkksPlaintextRingt> pts;
+                    vector<CkksPlaintext> pts;
                     pts.push_back(
-                        ctx.encode_ringt(invalid_mask, param.get_q(level))
+                        fhe_api::encode_ringt(ctx, invalid_mask, param.q()[level])
                     );
                     put("tap_" + std::to_string(tap) + "_invalid",
                         std::move(pts));
@@ -1536,7 +1525,7 @@ void InitInferenceProcess::_init_fhe_maxpool_layer(
             level - 29, skip, shape
         );
 
-        vector<CkksPlaintextRingt> select_pt;
+        vector<CkksPlaintext> select_pt;
         const int n_select = std::min(channels, n_per_ct * 4);
         select_pt.reserve(n_select);
 
@@ -1546,7 +1535,7 @@ void InitInferenceProcess::_init_fhe_maxpool_layer(
                 value *= 4.0;
             }
             select_pt.push_back(
-                ctx.encode_ringt(mask, param.get_q(level - 29))
+                fhe_api::encode_ringt(ctx, mask, param.q()[level - 29])
             );
         }
         put("select", std::move(select_pt));
@@ -1588,7 +1577,7 @@ void InitInferenceProcess::_init_fhe_maxpool_layer(
     CkksParameter& param =
         *ckks_parameters_.at(in.ckks_parameter_id);
 
-    const int slots = param.get_n() / 2;
+    const int slots = param.max_slots();
     const int n_per_ct = slots / (shape[0] * shape[1]);
 
     if (n_per_ct <= 0 ||
@@ -1612,7 +1601,7 @@ void InitInferenceProcess::_init_fhe_maxpool_layer(
 
     // Register a plaintext argument group.
     auto put = [&](const string& name,
-                   vector<CkksPlaintextRingt>&& pts) {
+                   vector<CkksPlaintext>&& pts) {
         if (!maxpool_pt_args_.emplace(
                 prefix + name, std::move(pts)
             ).second) {
@@ -1622,13 +1611,13 @@ void InitInferenceProcess::_init_fhe_maxpool_layer(
 
     // Encode a constant at a specific CKKS level.
     auto encode_constant = [&](double value, int lv, int count) {
-        vector<CkksPlaintextRingt> pts;
+        vector<CkksPlaintext> pts;
         vector<double> values(slots, value);
         pts.reserve(count);
 
         for (int i = 0; i < count; ++i) {
             pts.push_back(
-                ctx.encode_ringt(values, param.get_q(lv))
+                fhe_api::encode_ringt(ctx, values, param.q()[lv])
             );
         }
         return pts;
@@ -1729,7 +1718,7 @@ void InitInferenceProcess::_init_fhe_maxpool_layer(
         level - 17, skip, shape
     );
 
-    vector<CkksPlaintextRingt> select_pt;
+    vector<CkksPlaintext> select_pt;
     select_pt.reserve(n_select);
 
     for (int i = 0; i < n_select; ++i) {
@@ -1740,7 +1729,7 @@ void InitInferenceProcess::_init_fhe_maxpool_layer(
         }
 
         select_pt.push_back(
-            ctx.encode_ringt(mask, param.get_q(level - 17))
+            fhe_api::encode_ringt(ctx, mask, param.q()[level - 17])
         );
     }
 
@@ -2951,7 +2940,7 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
         uint32_t n_h_padded = 1;
         while (n_h_padded < fp->n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot_val = ckks_contexts.at(first_input.ckks_parameter_id)->get_parameter().get_n() / 2;
+        uint32_t n_slot_val = ckks_contexts.at(first_input.ckks_parameter_id)->parameter().max_slots();
         if (n_slot_val >= n_h_padded * par_d * par_d) {
             par_G = 1;
         } else {
@@ -2979,7 +2968,7 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
             Duo output_head_shape = get_feature_mat_head_shape(feature_output, ki.get<string>());
             if (fp->mat_pack_style == "par_diagonal_pack") {
                 auto* output_context = ckks_contexts.at(feature_output.ckks_parameter_id).get();
-                n_out_num = par_diagonal_ct_count(output_context->get_parameter(), feature_output.shape,
+                n_out_num = par_diagonal_ct_count(output_context->parameter(), feature_output.shape,
                                                   output_head_shape, fp->n_heads, feature_output.is_transposed);
             } else {
                 uint32_t d = par_d;
@@ -2989,7 +2978,7 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
             n_out_num = feature_output.get_n_ciphertexts(block_shape);
         }
         auto* output_context = ckks_contexts.at(feature_output.ckks_parameter_id).get();
-        double encode_scale = output_context->get_parameter().get_default_scale();
+        double encode_scale = output_context->parameter().default_scale();
 
         if (feature_output.is_mat) {
             auto output = MakeU<FeatureMatEncrypted>(output_context, feature_output.level);
@@ -3000,7 +2989,8 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
                                                                                          feature_output.head_shape[1]) :
                                             par_d;
             for (int i = 0; i < n_out_num; i++) {
-                output->data.push_back(output_context->new_ciphertext(feature_output.level, encode_scale));
+                output->data.emplace_back(output_context->parameter(), feature_output.level);
+                output->data.back().set_scale(encode_scale);
             }
             cxx_args.push_back(CxxVectorArgument{ki, &output->data});
             output_features[out_idx] = move(output);
@@ -3011,7 +3001,8 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
             output->n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
             output->n_channel = feature_output.channel;
             for (int i = 0; i < n_out_num; i++) {
-                output->data.push_back(output_context->new_ciphertext(feature_output.level, encode_scale));
+                output->data.emplace_back(output_context->parameter(), feature_output.level);
+                output->data.back().set_scale(encode_scale);
             }
             cxx_args.push_back(CxxVectorArgument{ki, &output->data});
             output_features[out_idx] = move(output);
@@ -3021,7 +3012,8 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
             output->n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
             output->n_channel = feature_output.channel;
             for (int i = 0; i < n_out_num; i++) {
-                output->data.push_back(output_context->new_ciphertext(feature_output.level, encode_scale));
+                output->data.emplace_back(output_context->parameter(), feature_output.level);
+                output->data.back().set_scale(encode_scale);
             }
             cxx_args.push_back(CxxVectorArgument{ki, &output->data});
             output_features[out_idx] = move(output);
@@ -3031,7 +3023,8 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
             output->n_channel_per_ct = feature_output.pack_channel_per_ciphertext;
             output->n_channel = feature_output.channel;
             for (int i = 0; i < n_out_num; i++) {
-                output->data.push_back(output_context->new_ciphertext(feature_output.level, encode_scale));
+                output->data.emplace_back(output_context->parameter(), feature_output.level);
+                output->data.back().set_scale(encode_scale);
             }
             cxx_args.push_back(CxxVectorArgument{ki, &output->data});
             output_features[out_idx] = move(output);
@@ -3729,7 +3722,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_
         uint32_t n_h_padded = 1;
         while (n_h_padded < fp->n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot_val = ckks_contexts.at(first_input.ckks_parameter_id)->get_parameter().get_n() / 2;
+        uint32_t n_slot_val = ckks_contexts.at(first_input.ckks_parameter_id)->parameter().max_slots();
         if (n_slot_val >= n_h_padded * par_d * par_d) {
             par_G = 1;
         } else {
@@ -3756,7 +3749,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_
             Duo output_head_shape = get_feature_mat_head_shape(feature_output, ki.get<string>());
             if (fp->mat_pack_style == "par_diagonal_pack") {
                 auto* output_context = ckks_contexts.at(feature_output.ckks_parameter_id).get();
-                n_out_num = par_diagonal_ct_count(output_context->get_parameter(), feature_output.shape,
+                n_out_num = par_diagonal_ct_count(output_context->parameter(), feature_output.shape,
                                                   output_head_shape, fp->n_heads, feature_output.is_transposed);
                 output_mat_block_sizes[out_idx] =
                     next_pow2_u32(feature_output.is_transposed ? output_head_shape[0] : output_head_shape[1]);
@@ -3769,10 +3762,10 @@ void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_
             n_out_num = feature_output.get_n_ciphertexts(block_shape);
         }
         double encode_scale =
-            ckks_contexts.at(feature_output.ckks_parameter_id).get()->get_parameter().get_default_scale();
+            ckks_contexts.at(feature_output.ckks_parameter_id).get()->parameter().default_scale();
         for (int i = 0; i < n_out_num; i++) {
-            z_lists[out_idx].push_back((*ckks_contexts.at(feature_output.ckks_parameter_id))
-                                           .new_ciphertext(feature_output.level, encode_scale));
+            z_lists[out_idx].emplace_back(ckks_contexts.at(feature_output.ckks_parameter_id)->parameter(), feature_output.level);
+            z_lists[out_idx].back().set_scale(encode_scale);
         }
         cxx_args.push_back(CxxVectorArgument{ki, &z_lists[out_idx]});
     }
@@ -4052,12 +4045,9 @@ void InferenceProcess::prepare_task() {
 void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorFunc>& executors) {
     auto* fp_ptr = this->fp;
 
-    executors["encode_pt"] = [fp_ptr](ExecutionContext& exec_ctx, const unordered_map<NodeIndex, any>& inputs,
-                                      any& output, const ComputeNode& self) -> void {
+    executors["encode_pt"] = [fp_ptr](ExecutionContext& exec_ctx, unordered_map<NodeId, any>& local_data,
+                                      const ComputeNode& self) -> void {
         CkksContext* ckks_ctx_ptr = exec_ctx.get_arithmetic_context<CkksContext>();
-        if (!ckks_ctx_ptr) {
-            ckks_ctx_ptr = exec_ctx.get_arithmetic_context<CkksBtpContext>();
-        }
         if (!ckks_ctx_ptr) {
             throw runtime_error("encode_pt: Cannot get CKKS context");
         }
@@ -4074,12 +4064,12 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         int k = attrs.value("k", 0);
         int l = attrs.value("l", 0);
 
-        NodeIndex input_node_idx = self.input_nodes[0]->index;
-        auto raw_ptr = any_cast<shared_ptr<fhe_ops_lib::CustomData>>(inputs.at(input_node_idx));
+        const NodeId& input_node_id = self.input_nodes[0]->id;
+        auto raw_ptr = any_cast<shared_ptr<fhe_ops_lib::CustomData>>(local_data.at(input_node_id));
         auto* custom_data = raw_ptr.get();
         void* layer_ptr = custom_data->get_typed_data<void>();
 
-        CkksPlaintextRingt pt;
+        CkksPlaintext pt;
 
         if (op_class == "Conv2DPackedLayer") {
             auto* layer = static_cast<Conv2DPackedLayer*>(layer_ptr);
@@ -4370,7 +4360,7 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             throw runtime_error("encode_pt: unknown op_class: " + op_class);
         }
 
-        output = make_shared<CkksPlaintextRingt>(move(pt));
+        local_data[self.output_nodes[0]->id] = make_shared<CkksPlaintext>(move(pt));
     };
 }
 

@@ -20,7 +20,7 @@ def flatten_maxpool_state(groups, channels):
     if channels <= 0 or not groups or any(len(group) != channels for group in groups):
         raise ValueError('Invalid MaxPool live group/channel counts')
     nodes = [ct for group in groups for ct in group]
-    if len({ct.level for ct in nodes}) != 1:
+    if len({ct.metadata.level for ct in nodes}) != 1:
         raise ValueError('MaxPool live state levels differ')
     return nodes
 
@@ -64,7 +64,7 @@ def call_interleaved_deferred_half_maxpool_dag(
         raise ValueError('Expected four interleaved ciphertexts per channel')
     if len(tap_specs) != 9 or len(weights_by_round) != len(plan['rounds']):
         raise ValueError('Incorrect tap or polynomial round count')
-    levels = {ct.level for ct in x_cts}
+    levels = {ct.metadata.level for ct in x_cts}
     if len(levels) != 1:
         raise ValueError('Input ciphertext levels differ')
     start = next(iter(levels))
@@ -74,13 +74,13 @@ def call_interleaved_deferred_half_maxpool_dag(
     taps = call_interleaved_normalized_maxpool_taps(
         x_cts, tap_specs, mask_pt_nodes, channels,
     )
-    if any(ct.level != start - 1 for row in taps for ct in row):
+    if any(ct.metadata.level != start - 1 for row in taps for ct in row):
         raise ValueError('Incorrect normalized tap level')
     result = reduce_poly_maxpool_stockmeyer(
         taps, plan, weights_by_round,
         input_shape=plan['output_shape'], skip=[1, 1], n_channel_per_ct=1,
     )
-    if len(result) != channels or any(ct.level != start - cost for ct in result):
+    if len(result) != channels or any(ct.metadata.level != start - cost for ct in result):
         raise ValueError('Incorrect interleaved reduction output count or level')
     return result
 
@@ -132,7 +132,7 @@ def call_deferred_half_maxpool_dag(
     if len(weights_by_round) != depth:
         raise ValueError("Incorrect polynomial round count")
 
-    levels = {ct.level for ct in x_cts}
+    levels = {ct.metadata.level for ct in x_cts}
 
     if len(levels) != 1:
         raise ValueError("Input ciphertext levels differ")
@@ -162,7 +162,7 @@ def call_deferred_half_maxpool_dag(
     tap_level = input_level - 1
 
     if any(
-        ct.level != tap_level
+        ct.metadata.level != tap_level
         for row in taps
         for ct in row
     ):
@@ -179,7 +179,7 @@ def call_deferred_half_maxpool_dag(
 
     expected_level = tap_level - 7 * depth
 
-    if any(ct.level != expected_level for ct in result):
+    if any(ct.metadata.level != expected_level for ct in result):
         raise ValueError(
             "Incorrect MaxPool reduction output level"
         )

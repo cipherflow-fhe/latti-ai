@@ -22,7 +22,7 @@ class AlphaGeneratorTest(unittest.TestCase):
     def setUp(self):
         self.plan = build_maxpool_plan(
             {'kernel_shape': [3, 3], 'stride': [2, 2], 'padding': [1, 1]}, [8, 8])
-        self.param = SimpleNamespace(n=65536, scale=2.**40,
+        self.param = SimpleNamespace(n=65536, default_scale=2.**40,
                                      q=[2.**40 + 4096 * i for i in range(33)])
 
     def test_profiles_bind_all_coefficients_and_reject_insufficient_levels(self):

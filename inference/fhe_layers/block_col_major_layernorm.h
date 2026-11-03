@@ -42,9 +42,9 @@ private:
 
     ls::CkksCiphertext intra_block_row_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
-    ls::CkksPlaintextRingt inv_n_pt_;    // 1/N
-    ls::CkksPlaintextRingt iv_pt_;       // inv_var
-    ls::CkksPlaintextRingt eps_add_pt_;  // eps*inv_var
+    ls::CkksPlaintext inv_n_pt_;    // 1/N
+    ls::CkksPlaintext iv_pt_;       // inv_var
+    ls::CkksPlaintext eps_add_pt_;  // eps*inv_var
 };
 
 // ============================================================
@@ -63,7 +63,7 @@ private:
 
     ls::CkksCiphertext intra_block_row_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
-    ls::CkksPlaintextRingt inv_n_pt_;  // 1/N
+    ls::CkksPlaintext inv_n_pt_;  // 1/N
 };
 
 // ============================================================
@@ -88,9 +88,9 @@ private:
     uint32_t d_, n_slot_, chunk_size_;
     double c0_, c1_, c2_;
 
-    ls::CkksPlaintextRingt c2_norm_pt_;  // c2
-    ls::CkksPlaintextRingt c1_pt_;       // c1
-    ls::CkksPlaintextRingt c0_add_pt_;   // c0
+    ls::CkksPlaintext c2_norm_pt_;  // c2
+    ls::CkksPlaintext c1_pt_;       // c1
+    ls::CkksPlaintext c0_add_pt_;   // c0
 };
 
 // ============================================================
@@ -108,8 +108,8 @@ public:
 private:
     uint32_t d_, n_slot_, chunk_size_;
 
-    ls::CkksPlaintextRingt three_pt_;      // 3.0, for pt*ct with y
-    ls::CkksPlaintextRingt half_norm_pt_;  // 0.5, normalizing scale
+    ls::CkksPlaintext three_pt_;      // 3.0, for pt*ct with y
+    ls::CkksPlaintext half_norm_pt_;  // 0.5, normalizing scale
 };
 
 // ============================================================
@@ -138,6 +138,6 @@ private:
     double inv_std_;
     Array<double, 1> gamma_vals_, beta_vals_;
 
-    std::vector<ls::CkksPlaintextRingt> gamma_pt_;
-    std::vector<ls::CkksPlaintextRingt> beta_add_pt_;
+    std::vector<ls::CkksPlaintext> gamma_pt_;
+    std::vector<ls::CkksPlaintext> beta_add_pt_;
 };

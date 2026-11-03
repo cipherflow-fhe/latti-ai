@@ -90,7 +90,7 @@ class ParBlockColMajorAddPt:
 
         Args:
             A_cts:    input CkksCiphertextNode list, total_cts entries.
-            pt_nodes: list of total_cts CkksPlaintextRingtNode.
+            pt_nodes: list of total_cts CkksPlaintextNode.
         Returns:
             list of output CkksCiphertextNode.
         """
@@ -109,7 +109,7 @@ class ParBlockColMajorAddPt:
         for bj in range(self.num_block_cols):
             for bi in range(self.num_block_rows):
                 for g in range(self.G):
-                    pt_node = CkksPlaintextRingtNode(f'encode_pt_{bi}_{bj}_{g}')
+                    pt_node = CkksPlaintextNode(f'encode_pt_{bi}_{bj}_{g}', is_ringt=True)
                     custom_compute(
                         inputs=[data_source],
                         output=pt_node,

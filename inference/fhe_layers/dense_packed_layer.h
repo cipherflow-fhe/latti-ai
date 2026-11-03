@@ -48,8 +48,8 @@ public:
     virtual Feature0DEncrypted run_1d_multiplexed(ls::CkksContext& ctx, const Feature0DEncrypted& x);
     Array<double, 1> run_plaintext(const Array<double, 1>& x, double multiplier = 1.0);
 
-    std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt;
-    std::vector<ls::CkksPlaintextRingt> bias_pt;
+    std::vector<std::vector<ls::CkksPlaintext>> weight_pt;
+    std::vector<ls::CkksPlaintext> bias_pt;
 
     // For lazy generation
     std::vector<std::vector<std::vector<double>>> weight_rearranged;
@@ -59,20 +59,20 @@ public:
     bool is_1d_multiplexed = false;
 
     // Helper functions for prepare_weight_0d_lazy
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_weight_0d_pt_for_indices(ls::CkksContext& ctx, uint32_t packed_out_idx, uint32_t weight_idx) const;
-    ls::CkksPlaintextRingt generate_bias_0d_pt_for_index(ls::CkksContext& ctx, uint32_t packed_out_idx) const;
+    ls::CkksPlaintext generate_bias_0d_pt_for_index(ls::CkksContext& ctx, uint32_t packed_out_idx) const;
 
     // Helper functions for prepare_weight_for_mult_pack_lazy (2D)
-    ls::CkksPlaintextRingt generate_weight_pt_mult_pack_for_indices(ls::CkksContext& ctx,
+    ls::CkksPlaintext generate_weight_pt_mult_pack_for_indices(ls::CkksContext& ctx,
                                                                     int packed_out_feature_idx,
                                                                     int n_block_input_idx) const;
-    ls::CkksPlaintextRingt generate_bias_pt_mult_pack_for_index(ls::CkksContext& ctx, int packed_out_feature_idx) const;
+    ls::CkksPlaintext generate_bias_pt_mult_pack_for_index(ls::CkksContext& ctx, int packed_out_feature_idx) const;
 
     // Helper functions for prepare_weight_for_1d_multiplexed_lazy
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_weight_pt_1d_mult_for_indices(ls::CkksContext& ctx, int out_group, int rot_idx) const;
-    ls::CkksPlaintextRingt generate_bias_pt_1d_mult_for_index(ls::CkksContext& ctx, int out_group) const;
+    ls::CkksPlaintext generate_bias_pt_1d_mult_for_index(ls::CkksContext& ctx, int out_group) const;
 
 protected:
     uint32_t n_out_feature;

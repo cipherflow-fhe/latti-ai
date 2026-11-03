@@ -26,7 +26,7 @@ public:
     void prepare_weight_stockmeyer();
     void prepare_weight_stockmeyer_lazy();
 
-    ls::CkksPlaintextRingt generate_weight_pt_for_stockmeyer(ls::CkksContext& ctx, int coeff_idx, int ct_idx) const;
+    ls::CkksPlaintext generate_weight_pt_for_stockmeyer(ls::CkksContext& ctx, int coeff_idx, int ct_idx) const;
     std::vector<ls::CkksCiphertext> run_core_stockmeyer(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
     Feature2DEncrypted run_stockmeyer(ls::CkksContext& ctx, const Feature2DEncrypted& x);
 
@@ -49,7 +49,7 @@ public:
     uint32_t n_channel_per_ct;
     uint32_t n_block_per_ct;
     bool is_ordinary_pack;
-    std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt;
+    std::vector<std::vector<ls::CkksPlaintext>> weight_pt;
 
 private:
     int cached_skip_prod;

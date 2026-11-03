@@ -26,8 +26,8 @@ script_dir = Path(__file__).resolve().parent
 project_root = script_dir.parent.parent
 base_path = project_root / 'build' / 'inference' / 'hetero'
 
-from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.deploy_cmds import *  # noqa: E402
+from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.add_pack import AddLayer  # noqa: E402
 from inference.model_generator.layers.avgpool2d_layer import Avgpool2DLayer  # noqa: E402
 from inference.model_generator.layers.avgpool1d_layer import Avgpool1DLayer  # noqa: E402
@@ -118,7 +118,7 @@ def export_to_onnx(model, inputs, output_names, onnx_path, dynamic_axes=None, op
 def gen_conv_mega_ag(
     n_in_channel, n_out_channel, input_shape, kernel_shape, stride, skip, groups, init_level, style='ordinary'
 ):
-    set_param('PN14QP438')
+    set_param('PN14Default')
     model = SimpleCNN()
     conv = nn.Conv2d(
         n_in_channel, n_out_channel, kernel_shape[0], stride[0], padding=int(kernel_shape[0] / 2), groups=groups
@@ -165,12 +165,12 @@ def gen_conv_mega_ag(
         model_json = json.load(f)
 
     model_json['feature']['input_0']['level'] = init_level
-    model_json['feature']['input_0']['pack_num'] = math.ceil(8192 / (input_shape[0] * input_shape[1]))
+    model_json['feature']['input_0']['pack_num'] = math.ceil(16384 / (input_shape[0] * input_shape[1]))
     model_json['feature']['output']['level'] = init_level - 1
     if style == 'multiplexed' and stride[0] != 1:
         model_json['feature']['output']['level'] = init_level - 2
     model_json['feature']['output']['pack_num'] = math.ceil(
-        8192 / (input_shape[0] * input_shape[1]) * (stride[0] * stride[1])
+        16384 / (input_shape[0] * input_shape[1]) * (stride[0] * stride[1])
     )
     with open(f'{task_server_path}/nn_layers_ct_0.json', 'w') as f:
         json.dump(
@@ -219,12 +219,12 @@ class SimpleCNN(nn.Module):
 class TestLayerExport(unittest.TestCase):
     def test_sq(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         n_in_level = 2
         shapes = [16, 32, 64]
         for s in shapes:
             print(f'sub-test: s={s}')
-            input_ct = [CkksCiphertextNode(f'input_ct_{i}', n_in_level) for i in range(int(np.ceil(s * s * 1 / 8192)))]
+            input_ct = [CkksCiphertextNode(id=f'input_ct_{i}', level=n_in_level) for i in range(int(np.ceil(s * s * 1 / 16384)))]
             square = SquareLayer(level=n_in_level)
             output_ct = square.call(input_ct)
             input_args = list()
@@ -233,7 +233,7 @@ class TestLayerExport(unittest.TestCase):
                 input_args=input_args,
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / f'CKKS_square_{s}_{s}' / f'level_{n_in_level}' / 'server',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_conv2d_packed(self):
@@ -357,7 +357,7 @@ class TestLayerExport(unittest.TestCase):
                         input_shape = [block_shape[0] * mult, block_shape[1] * mult]
 
                         for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
-                            set_param('PN14QP438')
+                            set_param('PN14Default')
 
                             next_stride = [
                                 input_shape[0] // (block_shape[0] * stride[0]),
@@ -374,7 +374,7 @@ class TestLayerExport(unittest.TestCase):
                                 f'cin={n_in_channel}, cout={n_out_channel}'
                             )
 
-                            input_ct = [CkksCiphertextNode(f'input_0input{k}', level=level) for k in range(n_ct_in)]
+                            input_ct = [CkksCiphertextNode(id=f'input_0input{k}', level=level) for k in range(n_ct_in)]
 
                             big_conv = InverseMultiplexedConv2DLayer(
                                 n_out_channel,
@@ -407,7 +407,7 @@ class TestLayerExport(unittest.TestCase):
                                 / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                                 / f'level_{init_level}'
                                 / 'server',
-                                fpga_acc=False,
+                                processor=Processor.CPU,
                             )
 
     def test_inverse_mux_conv_repack(self):
@@ -428,7 +428,7 @@ class TestLayerExport(unittest.TestCase):
                 input_shape = [block_shape[0] * 2, block_shape[1] * 2]
 
                 for n_in_channel, n_out_channel in zip(n_in_channels, n_out_channels):
-                    set_param('PN14QP438')
+                    set_param('PN14Default')
 
                     next_stride = [
                         max(1, input_shape[0] // (block_shape[0] * stride[0])),
@@ -460,7 +460,7 @@ class TestLayerExport(unittest.TestCase):
                     n_ct_in = n_in_channel * n_block_per_channel
                     level = init_level
 
-                    input_ct = [CkksCiphertextNode(f'input_0input{k}', level=level) for k in range(n_ct_in)]
+                    input_ct = [CkksCiphertextNode(id=f'input_0input{k}', level=level) for k in range(n_ct_in)]
 
                     weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes('_conv1')
                     output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_pt)
@@ -483,7 +483,7 @@ class TestLayerExport(unittest.TestCase):
                         / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                         / f'level_{init_level}'
                         / 'server',
-                        fpga_acc=False,
+                        processor=Processor.CPU,
                     )
 
     def test_inverse_mux_dw_conv(self):
@@ -506,7 +506,7 @@ class TestLayerExport(unittest.TestCase):
                         input_shape = [block_shape[0] * mult, block_shape[1] * mult]
 
                         for n_channel in n_channels:
-                            set_param('PN14QP438')
+                            set_param('PN14Default')
 
                             next_stride = [
                                 input_shape[0] // (block_shape[0] * stride[0]),
@@ -523,18 +523,18 @@ class TestLayerExport(unittest.TestCase):
                                 f'ch={n_channel}'
                             )
 
-                            input_ct = [CkksCiphertextNode(f'input_0input{k}', level=level) for k in range(n_ct_in)]
+                            input_ct = [CkksCiphertextNode(id=f'input_0input{k}', level=level) for k in range(n_ct_in)]
 
                             index = kernel_shape[0] * kernel_shape[1]
                             # Depthwise: weight_pt is 2D [out_ch][kernel], no n_in_channel dimension
                             weight_pt = [
                                 [
-                                    CkksPlaintextRingtNode(f'convw__conv1_{k}_{i}')
+                                    CkksPlaintextNode(f'convw__conv1_{k}_{i}', is_ringt=True)
                                     for i in range(int(index * next_stride[0] * next_stride[1]))
                                 ]
                                 for k in range(n_channel)
                             ]
-                            bias_pt = [CkksPlaintextRingtNode(f'convb__conv1_{i}') for i in range(n_channel)]
+                            bias_pt = [CkksPlaintextNode(f'convb__conv1_{i}', is_ringt=True) for i in range(n_channel)]
 
                             big_conv = InverseMultiplexedDepthwiseConv2DLayer(
                                 n_channel,
@@ -563,25 +563,25 @@ class TestLayerExport(unittest.TestCase):
                                 / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                                 / f'level_{init_level}'
                                 / 'server',
-                                fpga_acc=False,
+                                processor=Processor.CPU,
                             )
 
     def test_poly_bsgs(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         n_in_channel = 32
         input_shape = (32, 32)
         skip = (1, 1)
-        n_in_channel_per_ct = int(np.floor(N / 2 / (input_shape[0] * input_shape[1])))
+        n_in_channel_per_ct = int(np.floor(N / (input_shape[0] * input_shape[1])))
         n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
         orders = [2, 4, 6, 8, 10, 12, 16, 32, 64]
         level = 8
 
         for order in orders:
             print(f'sub-test: order={order}')
-            input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+            input_ct = [CkksCiphertextNode(id=f'input{k}', level=level) for k in range(n_pack_in_channel)]
             weight_pt = [
-                [CkksPlaintextRingtNode(f'polyw_{1}_{i}_{j}') for j in range(n_pack_in_channel)]
+                [CkksPlaintextNode(f'polyw_{1}_{i}_{j}', is_ringt=True) for j in range(n_pack_in_channel)]
                 for i in range(order + 1)
             ]
 
@@ -599,12 +599,12 @@ class TestLayerExport(unittest.TestCase):
                 output_instruction_path=base_path
                 / f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order}'
                 / f'level_{level}',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_fc_pack_skip_feature0d(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         w_shape = [10, 4096]
         virtual_shape = [1, 1]
         level = 2
@@ -616,7 +616,7 @@ class TestLayerExport(unittest.TestCase):
             n_out_channel = w_shape[0]
             virtual_skip = [s, s]
             skip_0d = s * s  # ciphertext_skip = skip[0] * skip[1]
-            n_channel_per_ct = int(N / 2 / skip_0d)
+            n_channel_per_ct = int(N / skip_0d)
             pack = n_channel_per_ct
             n_packed_out_feature = int(np.ceil(n_out_channel / n_channel_per_ct))
             n_packed_in_feature = int(np.ceil(n_in_channel / n_channel_per_ct))
@@ -632,13 +632,13 @@ class TestLayerExport(unittest.TestCase):
             bsgs_bs = int(np.ceil(np.sqrt(pack)))
             weight_pt_size = n_packed_in_feature * pack
             input_ct = [
-                CkksCiphertextNode(f'input_ct_{i}', level) for i in range(int(np.ceil(n_in_channel / n_channel_per_ct)))
+                CkksCiphertextNode(id=f'input_ct_{i}', level=level) for i in range(int(np.ceil(n_in_channel / n_channel_per_ct)))
             ]
             weight_pt = [
-                [CkksPlaintextRingtNode(f'weight_pt_{i}_{j}') for j in range(weight_pt_size)]
+                [CkksPlaintextNode(f'weight_pt_{i}_{j}', is_ringt=True) for j in range(weight_pt_size)]
                 for i in range(n_packed_out_feature)
             ]
-            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_feature)]
+            bias_pt = [CkksPlaintextNode(f'bias_pt_{i}', is_ringt=True) for i in range(n_packed_out_feature)]
 
             output_ct = dense.call_skip_0d(input_ct, weight_pt, bias_pt, skip_0d)
 
@@ -654,13 +654,13 @@ class TestLayerExport(unittest.TestCase):
                 / f'CKKS_fc_prepare_weight1_1D_pack_skip_{s}_{s}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_fc_fc_feature0d(self):
         N = 16384
-        set_param('PN14QP438')
-        n_slot = 8192
+        set_param('PN14Default')
+        n_slot = 16384
         init_level = 2
         input_channel = 1024
         output_channel = 1024
@@ -683,13 +683,13 @@ class TestLayerExport(unittest.TestCase):
         n_block_input0 = int(np.ceil(n_channel0 / (n_num_pre_ct0 * n_channel_per_block))) * n_num_pre_ct0
 
         input_ct = [
-            CkksCiphertextNode(f'input_ct0_{i}', init_level) for i in range(int(np.ceil(input_channel / n_slot)))
+            CkksCiphertextNode(id=f'input_ct0_{i}', level=init_level) for i in range(int(np.ceil(input_channel / n_slot)))
         ]
         weight_pt0 = [
-            [CkksPlaintextRingtNode(f'weight_pt0_{i}_{j}') for j in range(n_block_input0)]
+            [CkksPlaintextNode(f'weight_pt0_{i}_{j}', is_ringt=True) for j in range(n_block_input0)]
             for i in range(n_packed_out_feature0)
         ]
-        bias_pt0 = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_feature0)]
+        bias_pt0 = [CkksPlaintextNode(f'bias_pt_{i}', is_ringt=True) for i in range(n_packed_out_feature0)]
         dense0 = DensePackedLayer(
             output_channel,
             input_channel,
@@ -703,16 +703,16 @@ class TestLayerExport(unittest.TestCase):
 
         # --- Layer 1: skip_0d ---
         skip_0d1 = skip1[0] * skip1[1]
-        n_channel_per_ct1 = int(N / 2 / skip_0d1)
+        n_channel_per_ct1 = int(N / skip_0d1)
         pack1 = n_channel_per_ct1
         n_packed_in_feature1 = int(np.ceil(output_channel / n_channel_per_ct1))
         n_packed_out_feature1 = int(np.ceil(output_channel1 / n_channel_per_ct1))
         weight_pt_size1 = n_packed_in_feature1 * pack1
         weight_pt1 = [
-            [CkksPlaintextRingtNode(f'weight_pt1_{i}_{j}') for j in range(weight_pt_size1)]
+            [CkksPlaintextNode(f'weight_pt1_{i}_{j}', is_ringt=True) for j in range(weight_pt_size1)]
             for i in range(n_packed_out_feature1)
         ]
-        bias_pt1 = [CkksPlaintextRingtNode(f'bias_pt1_{i}') for i in range(n_packed_out_feature1)]
+        bias_pt1 = [CkksPlaintextNode(f'bias_pt1_{i}', is_ringt=True) for i in range(n_packed_out_feature1)]
         dense1 = DensePackedLayer(
             output_channel1,
             output_channel,
@@ -738,12 +738,12 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_fc_fc_{input_channel}_{output_channel}_{output_channel1}'
             / f'level_{init_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_fc_multiplexed_feature2d(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         level = 3
         n_in_channel = 64
         n_out_channel = 10
@@ -759,22 +759,22 @@ class TestLayerExport(unittest.TestCase):
 
         for shape, skip, invalid_fill in configs:
             input_ct_shape = [shape[0] * skip[0], shape[1] * skip[1]]
-            n_num_per_ct = int(np.ceil(N / 2 / (input_ct_shape[0] * input_ct_shape[1])))
+            n_num_per_ct = int(np.ceil(N / (input_ct_shape[0] * input_ct_shape[1])))
             n_packed_out = int(np.ceil(n_out_channel / n_num_per_ct))
             valid_skip_0 = skip[0] // invalid_fill[0]
             valid_skip_1 = skip[1] // invalid_fill[1]
             n_channel_per_block = valid_skip_0 * valid_skip_1
             n_channel = n_in_channel // (shape[0] * shape[1])
-            n_channel_per_ct = int((N / 2) / (shape[0] * shape[1]) / (invalid_fill[0] * invalid_fill[1]))
-            n_input_ct = max(1, int(np.ceil(n_channel / n_channel_per_block / n_num_per_ct)) * 1)
-            n_block_input = int(np.ceil(n_channel / n_channel_per_block))
+            n_channel_per_ct = int((N) / (shape[0] * shape[1]) / (invalid_fill[0] * invalid_fill[1]))
+            n_input_ct = max(1, int(np.ceil(n_channel / n_channel_per_block / n_num_per_ct)))
+            n_block_input = n_input_ct * n_num_per_ct
 
-            input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_input_ct)]
+            input_ct = [CkksCiphertextNode(id=f'input_ct_{i}', level=level) for i in range(n_input_ct)]
             weight_pt = [
-                [CkksPlaintextRingtNode(f'weight_pt_{i}_{j}') for j in range(n_block_input)]
+                [CkksPlaintextNode(f'weight_pt_{i}_{j}', is_ringt=True) for j in range(n_block_input)]
                 for i in range(n_packed_out)
             ]
-            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out)]
+            bias_pt = [CkksPlaintextNode(f'bias_pt_{i}', is_ringt=True) for i in range(n_packed_out)]
 
             dense = DensePackedLayer(
                 n_out_channel,
@@ -802,16 +802,16 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_poly_relu_bsgs_feature2d(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         n_in_channel = 32
         input_shape = (32, 32)
         skip = (1, 1)
-        n_in_channel_per_ct = int(np.floor(N / 2 / (input_shape[0] * input_shape[1])))
+        n_in_channel_per_ct = int(np.floor(N / (input_shape[0] * input_shape[1])))
         n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
         order0 = 7
         order1 = 7
@@ -819,15 +819,15 @@ class TestLayerExport(unittest.TestCase):
         level_cost1 = PolyRelu2D.compute_bsgs_level_cost(order1)
         level = level_cost0 + level_cost1 + 1  # +1 for sign(x)*x multiplication
 
-        input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+        input_ct = [CkksCiphertextNode(id=f'input{k}', level=level) for k in range(n_pack_in_channel)]
         weight_pt0 = [
-            [CkksPlaintextRingtNode(f'poly0w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order0 + 1)
+            [CkksPlaintextNode(f'poly0w_{i}_{j}', is_ringt=True) for j in range(n_pack_in_channel)] for i in range(order0 + 1)
         ]
         poly_layer0 = PolyRelu2D(input_shape, order0, skip, n_in_channel_per_ct)
         output_ct0 = poly_layer0.call_bsgs_feature2d(input_ct, weight_pt0)
 
         weight_pt1 = [
-            [CkksPlaintextRingtNode(f'poly1w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order1 + 1)
+            [CkksPlaintextNode(f'poly1w_{i}_{j}', is_ringt=True) for j in range(n_pack_in_channel)] for i in range(order1 + 1)
         ]
         poly_layer1 = PolyRelu2D(input_shape, order1, skip, n_in_channel_per_ct)
         output_ct1 = poly_layer1.call_bsgs_feature2d(output_ct0, weight_pt1)
@@ -835,12 +835,12 @@ class TestLayerExport(unittest.TestCase):
         output_ct = list()
         for idx in range(len(output_ct1)):
             tmp = input_ct[idx]
-            if tmp.level > output_ct1[idx].level:
-                tmp = drop_level(tmp, tmp.level - output_ct1[idx].level)
+            if tmp.metadata.level > output_ct1[idx].metadata.level:
+                tmp = drop_level(tmp, tmp.metadata.level - output_ct1[idx].metadata.level)
             tmp0 = rescale(relin(mult(output_ct1[idx], tmp)))
             tmp1 = input_ct[idx]
-            if tmp1.level > tmp0.level:
-                tmp1 = drop_level(tmp1, tmp1.level - tmp0.level)
+            if tmp1.metadata.level > tmp0.metadata.level:
+                tmp1 = drop_level(tmp1, tmp1.metadata.level - tmp0.metadata.level)
             output_ct.append(add(tmp0, tmp1))
 
         input_args = list()
@@ -855,7 +855,7 @@ class TestLayerExport(unittest.TestCase):
             output_instruction_path=base_path
             / f'CKKS_poly_relu_bsgs_{n_in_channel}_channel_order_{order0}_{order1}'
             / f'level_{level}',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_poly_relu_stockmeyer_feature2d(self):
@@ -1539,13 +1539,13 @@ class TestLayerExport(unittest.TestCase):
 
     def test_poly_bsgs_feature0d(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         n_in_channel = 32
         orders = [2, 4, 6, 8]
         skips = [1, 2, 128, 256]
 
         for skip_val in skips:
-            n_channel_per_ct = N // 2 // skip_val
+            n_channel_per_ct = N // skip_val
             n_pack_in_channel = int(np.ceil(n_in_channel / n_channel_per_ct))
             level = 8
 
@@ -1555,9 +1555,9 @@ class TestLayerExport(unittest.TestCase):
                     continue
 
                 print(f'sub-test: skip={skip_val}, order={order}')
-                input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+                input_ct = [CkksCiphertextNode(id=f'input{k}', level=level) for k in range(n_pack_in_channel)]
                 weight_pt = [
-                    [CkksPlaintextRingtNode(f'polyw_0d_{i}_{j}') for j in range(n_pack_in_channel)]
+                    [CkksPlaintextNode(f'polyw_0d_{i}_{j}', is_ringt=True) for j in range(n_pack_in_channel)]
                     for i in range(order + 1)
                 ]
 
@@ -1575,17 +1575,17 @@ class TestLayerExport(unittest.TestCase):
                     output_instruction_path=base_path
                     / f'CKKS_poly_relu_bsgs_feature0d_{n_in_channel}_channel_order_{order}_skip_{skip_val}'
                     / f'level_{level}',
-                    fpga_acc=False,
+                    processor=Processor.CPU,
                 )
 
     def test_poly_bsgs_feature1d_skip(self):
         """PolyRelu1D — skip-pack mode (Feature1DEncrypted::pack).
 
         Slot layout: channel ch, position i → slot ch * shape * skip + i * skip
-        n_channel_per_ct = N/2 / (shape * skip)
+        n_channel_per_ct = N / (shape * skip)
         """
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         n_in_channel = 64
         shapes = [32, 64]
         skips = [1, 2]
@@ -1594,7 +1594,7 @@ class TestLayerExport(unittest.TestCase):
 
         for shape in shapes:
             for skip_val in skips:
-                n_channel_per_ct = N // 2 // shape // skip_val
+                n_channel_per_ct = N // shape // skip_val
                 if n_channel_per_ct == 0:
                     continue
                 n_pack_in_channel = int(np.ceil(n_in_channel / n_channel_per_ct))
@@ -1605,9 +1605,9 @@ class TestLayerExport(unittest.TestCase):
                         continue
 
                     print(f'sub-test skip: shape={shape}, skip={skip_val}, order={order}')
-                    input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+                    input_ct = [CkksCiphertextNode(id=f'input{k}', level=level) for k in range(n_pack_in_channel)]
                     weight_pt = [
-                        [CkksPlaintextRingtNode(f'polyw_1d_skip_{i}_{j}') for j in range(n_pack_in_channel)]
+                        [CkksPlaintextNode(f'polyw_1d_skip_{i}_{j}', is_ringt=True) for j in range(n_pack_in_channel)]
                         for i in range(order + 1)
                     ]
 
@@ -1623,17 +1623,17 @@ class TestLayerExport(unittest.TestCase):
                         output_args=[Argument('output_ct', output_ct)],
                         output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_skip_{n_in_channel}_channel'
                         f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
-                        fpga_acc=False,
+                        processor=Processor.CPU,
                     )
 
     def test_poly_bsgs_feature1d_mux(self):
         """PolyRelu1D — multiplexed/interleaved-pack mode (Feature1DEncrypted::pack_multiplexed).
 
         Slot layout: channel j (CT-local), position i → slot (j/skip)*shape*skip + i*skip + (j%skip)
-        n_channel_per_ct = N/2 / shape   (skip channels share each shape*skip block)
+        n_channel_per_ct = N / shape   (skip channels share each shape*skip block)
         """
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         n_in_channel = 64
         shapes = [32, 64]
         skips = [1, 2]
@@ -1642,7 +1642,7 @@ class TestLayerExport(unittest.TestCase):
 
         for shape in shapes:
             for skip_val in skips:
-                n_channel_per_ct = N // 2 // shape  # multiplexed: no skip in denominator
+                n_channel_per_ct = N // shape  # multiplexed: no skip in denominator
                 n_pack_in_channel = int(np.ceil(n_in_channel / n_channel_per_ct))
 
                 for order in orders:
@@ -1651,9 +1651,9 @@ class TestLayerExport(unittest.TestCase):
                         continue
 
                     print(f'sub-test mux: shape={shape}, skip={skip_val}, order={order}')
-                    input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+                    input_ct = [CkksCiphertextNode(id=f'input{k}', level=level) for k in range(n_pack_in_channel)]
                     weight_pt = [
-                        [CkksPlaintextRingtNode(f'polyw_1d_mux_{i}_{j}') for j in range(n_pack_in_channel)]
+                        [CkksPlaintextNode(f'polyw_1d_mux_{i}_{j}', is_ringt=True) for j in range(n_pack_in_channel)]
                         for i in range(order + 1)
                     ]
 
@@ -1669,12 +1669,12 @@ class TestLayerExport(unittest.TestCase):
                         output_args=[Argument('output_ct', output_ct)],
                         output_instruction_path=base_path / f'CKKS_poly_relu_bsgs_feature1d_mux_{n_in_channel}_channel'
                         f'_shape{shape}_skip{skip_val}_order{order}' / f'level_{level}',
-                        fpga_acc=False,
+                        processor=Processor.CPU,
                     )
 
     def test_conv1d_layer(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         n_in_channel = 4
         n_out_channel = 4
         init_level = 5
@@ -1691,10 +1691,10 @@ class TestLayerExport(unittest.TestCase):
                         print(
                             f'sub-test: input_shape={input_shape}, kernel_shape={kernel_shape}, skip={skip}, stride={stride}'
                         )
-                        n_channel_per_ct = int(N / 2 / input_shape / skip)
+                        n_channel_per_ct = int(N / input_shape / skip)
                         n_pack_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
                         n_packed_out_channel = math.ceil(n_out_channel / (n_channel_per_ct * stride))
-                        input_ct = [CkksCiphertextNode(f'input_{k}', init_level) for k in range(n_pack_in_channel)]
+                        input_ct = [CkksCiphertextNode(id=f'input_{k}', level=init_level) for k in range(n_pack_in_channel)]
                         conv1d = Conv1DPackedLayer(
                             n_out_channel,
                             n_in_channel,
@@ -1721,12 +1721,12 @@ class TestLayerExport(unittest.TestCase):
                             / f'conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}'
                             / f'level_{init_level}'
                             / 'server',
-                            fpga_acc=False,
+                            processor=Processor.CPU,
                         )
 
     def test_mux_conv1d_layer(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
 
         n_in_channel = 16
         n_out_channel = 32
@@ -1744,20 +1744,20 @@ class TestLayerExport(unittest.TestCase):
                         print(
                             f'sub-test: input_shape={input_shape}, kernel_shape={kernel_shape}, skip={skip}, stride={stride}'
                         )
-                        n_channel_per_ct = math.ceil(N / 2 / input_shape)
+                        n_channel_per_ct = math.ceil(N / input_shape)
                         n_packed_in_channel = math.ceil(n_in_channel / n_channel_per_ct)
                         n_packed_out_channel = math.ceil(n_out_channel / n_channel_per_ct)
                         n_block_per_ct = math.ceil(n_channel_per_ct / skip)
                         n_weight_pt = math.ceil(n_out_channel / n_block_per_ct)
-                        input_ct = [CkksCiphertextNode(f'input_{k}', init_level) for k in range(n_packed_in_channel)]
+                        input_ct = [CkksCiphertextNode(id=f'input_{k}', level=init_level) for k in range(n_packed_in_channel)]
                         weight_pt = [
                             [
-                                [CkksPlaintextRingtNode(f'weight_pt_{i}_{k}_{j}') for k in range(kernel_shape)]
+                                [CkksPlaintextNode(f'weight_pt_{i}_{k}_{j}', is_ringt=True) for k in range(kernel_shape)]
                                 for j in range(n_packed_in_channel * n_block_per_ct)
                             ]
                             for i in range(n_weight_pt)
                         ]
-                        bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out_channel)]
+                        bias_pt = [CkksPlaintextNode(f'bias_pt_{i}', is_ringt=True) for i in range(n_packed_out_channel)]
                         conv1d = MultiplexedConv1DPackedLayer(
                             n_out_channel,
                             n_in_channel,
@@ -1770,7 +1770,7 @@ class TestLayerExport(unittest.TestCase):
                             n_packed_out_channel,
                         )
                         n_select_pt = min(n_block_per_ct, n_out_channel)
-                        block_select_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
+                        block_select_pt = [CkksPlaintextNode(f'select_pt_{i}', is_ringt=True) for i in range(n_select_pt)]
                         output_ct = conv1d.call(input_ct, weight_pt, bias_pt, block_select_pt)
 
                         input_args = list()
@@ -1787,12 +1787,12 @@ class TestLayerExport(unittest.TestCase):
                             / f'multiplexed_conv1d_input_shape_{input_shape}_kernel_shape_{kernel_shape}_skip_{skip}_stride_{stride}'
                             / f'level_{init_level}'
                             / 'server',
-                            fpga_acc=False,
+                            processor=Processor.CPU,
                         )
 
     def test_add_layer(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         level = 2
         skip = (1, 1)
         shapes = [16, 32]
@@ -1800,9 +1800,9 @@ class TestLayerExport(unittest.TestCase):
         for n_channel in channels:
             for s in shapes:
                 print(f'sub-test: n_channel={n_channel}, s={s}')
-                n_ct = int(np.ceil(n_channel / (N / 2 / (s * s))))
-                input_ct1 = [CkksCiphertextNode(f'input_ct1_{i}', level) for i in range(n_ct)]
-                input_ct2 = [CkksCiphertextNode(f'input_ct2_{i}', level) for i in range(n_ct)]
+                n_ct = int(np.ceil(n_channel / (N / (s * s))))
+                input_ct1 = [CkksCiphertextNode(id=f'input_ct1_{i}', level=level) for i in range(n_ct)]
+                input_ct2 = [CkksCiphertextNode(id=f'input_ct2_{i}', level=level) for i in range(n_ct)]
                 add_layer = AddLayer()
                 output_ct = add_layer.call(input_ct1, input_ct2)
                 input_args = list()
@@ -1815,7 +1815,7 @@ class TestLayerExport(unittest.TestCase):
                     / f'CKKS_add_layer/ch_{n_channel}_shape_{s}_{s}'
                     / f'level_{level}'
                     / 'server',
-                    fpga_acc=False,
+                    processor=Processor.CPU,
                 )
 
     def test_par_block_col_major_add(self):
@@ -1833,6 +1833,7 @@ class TestLayerExport(unittest.TestCase):
             'scale': 1.0,
             'ckks_scale': 1.0,
             'shape': [m, total_dim],
+            'head_shape': [m, head_dim],
             'ckks_parameter_id': 'ckks',
             'level': level,
             'data_type': 'feature_mat',
@@ -1859,6 +1860,8 @@ class TestLayerExport(unittest.TestCase):
             'block_shape': [64, 64],
             'is_absorb_polyrelu': False,
             'n_heads': n_heads,
+            'head_dim': head_dim,
+            'matmul_block_size': d,
         }
         with open(task_path / 'task_config.json', 'w', encoding='utf-8') as f:
             json.dump(task_config, f)
@@ -1882,6 +1885,7 @@ class TestLayerExport(unittest.TestCase):
             'scale': 1.0,
             'ckks_scale': 1.0,
             'shape': [m, total_dim],
+            'head_shape': [m, head_dim],
             'ckks_parameter_id': 'ckks',
             'level': level,
             'data_type': 'feature_mat',
@@ -1909,6 +1913,8 @@ class TestLayerExport(unittest.TestCase):
             'block_shape': [64, 64],
             'is_absorb_polyrelu': False,
             'n_heads': n_heads,
+            'head_dim': head_dim,
+            'matmul_block_size': d,
         }
         with open(task_path / 'task_config.json', 'w', encoding='utf-8') as f:
             json.dump(task_config, f)
@@ -1919,7 +1925,7 @@ class TestLayerExport(unittest.TestCase):
 
     def test_avgpool2d_layer(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         level = 3
         skip = (1, 1)
         shapes = [8, 16, 32, 64]
@@ -1931,8 +1937,8 @@ class TestLayerExport(unittest.TestCase):
                     if s < stride[0]:
                         continue  # shape must be >= stride
                     print(f'sub-test: stride={stride[0]}, n_channel={n_channel}, s={s}')
-                    n_ct = int(np.ceil(n_channel / int(np.ceil(N / 2 / (s * s)))))
-                    input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+                    n_ct = int(np.ceil(n_channel / int(np.ceil(N / (s * s)))))
+                    input_ct = [CkksCiphertextNode(id=f'input_ct_{i}', level=level) for i in range(n_ct)]
                     avgpool = Avgpool2DLayer(stride=list(stride), shape=[s, s], channel=n_channel, skip=[1, 1])
                     select_tensor_pt, n_channel_per_ct = avgpool.make_pt_nodes_multiplexed_avgpool(
                         '_avgpool', n_channel, N
@@ -1951,12 +1957,12 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}_{s}'
                         / f'level_{level}'
                         / 'server',
-                        fpga_acc=False,
+                        processor=Processor.CPU,
                     )
 
     def test_adaptive_avgpool2d_layer(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         level = 3
         skip = (1, 1)
         shapes = [8, 16, 32, 64]
@@ -1968,9 +1974,9 @@ class TestLayerExport(unittest.TestCase):
                     if s < stride[0]:
                         continue
                     print(f'sub-test: stride={stride[0]}, n_channel={n_channel}, s={s}')
-                    n_channel_per_ct = int(np.ceil(N / 2 / (s * s)))
+                    n_channel_per_ct = int(np.ceil(N / (s * s)))
                     n_ct = int(np.ceil(n_channel / n_channel_per_ct))
-                    input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+                    input_ct = [CkksCiphertextNode(id=f'input_ct_{i}', level=level) for i in range(n_ct)]
                     avgpool = Avgpool2DLayer(stride=list(stride), shape=[s, s], channel=n_channel, skip=[1, 1])
                     output_ct = avgpool.run_adaptive_avgpool(input_ct, n=N)
                     input_args = list()
@@ -1983,12 +1989,12 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}_{s}'
                         / f'level_{level}'
                         / 'server',
-                        fpga_acc=False,
+                        processor=Processor.CPU,
                     )
 
     def test_interleaved_avgpool2d_layer(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         level = 3
         channels = [2, 4, 8]
         strides = [(2, 2), (4, 4)]
@@ -2010,7 +2016,7 @@ class TestLayerExport(unittest.TestCase):
                             f'block_shape={block_shape}, input_shape={input_shape}'
                         )
 
-                        input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct_in)]
+                        input_ct = [CkksCiphertextNode(id=f'input_ct_{i}', level=level) for i in range(n_ct_in)]
                         avgpool = Avgpool2DLayer(
                             stride=list(stride),
                             shape=[block_shape[0], block_shape[1]],
@@ -2030,12 +2036,12 @@ class TestLayerExport(unittest.TestCase):
                             / f'input_shape_{input_shape[0]}_{input_shape[1]}'
                             / f'level_{level}'
                             / 'server',
-                            fpga_acc=False,
+                            processor=Processor.CPU,
                         )
 
     def test_avgpool1d_layer(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         level = 3
         skip = 1
         shapes = [8, 16, 32, 64]
@@ -2047,12 +2053,12 @@ class TestLayerExport(unittest.TestCase):
                     if s < stride:
                         continue
                     print(f'sub-test: stride={stride}, n_channel={n_channel}, s={s}')
-                    n_channel_per_ct = int(np.ceil(N / 2 / s))
+                    n_channel_per_ct = int(np.ceil(N / s))
                     n_ct = int(np.ceil(n_channel / n_channel_per_ct))
-                    input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+                    input_ct = [CkksCiphertextNode(id=f'input_ct_{i}', level=level) for i in range(n_ct)]
                     out_channels_per_ct = n_channel_per_ct * stride
                     n_select_pt = min(n_channel, out_channels_per_ct)
-                    select_tensor_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
+                    select_tensor_pt = [CkksPlaintextNode(f'select_pt_{i}', is_ringt=True) for i in range(n_select_pt)]
                     avgpool = Avgpool1DLayer(stride=stride, shape=s, channel=n_channel, skip=skip)
                     output_ct = avgpool.call_multiplexed_avgpool(
                         input_ct, select_tensor_pt, n_channel, n_channel_per_ct
@@ -2068,12 +2074,12 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}'
                         / f'level_{level}'
                         / 'server',
-                        fpga_acc=False,
+                        processor=Processor.CPU,
                     )
 
     def test_adaptive_avgpool1d_layer(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         level = 3
         skip = 1
         shapes = [8, 16, 32, 64]
@@ -2085,9 +2091,9 @@ class TestLayerExport(unittest.TestCase):
                     if s < stride:
                         continue
                     print(f'sub-test: stride={stride}, n_channel={n_channel}, s={s}')
-                    n_channel_per_ct = int(np.ceil(N / 2 / s))
+                    n_channel_per_ct = int(np.ceil(N / s))
                     n_ct = int(np.ceil(n_channel / n_channel_per_ct))
-                    input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
+                    input_ct = [CkksCiphertextNode(id=f'input_ct_{i}', level=level) for i in range(n_ct)]
                     avgpool = Avgpool1DLayer(stride=stride, shape=s, channel=n_channel, skip=skip)
                     output_ct = avgpool.run_adaptive_avgpool(input_ct, n=N)
                     input_args = list()
@@ -2100,21 +2106,21 @@ class TestLayerExport(unittest.TestCase):
                         / f'ch_{n_channel}_shape_{s}'
                         / f'level_{level}'
                         / 'server',
-                        fpga_acc=False,
+                        processor=Processor.CPU,
                     )
 
     def test_mult_scalar_layer(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
         level = 3
         skip = (1, 1)
         s = 32
         n_channel = 32
         print(f'sub-test: n_channel={n_channel}, s={s}')
-        n_channel_per_ct = int(np.ceil(N / 2 / (s * s)))
+        n_channel_per_ct = int(np.ceil(N / (s * s)))
         n_ct = int(np.ceil(n_channel / n_channel_per_ct))
-        input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_ct)]
-        weight_pt = [CkksPlaintextRingtNode(f'weight_pt_{i}') for i in range(n_ct)]
+        input_ct = [CkksCiphertextNode(id=f'input_ct_{i}', level=level) for i in range(n_ct)]
+        weight_pt = [CkksPlaintextNode(f'weight_pt_{i}', is_ringt=True) for i in range(n_ct)]
         mult_layer = MultScalarLayer()
         output_ct = mult_layer.call(input_ct, weight_pt)
         input_args = list()
@@ -2127,12 +2133,12 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_mult_scalar/ch_{n_channel}_shape_{s}_{s}'
             / f'level_{level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_mux_dw_conv1d_layer(self):
         N = 16384
-        set_param('PN14QP438')
+        set_param('PN14Default')
 
         init_level = 5
 
@@ -2151,20 +2157,20 @@ class TestLayerExport(unittest.TestCase):
                                 f'sub-test: n_channel={n_channel}, input_shape={input_shape}, '
                                 f'kernel_shape={kernel_shape}, skip={skip}, stride={stride}'
                             )
-                            n_channel_per_ct = math.ceil(N / 2 / input_shape)
+                            n_channel_per_ct = math.ceil(N / input_shape)
                             n_packed_ct = math.ceil(n_channel / n_channel_per_ct)
                             n_block_per_ct = math.ceil(n_channel_per_ct / skip)
                             n_packed_out = math.ceil(n_channel / n_channel_per_ct)
 
-                            input_ct = [CkksCiphertextNode(f'input_{k}', init_level) for k in range(n_packed_ct)]
+                            input_ct = [CkksCiphertextNode(id=f'input_{k}', level=init_level) for k in range(n_packed_ct)]
                             # weight_pt[ct_idx][kernel_idx]
                             weight_pt = [
-                                [CkksPlaintextRingtNode(f'weight_pt_{i}_{k}') for k in range(kernel_shape)]
+                                [CkksPlaintextNode(f'weight_pt_{i}_{k}', is_ringt=True) for k in range(kernel_shape)]
                                 for i in range(n_packed_ct)
                             ]
-                            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out)]
+                            bias_pt = [CkksPlaintextNode(f'bias_pt_{i}', is_ringt=True) for i in range(n_packed_out)]
                             n_select_pt = min(n_channel_per_ct, n_channel)
-                            block_select_pt = [CkksPlaintextRingtNode(f'select_pt_{i}') for i in range(n_select_pt)]
+                            block_select_pt = [CkksPlaintextNode(f'select_pt_{i}', is_ringt=True) for i in range(n_select_pt)]
 
                             conv1d = MultiplexedDWConv1DPackedLayer(
                                 n_channel,
@@ -2191,7 +2197,7 @@ class TestLayerExport(unittest.TestCase):
                                 / f'mux_dw_conv1d_ch_{n_channel}_input_{input_shape}_kernel_{kernel_shape}_skip_{skip}_stride_{stride}'
                                 / f'level_{init_level}'
                                 / 'server',
-                                fpga_acc=False,
+                                processor=Processor.CPU,
                             )
 
     def test_fc_1d_multiplexed(self):
@@ -2200,14 +2206,14 @@ class TestLayerExport(unittest.TestCase):
         Feature layout: Feature1DEncrypted::pack_multiplexed
           block_stride  = skip          (skip already contains invalid_fill)
           block_size    = shape * skip
-          n_block_per_ct = N/2 / block_size
+          n_block_per_ct = N / block_size
           valid_sub      = skip / invalid_fill
           n_valid_per_ct = n_block_per_ct * valid_sub  (channels with actual data)
           n_ct           = ceil(n_channel / n_valid_per_ct)
         """
         N = 16384
-        set_param('PN14QP438')
-        N_half = N // 2
+        set_param('PN14Default')
+        N_half = N
         level = 2
 
         # (shape, skip, invalid_fill, n_in_channel, n_out_channel)
@@ -2242,12 +2248,12 @@ class TestLayerExport(unittest.TestCase):
                 f'n_packed_out={n_packed_out}, n_block_input={n_block_input}'
             )
 
-            input_ct = [CkksCiphertextNode(f'input_ct_{i}', level) for i in range(n_input_ct)]
+            input_ct = [CkksCiphertextNode(id=f'input_ct_{i}', level=level) for i in range(n_input_ct)]
             weight_pt = [
-                [CkksPlaintextRingtNode(f'weight_pt_{i}_{j}') for j in range(n_block_input)]
+                [CkksPlaintextNode(f'weight_pt_{i}_{j}', is_ringt=True) for j in range(n_block_input)]
                 for i in range(n_packed_out)
             ]
-            bias_pt = [CkksPlaintextRingtNode(f'bias_pt_{i}') for i in range(n_packed_out)]
+            bias_pt = [CkksPlaintextNode(f'bias_pt_{i}', is_ringt=True) for i in range(n_packed_out)]
 
             dense = DensePackedLayer(
                 n_out_channel,
@@ -2276,14 +2282,14 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output_ct', output_ct)],
                 output_instruction_path=base_path / path_name / f'level_{level}' / 'server',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_par_block_col_major_cpmm(self):
         """ParBlockColMajorCPMM SQUARE: A(8x4 per-head), W(8x8), d=4, n_heads=2, N=16384."""
-        set_param('PN14QP438')
+        set_param('PN14Default')
         M, N_PER_HEAD, N_HEADS, D, LEVEL = 8, 4, 2, 4, 5
-        N_SLOT = 16384 // 2
+        N_SLOT = 16384
 
         layer = ParBlockColMajorCPMM(
             shape_A=(M, N_PER_HEAD),
@@ -2294,7 +2300,7 @@ class TestLayerExport(unittest.TestCase):
         )
 
         n_in_cts = layer.num_block_rows_A * layer.G
-        input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=LEVEL) for k in range(n_in_cts)]
+        input_cts = [CkksCiphertextNode(id=f'input_ct_{k}', level=LEVEL) for k in range(n_in_cts)]
         data_source = CustomDataNode(type='cpmm_data_source', id='_cpmm_layer')
         output_cts = layer.call_custom_compute(input_cts, data_source)
 
@@ -2305,19 +2311,19 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_block_col_major_cpmm' / f'level_{LEVEL}' / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_par_block_col_major_transpose(self):
         """ParBlockColMajorTranspose: 8x8 per-head, d=4, n_heads=2, N=16384."""
-        set_param('PN14QP438')
+        set_param('PN14Default')
         M, K, D, N_HEADS, LEVEL = 8, 8, 4, 2, 5
-        N_SLOT = 16384 // 2
+        N_SLOT = 16384
 
         layer = ParBlockColMajorTranspose(shape=(M, K), block_size=D, n_heads=N_HEADS, n_slot=N_SLOT)
         n_cts = layer.num_blocks * layer.G
 
-        input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=LEVEL) for k in range(n_cts)]
+        input_cts = [CkksCiphertextNode(id=f'input_ct_{k}', level=LEVEL) for k in range(n_cts)]
         data_source = CustomDataNode(type='transpose_data_source', id='_transpose_layer')
         output_cts = layer.call_custom_compute(input_cts, data_source)
 
@@ -2328,14 +2334,14 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_block_col_major_transpose' / f'level_{LEVEL}' / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_par_block_col_major_ccmm(self):
         """ParBlockColMajorCCMM: A(8x8) * B(8x8) per-head, d=4, n_heads=2, N=16384, level=7."""
-        set_param('PN14QP438')
+        set_param('PN14Default')
         M, N_dim, P, D, N_HEADS, LEVEL = 8, 8, 8, 4, 2, 7
-        N_SLOT = 16384 // 2
+        N_SLOT = 16384
 
         layer = ParBlockColMajorCCMM(
             shape_A=(M, N_dim),
@@ -2347,8 +2353,8 @@ class TestLayerExport(unittest.TestCase):
         n_A_cts = layer.num_block_rows_A * layer.num_block_cols_A * layer.G
         n_B_cts = layer.num_block_rows_B * layer.num_block_cols_B * layer.G
 
-        A_cts = [CkksCiphertextNode(f'A_ct_{k}', level=LEVEL) for k in range(n_A_cts)]
-        B_cts = [CkksCiphertextNode(f'B_ct_{k}', level=LEVEL) for k in range(n_B_cts)]
+        A_cts = [CkksCiphertextNode(id=f'A_ct_{k}', level=LEVEL) for k in range(n_A_cts)]
+        B_cts = [CkksCiphertextNode(id=f'B_ct_{k}', level=LEVEL) for k in range(n_B_cts)]
         data_source = CustomDataNode(type='ccmm_data_source', id='_ccmm_layer')
         output_cts = layer.call_custom_compute(A_cts, B_cts, data_source)
 
@@ -2360,15 +2366,15 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_block_col_major_ccmm' / f'level_{LEVEL}' / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_par_block_col_major_polyactrn(self):
         """ParBlockColMajorPolyActRN generated DAG: gamma then degree 2/4 poly."""
-        set_param('PN14QP438')
+        set_param('PN14Default')
         seq_len, n_heads, head_dim, D = 197, 3, 64, 64
         total_dim = n_heads * head_dim
-        N_SLOT = 16384 // 2
+        N_SLOT = 16384
 
         for degree, level in [(2, 3), (4, 4)]:
             gamma_layer = ParBlockColMajorPolyActRNGamma(
@@ -2385,7 +2391,7 @@ class TestLayerExport(unittest.TestCase):
                 degree=degree,
             )
             input_cts = [
-                CkksCiphertextNode(f'input_ct_deg{degree}_{k}', level=level) for k in range(gamma_layer.total_cts)
+                CkksCiphertextNode(id=f'input_ct_deg{degree}_{k}', level=level) for k in range(gamma_layer.total_cts)
             ]
             gamma_data_id = f'_gamma_layer_deg{degree}'
             poly_data_id = f'_poly_layer_deg{degree}'
@@ -2406,13 +2412,13 @@ class TestLayerExport(unittest.TestCase):
                 / f'degree_{degree}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_par_block_col_major_layernorm(self):
         """ParBlockColMajor LayerNorm generated DAG: stats/xcenter/minimax/gold/affine."""
-        set_param('PN15QP880')
-        N_SLOT = 32768 // 2
+        set_param('PN15Default')
+        N_SLOT = 32768
         init_level = 11
 
         configs = [
@@ -2441,7 +2447,7 @@ class TestLayerExport(unittest.TestCase):
             affine = ParBlockColMajorLNAffine(shape=(seq_len, total_dim), block_size=D, n_heads=n_heads, n_slot=N_SLOT)
 
             input_cts = [
-                CkksCiphertextNode(f'input_ct_seq{seq_len}_{k}', level=init_level) for k in range(stats.total_cts)
+                CkksCiphertextNode(id=f'input_ct_seq{seq_len}_{k}', level=init_level) for k in range(stats.total_cts)
             ]
             stats_data = CustomDataNode(type='layernorm_data_source', id='_ln_stats_layer')
             xcenter_data = CustomDataNode(type='layernorm_data_source', id='_ln_xcenter_layer')
@@ -2466,13 +2472,13 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output', output_cts)],
                 output_instruction_path=output_path,
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_par_lower_diag_transpose(self):
         """ParLowerDiagTranspose generated DAG."""
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
         n_heads, head_dim, level = 3, 64, 2
 
         for n_prepad in [65, 128]:
@@ -2482,9 +2488,9 @@ class TestLayerExport(unittest.TestCase):
                 head_dim=head_dim,
                 n_slot=N_SLOT,
             )
-            input_cts = [CkksCiphertextNode(f'input_ct_{n_prepad}_{k}', level=level) for k in range(layer.m_c)]
+            input_cts = [CkksCiphertextNode(id=f'input_ct_{n_prepad}_{k}', level=level) for k in range(layer.m_c)]
             transpose_mask_pt = [
-                [CkksPlaintextRingtNode(f'transpose_mask_pt_{out_diag_idx}_{mask_idx}') for mask_idx in range(2)]
+                [CkksPlaintextNode(f'transpose_mask_pt_{out_diag_idx}_{mask_idx}', is_ringt=True) for mask_idx in range(2)]
                 for out_diag_idx in range(layer.m)
             ]
             output_cts = layer.call(input_cts, transpose_mask_pt)
@@ -2500,13 +2506,13 @@ class TestLayerExport(unittest.TestCase):
                 / f'n_prepad_{n_prepad}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_par_lower_diag_pcmm(self):
         """ParLowerDiagPCMM generated DAG for SQUARE/EXPAND/REDUCE with bias."""
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
         n_prepad, n_heads, head_dim, level = 65, 3, 64, 3
         d_prepad = n_heads * head_dim
 
@@ -2526,19 +2532,19 @@ class TestLayerExport(unittest.TestCase):
                 has_bias=True,
             )
             n_in_cts = layer.K_col * layer.m_c
-            input_cts = [CkksCiphertextNode(f'input_ct_{mode}_{k}', level=level) for k in range(n_in_cts)]
+            input_cts = [CkksCiphertextNode(id=f'input_ct_{mode}_{k}', level=level) for k in range(n_in_cts)]
             pt_A = [
                 [
                     [
-                        CkksPlaintextRingtNode(f'pcmm_pt_A_{mb}_{i}_{pt_idx}')
+                        CkksPlaintextNode(f'pcmm_pt_A_{mb}_{i}_{pt_idx}', is_ringt=True)
                         for pt_idx in range(layer.m_c * layer.c * layer.m_c)
                     ]
                     for i in range(layer.H)
                 ]
                 for mb in range(layer.K)
             ]
-            mask_wrap_pt = [CkksPlaintextRingtNode(f'pcmm_mask_wrap_pt_{i}') for i in range(layer.H - 1)]
-            bias_pt = [CkksPlaintextRingtNode(f'pcmm_bias_pt_{idx}') for idx in range(layer.n_out_mbs * layer.m_c)]
+            mask_wrap_pt = [CkksPlaintextNode(f'pcmm_mask_wrap_pt_{i}', is_ringt=True) for i in range(layer.H - 1)]
+            bias_pt = [CkksPlaintextNode(f'pcmm_bias_pt_{idx}', is_ringt=True) for idx in range(layer.n_out_mbs * layer.m_c)]
             output_cts = layer.call(input_cts, pt_A, mask_wrap_pt, bias_pt)
 
             process_custom_task(
@@ -2554,13 +2560,13 @@ class TestLayerExport(unittest.TestCase):
                 / mode.lower()
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_par_lower_diag_ccmm(self):
         """ParLowerDiagCCMM generated DAG for KQT and ordinary modes."""
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
         n_heads, head_dim, n_prepad, level = 3, 64, 97, 3
 
         configs = [
@@ -2582,17 +2588,17 @@ class TestLayerExport(unittest.TestCase):
             else:
                 n_A_cts = layer.m_c
                 n_B_cts = layer.n_c
-            A_cts = [CkksCiphertextNode(f'A_ct_{mode}_{k}', level=level) for k in range(n_A_cts)]
-            B_cts = [CkksCiphertextNode(f'B_ct_{mode}_{k}', level=level) for k in range(n_B_cts)]
+            A_cts = [CkksCiphertextNode(id=f'A_ct_{mode}_{k}', level=level) for k in range(n_A_cts)]
+            B_cts = [CkksCiphertextNode(id=f'B_ct_{mode}_{k}', level=level) for k in range(n_B_cts)]
             replication_count = layer.m if layer.is_kqt else layer.n
             replication_mask_pt = [
-                CkksPlaintextRingtNode(f'ccmm_replication_mask_pt_{idx}')
+                CkksPlaintextNode(f'ccmm_replication_mask_pt_{idx}', is_ringt=True)
                 for idx in range(min(layer.c, replication_count))
             ]
             if layer.is_kqt:
                 kqt_route_pt = [
                     [
-                        [CkksPlaintextRingtNode(f'ccmm_kqt_route_pt_{j}_{ell}_{mask_idx}') for mask_idx in range(4)]
+                        [CkksPlaintextNode(f'ccmm_kqt_route_pt_{j}_{ell}_{mask_idx}', is_ringt=True) for mask_idx in range(4)]
                         for ell in range(layer.m)
                     ]
                     for j in range(layer.n_c)
@@ -2601,7 +2607,7 @@ class TestLayerExport(unittest.TestCase):
                 route_arg = Argument('kqt_route_pt', kqt_route_pt)
             else:
                 ordinary_route_pt = [
-                    [CkksPlaintextRingtNode(f'ccmm_ordinary_route_pt_{ell}_{mask_idx}') for mask_idx in range(4)]
+                    [CkksPlaintextNode(f'ccmm_ordinary_route_pt_{ell}_{mask_idx}', is_ringt=True) for mask_idx in range(4)]
                     for ell in range(layer.n)
                 ]
                 output_cts = layer.call(A_cts, B_cts, replication_mask_pt, ordinary_route_pt=ordinary_route_pt)
@@ -2616,20 +2622,20 @@ class TestLayerExport(unittest.TestCase):
                 ],
                 output_args=[Argument('output', output_cts)],
                 output_instruction_path=base_path / 'CKKS_par_lower_diag_ccmm' / mode / f'level_{level}' / 'server',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_par_lower_diagonal_add_pt(self):
         """ParLowerDiagonalAddPt generated DAG."""
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
         total_rows, n_prepad, n_heads, m_prepad, level = 137, 197, 3, 20, 2
         shape = (total_rows, n_prepad)
         head_shape = (m_prepad, n_prepad)
         layer = ParLowerDiagonalAddPt(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
 
-        input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=level) for k in range(layer.total_cts)]
-        add_pt = [CkksPlaintextRingtNode(f'lower_diag_add_pt_{k}') for k in range(layer.total_cts)]
+        input_cts = [CkksCiphertextNode(id=f'input_ct_{k}', level=level) for k in range(layer.total_cts)]
+        add_pt = [CkksPlaintextNode(f'lower_diag_add_pt_{k}', is_ringt=True) for k in range(layer.total_cts)]
         output_cts = layer.call(input_cts, add_pt)
 
         process_custom_task(
@@ -2639,24 +2645,24 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_lower_diagonal_add_pt' / f'level_{level}' / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_par_upper_diagonal_layernorm_parts(self):
         """ParUpperDiagonal layernorm generated DAGs for individual sublayers."""
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
         n_prepad, total_cols, n_heads, m_prepad = 65, 73, 3, 20
         shape = (n_prepad, total_cols)
         head_shape = (n_prepad, m_prepad)
 
         stats_level = 4
         stats = ParUpperDiagonalLNStats(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
-        input_cts = [CkksCiphertextNode(f'ln_stats_input_{k}', level=stats_level) for k in range(stats.total_cts)]
-        h0_mask_pt = CkksPlaintextRingtNode('ln_stats_h0_mask_pt')
-        inv_n_pt = [CkksPlaintextRingtNode(f'ln_stats_inv_n_pt_{k}') for k in range(stats.total_cts)]
-        iv_pt = [CkksPlaintextRingtNode(f'ln_stats_iv_pt_{k}') for k in range(stats.total_cts)]
-        eps_add_pt = [CkksPlaintextRingtNode(f'ln_stats_eps_add_pt_{k}') for k in range(stats.total_cts)]
+        input_cts = [CkksCiphertextNode(id=f'ln_stats_input_{k}', level=stats_level) for k in range(stats.total_cts)]
+        h0_mask_pt = CkksPlaintextNode('ln_stats_h0_mask_pt', is_ringt=True)
+        inv_n_pt = [CkksPlaintextNode(f'ln_stats_inv_n_pt_{k}', is_ringt=True) for k in range(stats.total_cts)]
+        iv_pt = [CkksPlaintextNode(f'ln_stats_iv_pt_{k}', is_ringt=True) for k in range(stats.total_cts)]
+        eps_add_pt = [CkksPlaintextNode(f'ln_stats_eps_add_pt_{k}', is_ringt=True) for k in range(stats.total_cts)]
         output_cts = stats.call(input_cts, h0_mask_pt, inv_n_pt, iv_pt, eps_add_pt)
         process_custom_task(
             input_args=[
@@ -2672,14 +2678,14 @@ class TestLayerExport(unittest.TestCase):
             / 'stats'
             / f'level_{stats_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
         xcenter_level = 2
         xcenter = ParUpperDiagonalLNXCentered(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
-        input_cts = [CkksCiphertextNode(f'ln_xcenter_input_{k}', level=xcenter_level) for k in range(xcenter.total_cts)]
-        h0_mask_pt = CkksPlaintextRingtNode('ln_xcenter_h0_mask_pt')
-        inv_n_pt = [CkksPlaintextRingtNode(f'ln_xcenter_inv_n_pt_{k}') for k in range(xcenter.total_cts)]
+        input_cts = [CkksCiphertextNode(id=f'ln_xcenter_input_{k}', level=xcenter_level) for k in range(xcenter.total_cts)]
+        h0_mask_pt = CkksPlaintextNode('ln_xcenter_h0_mask_pt', is_ringt=True)
+        inv_n_pt = [CkksPlaintextNode(f'ln_xcenter_inv_n_pt_{k}', is_ringt=True) for k in range(xcenter.total_cts)]
         output_cts = xcenter.call(input_cts, h0_mask_pt, inv_n_pt)
         process_custom_task(
             input_args=[
@@ -2693,15 +2699,15 @@ class TestLayerExport(unittest.TestCase):
             / 'xcentered'
             / f'level_{xcenter_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
         minimax_level = 2
         minimax = ParUpperDiagonalLNMinimaxInit(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
-        input_cts = [CkksCiphertextNode(f'ln_minimax_input_{k}', level=minimax_level) for k in range(minimax.total_cts)]
-        c0_add_pt = [CkksPlaintextRingtNode(f'ln_minimax_c0_add_pt_{k}') for k in range(minimax.total_cts)]
-        c1_pt = [CkksPlaintextRingtNode(f'ln_minimax_c1_pt_{k}') for k in range(minimax.total_cts)]
-        c2_norm_pt = [CkksPlaintextRingtNode(f'ln_minimax_c2_norm_pt_{k}') for k in range(minimax.total_cts)]
+        input_cts = [CkksCiphertextNode(id=f'ln_minimax_input_{k}', level=minimax_level) for k in range(minimax.total_cts)]
+        c0_add_pt = [CkksPlaintextNode(f'ln_minimax_c0_add_pt_{k}', is_ringt=True) for k in range(minimax.total_cts)]
+        c1_pt = [CkksPlaintextNode(f'ln_minimax_c1_pt_{k}', is_ringt=True) for k in range(minimax.total_cts)]
+        c2_norm_pt = [CkksPlaintextNode(f'ln_minimax_c2_norm_pt_{k}', is_ringt=True) for k in range(minimax.total_cts)]
         output_cts = minimax.call(input_cts, c0_add_pt, c1_pt, c2_norm_pt)
         process_custom_task(
             input_args=[
@@ -2716,15 +2722,15 @@ class TestLayerExport(unittest.TestCase):
             / 'minimax'
             / f'level_{minimax_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
         gold_level = 3
         gold = ParUpperDiagonalLNGoldschmidt(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
-        y_cts = [CkksCiphertextNode(f'ln_gold_y_{k}', level=gold_level) for k in range(gold.total_cts)]
-        a_cts = [CkksCiphertextNode(f'ln_gold_a_{k}', level=gold_level) for k in range(gold.total_cts)]
-        three_pt = [CkksPlaintextRingtNode(f'ln_gold_three_pt_{k}') for k in range(gold.total_cts)]
-        half_norm_pt = [CkksPlaintextRingtNode(f'ln_gold_half_norm_pt_{k}') for k in range(gold.total_cts)]
+        y_cts = [CkksCiphertextNode(id=f'ln_gold_y_{k}', level=gold_level) for k in range(gold.total_cts)]
+        a_cts = [CkksCiphertextNode(id=f'ln_gold_a_{k}', level=gold_level) for k in range(gold.total_cts)]
+        three_pt = [CkksPlaintextNode(f'ln_gold_three_pt_{k}', is_ringt=True) for k in range(gold.total_cts)]
+        half_norm_pt = [CkksPlaintextNode(f'ln_gold_half_norm_pt_{k}', is_ringt=True) for k in range(gold.total_cts)]
         output_cts = gold.call(y_cts, a_cts, three_pt, half_norm_pt)
         process_custom_task(
             input_args=[
@@ -2739,17 +2745,17 @@ class TestLayerExport(unittest.TestCase):
             / 'goldschmidt'
             / f'level_{gold_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
         affine_y_level = 2
         affine = ParUpperDiagonalLNAffine(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
         x_centered = [
-            CkksCiphertextNode(f'ln_affine_xc_{k}', level=affine_y_level - 1) for k in range(affine.total_cts)
+            CkksCiphertextNode(id=f'ln_affine_xc_{k}', level=affine_y_level - 1) for k in range(affine.total_cts)
         ]
-        y_cts = [CkksCiphertextNode(f'ln_affine_y_{k}', level=affine_y_level) for k in range(affine.total_cts)]
-        gamma_pt = [CkksPlaintextRingtNode(f'ln_affine_gamma_pt_{k}') for k in range(affine.total_cts)]
-        beta_add_pt = [CkksPlaintextRingtNode(f'ln_affine_beta_add_pt_{k}') for k in range(affine.total_cts)]
+        y_cts = [CkksCiphertextNode(id=f'ln_affine_y_{k}', level=affine_y_level) for k in range(affine.total_cts)]
+        gamma_pt = [CkksPlaintextNode(f'ln_affine_gamma_pt_{k}', is_ringt=True) for k in range(affine.total_cts)]
+        beta_add_pt = [CkksPlaintextNode(f'ln_affine_beta_add_pt_{k}', is_ringt=True) for k in range(affine.total_cts)]
         output_cts = affine.call(x_centered, y_cts, gamma_pt, beta_add_pt)
         process_custom_task(
             input_args=[
@@ -2764,21 +2770,21 @@ class TestLayerExport(unittest.TestCase):
             / 'affine'
             / f'level_{affine_y_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_par_upper_diagonal_polyact(self):
         """ParUpperDiagonal polyact generated DAGs for gamma and degree-4 poly."""
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
         n_prepad, total_cols, n_heads, m_prepad = 65, 73, 3, 20
         shape = (n_prepad, total_cols)
         head_shape = (n_prepad, m_prepad)
 
         gamma_level = 1
         gamma = ParUpperDiagonalPolyActRNGamma(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
-        input_cts = [CkksCiphertextNode(f'poly_gamma_input_{k}', level=gamma_level) for k in range(gamma.total_cts)]
-        gamma_pt = [CkksPlaintextRingtNode(f'poly_gamma_pt_{k}') for k in range(gamma.total_cts)]
+        input_cts = [CkksCiphertextNode(id=f'poly_gamma_input_{k}', level=gamma_level) for k in range(gamma.total_cts)]
+        gamma_pt = [CkksPlaintextNode(f'poly_gamma_pt_{k}', is_ringt=True) for k in range(gamma.total_cts)]
         output_cts = gamma.call(input_cts, gamma_pt)
         process_custom_task(
             input_args=[Argument('input', input_cts), Argument('gamma_pt', gamma_pt)],
@@ -2788,7 +2794,7 @@ class TestLayerExport(unittest.TestCase):
             / 'gamma'
             / f'level_{gamma_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
         poly_level, degree = 3, 4
@@ -2799,12 +2805,12 @@ class TestLayerExport(unittest.TestCase):
             n_slot=N_SLOT,
             degree=degree,
         )
-        input_cts = [CkksCiphertextNode(f'poly_input_{k}', level=poly_level) for k in range(poly.total_cts)]
-        c0_add_pt = [CkksPlaintextRingtNode(f'poly_c0_add_pt_{k}') for k in range(poly.total_cts)]
-        c1_pt = [CkksPlaintextRingtNode(f'poly_c1_pt_{k}') for k in range(poly.total_cts)]
-        c2_pt = [CkksPlaintextRingtNode(f'poly_c2_pt_{k}') for k in range(poly.total_cts)]
-        c3_pt = [CkksPlaintextRingtNode(f'poly_c3_pt_{k}') for k in range(poly.total_cts)]
-        c4_pt = [CkksPlaintextRingtNode(f'poly_c4_pt_{k}') for k in range(poly.total_cts)]
+        input_cts = [CkksCiphertextNode(id=f'poly_input_{k}', level=poly_level) for k in range(poly.total_cts)]
+        c0_add_pt = [CkksPlaintextNode(f'poly_c0_add_pt_{k}', is_ringt=True) for k in range(poly.total_cts)]
+        c1_pt = [CkksPlaintextNode(f'poly_c1_pt_{k}', is_ringt=True) for k in range(poly.total_cts)]
+        c2_pt = [CkksPlaintextNode(f'poly_c2_pt_{k}', is_ringt=True) for k in range(poly.total_cts)]
+        c3_pt = [CkksPlaintextNode(f'poly_c3_pt_{k}', is_ringt=True) for k in range(poly.total_cts)]
+        c4_pt = [CkksPlaintextNode(f'poly_c4_pt_{k}', is_ringt=True) for k in range(poly.total_cts)]
         output_cts = poly.call(input_cts, c0_add_pt, c1_pt, c2_pt, c3_pt, c4_pt)
         process_custom_task(
             input_args=[
@@ -2822,13 +2828,13 @@ class TestLayerExport(unittest.TestCase):
             / f'degree_{degree}'
             / f'level_{poly_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_par_upper_diagonal_poly_stockmeyer(self):
         """ParUpperDiagonalPoly generated DAG for the default Stockmeyer path."""
-        set_param('PN13QP218')
-        N_SLOT = 8192 // 2
+        set_param('PN13Default')
+        N_SLOT = 8192
         n_prepad, n_heads, m_prepad = 64, 2, 64
         total_cols = n_heads * m_prepad
         shape = (n_prepad, total_cols)
@@ -2836,7 +2842,7 @@ class TestLayerExport(unittest.TestCase):
         order, level = 7, 4
 
         poly = ParUpperDiagonalPoly(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT, order=order)
-        input_cts = [CkksCiphertextNode(f'upper_poly_input_{k}', level=level) for k in range(poly.total_cts)]
+        input_cts = [CkksCiphertextNode(id=f'upper_poly_input_{k}', level=level) for k in range(poly.total_cts)]
         data_source = CustomDataNode(type='upper_poly_data_source', id='_upper_poly_layer')
         output_cts = poly.call_custom_compute(input_cts, data_source)
 
@@ -2852,13 +2858,13 @@ class TestLayerExport(unittest.TestCase):
             / f'order_{order}'
             / f'level_{level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_par_upper_diagonal_poly_mult_ct(self):
         """ParUpperDiagonalPolyMultCt generated DAG."""
-        set_param('PN13QP218')
-        N_SLOT = 8192 // 2
+        set_param('PN13Default')
+        N_SLOT = 8192
         n_prepad, n_heads, m_prepad = 64, 2, 64
         total_cols = n_heads * m_prepad
         shape = (n_prepad, total_cols)
@@ -2866,8 +2872,8 @@ class TestLayerExport(unittest.TestCase):
         level = 2
 
         layer = ParUpperDiagonalPolyMultCt(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
-        half_tanh_cts = [CkksCiphertextNode(f'poly_mult_half_tanh_{k}', level=level) for k in range(layer.total_cts)]
-        x_cts = [CkksCiphertextNode(f'poly_mult_x_{k}', level=level) for k in range(layer.total_cts)]
+        half_tanh_cts = [CkksCiphertextNode(id=f'poly_mult_half_tanh_{k}', level=level) for k in range(layer.total_cts)]
+        x_cts = [CkksCiphertextNode(id=f'poly_mult_x_{k}', level=level) for k in range(layer.total_cts)]
         data_source = CustomDataNode(type='poly_mult_ct_data_source', id='_poly_mult_ct_layer')
         output_cts = layer.call_custom_compute(half_tanh_cts, x_cts, data_source)
 
@@ -2879,13 +2885,13 @@ class TestLayerExport(unittest.TestCase):
             ],
             output_args=[Argument('output', output_cts)],
             output_instruction_path=base_path / 'CKKS_par_upper_diagonal_poly_mult_ct' / f'level_{level}' / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_par_upper_diagonal_softmax_helpers(self):
         """ParUpperDiagonal softmax helper generated DAGs, one graph per helper class."""
-        set_param('PN13QP218')
-        N_SLOT = 8192 // 2
+        set_param('PN13Default')
+        N_SLOT = 8192
         n_prepad, n_heads, m_prepad = 64, 2, 64
         total_cols = n_heads * m_prepad
         shape = (n_prepad, total_cols)
@@ -2893,7 +2899,7 @@ class TestLayerExport(unittest.TestCase):
 
         add_level = 1
         add_layer = ParUpperDiagonalAddPt(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
-        input_cts = [CkksCiphertextNode(f'upper_add_input_{k}', level=add_level) for k in range(add_layer.total_cts)]
+        input_cts = [CkksCiphertextNode(id=f'upper_add_input_{k}', level=add_level) for k in range(add_layer.total_cts)]
         data_source = CustomDataNode(type='upper_add_pt_data_source', id='_upper_add_pt_layer')
         output_cts = add_layer.call_custom_compute(input_cts, data_source)
         process_custom_task(
@@ -2904,7 +2910,7 @@ class TestLayerExport(unittest.TestCase):
             / 'add_pt'
             / f'level_{add_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
         square_level = 2
@@ -2912,7 +2918,7 @@ class TestLayerExport(unittest.TestCase):
             shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT
         )
         input_cts = [
-            CkksCiphertextNode(f'upper_multiple_square_input_{k}', level=square_level)
+            CkksCiphertextNode(id=f'upper_multiple_square_input_{k}', level=square_level)
             for k in range(square_layer.total_cts)
         ]
         data_source = CustomDataNode(type='upper_multiple_square_data_source', id='_upper_multiple_square_layer')
@@ -2925,13 +2931,13 @@ class TestLayerExport(unittest.TestCase):
             / 'multiple_square'
             / f'level_{square_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
         sum_level = 1
         sum_layer = ParUpperDiagonalHeadColSum(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
         input_cts = [
-            CkksCiphertextNode(f'upper_head_col_sum_input_{k}', level=sum_level) for k in range(sum_layer.total_cts)
+            CkksCiphertextNode(id=f'upper_head_col_sum_input_{k}', level=sum_level) for k in range(sum_layer.total_cts)
         ]
         data_source = CustomDataNode(type='upper_head_col_sum_data_source', id='_upper_head_col_sum_layer')
         output_cts = sum_layer.call_custom_compute(input_cts, data_source)
@@ -2943,13 +2949,13 @@ class TestLayerExport(unittest.TestCase):
             / 'head_col_sum'
             / f'level_{sum_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
         init_level = 1
         init_layer = ParUpperDiagonalInverseInit(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
         input_cts = [
-            CkksCiphertextNode(f'upper_inverse_init_input_{k}', level=init_level) for k in range(init_layer.total_cts)
+            CkksCiphertextNode(id=f'upper_inverse_init_input_{k}', level=init_level) for k in range(init_layer.total_cts)
         ]
         data_source = CustomDataNode(type='upper_inverse_init_data_source', id='_upper_inverse_init_layer')
         output_cts = init_layer.call_custom_compute(input_cts, data_source)
@@ -2961,13 +2967,13 @@ class TestLayerExport(unittest.TestCase):
             / 'inverse_init'
             / f'level_{init_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
         iter_level = 2
         iter_layer = ParUpperDiagonalInverseIter(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
-        a_cts = [CkksCiphertextNode(f'upper_inverse_iter_a_{k}', level=iter_level) for k in range(iter_layer.total_cts)]
-        b_cts = [CkksCiphertextNode(f'upper_inverse_iter_b_{k}', level=iter_level) for k in range(iter_layer.total_cts)]
+        a_cts = [CkksCiphertextNode(id=f'upper_inverse_iter_a_{k}', level=iter_level) for k in range(iter_layer.total_cts)]
+        b_cts = [CkksCiphertextNode(id=f'upper_inverse_iter_b_{k}', level=iter_level) for k in range(iter_layer.total_cts)]
         data_source = CustomDataNode(type='upper_inverse_iter_data_source', id='_upper_inverse_iter_layer')
         output_cts = iter_layer.call_custom_compute(a_cts, b_cts, data_source)
         process_custom_task(
@@ -2982,13 +2988,13 @@ class TestLayerExport(unittest.TestCase):
             / 'inverse_iter'
             / f'level_{iter_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
         gelu_level = 2
         gelu_layer = ParUpperDiagonalGELU(shape=shape, head_shape=head_shape, n_heads=n_heads, n_slot=N_SLOT)
-        a_cts = [CkksCiphertextNode(f'upper_gelu_a_{k}', level=gelu_level) for k in range(gelu_layer.total_cts)]
-        b_cts = [CkksCiphertextNode(f'upper_gelu_b_{k}', level=gelu_level) for k in range(gelu_layer.total_cts)]
+        a_cts = [CkksCiphertextNode(id=f'upper_gelu_a_{k}', level=gelu_level) for k in range(gelu_layer.total_cts)]
+        b_cts = [CkksCiphertextNode(id=f'upper_gelu_b_{k}', level=gelu_level) for k in range(gelu_layer.total_cts)]
         data_source = CustomDataNode(type='upper_gelu_data_source', id='_upper_gelu_layer')
         output_cts = gelu_layer.call_custom_compute(a_cts, b_cts, data_source)
         process_custom_task(
@@ -3003,13 +3009,13 @@ class TestLayerExport(unittest.TestCase):
             / 'gelu'
             / f'level_{gelu_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_par_cpmm_square(self):
         """ParBlockColMajorCPMM SQUARE: two configs with n_heads=3."""
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
 
         configs = [
             (53, 3, 16, 2),
@@ -3027,7 +3033,7 @@ class TestLayerExport(unittest.TestCase):
             )
 
             n_in_cts = layer.num_block_rows_A * layer.G
-            input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=level) for k in range(n_in_cts)]
+            input_cts = [CkksCiphertextNode(id=f'input_ct_{k}', level=level) for k in range(n_in_cts)]
             data_source = CustomDataNode(type='cpmm_data_source', id='_cpmm_layer')
             output_cts = layer.call_custom_compute(input_cts, data_source)
 
@@ -3042,13 +3048,13 @@ class TestLayerExport(unittest.TestCase):
                 / f'm_{m}_heads_{n_heads}_dim_{head_dim}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_par_cpmm_square_with_bias(self):
         """ParBlockColMajorCPMM SQUARE with bias: non-square W (W_cols < total_dim), n_heads=3."""
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
 
         # (m, n_heads, head_dim, W_cols, level)
         configs = [
@@ -3067,7 +3073,7 @@ class TestLayerExport(unittest.TestCase):
             )
 
             n_in_cts = layer.num_block_rows_A * layer.G
-            input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=level) for k in range(n_in_cts)]
+            input_cts = [CkksCiphertextNode(id=f'input_ct_{k}', level=level) for k in range(n_in_cts)]
             data_source = CustomDataNode(type='cpmm_data_source', id='_cpmm_layer')
             output_cts = layer.call_custom_compute(input_cts, data_source)
 
@@ -3082,13 +3088,13 @@ class TestLayerExport(unittest.TestCase):
                 / f'm_{m}_heads_{n_heads}_dim_{head_dim}_wcols_{W_cols}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_par_cpmm_expand_with_bias(self):
         """ParBlockColMajorCPMM EXPAND with bias: non-regular W_cols, n_heads=3."""
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
 
         # m=53, n_heads=3, head_dim=16, total_dim=48, W_cols=100 (not divisible by 48)
         configs = [
@@ -3107,7 +3113,7 @@ class TestLayerExport(unittest.TestCase):
             )
 
             n_in_cts = layer.num_block_rows_A * layer.G
-            input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=level) for k in range(n_in_cts)]
+            input_cts = [CkksCiphertextNode(id=f'input_ct_{k}', level=level) for k in range(n_in_cts)]
             data_source = CustomDataNode(type='cpmm_data_source', id='_cpmm_layer')
             output_cts = layer.call_custom_compute(input_cts, data_source)
 
@@ -3122,13 +3128,13 @@ class TestLayerExport(unittest.TestCase):
                 / f'm_{m}_heads_{n_heads}_dim_{head_dim}_wcols_{W_cols}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_par_cpmm_reduce_with_bias(self):
         """ParBlockColMajorCPMM REDUCE with bias: non-regular W_rows, n_heads=3."""
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
 
         # m=53, n_heads=3, head_dim=16, total_dim=48, W_rows=100 (not divisible by 48)
         configs = [
@@ -3148,7 +3154,7 @@ class TestLayerExport(unittest.TestCase):
 
             # REDUCE: input has K_row megablocks
             n_in_cts = layer.K * layer.num_block_rows_A * layer.G
-            input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=level) for k in range(n_in_cts)]
+            input_cts = [CkksCiphertextNode(id=f'input_ct_{k}', level=level) for k in range(n_in_cts)]
             data_source = CustomDataNode(type='cpmm_data_source', id='_cpmm_layer')
             output_cts = layer.call_custom_compute(input_cts, data_source)
 
@@ -3163,13 +3169,13 @@ class TestLayerExport(unittest.TestCase):
                 / f'm_{m}_heads_{n_heads}_dim_{head_dim}_wrows_{W_rows}'
                 / f'level_{level}'
                 / 'server',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_par_block_qkt_v_attention(self):
         """Par attention pipeline: Q*K^T then attn*V, seq_len=53, n_heads=3, head_dim=16, init_level=7."""
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
         seq_len, n_heads, head_dim, init_level = 53, 3, 16, 7
 
         # -- K^T = Transpose(K) --
@@ -3181,7 +3187,7 @@ class TestLayerExport(unittest.TestCase):
         )
         n_kt_cts = transpose_layer.num_blocks * transpose_layer.G
 
-        K_cts = [CkksCiphertextNode(f'K_ct_{k}', level=init_level) for k in range(n_kt_cts)]
+        K_cts = [CkksCiphertextNode(id=f'K_ct_{k}', level=init_level) for k in range(n_kt_cts)]
         transpose_data = CustomDataNode(type='transpose_data_source', id='_kt_transpose')
         KT_cts = transpose_layer.call_custom_compute(K_cts, transpose_data)
 
@@ -3194,7 +3200,7 @@ class TestLayerExport(unittest.TestCase):
             n_slot=N_SLOT,
         )
         n_q_cts = ccmm_qkt_layer.num_block_rows_A * ccmm_qkt_layer.num_block_cols_A * ccmm_qkt_layer.G
-        Q_cts = [CkksCiphertextNode(f'Q_ct_{k}', level=init_level) for k in range(n_q_cts)]
+        Q_cts = [CkksCiphertextNode(id=f'Q_ct_{k}', level=init_level) for k in range(n_q_cts)]
         Q_dropped = [drop_level(q, 1) for q in Q_cts]
         ccmm_qkt_data = CustomDataNode(type='ccmm_data_source', id='_qkt_ccmm')
         attn_cts = ccmm_qkt_layer.call_custom_compute(Q_dropped, KT_cts, ccmm_qkt_data)
@@ -3208,7 +3214,7 @@ class TestLayerExport(unittest.TestCase):
             n_slot=N_SLOT,
         )
         n_v_cts = ccmm_attnv_layer.num_block_rows_B * ccmm_attnv_layer.num_block_cols_B * ccmm_attnv_layer.G
-        V_cts = [CkksCiphertextNode(f'V_ct_{k}', level=init_level) for k in range(n_v_cts)]
+        V_cts = [CkksCiphertextNode(id=f'V_ct_{k}', level=init_level) for k in range(n_v_cts)]
         V_dropped = [drop_level(v, 4) for v in V_cts]
         ccmm_attnv_data = CustomDataNode(type='ccmm_data_source', id='_attnv_ccmm')
         result_cts = ccmm_attnv_layer.call_custom_compute(attn_cts, V_dropped, ccmm_attnv_data)
@@ -3227,13 +3233,13 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_par_attention_seq{seq_len}_heads{n_heads}_dim{head_dim}'
             / f'level_{init_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_par_cpmm_expand_reduce(self):
         """Par CPMM expand-reduce pipeline: A*W1*W2, m=53, n_heads=3, head_dim=16, K_factor=4, init_level=4."""
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
         m, n_heads, head_dim, K_factor, init_level = 53, 3, 16, 4, 4
         total_dim = n_heads * head_dim
         expanded_dim = K_factor * total_dim
@@ -3247,7 +3253,7 @@ class TestLayerExport(unittest.TestCase):
             n_slot=N_SLOT,
         )
         n_in_cts = expand_layer.num_block_rows_A * expand_layer.G
-        input_cts = [CkksCiphertextNode(f'input_ct_{k}', level=init_level) for k in range(n_in_cts)]
+        input_cts = [CkksCiphertextNode(id=f'input_ct_{k}', level=init_level) for k in range(n_in_cts)]
         expand_data = CustomDataNode(type='cpmm_data_source', id='_expand_cpmm')
         mid_cts = expand_layer.call_custom_compute(input_cts, expand_data)
 
@@ -3273,13 +3279,13 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_par_cpmm_expand_reduce_m{m}_heads{n_heads}_dim{head_dim}_K{K_factor}'
             / f'level_{init_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )
 
     def test_par_cpmm_expand_polyactrn_reduce(self):
         """Par CPMM expand -> gamma -> degree 2/4 poly -> reduce mega pipeline."""
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
         m, n_heads, head_dim, K_factor = 53, 3, 16, 2
         total_dim = n_heads * head_dim
         expanded_dim = K_factor * total_dim
@@ -3293,7 +3299,7 @@ class TestLayerExport(unittest.TestCase):
                 n_slot=N_SLOT,
             )
             n_in_cts = expand_layer.num_block_rows_A * expand_layer.G
-            input_cts = [CkksCiphertextNode(f'input_ct_deg{degree}_{k}', level=init_level) for k in range(n_in_cts)]
+            input_cts = [CkksCiphertextNode(id=f'input_ct_deg{degree}_{k}', level=init_level) for k in range(n_in_cts)]
             expand_data = CustomDataNode(type='cpmm_data_source', id='_expand_cpmm')
             expanded_cts = expand_layer.call_custom_compute(input_cts, expand_data)
 
@@ -3342,7 +3348,7 @@ class TestLayerExport(unittest.TestCase):
                 / f'degree_{degree}'
                 / f'level_{init_level}'
                 / 'server',
-                fpga_acc=False,
+                processor=Processor.CPU,
             )
 
     def test_par_full_attention(self):
@@ -3351,8 +3357,8 @@ class TestLayerExport(unittest.TestCase):
         seq_len=197, n_heads=3, head_dim=64, init_level=9.
         Level budget: CPMM(2) + Transpose(1) + CCMM(3) + CCMM(3) = 9.
         """
-        set_param('PN14QP438')
-        N_SLOT = 16384 // 2
+        set_param('PN14Default')
+        N_SLOT = 16384
         seq_len, n_heads, head_dim = 197, 3, 64
         total_dim = n_heads * head_dim
         init_level = 9
@@ -3366,7 +3372,7 @@ class TestLayerExport(unittest.TestCase):
             n_slot=N_SLOT,
         )
         n_x_cts = cpmm_q_layer.num_block_rows_A * cpmm_q_layer.G
-        X_cts = [CkksCiphertextNode(f'X_ct_{k}', level=init_level) for k in range(n_x_cts)]
+        X_cts = [CkksCiphertextNode(id=f'X_ct_{k}', level=init_level) for k in range(n_x_cts)]
 
         # Q = CPMM(X, W_Q) → level 7
         cpmm_q_data = CustomDataNode(type='cpmm_data_source', id='_cpmm_q')
@@ -3447,5 +3453,5 @@ class TestLayerExport(unittest.TestCase):
             / f'CKKS_par_full_attention_seq{seq_len}_heads{n_heads}_dim{head_dim}'
             / f'level_{init_level}'
             / 'server',
-            fpga_acc=False,
+            processor=Processor.CPU,
         )

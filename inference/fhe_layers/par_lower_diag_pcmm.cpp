@@ -50,7 +50,7 @@ ParLowerDiagPCMM::ParLowerDiagPCMM(const CkksParameter& param_in,
     assert(n_ >= m_);
     assert(n_ % m_ == 0);
 
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     segment_len_ = H_ * n_;
     assert(n_slot_ % segment_len_ == 0);
     c_ = n_slot_ / segment_len_;
@@ -138,7 +138,7 @@ void ParLowerDiagPCMM::prepare_weight() {
     }
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParLowerDiagPCMM::generate_pt_A(CkksContext& ctx, uint32_t mb, uint32_t i, uint32_t j, uint32_t ell, uint32_t r) const {
     assert(mb < K_);
     assert(i < H_);
@@ -167,10 +167,10 @@ ParLowerDiagPCMM::generate_pt_A(CkksContext& ctx, uint32_t mb, uint32_t i, uint3
             }
         }
     }
-    return ctx.encode_ringt(plaintext, param_.get_q(level_));
+    return fhe_api::encode_ringt(ctx, plaintext, param_.q()[level_]);
 }
 
-CkksPlaintextRingt ParLowerDiagPCMM::generate_mask_wrap_pt(CkksContext& ctx, uint32_t i_idx) const {
+CkksPlaintext ParLowerDiagPCMM::generate_mask_wrap_pt(CkksContext& ctx, uint32_t i_idx) const {
     assert(i_idx < H_ - 1);
     uint32_t i = i_idx + 1;
     vector<double> mask(n_slot_, 0.0);
@@ -182,10 +182,10 @@ CkksPlaintextRingt ParLowerDiagPCMM::generate_mask_wrap_pt(CkksContext& ctx, uin
             }
         }
     }
-    return ctx.encode_ringt(mask, param_.get_q(level_ - 1));
+    return fhe_api::encode_ringt(ctx, mask, param_.q()[level_ - 1]);
 }
 
-CkksPlaintextRingt ParLowerDiagPCMM::generate_bias_pt(CkksContext& ctx, uint32_t mb, uint32_t r) const {
+CkksPlaintext ParLowerDiagPCMM::generate_bias_pt(CkksContext& ctx, uint32_t mb, uint32_t r) const {
     assert(has_bias_);
     assert(r < m_c_);
     uint32_t output_mbs = (mode_ == Mode::EXPAND) ? K_ : 1;
@@ -204,13 +204,13 @@ CkksPlaintextRingt ParLowerDiagPCMM::generate_bias_pt(CkksContext& ctx, uint32_t
             }
         }
     }
-    return ctx.encode_ringt(bias_vec, param_.get_default_scale());
+    return fhe_api::encode_ringt(ctx, bias_vec, param_.default_scale());
 }
 
 std::vector<CkksCiphertext> ParLowerDiagPCMM::run_core(CkksContext& ctx,
                                                        const std::vector<CkksCiphertext>& input_cts,
                                                        const std::vector<uint32_t>& mb_indices) const {
-    double default_scale = param_.get_default_scale();
+    double default_scale = param_.default_scale();
     vector<CkksCiphertext> reduced(m_c_);
     bool reduced_init = false;
 
@@ -231,13 +231,13 @@ std::vector<CkksCiphertext> ParLowerDiagPCMM::run_core(CkksContext& ctx,
         for (uint32_t i = 0; i < H_; i++) {
             ct_ir[i].resize(m_c_);
             for (uint32_t r = 0; r < m_c_; r++) {
-                CkksCiphertext acc(0);
+                CkksCiphertext acc;
                 bool init = false;
                 for (uint32_t j = 0; j < m_c_; j++) {
                     for (uint32_t ell = 0; ell < c_; ell++) {
                         uint32_t pt_idx = (j * c_ + ell) * m_c_ + r;
-                        auto pt_mul = ctx.ringt_to_mul(pt_A_[weight_mb][i][pt_idx], level_);
-                        auto product = ctx.mult_plain_mul(ct_Br[j][ell], pt_mul);
+                        const auto& pt_mul = pt_A_[weight_mb][i][pt_idx];
+                        auto product = ctx.mult(ct_Br[j][ell], pt_mul);
                         if (!init) {
                             acc = std::move(product);
                             init = true;
@@ -246,7 +246,7 @@ std::vector<CkksCiphertext> ParLowerDiagPCMM::run_core(CkksContext& ctx,
                         }
                     }
                 }
-                ct_ir[i][r] = ctx.rescale(acc, default_scale);  // level L-1, scale D
+                ct_ir[i][r] = ctx.rescale(acc);  // level L-1, scale D
             }
         }
 
@@ -255,8 +255,8 @@ std::vector<CkksCiphertext> ParLowerDiagPCMM::run_core(CkksContext& ctx,
             CkksCiphertext acc = ctx.drop_level(ct_ir[0][r]);
             for (uint32_t i_idx = 0; i_idx < H_ - 1; i_idx++) {
                 uint32_t i = i_idx + 1;
-                auto mask_mul = ctx.ringt_to_mul(mask_wrap_pt_[i_idx], level_ - 1);
-                auto ct_R = ctx.rescale(ctx.mult_plain_mul(ct_ir[i][r], mask_mul), default_scale);  // level L-2, scale
+                const auto& mask_mul = mask_wrap_pt_[i_idx];
+                auto ct_R = ctx.rescale(ctx.mult(ct_ir[i][r], mask_mul));  // level L-2, scale
                                                                                                     // D
                 auto ct_i_drop = ctx.drop_level(ct_ir[i][r]);
                 auto ct_L = ctx.sub(ct_i_drop, ct_R);
@@ -301,7 +301,7 @@ FeatureMatEncrypted ParLowerDiagPCMM::run(CkksContext& ctx, const FeatureMatEncr
             auto mb_cts = run_core(ctx, X_T.data, {mb});
             if (has_bias_) {
                 for (uint32_t r = 0; r < m_c_; r++) {
-                    mb_cts[r] = ctx.add_plain_ringt(mb_cts[r], bias_pt_[mb * m_c_ + r]);
+                    mb_cts[r] = ctx.add(mb_cts[r], bias_pt_[mb * m_c_ + r]);
                 }
             }
             for (auto& ct : mb_cts) {
@@ -316,7 +316,7 @@ FeatureMatEncrypted ParLowerDiagPCMM::run(CkksContext& ctx, const FeatureMatEncr
         result.data = run_core(ctx, X_T.data, all_mbs);
         if (has_bias_) {
             for (uint32_t r = 0; r < m_c_; r++) {
-                result.data[r] = ctx.add_plain_ringt(result.data[r], bias_pt_[r]);
+                result.data[r] = ctx.add(result.data[r], bias_pt_[r]);
             }
         }
     }

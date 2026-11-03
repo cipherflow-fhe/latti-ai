@@ -44,13 +44,19 @@ class MultScalarLayer:
 
     def make_pt_nodes(self, layer_id, n_input_nodes):
         """Return weight_pt list with n_input_nodes elements."""
-        return [CkksPlaintextRingtNode(f'mult_scalar_{layer_id}_{i}') for i in range(n_input_nodes)]
+        return [CkksPlaintextNode(f'mult_scalar_{layer_id}_{i}', is_ringt=True) for i in range(n_input_nodes)]
 
     def call_custom_compute(self, x: list, conv_data_source) -> list:
         """Lazy path: generate encode_pt nodes on-demand."""
+        layer_id = conv_data_source.id
+        param = get_fhe_param()
+        # C++ MultScalarLayer encodes the weight at q[level].
+        pack_scale = float(param.q[x[0].metadata.level])
         result = []
         for i in range(len(x)):
-            w_pt = CkksPlaintextRingtNode(f'encode_pt_mult_scalar_{i}')
+            w_pt = CkksPlaintextNode(
+                f'encode_pt_mult_scalar_{layer_id}_{i}', is_ringt=True, scale=pack_scale
+            )
             custom_compute(
                 inputs=[conv_data_source],
                 output=w_pt,
