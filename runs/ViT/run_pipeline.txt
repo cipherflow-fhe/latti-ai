@@ -1,0 +1,8 @@
+# GPU pipeline
+'''
+cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=89 -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+python training/run_compile.py --input=./runs/ViT/model/trained_poly.onnx --output=./runs/ViT/ --style=multiplexed --config training/config/ViT_tiny_config.json
+python inference/interface/gen_mega_ag.py --task-dir ./runs/ViT/task
+./build/examples/inference --task-dir ./runs/ViT/task --input runs/ViT/patch_input.csv --verify --gpu
+'''

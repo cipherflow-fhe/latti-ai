@@ -44,7 +44,7 @@ BERT 满足新的 `< 0.2` 标准，但不满足此前的 `0.1` 标准。
 
 两模型均使用 `deployment_mode=server_provisioned_runner`、`input_mode=plaintext`、`parameter_mode=encrypted_offline`、`parameter_loading_mode=runtime_lazy` 和 `par_diagonal_pack`。本次验收覆盖明文输入、加密参数、密文输出的外包推理路径。
 
-BERT 按 `runs/BERT/run_pipeline.md` 在编译时显式传入 `training/config/config.json`。ViT 使用该配置的实验副本 `/tmp/transformer-param-gpu-validation/ViT/config.json`，设置 `n_heads=3`、`model_type=vit`。没有新增调度限制。
+BERT 当次验收在编译时显式传入 `training/config/config.json`，该文件现已原样重命名为 `training/config/BERT_base_config.json`。ViT 当次使用该配置的实验副本 `/tmp/transformer-param-gpu-validation/ViT/config.json`，设置 `n_heads=3`、`model_type=vit`；现在对应 `training/config/ViT_tiny_config.json`，省略不参与 ViT 编译的 BERT 专用字段。两份 `run_pipeline` 已分别引用对应配置。没有新增调度限制。
 
 已核验完整原始输出的名称、形状、索引连续性、无重复及全部有限；Runner 返回码均为 0。逐参数核验 task signature 与 manifest 的 ID、level、size、类型及 layer，以及全部密文容器的数量、元素偏移、长度和文件大小。Runner 不携带明文模型 H5 或私钥文件。PCMM 权重、bias 及数值系数走离线参数密文，结构 mask 仍为公开明文。
 
