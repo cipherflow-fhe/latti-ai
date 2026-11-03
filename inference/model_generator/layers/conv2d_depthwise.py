@@ -206,6 +206,8 @@ class Conv2DPackedDepthwiseLayer:
         return rotated_x
 
     def call_custom_compute(self, x: list[DataNode], conv_data_source) -> list[DataNode]:
+        # Match Conv2DPackedDepthwiseLayer's C++ weight encoder (residual_scale = 1).
+        weight_scale = float(get_fhe_param().q[x[0].metadata.level])
         rotated_x = x
         rotated_x_2d = self.gen_rotated_x(rotated_x)
         result = list()
@@ -217,7 +219,11 @@ class Conv2DPackedDepthwiseLayer:
                 for j in range(self.kernel_shape[1]):
                     index = i * self.kernel_shape[1] + j
                     x_ct = rotated_x_2d[packed_out_channel_idx][index]
-                    w_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}_{index}', is_ringt=True)
+                    w_pt = CkksPlaintextNode(
+                        f'encode_pt_{conv_data_source.id}_{packed_out_channel_idx}_{index}',
+                        is_ringt=True,
+                        scale=weight_scale,
+                    )
                     custom_compute(
                         inputs=[conv_data_source],
                         output=w_pt,
@@ -233,7 +239,7 @@ class Conv2DPackedDepthwiseLayer:
                     w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             partial_sum = rescale(partial_sum)
-            b_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}', is_ringt=True)
+            b_pt = CkksPlaintextNode(f'encode_pt_{conv_data_source.id}_bias_{packed_out_channel_idx}', is_ringt=True)
             custom_compute(
                 inputs=[conv_data_source],
                 output=b_pt,
