@@ -1278,6 +1278,9 @@ def _bert_softmax_denominator_scale(attn_node: ComputeNode, attr_name: str, conf
 
 
 def _bert_softmax_denominator_guard(attn_node: ComputeNode, attr_name: str) -> float:
+    # Compiler-side stabilization changes the approximation. The original
+    # exporter's epsilon/alpha control convergence, so reference evaluation
+    # must not add these guards to its denominators.
     if _node_str_attr(attn_node, 'softmax_profile').lower() != 'thor-wide':
         return 0.0
     if float(getattr(config, 'bert_softmax_use_wide_inverse_epsilon', 1.0)) == 0.0:

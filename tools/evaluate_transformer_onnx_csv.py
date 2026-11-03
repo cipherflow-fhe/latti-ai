@@ -24,6 +24,26 @@ def polynomial(x, coefficients):
     return np.polynomial.polynomial.polyval(x, coefficients)
 
 
+def inverse(x, epsilon, alpha, attrs):
+    # Match PolySoftmax._normalize / _approx_inverse in the ONNX exporter.
+    # epsilon and alpha control convergence; neither is added to the input.
+    a = np.ones_like(x)
+    b = x
+    lower = epsilon
+    for _ in range(attrs.get('max_inverse_iterations', 15)):
+        if not attrs.get('use_asor', 1):
+            a = a * (2 - b * a)
+        else:
+            if lower >= 1 - alpha:
+                break
+            k = 2 / (1 + lower)
+            factor = k * (2 - k * b)
+            a = a * factor
+            b = b * factor
+            lower = k * lower * (2 - k * lower)
+    return a
+
+
 def layernorm(x, weight, bias, attrs):
     eps = attrs.get('eps', attrs.get('epsilon', 1e-5))
     centered = x - x.mean(axis=-1, keepdims=True)
@@ -70,18 +90,14 @@ def attention(values, attrs, bert):
         mid = (attrs['range_min'] + attrs['range_max']) / 2
         a = polynomial((scores - mid) / attrs['exp_divisor'], attrs['exp_coefficients'])
         a = a ** attrs.get('delta_1', 2)
-        # The wide profile exports guards for the initial normalization and
-        # each refinement. Keep these attributes in the reference operation.
-        wide = attrs.get('softmax_profile', b'') in (b'thor-wide', 'thor-wide')
-        guard = attrs.get('inverse_epsilon', 0.0) if wide else 0.0
-        a = a / (a.sum(axis=-1, keepdims=True) + guard)
+        epsilon = attrs['inverse_epsilon']
+        a = a * inverse(a.sum(axis=-1, keepdims=True), epsilon, attrs['inverse_alpha'], attrs)
         delta = attrs.get('delta_2', 2)
         while delta > 1:
             a = a * a
             delta >>= 1
             key = 'final_inverse_alpha' if delta == 1 else 'inverse_alpha'
-            guard = attrs.get(key, 0.0) if wide else 0.0
-            a = a / (a.sum(axis=-1, keepdims=True) + guard)
+            a = a * inverse(a.sum(axis=-1, keepdims=True), epsilon / x.shape[1], attrs[key], attrs)
     else:
         n = x.shape[1]
         scale = values[5].reshape(heads, n)[None, :, None, :]
