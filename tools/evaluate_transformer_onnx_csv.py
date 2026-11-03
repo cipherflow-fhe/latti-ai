@@ -70,11 +70,18 @@ def attention(values, attrs, bert):
         mid = (attrs['range_min'] + attrs['range_max']) / 2
         a = polynomial((scores - mid) / attrs['exp_divisor'], attrs['exp_coefficients'])
         a = a ** attrs.get('delta_1', 2)
-        # Normalization is the mathematical custom softmax operation. The
-        # compiler's Newton reciprocal is an approximation of this division.
-        a = a / a.sum(axis=-1, keepdims=True)
-        a = a ** attrs.get('delta_2', 2)
-        a = a / a.sum(axis=-1, keepdims=True)
+        # The wide profile exports guards for the initial normalization and
+        # each refinement. Keep these attributes in the reference operation.
+        wide = attrs.get('softmax_profile', b'') in (b'thor-wide', 'thor-wide')
+        guard = attrs.get('inverse_epsilon', 0.0) if wide else 0.0
+        a = a / (a.sum(axis=-1, keepdims=True) + guard)
+        delta = attrs.get('delta_2', 2)
+        while delta > 1:
+            a = a * a
+            delta >>= 1
+            key = 'final_inverse_alpha' if delta == 1 else 'inverse_alpha'
+            guard = attrs.get(key, 0.0) if wide else 0.0
+            a = a / (a.sum(axis=-1, keepdims=True) + guard)
     else:
         n = x.shape[1]
         scale = values[5].reshape(heads, n)[None, :, None, :]
