@@ -151,7 +151,7 @@ def get_compute_score(
         'upsample_nearest',
         'resize',
     }
-    if compute.layer_type in supported_fhe_score_layers:
+    if compute.layer_type in supported_fhe_score_layers or compute.layer_type.startswith('maxpool2d_'):
         preds = list(enclosing_graph.predecessors(compute))
         level = min(enclosing_graph.nodes[p]['level'] for p in preds)
         s_param = FheScoreParam(
@@ -393,7 +393,15 @@ class GraphPartitioner:
 
                     sol_graph_vec_aux_lv = solution[1].copy()
                     sol_graph_vec_aux_lv[node_to_idx[new_node]] = AUX_LV
-                    sol_aux_lv_score = get_restoring_score(dag, leading_comp, self.param_dict)
+                    if leading_comp.layer_type.startswith('maxpool2d_'):
+                        # Refresh the output live set, not the larger input
+                        # set of the reduction that just produced it.
+                        score_graph = dag.copy()
+                        refresh = transforms.add_btp_layer(
+                            score_graph, new_node, self.param_dict, config.fhe_param.max_level - terminal_lv)
+                        sol_aux_lv_score = get_restoring_score(score_graph, refresh, self.param_dict)
+                    else:
+                        sol_aux_lv_score = get_restoring_score(dag, leading_comp, self.param_dict)
                     aux_lv_solutions[tuple(sol_key)] = (
                         solution[0] + sol_aux_lv_score,
                         sol_graph_vec_aux_lv,

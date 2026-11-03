@@ -169,10 +169,17 @@ def main():
         from training.nn_tools.activations import RangeNormPoly2d, PolyAct
         from training.nn_tools.replace import count_activations
 
+        # n_maxpool = count_activations(model, nn.MaxPool2d)
+        # replace_maxpool_with_avgpool(model)
+        # n_avgpool = count_activations(model, nn.AvgPool2d)
+        # log.info(f'Device: {device}  |  MaxPool2d {n_maxpool} -> AvgPool2d {n_avgpool} ')
+
         n_maxpool = count_activations(model, nn.MaxPool2d)
-        replace_maxpool_with_avgpool(model)
-        n_avgpool = count_activations(model, nn.AvgPool2d)
-        log.info(f'Device: {device}  |  MaxPool2d {n_maxpool} -> AvgPool2d {n_avgpool} ')
+
+        log.info(
+            f'Device: {device} | Retained MaxPool2d: {n_maxpool}'
+        )
+
         n_relu = count_activations(model, nn.ReLU)
         if args.poly_module == 'RangeNormPoly2d':
             replace_activation_with_poly(

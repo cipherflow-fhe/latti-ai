@@ -21,6 +21,7 @@ activations in an existing model, in-place.
 
 import logging
 from typing import Type, Callable
+from xml.parsers.expat import model
 
 import torch.nn as nn
 
@@ -317,9 +318,8 @@ def prepare_for_fhe(
 ) -> nn.Module:
     """Convert a standard PyTorch model to be FHE-compatible.
 
-    Performs three in-place replacements:
+    Preserves standard MaxPool2d for compiler PolyMaxPool lowering and performs:
 
-    1. ``nn.MaxPool2d`` → ``nn.AvgPool2d``
     2. General ``nn.AvgPool2d`` → ``DepthwiseAvgPool2d`` (depthwise conv)
     3. ``nn.ReLU`` → *poly_module* (default ``RangeNormPoly2d``)
 
@@ -345,7 +345,11 @@ def prepare_for_fhe(
     """
     import torch
 
-    replace_maxpool_with_avgpool(model)
+    # Keep original MaxPool2d for PolyMaxPool2D conversion.
+    # replace_maxpool_with_avgpool(model)
+
+
+
     replace_layernorm_with_fhe(model)
     _replace_general_avgpool_recursive(model, freeze=True)
     replace_activation_with_poly(model, new_module_factory=poly_module, upper_bound=upper_bound, degree=degree)

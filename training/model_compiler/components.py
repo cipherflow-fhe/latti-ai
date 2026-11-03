@@ -257,6 +257,53 @@ N16QP1546H192H32 = FheParameter(
 )
 
 
+# Existing Lattigo 45-bit Bootstrap preset; five usable residual levels.
+N16QP1547H192H32 = FheParameter(
+    name="N16QP1547H192H32", poly_modulus_degree=65536,
+    max_level=5, log_default_scale=45, n_slots=32768,
+    q=[
+        0x10000000006e0001,
+        0x2000000a0001,
+        0x2000000e0001,
+        0x1fffffc20001,
+        0x200000440001,
+        0x200000500001,
+        0x3ffffe80001,
+        0x3ffffd20001,
+        0x3ffffca0001,
+        0xffffffffffc0001,
+        0xfffffffff240001,
+        0x1000000000f00001,
+        0xfffffffff840001,
+        0x1000000000860001,
+        0xfffffffff6a0001,
+        0x1000000000980001,
+        0xfffffffff5a0001,
+        0x1000000000b00001,
+        0x1000000000ce0001,
+        0xfffffffff2a0001,
+        0x400000000360001,
+        0x3ffffffffbe0001,
+        0x400000000660001,
+        0x4000000008a0001,
+    ],
+    p=[
+        0x1fffffffffe00001,
+        0x1fffffffffc80001,
+        0x1fffffffffb40001,
+        0x1fffffffff500001,
+    ],
+)
+
+
+# Experimental scale sweep only; Bootstrap compatibility is measured separately.
+EXPERIMENTAL_N16S50H192H32 = FheParameter(
+    name="EXPERIMENTAL_N16S50H192H32", poly_modulus_degree=65536,
+    max_level=5, log_default_scale=50, n_slots=32768,
+    q=N16QP1547H192H32.q[:1] + [1125899908022273, 1125899911168001, 1125899913527297, 1125899915100161, 1125899915231233] + N16QP1547H192H32.q[6:],
+    p=list(N16QP1547H192H32.p),
+)
+
 class GlobalConfig:
     _instance = None
 
@@ -750,6 +797,8 @@ class LayerAbstractGraph:
             else:
                 raise ValueError(f'Unsupported feature dim: {dim}')
             node.data_type = feature_json.get('data_type', '')
+            if 'maxpool_state' in feature_json:
+                node.maxpool_state = feature_json['maxpool_state']
             if 'head_shape' in feature_json:
                 node.head_shape = feature_json['head_shape']
             if 'is_transposed' in feature_json:
@@ -1006,6 +1055,26 @@ class LayerAbstractGraph:
                     kernel_shape=kernel_shape,
                     padding=padding,
                 )
+                if layer_type == 'maxpool2d' or layer_type.startswith('maxpool2d_'):
+                    for name, default in [('alpha', 7), ('upper_bound', 1.0), ('B', 1.0)]:
+                        setattr(compute_node, name, layer_json.get(name, default))
+                if layer_type == 'maxpool2d':
+                    raw_running_max = layer_json.get('running_max')
+                    if raw_running_max is not None:
+                        compute_node.running_max = float(raw_running_max)
+                elif layer_type.startswith('maxpool2d_'):
+                    # Compiler-lowered MaxPool stages must survive a JSON
+                    # round-trip so DP output can be consumed by later passes.
+                    compute_node.maxpool_stage = layer_json.get(
+                        'maxpool_stage', layer_type[len('maxpool2d_'):]
+                    )
+                    compute_node.level_cost = int(layer_json.get('level_cost', 0))
+                    compute_node.maxpool_output_shape = list(layer_json.get(
+                        'maxpool_output_shape', feature_output[0].shape
+                    ))
+                    raw_running_max = layer_json.get('running_max')
+                    if raw_running_max is not None:
+                        compute_node.running_max = float(raw_running_max)
 
             elif 'mult_scalar' in layer_type:
                 compute_node = MultScalarComputeNode(key, layer_type, channel_input, channel_output)
@@ -1245,6 +1314,20 @@ class LayerAbstractGraph:
                     'is_adaptive_avgpool': layer.is_adaptive_avgpool,
                     'padding': layer.padding,
                 }
+                if layer_type == 'maxpool2d' or layer_type.startswith('maxpool2d_'):
+                    for name, default in [('alpha', 7), ('upper_bound', 1.0), ('B', 1.0)]:
+                        layers[layer_id][name] = getattr(layer, name, default)
+                if layer_type == 'maxpool2d':
+                    running_max = getattr(layer, 'running_max', None)
+                    if running_max is not None:
+                        layers[layer_id]['running_max'] = float(running_max)
+                elif layer_type.startswith('maxpool2d_'):
+                    layers[layer_id]['maxpool_stage'] = getattr(layer, 'maxpool_stage', layer_type[len('maxpool2d_'):])
+                    layers[layer_id]['level_cost'] = int(getattr(layer, 'level_cost', 0))
+                    layers[layer_id]['maxpool_output_shape'] = list(layer.maxpool_output_shape)
+                    running_max = getattr(layer, 'running_max', None)
+                    if running_max is not None:
+                        layers[layer_id]['running_max'] = float(running_max)
             if (
                 'sigmoid' in layer_type
                 or 'softmax' in layer_type
@@ -1666,6 +1749,8 @@ class LayerAbstractGraph:
                             'is_transposed': is_transposed,
                         }
                     features[key] = feature_dict
+                    if hasattr(feature, 'maxpool_state'):
+                        features[key]['maxpool_state'] = feature.maxpool_state
                 else:
                     raise ValueError('Unsupported dim value.')
 

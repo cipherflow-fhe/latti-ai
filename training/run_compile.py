@@ -139,6 +139,7 @@ Examples:
         help='Wrap each bootstrapping layer with pcmgamma layers using this scale',
     )
 
+    parser.add_argument('--maxpool-config', help='JSON mapping MaxPool layer IDs to alpha, upper_bound and B')
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -165,6 +166,10 @@ Examples:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     compile_config = read_compile_config(args.config)
+    maxpool_config = None
+    if args.maxpool_config:
+        with open(args.maxpool_config, encoding='utf-8') as stream:
+            maxpool_config = json.load(stream)
     mat_pack_style = compile_config.get('mat_pack_style', '')
     model_type = compile_config.get('model_type', '')
     feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
@@ -212,6 +217,7 @@ Examples:
 
     try:
         run_pipeline(
+            maxpool_config=maxpool_config,
             num_experiments=args.num_experiments,
             input_file_path=pt_json_path,
             output_dir=output_dir,

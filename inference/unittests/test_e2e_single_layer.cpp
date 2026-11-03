@@ -1,3 +1,4 @@
+#include <fstream>
 /*
  * Copyright (c) 2025-2026 CipherFlow (Shenzhen) Co., Ltd.
  *
@@ -37,9 +38,12 @@
 
 #include <cxx_sdk_v2/cxx_fhe_task.h>
 #include <cxx_sdk_v2/cxx_argument.h>
+#include "inference_task/inference_process.h"
 
 using namespace lattisense;
 using namespace fhe_ops_lib;
+
+#include "maxpool_p1_control.h"
 
 static const fs::path single_layer_base_path = e2e_base_path / "single_layer";
 
@@ -58,6 +62,22 @@ static std::vector<std::string> load_test_names(const fs::path& base) {
 }
 
 static const auto single_layer_test_names = load_test_names(single_layer_base_path);
+
+TEST_CASE("cpu/ckks_copy_preserves_scale", "[cpu][ckks_copy]") {
+    auto param = CkksParameter::create_parameter(8192);
+    auto context = CkksContext::create_empty_context(param);
+    const double scale = 123456789.25;
+    auto source = context.new_ciphertext(0, scale);
+    auto destination = context.new_ciphertext(0, 1099511627776.);
+    source.copy_to(destination);
+    REQUIRE(destination.get_scale() == scale);
+    REQUIRE(destination.get_level() == source.get_level());
+    auto source3 = context.new_ciphertext3(0, scale);
+    auto destination3 = context.new_ciphertext3(0, 1099511627776.);
+    source3.copy_to(destination3);
+    REQUIRE(destination3.get_scale() == scale);
+    REQUIRE(destination3.get_level() == source3.get_level());
+}
 
 // == Run all (batch) ==========================================================
 
@@ -587,3 +607,481 @@ TEST_CASE("gpu/par_diagonal_pack_cpmm", "[e2e][gpu]") {
 }
 
 #endif
+
+TEST_CASE("cpu/poly_maxpool_init", "[maxpool][init]") {
+    const fs::path task_dir =
+        "/tmp/poly_maxpool2x2_task/task/server";
+
+    REQUIRE(fs::exists(task_dir / "nn_layers_ct_0.json"));
+    REQUIRE(fs::exists(task_dir / "ckks_parameter.json"));
+    REQUIRE(fs::exists(task_dir / "task_signature.json"));
+
+    // This standalone MaxPool task has no trainable weights,
+    // but load_model_prepare() currently opens an HDF5 file.
+    const fs::path h5_path = task_dir / "model_parameters.h5";
+
+    if (!fs::exists(h5_path)) {
+        hid_t h5 = H5Fcreate(
+            h5_path.string().c_str(),
+            H5F_ACC_EXCL,
+            H5P_DEFAULT,
+            H5P_DEFAULT
+        );
+        REQUIRE(h5 >= 0);
+        REQUIRE(H5Fclose(h5) >= 0);
+    }
+
+    InitInferenceProcess fp(task_dir.string(), false);
+
+    fp.init_parameters(false);
+    fp.load_model_prepare();
+
+    const auto signature =
+        read_json((task_dir / "task_signature.json").string());
+
+    size_t matched = 0;
+
+    for (const auto& arg : signature.at("online")) {
+        const std::string name = arg.at("id").get<std::string>();;
+
+        if (name.rfind("maxpool_", 0) != 0)
+            continue;
+
+        auto it = fp.maxpool_pt_args_.find(name);
+
+        REQUIRE(it != fp.maxpool_pt_args_.end());
+
+        const size_t expected_size =
+            name == "maxpool__0_MaxPool_select" ? 32 : 1;
+
+        REQUIRE(it->second.size() == expected_size);
+
+        ++matched;
+    }
+
+    REQUIRE(matched == 37);
+    REQUIRE(fp.maxpool_pt_args_.size() == 37);
+
+    std::cout
+        << "PASS: PolyMaxPool2D initialized "
+        << matched
+        << " plaintext argument groups"
+        << std::endl;
+}
+
+TEST_CASE("cpu/poly_maxpool3x3_init", "[maxpool3x3][init]") {
+    const fs::path task_dir =
+        "/tmp/poly_maxpool3x3_task/task/server";
+
+    REQUIRE(fs::exists(task_dir / "nn_layers_ct_0.json"));
+    REQUIRE(fs::exists(task_dir / "ckks_parameter.json"));
+    REQUIRE(fs::exists(task_dir / "task_signature.json"));
+
+    // This standalone MaxPool task has no trainable weights,
+    // but load_model_prepare() currently opens an HDF5 file.
+    const fs::path h5_path = task_dir / "model_parameters.h5";
+
+    if (!fs::exists(h5_path)) {
+        hid_t h5 = H5Fcreate(
+            h5_path.string().c_str(),
+            H5F_ACC_EXCL,
+            H5P_DEFAULT,
+            H5P_DEFAULT
+        );
+        REQUIRE(h5 >= 0);
+        REQUIRE(H5Fclose(h5) >= 0);
+    }
+
+    InitInferenceProcess fp(task_dir.string(), false);
+
+    fp.init_parameters(false);
+    fp.load_model_prepare();
+
+    const auto signature =
+        read_json((task_dir / "task_signature.json").string());
+
+    size_t matched = 0;
+    size_t plaintext_objects = 0;
+
+    for (const auto& arg : signature.at("online")) {
+        const std::string name = arg.at("id").get<std::string>();;
+
+        if (name.rfind("maxpool_", 0) != 0)
+            continue;
+
+        auto it = fp.maxpool_pt_args_.find(name);
+
+        REQUIRE(it != fp.maxpool_pt_args_.end());
+
+        const size_t expected_size =
+            name == "maxpool__0_MaxPool_select" ? 32 : 1;
+
+        REQUIRE(it->second.size() == expected_size);
+
+        plaintext_objects += it->second.size();
+        ++matched;
+    }
+
+    REQUIRE(matched == 80);
+    REQUIRE(plaintext_objects == 111);
+    REQUIRE(fp.maxpool_pt_args_.size() == 80);
+
+    std::cout
+        << "PASS: PolyMaxPool3x3 initialized "
+        << matched
+        << " plaintext argument groups"
+        << std::endl;
+}
+
+
+TEST_CASE("cpu/poly_maxpool_e2e", "[maxpool][e2e]") {
+    const fs::path base =
+        "/tmp/poly_maxpool2x2_task/task";
+
+    const fs::path client_dir = base / "client";
+    const fs::path server_dir = base / "server";
+    const fs::path input_path = client_dir / "input.csv";
+    const fs::path reference_path =
+        "/tmp/poly_maxpool2x2_exact_max.csv";
+
+    REQUIRE(fs::exists(input_path));
+    REQUIRE(fs::exists(reference_path));
+    REQUIRE(fs::exists(server_dir / "mega_ag.json"));
+    REQUIRE(fs::exists(server_dir / "model_parameters.h5"));
+
+    // 1. Client: generate CKKS keys and encrypt input
+    InferenceClient client(client_dir.string());
+    client.setup();
+
+    auto eval_context = client.export_eval_context();
+
+    auto encrypted_inputs = client.encrypt({
+        {"input", input_path.string()}
+    });
+
+    // 2. Server: load the model and execute the FHE DAG
+    InferenceServer server(server_dir.string(), false);
+
+    server.import_eval_context(eval_context);
+    server.load_model();
+
+    auto encrypted_outputs =
+        server.evaluate(encrypted_inputs);
+
+    // 3. Client: decrypt the MaxPool output
+    auto results = client.decrypt(encrypted_outputs);
+
+    REQUIRE(results.count("output") == 1);
+
+    const auto& actual = results.at("output").output;
+
+    // 4. Load exact PyTorch-style MaxPool reference
+    auto reference = csv_to_array<3>(
+        reference_path.string(),
+        {32, 16, 16}
+    );
+
+    auto expected = reference.to_array_1d();
+
+    REQUIRE(actual.size() == 32 * 16 * 16);
+    REQUIRE(actual.size() == expected.size());
+
+    // 5. Evaluate approximation accuracy
+    double max_error = 0.0;
+    double sum_squared_error = 0.0;
+
+    for (size_t i = 0; i < actual.size(); ++i) {
+        REQUIRE(std::isfinite(actual[i]));
+
+        const double error =
+            std::abs(actual[i] - expected[i]);
+
+        max_error = std::max(max_error, error);
+        sum_squared_error += error * error;
+    }
+
+    const double rmse = std::sqrt(
+        sum_squared_error / actual.size()
+    );
+
+    std::cout << "\n=== PolyMaxPool2D E2E ===\n";
+    std::cout << "Output elements: "
+              << actual.size() << "\n";
+    std::cout << "Max error vs exact MaxPool: "
+              << max_error << "\n";
+    std::cout << "RMSE vs exact MaxPool: "
+              << rmse << "\n";
+
+    REQUIRE(max_error < 0.5);
+    REQUIRE(rmse < 0.2);
+
+    std::cout << "PASS: PolyMaxPool2D encrypted E2E\n";
+}
+
+TEST_CASE("cpu/poly_maxpool3x3_e2e", "[maxpool3x3][e2e]") {
+    const fs::path base =
+        "/tmp/poly_maxpool3x3_task/task";
+
+    const fs::path client_dir = base / "client";
+    const fs::path server_dir = base / "server";
+    const fs::path input_path = client_dir / "input.csv";
+    const fs::path reference_path =
+        "/tmp/poly_maxpool3x3_exact_max.csv";
+
+    REQUIRE(fs::exists(input_path));
+    REQUIRE(fs::exists(reference_path));
+    REQUIRE(fs::exists(server_dir / "mega_ag.json"));
+    REQUIRE(fs::exists(server_dir / "model_parameters.h5"));
+
+    // 1. Client: generate CKKS keys and encrypt input
+    InferenceClient client(client_dir.string());
+    client.setup();
+
+    auto eval_context = client.export_eval_context();
+
+    auto encrypted_inputs = client.encrypt({
+        {"input", input_path.string()}
+    });
+
+    // 2. Server: load the model and execute the FHE DAG
+    InferenceServer server(server_dir.string(), false);
+
+    server.import_eval_context(eval_context);
+    server.load_model();
+
+    auto encrypted_outputs =
+        server.evaluate(encrypted_inputs);
+
+    // 3. Client: decrypt the MaxPool output
+    auto results = client.decrypt(encrypted_outputs);
+
+    REQUIRE(results.count("output") == 1);
+
+    const auto& actual = results.at("output").output;
+
+    // 4. Load exact PyTorch-style MaxPool reference
+    auto reference = csv_to_array<3>(
+        reference_path.string(),
+        {32, 16, 16}
+    );
+
+    auto expected = reference.to_array_1d();
+
+    REQUIRE(actual.size() == 32 * 16 * 16);
+    REQUIRE(actual.size() == expected.size());
+
+    // Save decrypted 3x3 CKKS output for elementwise verification.
+    const fs::path ckks_output_path =
+        "/tmp/poly_maxpool3x3_ckks_output.csv";
+
+    REQUIRE_FALSE(fs::exists(ckks_output_path));
+
+    {
+        std::ofstream output_file(ckks_output_path);
+        REQUIRE(output_file.is_open());
+
+        output_file.precision(17);
+
+        for (double value : actual) {
+            output_file << value << '\n';
+        }
+
+        REQUIRE(output_file.good());
+    }
+
+    std::cout << "CKKS output saved: "
+              << ckks_output_path << "\n";
+
+
+    // 5. Evaluate approximation accuracy
+    double max_error = 0.0;
+    double sum_squared_error = 0.0;
+    double sum_absolute_error = 0.0;
+
+    for (size_t i = 0; i < actual.size(); ++i) {
+        REQUIRE(std::isfinite(actual[i]));
+
+        const double error =
+            std::abs(actual[i] - expected[i]);
+
+        max_error = std::max(max_error, error);
+        sum_squared_error += error * error;
+        sum_absolute_error += error;
+    }
+
+    const double rmse = std::sqrt(
+        sum_squared_error / actual.size()
+    );
+
+    const double mae = sum_absolute_error / actual.size();
+    std::cout << "\n=== PolyMaxPool3x3 E2E ===\n";
+    std::cout << "MAE vs exact MaxPool: "
+              << mae << "\n";
+    std::cout << "Output elements: "
+              << actual.size() << "\n";
+    std::cout << "Max error vs exact MaxPool: "
+              << max_error << "\n";
+    std::cout << "RMSE vs exact MaxPool: "
+              << rmse << "\n";
+
+
+    std::cout << "DONE: PolyMaxPool3x3 encrypted E2E; accuracy review pending\n";
+}
+
+#include <fstream>
+#include <sstream>
+#include <algorithm>
+
+TEST_CASE("cpu/conv_polymaxpool_e2e", "[e2e][cpu][polymaxpool]") {
+    const fs::path root = "/tmp/conv_polymaxpool_test";
+    const fs::path client_dir = root / "task/client";
+    const fs::path server_dir = root / "task/server";
+
+    // 1. Load PyTorch exact reference
+    std::ifstream file(root / "exact_output.csv");
+    REQUIRE(file.is_open());
+
+    std::vector<double> expected;
+    std::string line, cell;
+
+    while (std::getline(file, line)) {
+        std::stringstream ss(line);
+        while (std::getline(ss, cell, ',')) {
+            if (!cell.empty())
+                expected.push_back(std::stod(cell));
+        }
+    }
+
+    REQUIRE(expected.size() == 8192);
+
+    // 2. Client: key generation and encryption
+    std::cout << "\n[Client] Generating keys...\n";
+    InferenceClient client(client_dir.string());
+    client.setup();
+
+    auto eval_ctx = client.export_eval_context();
+
+    std::map<std::string, std::string> inputs = {
+        {"input", (client_dir / "input.csv").string()}
+    };
+
+    auto encrypted_inputs = client.encrypt(inputs);
+
+    // 3. Server: encrypted Conv + PolyMaxPool
+    std::cout << "[Server] Loading model...\n";
+    InferenceServer server(server_dir.string(), false);
+
+    server.import_eval_context(eval_ctx);
+    server.load_model();
+
+    std::cout << "[Server] Running encrypted inference...\n";
+    auto encrypted_outputs = server.evaluate(encrypted_inputs);
+
+    // 4. Client: decrypt
+    std::cout << "[Client] Decrypting output...\n";
+    auto results = client.decrypt(encrypted_outputs);
+
+    REQUIRE(results.size() == 1);
+
+    const auto& result = results.begin()->second;
+    REQUIRE(result.num_outputs == 8192);
+    REQUIRE(result.output.size() >= expected.size());
+
+    // 5. Compare with PyTorch
+    double max_error = 0.0;
+    double sum_sq = 0.0;
+
+    for (size_t i = 0; i < expected.size(); i++) {
+        REQUIRE(std::isfinite(result.output[i]));
+        double error = std::abs(result.output[i] - expected[i]);
+
+        max_error = std::max(max_error, error);
+        sum_sq += error * error;
+    }
+
+    double rmse = std::sqrt(sum_sq / expected.size());
+
+    std::cout << "\n========== Conv + PolyMaxPool E2E ==========\n";
+    std::cout << "Output elements: " << expected.size() << "\n";
+    std::cout << "Max absolute error: " << max_error << "\n";
+    std::cout << "RMSE: " << rmse << "\n";
+
+    std::cout << "\nFirst 5 values:\n";
+    for (int i = 0; i < 5; i++) {
+        std::cout << i
+                  << "  PyTorch=" << expected[i]
+                  << "  FHE=" << result.output[i]
+                  << "\n";
+    }
+
+    // Preliminary accuracy acceptance criteria
+    REQUIRE(max_error < 0.20);
+    REQUIRE(rmse < 0.08);
+}
+
+
+// Generated by scripts/prepare_maxpool_ckks_test.py; retains Retina spatial
+// layout while allowing a small channel count for the first real BTP test.
+TEST_CASE("cpu/poly_maxpool_staged_ckks", "[maxpool_staged][e2e]") {
+    const char* configured = std::getenv("LATTI_MAXPOOL_TEST_DIR");
+    const fs::path root = configured ? configured : "/tmp/maxpool-staged-ckks";
+    const auto config = read_json((root / "client/task_config.json").string());
+    const int channels = config.at("task_output_param").at("y").at("channel");
+    auto reference = csv_to_array<3>((root / "polynomial.csv").string(),
+                                    {uint32_t(channels), 128, 128}).to_array_1d();
+    auto exact = csv_to_array<3>((root / "exact.csv").string(),
+                                {uint32_t(channels), 128, 128}).to_array_1d();
+    std::cout << "[Staged MaxPool] key generation" << std::endl;
+    InferenceClient client((root / "client").string());
+    client.setup();
+    auto eval_context = client.export_eval_context();
+    auto inputs = client.encrypt({{"x", (root / "client/x.csv").string()}});
+    std::cout << "[Staged MaxPool] load runtime" << std::endl;
+    InferenceServer server((root / "server").string(), false);
+    server.import_eval_context(eval_context);
+    server.load_model();
+    std::cout << "[Staged MaxPool] encrypted evaluate" << std::endl;
+    auto outputs = server.evaluate(inputs);
+    nlohmann::json diagnostic_metadata = nlohmann::json::object();
+    for (const auto& entry : outputs) {
+        if (entry.first.rfind("diagnostic_", 0) != 0) continue;
+        Feature2DEncrypted feature(nullptr, 0);
+        feature.deserialize(entry.second);
+        for (const auto& ct : feature.data) {
+            diagnostic_metadata[entry.first].push_back(
+                {{"level", ct.get_level()}, {"scale", ct.get_scale()}});
+        }
+    }
+    std::ofstream(root / "diagnostic_actual_metadata.json") << diagnostic_metadata.dump(2);
+    auto results = client.decrypt(outputs);
+    for (const auto& entry : results) {
+        if (entry.first.rfind("diagnostic_", 0) != 0) continue;
+        std::ofstream dump(root / (entry.first + ".csv"));
+        dump.precision(17);
+        double peak = 0.;
+        for (double value : entry.second.output) {
+            dump << value << '\n';
+            peak = std::max(peak, std::abs(value));
+        }
+        std::cout << "[Stage diagnostic] " << entry.first << " peak=" << peak << std::endl;
+    }
+    const auto& values = results.at("y").output;
+    REQUIRE(values.size() == reference.size());
+    double mae = 0., max_error = 0., approx_mae = 0.;
+    std::ofstream decoded(root / "decrypted.csv");
+    decoded.precision(17);
+    for (size_t i = 0; i < values.size(); ++i) {
+        REQUIRE(std::isfinite(values[i]));
+        const double error = std::abs(values[i] - reference[i]);
+        mae += error;
+        max_error = std::max(max_error, error);
+        approx_mae += std::abs(reference[i] - exact[i]);
+        decoded << values[i] << '\n';
+    }
+    mae /= values.size();
+    approx_mae /= values.size();
+    std::cout << "[Staged MaxPool] CKKS/poly MAE=" << mae
+              << " max=" << max_error << " poly/exact MAE=" << approx_mae << std::endl;
+    REQUIRE(mae < 0.01);
+    REQUIRE(max_error < 0.1);
+}

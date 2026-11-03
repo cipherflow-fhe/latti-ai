@@ -168,7 +168,14 @@ void InferenceClient::create_crypto_context() {
     std::cout << "[Client] Poly degree: N=" << poly_modulus_degree_ << std::endl;
 
     if (needs_btp_) {
-        btp_param_ = std::make_unique<CkksBtpParameter>(CkksBtpParameter::create_parameter());
+        auto params = read_json((client_dir_ / "ckks_parameter.json").string());
+        const auto& input = task_config_["task_input_param"].begin().value();
+        const auto& entry = params.at(input["ckks_parameter_id"].get<std::string>());
+        const auto name = entry.value("param_name", std::string("N16QP1546H192H32"));
+        if (name != "N16QP1546H192H32" && name != "N16QP1547H192H32" && name != "EXPERIMENTAL_N16S50H192H32")
+            throw std::runtime_error("Unsupported Bootstrap parameter: " + name);
+        btp_param_ = std::make_unique<CkksBtpParameter>(name == "EXPERIMENTAL_N16S50H192H32" ? CkksBtpParameter::create_parameter_experimental50() : name == "N16QP1547H192H32" ?
+            CkksBtpParameter::create_parameter_45() : CkksBtpParameter::create_parameter());
         btp_context_ = std::make_unique<CkksBtpContext>(CkksBtpContext::create_random_context(*btp_param_));
         btp_context_->gen_rotation_keys();
         context_ptr_ = btp_context_.get();

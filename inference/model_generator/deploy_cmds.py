@@ -41,6 +41,36 @@ from inference.model_generator.layers.multiplexed_conv2d_pack_layer_depthwise im
 from inference.model_generator.layers.poly_relu0d import *
 from inference.model_generator.layers.poly_relu1d import *
 from inference.model_generator.layers.poly_relu2d import *
+
+from inference.model_generator.layers.poly_maxpool2d_layer import (
+    poly_maxpool2x2_range_norm_stockmeyer,
+)
+from inference.model_generator.layers.range_norm_maxpool import (
+    PolyMaxPoolConfig,
+    scaling_plan,
+)
+
+from training.model_compiler.maxpool_plan import (
+    build_maxpool_plan,
+    build_maxpool_access_plan,
+    build_deferred_half_ckks_schedule,
+)
+from inference.model_generator.layers.poly_maxpool_taps import (
+    build_multiplexed_maxpool_tap_masks,
+)
+from inference.model_generator.layers.poly_maxpool_generic import (
+    call_deferred_half_maxpool_dag,
+)
+from inference.model_generator.layers.poly_maxpool_stages import (
+    call_maxpool_stage, bind_maxpool_stage_plaintexts,
+)
+from inference.model_generator.layers.poly_maxpool2d_layer import (
+    repack_maxpool2x2_multiplexed,
+)
+from inference.model_generator.layers.range_norm_maxpool import (
+    restore_range_after_repack,
+)
+
 from inference.model_generator.layers.upsample_layer import *
 from inference.model_generator.layers.par_block_col_major_ccmm import ParBlockColMajorCCMM
 from inference.model_generator.layers.par_block_col_major_cpmm import ParBlockColMajorCPMM
@@ -83,7 +113,9 @@ from inference.model_generator.layers.par_upper_diagonal_softmax import (
     ParUpperDiagonalMultipleSquare,
 )
 from training.model_compiler.components import (
+    EXPERIMENTAL_N16S50H192H32,
     N16QP1546H192H32,
+    N16QP1547H192H32,
     PN13QP218,
     PN14QP438,
     PN15QP880,
@@ -103,6 +135,8 @@ _FHE_PARAMS = {
     'PN15QP880': PN15QP880,
     'PN16QP1761': PN16QP1761,
     'N16QP1546H192H32': N16QP1546H192H32,
+    'N16QP1547H192H32': N16QP1547H192H32,
+    'EXPERIMENTAL_N16S50H192H32': EXPERIMENTAL_N16S50H192H32,
 }
 
 
@@ -112,6 +146,10 @@ def set_param(param_name):
     fhe = _FHE_PARAMS[param_name]
     if param_name == 'N16QP1546H192H32':
         param = CkksBtpParam.create_default_param()
+    elif param_name == 'N16QP1547H192H32':
+        param = CkksBtpParam.create_precision45_param()
+    elif param_name == 'EXPERIMENTAL_N16S50H192H32':
+        param = CkksBtpParam.create_experimental50_param()
     else:
         param = CkksParam.create_custom_param(
             n=fhe.poly_modulus_degree,
@@ -120,6 +158,56 @@ def set_param(param_name):
             scale=1 << fhe.log_default_scale,
         )
     set_fhe_param(param)
+
+
+def _collapse_maxpool_stage_layers(config_info):
+    """Collapse compiler-only MaxPool stages for the fused runtime backend."""
+    stage_layers = [
+        (key, value) for key, value in config_info.get('layer', {}).items()
+        if str(value.get('type', '')).startswith('maxpool2d_')
+    ]
+    if not stage_layers:
+        return config_info
+    for _, layer in stage_layers:
+        if any(layer.get(name, default) != default for name, default in
+               [('alpha', 7), ('upper_bound', 1.0), ('B', 1.0)]):
+            raise NotImplementedError('Configured MaxPool requires stage parameter binding; '
+                                      'the fused backend only supports legacy defaults')
+    # A fused backend cannot preserve operations inserted inside the stage
+    # chain. Never bypass an internal Bootstrap by reconnecting endpoints.
+    stage_keys = {key for key, _ in stage_layers}
+    internal_features = {
+        fid for _, layer in stage_layers
+        if layer.get('maxpool_stage', '') != 'restore'
+        and not str(layer.get('type', '')).endswith('_restore')
+        for fid in layer.get('feature_output', [])
+    }
+    for key, layer in config_info.get('layer', {}).items():
+        if key not in stage_keys and internal_features.intersection(layer.get('feature_input', [])):
+            raise NotImplementedError(
+                f'MaxPool internal operation {key} cannot be collapsed into the fused backend; '
+                'stage parameter binding is required'
+            )
+    groups = {}
+    suffixes = ('_normalize_taps', '_reduce_round_1', '_reduce_round_2',
+                '_reduce_round_3', '_reduce_round_4', '_repack', '_restore')
+    for key, value in stage_layers:
+        base = next((key[:-len(s)] for s in suffixes if key.endswith(s)), key)
+        groups.setdefault(base, []).append((key, value))
+    for base, members in groups.items():
+        members.sort(key=lambda item: item[0])
+        first = members[0][1]
+        last = members[-1][1]
+        fused = dict(first)
+        fused['type'] = 'maxpool2d'
+        fused['feature_input'] = list(first['feature_input'])
+        fused['feature_output'] = list(last['feature_output'])
+        fused.pop('maxpool_stage', None)
+        fused.pop('level_cost', None)
+        config_info['layer'][base] = fused
+        for key, _ in members:
+            config_info['layer'].pop(key, None)
+    return config_info
 
 
 def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordinary', lazy=False):
@@ -131,6 +219,9 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
     except Exception:
         block_shape = [64, 64]
     config_info = read_config(os.path.join(task_path, 'nn_layers_ct_0.json'))
+
+    # Preserve compiler stages and ordinary Bootstrap nodes between them.
+    maxpool_stage_parameters = {}
     input_args = list()
     feature_id_to_nodes_map = {}
     par_feature_shapes = {}
@@ -528,6 +619,11 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 pack = int(feat['pack_num'])
                 n_in_channel_fid = int(feat['channel'])
                 n_packed = math.ceil(n_in_channel_fid / pack)
+                if 'maxpool_state' in feat:
+                    state = feat['maxpool_state']
+                    n_packed = int(state['groups']) * int(state['channels'])
+                elif consumer is not None and consumer['type'] == 'maxpool2d_normalize_taps':
+                    n_packed = n_in_channel_fid * 4
                 # Mirror the big_size expansion logic from the per-layer loop below:
                 # big_size conv2d / avgpool / mult_scalar (2D only) consume inputs as
                 #   n_in_channel * block_expansion[0] * block_expansion[1]
@@ -597,6 +693,11 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
             level = int(input_feat0['level'])
             n_packed_in_channel = math.ceil(n_in_channel / pack)
             n_packed_out_channel = math.ceil(n_out_channel / pack)
+            if 'maxpool_state' in input_feat0:
+                state = input_feat0['maxpool_state']
+                n_packed_in_channel = int(state['groups']) * int(state['channels'])
+            elif layer_config['type'] == 'maxpool2d_normalize_taps':
+                n_packed_in_channel = n_in_channel * 4
 
             # For big_conv/big_avgpool/big_mult_scalar (2D only)
             if (
@@ -629,7 +730,69 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                     feature_id_to_nodes_map.update({input_node: x})
                     input_args.append(Argument(input_node, x))
 
-        if layer_config['type'] == 'reshape':
+        if layer_config['type'].startswith('maxpool2d_'):
+            if style != 'multiplexed' or list(layer_config['kernel_shape']) != [3, 3]:
+                raise NotImplementedError('MaxPool stages require multiplexed 3x3 layout')
+            stage = layer_config['maxpool_stage']
+            shape = list(layer_config['maxpool_output_shape'])
+            if block_shape != shape or list(layer_config['stride']) != [2, 2] or list(layer_config['padding']) != [1, 1]:
+                raise NotImplementedError('MaxPool stages require Retina interleaved block layout')
+            plan = build_maxpool_plan(layer_config, [2 * x for x in shape])
+            if 'running_max' not in layer_config:
+                raise ValueError(f'Missing calibrated running_max for {layer_id}')
+            declarations = {}
+
+            def make_stage_pt(suffix, count, descriptor):
+                name = f'maxpool_{layer_id}_{suffix}'
+                full_rns = param_name in ('N16QP1547H192H32', 'EXPERIMENTAL_N16S50H192H32') and 'scale' in descriptor
+                nodes = [(CkksPlaintextNode(f'{name}_{i}', descriptor['level']) if full_rns
+                          else CkksPlaintextRingtNode(f'{name}_{i}')) for i in range(count)]
+                input_args.append(Argument(name, nodes))
+                declarations[name] = dict(descriptor, count=count, encoding='full_rns' if full_rns else 'ringt')
+                return nodes
+
+            pts = bind_maxpool_stage_plaintexts(stage, plan, n_in_channel, n // 2, level,
+                float(layer_config['running_max']), make_stage_pt,
+                alpha=layer_config.get('alpha', 7),
+                comparison_B=layer_config.get('B', 1.0),
+                upper_bound=layer_config.get('upper_bound', 1.0))
+            from inference.model_generator.layers.poly2d import Poly2D
+            internal_debug = (Path(task_path) / 'diagnostic_poly_internal.json').exists()
+            observed = {}
+            if internal_debug and layer_id == 'pool_reduce_round_1_poly_1':
+                def capture(name, node, metadata):
+                    observed.setdefault(name, (node, metadata))
+                Poly2D.diagnostic_observer = capture
+            try:
+                result = call_maxpool_stage(stage,
+                    feature_id_to_nodes_map[layer_input_feature_ids[0]], plan,
+                    n_in_channel, n // 2, pts)
+            finally:
+                Poly2D.diagnostic_observer = None
+            if observed:
+                internal_metadata = {}
+                for name, (node, metadata) in observed.items():
+                    alias = 'diagnostic_internal_' + name
+                    # A distinct output leaf avoids ABI aliasing without doubling
+                    # large intermediate values (or consuming a rescale level).
+                    feature_id_to_nodes_map[alias] = [add(node, sub(node, node))]
+                    task_output_feature_ids.append(alias)
+                    view = dict(task_config_info['task_output_param']['y'])
+                    view.update(channel=2, shape=[128,128], skip=[1,1], pack_num=2, level=node.level)
+                    config_info['feature'][alias] = view
+                    task_config_info['task_output_id'].append(alias)
+                    task_config_info['task_output_param'][alias] = view
+                    internal_metadata[alias] = dict(metadata, level=node.level, output_factor=1)
+                for target in (Path(task_path)/'task_config.json', Path(task_path).parent/'client/task_config.json'):
+                    target.write_text(json.dumps(task_config_info, indent=2))
+                (Path(task_path)/'diagnostic_internal_manifest.json').write_text(json.dumps(internal_metadata, indent=2))
+            output = config_info['feature'][layer_output_feature_ids[0]]
+            if any(ct.level != int(output['level']) for ct in result):
+                raise ValueError(f'MaxPool stage {layer_id} output level differs from compiler')
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = result
+            maxpool_stage_parameters[layer_id] = declarations
+
+        elif layer_config['type'] == 'reshape':
             layer_output_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
@@ -1174,6 +1337,365 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
                 )
                 input_args.append(Argument(f'upsample_select_pt_{layer_id}', select_tensor_pt))
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
+
+        elif (
+            layer_config['type'] == 'maxpool2d'
+            and list(layer_config['kernel_shape']) == [3, 3]
+        ):
+            # Generic 3x3 PolyMaxPool, stride=2, padding=1.
+            # Existing 2x2 implementation remains unchanged.
+            if style != 'multiplexed':
+                raise NotImplementedError(
+                    '3x3 PolyMaxPool requires multiplexed style'
+                )
+
+            input_shape = list(input_feat0['shape'])
+
+            if (
+                list(layer_config['stride']) != [2, 2]
+                or list(layer_config['padding']) != [1, 1]
+                or list(skip) != [1, 1]
+                or layer_config.get('is_big_size', False)
+            ):
+                raise NotImplementedError(
+                    '3x3 PolyMaxPool requires stride=2, '
+                    'padding=1, skip=[1,1], non-big-size'
+                )
+
+            if 'running_max' not in layer_config:
+                raise ValueError(
+                    f'Missing running_max for MaxPool {layer_id}'
+                )
+
+            running_max = float(layer_config['running_max'])
+
+            pool_plan = build_maxpool_plan(
+                layer_config, input_shape
+            )
+
+            output_level = int(
+                config_info['feature'][
+                    layer_output_feature_ids[0]
+                ]['level']
+            )
+
+            expected_output_shape = tuple(
+                config_info['feature'][
+                    layer_output_feature_ids[0]
+                ]['shape']
+            )
+
+            if expected_output_shape != tuple(
+                pool_plan['output_shape']
+            ):
+                raise ValueError(
+                    '3x3 MaxPool output shape mismatch'
+                )
+
+            schedule = build_deferred_half_ckks_schedule(
+                pool_plan, level, running_max
+            )
+
+            if output_level != schedule['final_level']:
+                raise ValueError(
+                    f'3x3 MaxPool level mismatch: '
+                    f'expected={schedule["final_level"]}, '
+                    f'configured={output_level}'
+                )
+
+            slots = n // 2
+            block = input_shape[0] * input_shape[1]
+            n_channel_per_ct = slots // block
+
+            if n_channel_per_ct < 1:
+                raise ValueError(
+                    '3x3 MaxPool channel does not fit in CT'
+                )
+
+            n_ct = math.ceil(
+                n_in_channel / n_channel_per_ct
+            )
+
+            n_out_ct = math.ceil(
+                n_in_channel / (n_channel_per_ct * 4)
+            )
+
+            input_nodes = feature_id_to_nodes_map[
+                layer_input_feature_ids[0]
+            ]
+
+            if len(input_nodes) != n_ct:
+                raise ValueError(
+                    '3x3 MaxPool ciphertext count mismatch'
+                )
+
+            if any(ct.level != level for ct in input_nodes):
+                raise ValueError(
+                    '3x3 MaxPool input level mismatch'
+                )
+
+            def make_maxpool_pt(suffix, count):
+                name = f'maxpool_{layer_id}_{suffix}'
+                nodes = [
+                    CkksPlaintextRingtNode(f'{name}_{i}')
+                    for i in range(count)
+                ]
+                input_args.append(Argument(name, nodes))
+                return nodes
+
+            # 1. Nine neighborhood taps, including padding.
+            accesses = build_maxpool_access_plan(
+                pool_plan, skip=skip
+            )
+
+            tap_specs = build_multiplexed_maxpool_tap_masks(
+                pool_plan,
+                accesses,
+                n_in_channel,
+                slots,
+                schedule['input_normalization_multiplier'],
+            )
+
+            mask_pt_nodes = []
+
+            for tap_index, tap in enumerate(tap_specs):
+                row = [
+                    {'valid': None, 'invalid': None}
+                    for _ in range(n_ct)
+                ]
+
+                for kind in ('valid', 'invalid'):
+                    needed = [
+                        bool(mask[kind].any())
+                        for mask in tap['per_ct']
+                    ]
+
+                    if not any(needed):
+                        continue
+
+                    if not all(needed):
+                        raise NotImplementedError(
+                            'Mixed empty/nonempty tap masks '
+                            'are not supported yet'
+                        )
+
+                    nodes = make_maxpool_pt(
+                        f'tap_{tap_index}_{kind}', n_ct
+                    )
+
+                    for i, node in enumerate(nodes):
+                        row[i][kind] = node
+
+                mask_pt_nodes.append(row)
+
+            # 2. Four rounds of degree-7 P0/P1.
+            weights_by_round = []
+
+            for round_index in range(
+                len(pool_plan['rounds'])
+            ):
+                r = round_index + 1
+
+                weights_by_round.append({
+                    'p0': [
+                        make_maxpool_pt(
+                            f'poly0_r{r}_degree_{degree}',
+                            n_ct,
+                        )
+                        for degree in range(8)
+                    ],
+                    'p1': [
+                        make_maxpool_pt(
+                            f'poly1_r{r}_degree_{degree}',
+                            n_ct,
+                        )
+                        for degree in range(8)
+                    ],
+                })
+
+            # 3. Repack and restoration plaintexts.
+            n_select = min(
+                n_in_channel, n_channel_per_ct * 4
+            )
+
+            select_pt = make_maxpool_pt(
+                'select', n_select
+            )
+
+            restore_pt = make_maxpool_pt(
+                'output_restore', n_out_ct
+            )
+
+            # 4. Generic deferred-half MaxPool DAG.
+            anchor_nodes = call_deferred_half_maxpool_dag(
+                x_cts=input_nodes,
+                plan=pool_plan,
+                tap_specs=tap_specs,
+                mask_pt_nodes=mask_pt_nodes,
+                weights_by_round=weights_by_round,
+                input_shape=input_shape,
+                skip=skip,
+                n_channel_per_ct=n_channel_per_ct,
+            )
+
+            # 5. Stride-2 anchor repacking.
+            packed_nodes = repack_maxpool2x2_multiplexed(
+                anchor_nodes,
+                select_pt,
+                n_in_channel,
+                n_channel_per_ct,
+                input_shape,
+                skip,
+            )
+
+            # 6. Restore running_max / 16.
+            layer_output_nodes = restore_range_after_repack(
+                packed_nodes,
+                restore_pt,
+            )
+
+            if len(layer_output_nodes) != n_out_ct:
+                raise ValueError(
+                    '3x3 MaxPool output CT count mismatch'
+                )
+
+            if any(
+                ct.level != output_level
+                for ct in layer_output_nodes
+            ):
+                raise ValueError(
+                    '3x3 MaxPool final level mismatch'
+                )
+
+            feature_id_to_nodes_map[
+                layer_output_feature_ids[0]
+            ] = layer_output_nodes
+
+        elif layer_config['type'] == 'maxpool2d':
+            # V1: 2x2 / stride 2 / padding 0
+            if style != 'multiplexed':
+                raise NotImplementedError(
+                    "PolyMaxPool2D V1 requires multiplexed style"
+                )
+
+            input_shape = list(input_feat0['shape'])
+
+            if (
+                list(layer_config['kernel_shape']) != [2, 2]
+                or list(layer_config['stride']) != [2, 2]
+                or list(layer_config['padding']) != [0, 0]
+                or list(skip) != [1, 1]
+                or layer_config.get('is_big_size', False)
+            ):
+                raise NotImplementedError(
+                    "PolyMaxPool2D V1 supports kernel=2x2, "
+                    "stride=2, padding=0, skip=[1,1], "
+                    "non-big-size only"
+                )
+
+            if 'running_max' not in layer_config:
+                raise ValueError(
+                    f"Missing running_max calibration for {layer_id}"
+                )
+
+            running_max = float(layer_config['running_max'])
+            poly_config = PolyMaxPoolConfig()
+            plan = scaling_plan(running_max, poly_config)
+
+            order = plan['degree_p0']
+            assert order == plan['degree_p1'] == 7
+
+            n_channel_per_ct = (
+                (n // 2) // (input_shape[0] * input_shape[1])
+            )
+
+            if n_channel_per_ct < 1:
+                raise ValueError("MaxPool input does not fit in one ciphertext")
+
+            n_ct = math.ceil(n_in_channel / n_channel_per_ct)
+            out_channels_per_ct = n_channel_per_ct * 4
+            n_out_ct = math.ceil(n_in_channel / out_channels_per_ct)
+            n_select_pt = min(n_in_channel, out_channels_per_ct)
+
+            input_nodes = feature_id_to_nodes_map[layer_input_feature_ids[0]]
+
+            if len(input_nodes) != n_ct:
+                raise ValueError(
+                    f"MaxPool input ciphertext count mismatch: "
+                    f"{len(input_nodes)} != {n_ct}"
+                )
+
+            output_level = int(
+                config_info['feature'][layer_output_feature_ids[0]]['level']
+            )
+
+            if level - output_level != 19:
+                raise ValueError(
+                    "PolyMaxPool2D V1 requires exactly 19 levels"
+                )
+
+            # Register plaintext arguments.
+            # The C++ initializer will use these names.
+            def make_pt_list(name, count):
+                arg_name = f"maxpool_{layer_id}_{name}"
+                nodes = [
+                    CkksPlaintextRingtNode(f"{arg_name}_{i}")
+                    for i in range(count)
+                ]
+                input_args.append(Argument(arg_name, nodes))
+                return nodes
+
+            def make_poly_weights(name):
+                return [
+                    make_pt_list(f"{name}_degree_{i}", n_ct)
+                    for i in range(order + 1)
+                ]
+
+            input_norm_pt = make_pt_list("input_norm", n_ct)
+            output_restore_pt = make_pt_list("output_restore", n_out_ct)
+
+            weight_pt0_r1 = make_poly_weights("poly0_r1")
+            weight_pt1_r1 = make_poly_weights("poly1_r1")
+            weight_pt0_r2 = make_poly_weights("poly0_r2")
+            weight_pt1_r2 = make_poly_weights("poly1_r2")
+
+            half_pt_r1 = make_pt_list("half_r1", n_ct)
+            half_pt_r2 = make_pt_list("half_r2", n_ct)
+            select_tensor_pt = make_pt_list("select", n_select_pt)
+
+            # Reuse the existing 19-Level Stockmeyer DAG.
+            layer_output_nodes, returned_plan = (
+                poly_maxpool2x2_range_norm_stockmeyer(
+                    x=input_nodes,
+                    input_norm_pt=input_norm_pt,
+                    output_restore_pt=output_restore_pt,
+                    weight_pt0_r1=weight_pt0_r1,
+                    weight_pt1_r1=weight_pt1_r1,
+                    weight_pt0_r2=weight_pt0_r2,
+                    weight_pt1_r2=weight_pt1_r2,
+                    half_pt_r1=half_pt_r1,
+                    half_pt_r2=half_pt_r2,
+                    select_tensor_pt=select_tensor_pt,
+                    n_channel=n_in_channel,
+                    n_channel_per_ct=n_channel_per_ct,
+                    input_shape=input_shape,
+                    skip=skip,
+                    running_max=running_max,
+                    config=poly_config,
+                )
+            )
+
+            assert returned_plan == plan
+            assert len(layer_output_nodes) == n_out_ct
+            assert all(
+                ct.level == output_level
+                for ct in layer_output_nodes
+            )
+
+            feature_id_to_nodes_map.update({
+                layer_output_feature_ids[0]: layer_output_nodes
+            })
+
 
         elif 'avgpool' in layer_config['type']:
             input_shape = config_info['feature'][layer_input_feature_ids[0]]['shape']
@@ -1788,7 +2310,21 @@ def gen_custom_task(task_path, param_name='PN14QP438', use_gpu=True, style='ordi
         else:
             raise ValueError(f'Unsupported layer type: {layer_config["type"]}')
 
+    # Optional test-only aliases retain actual intermediate DAG ciphertexts.
+    diagnostic_path = Path(task_path) / 'diagnostic_outputs.json'
+    if diagnostic_path.exists():
+        for alias, spec in json.loads(diagnostic_path.read_text()).items():
+            source = feature_id_to_nodes_map[spec['feature']][spec['index']]
+            feature_id_to_nodes_map[alias] = [add(source, source)]
+
+    if (Path(task_path) / 'diagnostic_poly_internal.json').exists():
+        (Path(task_path) / 'nn_layers_ct_0.json').write_text(json.dumps(config_info, indent=2))
+
     output_args = [Argument(output_id, feature_id_to_nodes_map[output_id]) for output_id in task_output_feature_ids]
+
+    if maxpool_stage_parameters:
+        with open(os.path.join(task_path, 'maxpool_stage_parameters.json'), 'w') as stream:
+            json.dump(maxpool_stage_parameters, stream)
 
     process_custom_task(
         input_args=input_args, output_args=output_args, output_instruction_path=task_path, fpga_acc=False

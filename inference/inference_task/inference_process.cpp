@@ -83,6 +83,15 @@ FeatureNode::FeatureNode(const json& json_data)
           json_data.value("data_type", string("")) == "feature_mat" ? 0 : json_data["pack_num"].get<int>()),
       level(json_data["level"]), ckks_scale(0.0), is_mat(json_data.value("data_type", string("")) == "feature_mat"),
       is_transposed(json_data.value("is_transposed", true)) {
+    if (json_data.contains("maxpool_state")) {
+        const auto& state = json_data.at("maxpool_state");
+        const int groups = state.at("groups").get<int>();
+        const int channels = state.at("channels").get<int>();
+        if (state.at("order") != "group_channel" || groups <= 0 || channels != channel) {
+            throw runtime_error("Invalid MaxPool live-state layout");
+        }
+        maxpool_state_ciphertexts = groups * channels;
+    }
     if (dim == 2 && is_mat) {
         shape = {json_data["shape"][0], json_data["shape"][1]};
         if (json_data.contains("head_shape"))
@@ -122,6 +131,7 @@ FeatureNode::FeatureNode(const json& json_data)
 }
 
 int FeatureNode::get_n_ciphertexts(const Duo& block_shape) const {
+    if (maxpool_state_ciphertexts > 0) return maxpool_state_ciphertexts;
     int n_ciphertexts = div_ceil(channel, (uint32_t)pack_channel_per_ciphertext);
     if (dim == 2) {
         if (shape[0] > block_shape[0] || shape[1] > block_shape[1]) {
@@ -273,7 +283,11 @@ void InitInferenceProcess::init_parameters(bool is_bootstrapping) {
     if (is_bootstrapping) {
         for (auto& param : json_params.items()) {
             string key = param.key();
-            auto btp_param = CkksBtpParameter::create_parameter();
+            const auto name = param.value().value("param_name", string("N16QP1546H192H32"));
+            if (name != "N16QP1546H192H32" && name != "N16QP1547H192H32" && name != "EXPERIMENTAL_N16S50H192H32")
+                throw runtime_error("Unsupported Bootstrap parameter: " + name);
+            auto btp_param = name == "EXPERIMENTAL_N16S50H192H32" ? CkksBtpParameter::create_parameter_experimental50() : name == "N16QP1547H192H32" ?
+                CkksBtpParameter::create_parameter_45() : CkksBtpParameter::create_parameter();
             ckks_parameters_[key] = MakeU<CkksParameter>(move(btp_param.get_ckks_parameter()));
         }
     } else {
@@ -1264,6 +1278,481 @@ void InitInferenceProcess::_init_poly_relu_layer(const string& key,
     }
 }
 
+void InitInferenceProcess::_init_fhe_maxpool_stage(const string& key, const json& layer) {
+    FeatureNode in(json_features.at(layer.at("feature_input").at(0).get<string>()));
+    auto& param = *ckks_parameters_.at(in.ckks_parameter_id);
+    auto ctx = CkksContext::create_empty_context(param);
+    const int slots = param.get_n() / 2;
+    const auto manifest = read_json(project_path / "maxpool_stage_parameters.json");
+    const auto& declarations = manifest.at(key);
+    const string stage = layer.value("maxpool_stage", string());
+    const bool ciphertext_only_finish = stage.rfind("reduce_round_", 0) == 0 &&
+        stage.size() >= 7 && stage.compare(stage.size() - 7, 7, "_finish") == 0;
+    if (declarations.empty() && !ciphertext_only_finish)
+        throw runtime_error("Missing MaxPool stage parameters: " + key);
+    for (const auto& item : declarations.items()) {
+        const string name = item.key();
+        const auto& desc = item.value();
+        const int count = desc.at("count").get<int>();
+        const int level = desc.at("level").get<int>();
+        const double value = desc.at("value").get<double>();
+        if (name.rfind("maxpool_" + key + "_", 0) != 0 || count <= 0 ||
+            level < 0 || level > in.level || !std::isfinite(value)) {
+            throw runtime_error("Invalid MaxPool parameter descriptor: " + name);
+        }
+        const double scale = desc.value("scale", double(param.get_q(level)));
+        if (!std::isfinite(scale) || scale <= 0) throw runtime_error("Invalid MaxPool encoding scale");
+        const string kind = desc.at("kind");
+        vector<double> values(slots, kind == "constant" ? value : 0.0);
+        if (kind == "mask") {
+            for (int index : desc.at("indices").get<vector<int>>()) {
+                if (index < 0 || index >= slots) throw runtime_error("Invalid MaxPool mask index");
+                values[index] = value;
+            }
+        } else if (kind == "prefix") {
+            const int length = desc.at("length");
+            if (length < 0 || length > slots) throw runtime_error("Invalid MaxPool mask length");
+            std::fill(values.begin(), values.begin() + length, value);
+        } else if (kind != "constant") {
+            throw runtime_error("Unknown MaxPool plaintext kind: " + kind);
+        }
+        if (desc.value("encoding", string("ringt")) == "full_rns") {
+            vector<CkksPlaintext> pts;
+            for (int i = 0; i < count; ++i) pts.push_back(ctx.encode(values, level, scale));
+            if (!maxpool_full_pt_args_.emplace(name, std::move(pts)).second)
+                throw runtime_error("Duplicate MaxPool parameter: " + name);
+            continue;
+        }
+        vector<CkksPlaintextRingt> pts;
+        pts.reserve(count);
+        for (int i = 0; i < count; ++i) pts.push_back(ctx.encode_ringt(values, scale));
+        if (!maxpool_pt_args_.emplace(name, std::move(pts)).second) {
+            throw runtime_error("Duplicate MaxPool parameter: " + name);
+        }
+    }
+}
+
+void InitInferenceProcess::_init_fhe_maxpool_layer(
+    const string& key,
+    const json& layer
+) {
+    FeatureNode in(
+        json_features[layer["feature_input"][0].get<string>()]
+    );
+    FeatureNode out(
+        json_features[layer["feature_output"][0].get<string>()]
+    );
+
+    const Duo shape = in.shape;
+    const Duo skip = in.skip;
+    const int level = in.level;
+    const int channels = in.channel;
+    constexpr int order = 7;
+
+
+    // Generic 3x3 PolyMaxPool parameter initialization
+    if (layer.at("kernel_shape").get<vector<int>>() == vector<int>{3, 3}) {
+        if (
+            pack_style != "multiplexed" ||
+            layer.at("stride").get<vector<int>>() != vector<int>{2, 2} ||
+            layer.at("padding").get<vector<int>>() != vector<int>{1, 1} ||
+            layer.value("is_big_size", false) ||
+            skip[0] != 1 || skip[1] != 1 ||
+            shape[0] != 32 || shape[1] != 32 ||
+            channels != 32 || out.channel != 32 ||
+            out.shape[0] != 16 || out.shape[1] != 16 ||
+            level < 32 || out.level != level - 31
+        ) {
+            throw runtime_error("Unsupported 3x3 PolyMaxPool smoke-test configuration");
+        }
+
+        const double running_max = layer.at("running_max").get<double>();
+        if (!std::isfinite(running_max) || running_max <= 0.0) {
+            throw runtime_error("Invalid 3x3 MaxPool running_max");
+        }
+
+        CkksParameter& param = *ckks_parameters_.at(in.ckks_parameter_id);
+        const int slots = param.get_n() / 2;
+        const int block = shape[0] * shape[1];
+        const int n_per_ct = slots / block;
+
+        if (
+            slots % block != 0 ||
+            n_per_ct != 32 ||
+            in.pack_channel_per_ciphertext != n_per_ct ||
+            out.pack_channel_per_ciphertext != n_per_ct * 4
+        ) {
+            throw runtime_error("Unsupported 3x3 MaxPool packing");
+        }
+
+        CkksContext ctx = CkksContext::create_empty_context(param);
+        const string prefix = "maxpool_" + key + "_";
+        const size_t start_count = maxpool_pt_args_.size();
+
+        auto put = [&](const string& name, vector<CkksPlaintextRingt>&& pts) {
+            if (!maxpool_pt_args_.emplace(prefix + name, std::move(pts)).second) {
+                throw runtime_error("Duplicate 3x3 MaxPool parameter: " + name);
+            }
+        };
+
+        auto encode_constant = [&](double value, int lv, int count) {
+            vector<CkksPlaintextRingt> pts;
+            vector<double> values(slots, value);
+            pts.reserve(count);
+            for (int i = 0; i < count; ++i) {
+                pts.push_back(ctx.encode_ringt(values, param.get_q(lv)));
+            }
+            return pts;
+        };
+
+        // 1. Nine tap masks, fused with input normalization.
+        // Each invalid neighbor is replaced by its legal anchor.
+        for (int kr = 0; kr < 3; ++kr) {
+            for (int kc = 0; kc < 3; ++kc) {
+                const int tap = kr * 3 + kc;
+                const int dr = kr - 1;
+                const int dc = kc - 1;
+
+                vector<double> valid_mask(slots, 0.0);
+                vector<double> invalid_mask(slots, 0.0);
+                bool has_valid = false;
+                bool has_invalid = false;
+
+                for (int ch = 0; ch < channels; ++ch) {
+                    for (int r = 0; r < 16; ++r) {
+                        for (int c = 0; c < 16; ++c) {
+                            const int anchor_r = 2 * r;
+                            const int anchor_c = 2 * c;
+                            const int nr = anchor_r + dr;
+                            const int nc = anchor_c + dc;
+                            const int index =
+                                ch * block + anchor_r * shape[1] + anchor_c;
+
+                            if (
+                                nr >= 0 && nr < shape[0] &&
+                                nc >= 0 && nc < shape[1]
+                            ) {
+                                valid_mask[index] = 1.0 / running_max;
+                                has_valid = true;
+                            } else {
+                                invalid_mask[index] = 1.0 / running_max;
+                                has_invalid = true;
+                            }
+                        }
+                    }
+                }
+
+                if (has_valid) {
+                    vector<CkksPlaintextRingt> pts;
+                    pts.push_back(
+                        ctx.encode_ringt(valid_mask, param.get_q(level))
+                    );
+                    put("tap_" + std::to_string(tap) + "_valid",
+                        std::move(pts));
+                }
+
+                if (has_invalid) {
+                    vector<CkksPlaintextRingt> pts;
+                    pts.push_back(
+                        ctx.encode_ringt(invalid_mask, param.get_q(level))
+                    );
+                    put("tap_" + std::to_string(tap) + "_invalid",
+                        std::move(pts));
+                }
+            }
+        }
+
+        // 2. Degree-7 polynomial coefficients.
+        const vector<double> coeff0 = {
+            0.0, 7.30445164958251, 0.0,
+            -34.6825871108659, 0.0,
+            59.8596518298826, 0.0,
+            -31.8755225906466
+        };
+
+        const vector<double> coeff1 = {
+            0.0, 2.40085652217597, 0.0,
+            -2.63125454261783, 0.0,
+            1.54912674773593, 0.0,
+            -0.331172956504304
+        };
+
+        auto make_weights = [&](const vector<double>& coeff) {
+            Array<double, 2> weights({
+                static_cast<uint64_t>(order + 1),
+                static_cast<uint64_t>(channels)
+            });
+            for (int i = 0; i <= order; ++i) {
+                for (int ch = 0; ch < channels; ++ch) {
+                    weights.set(i, ch, coeff[i]);
+                }
+            }
+            return weights;
+        };
+
+        auto register_poly = [&](const string& name,
+                                 const vector<double>& coeff,
+                                 int start_level) {
+            Poly2D poly(
+                param, shape, order, make_weights(coeff),
+                skip, n_per_ct, start_level
+            );
+            poly.prepare_weight_stockmeyer();
+
+            for (int i = 0; i <= order; ++i) {
+                put(
+                    name + "_degree_" + std::to_string(i),
+                    std::move(poly.weight_pt[i])
+                );
+            }
+        };
+
+        // 3. Four deferred-half comparison rounds.
+        for (int r = 0; r < 4; ++r) {
+            const double B =
+                (r == 0 ? 1.0 : 1.05) * std::pow(2.0, r);
+
+            vector<double> scaled_p0 = coeff0;
+            for (int i = 0; i <= order; ++i) {
+                scaled_p0[i] /= std::pow(2.0 * B, i);
+            }
+
+            const int poly0_level = level - 1 - 7 * r;
+            const int poly1_level = level - 4 - 7 * r;
+            const string suffix = "_r" + std::to_string(r + 1);
+
+            register_poly(
+                "poly0" + suffix, scaled_p0, poly0_level
+            );
+            register_poly(
+                "poly1" + suffix, coeff1, poly1_level
+            );
+        }
+
+        // 4. Repacking at level - 29.
+        Avgpool2DLayer mask_layer(shape, {2, 2});
+        mask_layer.prepare_weight_lazy(
+            param, n_per_ct, channels,
+            level - 29, skip, shape
+        );
+
+        vector<CkksPlaintextRingt> select_pt;
+        const int n_select = std::min(channels, n_per_ct * 4);
+        select_pt.reserve(n_select);
+
+        for (int i = 0; i < n_select; ++i) {
+            vector<double> mask = mask_layer.select_tensor(i);
+            for (auto& value : mask) {
+                value *= 4.0;
+            }
+            select_pt.push_back(
+                ctx.encode_ringt(mask, param.get_q(level - 29))
+            );
+        }
+        put("select", std::move(select_pt));
+
+        // 5. Restore scale/16 at level - 30.
+        put(
+            "output_restore",
+            encode_constant(running_max / 16.0, level - 30, 1)
+        );
+
+        // 14 tap groups (9 valid + 5 padding) + 64 polynomial groups
+        // + 1 select group + 1 restore group.
+        if (maxpool_pt_args_.size() - start_count != 80) {
+            throw runtime_error("3x3 MaxPool plaintext argument count mismatch");
+        }
+
+        return;
+    }
+
+    if (
+        pack_style != "multiplexed" ||
+        layer.at("kernel_shape").get<vector<int>>() != vector<int>{2, 2} ||
+        layer.at("stride").get<vector<int>>() != vector<int>{2, 2} ||
+        layer.at("padding").get<vector<int>>() != vector<int>{0, 0} ||
+        skip[0] != 1 || skip[1] != 1 ||
+        layer.value("is_big_size", false) ||
+        level < 19 || out.level != level - 19 ||
+        out.shape[0] * 2 != shape[0] ||
+        out.shape[1] * 2 != shape[1]
+    ) {
+        throw runtime_error("Unsupported PolyMaxPool2D V1 configuration");
+    }
+
+    const double running_max = layer.at("running_max").get<double>();
+    if (!std::isfinite(running_max) || running_max <= 0.0) {
+        throw runtime_error("Invalid MaxPool running_max");
+    }
+
+    CkksParameter& param =
+        *ckks_parameters_.at(in.ckks_parameter_id);
+
+    const int slots = param.get_n() / 2;
+    const int n_per_ct = slots / (shape[0] * shape[1]);
+
+    if (n_per_ct <= 0 ||
+        in.pack_channel_per_ciphertext != n_per_ct ||
+        out.pack_channel_per_ciphertext != n_per_ct * 4) {
+        throw runtime_error("Unsupported MaxPool ciphertext packing");
+    }
+
+    const int n_ct = div_ceil(channels, n_per_ct);
+    const int n_out_ct = div_ceil(channels, n_per_ct * 4);
+    const int n_select = std::min(channels, n_per_ct * 4);
+
+    const double upper_bound = 1.0;
+    const double B1 = 1.0;
+    const double B2 = 1.05;
+    const double normalization = running_max / upper_bound;
+
+    CkksContext ctx = CkksContext::create_empty_context(param);
+    const string prefix = "maxpool_" + key + "_";
+    const size_t start_count = maxpool_pt_args_.size();
+
+    // Register a plaintext argument group.
+    auto put = [&](const string& name,
+                   vector<CkksPlaintextRingt>&& pts) {
+        if (!maxpool_pt_args_.emplace(
+                prefix + name, std::move(pts)
+            ).second) {
+            throw runtime_error("Duplicate MaxPool parameter: " + name);
+        }
+    };
+
+    // Encode a constant at a specific CKKS level.
+    auto encode_constant = [&](double value, int lv, int count) {
+        vector<CkksPlaintextRingt> pts;
+        vector<double> values(slots, value);
+        pts.reserve(count);
+
+        for (int i = 0; i < count; ++i) {
+            pts.push_back(
+                ctx.encode_ringt(values, param.get_q(lv))
+            );
+        }
+        return pts;
+    };
+
+    // Input/output normalization and binary Max constants.
+    put("input_norm",
+        encode_constant(1.0 / normalization, level, n_ct));
+
+    put("half_r1",
+        encode_constant(0.5, level - 8, n_ct));
+
+    put("half_r2",
+        encode_constant(0.5, level - 16, n_ct));
+
+    put("output_restore",
+        encode_constant(normalization, level - 18, n_out_ct));
+
+    // Original degree-7 polynomial coefficients.
+    const vector<double> coeff0 = {
+        0.0, 7.30445164958251, 0.0,
+        -34.6825871108659, 0.0,
+        59.8596518298826, 0.0,
+        -31.8755225906466
+    };
+
+    const vector<double> coeff1 = {
+        0.0, 2.40085652217597, 0.0,
+        -2.63125454261783, 0.0,
+        1.54912674773593, 0.0,
+        -0.331172956504304
+    };
+
+    auto scaled_p0 = [&](double B) {
+        vector<double> c = coeff0;
+        for (int i = 0; i <= order; ++i) {
+            c[i] /= std::pow(2.0 * B, i);
+        }
+        return c;
+    };
+
+    auto make_weights = [&](const vector<double>& coeff) {
+        Array<double, 2> weights({
+            static_cast<uint64_t>(order + 1),
+            static_cast<uint64_t>(channels)
+        });
+
+        for (int i = 0; i <= order; ++i) {
+            for (int ch = 0; ch < channels; ++ch) {
+                weights.set(i, ch, coeff[i]);
+            }
+        }
+        return weights;
+    };
+
+    // The starting levels match the validated test.
+    Poly2D poly0_r1(
+        param, shape, order, make_weights(scaled_p0(B1)),
+        skip, n_per_ct, level - 1
+    );
+
+    Poly2D poly1_r1(
+        param, shape, order, make_weights(coeff1),
+        skip, n_per_ct, level - 4
+    );
+
+    Poly2D poly0_r2(
+        param, shape, order, make_weights(scaled_p0(B2)),
+        skip, n_per_ct, level - 9
+    );
+
+    Poly2D poly1_r2(
+        param, shape, order, make_weights(coeff1),
+        skip, n_per_ct, level - 12
+    );
+
+    auto register_poly = [&](const string& name, Poly2D& poly) {
+        poly.prepare_weight_stockmeyer();
+
+        for (int i = 0; i <= order; ++i) {
+            put(
+                name + "_degree_" + std::to_string(i),
+                std::move(poly.weight_pt[i])
+            );
+        }
+    };
+
+    register_poly("poly0_r1", poly0_r1);
+    register_poly("poly1_r1", poly1_r1);
+    register_poly("poly0_r2", poly0_r2);
+    register_poly("poly1_r2", poly1_r2);
+
+    // Repack selection mask: 0/1 rather than AvgPool's 0.25.
+    Avgpool2DLayer mask_layer(shape, {2, 2});
+
+    mask_layer.prepare_weight_lazy(
+        param, n_per_ct, channels,
+        level - 17, skip, shape
+    );
+
+    vector<CkksPlaintextRingt> select_pt;
+    select_pt.reserve(n_select);
+
+    for (int i = 0; i < n_select; ++i) {
+        vector<double> mask = mask_layer.select_tensor(i);
+
+        for (auto& value : mask) {
+            value *= 4.0;
+        }
+
+        select_pt.push_back(
+            ctx.encode_ringt(mask, param.get_q(level - 17))
+        );
+    }
+
+    put("select", std::move(select_pt));
+
+    if (maxpool_pt_args_.size() - start_count != 37) {
+        throw runtime_error("MaxPool plaintext argument count mismatch");
+    }
+}
+
+
+
 void InitInferenceProcess::_init_fhe_avgpool_layer(const string& key,
                                                    const json& layer,
                                                    const bool& is_adaptive,
@@ -1373,6 +1862,10 @@ void InitInferenceProcess::load_model_prepare() {
             _init_mult_scalar_layer(key, value, h5_file, block_shape);
         } else if (layer_type == "poly_relu2d" || layer_type == "polyact") {
             _init_poly_relu_layer(key, value, h5_file, is_absorb_polyrelu, block_shape);
+        } else if (layer_type.rfind("maxpool2d_", 0) == 0) {
+            _init_fhe_maxpool_stage(key, value);
+        } else if (layer_type == "maxpool2d") {
+            _init_fhe_maxpool_layer(key, value);
         } else if (layer_type == "avgpool2d") {
             bool is_adaptive_avgpool = value["is_adaptive_avgpool"];
             _init_fhe_avgpool_layer(key, value, is_adaptive_avgpool, block_shape);
@@ -2241,6 +2734,119 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
         } else if (layer_type == "fc0" || layer_type == "fc1") {
             cxx_args.push_back(CxxVectorArgument{"densew_" + key, &(fp->get_layer<DensePackedLayer>(key).weight_pt)});
             cxx_args.push_back(CxxVectorArgument{"denseb_" + key, &(fp->get_layer<DensePackedLayer>(key).bias_pt)});
+        } else if (layer_type.rfind("maxpool2d_", 0) == 0) {
+            const auto manifest = read_json(fp->project_path / "maxpool_stage_parameters.json");
+            for (const auto& entry : manifest.at(key).items()) {
+                if (entry.value().value("encoding", string("ringt")) == "full_rns") {
+                    auto it = fp->maxpool_full_pt_args_.find(entry.key());
+                    if (it == fp->maxpool_full_pt_args_.end() ||
+                        it->second.size() != entry.value().at("count").get<size_t>())
+                        throw runtime_error("Missing full RNS MaxPool argument: " + entry.key());
+                    cxx_args.push_back(CxxVectorArgument{entry.key(), &it->second});
+                    continue;
+                }
+                auto it = fp->maxpool_pt_args_.find(entry.key());
+                if (it == fp->maxpool_pt_args_.end() ||
+                    it->second.size() != entry.value().at("count").get<size_t>()) {
+                    throw runtime_error("Missing MaxPool stage argument: " + entry.key());
+                }
+                cxx_args.push_back(CxxVectorArgument{entry.key(), &it->second});
+            }
+        } else if (layer_type == "maxpool2d") {
+            const string prefix = "maxpool_" + key + "_";
+            int bound_count = 0;
+
+            auto bind_pt = [&](const string& suffix) {
+                const string name = prefix + suffix;
+
+                auto it = fp->maxpool_pt_args_.find(name);
+
+                if (it == fp->maxpool_pt_args_.end() ||
+                    it->second.empty()) {
+                    throw runtime_error(
+                        "Missing MaxPool plaintext argument: " + name
+                    );
+                }
+
+                cxx_args.push_back(
+                    CxxVectorArgument{name, &it->second}
+                );
+
+                ++bound_count;
+            };
+
+            // 3x3 MaxPool task-signature binding
+            if (layer.value().at("kernel_shape").get<vector<int>>() == vector<int>{3, 3}) {
+                // 9 valid masks + 5 padding masks
+                for (int tap = 0; tap < 9; ++tap) {
+                    const string base = "tap_" + std::to_string(tap);
+
+                    bind_pt(base + "_valid");
+
+                    if (
+                        tap == 0 || tap == 1 || tap == 2 ||
+                        tap == 3 || tap == 6
+                    ) {
+                        bind_pt(base + "_invalid");
+                    }
+                }
+
+                // Four comparison rounds, degree-7 P0/P1
+                for (int r = 1; r <= 4; ++r) {
+                    for (const string& poly :
+                         vector<string>{"poly0", "poly1"}) {
+
+                        const string base =
+                            poly + "_r" + std::to_string(r);
+
+                        for (int degree = 0; degree <= 7; ++degree) {
+                            bind_pt(
+                                base + "_degree_" +
+                                std::to_string(degree)
+                            );
+                        }
+                    }
+                }
+
+                bind_pt("select");
+                bind_pt("output_restore");
+
+                if (bound_count != 80) {
+                    throw runtime_error(
+                        "3x3 MaxPool binding count mismatch: " +
+                        std::to_string(bound_count)
+                    );
+                }
+            } else {
+                // 1. Normalize and restore
+                bind_pt("input_norm");
+                bind_pt("output_restore");
+
+                // 2. Stockmeyer polynomial coefficients
+                for (const string& poly : {
+                    "poly0_r1",
+                    "poly1_r1",
+                    "poly0_r2",
+                    "poly1_r2"
+                }) {
+                    for (int i = 0; i <= 7; ++i) {
+                        bind_pt(poly + "_degree_" + std::to_string(i));
+                    }
+                }
+
+                // 3. Constants and selection mask
+                bind_pt("half_r1");
+                bind_pt("half_r2");
+                bind_pt("select");
+
+                if (bound_count != 37) {
+                    throw runtime_error(
+                        "MaxPool plaintext binding mismatch: " +
+                        key + ", expected 37, got " +
+                        std::to_string(bound_count)
+                    );
+                }
+            }
         } else if (layer_type == "avgpool2d") {
             FeatureNode d_input_node(json_features[feature_input[0]]);
             if (d_input_node.dim == 2) {
@@ -2966,7 +3572,125 @@ void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_
     for (const auto& layer : json_layers.items()) {
         const string& key = layer.key();
         const string& layer_type = layer.value()["type"].get<string>();
-        if (layer_type == "avgpool2d") {
+
+
+        if (layer_type.rfind("maxpool2d_", 0) == 0) {
+            const auto manifest = read_json(fp->project_path / "maxpool_stage_parameters.json");
+            for (const auto& entry : manifest.at(key).items()) {
+                if (entry.value().value("encoding", string("ringt")) == "full_rns") {
+                    auto it = fp->maxpool_full_pt_args_.find(entry.key());
+                    if (it == fp->maxpool_full_pt_args_.end() ||
+                        it->second.size() != entry.value().at("count").get<size_t>())
+                        throw runtime_error("Missing full RNS MaxPool argument: " + entry.key());
+                    cxx_args.push_back(CxxVectorArgument{entry.key(), &it->second});
+                    continue;
+                }
+                auto it = fp->maxpool_pt_args_.find(entry.key());
+                if (it == fp->maxpool_pt_args_.end() ||
+                    it->second.size() != entry.value().at("count").get<size_t>()) {
+                    throw runtime_error("Missing MaxPool stage argument: " + entry.key());
+                }
+                cxx_args.push_back(CxxVectorArgument{entry.key(), &it->second});
+            }
+        } else if (layer_type == "maxpool2d") {
+            const string prefix = "maxpool_" + key + "_";
+            int bound_count = 0;
+
+            auto bind_pt = [&](const string& suffix) {
+                const string name = prefix + suffix;
+
+                auto it = fp->maxpool_pt_args_.find(name);
+
+                if (it == fp->maxpool_pt_args_.end() ||
+                    it->second.empty()) {
+                    throw runtime_error(
+                        "Missing MaxPool plaintext argument: " + name
+                    );
+                }
+
+                cxx_args.push_back(
+                    CxxVectorArgument{name, &it->second}
+                );
+
+                ++bound_count;
+            };
+
+            // 3x3 MaxPool task-signature binding
+            if (layer.value().at("kernel_shape").get<vector<int>>() == vector<int>{3, 3}) {
+                // 9 valid masks + 5 padding masks
+                for (int tap = 0; tap < 9; ++tap) {
+                    const string base = "tap_" + std::to_string(tap);
+
+                    bind_pt(base + "_valid");
+
+                    if (
+                        tap == 0 || tap == 1 || tap == 2 ||
+                        tap == 3 || tap == 6
+                    ) {
+                        bind_pt(base + "_invalid");
+                    }
+                }
+
+                // Four comparison rounds, degree-7 P0/P1
+                for (int r = 1; r <= 4; ++r) {
+                    for (const string& poly :
+                         vector<string>{"poly0", "poly1"}) {
+
+                        const string base =
+                            poly + "_r" + std::to_string(r);
+
+                        for (int degree = 0; degree <= 7; ++degree) {
+                            bind_pt(
+                                base + "_degree_" +
+                                std::to_string(degree)
+                            );
+                        }
+                    }
+                }
+
+                bind_pt("select");
+                bind_pt("output_restore");
+
+                if (bound_count != 80) {
+                    throw runtime_error(
+                        "3x3 MaxPool binding count mismatch: " +
+                        std::to_string(bound_count)
+                    );
+                }
+            } else {
+                // 1. Normalization
+                bind_pt("input_norm");
+                bind_pt("output_restore");
+
+                // 2. Stockmeyer polynomial coefficients
+                for (const string& poly : {
+                    "poly0_r1",
+                    "poly1_r1",
+                    "poly0_r2",
+                    "poly1_r2"
+                }) {
+                    for (int i = 0; i <= 7; ++i) {
+                        bind_pt(
+                            poly + "_degree_" + std::to_string(i)
+                        );
+                    }
+                }
+
+                // 3. Remaining constants and repack mask
+                bind_pt("half_r1");
+                bind_pt("half_r2");
+                bind_pt("select");
+
+                if (bound_count != 37) {
+                    throw runtime_error(
+                        "MaxPool binding count mismatch: " +
+                        std::to_string(bound_count)
+                    );
+                }
+            }
+
+        } else if (layer_type == "avgpool2d") {
+
             FeatureNode d_input_node(json_features[layer.value()["feature_input"][0].get<string>()]);
             if (d_input_node.dim == 2) {
                 bool is_big_size = layer.value()["is_big_size"];
@@ -3042,12 +3766,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_
                 output_mat_block_sizes[out_idx] = par_d;
             }
         } else {
-            n_out_num = div_ceil(feature_output.channel, feature_output.pack_channel_per_ciphertext);
-            if (feature_output.shape[0] > block_shape[0] || feature_output.shape[1] > block_shape[1]) {
-                Duo out_block_expansion = {feature_output.shape[0] / block_shape[0],
-                                           feature_output.shape[1] / block_shape[1]};
-                n_out_num *= out_block_expansion[0] * out_block_expansion[1];
-            }
+            n_out_num = feature_output.get_n_ciphertexts(block_shape);
         }
         double encode_scale =
             ckks_contexts.at(feature_output.ckks_parameter_id).get()->get_parameter().get_default_scale();

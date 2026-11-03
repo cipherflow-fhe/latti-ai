@@ -30,6 +30,7 @@
 #include <iomanip>
 #include <utility>
 #include <limits>
+#include <random>
 
 #include "data_structs/feature.h"
 #include "fhe_layers/conv2d_packed_layer.h"
@@ -4725,6 +4726,1829 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_stockmeyer_feature2d", 
     REQUIRE(compare_result.rmse < 1.0e-2 * compare_result.rms);
 }
 
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_maxpool2x2_param_check", "", HeteroProcessors) {
+    const int N = 32768;
+
+    CkksParameter local_param =
+        CkksParameter::create_parameter(N);
+
+    // Check PN15QP880 parameter compatibility
+    REQUIRE(local_param.get_n() == 32768);
+    REQUIRE(local_param.get_max_level() == 17);
+    REQUIRE(local_param.get_p_count() == 3);
+
+    // Compare representative Q and P moduli
+    REQUIRE(local_param.get_q(0) == 0x4000000120001ULL);
+    REQUIRE(local_param.get_q(17) == 0x10000960001ULL);
+    REQUIRE(local_param.get_p(0) == 0x40000001B0001ULL);
+    REQUIRE(local_param.get_p(2) == 0x4000000270001ULL);
+
+    // PN15QP880 default scale = 2^40
+    REQUIRE(
+        local_param.get_default_scale() ==
+        std::ldexp(1.0, 40)
+    );
+}
+
+
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_maxpool2x2_stockmeyer_feature2d", "", HeteroProcessors) {
+    // =========================================================
+    // 1. Test configuration
+    // =========================================================
+    const int N = 32768;
+    const int init_level = 17;
+    const int order = 7;
+    const int n_channel = 32;
+
+    const Duo input_shape = {32, 32};
+    const Duo output_shape = {16, 16};
+    const Duo skip = {1, 1};
+
+    // Independent approximation bounds for two rounds.
+    // Round 1: horizontal Max
+    // Round 2: vertical Max
+    const double B_r1 = 1.0;
+    const double B_r2 = 1.0;
+
+    // Input amplitude for range testing
+    const double input_amplitude = 10.0;
+
+    REQUIRE(std::isfinite(B_r1));
+    REQUIRE(std::isfinite(B_r2));
+    REQUIRE(B_r1 > 0.0);
+    REQUIRE(B_r2 > 0.0);
+
+    // =========================================================
+    // 2. Independent CKKS context
+    // =========================================================
+    CkksParameter local_param =
+        CkksParameter::create_parameter(N);
+
+    REQUIRE(local_param.get_max_level() >= init_level);
+
+    CkksContext local_context =
+        CkksContext::create_random_context(local_param);
+
+    local_context.gen_rotation_keys();
+
+    const double scale = local_param.get_default_scale();
+    const int n_slot = N / 2;
+
+    const int n_channel_per_ct =
+        n_slot / (input_shape[0] * input_shape[1]);
+
+    const int n_ct =
+        div_ceil(n_channel, n_channel_per_ct);
+
+    // =========================================================
+    // 3. Original alpha=7 polynomial coefficients
+    // =========================================================
+    const vector<double> coeff0 = {
+        0.0,
+        7.30445164958251,
+        0.0,
+        -34.6825871108659,
+        0.0,
+        59.8596518298826,
+        0.0,
+        -31.8755225906466
+    };
+
+    const vector<double> coeff1 = {
+        0.0,
+        2.40085652217597,
+        0.0,
+        -2.63125454261783,
+        0.0,
+        1.54912674773593,
+        0.0,
+        -0.331172956504304
+    };
+
+    // =========================================================
+    // 4. Apply B to first polynomial P0
+    //
+    // P0(x / (2B)) = sum c[k] / (2B)^k * x^k
+    //
+    // This changes coefficients without adding CKKS levels.
+    // =========================================================
+    auto make_scaled_coeff0 = [&](double B) {
+        vector<double> scaled = coeff0;
+        const double s = 2.0 * B;
+
+        for (size_t k = 0; k < scaled.size(); ++k) {
+            scaled[k] /= std::pow(
+                s, static_cast<int>(k)
+            );
+        }
+
+        return scaled;
+    };
+
+    const vector<double> coeff0_r1 =
+        make_scaled_coeff0(B_r1);
+
+    const vector<double> coeff0_r2 =
+        make_scaled_coeff0(B_r2);
+
+    auto weight0_r1 =
+        make_uniform_coeff(coeff0_r1, n_channel);
+
+    auto weight0_r2 =
+        make_uniform_coeff(coeff0_r2, n_channel);
+
+    auto weight1 =
+        make_uniform_coeff(coeff1, n_channel);
+
+    // =========================================================
+    // 5. Prepare polynomial layers
+    // =========================================================
+
+    // Round 1: horizontal Max
+    // Level: 17 -> 14 -> 11
+    Poly2D poly0_r1(
+        local_param,
+        input_shape,
+        order,
+        weight0_r1.copy(),
+        skip,
+        n_channel_per_ct,
+        17
+    );
+
+    Poly2D poly1_r1(
+        local_param,
+        input_shape,
+        order,
+        weight1.copy(),
+        skip,
+        n_channel_per_ct,
+        14
+    );
+
+    // Round 2: vertical Max
+    // Level: 9 -> 6 -> 3
+    Poly2D poly0_r2(
+        local_param,
+        input_shape,
+        order,
+        weight0_r2.copy(),
+        skip,
+        n_channel_per_ct,
+        9
+    );
+
+    Poly2D poly1_r2(
+        local_param,
+        input_shape,
+        order,
+        weight1.copy(),
+        skip,
+        n_channel_per_ct,
+        6
+    );
+
+    poly0_r1.prepare_weight_stockmeyer();
+    poly1_r1.prepare_weight_stockmeyer();
+    poly0_r2.prepare_weight_stockmeyer();
+    poly1_r2.prepare_weight_stockmeyer();
+
+    // =========================================================
+    // 6. Encode 0.5 plaintext weights
+    // =========================================================
+    auto encode_half = [&](int level) {
+        vector<CkksPlaintextRingt> result;
+        result.reserve(n_ct);
+
+        vector<double> values(n_slot, 0.5);
+
+        for (int i = 0; i < n_ct; ++i) {
+            result.push_back(
+                local_context.encode_ringt(
+                    values,
+                    local_param.get_q(level)
+                )
+            );
+        }
+
+        return result;
+    };
+
+    auto half_pt_r1 = encode_half(10);
+    auto half_pt_r2 = encode_half(2);
+
+    // =========================================================
+    // 7. Prepare MaxPooling selection masks
+    // =========================================================
+    Avgpool2DLayer mask_layer(
+        input_shape,
+        {2, 2}
+    );
+
+    mask_layer.prepare_weight_lazy(
+        local_param,
+        n_channel_per_ct,
+        n_channel,
+        1,
+        skip,
+        input_shape
+    );
+
+    const int out_channels_per_ct =
+        n_channel_per_ct * 4;
+
+    const int n_select_pt =
+        std::min(n_channel, out_channels_per_ct);
+
+    vector<CkksPlaintextRingt> select_pt;
+    select_pt.reserve(n_select_pt);
+
+    for (int i = 0; i < n_select_pt; ++i) {
+        auto mask = mask_layer.select_tensor(i);
+
+        // AvgPooling mask uses 0.25.
+        // MaxPooling needs a 0/1 selection mask.
+        for (auto& v : mask) {
+            v *= 4.0;
+        }
+
+        select_pt.push_back(
+            local_context.encode_ringt(
+                mask,
+                local_param.get_q(1)
+            )
+        );
+    }
+
+    // =========================================================
+    // 8. Generate and encrypt input (normalized experiment)
+    // =========================================================
+
+    // 原始输入范围 [-10, 10]
+    const double normalization_factor = 10.0;
+
+    Array<double, 3> input_array({
+        static_cast<uint64_t>(n_channel),
+        32,
+        32
+    });
+
+    // 固定随机种子
+    std::mt19937 rng(20261022);
+    std::uniform_real_distribution<double> dis(
+        -input_amplitude,
+        input_amplitude
+    );
+
+    // 生成原始输入
+    for (uint64_t i = 0; i < input_array.get_size(); ++i) {
+        input_array.set(i, dis(rng));
+    }
+
+    // 创建归一化副本，不修改原始 input_array
+    // 创建独立的归一化输入数组
+    Array<double, 3> normalized_input({
+        static_cast<uint64_t>(n_channel),
+        32,
+        32
+    });
+
+    // 逐元素归一化
+    for (uint64_t i = 0; i < input_array.get_size(); ++i) {
+        normalized_input.set(
+            i,
+            input_array.get(i) / normalization_factor
+        );
+    }
+
+    // 使用归一化数据进行 CKKS 编码和加密
+    Feature2DEncrypted input_feature(
+        &local_context,
+        init_level,
+        skip
+    );
+
+    input_feature.pack_multiplexed(
+        normalized_input,
+        false,
+        scale
+    );
+
+    REQUIRE(input_feature.data.size() == n_ct);
+
+    // =========================================================
+    // 9. Prepare output ciphertext
+    // =========================================================
+    Feature2DEncrypted output_feature(
+        &local_context,
+        0
+    );
+
+    output_feature.shape = output_shape;
+    output_feature.skip = {2, 2};
+    output_feature.n_channel = n_channel;
+
+    output_feature.n_channel_per_ct =
+        n_channel_per_ct * 4;
+
+    output_feature.data.push_back(
+        local_context.new_ciphertext(0, scale)
+    );
+
+    // =========================================================
+    // 10. Load generated Python FHE task
+    // =========================================================
+    fs::path project_path =
+        base_path
+        / "CKKS_poly_maxpool2x2_repack_stockmeyer"
+        / "level_17";
+
+    auto arg_names = read_arg_names(project_path);
+
+    vector<CxxVectorArgument> cxx_args;
+    int idx = 0;
+
+    cxx_args.push_back({
+        arg_names.at(idx++),
+        &input_feature.data
+    });
+
+    auto append_poly_weights = [&](Poly2D& poly) {
+        for (int i = 0; i <= order; ++i) {
+            cxx_args.push_back({
+                arg_names.at(idx++),
+                &poly.weight_pt[i]
+            });
+        }
+    };
+
+    append_poly_weights(poly0_r1);
+    append_poly_weights(poly1_r1);
+    append_poly_weights(poly0_r2);
+    append_poly_weights(poly1_r2);
+
+    cxx_args.push_back({
+        arg_names.at(idx++),
+        &half_pt_r1
+    });
+
+    cxx_args.push_back({
+        arg_names.at(idx++),
+        &half_pt_r2
+    });
+
+    cxx_args.push_back({
+        arg_names.at(idx++),
+        &select_pt
+    });
+
+    cxx_args.push_back({
+        arg_names.at(idx++),
+        &output_feature.data
+    });
+
+    REQUIRE(idx == static_cast<int>(arg_names.size()));
+
+    // =========================================================
+    // 11. Execute FHE task
+    // =========================================================
+    if constexpr (is_same_v<TestType, ProcessorCpu>) {
+        FheTaskCpu task(project_path.string());
+        task.run(&local_context, cxx_args);
+
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    } else if constexpr (
+        is_same_v<TestType, ProcessorGpu>
+    ) {
+        FheTaskGpu task(project_path.string());
+        task.run(&local_context, cxx_args);
+#endif
+    }
+
+    // =========================================================
+    // 12. Decrypt and unpack output
+    // =========================================================
+    // auto output_mg =
+    //     output_feature.unpack_multiplexed();
+
+    auto output_mg =
+    output_feature.unpack_multiplexed();
+
+    // 恢复到原始输入尺度
+    for (uint64_t i = 0; i < output_mg.get_size(); ++i) {
+        output_mg.set(
+            i,
+            output_mg.get(i) * normalization_factor
+        );
+    }
+
+    // =========================================================
+    // 13. Plaintext polynomial reference
+    // =========================================================
+    auto eval_poly = [](
+        const vector<double>& coeff,
+        double x
+    ) {
+        double y = 0.0;
+
+        for (int i = static_cast<int>(coeff.size()) - 1;
+             i >= 0;
+             --i) {
+            y = y * x + coeff[i];
+        }
+
+        return y;
+    };
+
+    auto approx_max = [&](double a, double b, double B) {
+        const double d = a - b;
+
+        // Normalize Sign polynomial input
+        const double normalized_d =
+            d / (2.0 * B);
+
+        const double sign_approx =
+            eval_poly(
+                coeff1,
+                eval_poly(coeff0, normalized_d)
+            );
+
+        return 0.5 * (
+            a + b + d * sign_approx
+        );
+    };
+
+    Array<double, 3> expected({
+        static_cast<uint64_t>(n_channel),
+        16,
+        16
+    });
+
+    Array<double, 3> true_max({
+        static_cast<uint64_t>(n_channel),
+        16,
+        16
+    });
+
+    // 明文参考使用原始输入尺度对应的 B
+    const double reference_B_r1 = B_r1 * normalization_factor;
+    const double reference_B_r2 = B_r2 * normalization_factor;
+
+    for (int ch = 0; ch < n_channel; ++ch) {
+        for (int i = 0; i < 16; ++i) {
+            for (int j = 0; j < 16; ++j) {
+
+                const double a =
+                    input_array.get(ch, 2*i, 2*j);
+
+                const double b =
+                    input_array.get(ch, 2*i, 2*j+1);
+
+                const double c =
+                    input_array.get(ch, 2*i+1, 2*j);
+
+                const double d =
+                    input_array.get(ch, 2*i+1, 2*j+1);
+
+                // // Round 1
+                // const double m1 =
+                //     approx_max(a, b, B_r1);
+
+                // const double m2 =
+                //     approx_max(c, d, B_r1);
+
+                // // Round 2
+                // const double y_poly =
+                //     approx_max(m1, m2, B_r2);
+
+
+                // Round 1
+                const double m1 = approx_max(a, b, reference_B_r1);
+                const double m2 = approx_max(c, d, reference_B_r1);
+
+                // Round 2
+                const double y_poly = approx_max(m1, m2, reference_B_r2);
+
+                expected.set(
+                    ch, i, j, y_poly
+                );
+
+                const double y_true =
+                    std::max(
+                        std::max(a, b),
+                        std::max(c, d)
+                    );
+
+                true_max.set(
+                    ch, i, j, y_true
+                );
+            }
+        }
+    }
+
+    // =========================================================
+    // 14. Check for non-finite values
+    // =========================================================
+    bool poly_finite = true;
+    bool fhe_finite = true;
+
+    for (uint64_t i = 0; i < expected.get_size(); ++i) {
+        if (!std::isfinite(expected.get(i))) {
+            poly_finite = false;
+        }
+        if (!std::isfinite(output_mg.get(i))) {
+            fhe_finite = false;
+        }
+    }
+
+    std::cout
+        << "========================================\n"
+        << "Poly MaxPooling test configuration\n"
+        << "========================================\n"
+        << "alpha = 7\n"
+        << "B_r1 = " << B_r1 << "\n"
+        << "B_r2 = " << B_r2 << "\n"
+        << "input_amplitude = "
+        << input_amplitude << "\n"
+        << "polynomial_finite = "
+        << poly_finite << "\n"
+        << "fhe_finite = "
+        << fhe_finite << "\n";
+
+    // Do not compute RMSE against inf/NaN references.
+    REQUIRE(poly_finite);
+    REQUIRE(fhe_finite);
+
+    // =========================================================
+    // 15. Compare numerical errors
+    // =========================================================
+    auto fhe_error =
+        compare(expected, output_mg);
+
+    auto approx_error =
+        compare(true_max, expected);
+
+    // Total error: exact MaxPooling vs FHE output
+    auto total_error =
+        compare(true_max, output_mg);
+
+    std::cout
+        << "FHE vs polynomial reference:"
+        << " max_error=" << fhe_error.max_error
+        << " rmse=" << fhe_error.rmse
+        << std::endl;
+
+    std::cout
+        << "Polynomial vs exact MaxPooling:"
+        << " max_error=" << approx_error.max_error
+        << " rmse=" << approx_error.rmse
+        << std::endl;
+
+    std::cout
+        << "FHE vs exact MaxPooling:"
+        << " max_error=" << total_error.max_error
+        << " rmse=" << total_error.rmse
+        << std::endl;
+
+    REQUIRE(
+        fhe_error.max_error <
+        5.0e-2 * fhe_error.max_abs
+    );
+
+    REQUIRE(
+        fhe_error.rmse <
+        1.0e-2 * fhe_error.rms
+    );
+}
+
+
+TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_maxpool2x2_stockmeyer_fused17_feature2d", "[fhe_layers][poly_maxpool][fused17]", HeteroProcessors) {
+    // =========================================================
+    // 1. Test configuration
+    // =========================================================
+    const int N = 32768;
+    const int init_level = 17;
+    const int order = 7;
+    const int n_channel = 32;
+
+    const Duo input_shape = {32, 32};
+    const Duo output_shape = {16, 16};
+    const Duo skip = {1, 1};
+
+    // Default PolyMaxPoolConfig
+    const double upper_bound = 1.0;
+    const double k1 = 1.0;
+    const double k2 = 1.05;
+
+    const double B_r1 = upper_bound * k1;
+    const double B_r2 = upper_bound * k2;
+
+    // Plaintext calibration
+    const double running_max = 10.0;
+    const double input_amplitude = 10.0;
+
+    const double normalization_factor =
+        running_max / upper_bound;
+
+    // Reference bounds for ORIGINAL input scale
+    const double reference_B_r1 =
+        normalization_factor * B_r1;
+
+    const double reference_B_r2 =
+        normalization_factor * B_r2;
+
+    REQUIRE(std::isfinite(normalization_factor));
+    REQUIRE(normalization_factor > 0.0);
+    REQUIRE(B_r1 > 0.0);
+    REQUIRE(B_r2 > 0.0);
+
+    // =========================================================
+    // 2. Independent CKKS context
+    // =========================================================
+    CkksParameter local_param =
+        CkksParameter::create_parameter(N);
+
+    REQUIRE(local_param.get_max_level() >= init_level);
+
+    CkksContext local_context =
+        CkksContext::create_random_context(local_param);
+
+    local_context.gen_rotation_keys();
+
+    const double scale = local_param.get_default_scale();
+    const int n_slot = N / 2;
+
+    const int n_channel_per_ct =
+        n_slot / (input_shape[0] * input_shape[1]);
+
+    const int n_ct =
+        div_ceil(n_channel, n_channel_per_ct);
+
+    const int out_channels_per_ct =
+        n_channel_per_ct * 4;
+
+    const int n_out_ct =
+        div_ceil(n_channel, out_channels_per_ct);
+
+    const int n_select_pt =
+        std::min(n_channel, out_channels_per_ct);
+
+    REQUIRE(n_ct == 2);
+    REQUIRE(n_out_ct == 1);
+
+    // =========================================================
+    // 3. Original alpha=7 polynomial coefficients
+    // =========================================================
+    const vector<double> coeff0 = {
+        0.0,
+        7.30445164958251,
+        0.0,
+        -34.6825871108659,
+        0.0,
+        59.8596518298826,
+        0.0,
+        -31.8755225906466
+    };
+
+    const vector<double> coeff1 = {
+        0.0,
+        2.40085652217597,
+        0.0,
+        -2.63125454261783,
+        0.0,
+        1.54912674773593,
+        0.0,
+        -0.331172956504304
+    };
+
+    // =========================================================
+    // 4. Scale P0 polynomial coefficients
+    //
+    // P0(d/(2B)) = sum c[k]/(2B)^k * d^k
+    //
+    // Here d is already normalized.
+    // =========================================================
+    auto make_scaled_coeff0 = [&](double B) {
+        vector<double> scaled = coeff0;
+
+        const double divisor = 2.0 * B;
+
+        for (size_t k = 0; k < scaled.size(); ++k) {
+            scaled[k] /= std::pow(
+                divisor,
+                static_cast<int>(k)
+            );
+        }
+
+        return scaled;
+    };
+
+    const vector<double> coeff0_r1 =
+        make_scaled_coeff0(B_r1);
+
+    const vector<double> coeff0_r2 =
+        make_scaled_coeff0(B_r2);
+
+    auto weight0_r1 =
+        make_uniform_coeff(coeff0_r1, n_channel);
+
+    auto weight0_r2 =
+        make_uniform_coeff(coeff0_r2, n_channel);
+
+    auto weight1 =
+        make_uniform_coeff(coeff1, n_channel);
+
+    // =========================================================
+    // 5. Prepare Stockmeyer layers
+    //
+    // Round 1:
+    //     P0: 17 -> 14
+    //     P1: 14 -> 11
+    //     d*sign: 11 -> 10
+    //     *0.5: 10 -> 9
+    //
+    // Round 2:
+    //     P0: 9 -> 6
+    //     P1: 6 -> 3
+    //     d*sign: 3 -> 2
+    //     *0.5: 2 -> 1
+    //
+    // Repack + scale restoration:
+    //     1 -> 0
+    // =========================================================
+
+    Poly2D poly0_r1(
+        local_param,
+        input_shape,
+        order,
+        weight0_r1.copy(),
+        skip,
+        n_channel_per_ct,
+        17
+    );
+
+    Poly2D poly1_r1(
+        local_param,
+        input_shape,
+        order,
+        weight1.copy(),
+        skip,
+        n_channel_per_ct,
+        14
+    );
+
+    Poly2D poly0_r2(
+        local_param,
+        input_shape,
+        order,
+        weight0_r2.copy(),
+        skip,
+        n_channel_per_ct,
+        9
+    );
+
+    Poly2D poly1_r2(
+        local_param,
+        input_shape,
+        order,
+        weight1.copy(),
+        skip,
+        n_channel_per_ct,
+        6
+    );
+
+    poly0_r1.prepare_weight_stockmeyer();
+    poly1_r1.prepare_weight_stockmeyer();
+    poly0_r2.prepare_weight_stockmeyer();
+    poly1_r2.prepare_weight_stockmeyer();
+
+    // =========================================================
+    // 6. Encode 0.5 plaintext constants
+    // =========================================================
+    auto encode_half = [&](int level) {
+        vector<CkksPlaintextRingt> result;
+        result.reserve(n_ct);
+
+        vector<double> values(n_slot, 0.5);
+
+        for (int i = 0; i < n_ct; ++i) {
+            result.push_back(
+                local_context.encode_ringt(
+                    values,
+                    local_param.get_q(level)
+                )
+            );
+        }
+
+        return result;
+    };
+
+    auto half_pt_r1 = encode_half(10);
+    auto half_pt_r2 = encode_half(2);
+
+    // =========================================================
+    // 7. Prepare MaxPooling selection masks
+    //
+    // Important optimization:
+    //
+    // OLD:
+    //   mask = 0 or 1
+    //   Repack(v, mask)
+    //   output = Repack(v, mask) * 10
+    //
+    // NEW:
+    //   fused_mask = mask * 10
+    //   output = Repack(v, fused_mask)
+    //
+    // Both repacking and output restoration are
+    // completed in a single mult + rescale.
+    // =========================================================
+    Avgpool2DLayer mask_layer(
+        input_shape,
+        {2, 2}
+    );
+
+    mask_layer.prepare_weight_lazy(
+        local_param,
+        n_channel_per_ct,
+        n_channel,
+        1,
+        skip,
+        input_shape
+    );
+
+    vector<CkksPlaintextRingt> select_pt;
+    select_pt.reserve(n_select_pt);
+
+    for (int i = 0; i < n_select_pt; ++i) {
+        auto mask = mask_layer.select_tensor(i);
+
+        // AvgPooling selection mask: 0.25
+        // MaxPooling selection mask: 1.0
+        // Fused output scale: 10.0
+        for (auto& v : mask) {
+            v *= 4.0 * normalization_factor;
+        }
+
+        select_pt.push_back(
+            local_context.encode_ringt(
+                mask,
+                local_param.get_q(1)
+            )
+        );
+    }
+
+    // =========================================================
+    // 8. Generate original input
+    // =========================================================
+    Array<double, 3> input_array({
+        static_cast<uint64_t>(n_channel),
+        32,
+        32
+    });
+
+    // Same seed as previous experiments
+    std::mt19937 rng(20261022);
+
+    std::uniform_real_distribution<double> dis(
+        -input_amplitude,
+        input_amplitude
+    );
+
+    for (uint64_t i = 0; i < input_array.get_size(); ++i) {
+        input_array.set(i, dis(rng));
+    }
+
+    // =========================================================
+    // 9. Simulate normalization absorbed by
+    //    the preceding Conv/ReLU layer
+    //
+    // This test does NOT yet implement Conv -> MaxPool.
+    // It verifies the MaxPool core given a normalized
+    // encrypted input.
+    // =========================================================
+    Array<double, 3> normalized_input({
+        static_cast<uint64_t>(n_channel),
+        32,
+        32
+    });
+
+    for (uint64_t i = 0; i < input_array.get_size(); ++i) {
+        normalized_input.set(
+            i,
+            input_array.get(i) / normalization_factor
+        );
+    }
+
+    // =========================================================
+    // 10. Encrypt normalized input at Level 17
+    // =========================================================
+    Feature2DEncrypted input_feature(
+        &local_context,
+        init_level,
+        skip
+    );
+
+    input_feature.pack_multiplexed(
+        normalized_input,
+        false,
+        scale
+    );
+
+    REQUIRE(input_feature.data.size() == n_ct);
+
+    // =========================================================
+    // 11. Prepare output ciphertext at Level 0
+    // =========================================================
+    Feature2DEncrypted output_feature(
+        &local_context,
+        0
+    );
+
+    output_feature.shape = output_shape;
+    output_feature.skip = {2, 2};
+    output_feature.n_channel = n_channel;
+    output_feature.n_channel_per_ct =
+        out_channels_per_ct;
+
+    for (int i = 0; i < n_out_ct; ++i) {
+        output_feature.data.push_back(
+            local_context.new_ciphertext(0, scale)
+        );
+    }
+
+    // =========================================================
+    // 12. Load existing Level-17 DAG
+    //
+    // DAG structure is unchanged.
+    // Only plaintext mask values differ.
+    // =========================================================
+    fs::path project_path =
+        base_path
+        / "CKKS_poly_maxpool2x2_repack_stockmeyer"
+        / "level_17";
+
+    REQUIRE(fs::exists(project_path / "mega_ag.json"));
+
+    auto arg_names = read_arg_names(project_path);
+
+    vector<CxxVectorArgument> cxx_args;
+    int idx = 0;
+
+    // Explicitly check argument names to prevent
+    // silent misbinding when the DAG changes.
+    auto append_arg = [&](const std::string& expected,
+                          auto* buffer) {
+        const auto& name = arg_names.at(idx++);
+        REQUIRE(name == expected);
+        cxx_args.push_back({name, buffer});
+    };
+
+    append_arg(
+        "input_node",
+        &input_feature.data
+    );
+
+    auto append_poly_weights = [&](
+        const std::string& prefix,
+        Poly2D& poly
+    ) {
+        for (int i = 0; i <= order; ++i) {
+            append_arg(
+                prefix + "_weight_pt" + std::to_string(i),
+                &poly.weight_pt.at(i)
+            );
+        }
+    };
+
+    append_poly_weights("poly0_r1", poly0_r1);
+    append_poly_weights("poly1_r1", poly1_r1);
+    append_poly_weights("poly0_r2", poly0_r2);
+    append_poly_weights("poly1_r2", poly1_r2);
+
+    append_arg(
+        "half_weight_pt_r1",
+        &half_pt_r1
+    );
+
+    append_arg(
+        "half_weight_pt_r2",
+        &half_pt_r2
+    );
+
+    append_arg(
+        "maxpool_select_pt",
+        &select_pt
+    );
+
+    append_arg(
+        "output_ct",
+        &output_feature.data
+    );
+
+    REQUIRE(idx == static_cast<int>(arg_names.size()));
+
+    // =========================================================
+    // 13. Execute FHE task
+    // =========================================================
+    std::cout
+        << "\n=== Fused17 MaxPooling configuration ===\n"
+        << "N=" << N
+        << ", init_level=" << init_level
+        << ", channels=" << n_channel
+        << ", input_ct=" << n_ct
+        << ", output_ct=" << n_out_ct
+        << ", B1=" << B_r1
+        << ", B2=" << B_r2
+        << ", normalization_factor="
+        << normalization_factor
+        << std::endl;
+
+    if constexpr (is_same_v<TestType, ProcessorCpu>) {
+        FheTaskCpu task(project_path.string());
+        task.run(&local_context, cxx_args);
+
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    } else if constexpr (
+        is_same_v<TestType, ProcessorGpu>
+    ) {
+        FheTaskGpu task(project_path.string());
+        task.run(&local_context, cxx_args);
+#endif
+    }
+
+    // =========================================================
+    // 14. Decrypt and unpack
+    //
+    // Do NOT multiply by normalization_factor here.
+    // The output has already been restored by
+    // the fused Repack plaintext mask.
+    // =========================================================
+    auto output_mg =
+        output_feature.unpack_multiplexed();
+
+    // =========================================================
+    // 15. Plaintext polynomial reference
+    //
+    // Use original-scale input and original-scale B.
+    // This is mathematically equivalent to:
+    //
+    // z = x / 10
+    // v = PolyMaxPool(z, B1=1.0, B2=1.05)
+    // y = 10 * v
+    // =========================================================
+    auto eval_poly = [](
+        const vector<double>& coeff,
+        double x
+    ) {
+        double result = 0.0;
+
+        for (int i = static_cast<int>(coeff.size()) - 1;
+             i >= 0; --i) {
+            result = result * x + coeff[i];
+        }
+
+        return result;
+    };
+
+    auto approx_max = [&](
+        double a,
+        double b,
+        double B
+    ) {
+        const double diff = a - b;
+
+        const double normalized_diff =
+            diff / (2.0 * B);
+
+        const double p0 =
+            eval_poly(coeff0, normalized_diff);
+
+        const double sign_approx =
+            eval_poly(coeff1, p0);
+
+        return 0.5 * (
+            a + b + diff * sign_approx
+        );
+    };
+
+    Array<double, 3> expected({
+        static_cast<uint64_t>(n_channel),
+        16,
+        16
+    });
+
+    Array<double, 3> exact_max({
+        static_cast<uint64_t>(n_channel),
+        16,
+        16
+    });
+
+    for (int ch = 0; ch < n_channel; ++ch) {
+        for (int i = 0; i < 16; ++i) {
+            for (int j = 0; j < 16; ++j) {
+
+                const double a =
+                    input_array.get(
+                        ch, 2 * i, 2 * j
+                    );
+
+                const double b =
+                    input_array.get(
+                        ch, 2 * i, 2 * j + 1
+                    );
+
+                const double c =
+                    input_array.get(
+                        ch, 2 * i + 1, 2 * j
+                    );
+
+                const double d =
+                    input_array.get(
+                        ch, 2 * i + 1, 2 * j + 1
+                    );
+
+                // Round 1: horizontal binary Max
+                const double m1 =
+                    approx_max(
+                        a, b, reference_B_r1
+                    );
+
+                const double m2 =
+                    approx_max(
+                        c, d, reference_B_r1
+                    );
+
+                // Round 2: vertical binary Max
+                const double approx_result =
+                    approx_max(
+                        m1, m2, reference_B_r2
+                    );
+
+                const double true_result =
+                    std::max(
+                        std::max(a, b),
+                        std::max(c, d)
+                    );
+
+                expected.set(
+                    ch, i, j, approx_result
+                );
+
+                exact_max.set(
+                    ch, i, j, true_result
+                );
+            }
+        }
+    }
+
+    // =========================================================
+    // 16. Error comparison
+    // =========================================================
+    auto fhe_vs_poly = compare(
+        expected,
+        output_mg
+    );
+
+    auto poly_vs_exact = compare(
+        exact_max,
+        expected
+    );
+
+    auto fhe_vs_exact = compare(
+        exact_max,
+        output_mg
+    );
+
+    std::cout << std::setprecision(12);
+
+    std::cout
+        << "\n========================================\n"
+        << "Fused17 MaxPooling Test Results\n"
+        << "========================================\n"
+
+        << "\nFHE vs Plaintext Polynomial\n"
+        << "max_error = "
+        << fhe_vs_poly.max_error
+        << "\nrmse      = "
+        << fhe_vs_poly.rmse
+
+        << "\n\nPolynomial vs Exact Max\n"
+        << "max_error = "
+        << poly_vs_exact.max_error
+        << "\nrmse      = "
+        << poly_vs_exact.rmse
+
+        << "\n\nFHE vs Exact Max\n"
+        << "max_error = "
+        << fhe_vs_exact.max_error
+        << "\nrmse      = "
+        << fhe_vs_exact.rmse
+
+        << "\n========================================\n"
+        << std::endl;
+
+    // =========================================================
+    // 17. Regression assertions
+    // =========================================================
+    REQUIRE(std::isfinite(fhe_vs_poly.max_error));
+    REQUIRE(std::isfinite(fhe_vs_poly.rmse));
+
+    REQUIRE(std::isfinite(poly_vs_exact.max_error));
+    REQUIRE(std::isfinite(poly_vs_exact.rmse));
+
+    REQUIRE(std::isfinite(fhe_vs_exact.max_error));
+    REQUIRE(std::isfinite(fhe_vs_exact.rmse));
+
+    // Preliminary CKKS regression thresholds
+    REQUIRE(fhe_vs_poly.max_error < 5e-4);
+    REQUIRE(fhe_vs_poly.rmse < 1e-4);
+}
+
+
+
+
+TEST_CASE("poly_maxpool2x2_range_norm_stockmeyer_feature2d", "[fhe_layers][poly_maxpool][range_norm]") {
+    // =====================================================
+    // 1. Configuration
+    // =====================================================
+    const int N = 65536;
+    const int init_level = 19;
+    const int order = 7;
+    const int n_channel = 32;
+
+    const Duo input_shape = {32, 32};
+    const Duo output_shape = {16, 16};
+    const Duo skip = {1, 1};
+
+    // Default PolyMaxPoolConfig values
+    const double upper_bound = 1.0;
+    const double k1 = 1.0;
+    const double k2 = 1.05;
+
+    const double B_r1 = k1 * upper_bound;
+    const double B_r2 = k2 * upper_bound;
+
+    // Fixed plaintext calibration for this test
+    const double running_max = 10.0;
+    const double input_amplitude = 10.0;
+
+    const double normalization_factor =
+        running_max / upper_bound;
+
+    const double input_multiplier =
+        1.0 / normalization_factor;
+
+    const double reference_B_r1 =
+        normalization_factor * B_r1;
+
+    const double reference_B_r2 =
+        normalization_factor * B_r2;
+
+    REQUIRE(B_r1 > 0.0);
+    REQUIRE(B_r2 > 0.0);
+    REQUIRE(normalization_factor > 0.0);
+
+    // =====================================================
+    // 2. Independent CKKS context
+    // =====================================================
+    // CkksParameter local_param =
+    //     CkksParameter::create_parameter(N);
+    // Load the same CKKS parameters used by the compiler
+    const fs::path param_path =
+        "/tmp/poly_maxpool2x2_task/task/server/ckks_parameter.json";
+
+    std::ifstream param_file(param_path);
+    REQUIRE(param_file.is_open());
+
+    nlohmann::json param_json;
+    param_file >> param_json;
+
+    const auto& cfg = param_json.at("param0");
+
+    REQUIRE(
+        cfg.at("param_name").get<std::string>() == "PN16QP1761"
+    );
+
+    const auto q =
+        cfg.at("q").get<std::vector<uint64_t>>();
+
+    const auto p =
+        cfg.at("p").get<std::vector<uint64_t>>();
+
+    CkksParameter local_param =
+        CkksParameter::create_custom_parameter(
+            N, q, p
+        );
+
+    REQUIRE(local_param.get_n() == N);
+    REQUIRE(local_param.get_max_level() >= init_level);
+
+    std::cout << "CKKS Max Level: "
+            << local_param.get_max_level()
+            << std::endl;
+
+    std::cout << "CKKS Default Scale: "
+            << local_param.get_default_scale()
+            << std::endl;
+
+    REQUIRE(local_param.get_n() == N);
+    REQUIRE(local_param.get_max_level() >= init_level);
+
+    CkksContext local_context =
+        CkksContext::create_random_context(local_param);
+
+    local_context.gen_rotation_keys();
+
+    const double scale = local_param.get_default_scale();
+    const int n_slot = N / 2;
+
+    const int n_channel_per_ct =
+        n_slot / (input_shape[0] * input_shape[1]);
+
+    const int n_ct =
+        div_ceil(n_channel, n_channel_per_ct);
+
+    const int out_channels_per_ct =
+        n_channel_per_ct * 4;
+
+    const int n_out_ct =
+        div_ceil(n_channel, out_channels_per_ct);
+
+    const int n_select_pt =
+        std::min(n_channel, out_channels_per_ct);
+
+    REQUIRE(n_ct == 1);
+    REQUIRE(n_out_ct == 1);
+
+    // =====================================================
+    // 3. Original alpha=7 polynomial coefficients
+    // =====================================================
+    const vector<double> coeff0 = {
+        0.0,
+        7.30445164958251,
+        0.0,
+        -34.6825871108659,
+        0.0,
+        59.8596518298826,
+        0.0,
+        -31.8755225906466
+    };
+
+    const vector<double> coeff1 = {
+        0.0,
+        2.40085652217597,
+        0.0,
+        -2.63125454261783,
+        0.0,
+        1.54912674773593,
+        0.0,
+        -0.331172956504304
+    };
+
+    // P0(d / (2B)): scale polynomial coefficients.
+    // The encrypted d has ALREADY been range-normalized.
+    auto make_scaled_coeff0 = [&](double B) {
+        vector<double> result = coeff0;
+
+        for (size_t i = 0; i < result.size(); ++i) {
+            result[i] /= std::pow(
+                2.0 * B,
+                static_cast<int>(i)
+            );
+        }
+
+        return result;
+    };
+
+    auto weight0_r1 = make_uniform_coeff(
+        make_scaled_coeff0(B_r1), n_channel
+    );
+
+    auto weight0_r2 = make_uniform_coeff(
+        make_scaled_coeff0(B_r2), n_channel
+    );
+
+    auto weight1 = make_uniform_coeff(
+        coeff1, n_channel
+    );
+
+    // =====================================================
+    // 4. Prepare Stockmeyer polynomial weights
+    //
+    // Input normalization: 19 -> 18
+    // Round 1 P0:         18 -> 15
+    // Round 1 P1:         15 -> 12
+    // Round 1 d*P:        12 -> 11
+    // Round 1 *0.5:       11 -> 10
+    //
+    // Round 2 P0:         10 -> 7
+    // Round 2 P1:          7 -> 4
+    // Round 2 d*P:         4 -> 3
+    // Round 2 *0.5:        3 -> 2
+    //
+    // Repack:              2 -> 1
+    // Output restoration:  1 -> 0
+    // =====================================================
+    Poly2D poly0_r1(
+        local_param, input_shape, order,
+        weight0_r1.copy(), skip,
+        n_channel_per_ct, 18
+    );
+
+    Poly2D poly1_r1(
+        local_param, input_shape, order,
+        weight1.copy(), skip,
+        n_channel_per_ct, 15
+    );
+
+    Poly2D poly0_r2(
+        local_param, input_shape, order,
+        weight0_r2.copy(), skip,
+        n_channel_per_ct, 10
+    );
+
+    Poly2D poly1_r2(
+        local_param, input_shape, order,
+        weight1.copy(), skip,
+        n_channel_per_ct, 7
+    );
+
+    poly0_r1.prepare_weight_stockmeyer();
+    poly1_r1.prepare_weight_stockmeyer();
+    poly0_r2.prepare_weight_stockmeyer();
+    poly1_r2.prepare_weight_stockmeyer();
+
+    // =====================================================
+    // 5. Encode plaintext constants
+    // =====================================================
+    auto encode_constant = [&](double value,
+                               int level,
+                               int count) {
+        vector<CkksPlaintextRingt> result;
+        result.reserve(count);
+
+        vector<double> values(n_slot, value);
+
+        for (int i = 0; i < count; ++i) {
+            result.push_back(
+                local_context.encode_ringt(
+                    values,
+                    local_param.get_q(level)
+                )
+            );
+        }
+
+        return result;
+    };
+
+    // Actual encrypted input normalization
+    auto input_norm_pt = encode_constant(
+        input_multiplier, 19, n_ct
+    );
+
+    // Each binary Max ends with a multiplication by 0.5
+    auto half_pt_r1 = encode_constant(
+        0.5, 11, n_ct
+    );
+
+    auto half_pt_r2 = encode_constant(
+        0.5, 3, n_ct
+    );
+
+    // Actual encrypted output scale restoration
+    auto output_restore_pt = encode_constant(
+        normalization_factor, 1, n_out_ct
+    );
+
+    // =====================================================
+    // 6. Prepare 0/1 selection masks for MaxPooling
+    // =====================================================
+    Avgpool2DLayer mask_layer(
+        input_shape, {2, 2}
+    );
+
+    mask_layer.prepare_weight_lazy(
+        local_param,
+        n_channel_per_ct,
+        n_channel,
+        2,
+        skip,
+        input_shape
+    );
+
+    vector<CkksPlaintextRingt> select_pt;
+    select_pt.reserve(n_select_pt);
+
+    for (int i = 0; i < n_select_pt; ++i) {
+        auto mask = mask_layer.select_tensor(i);
+
+        // AvgPooling mask contains 0.25.
+        // MaxPooling selection must contain 0 or 1.
+        for (auto& v : mask) {
+            v *= 4.0;
+        }
+
+        select_pt.push_back(
+            local_context.encode_ringt(
+                mask,
+                local_param.get_q(2)
+            )
+        );
+    }
+
+    // =====================================================
+    // 7. Generate ORIGINAL input and encrypt directly
+    // =====================================================
+    Array<double, 3> input_array({
+        static_cast<uint64_t>(n_channel),
+        32,
+        32
+    });
+
+    std::mt19937 rng(20261022);
+
+    std::uniform_real_distribution<double> dis(
+        -input_amplitude,
+        input_amplitude
+    );
+
+    for (uint64_t i = 0; i < input_array.get_size(); ++i) {
+        input_array.set(i, dis(rng));
+    }
+
+    Feature2DEncrypted input_feature(
+        &local_context,
+        init_level,
+        skip
+    );
+
+    // Important: encrypt raw x, NOT x / 10.
+    input_feature.pack_multiplexed(
+        input_array,
+        false,
+        scale
+    );
+
+    REQUIRE(input_feature.data.size() == n_ct);
+
+    // =====================================================
+    // 8. Prepare output ciphertext
+    // =====================================================
+    Feature2DEncrypted output_feature(
+        &local_context, 0
+    );
+
+    output_feature.shape = output_shape;
+    output_feature.skip = {2, 2};
+    output_feature.n_channel = n_channel;
+    output_feature.n_channel_per_ct =
+        out_channels_per_ct;
+
+    for (int i = 0; i < n_out_ct; ++i) {
+        output_feature.data.push_back(
+            local_context.new_ciphertext(0, scale)
+        );
+    }
+
+    // =====================================================
+    // 9. Load generated 19-Level FHE DAG
+    // =====================================================
+    fs::path project_path =
+        base_path
+        / "CKKS_poly_maxpool2x2_range_norm_stockmeyer"
+        / "level_19";
+
+    REQUIRE(fs::exists(project_path / "mega_ag.json"));
+
+    auto arg_names = read_arg_names(project_path);
+
+    vector<CxxVectorArgument> cxx_args;
+
+    // Bind polynomial weight by its explicit argument name,
+    // rather than relying on the order of arg_names.
+    auto bind_poly = [&](const string& name,
+                         const string& prefix,
+                         Poly2D& poly) -> bool {
+        if (name.rfind(prefix, 0) != 0) {
+            return false;
+        }
+
+        int coeff_idx = std::stoi(
+            name.substr(prefix.size())
+        );
+
+        REQUIRE(coeff_idx >= 0);
+        REQUIRE(coeff_idx <= order);
+
+        cxx_args.push_back({
+            name, &poly.weight_pt.at(coeff_idx)
+        });
+
+        return true;
+    };
+
+    for (const auto& name : arg_names) {
+        if (name == "input_node") {
+            cxx_args.push_back({
+                name, &input_feature.data
+            });
+        }
+        else if (name == "input_norm_pt") {
+            cxx_args.push_back({
+                name, &input_norm_pt
+            });
+        }
+        else if (name == "half_weight_pt_r1") {
+            cxx_args.push_back({
+                name, &half_pt_r1
+            });
+        }
+        else if (name == "half_weight_pt_r2") {
+            cxx_args.push_back({
+                name, &half_pt_r2
+            });
+        }
+        else if (name == "maxpool_select_pt") {
+            cxx_args.push_back({
+                name, &select_pt
+            });
+        }
+        else if (name == "output_restore_pt") {
+            cxx_args.push_back({
+                name, &output_restore_pt
+            });
+        }
+        else if (name == "output_ct") {
+            cxx_args.push_back({
+                name, &output_feature.data
+            });
+        }
+        else if (
+            bind_poly(
+                name, "poly0_r1_weight_pt", poly0_r1
+            )
+        ) {}
+        else if (
+            bind_poly(
+                name, "poly1_r1_weight_pt", poly1_r1
+            )
+        ) {}
+        else if (
+            bind_poly(
+                name, "poly0_r2_weight_pt", poly0_r2
+            )
+        ) {}
+        else if (
+            bind_poly(
+                name, "poly1_r2_weight_pt", poly1_r2
+            )
+        ) {}
+        else {
+            FAIL("Unknown DAG argument: " << name);
+        }
+    }
+
+    REQUIRE(cxx_args.size() == arg_names.size());
+
+    // =====================================================
+    // 10. Execute encrypted computation on CPU
+    // =====================================================
+    std::cout
+        << "N=" << N
+        << ", level=" << init_level
+        << ", input_multiplier=" << input_multiplier
+        << ", output_multiplier=" << normalization_factor
+        << ", B1=" << B_r1
+        << ", B2=" << B_r2
+        << std::endl;
+
+    FheTaskCpu task(project_path.string());
+    task.run(&local_context, cxx_args);
+
+    // =====================================================
+    // 11. Decrypt output
+    //
+    // NO post-decryption multiplication by 10.
+    // Output restoration is already inside the FHE DAG.
+    // =====================================================
+    auto output_mg =
+        output_feature.unpack_multiplexed();
+
+    // =====================================================
+    // 12. Plaintext polynomial reference
+    // =====================================================
+    auto eval_poly = [](
+        const vector<double>& coeff, double x
+    ) {
+        double value = 0.0;
+
+        for (int i = static_cast<int>(coeff.size()) - 1;
+             i >= 0; --i) {
+            value = value * x + coeff[i];
+        }
+
+        return value;
+    };
+
+    auto approx_max = [&](double a, double b, double B) {
+        const double d = a - b;
+        const double t = d / (2.0 * B);
+
+        const double p0 = eval_poly(coeff0, t);
+        const double sign_approx =
+            eval_poly(coeff1, p0);
+
+        return 0.5 * (a + b + d * sign_approx);
+    };
+
+    Array<double, 3> expected({
+        static_cast<uint64_t>(n_channel),
+        16,
+        16
+    });
+
+    Array<double, 3> exact_max({
+        static_cast<uint64_t>(n_channel),
+        16,
+        16
+    });
+
+    for (int ch = 0; ch < n_channel; ++ch) {
+        for (int i = 0; i < 16; ++i) {
+            for (int j = 0; j < 16; ++j) {
+                const double a =
+                    input_array.get(ch, 2 * i, 2 * j);
+                const double b =
+                    input_array.get(ch, 2 * i, 2 * j + 1);
+                const double c =
+                    input_array.get(ch, 2 * i + 1, 2 * j);
+                const double d =
+                    input_array.get(ch, 2 * i + 1, 2 * j + 1);
+
+                const double m1 =
+                    approx_max(a, b, reference_B_r1);
+
+                const double m2 =
+                    approx_max(c, d, reference_B_r1);
+
+                const double approx_result =
+                    approx_max(m1, m2, reference_B_r2);
+
+                const double true_result =
+                    std::max(
+                        std::max(a, b),
+                        std::max(c, d)
+                    );
+
+                expected.set(ch, i, j, approx_result);
+                exact_max.set(ch, i, j, true_result);
+            }
+        }
+    }
+
+    // =====================================================
+    // 13. Compare three kinds of errors
+    // =====================================================
+    auto fhe_vs_poly = compare(
+        expected, output_mg
+    );
+
+    auto poly_vs_exact = compare(
+        exact_max, expected
+    );
+
+    auto fhe_vs_exact = compare(
+        exact_max, output_mg
+    );
+
+    std::cout << std::setprecision(12);
+
+    std::cout
+        << "\n=== FHE vs Plaintext Polynomial ===\n"
+        << "max_error=" << fhe_vs_poly.max_error
+        << ", rmse=" << fhe_vs_poly.rmse
+        << "\n=== Polynomial vs Exact Max ===\n"
+        << "max_error=" << poly_vs_exact.max_error
+        << ", rmse=" << poly_vs_exact.rmse
+        << "\n=== FHE vs Exact Max ===\n"
+        << "max_error=" << fhe_vs_exact.max_error
+        << ", rmse=" << fhe_vs_exact.rmse
+        << std::endl;
+
+    REQUIRE(std::isfinite(fhe_vs_poly.max_error));
+    REQUIRE(std::isfinite(fhe_vs_poly.rmse));
+    REQUIRE(std::isfinite(fhe_vs_exact.max_error));
+    REQUIRE(std::isfinite(fhe_vs_exact.rmse));
+    // V1 regression thresholds for CKKS numerical error
+    REQUIRE(fhe_vs_poly.max_error < 1e-4);
+    REQUIRE(fhe_vs_poly.rmse < 1e-5);
+}
+
+
+
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv1d", "", HeteroProcessors) {
     uint32_t n_in_channel = 4;
     uint32_t n_out_channel = 4;
@@ -6556,4 +8380,274 @@ TEST_CASE("batch_dense_packed_layer/multiple_groups_and_padding", "[fhe_layers][
     // ceil(ceil(2049/32)/8)=9 batch ciphertext groups.
     REQUIRE(input_enc.data.size() == 288);
     REQUIRE(output_enc.data.size() == 18);
+}
+// Append this TEST_CASE to inference/unittests/test_fhe_layers_hetero.cpp.
+// Real CKKS, direct CkksContext API, no DAG or output repacking yet.
+TEST_CASE("poly_maxpool3x3_deferred_half_real_ckks", "[fhe_layers][poly_maxpool3x3_real]") {
+    constexpr int N = 65536;
+    constexpr int L = 33;
+    constexpr int H = 32;
+    constexpr int W = 32;
+    constexpr int stride = 2;
+    constexpr int order = 7;
+    constexpr double running_max = 10.0;
+    constexpr double input_amplitude = 10.0;
+
+    std::ifstream param_file("/tmp/poly_maxpool2x2_task/task/server/ckks_parameter.json");
+    REQUIRE(param_file.is_open());
+    nlohmann::json param_json;
+    param_file >> param_json;
+    const auto& cfg = param_json.at("param0");
+    REQUIRE(cfg.at("param_name").get<std::string>() == "PN16QP1761");
+
+    CkksParameter param = CkksParameter::create_custom_parameter(
+        N,
+        cfg.at("q").get<std::vector<uint64_t>>(),
+        cfg.at("p").get<std::vector<uint64_t>>());
+    REQUIRE(param.get_max_level() >= L);
+    CkksContext ctx = CkksContext::create_random_context(param);
+    ctx.gen_rotation_keys();
+    const double default_scale = param.get_default_scale();
+    const int slots = N / 2;
+    const int channels_per_ct = slots / (H * W);
+
+    Array<double, 3> input({1, H, W});
+    std::mt19937 rng(20261024);
+    std::uniform_real_distribution<double> dist(-input_amplitude, input_amplitude);
+    for (int r = 0; r < H; ++r)
+        for (int c = 0; c < W; ++c)
+            input.set(0, r, c, dist(rng));
+
+    Feature2DEncrypted encrypted(&ctx, L, Duo{1, 1});
+    encrypted.pack_multiplexed(input, false, default_scale);
+    REQUIRE(encrypted.data.size() == 1);
+    REQUIRE(encrypted.data[0].get_level() == L);
+
+    // Encrypted neighborhood taps: fused normalization and boundary replacement.
+    // Valid output anchors are at (2*out_row, 2*out_col).
+    std::vector<CkksCiphertext> current;
+    current.reserve(9);
+    for (int kr = 0; kr < 3; ++kr) {
+        for (int kc = 0; kc < 3; ++kc) {
+            const int dr = kr - 1;
+            const int dc = kc - 1;
+            const int rotation = dr * W + dc;
+            std::vector<double> valid(slots, 0.0), invalid(slots, 0.0);
+            bool any_valid = false, any_invalid = false;
+            for (int r = 0; r < H / stride; ++r) {
+                for (int c = 0; c < W / stride; ++c) {
+                    const int ar = r * stride;
+                    const int ac = c * stride;
+                    const int pos = ar * W + ac;
+                    const bool inside = ar + dr >= 0 && ar + dr < H &&
+                                        ac + dc >= 0 && ac + dc < W;
+                    if (inside) {
+                        valid[pos] = 1.0 / running_max;
+                        any_valid = true;
+                    } else {
+                        invalid[pos] = 1.0 / running_max;
+                        any_invalid = true;
+                    }
+                }
+            }
+
+            auto multiply_mask = [&](const CkksCiphertext& source,
+                                     const std::vector<double>& values) {
+                auto pt = ctx.encode_ringt(values, param.get_q(L));
+                auto mul_pt = ctx.ringt_to_mul(pt, L);
+                return ctx.mult_plain_mul(source, mul_pt);
+            };
+
+            CkksCiphertext accumulated;
+            if (any_valid) {
+                auto rotated = rotation == 0 ? encrypted.data[0].copy()
+                                             : ctx.rotate(encrypted.data[0], rotation);
+                accumulated = multiply_mask(rotated, valid);
+            }
+            if (any_invalid) {
+                auto boundary = multiply_mask(encrypted.data[0], invalid);
+                accumulated = any_valid ? ctx.add(accumulated, boundary)
+                                        : std::move(boundary);
+            }
+            REQUIRE((any_valid || any_invalid));
+            current.push_back(ctx.rescale(accumulated, default_scale));
+            REQUIRE(current.back().get_level() == L - 1);
+        }
+    }
+    std::cout << "3x3 CKKS taps: " << current.size() << ", level "
+              << current.front().get_level() << std::endl;
+
+    const std::vector<double> coeff0 = {
+        0.0, 7.30445164958251, 0.0, -34.6825871108659,
+        0.0, 59.8596518298826, 0.0, -31.8755225906466};
+    const std::vector<double> coeff1 = {
+        0.0, 2.40085652217597, 0.0, -2.63125454261783,
+        0.0, 1.54912674773593, 0.0, -0.331172956504304};
+
+    auto make_weights = [](const std::vector<double>& coeff) {
+        Array<double, 2> w({order + 1, 1});
+
+        for (int i = 0; i <= order; ++i)
+            w.set(i, 0, coeff.at(i));
+        return w;
+    };
+
+    for (int round = 0; round < 4; ++round) {
+        const int level_before = current.front().get_level();
+        const double B = (round == 0 ? 1.0 : 1.05) * std::pow(2.0, round);
+        std::vector<double> scaled0 = coeff0;
+        for (int i = 0; i <= order; ++i)
+            scaled0[i] /= std::pow(2.0 * B, i);
+
+        Poly2D poly0(param, Duo{H, W}, order, make_weights(scaled0),
+                     Duo{1, 1}, channels_per_ct, level_before);
+        Poly2D poly1(param, Duo{H, W}, order, make_weights(coeff1),
+                     Duo{1, 1}, channels_per_ct, level_before - 3);
+        poly0.prepare_weight_stockmeyer();
+        poly1.prepare_weight_stockmeyer();
+
+        std::vector<CkksCiphertext> next;
+        next.reserve((current.size() + 1) / 2);
+        for (size_t i = 0; i + 1 < current.size(); i += 2) {
+            auto difference = ctx.sub(current[i], current[i + 1]);
+            auto sum = ctx.add(current[i], current[i + 1]);
+
+            std::vector<CkksCiphertext> poly_input;
+            poly_input.push_back(difference.copy());
+            auto p0_out = poly0.run_core_stockmeyer(ctx, poly_input);
+            REQUIRE(p0_out.at(0).get_level() == level_before - 3);
+            auto p1_out = poly1.run_core_stockmeyer(ctx, p0_out);
+            REQUIRE(p1_out.at(0).get_level() == level_before - 6);
+
+            while (difference.get_level() > p1_out[0].get_level())
+                difference = ctx.drop_level(difference);
+            auto product = ctx.rescale(
+                ctx.relinearize(ctx.mult(difference, p1_out[0])), default_scale);
+            REQUIRE(product.get_level() == level_before - 7);
+            while (sum.get_level() > product.get_level())
+                sum = ctx.drop_level(sum);
+            next.push_back(ctx.add(sum, product));  // No per-round *0.5
+        }
+        if (current.size() % 2 != 0) {
+            auto carry = current.back().copy();
+            const int target_level = next.front().get_level();
+            while (carry.get_level() > target_level)
+                carry = ctx.drop_level(carry);
+            REQUIRE(carry.get_level() == target_level);
+            next.push_back(ctx.add(carry, carry));  // Deferred-half carry
+        }
+        current = std::move(next);
+        REQUIRE(current.front().get_level() == level_before - 7);
+        std::cout << "3x3 CKKS round " << round + 1
+                  << ": candidates=" << current.size()
+                  << ", level=" << current.front().get_level() << std::endl;
+    }
+    REQUIRE(current.size() == 1);
+    REQUIRE(current[0].get_level() == 4);
+
+    // Restore original input scale and divide by 2^4 in encrypted space.
+    // No output repacking yet: valid results remain at (2*r, 2*c) slots.
+    std::vector<double> restore(slots, 0.0);
+    for (int r = 0; r < H / stride; ++r)
+        for (int c = 0; c < W / stride; ++c)
+            restore[(stride * r) * W + stride * c] = running_max / 16.0;
+    const int restore_level = current[0].get_level();
+    auto restore_pt = ctx.encode_ringt(restore, param.get_q(restore_level));
+    auto restore_mul_pt = ctx.ringt_to_mul(restore_pt, restore_level);
+    auto restored = ctx.rescale(
+        ctx.mult_plain_mul(current[0], restore_mul_pt), default_scale);
+    REQUIRE(restored.get_level() == 3);
+
+    // Genuine decrypt/decode, compare directly with exact 3x3 MaxPool.
+    auto decoded_pt = ctx.decrypt(restored);
+    auto decrypted = ctx.decode(decoded_pt);
+    // PLAINTEXT_POLY_REFERENCE_V1: exact same input and polynomial as CKKS.
+    auto eval_poly_ref = [](const std::vector<double>& coeff, double x) {
+        double result = 0.0;
+        for (int i = static_cast<int>(coeff.size()) - 1; i >= 0; --i)
+            result = result * x + coeff[i];
+        return result;
+    };
+
+    auto plaintext_poly_at = [&](int ar, int ac) {
+        std::vector<double> candidates;
+        candidates.reserve(9);
+        const double anchor = input.get(0, ar, ac) / running_max;
+        for (int kr = 0; kr < 3; ++kr) {
+            for (int kc = 0; kc < 3; ++kc) {
+                const int r = ar + kr - 1;
+                const int c = ac + kc - 1;
+                const bool inside = r >= 0 && r < H && c >= 0 && c < W;
+                candidates.push_back(
+                    inside ? input.get(0, r, c) / running_max : anchor);
+            }
+        }
+        for (int round = 0; round < 4; ++round) {
+            const double B = (round == 0 ? 1.0 : 1.05) * std::pow(2.0, round);
+            std::vector<double> next;
+            next.reserve((candidates.size() + 1) / 2);
+            for (size_t i = 0; i + 1 < candidates.size(); i += 2) {
+                const double a = candidates[i];
+                const double b = candidates[i + 1];
+                const double d = a - b;
+                const double p0 = eval_poly_ref(coeff0, d / (2.0 * B));
+                const double p1 = eval_poly_ref(coeff1, p0);
+                next.push_back(a + b + d * p1); // Deferred-half
+            }
+            if (candidates.size() % 2 != 0)
+                next.push_back(2.0 * candidates.back());
+            candidates = std::move(next);
+        }
+        if (candidates.size() != 1)
+            throw std::runtime_error("Plaintext reduction did not finish");
+        return candidates[0] * running_max / 16.0;
+    };
+
+    double poly_vs_exact_mae = 0.0, poly_vs_exact_max = 0.0;
+    double ckks_vs_poly_mae = 0.0, ckks_vs_poly_max = 0.0;
+    double mae = 0.0;
+    double max_error = 0.0;
+    for (int r = 0; r < H / stride; ++r) {
+        for (int c = 0; c < W / stride; ++c) {
+            const int ar = r * stride;
+            const int ac = c * stride;
+            double exact = -std::numeric_limits<double>::infinity();
+            for (int dr = -1; dr <= 1; ++dr)
+                for (int dc = -1; dc <= 1; ++dc)
+                    if (ar + dr >= 0 && ar + dr < H &&
+                        ac + dc >= 0 && ac + dc < W)
+                        exact = std::max(exact, input.get(0, ar + dr, ac + dc));
+
+            const double actual = decrypted[ar * W + ac];
+            REQUIRE(std::isfinite(actual));
+            const double poly = plaintext_poly_at(ar, ac);
+            REQUIRE(std::isfinite(poly));
+            const double poly_err = std::abs(poly - exact);
+            const double ckks_err = std::abs(actual - poly);
+            poly_vs_exact_mae += poly_err;
+            poly_vs_exact_max = std::max(poly_vs_exact_max, poly_err);
+            ckks_vs_poly_mae += ckks_err;
+            ckks_vs_poly_max = std::max(ckks_vs_poly_max, ckks_err);
+
+            const double err = std::abs(actual - exact);
+            mae += err;
+            max_error = std::max(max_error, err);
+        }
+    }
+    const double output_count = (H / stride) * (W / stride);
+    poly_vs_exact_mae /= output_count;
+    ckks_vs_poly_mae /= output_count;
+    mae /= output_count;
+    std::cout << "ERROR BREAKDOWN (same input, original units):\n"
+              << "  Poly vs Exact : MAE=" << poly_vs_exact_mae
+              << ", max_error=" << poly_vs_exact_max << "\n"
+              << "  CKKS vs Poly  : MAE=" << ckks_vs_poly_mae
+              << ", max_error=" << ckks_vs_poly_max << "\n"
+              << "  CKKS vs Exact : MAE=" << mae
+              << ", max_error=" << max_error << std::endl;
+    std::cout << "REAL CKKS 3x3 MaxPool: output_level=" << restored.get_level()
+              << ", MAE=" << mae << ", max_error=" << max_error
+              << " (original input units)" << std::endl;
+    REQUIRE(std::isfinite(mae));
+    REQUIRE(std::isfinite(max_error));
 }

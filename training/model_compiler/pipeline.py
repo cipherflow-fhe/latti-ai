@@ -71,6 +71,7 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     set_is_adaptive_avgpool(pt_graph)
     transforms.expand_multi_head_attention(pt_graph)
     transforms.expand_layer_norm(pt_graph)
+    transforms.expand_maxpool_for_btp(pt_graph)
     transforms.expand_bert_custom_poly_functions(pt_graph)
     transforms.expand_poly_act_rn(pt_graph)
     transforms.expand_parcpmm_add_pt(pt_graph)
@@ -705,6 +706,7 @@ def run_pipeline(
     bert_softmax_later_refinement_denominator_scale: float | None = None,
     use_gpu: bool = True,
     enable_score_cache: bool = True,
+    maxpool_config: dict | None = None,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -785,6 +787,9 @@ def run_pipeline(
     )
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
+    if maxpool_config is not None:
+        from training.nn_tools.maxpool_config import configure_maxpool
+        configure_maxpool(raw_graph, maxpool_config)
 
     if not is_use_btp:
         use_btp = False

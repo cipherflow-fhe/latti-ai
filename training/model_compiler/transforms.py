@@ -22,6 +22,7 @@ from enum import Enum
 import networkx as nx
 
 from components import *
+from maxpool_plan import build_maxpool_plan, build_maxpool_stage_plan
 from inference.model_generator.layers.poly_relu_base import PolyReluBase
 from inference.model_generator.layers.poly_base import PolyBase
 
@@ -282,6 +283,9 @@ def add_layer(
         ckks_scale,
         shape,
     )
+    if hasattr(feature_node_in, 'maxpool_state'):
+        # Level/scale adapters preserve the full group-major live set.
+        feature_node_out.maxpool_state = copy.deepcopy(feature_node_in.maxpool_state)
     feature_node_out.sp_info = feature_node_in.sp_info.copy()
     feature_node_out.data_type = feature_node_in.data_type
 
@@ -679,18 +683,40 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
         if succ.dim != 0:
             graph.dag.nodes[succ]['skip'] = [1] * succ.dim
 
+        if compute_node.layer_type.startswith('maxpool2d_'):
+            # Tap normalization already writes dense output planes; generic
+            # pass-through inference would overwrite them with input shape.
+            succ.shape = list(compute_node.maxpool_output_shape)
+            populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)
+            continue
+
         if process_special_info(graph, compute_node, preds, succ):
             populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree / 2)
             continue
         if succ.dim > 0:
             if isinstance(compute_node, SpatialComputeNode):
-                for i in range(compute_node.dim):
-                    succ.shape[i] = (
-                        preds[0].shape[i]
-                        // compute_node.stride[i]
-                        * compute_node.upsample_factor_in[i]
-                        * compute_node.upsample_factor[i]
+                maxpool_output_shape = None
+                if compute_node.layer_type == 'maxpool2d':
+                    plan = build_maxpool_plan(
+                        {
+                            'kernel_shape': compute_node.kernel_shape,
+                            'stride': compute_node.stride,
+                            'padding': compute_node.padding,
+                        },
+                        preds[0].shape,
                     )
+                    maxpool_output_shape = plan['output_shape']
+
+                for i in range(compute_node.dim):
+                    if maxpool_output_shape is not None:
+                        succ.shape[i] = maxpool_output_shape[i]
+                    else:
+                        succ.shape[i] = (
+                            preds[0].shape[i]
+                            // compute_node.stride[i]
+                            * compute_node.upsample_factor_in[i]
+                            * compute_node.upsample_factor[i]
+                        )
                     graph.dag.nodes[succ]['skip'][i] = (
                         graph.dag.nodes[preds[0]]['skip'][i]
                         * compute_node.stride[i]
@@ -855,6 +881,97 @@ def replace_avgpool1d_with_depthwise_conv(graph: LayerAbstractGraph):
         graph.dag.remove_node(node)
 
 
+def expand_maxpool_for_btp(graph: LayerAbstractGraph):
+    """Lower the Retina 3x3 MaxPool into compiler-visible stages.
+
+    Preserve configuration on executable stages and derive round costs from
+    the selected fixed profile. DP chooses refresh boundaries between stages.
+    """
+    for pool in list(graph.dag.nodes):
+        if not isinstance(pool, ComputeNode) or pool.layer_type != 'maxpool2d':
+            continue
+        preds = list(graph.dag.predecessors(pool))
+        succs = list(graph.dag.successors(pool))
+        if len(preds) != 1 or len(succs) != 1:
+            raise ValueError(f'MaxPool node {pool.layer_id} must have one input and output')
+        if list(pool.kernel_shape) != [3, 3] or list(pool.stride) != [2, 2] or list(pool.padding) != [1, 1]:
+            continue
+
+        input_feature = preds[0]
+        output_feature = succs[0]
+        from inference.model_generator.layers.poly_maxpool_cost import get_maxpool_compare_cost
+        alpha = getattr(pool, 'alpha', 7)
+        compare_cost = get_maxpool_compare_cost(alpha)
+        polynomial_costs = None
+        if compare_cost > config.fhe_param.max_level:
+            from training.nn_tools.fixed_maxpool_profiles import get_maxpool_profile
+            from inference.model_generator.layers.poly_base import PolyBase
+            polynomial_costs = [PolyBase.compute_stockmeyer_level_cost(d)
+                                for d in get_maxpool_profile(alpha)['degrees']]
+            if max(polynomial_costs) > config.fhe_param.max_level:
+                raise ValueError('MaxPool polynomial stage exceeds CKKS level budget')
+        for name in ('upper_bound', 'B'):
+            value = getattr(pool, name, 1.0)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f'MaxPool {name} must be positive and finite')
+        plan = build_maxpool_plan(pool.__dict__, input_feature.shape)
+        stage_plan = build_maxpool_stage_plan(plan, compare_cost=compare_cost,
+                                              polynomial_costs=polynomial_costs)
+        prev = input_feature
+        new_nodes = []
+        for index, stage in enumerate(stage_plan['stages']):
+            stage_id = f'{pool.layer_id}_{stage["name"]}'
+            node = ComputeNode(stage_id, f'maxpool2d_{stage["name"]}', pool.channel_input, pool.channel_output)
+            node.kernel_shape = list(pool.kernel_shape)
+            node.stride = list(pool.stride)
+            node.padding = list(pool.padding)
+            node.maxpool_stage = stage['name']
+            node.maxpool_plan = plan
+            node.maxpool_output_shape = list(plan['output_shape'])
+            node.is_adaptive_avgpool = False
+            node.level_cost = stage['level_cost']
+            node.running_max = getattr(pool, 'running_max', None)
+            node.alpha = alpha
+            node.upper_bound = getattr(pool, 'upper_bound', 1.0)
+            node.B = getattr(pool, 'B', 1.0)
+            is_last = index == len(stage_plan['stages']) - 1
+            stage_shape = list(plan['output_shape'])
+            stage_channel = output_feature.channel if stage['name'] in {'repack', 'restore'} else input_feature.channel
+            feature = output_feature if is_last else FeatureNode(
+                f'{stage_id}_out', input_feature.dim, stage_channel,
+                scale=input_feature.scale, ckks_parameter_id=input_feature.ckks_parameter_id,
+                ckks_scale=input_feature.ckks_scale, shape=stage_shape,
+            )
+            graph.dag.add_node(node, name=node.layer_id, level_cost=stage['level_cost'])
+            if feature is not output_feature:
+                # Explicit live-set metadata; do not pretend reduction groups
+                # are additional packed CNN channels. Generator stage entries
+                # use group-major/channel-minor order, one CT per plane.
+                if stage['name'] == 'normalize_taps' or stage['name'].startswith('reduce_round_'):
+                    feature.maxpool_state = {
+                        'pool_id': pool.layer_id,
+                        'groups': stage['live_tensors'],
+                        'channels': input_feature.channel,
+                        'order': 'group_channel',
+                    }
+                    from training.model_compiler.maxpool_plan import parse_maxpool_split_stage
+                    split = parse_maxpool_split_stage(stage['name'])
+                    if split is not None and split[1] != 'finish':
+                        feature.maxpool_state['layout'] = 'pair_sum_difference_sign_then_doubled_carry'
+                        feature.maxpool_state['round'] = split[0]
+                        feature.maxpool_state['polynomial'] = split[1]
+                graph.dag.add_node(feature, name=feature.node_id, skip=list(graph.dag.nodes[input_feature].get('skip', [1] * input_feature.dim)), level=graph.dag.nodes[input_feature].get('level', 0), pack_num=graph.dag.nodes[input_feature].get('pack_num', 1))
+            graph.dag.add_edge(prev, node)
+            graph.dag.add_edge(node, feature)
+            prev = feature
+            new_nodes.append(node)
+
+        for successor in list(graph.dag.successors(pool)):
+            edge_attrs = dict(graph.dag.edges[pool, successor])
+            graph.dag.add_edge(output_feature, successor, **edge_attrs) if successor is not output_feature else None
+        graph.dag.remove_node(pool)
+
+
 def set_level_costs(graph: LayerAbstractGraph):
     for node in graph.dag.nodes:
         if not isinstance(node, ComputeNode):
@@ -887,6 +1004,51 @@ def set_level_costs(graph: LayerAbstractGraph):
                             graph.dag.nodes[compute_node]['level_cost'] = 2
             else:
                 raise ValueError('Unsupported config.style')
+
+        elif compute_node.layer_type.startswith('maxpool2d_'):
+            # Lowered stages carry their own cost from maxpool_plan.  Do not
+            # collapse them back to the fused 31-level node before DP runs.
+            level_cost = int(
+                getattr(compute_node, 'level_cost', graph.dag.nodes[compute_node].get('level_cost', 0))
+            )
+            from inference.model_generator.layers.poly_maxpool_cost import get_maxpool_compare_cost
+            stage = compute_node.maxpool_stage
+            from training.model_compiler.maxpool_plan import parse_maxpool_split_stage
+            split = parse_maxpool_split_stage(stage)
+            if split is not None:
+                from training.nn_tools.fixed_maxpool_profiles import get_maxpool_profile
+                from inference.model_generator.layers.poly_base import PolyBase
+                degrees = get_maxpool_profile(getattr(compute_node, 'alpha', 7))['degrees']
+                expected_cost = 1 if split[1] == 'finish' else PolyBase.compute_stockmeyer_level_cost(degrees[split[1]])
+            elif stage.startswith('reduce_round_'):
+                expected_cost = get_maxpool_compare_cost(getattr(compute_node, 'alpha', 7))
+            elif stage in {'normalize_taps', 'repack', 'restore'}:
+                expected_cost = 1
+            else:
+                raise ValueError(f'Unknown MaxPool stage: {stage}')
+            if level_cost != expected_cost:
+                raise ValueError(f'Invalid MaxPool stage cost: {level_cost}; expected {expected_cost}')
+            graph.dag.nodes[compute_node]['level_cost'] = level_cost
+
+        elif compute_node.layer_type == 'maxpool2d':
+            kernel = list(compute_node.kernel_shape)
+            stride = list(compute_node.stride)
+            padding = list(compute_node.padding)
+
+            if kernel == [2, 2] and stride == [2, 2] and padding == [0, 0]:
+                level_cost = 19
+
+            elif kernel == [3, 3] and stride == [2, 2] and padding == [1, 1]:
+                level_cost = 31
+
+            else:
+                raise NotImplementedError(
+                    f"Unsupported PolyMaxPool2D: "
+                    f"kernel={kernel}, stride={stride}, padding={padding}"
+                )
+
+            graph.dag.nodes[compute_node]['level_cost'] = level_cost
+
 
         elif compute_node.layer_type in {'avgpool1d', 'avgpool2d'}:
             if any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):

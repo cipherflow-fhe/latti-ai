@@ -62,6 +62,7 @@ public:
     int special_info_dim = 0;   // 0: no special_info, 1: from 1D, 2: from 2D
     std::string ckks_parameter_id;
     int pack_channel_per_ciphertext;
+    int maxpool_state_ciphertexts = 0;
     int level = 0;
     double ckks_scale = 0.0;
     bool is_mat = false;  // true when data_type == "feature_mat"
@@ -143,6 +144,10 @@ public:
     }
 
     std::map<std::string, UPtr<ls::CkksParameter>> ckks_parameters_;
+    // PolyMaxPool2D plaintext arguments.
+    // Keys must match the Python DAG task_signature.json.
+    std::map<std::string, std::vector<ls::CkksPlaintextRingt>> maxpool_pt_args_;
+    std::map<std::string, std::vector<ls::CkksPlaintext>> maxpool_full_pt_args_;
 
 private:
     virtual void _init_conv_layer(const std::string& key, const json& layer, const hid_t& h5_file);
@@ -167,6 +172,10 @@ private:
                                       const json& layer,
                                       const hid_t& h5_file,
                                       const Duo& block_shape_in = {128, 256});
+    void _init_fhe_maxpool_layer(const std::string& key, const json& layer);
+    void _init_fhe_maxpool_stage(const std::string& key, const json& layer);
+
+
     void _init_poly_relu_layer(const std::string& key,
                                const json& layer,
                                const hid_t& h5_file,

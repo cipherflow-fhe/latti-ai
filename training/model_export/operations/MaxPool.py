@@ -35,12 +35,36 @@ class MaxPoolComputeNode(ComputeNode):
         feature_output: list[FeatureNode],
         kernel_shape: list,
         stride: list,
+        padding: list = None,
     ):
         super(MaxPoolComputeNode, self).__init__(layer_id, layer_type, feature_input, feature_output)
         self.stride = stride
         self.kernel_shape = kernel_shape
-        feature_output[0].shape[0] = feature_input[0].shape[0] // stride[0]
-        feature_output[0].shape[1] = feature_input[0].shape[1] // stride[1]
+        self.padding = list(padding) if padding is not None else [0, 0]
+        # feature_output[0].shape[0] = feature_input[0].shape[0] // stride[0]
+        # feature_output[0].shape[1] = feature_input[0].shape[1] // stride[1]
+        # feature_output[0].skip = [1, 1]
+        # Validate ONNX-inferred output shape.
+        # Supports standard MaxPool with dilation=1, ceil_mode=0.
+        for i in range(2):
+            input_size = feature_input[0].shape[i]
+            kernel = self.kernel_shape[i]
+            step = self.stride[i]
+            pad = self.padding[i]
+
+            expected_size = (
+                input_size + 2 * pad - kernel
+            ) // step + 1
+
+            actual_size = feature_output[0].shape[i]
+
+            if actual_size != expected_size:
+                raise ValueError(
+                    f"MaxPool output shape mismatch: "
+                    f"expected {expected_size}, "
+                    f"got {actual_size}"
+                )
+
         feature_output[0].skip = [1, 1]
 
     @override
@@ -58,6 +82,7 @@ class MaxPoolComputeNode(ComputeNode):
         info['ckks_parameter_id_output'] = self.feature_output[0].ckks_parameter_id
         info['stride'] = self.stride
         info['kernel_shape'] = self.kernel_shape
+        info['padding'] = self.padding
         info['feature_input'] = [i.node_id for i in self.feature_input]
         info['feature_output'] = [i.node_id for i in self.feature_output]
         return info
@@ -72,14 +97,21 @@ class MaxPoolComputeNode(ComputeNode):
         stride = attrs['strides']
         kernel_shape = attrs['kernel_shape']
 
-        return MaxPoolComputeNode(layer_id, layer_type, feature_input, feature_output, kernel_shape, stride)
+        pads = list(attrs.get('pads', [0, 0, 0, 0]))
+
+        if len(pads) != 4 or pads[:2] != pads[2:]:
+            raise NotImplementedError(
+                f"Unsupported asymmetric MaxPool padding: {pads}"
+            )
+
+        return MaxPoolComputeNode(layer_id, layer_type, feature_input, feature_output, kernel_shape, stride, padding=pads[:2],)
 
     @override
     def to_torch_code(self) -> dict[str, list[str]]:
         log.debug('Generating maxpool code')
         init_str, forward_str = [], []
         params_str = {}
-        params_str['padding'] = [1, 1]
+        params_str['padding'] = self.padding # [1, 1]
         params_str['stride'] = self.stride
         params_str['kernel_size'] = self.kernel_shape
         params = self.gen_params_str(**params_str)
