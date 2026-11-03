@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from inference.model_generator.parameter_sources import resolve_pcm_parameter_source, pcm_parameter_scale
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.par_block_col_major_poly import ParBlockColMajorPoly
 from inference.model_generator.layers.par_block_col_major_poly_mult_ct import ParBlockColMajorPolyMultCt
@@ -377,7 +378,7 @@ def gen_custom_task(
             return
         counter = 0
 
-        def build(attributes, node_id, use_level):
+        def build(attributes, node_id, use_level, trigger=None):
             nonlocal counter
             op_class, kind = attributes['op_class'], attributes['type']
             encrypted = (
@@ -387,15 +388,33 @@ def gen_custom_task(
                                 'ParUpperDiagonalLNMinimaxInit', 'ParUpperDiagonalLNAffine',
                                 'ParUpperDiagonalAddPt'}
             )
+            source = None
+            if op_class.startswith('ParBlockColMajor'):
+                source = resolve_pcm_parameter_source(config_info['layer'][matrix_layer_id], attributes)
+                encrypted = source['visibility'] == 'secret'
             if encrypted:
                 node = CkksCiphertextNode(f'{matrix_layer_id}_{node_id}_L{use_level}', level=use_level)
                 _append_parameter_arg(f'matrix_{matrix_layer_id}_{counter}', [node])
                 encrypted_parameter_signature[-1].update(layer_id=matrix_layer_id, generator=attributes)
+                if source is not None:
+                    input_levels = [config_info['feature'][fid]['level']
+                                    for fid in config_info['layer'][matrix_layer_id]['feature_input']]
+                    encrypted_parameter_signature[-1].update(
+                        scale=float(pcm_parameter_scale(attributes, input_levels, fhe_param)),
+                        use_site_level=int(use_level))
+                    encrypted_parameter_signature[-1]['parameter_source'] = {
+                        key: value for key, value in source.items() if key != 'source_refs'}
+                if op_class == 'ParBlockColMajorCPMM' and kind == 'row_chunk_seed':
+                    layout = attributes['pcm_seed_layout']
+                    encrypted_parameter_signature[-1].update(
+                        scale=layout['scale'], layout=layout,
+                        use_site_level=layout['use_site_level'])
                 counter += 1
             else:
                 node = CkksPlaintextRingtNode(f'{matrix_layer_id}_{node_id}_L{use_level}')
-                custom_compute(inputs=[], output=node, type='encode_pt',
-                               attributes={**attributes, 'layer_id': matrix_layer_id})
+                custom_compute(inputs=[] if source is None or trigger is None else [trigger], output=node, type='encode_pt',
+                               attributes={**attributes, 'layer_id': matrix_layer_id,
+                                           **({'public_recipe': source['public_recipe']} if source else {})})
             return node
 
         data_source.matrix_parameter_builder = build
@@ -429,7 +448,8 @@ def gen_custom_task(
             zero = CkksCiphertextNode(f'{feature_id}_encrypted_zero', level=level)
             _append_parameter_arg(f'matrix_{consumer_id}_input_zero', [zero])
             encrypted_parameter_signature[-1].update(
-                layer_id=consumer_id, generator={'op_class': 'InputZero', 'type': 'zero'})
+                layer_id=consumer_id, generator={'op_class': 'InputZero', 'type': 'zero'},
+                use_site_level=int(level), scale=float(fhe_param.scale))
             nodes = [add(materialize_encrypted_param(zero, pt), pt) for pt in nodes]
         feature_id_to_nodes_map[feature_id] = nodes
         return nodes
@@ -774,7 +794,7 @@ def gen_custom_task(
     }
     _FEATURE_MAT_LAYER_TYPES = _PAR_MATRIX_LAYER_TYPES | _PCM_LAYER_TYPES | _PDM_MATRIX_LAYER_TYPES | _PDM_LAYER_TYPES
     _UNSUPPORTED_MATRIX_LAYER_TYPES = {'cpmm', 'qkvcpmm', 'ccmm', 'transpose'}
-    _ENCRYPTED_OFFLINE_UNSUPPORTED_LAYER_TYPES = _PAR_MATRIX_LAYER_TYPES | _PCM_LAYER_TYPES
+    _ENCRYPTED_OFFLINE_UNSUPPORTED_LAYER_TYPES = set()
 
     for layer_id, layer_config in config_info['layer'].items():
         if layer_config['type'] == 'relu2d':
@@ -1755,12 +1775,10 @@ def gen_custom_task(
 
             # Register par-type input (deferred from the top of the loop)
             if input_fid not in feature_id_to_nodes_map:
-                x = _make_feature_nodes(input_fid, n_cts_in, level)
-                feature_id_to_nodes_map[input_fid] = x
-                input_args.append(Argument(input_fid, x))
+                _register_feature_nodes(input_fid, n_cts_in, level)
 
             data_source = CustomDataNode(type='partranspose_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = partranspose_layer.call_custom_compute(
                 feature_id_to_nodes_map[input_fid],
                 data_source,
@@ -1780,12 +1798,10 @@ def gen_custom_task(
 
             input_fid = layer_input_feature_ids[0]
             if input_fid not in feature_id_to_nodes_map:
-                x = _make_feature_nodes(input_fid, n_cts_in, level)
-                feature_id_to_nodes_map[input_fid] = x
-                input_args.append(Argument(input_fid, x))
+                _register_feature_nodes(input_fid, n_cts_in, level)
 
             data_source = CustomDataNode(type='pcm_add_pt_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = add_pt_layer.call_custom_compute(
                 feature_id_to_nodes_map[input_fid],
                 data_source,
@@ -1896,17 +1912,19 @@ def gen_custom_task(
             # Register par-type input (deferred from the top of the loop)
             input_fid = layer_input_feature_ids[0]
             if input_fid not in feature_id_to_nodes_map:
-                x = _make_feature_nodes(input_fid, n_cts_in, level)
-                feature_id_to_nodes_map[input_fid] = x
-                input_args.append(Argument(input_fid, x))
+                _register_feature_nodes(input_fid, n_cts_in, level)
 
             data_source = CustomDataNode(type='parcpmm_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            data_source.pcm_seed_parameter_mode = parameter_mode == 'encrypted_offline'
+            data_source.pcm_seed_scale = float(fhe_param.q[level])
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = parcpmm_layer.call_custom_compute(
                 feature_id_to_nodes_map[input_fid],
                 data_source,
             )
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
+            if data_source.pcm_seed_parameter_mode:
+                layer_config['pcm_seed_layout'] = data_source.pcm_seed_layout
 
         elif layer_config['type'] == 'parccmm':
             n_heads = task_config_info.get('n_heads', 1)
@@ -1940,12 +1958,10 @@ def gen_custom_task(
                         shape_per_head = _par_input_shape(feat, n_heads, split_rows=(idx == 1), feature_id=input_fid)
                         par_feature_shapes[input_fid] = shape_per_head
                     n_cts = _par_ct_count(shape_per_head, block_size, G)
-                    x = _make_feature_nodes(input_fid, n_cts, int(feat['level']))
-                    feature_id_to_nodes_map[input_fid] = x
-                    input_args.append(Argument(input_fid, x))
+                    _register_feature_nodes(input_fid, n_cts, int(feat['level']))
 
             data_source = CustomDataNode(type='parccmm_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = parccmm_layer.call_custom_compute(
                 feature_id_to_nodes_map[fid_A],
                 feature_id_to_nodes_map[fid_B],
@@ -1963,12 +1979,10 @@ def gen_custom_task(
             layer = ParBlockColMajorLNStats(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
 
             if input_fid not in feature_id_to_nodes_map:
-                x = _make_feature_nodes(input_fid, layer.total_cts, level)
-                feature_id_to_nodes_map[input_fid] = x
-                input_args.append(Argument(input_fid, x))
+                _register_feature_nodes(input_fid, layer.total_cts, level)
 
             data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], 1)
@@ -1982,12 +1996,10 @@ def gen_custom_task(
             layer = ParBlockColMajorLNXCentered(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
 
             if input_fid not in feature_id_to_nodes_map:
-                x = _make_feature_nodes(input_fid, layer.total_cts, level)
-                feature_id_to_nodes_map[input_fid] = x
-                input_args.append(Argument(input_fid, x))
+                _register_feature_nodes(input_fid, layer.total_cts, level)
 
             data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             par_feature_shapes[layer_output_feature_ids[0]] = (shape[0], shape[1] // n_heads)
@@ -1999,7 +2011,7 @@ def gen_custom_task(
             layer = ParBlockColMajorLNMinimaxInit(block_size=block_size, n_slot=n // 2)
 
             data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = layer.call_custom_compute(
                 feature_id_to_nodes_map[layer_input_feature_ids[0]], data_source
             )
@@ -2013,7 +2025,7 @@ def gen_custom_task(
             layer = ParBlockColMajorLNGoldschmidt(block_size=block_size, n_slot=n // 2)
 
             data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = layer.call_custom_compute(
                 feature_id_to_nodes_map[layer_input_feature_ids[0]],
                 feature_id_to_nodes_map[layer_input_feature_ids[1]],
@@ -2030,7 +2042,7 @@ def gen_custom_task(
             layer = ParBlockColMajorLNAffine(shape=shape, block_size=block_size, n_heads=n_heads, n_slot=n // 2)
 
             data_source = CustomDataNode(type='layernorm_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = layer.call_custom_compute(
                 feature_id_to_nodes_map[layer_input_feature_ids[0]],
                 feature_id_to_nodes_map[layer_input_feature_ids[1]],
@@ -2056,12 +2068,10 @@ def gen_custom_task(
             )
 
             if input_fid not in feature_id_to_nodes_map:
-                x = _make_feature_nodes(input_fid, layer.total_cts, level)
-                feature_id_to_nodes_map[input_fid] = x
-                input_args.append(Argument(input_fid, x))
+                _register_feature_nodes(input_fid, layer.total_cts, level)
 
             data_source = CustomDataNode(type='polyactrn_gamma_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             par_feature_shapes[layer_output_feature_ids[0]] = par_feature_shapes.get(
@@ -2090,12 +2100,10 @@ def gen_custom_task(
             )
 
             if input_fid not in feature_id_to_nodes_map:
-                x = _make_feature_nodes(input_fid, layer.total_cts, level)
-                feature_id_to_nodes_map[input_fid] = x
-                input_args.append(Argument(input_fid, x))
+                _register_feature_nodes(input_fid, layer.total_cts, level)
 
             data_source = CustomDataNode(type='polyactrn_poly_data_source', id=f'{layer_id}')
-            input_args.append(Argument(f'{layer_id}', [data_source]))
+            _append_matrix_source(data_source, layer_id)
             layer_output_nodes = layer.call_custom_compute(feature_id_to_nodes_map[input_fid], data_source)
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer_output_nodes
             par_feature_shapes[layer_output_feature_ids[0]] = par_feature_shapes.get(
@@ -2132,7 +2140,7 @@ def gen_custom_task(
                 if fid not in feature_id_to_nodes_map:
                     _register_feature_nodes(fid, layer.total_cts, int(config_info['feature'][fid]['level']))
             data_source = CustomDataNode(type='pcm_data_source', id=layer_id)
-            input_args.append(Argument(layer_id, [data_source]))
+            _append_matrix_source(data_source, layer_id)
             inputs = [feature_id_to_nodes_map[fid] for fid in layer_input_feature_ids]
             feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer.call_custom_compute(*inputs, data_source)
             par_feature_shapes[layer_output_feature_ids[0]] = head_shape
@@ -2191,6 +2199,11 @@ def gen_custom_task(
 
         else:
             raise ValueError(f'Unsupported layer type: {layer_config["type"]}')
+
+    if parameter_mode == 'encrypted_offline' and task_config_info.get('mat_pack_style') == 'par_block_col_major':
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        (Path(task_path) / 'nn_layers_ct_0.json').write_text(json.dumps(config_info, indent=4) + '\n')
+        (Path(output_dir) / 'nn_layers_ct_0.json').write_text(json.dumps(config_info, indent=4) + '\n')
 
     output_args = [Argument(output_id, feature_id_to_nodes_map[output_id]) for output_id in task_output_feature_ids]
     if runtime_lazy_parameters and encrypted_parameter_signature:

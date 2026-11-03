@@ -66,9 +66,16 @@ vector<CkksCiphertext> run_lazy(CkksContext& ctx, const string& path,
             pt = ln_pt(static_cast<ParBlockColMajorLNAffine*>(layer));
         else
             pt = generate_matrix_parameter(*context, layer, attrs);
-        out = make_shared<CkksPlaintextRingt>(move(pt));
+        if (node.custom_prop->type == "encode_secret") {
+            lock_guard<mutex> lock(probe_mutex);
+            out = make_shared<CkksCiphertext>(ctx.encrypt_symmetric(
+                ctx.ringt_to_pt(pt, attrs.at("parameter_level").get<int>())));
+        } else {
+            out = make_shared<CkksPlaintextRingt>(move(pt));
+        }
         ++encoded;
     };
+    executors["encode_secret"] = executors["encode_pt"];
     executors["check_contract"] = [&](ExecutionContext& ec, const unordered_map<NodeIndex, any>& in,
                                        any& out, const ComputeNode& node) {
         auto* context = ec.get_arithmetic_context<CkksContext>();
@@ -137,6 +144,84 @@ vector<CkksCiphertext> run_lazy(CkksContext& ctx, const string& path,
 }
 
 }  // namespace
+
+TEST_CASE("PCM row/chunk seeds restore independent matrix diagonals", "[pcm_seed]") {
+    auto param = CkksParameter::create_parameter(8192);
+    const uint32_t L = 3, slots = param.get_n() / 2;
+    auto ctx = CkksContext::create_random_context(param, L + 1);
+    ctx.gen_rotation_keys();
+    REQUIRE(double(param.get_q(L)) != param.get_default_scale());
+    // Repeated chunks, head padding, multiple groups, u=1 and non-square BSGS.
+    for (auto cfg : vector<array<uint32_t, 4>>{{8, 3, 24, 24}, {8, 3, 24, 43},
+            {8, 3, 43, 24}, {32, 7, 224, 2}, {64, 3, 192, 192}}) {
+        auto [d, heads, rows, cols] = cfg;
+        CAPTURE(d, heads, rows, cols);
+        uint32_t hp = 1;
+        while (hp < heads) hp *= 2;
+        const uint32_t u = min(hp, slots / (d*d)), chunk = u*d*d, rho = slots/chunk;
+        if (u == 1) hp = heads;
+        const uint32_t groups = hp/u, n = heads*d;
+        const uint32_t kr = (rows+n-1)/n, kc = (cols+n-1)/n, blocks = max(kr, kc);
+        const uint32_t requests = blocks*groups*heads*d, capacity = d*rho;
+        const uint32_t baby = uint32_t(ceil(sqrt(double(d))));
+        Array<double, 2> w({rows, cols});
+        for (uint32_t i = 0; i < rows; ++i)
+            for (uint32_t j = 0; j < cols; ++j) w.set(i, j, (1.0+i*cols+j)/(rows*cols));
+        ParBlockColMajorCPMM layer(param, {d+3, d}, w, d, heads, L);
+        REQUIRE(layer.row_chunk_seed_count() == (requests+capacity-1)/capacity);
+        vector<vector<double>> seeds;
+        for (uint32_t sid = 0; sid < layer.row_chunk_seed_count(); ++sid)
+            seeds.push_back(layer.row_chunk_seed_values(sid));
+        double integer_error = 0, recovery_error = 0, diagonal_error = 0;
+        for (uint32_t ridx = 0; ridx < requests; ++ridx) {
+            uint32_t index = ridx;
+            const uint32_t k = index%d; index /= d;
+            const uint32_t bp = index%heads; index /= heads;
+            const uint32_t g = index%groups, mb = index/groups;
+            const uint32_t sid = ridx/capacity, position = ridx%capacity;
+            vector<double> expected(slots);
+            for (uint32_t s = 0; s < slots; ++s) {
+                const uint32_t j = (s%chunk)/(d*u), h = s%u;
+                const uint32_t row = (kr>1 ? mb*n : 0)+(g*u+h)*d+(j+k%baby)%d;
+                const uint32_t col = (kc>1 ? mb*n : 0)+bp*d+(j+d-(k/baby)*baby%d)%d;
+                expected[s] = g*u+h < heads && row < rows && col < cols ? w.get(row, col) : 0;
+                const uint32_t source = (position/d)*chunk+(position%d+d*j)*u+h;
+                integer_error = max(integer_error, abs(seeds[sid][source]-expected[s]));
+            }
+            // Boundary requests exercise every seed, chunk and both signed row directions.
+            if (ridx%capacity != 0 && ridx%capacity != capacity-1 && ridx+1 != requests &&
+                ridx != d-1 && ridx != d) continue;
+            auto seed = ctx.encrypt_symmetric(ctx.ringt_to_pt(layer.generate_row_chunk_seed_pt(ctx, sid), L+1));
+            auto restored = ctx.mult_plain_mul(seed,
+                ctx.ringt_to_mul(ParBlockColMajorCPMM::selection_for_config(ctx, d, heads, L, position), L+1));
+            for (uint32_t bit = 0; (1u<<bit) < d; ++bit) {
+                const int step = int((1u<<bit)*u);
+                restored = ctx.add(restored, ctx.rotate(restored, position%d & (1u<<bit) ? step : -step));
+            }
+            for (uint32_t bit = 0; (1u<<bit) < rho; ++bit) {
+                const int step = int((1u<<bit)*chunk);
+                restored = ctx.add(restored, ctx.rotate(restored, position/d & (1u<<bit) ? step : -step));
+            }
+            restored = ctx.rescale(restored, param.get_default_scale());
+            REQUIRE(restored.get_level() == L);
+            REQUIRE(restored.get_scale()/param.get_q(L) == Approx(1.0).epsilon(1e-9));
+            auto values = ctx.decode_complex(ctx.decrypt(restored));
+            auto reference = ctx.decode_complex(ctx.ringt_to_pt(layer.generate_diag_pt(ctx, mb, g, bp, k), L));
+            for (uint32_t s = 0; s < slots; ++s) {
+                recovery_error = max(recovery_error, abs(values[s]-expected[s]));
+                diagonal_error = max(diagonal_error, abs(values[s]-reference[s]));
+            }
+        }
+        INFO("recovery=" << recovery_error << " diagonal=" << diagonal_error);
+        REQUIRE(integer_error == 0);
+        REQUIRE(recovery_error < 1e-4);
+        REQUIRE(diagonal_error < 1e-4);
+        for (uint32_t t = requests%capacity; t && t < capacity; ++t)
+            for (uint32_t j = 0; j < d; ++j)
+                for (uint32_t h = 0; h < u; ++h)
+                    REQUIRE(seeds.back()[(t/d)*chunk+(t%d+d*j)*u+h] == 0);
+    }
+}
 
 TEST_CASE("PCM BERT LayerNorm stages preserve actual scale and lazy arithmetic contracts", "[pcm_bert]") {
     auto param = CkksParameter::create_parameter(16384);

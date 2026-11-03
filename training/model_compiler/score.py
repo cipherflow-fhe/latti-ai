@@ -31,6 +31,7 @@ from components import (
     config,
 )
 from inference.model_generator.layers.par_block_col_major_poly import ParBlockColMajorPoly
+from inference.model_generator.parameter_sources import resolve_pcm_parameter_source
 from inference.model_generator.layers.par_block_col_major_poly_mult_ct import ParBlockColMajorPolyMultCt
 from inference.model_generator.layers.par_block_col_major_softmax import (
     ParBlockColMajorMultipleSquare, ParBlockColMajorHeadColSum, ParBlockColMajorInverseInit,
@@ -937,7 +938,9 @@ def encrypted_parameter_storage_normalization_bytes():
 
 def encrypted_parameter_bytes(param, level):
     calibration = ENCRYPTED_PARAMETER_SIZE
-    if param.to_dict() != calibration['parameter']:
+    actual = param.to_dict()
+    expected = calibration['parameter']
+    if any(actual.get(key) != value for key, value in expected.items() if key != 'n_mult_level'):
         raise ValueError(f'No encrypted parameter size calibration for {param.name}')
     if str(level) not in calibration['bytes_per_element']:
         raise ValueError(f'Uncalibrated encrypted parameter level: {level}')
@@ -958,6 +961,18 @@ def get_encrypted_parameter_storage_report(dag, param_dict):
     }
     public_layers = {'add', 'add2d', 'reshape', 'drop_level', 'avgpool1d', 'avgpool2d',
                      'concat', 'concat2d', 'upsample_nearest', 'resize'}
+    if getattr(config, 'pcm_encrypted_parameters', False):
+        zeros = set()
+        for feature in dag.nodes:
+            if isinstance(feature, FeatureNode) and dag.in_degree(feature) == 0:
+                level = dag.nodes[feature]['level']
+                key = (feature.ckks_parameter_id, level)
+                if key not in zeros:
+                    zeros.add(key)
+                    size = encrypted_parameter_bytes(param_dict[key[0]], level)
+                    report['layers'].append(dict(layer_id=feature.node_id, type='InputZero',
+                                                 counts={level: {'zero': 1}}, bytes=size))
+                    report['storage_bytes'] += size
     for node in nx.topological_sort(dag):
         if not isinstance(node, ComputeNode):
             continue
@@ -1075,6 +1090,34 @@ class FheScoreParam:
         style = config.style
 
         op_counts = self._build_layer_and_get_op_count(preds, n, layer_type, style)
+        if (op_counts and getattr(config, 'pcm_encrypted_parameters', False)
+                and layer_type.startswith('pcm')):
+            if isinstance(next(iter(op_counts)), str):
+                op_counts = {self.input_mult_level: op_counts}
+            for lv, kinds in self._pcm_parameter_counts(preds, self.input_mult_level).items():
+                for kind, count in kinds.items():
+                    parameter = kind.split(':')[0]
+                    if parameter in {'bias_pt', 'add_pt'}:
+                        continue
+                    if parameter == 'coeff_pt' and kind.endswith('coeff_idx=0'):
+                        continue
+                    if parameter == 'stockmeyer_coeff_pt':
+                        degree = int(kind.rsplit('=', 1)[1])
+                        if degree % 4 == 0 and degree != getattr(self.compute_node, 'order', 0):
+                            continue
+                    if parameter == 'pt':
+                        idx = int(kind.rsplit('=', 1)[1])
+                        if ((layer_type == 'pcmstats' and idx == 3) or
+                                (layer_type == 'pcminit' and idx == 0) or
+                                (layer_type == 'pcmaffine' and idx == 1)):
+                            continue
+                        if layer_type in {'pcmstats', 'pcminit'}:
+                            count *= math.ceil(preds[0].shape[0]/config.matmul_block_size)
+                    if lv not in op_counts or op_counts[lv]['mult_plain'] < count:
+                        raise ValueError(f'PCM parameter operation count mismatch: {self.compute_node.layer_id} '
+                                         f'{layer_type} {kind} L{lv} count={count} ops={op_counts}')
+                    op_counts[lv]['mult_plain'] -= count
+                    op_counts[lv]['mult'] += count
         if op_counts is None:
             return 0.0
         # op_counts may be a flat dict {str: int} (single level) or a level-grouped
@@ -1119,6 +1162,8 @@ class FheScoreParam:
             result['poly_seed_layout'] = self.poly_seed_layout
         if getattr(self, 'convolution_seed_layout', None):
             result['convolution_seed_layout'] = self.convolution_seed_layout
+        if getattr(self, 'pcm_seed_layout', None):
+            result['pcm_seed_layout'] = self.pcm_seed_layout
         return result
 
     def get_parameter_use_site_level(self):
@@ -1130,9 +1175,94 @@ class FheScoreParam:
 
     def get_encrypted_param_count(self):
         preds = list(self.dag.predecessors(self.compute_node))
+        kind = self.compute_node.layer_type
+        if kind.startswith('pcm') or kind in {'parcpmm', 'parccmm', 'partranspose'}:
+            return self._pcm_parameter_counts(preds)
         return self._build_layer_and_get_op_count(
             preds, self.input_degree, self.compute_node.layer_type, config.style, encrypted_param_count=True
         )
+
+    def _pcm_parameter_counts(self, preds, level=None):
+        node = self.compute_node
+        preds = sorted(preds, key=lambda p: self.dag.edges[p, node].get('input_index', 0))
+        kind = node.layer_type
+        runtime_levels = level is not None
+        level = self.get_parameter_use_site_level() if level is None else level
+        d, heads, slots = config.matmul_block_size, config.n_heads, self.input_degree//2
+        rows, cols = preds[0].shape
+        hp = 1 << (heads-1).bit_length()
+        lanes = min(hp, slots//(d*d))
+        if lanes == 1: hp = heads
+        groups = hp//lanes
+        row_cts = math.ceil(rows/d)
+        counts = {}
+        sources = dict(parameter_sources=getattr(node, 'parameter_sources', {}))
+
+        def item(op, parameter, lv, count=1, **attrs):
+            source = resolve_pcm_parameter_source(sources, dict(op_class=op, type=parameter, **attrs))
+            if source['visibility'] == 'secret':
+                by_kind = counts.setdefault(lv, {})
+                key = parameter
+                for field in ('pt_idx', 'coeff_idx'):
+                    if field in attrs:
+                        key += f':{field}={attrs[field]}'
+                by_kind[key] = by_kind.get(key, 0) + count
+
+        if kind == 'parcpmm':
+            layer = ParBlockColMajorCPMM(tuple(preds[0].head_shape), tuple(node.weight_shape),
+                                         d, heads, slots, bool(getattr(node, 'bias_path', '')))
+            layout = layer.seed_layout(level, float(self.parameter.q[level]))
+            self.pcm_seed_layout = layout
+            item('ParBlockColMajorCPMM', 'row_chunk_seed', level+1, layout['seed_count'])
+            if layer.has_bias:
+                item('ParBlockColMajorCPMM', 'bias_pt', level-2, layer.n_out_mbs*row_cts*groups)
+        elif kind in {'pcm_add_pt', 'pcmgamma', 'pcmpoly', 'pcmaffine', 'pcmgeneralpoly'}:
+            k = getattr(node, 'K', 1)
+            head_cols = cols//(heads*k)
+            if kind in {'pcmgamma', 'pcmgeneralpoly'}:
+                head_cols = preds[0].head_shape[1]
+                k = math.ceil(cols/(heads*head_cols))
+            total = k*row_cts*math.ceil(head_cols/d)*groups
+            if kind == 'pcmgamma' and cols == 1:
+                total = row_cts
+            if kind == 'pcm_add_pt':
+                item('ParBlockColMajorAddPt', 'add_pt', level, total)
+            elif kind == 'pcmgamma':
+                item('ParBlockColMajorPolyActRNGamma', 'gamma_pt', level, total)
+            elif kind == 'pcmaffine':
+                ordered = sorted(preds, key=lambda p: self.dag.edges[p, node].get('input_index', 0))
+                ylevel = self.dag.nodes[ordered[1]]['level']
+                if not runtime_levels:
+                    ylevel = min(ylevel, self.output_mult_level+2)
+                item('ParBlockColMajorLNAffine', 'pt', ylevel, total, pt_idx=0)
+                item('ParBlockColMajorLNAffine', 'pt', ylevel-2, total, pt_idx=1)
+            elif kind == 'pcmpoly':
+                order = getattr(node, 'order', 4)
+                levels = [level-2, level, level-1, level, level-1]
+                for degree in range(order+1):
+                    item('ParBlockColMajorPolyActRNPoly', 'coeff_pt', levels[degree], total, coeff_idx=degree)
+            else:
+                order = node.order
+                cost = ParBlockColMajorPoly.compute_stockmeyer_level_cost(order)
+                babies = (order+4)//4
+                def visit(start, span, actual, target):
+                    if span == 1:
+                        for degree in range(start*4, min(order+1, start*4+4)):
+                            off = degree % 4
+                            lv = target + (0 if off == 0 else 2 if off == 3 else 1)
+                            item('ParBlockColMajorPoly', 'stockmeyer_coeff_pt', lv, total, coeff_idx=degree)
+                        return
+                    half = span//2
+                    visit(start, half, min(actual, half), target)
+                    if actual > half: visit(start+half, half, actual-half, target+1)
+                visit(0, 1 << (babies-1).bit_length(), babies, level-cost)
+        elif kind == 'pcmstats':
+            item('ParBlockColMajorLNStats', 'pt', level-3, pt_idx=2)
+            item('ParBlockColMajorLNStats', 'pt', level-4, pt_idx=3)
+        elif kind == 'pcminit':
+            for idx, lv in enumerate([level-2, level, level-1]):
+                item('ParBlockColMajorLNMinimaxInit', 'pt', lv, pt_idx=idx)
+        return counts
 
     def _build_layer_and_get_op_count(self, preds, n, layer_type, style, encrypted_param_count=False):
         """Instantiate the matching inference layer and return operation or parameter counts.
@@ -1828,20 +1958,19 @@ class FheScoreParam:
                 return None
         elif layer_type == 'parcpmm':
             m = preds[0].shape[0]
-            n_total = preds[0].shape[1]
-            n_per_head = n_total // config.n_heads
-            W_rows = n_total
-            W_cols = self.output_shape[1]
+            n_per_head = preds[0].head_shape[1]
             n_slot = n // 2
             try:
                 layer = ParBlockColMajorCPMM(
                     shape_A=(m, n_per_head),
-                    W_shape=(W_rows, W_cols),
+                    W_shape=tuple(node.weight_shape),
                     block_size=config.matmul_block_size,
                     n_heads=config.n_heads,
                     n_slot=n_slot,
                 )
-                return layer.get_fhe_op_count(self.input_mult_level)
+                return (layer.get_compact_fhe_op_count(self.input_mult_level)
+                        if getattr(config, 'pcm_encrypted_parameters', False)
+                        else layer.get_fhe_op_count(self.input_mult_level))
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmpcmm':

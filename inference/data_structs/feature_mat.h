@@ -41,6 +41,8 @@ public:
     // Parallel (interleaved) block column-major packing: interleave blocks from
     // multiple heads at the same block position into a single ciphertext.
     // head_dim: columns per head within each megablock.
+    std::vector<std::vector<double>> par_block_col_major_slots(const Array<double, 2>& matrix,
+        uint32_t d, uint32_t n_heads, uint32_t head_dim) const;
     void par_block_col_major_pack(const Array<double, 2>& matrix,
                                   uint32_t d,
                                   uint32_t n_heads,

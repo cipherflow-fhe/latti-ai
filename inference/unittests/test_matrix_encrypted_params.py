@@ -17,7 +17,8 @@ class MatrixEncryptedParameterTest(unittest.TestCase):
     def test_deferred_parameters_are_cached_at_each_consuming_level(self):
         source = CustomDataNode(type='matrix_source', id='source')
         calls = []
-        def build(attrs, name, level):
+        def build(attrs, name, level, trigger=None):
+            self.assertEqual(trigger.level, level)
             calls.append((attrs, level))
             return CkksCiphertextNode(f'{name}_{level}', level=level)
         source.matrix_parameter_builder = build

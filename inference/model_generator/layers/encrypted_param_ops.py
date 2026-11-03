@@ -34,7 +34,8 @@ def is_plaintext_input(node: ParamInputNode) -> bool:
     return isinstance(node, (CkksPlaintextNode, CkksPlaintextRingtNode, CkksPlaintextMulNode))
 
 
-def materialize_encrypted_param(param_ct: CkksCiphertextNode, trigger: ParamInputNode) -> CkksCiphertextNode:
+def materialize_encrypted_param(param_ct: CkksCiphertextNode, trigger: ParamInputNode,
+                               *, dependencies=()) -> CkksCiphertextNode:
     store_node = getattr(param_ct, 'encrypted_parameter_store_node', None)
     if store_node is None:
         return param_ct
@@ -46,7 +47,7 @@ def materialize_encrypted_param(param_ct: CkksCiphertextNode, trigger: ParamInpu
     # The runner schedules real inputs; wait_inputs metadata is not consumed by
     # its graph reader. The executor only reads the store (the first input).
     custom_compute(
-        inputs=[store_node, trigger],
+        inputs=[store_node, trigger, *dependencies],
         output=param_ct,
         type='load_encrypted_param_ct',
         attributes={

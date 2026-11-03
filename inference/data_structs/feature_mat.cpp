@@ -140,23 +140,15 @@ static uint32_t next_power_of_2(uint32_t x) {
     return p;
 }
 
-void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matrix,
-                                                   uint32_t d,
-                                                   uint32_t n_heads,
-                                                   uint32_t head_dim,
-                                                   bool is_symmetric,
-                                                   double scale_in) {
+vector<vector<double>> FeatureMatEncrypted::par_block_col_major_slots(const Array<double, 2>& matrix,
+    uint32_t d, uint32_t n_heads, uint32_t head_dim) const {
     uint32_t m = matrix.get_shape()[0];
     uint32_t total_cols = matrix.get_shape()[1];
-    shape = {m, total_cols};
-    head_shape = {m, head_dim};
-    matmul_block_size = d;
     uint32_t cols_per_head = head_dim;
     uint32_t n = cols_per_head * n_heads;  // columns per megablock
     uint32_t K_col = div_ceil(total_cols, n);
     uint32_t n_h_padded = next_power_of_2(n_heads);
     int n_slot = context->get_parameter().get_n() / 2;
-    const int N_THREAD = 4;
 
     // Determine chunk sizing and n_heads_per_chunk(S)
     uint32_t S, chunk_size, n_cts_per_block_idx;
@@ -215,6 +207,21 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
         }
     }
 
+    return block_vecs;
+}
+
+void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matrix,
+                                                   uint32_t d,
+                                                   uint32_t n_heads,
+                                                   uint32_t head_dim,
+                                                   bool is_symmetric,
+                                                   double scale_in) {
+    shape = {matrix.get_shape()[0], matrix.get_shape()[1]};
+    head_shape = {shape[0], head_dim};
+    matmul_block_size = d;
+    auto block_vecs = par_block_col_major_slots(matrix, d, n_heads, head_dim);
+    const uint32_t total_vecs = block_vecs.size();
+    const int N_THREAD = 4;
     data.clear();
     data_compress.clear();
     if (is_symmetric) {

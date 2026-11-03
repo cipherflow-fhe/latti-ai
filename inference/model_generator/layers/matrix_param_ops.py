@@ -27,7 +27,7 @@ def _resolve(parameter, trigger):
     level = trigger.level
     if level not in parameter.matrix_parameter_uses:
         parameter.matrix_parameter_uses[level] = source.matrix_parameter_builder(
-            parameter.matrix_parameter_attributes, parameter.id, level
+            parameter.matrix_parameter_attributes, parameter.id, level, trigger
         )
     return parameter.matrix_parameter_uses[level]
 
@@ -46,3 +46,8 @@ def add(x, parameter):
     if deferred and isinstance(parameter, fhe.CkksCiphertextNode):
         return add_encrypted_param_bias(x, parameter)
     return fhe.add(x, parameter)
+
+
+def ct_pt_mult_accumulate(xs, parameters):
+    parameters = [_resolve(parameter, x) for x, parameter in zip(xs, parameters)]
+    return fhe.ct_pt_mult_accumulate(xs, parameters)

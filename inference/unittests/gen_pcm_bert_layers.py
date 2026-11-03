@@ -21,6 +21,8 @@ from inference.lattisense.frontend.custom_task import (
     drop_level, process_custom_task,
 )
 from inference.model_generator.deploy_cmds import set_param
+from inference.model_generator.layers.matrix_param_ops import _resolve
+from inference.model_generator.parameter_sources import resolve_pcm_parameter_source
 
 MODULES = [importlib.import_module('inference.model_generator.layers.' + name) for name in (
     'par_block_col_major_softmax', 'par_block_col_major_poly', 'par_block_col_major_poly_mult_ct',
@@ -36,15 +38,33 @@ def instrument():
             original = getattr(module, operation)
 
             def checked(a, b, *args, _op=operation, _original=original, **kwargs):
+                rhs = _resolve(b, a)
                 checked_a = CkksCiphertextNode(level=a.level)
-                custom_compute([a] if a is b else [a, b], checked_a, 'check_contract',
-                               {'operation': _op, 'plaintext': not isinstance(b, CkksCiphertextNode)})
+                custom_compute([a] if a is rhs else [a, rhs], checked_a, 'check_contract',
+                               {'operation': _op, 'plaintext': not isinstance(rhs, CkksCiphertextNode)})
                 return _original(checked_a, b, *args, **kwargs)
 
             setattr(module, operation, checked)
 
 
-def generate(root, check_contracts=True):
+def parameter_source(name, encrypted):
+    source = CustomDataNode(type='pcm_layer_source', id=name)
+    if encrypted:
+        def build(attrs, parameter_name, level, trigger):
+            secret = resolve_pcm_parameter_source({}, attrs)['visibility'] == 'secret'
+            if secret:
+                output = CkksCiphertextNode(parameter_name + '_ct', level=level)
+            else:
+                from inference.lattisense.frontend.custom_task import CkksPlaintextRingtNode
+                output = CkksPlaintextRingtNode(parameter_name + '_pt')
+            custom_compute([source, trigger], output, 'encode_secret' if secret else 'encode_pt',
+                           dict(attrs, parameter_level=level))
+            return output
+        source.matrix_parameter_builder = build
+    return source
+
+
+def generate(root, check_contracts=True, encrypted=False):
     if check_contracts:
         instrument()
     softmax, polynomial, gelu, ln = MODULES
@@ -68,10 +88,10 @@ def generate(root, check_contracts=True):
                 layer = cls(**common)
             a = [CkksCiphertextNode(level=6) for _ in range(layer.total_cts)]
             b = [CkksCiphertextNode(level=6) for _ in a]
-            source = CustomDataNode(type='pcm_layer_source', id='layer')
+            source = parameter_source('layer', encrypted)
             inputs = [Argument('a', a), Argument('layer', [source])]
             if name == 'gelu_composition':
-                sources = [source] + [CustomDataNode(type='pcm_layer_source', id='layer' + str(i))
+                sources = [source] + [parameter_source('layer' + str(i), encrypted)
                                      for i in range(1, 4)]
                 output = a
                 for i in range(3):
@@ -104,7 +124,7 @@ def generate(root, check_contracts=True):
                 count = layer.total_cts
             a = [CkksCiphertextNode(level=6) for _ in range(count)]
             b = [CkksCiphertextNode(level=6) for _ in range(compact)]
-            source = CustomDataNode(type='pcm_layer_source', id='layer')
+            source = parameter_source('layer', encrypted)
             inputs = [Argument('a', a), Argument('layer', [source])]
             if name in ('lngs', 'lnaffine'):
                 inputs.append(Argument('b', b))
@@ -119,7 +139,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
     parser.add_argument('--without-contract-checks', action='store_true')
+    parser.add_argument('--encrypted-parameters', action='store_true')
     args = parser.parse_args()
     if not args.output.resolve().is_relative_to('/tmp'):
         parser.error('output must be under /tmp')
-    generate(args.output, not args.without_contract_checks)
+    generate(args.output, not args.without_contract_checks, args.encrypted_parameters)

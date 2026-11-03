@@ -22,6 +22,7 @@ from enum import Enum
 import networkx as nx
 
 from components import *
+from inference.model_generator.parameter_sources import public_source, secret_source
 from inference.model_generator.layers.poly_relu_base import PolyReluBase
 from inference.model_generator.layers.mat_poly_base import MatPolyBase
 
@@ -589,6 +590,7 @@ def expand_parcpmm_add_pt(graph: LayerAbstractGraph):
             add_pt_id, _pack_pcm_type('pcm_add_pt'), parcpmm_node.channel_output, parcpmm_node.channel_output
         )
         add_pt_node.path = bias_path
+        add_pt_node.parameter_sources = {'add_pt': secret_source('onnx_initializer', bias_path)}
 
         new_feature_args = copy.deepcopy(graph.dag.nodes[old_feature])
         new_feature_args['name'] = new_feature.node_id
@@ -1423,10 +1425,12 @@ def _append_binary_compute(
     return output_feature
 
 
-def _make_scalar_gamma(layer_id: str, scalar: float) -> ComputeNode:
+def _make_scalar_gamma(layer_id: str, scalar: float, source=None) -> ComputeNode:
     node = ComputeNode(layer_id, _pack_pcm_type('pcmgamma'), 1, 1)
     node.path = f'{layer_id}.weight'
     node.scalar_value = float(scalar)
+    node.parameter_sources = {'gamma_pt': source or public_source(
+        'approximation_config', {'scalar_value': float(scalar)})}
     return node
 
 
@@ -1436,6 +1440,8 @@ def _make_upper_poly(layer_id: str, coefficients: list[float]) -> ComputeNode:
     node.coeffs_path = node.path
     node.coefficients = list(coefficients)
     node.order = len(coefficients) - 1
+    node.parameter_sources = {'stockmeyer_coeff_pt': public_source(
+        'approximation_config', {'coefficients': list(coefficients)})}
     return node
 
 
@@ -1458,6 +1464,8 @@ def _append_softmax_normalize(
         add_epsilon = ComputeNode(f'{base_id}_denominator_epsilon', ('pdmupperaddpt' if _is_diagonal_mat_pack() else 'pcm_add_pt'), 1, 1)
         add_epsilon.value = denominator_epsilon
         add_epsilon.path = f'{add_epsilon.layer_id}.weight'
+        add_epsilon.parameter_sources = {'add_pt': public_source(
+            'math_constant', {'value': float(denominator_epsilon)})}
         denom = _append_unary_compute(
             graph,
             denom,
@@ -1551,6 +1559,8 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
     add_mid_node = ComputeNode(f'{base_id}_softmax_add_mid', ('pdmupperaddpt' if _is_diagonal_mat_pack() else 'pcm_add_pt'), 1, 1)
     add_mid_node.value = -mid
     add_mid_node.path = f'{add_mid_node.layer_id}.weight'
+    add_mid_node.parameter_sources = {'add_pt': secret_source(
+        'calibration', f'{attn_node.layer_id}.range_min', f'{attn_node.layer_id}.range_max')}
     centered = _append_unary_compute(
         graph,
         scores,
@@ -1895,7 +1905,8 @@ def _expand_custom_gelu(graph: LayerAbstractGraph, node: ComputeNode):
     x_scaled = _append_unary_compute(
         graph,
         x_in,
-        _make_scalar_gamma(f'{base_id}_gelu_input_scale', 1.0 / scale),
+        _make_scalar_gamma(f'{base_id}_gelu_input_scale', 1.0 / scale,
+                           secret_source('calibration', f'{base_id}.scale')),
         f'{base_id}_gelu_x_scaled',
         1,
     )
@@ -1968,7 +1979,8 @@ def _expand_custom_tanh(graph: LayerAbstractGraph, node: ComputeNode):
     x_scaled = _append_unary_compute(
         graph,
         x_in,
-        _make_scalar_gamma(f'{base_id}_tanh_input_scale', 1.0 / (scale * f1_input_scale)),
+        _make_scalar_gamma(f'{base_id}_tanh_input_scale', 1.0 / (scale * f1_input_scale),
+                           secret_source('calibration', f'{base_id}.scale')),
         f'{base_id}_tanh_x_scaled',
         1,
     )
@@ -2043,6 +2055,8 @@ def expand_poly_act_rn(graph: LayerAbstractGraph):
         poly_node.gamma_path = gamma_path
         poly_node.coeffs_path = coeffs_path
         poly_node.order = order
+        poly_node.parameter_sources = {'coeff_pt': secret_source(
+            'derived', running_max_path, gamma_path, coeffs_path)}
 
         graph.dag.remove_node(node)
 
@@ -2134,6 +2148,16 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
         for stage_node in (pcmstats, pcmcenter, pcminit, *pcmgs_nodes, pcmaffine):
             for attr_key, attr_value in layernorm_param_attrs.items():
                 setattr(stage_node, attr_key, attr_value)
+
+        pcmstats.parameter_sources = {
+            f'pt:pt_idx={idx}': secret_source('calibration', f'{base_id}.variance_range')
+            for idx in (2, 3)}
+        pcminit.parameter_sources = {
+            f'pt:pt_idx={idx}': public_source('approximation_config',
+                {f'c{idx}': float(layernorm_param_attrs[f'c{idx}'])}) for idx in range(3)}
+        pcmaffine.parameter_sources = {
+            'pt:pt_idx=0': secret_source('derived', weight_path, f'{base_id}.variance_range'),
+            'pt:pt_idx=1': secret_source('onnx_initializer', bias_path)}
 
         # Remove the original layernorm node (keeps x_in and out in the graph)
         graph.dag.remove_node(ln_node)

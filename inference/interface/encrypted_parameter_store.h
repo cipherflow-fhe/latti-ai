@@ -56,6 +56,7 @@ private:
         double scale = 0.0;  // Absent in legacy manifests.
         std::vector<uint64_t> shape;
         std::vector<ElementSpan> elements;
+        std::string layer_id, kind;
     };
 
     using ElementKey = std::pair<std::string, uint64_t>;
@@ -74,5 +75,8 @@ private:
     uint64_t cache_capacity_bytes_;
     uint64_t cache_bytes_ = 0, peak_cache_bytes_ = 0;
     uint64_t canonical_loads_ = 0, cache_hits_ = 0, cache_evictions_ = 0;
+    uint64_t seed_loads_ = 0;
+    double load_seconds_ = 0;
+    json layer_loads_ = json::object();
     mutable std::mutex mutex_;
 };

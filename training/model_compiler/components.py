@@ -46,6 +46,8 @@ import math
 import networkx as nx
 import os
 
+from inference.model_generator.parameter_sources import pcm_parameter_sources
+
 
 class FheParameter:
     def __init__(
@@ -1079,6 +1081,9 @@ class LayerAbstractGraph:
             else:
                 compute_node = ComputeNode(key, layer_type, channel_input, channel_output)
 
+            compute_node.parameter_sources = pcm_parameter_sources(layer_json)
+            if 'pcm_seed_layout' in layer_json:
+                compute_node.pcm_seed_layout = layer_json['pcm_seed_layout']
             graph_info.dag.add_node(compute_node, name=key)
             for idx, f_node in enumerate(feature_input):
                 graph_info.dag.add_edge(f_node, compute_node, input_index=idx if len(feature_input) > 1 else None)
@@ -1597,6 +1602,12 @@ class LayerAbstractGraph:
                 layers[layer_id]['is_big_size'] = layer.is_big_size
                 layers[layer_id]['is_absorb_polyrelu'] = IS_ABSORB_POLYRELU
                 layers[layer_id]['style'] = config.style
+            sources = pcm_parameter_sources({**layers[layer_id],
+                                             'parameter_sources': getattr(layer, 'parameter_sources', {})})
+            if sources:
+                layers[layer_id]['parameter_sources'] = sources
+            if hasattr(layer, 'pcm_seed_layout'):
+                layers[layer_id]['pcm_seed_layout'] = layer.pcm_seed_layout
             if 'level_cost' in self.dag.nodes[layer]:
                 layers[layer_id]['level_cost'] = self.dag.nodes[layer]['level_cost']
             if 'polyact' == layer.layer_type:

@@ -144,16 +144,11 @@ int ParBlockColMajorCPMM::get_block_index(int bi, int bj, int num_block_rows) {
 std::vector<double>
 ParBlockColMajorCPMM::build_block_diagonal(uint32_t megablock, uint32_t g_input, int bp, int k) const {
     uint32_t S = n_blocks_per_chunk_;
-    uint32_t g_bsgs = k / bsgs_bs_;
-    uint32_t b = k % bsgs_bs_;
 
     vector<double> diag_chunk(chunk_size_, 0.0);
     for (uint32_t j = 0; j < d_; j++) {
-        uint32_t j_col = (j + d_ - g_bsgs * bsgs_bs_ % d_) % d_;
         for (uint32_t h = 0; h < S; h++) {
-            uint32_t row = (g_input * S + h) * d_ + (j + b) % d_;
-            uint32_t col = bp * d_ + j_col;
-            double val = W_padded_[megablock].get(row, col);
+            double val = diagonal_value(megablock, g_input, bp, k, j, h);
             for (uint32_t i = 0; i < d_; i++) {
                 diag_chunk[(i + d_ * j) * S + h] = val;
             }
@@ -168,6 +163,72 @@ ParBlockColMajorCPMM::build_block_diagonal(uint32_t megablock, uint32_t g_input,
         }
     }
     return diag;
+}
+
+double ParBlockColMajorCPMM::diagonal_value(uint32_t mb, uint32_t g, uint32_t bp,
+                                           uint32_t k, uint32_t j, uint32_t h) const {
+    const auto row = (g * n_blocks_per_chunk_ + h) * d_ + (j + k % bsgs_bs_) % d_;
+    const auto col = bp * d_ + (j + d_ - (k / bsgs_bs_) * bsgs_bs_ % d_) % d_;
+    return W_padded_.at(mb).get(row, col);
+}
+
+uint32_t ParBlockColMajorCPMM::row_chunk_seed_count() const {
+    if (n_per_head_ != d_)
+        throw runtime_error("PCM row/chunk seeds require n_per_head == block_size");
+    return div_ceil(K_ * n_cts_per_block_idx_ * n_heads_, num_chunks_);
+}
+
+vector<double> ParBlockColMajorCPMM::row_chunk_seed_values(uint32_t seed_id) const {
+    if (seed_id >= row_chunk_seed_count())
+        throw runtime_error("PCM row/chunk seed index out of range");
+    vector<double> values(n_slot_, 0.0);
+    const uint32_t capacity = d_ * num_chunks_;
+    const uint32_t requests = K_ * n_cts_per_block_idx_ * n_heads_ * d_;
+    for (uint32_t t = 0; t < capacity && seed_id * capacity + t < requests; ++t) {
+        uint32_t index = seed_id * capacity + t;
+        const uint32_t k = index % d_; index /= d_;
+        const uint32_t bp = index % n_heads_; index /= n_heads_;
+        const uint32_t g = index % n_cts_per_block_idx_;
+        const uint32_t mb = index / n_cts_per_block_idx_;
+        for (uint32_t j = 0; j < d_; ++j)
+            for (uint32_t h = 0; h < n_blocks_per_chunk_; ++h)
+                values[(t / d_) * chunk_size_ + (t % d_ + d_ * j) * n_blocks_per_chunk_ + h] =
+                    diagonal_value(mb, g, bp, k, j, h);
+    }
+    return values;
+}
+
+CkksPlaintextRingt ParBlockColMajorCPMM::generate_row_chunk_seed_pt(CkksContext& ctx, uint32_t seed_id) const {
+    return ctx.encode_ringt(row_chunk_seed_values(seed_id), param_.get_q(level_));
+}
+
+CkksPlaintextRingt ParBlockColMajorCPMM::selection_for_config(CkksContext& ctx, uint32_t d,
+    uint32_t heads, uint32_t level, uint32_t position) {
+    const auto& param = ctx.get_parameter();
+    const uint32_t slots = param.get_n() / 2;
+    if (!d || (d & (d - 1)) || !heads || slots < uint64_t(d) * d)
+        throw runtime_error("Invalid PCM selection geometry");
+    const uint32_t u = min(next_pow2(heads), slots / (d * d));
+    const uint32_t chunk = u * d * d, rho = slots / chunk;
+    if (position >= d * rho || slots % chunk)
+        throw runtime_error("PCM selection position out of range");
+    vector<double> mask(slots, 0.0);
+    for (uint32_t j = 0; j < d; ++j)
+        for (uint32_t h = 0; h < u; ++h)
+            mask[(position / d) * chunk + (position % d + d * j) * u + h] = 1.0;
+    return ctx.encode_ringt(mask, param.get_q(level + 1));
+}
+
+CkksPlaintextRingt ParBlockColMajorCPMM::head0_mask_for_config(CkksContext& ctx, uint32_t d,
+    uint32_t heads, uint32_t level) {
+    const auto& param = ctx.get_parameter();
+    const uint32_t slots = param.get_n() / 2;
+    if (!d || (d & (d - 1)) || !heads || slots < uint64_t(d) * d)
+        throw runtime_error("Invalid PCM head mask geometry");
+    const uint32_t u = min(next_pow2(heads), slots / (d * d));
+    vector<double> mask(slots, 0.0);
+    for (uint32_t slot = 0; slot < slots; slot += u) mask[slot] = 1.0;
+    return ctx.encode_ringt(mask, param.get_q(level - 1));
 }
 
 // Build mask selecting h=0 positions: mask[(i+d*j)*S + 0] = 1, rest = 0.

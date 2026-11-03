@@ -19,6 +19,7 @@
 #include "interface/encrypted_parameter_store.h"
 
 #include <cmath>
+#include <chrono>
 #include <fstream>
 #include <numeric>
 #include <stdexcept>
@@ -51,6 +52,9 @@ EncryptedParameterStore::EncryptedParameterStore(std::filesystem::path root, uin
         entry.level = value.at("level").get<int>();
         entry.scale = value.value("scale", 0.0);
         entry.shape = value.at("size").get<std::vector<uint64_t>>();
+        entry.layer_id = value.value("layer_id", std::string());
+        entry.kind = value.contains("layout") && value["layout"].is_object() ?
+            value["layout"].value("kind", std::string()) : std::string();
         if (value.contains("elements")) {
             const auto expected = shape_size(entry.shape);
             if (value["elements"].size() != expected) {
@@ -63,6 +67,21 @@ EncryptedParameterStore::EncryptedParameterStore(std::filesystem::path root, uin
                 span.length = item.at("length").get<uint64_t>();
                 entry.elements.push_back(span);
             }
+            std::ifstream container(root_ / entry.file, std::ios::binary);
+            uint64_t count = 0;
+            container.read(reinterpret_cast<char*>(&count), sizeof(count));
+            if (!container || count != expected)
+                throw std::runtime_error("Encrypted parameter container count mismatch for " + arg_id);
+            for (const auto& span : entry.elements) {
+                uint64_t length = 0;
+                container.read(reinterpret_cast<char*>(&length), sizeof(length));
+                if (!container || length != span.length || !length ||
+                    static_cast<uint64_t>(container.tellg()) != span.offset)
+                    throw std::runtime_error("Encrypted parameter element index mismatch for " + arg_id);
+                container.seekg(static_cast<std::streamoff>(length), std::ios::cur);
+            }
+            if (!container || static_cast<uint64_t>(container.tellg()) != std::filesystem::file_size(root_ / entry.file))
+                throw std::runtime_error("Encrypted parameter container length mismatch for " + arg_id);
         }
         if (entry.id != arg_id) {
             throw std::runtime_error("Encrypted parameter manifest id mismatch for argument: " + arg_id);
@@ -143,6 +162,8 @@ std::shared_ptr<fhe_ops_lib::CkksCiphertext> EncryptedParameterStore::load_eleme
         return cached->second.value;
     }
 
+    const auto begin = std::chrono::steady_clock::now();
+
     std::ifstream in(root_ / entry.file, std::ios::binary);
     if (!in.is_open()) {
         throw std::runtime_error("Failed to open encrypted parameter file: " + (root_ / entry.file).string());
@@ -194,6 +215,13 @@ std::shared_ptr<fhe_ops_lib::CkksCiphertext> EncryptedParameterStore::load_eleme
         throw std::runtime_error("Encrypted parameter scale mismatch for " + arg_id);
     }
     ++canonical_loads_;
+    if (entry.kind == "pcm_row_chunk_v1") ++seed_loads_;
+    const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+    load_seconds_ += elapsed;
+    auto& layer = layer_loads_[entry.layer_id];
+    if (layer.is_null()) layer = json::object();
+    layer["loads"] = layer.value("loads", uint64_t{0}) + 1;
+    layer["load_seconds"] = layer.value("load_seconds", 0.0) + elapsed;
     if (span.length <= cache_capacity_bytes_) {
         while (cache_bytes_ > cache_capacity_bytes_ - span.length) {
             const auto victim = element_cache_.find(lru_.back());
@@ -213,6 +241,7 @@ std::shared_ptr<fhe_ops_lib::CkksCiphertext> EncryptedParameterStore::load_eleme
 json EncryptedParameterStore::cache_statistics() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return {{"canonical_loads", canonical_loads_}, {"cache_hits", cache_hits_},
+            {"seed_loads", seed_loads_}, {"load_decode_seconds", load_seconds_}, {"layers", layer_loads_},
             {"cache_evictions", cache_evictions_}, {"cache_peak_bytes", peak_cache_bytes_},
             {"cache_bytes", cache_bytes_}, {"cache_capacity_bytes", cache_capacity_bytes_},
             {"byte_accounting", "serialized_ciphertext_payload"}};

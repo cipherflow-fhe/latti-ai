@@ -15,7 +15,7 @@
 - PDM 指配置值 `par_diagonal_pack`；本次保留它的已有实现和 BERT 数学展开。
 - 验收路径是 `InferenceClient` 加密 CSV 输入 → `InferenceServer::evaluate` → `InferenceProcess::run_task_lazy` → GPU executor → 客户端解密。模型权重在此路径为明文参数，通过 `encode_pt` 按需生成 PT。
 - 当前 CLI 的 `parameter_loading_mode=runtime_lazy` 专属于 `server_provisioned_runner + encrypted_offline` 参数加密路径，不能直接用于本次输入加密验收。本文所称 GPU runtime lazy，是上述 `run_task_lazy` 路径；验收必须给出执行证据，不能仅凭一个配置字段判定。
-- 本次不实现 PCM 参数加密、seed weight 恢复和参数 bundle 压缩。相关后续工作见 [PCM 参数压缩研究](../research/transformer_pcm_seed_parameter_compression.md)。已有参数加密入口的 PCM 拒绝条件继续有效。
+- 本次不实现 PCM 参数加密、seed weight 恢复和参数 bundle 压缩。相关后续工作见 [PCM 压缩参数密文规范](transformer_pcm_compact_encrypted_parameter_design.md)。该后续规范负责接通参数加密入口的 PCM 分支。
 
 ### 1.2 实现边界
 

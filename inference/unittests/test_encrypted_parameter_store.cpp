@@ -36,7 +36,8 @@ TEST_CASE("lazy store evicts safely and supports containers without an index", "
     }
     write_binary_file(root / "w.bin", ss_to_bytes(container));
     json argument = {{"id", "w"}, {"file", "w.bin"}, {"level", level},
-                     {"scale", scale}, {"size", {3}}};
+                     {"scale", scale}, {"size", {3}}, {"layer_id", "linear"},
+                     {"layout", {{"kind", "pcm_row_chunk_v1"}}}};
     for (bool indexed : {false, true}) {
         INFO("indexed=" << indexed);
         if (indexed) argument["elements"] = spans;
@@ -48,6 +49,8 @@ TEST_CASE("lazy store evicts safely and supports containers without an index", "
         auto second = store.load_element("w", 1);
         auto stats = store.cache_statistics();
         REQUIRE(stats["canonical_loads"] == 2);
+        REQUIRE(stats["seed_loads"] == 2);
+        REQUIRE(stats["layers"]["linear"]["loads"] == 2);
         REQUIRE(stats["cache_hits"] == 1);
         REQUIRE(stats["cache_evictions"] == 1);
         REQUIRE(stats["cache_peak_bytes"].get<uint64_t>() <= payloads[0].size());
@@ -66,6 +69,7 @@ TEST_CASE("lazy store evicts safely and supports containers without an index", "
         REQUIRE(uncached.load_element("w", 2) != uncached.load_element("w", 2));
         REQUIRE(uncached.cache_statistics()["cache_bytes"] == 0);
         REQUIRE(uncached.cache_statistics()["canonical_loads"] == 2);
+        REQUIRE(uncached.cache_statistics()["seed_loads"] == 2);
 
         EncryptedParameterStore eager(root);
         auto& all = eager.load_argument("w");

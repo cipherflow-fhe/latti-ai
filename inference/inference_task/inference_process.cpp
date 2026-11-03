@@ -1458,6 +1458,80 @@ void InitInferenceProcess::load_public_matrix_layers() {
         const auto& key = item.key();
         const auto& layer = item.value();
         const auto type = layer.at("type").get<string>();
+        if (type == "parccmm") _init_parccmm_layer(key, layer);
+        if (type == "partranspose") _init_partranspose_layer(key, layer);
+        if (type == "pcmmulsquare") _init_pcmmulsquare_layer(key, layer);
+        if (type == "pcmheadcolsum") _init_pcmheadcolsum_layer(key, layer);
+        if (type == "pcminvinit") _init_pcminvinit_layer(key, layer);
+        if (type == "pcminviter") _init_pcminviter_layer(key, layer);
+        if (type == "pcmctmul") _init_pcmctmul_layer(key, layer);
+        if (type == "pcmpolymultct") _init_pcmpolymultct_layer(key, layer);
+        if (type == "pcmcenter") _init_pcmcenter_layer(key, layer);
+        if (type == "pcmgs") _init_pcmgs_layer(key, layer);
+        if (type == "pcminit" && layer.contains("parameter_sources")) {
+            auto public_layer = layer;
+            vector<double> coeffs(3, 0.0);
+            bool has_public = false;
+            for (int i = 0; i < 3; ++i) {
+                const auto name = "pt:pt_idx=" + to_string(i);
+                const auto& sources = layer.at("parameter_sources");
+                if (sources.contains(name) && sources.at(name).at("visibility") == "public") {
+                    coeffs[i] = sources.at(name).at("public_recipe").at("content").at("c" + to_string(i));
+                    has_public = true;
+                }
+            }
+            if (has_public) {
+                public_layer["coeffs"] = coeffs;
+                _init_pcminit_layer(key, public_layer);
+            }
+        }
+        if ((type == "pcmgeneralpoly" || type == "pcmgamma" || type == "pcm_add_pt") &&
+            layer.contains("parameter_sources")) {
+            const string generator = type == "pcmgeneralpoly" ? "stockmeyer_coeff_pt" :
+                                     type == "pcmgamma" ? "gamma_pt" : "add_pt";
+            const auto& sources = layer.at("parameter_sources");
+            if (sources.contains(generator) && sources.at(generator).at("visibility") == "public") {
+                const auto& recipe = sources.at(generator).at("public_recipe").at("content");
+                const auto fid = layer.at("feature_input")[0].get<string>();
+                FeatureNode feature(json_features.at(fid));
+                const auto& param = *ckks_parameters_.at(feature.ckks_parameter_id);
+                const auto d = get_config_matmul_block_size(matmul_block_size);
+                const auto heads = get_config_n_heads(n_heads);
+                if (type == "pcmgeneralpoly") {
+                    const auto values = recipe.at("coefficients").get<vector<double>>();
+                    const auto order = layer.at("order").get<uint32_t>();
+                    if (values.size() != order + 1) throw runtime_error("Invalid public PCM polynomial: " + key);
+                    Array<double, 2> coeffs({order + 1, feature.shape[1]});
+                    for (uint32_t i = 0; i <= order; ++i)
+                        for (uint32_t j = 0; j < feature.shape[1]; ++j) coeffs.set(i, j, values[i]);
+                    auto poly = MakeU<ParBlockColMajorPoly>(param, feature.shape,
+                        get_feature_mat_head_shape(feature, fid), heads, feature.level, move(coeffs), order, d);
+                    _prepare_layer(key, move(poly), [](ParBlockColMajorPoly& l) { l.prepare_weight_stockmeyer_lazy(); },
+                                                   [](ParBlockColMajorPoly& l) { l.prepare_weight_stockmeyer(); });
+                } else if (type == "pcmgamma") {
+                    Array<double, 1> values({feature.shape[1]});
+                    for (uint32_t i = 0; i < feature.shape[1]; ++i) values.set(i, recipe.at("scalar_value").get<double>());
+                    auto gamma = MakeU<ParBlockColMajorPolyActRNGamma>(param, feature.shape, d, heads,
+                        layer.value("K", 1u), feature.level, move(values), get_feature_mat_head_shape(feature, fid));
+                    _prepare_layer(key, move(gamma), [](ParBlockColMajorPolyActRNGamma&) {},
+                                                   [](ParBlockColMajorPolyActRNGamma& l) { l.prepare_weight(); });
+                } else {
+                    Array<double, 2> values({feature.shape[0], feature.shape[1]});
+                    for (uint32_t i = 0; i < feature.shape[0]; ++i)
+                        for (uint32_t j = 0; j < feature.shape[1]; ++j) values.set(i, j, recipe.at("value").get<double>());
+                    auto add = MakeU<ParBlockColMajorAddPt>(param, feature.shape, d, heads, feature.level, move(values));
+                    _prepare_layer(key, move(add), [](ParBlockColMajorAddPt&) {},
+                                                 [](ParBlockColMajorAddPt& l) { l.precompute_pts(); });
+                }
+            }
+        }
+        if (type == "pcmstats") {
+            // Only pt_idx 0/1 use this public instance; private stats CTs
+            // are generated in the Provisioner from its calibrated instance.
+            auto geometry = layer;
+            geometry["inv_var"] = 1.0;
+            _init_pcmstats_layer(key, geometry);
+        }
         if (type == "pdmccmm") _init_pdmccmm_layer(key, layer);
         if (type == "pdmtranspose") _init_pdmtranspose_layer(key, layer);
         if (type == "pdmmulsquare") _init_pdmmulsquare_layer(key, layer);
@@ -3792,6 +3866,63 @@ ls::CkksPlaintextRingt generate_matrix_parameter(ls::CkksContext& ckks_ctx, Laye
             auto* layer = static_cast<ParUpperDiagonalLNAffine*>(layer_ptr);
             pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("mb", 0),
                                     attrs.value("ct_local", j), attrs.value("g", k));
+        } else if (op_class == "ParBlockColMajorCPMM") {
+            auto* layer = static_cast<ParBlockColMajorCPMM*>(layer_ptr);
+            if (type == "mask_h0_pt")
+                pt = layer->generate_mask_h0_pt(ckks_ctx);
+            else if (type == "bias_pt")
+                pt = layer->generate_bias_pt(ckks_ctx, attrs.value("mb", i), attrs.value("bi", j), attrs.value("g", k));
+            else if (type == "row_chunk_seed")
+                pt = layer->generate_row_chunk_seed_pt(ckks_ctx, attrs.at("seed_id").get<uint32_t>());
+            else
+                pt = layer->generate_diag_pt(ckks_ctx, attrs.value("mb", i), attrs.value("g", j), attrs.value("bp", k),
+                                             attrs.value("k", 0));
+        } else if (op_class == "ParBlockColMajorCCMM") {
+            auto* layer = static_cast<ParBlockColMajorCCMM*>(layer_ptr);
+            if (type == "sigma_pt")
+                pt = layer->generate_sigma_pt(ckks_ctx, attrs.value("k", i));
+            else if (type == "tau_pt")
+                pt = layer->generate_tau_pt(ckks_ctx, attrs.value("offset_idx", i));
+            else if (type == "psi_k0_pt")
+                pt = layer->generate_psi_k0_pt(ckks_ctx);
+            else if (type == "psi_wk_pt")
+                pt = layer->generate_psi_wk_pt(ckks_ctx, i);
+            else
+                pt = layer->generate_psi_wkd_pt(ckks_ctx, i);
+        } else if (op_class == "ParBlockColMajorPolyActRNGamma") {
+            auto* layer = static_cast<ParBlockColMajorPolyActRNGamma*>(layer_ptr);
+            pt = layer->generate_gamma_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("bi", 0), attrs.value("bj", j),
+                                          attrs.value("g", k));
+        } else if (op_class == "ParBlockColMajorPolyActRNPoly") {
+            auto* layer = static_cast<ParBlockColMajorPolyActRNPoly*>(layer_ptr);
+            pt = layer->generate_coeff_pt(ckks_ctx, attrs.value("coeff_idx", i), attrs.value("mb", 0),
+                                          attrs.value("bi", 0), attrs.value("bj", j), attrs.value("g", k));
+        } else if (op_class == "ParBlockColMajorLNStats") {
+            auto* layer = static_cast<ParBlockColMajorLNStats*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                    attrs.value("g", k));
+        } else if (op_class == "ParBlockColMajorLNXCentered") {
+            auto* layer = static_cast<ParBlockColMajorLNXCentered*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                    attrs.value("g", k));
+        } else if (op_class == "ParBlockColMajorLNMinimaxInit") {
+            auto* layer = static_cast<ParBlockColMajorLNMinimaxInit*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                    attrs.value("g", k));
+        } else if (op_class == "ParBlockColMajorLNGoldschmidt") {
+            auto* layer = static_cast<ParBlockColMajorLNGoldschmidt*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                    attrs.value("g", k));
+        } else if (op_class == "ParBlockColMajorLNAffine") {
+            auto* layer = static_cast<ParBlockColMajorLNAffine*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                    attrs.value("g", k));
+        } else if (op_class == "ParBlockColMajorTranspose") {
+            auto* layer = static_cast<ParBlockColMajorTranspose*>(layer_ptr);
+            pt = layer->generate_transpose_diag_pt(ckks_ctx, attrs.value("k_idx", i));
+        } else if (op_class == "ParBlockColMajorAddPt") {
+            auto* layer = static_cast<ParBlockColMajorAddPt*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("bi", i), attrs.value("bj", j), attrs.value("g", k));
         } else {
             throw runtime_error("Unknown matrix parameter class: " + op_class);
         }
@@ -3987,65 +4118,7 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         } else if (op_class == "BlockColMajorCPMM" || op_class == "BlockColMajorCCMM" ||
                    op_class == "BlockColMajorTranspose") {
             throw runtime_error("encode_pt: non-par matrix ops are unsupported; use par op_class");
-        } else if (op_class == "ParBlockColMajorCPMM") {
-            auto* layer = static_cast<ParBlockColMajorCPMM*>(layer_ptr);
-            if (type == "mask_h0_pt")
-                pt = layer->generate_mask_h0_pt(ckks_ctx);
-            else if (type == "bias_pt")
-                pt = layer->generate_bias_pt(ckks_ctx, attrs.value("mb", i), attrs.value("bi", j), attrs.value("g", k));
-            else
-                pt = layer->generate_diag_pt(ckks_ctx, attrs.value("mb", i), attrs.value("g", j), attrs.value("bp", k),
-                                             attrs.value("k", l));
-        } else if (op_class == "ParBlockColMajorCCMM") {
-            auto* layer = static_cast<ParBlockColMajorCCMM*>(layer_ptr);
-            if (type == "sigma_pt")
-                pt = layer->generate_sigma_pt(ckks_ctx, attrs.value("k", i));
-            else if (type == "tau_pt")
-                pt = layer->generate_tau_pt(ckks_ctx, attrs.value("offset_idx", i));
-            else if (type == "psi_k0_pt")
-                pt = layer->generate_psi_k0_pt(ckks_ctx);
-            else if (type == "psi_wk_pt")
-                pt = layer->generate_psi_wk_pt(ckks_ctx, i);
-            else
-                pt = layer->generate_psi_wkd_pt(ckks_ctx, i);
-        } else if (op_class == "ParBlockColMajorPolyActRNGamma") {
-            auto* layer = static_cast<ParBlockColMajorPolyActRNGamma*>(layer_ptr);
-            pt = layer->generate_gamma_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("bi", 0), attrs.value("bj", j),
-                                          attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorPolyActRNPoly") {
-            auto* layer = static_cast<ParBlockColMajorPolyActRNPoly*>(layer_ptr);
-            pt = layer->generate_coeff_pt(ckks_ctx, attrs.value("coeff_idx", i), attrs.value("mb", 0),
-                                          attrs.value("bi", 0), attrs.value("bj", j), attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorLNStats") {
-            auto* layer = static_cast<ParBlockColMajorLNStats*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
-                                    attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorLNXCentered") {
-            auto* layer = static_cast<ParBlockColMajorLNXCentered*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
-                                    attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorLNMinimaxInit") {
-            auto* layer = static_cast<ParBlockColMajorLNMinimaxInit*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
-                                    attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorLNGoldschmidt") {
-            auto* layer = static_cast<ParBlockColMajorLNGoldschmidt*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
-                                    attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorLNAffine") {
-            auto* layer = static_cast<ParBlockColMajorLNAffine*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
-                                    attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorTranspose") {
-            auto* layer = static_cast<ParBlockColMajorTranspose*>(layer_ptr);
-            pt = layer->generate_transpose_diag_pt(ckks_ctx, attrs.value("k_idx", i));
-        } else if (op_class == "ParBlockColMajorAddPt") {
-            auto* layer = static_cast<ParBlockColMajorAddPt*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("bi", i), attrs.value("bj", j), attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorPoly" || op_class == "ParBlockColMajorMultipleSquare" ||
-                   op_class == "ParBlockColMajorHeadColSum" || op_class == "ParBlockColMajorInverseInit" ||
-                   op_class == "ParBlockColMajorInverseIter" || op_class == "ParBlockColMajorCtMul" ||
-                   op_class == "ParBlockColMajorPolyMultCt") {
+        } else if (op_class.rfind("ParBlockColMajor", 0) == 0) {
             pt = generate_matrix_parameter(ckks_ctx, static_cast<Layer*>(layer_ptr), attrs);
         } else if (op_class.rfind("ParLowerDiag", 0) == 0 || op_class.rfind("ParUpperDiagonal", 0) == 0) {
             pt = generate_matrix_parameter(ckks_ctx, static_cast<Layer*>(layer_ptr), attrs);

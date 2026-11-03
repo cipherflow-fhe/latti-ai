@@ -17,6 +17,7 @@
  */
 
 #include "interface/inference_provisioner.h"
+#include <set>
 
 #include <algorithm>
 #include <cctype>
@@ -209,10 +210,35 @@ void InferenceProvisioner::copy_private_and_runner_configs(const std::filesystem
     runner_config["parameter_mode"] = "encrypted_offline";
     runner_config["decryptor"] = "provisioner";
     runner_config["deployment_role"] = "runner";
+    if (runner_config.value("mat_pack_style", std::string()) == "par_block_col_major" &&
+        runner_config.contains("layernorm_param")) {
+        for (const auto* key : {"inv_var", "inv_std", "var_std_bound", "inv_var_scale", "inv_std_scale"})
+            runner_config["layernorm_param"].erase(key);
+    }
     write_json_file(runner_dir / "task_config.json", runner_config);
 
     copy_if_exists(server_dir_ / "ckks_parameter.json", runner_dir / "ckks_parameter.json");
-    copy_if_exists(server_dir_ / "nn_layers_ct_0.json", runner_dir / "nn_layers_ct_0.json");
+    auto graph = read_json((server_dir_ / "nn_layers_ct_0.json").string());
+    if (runner_config.value("mat_pack_style", std::string()) == "par_block_col_major") {
+        // Keep geometry and explicit public recipes. Private coefficients and
+        // source paths are only needed by the Provisioner encoders.
+        const std::set<std::string> public_fields = {
+            "type", "feature_input", "feature_output", "K", "k", "order", "degree",
+            "weight_shape", "head_shape", "to_expand", "level_cost", "pcm_seed_layout",
+            "parameter_sources", "epsilon", "eps", "level", "n_levels", "is_transposed"};
+        for (auto& item : graph["layer"].items()) {
+            auto& layer = item.value();
+            const auto type = layer.at("type").get<std::string>();
+            if (type.rfind("pcm", 0) != 0 && type.rfind("par", 0) != 0) continue;
+            for (auto it = layer.begin(); it != layer.end();) {
+                if (!public_fields.count(it.key())) it = layer.erase(it);
+                else ++it;
+            }
+            if (layer.contains("parameter_sources"))
+                for (auto& source : layer["parameter_sources"].items()) source.value().erase("source_refs");
+        }
+    }
+    write_json_file(runner_dir / "nn_layers_ct_0.json", graph);
 
     if (!std::filesystem::exists(runner_dir / "mega_ag.json") ||
         !std::filesystem::exists(runner_dir / "task_signature.json")) {
@@ -631,7 +657,7 @@ void InferenceProvisioner::write_encrypted_argument(const std::filesystem::path&
         {"source_id", info.source_id.empty() ? arg_id : info.source_id},
         {"type", "ct"},
         {"level", sig.at("level").get<int>()},
-        {"use_site_level", sig.at("level").get<int>()},
+        {"use_site_level", sig.value("use_site_level", sig.at("level").get<int>())},
         {"size", sig.at("size")},
         {"file", filename},
         {"layer_id", info.layer_id},

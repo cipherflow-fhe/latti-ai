@@ -21,6 +21,7 @@
 #include <fstream>
 #include <cmath>
 #include <stdexcept>
+#include <set>
 
 #include "util/serial.h"
 
@@ -33,6 +34,48 @@ const std::string kNamedBytesBundleMagic = "latti-ai.runner-output.v1";
 json parameter_layout_metadata(const json& graph, const std::string& layer_id, const json& signature) {
     const auto& layer = graph.at("layer").at(layer_id);
     const auto id = signature.at("id").get<std::string>();
+    if (signature.contains("generator") &&
+        signature.at("generator").value("type", std::string()) == "row_chunk_seed") {
+        const auto& layout = layer.at("pcm_seed_layout");
+        const auto& feature = graph.at("feature").at(layer.at("feature_input")[0].get<std::string>());
+        const auto d = layout.at("d").get<uint64_t>();
+        const auto heads = layout.at("H").get<uint64_t>();
+        const auto slots = layout.at("C").get<uint64_t>() * layout.at("rho").get<uint64_t>();
+        if (!d || (d & (d - 1)) || !heads || slots < d*d ||
+            layout.at("weight_shape") != layer.at("weight_shape") ||
+            layout.at("head_shape") != feature.at("head_shape") ||
+            feature.at("head_shape")[1] != d)
+            throw std::runtime_error("Invalid PCM parameter seed geometry: " + layer_id);
+        uint64_t padded = 1;
+        while (padded < heads) padded *= 2;
+        const auto lanes = std::min(padded, slots/(d*d));
+        if (lanes == 1) padded = heads;
+        const auto chunk = std::min(slots, padded*d*d);
+        const auto groups = padded/lanes;
+        const auto repeats = slots/chunk;
+        const auto rows = layer.at("weight_shape")[0].get<uint64_t>();
+        const auto cols = layer.at("weight_shape")[1].get<uint64_t>();
+        const auto kr = (rows + heads*d - 1)/(heads*d);
+        const auto kc = (cols + heads*d - 1)/(heads*d);
+        const auto blocks = std::max(kr, kc);
+        const auto requests = blocks*groups*heads*d;
+        const auto per_seed = d*repeats;
+        if (std::min(kr, kc) != 1 || (lanes & (lanes-1)) || slots % chunk ||
+            layout.at("Hp") != padded || layout.at("u") != lanes || layout.at("C") != chunk ||
+            layout.at("G") != groups || layout.at("rho") != repeats || layout.at("K") != blocks ||
+            layout.at("request_count") != requests || layout.at("requests_per_seed") != per_seed ||
+            layout.at("seed_count") != (requests + per_seed-1)/per_seed ||
+            layout.at("request_order_version") != 1 ||
+            signature.at("generator").at("pcm_seed_layout") != layout ||
+            signature.at("scale") != layout.at("scale"))
+            throw std::runtime_error("PCM parameter seed layout differs from geometry: " + layer_id);
+        if (layout.at("kind") != "pcm_row_chunk_v1" ||
+            layout.at("seed_level").get<int>() != layout.at("use_site_level").get<int>() + 1 ||
+            signature.at("level") != layout.at("seed_level") ||
+            signature.at("generator").at("seed_id").get<uint64_t>() >= layout.at("seed_count").get<uint64_t>())
+            throw std::runtime_error("Invalid PCM parameter seed layout: " + layer_id);
+        return layout;
+    }
     if (id.rfind("dense", 0) == 0 && layer.contains("dense_seed_tiles"))
         return layer.at("dense_seed_tiles");
     if (id.rfind("poly_reluw_", 0) == 0 && layer.contains("poly_seed_layout"))
@@ -50,14 +93,22 @@ json parameter_layout_metadata(const json& graph, const std::string& layer_id, c
 void validate_parameter_manifest(const json& manifest, const json& signature, const json& graph) {
     const auto& parameters = signature.contains("encrypted_parameters") ? signature.at("encrypted_parameters") : signature.at("offline");
     size_t expected_count = 0;
+    std::map<std::string, std::set<uint64_t>> seed_ids;
     for (const auto& sig : parameters) {
         if (sig.at("type") != "ct") continue;
         ++expected_count;
         const auto id = sig.at("id").get<std::string>();
         const auto& arg = manifest.at("arguments").at(id);
+        if (sig.contains("generator") && sig.at("generator").value("type", std::string()) == "row_chunk_seed") {
+            const auto layer_id = sig.at("layer_id").get<std::string>();
+            if (!seed_ids[layer_id].insert(sig.at("generator").at("seed_id").get<uint64_t>()).second)
+                throw std::runtime_error("Duplicate PCM seed: " + id);
+        }
         for (const auto* key : {"size", "level", "type"}) {
             if (arg.at(key) != sig.at(key)) throw std::runtime_error("Parameter manifest/signature mismatch: " + id + " " + key);
         }
+        if (sig.contains("use_site_level") && arg.at("use_site_level") != sig.at("use_site_level"))
+            throw std::runtime_error("Parameter manifest/signature use-site mismatch: " + id);
         // Layouts are JSON objects: insertion order is not part of their contract.
         if (arg.contains("layout") && nlohmann::json(arg.at("layout")) !=
             nlohmann::json(parameter_layout_metadata(graph, arg.at("layer_id"), sig)))
@@ -76,6 +127,9 @@ void validate_parameter_manifest(const json& manifest, const json& signature, co
     }
     if (manifest.at("arguments").size() != expected_count)
         throw std::runtime_error("Parameter manifest has unexpected arguments");
+    for (const auto& [layer_id, ids] : seed_ids)
+        if (ids.size() != graph.at("layer").at(layer_id).at("pcm_seed_layout").at("seed_count").get<uint64_t>())
+            throw std::runtime_error("Incomplete PCM seed set: " + layer_id);
 }
 
 Bytes read_binary_file(const std::filesystem::path& path) {

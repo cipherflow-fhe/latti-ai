@@ -41,6 +41,7 @@ from processor import *
 from graph_partition_dp import *
 
 from score import encrypted_parameter_storage_enabled, get_encrypted_parameter_storage_report
+from inference.model_generator.parameter_sources import public_source
 
 MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
 PCM_TO_PDM_TYPES = {
@@ -418,11 +419,15 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         pre_gamma.depth = btp_node.depth
         pre_gamma.path = f'{pre_gamma_id}.weight'
         pre_gamma.btp_scale = pre_btp_scale
+        pre_gamma.parameter_sources = {'gamma_pt': public_source(
+            'math_constant', dict(formula='bootstrap_scale', scalar_value=pre_btp_scale))}
 
         post_gamma = ComputeNode(post_gamma_id, gamma_type, btp_node.channel_output, btp_node.channel_output)
         post_gamma.depth = btp_node.depth
         post_gamma.path = f'{post_gamma_id}.weight'
         post_gamma.btp_scale = 1 / pre_btp_scale
+        post_gamma.parameter_sources = {'gamma_pt': public_source(
+            'math_constant', dict(formula='bootstrap_scale', scalar_value=1 / pre_btp_scale))}
 
         pre_feature = _clone_feature_node(pred_feature, pre_feature_id)
         post_gamma_input_feature = _clone_feature_node(succ_feature, post_gamma_input_feature_id)
@@ -474,6 +479,15 @@ def _pcmgamma_fuse_info(pcmgamma_node: ComputeNode, direction: str) -> dict:
 
 
 def _append_fuse_gama_info(node: ComputeNode, fuse_gama_info: dict):
+    sources = getattr(node, 'parameter_sources', {})
+    key = 'coeff_pt' if node.layer_type in ('pcmpoly', 'pdmpoly') else 'row_chunk_seed'
+    if node.layer_type in ('pcmpoly', 'pdmpoly', 'parcpmm'):
+        previous = sources.get(key, {})
+        refs = list(previous.get('source_refs', []))
+        refs.extend(getattr(node, name, '') for name in ('weight_path', 'coeffs_path'))
+        sources[key] = dict(visibility='secret', source_kind='derived',
+                            source_refs=[ref for ref in refs if ref] + [fuse_gama_info])
+    node.parameter_sources = sources
     existing_fuse_gama_info = getattr(node, 'fuse_gama_info', None)
     if existing_fuse_gama_info is None:
         node.fuse_gama_info = [fuse_gama_info]
@@ -686,12 +700,12 @@ def dump_graph(
     insert_btp_scale_gamma_layers(graph)
     absorb_pcmgamma_layers(graph)
     recompute_final_level(graph)
-    if encrypted_parameter_storage_enabled():
+    if encrypted_parameter_storage_enabled() or getattr(config, 'pcm_encrypted_parameters', False):
         report = get_encrypted_parameter_storage_report(graph.dag, generate_param_dict_for_graph())
         previous = getattr(graph, 'encrypted_parameter_dp_report', report)
         before = {item['layer_id']: item['counts'] for item in previous['layers']}
         after = {item['layer_id']: item['counts'] for item in report['layers']}
-        if before != after:
+        if encrypted_parameter_storage_enabled() and before != after:
             raise ValueError('Final level recompute changed encrypted parameter storage from the DP candidate')
         (output_dir / 'encrypted_parameter_storage_report.json').write_text(
             json.dumps(report, indent=2) + '\n', encoding='utf-8'
@@ -807,6 +821,8 @@ def run_pipeline(
     if matmul_block_size is not None:
         config.matmul_block_size = matmul_block_size
     config.mat_pack_style = mat_pack_style
+    config.pcm_encrypted_parameters = (deployment_mode == 'server_provisioned_runner' and
+                                       mat_pack_style == 'par_block_col_major')
     config.model_type = model_type
     seed_stride = seed_weight_subgrid_stride
     if not (

@@ -266,6 +266,7 @@ class ParBlockColMajorPoly(MatPolyBase):
                             'op_class': op_class,
                             'type': 'stockmeyer_coeff_pt',
                             'coeff_idx': coeff_idx,
+                            'parameter_scale': self.cached_stockmeyer_coeff_scale[coeff_idx],
                             'ct_idx': ct_idx,
                             'mb': mb,
                             'ct_local': ct_local,

@@ -23,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
 from inference.model_generator.layers.fhe_op_utils import naf_weight
+from inference.model_generator.layers.matrix_param_ops import custom_compute, mult, add, ct_pt_mult_accumulate
+from inference.model_generator.layers.encrypted_param_ops import materialize_encrypted_param
 
 
 op_class = 'ParBlockColMajorCPMM'
@@ -98,6 +100,7 @@ class ParBlockColMajorCPMM:
         # Pad both W dimensions to multiples of n_total, then compare to determine mode.
         # Exactly one of K_row, K_col must be 1; K = max(K_row, K_col).
         W_rows, W_cols = W_shape
+        self.W_shape = tuple(W_shape)
         n = self.n_total_per_mb
         K_row = math.ceil(W_rows / n)
         K_col = math.ceil(W_cols / n)
@@ -296,6 +299,8 @@ class ParBlockColMajorCPMM:
         Plaintext nodes are bound to C++ precompute_diagonals() output through
         the custom_compute mechanism.  Functionally equivalent to call().
         """
+        if getattr(data_source, 'pcm_seed_parameter_mode', False):
+            return self._call_row_chunk_seeds(A_cts, data_source)
         diag_pt = []
         for mb in range(self.K):
             diag_pt_mb = []
@@ -353,6 +358,105 @@ class ParBlockColMajorCPMM:
                         bias_pt.append(bp_node)
 
         return self.call(A_cts, diag_pt, mask_h0_pt, bias_pt)
+
+    def seed_layout(self, level: int, scale: float) -> dict:
+        if self.n_per_head != self.d:
+            raise ValueError('PCM row/chunk seeds require n_per_head == block_size')
+        return dict(kind='pcm_row_chunk_v1', weight_shape=list(self.W_shape),
+                    head_shape=[self.m, self.n_per_head], d=self.d, H=self.n_heads,
+                    Hp=self.n_h_padded, u=self.S, C=self.chunk_size, G=self.G,
+                    rho=self.num_chunks, K=self.K, request_count=self.K*self.G*self.n_heads*self.d,
+                    requests_per_seed=self.d*self.num_chunks,
+                    seed_count=math.ceil(self.K*self.G*self.n_heads/self.num_chunks),
+                    use_site_level=level, seed_level=level+1, scale=float(scale), request_order_version=1)
+
+    def _call_row_chunk_seeds(self, A_cts, source):
+        """Consume one baby group across all token blocks before restoring the next."""
+        level = A_cts[0].level
+        layout = self.seed_layout(level, source.pcm_seed_scale)
+        source.pcm_seed_layout = layout
+        source_id = source.id
+        seeds = {}
+        previous = list(A_cts)
+        full_sums = {}
+        cts_per_mb = self.num_block_rows_A*self.G
+        unit = self.d*self.S
+
+        for mb in range(self.K):
+            out_mb = mb if self.mode == 'EXPAND' else 0
+            for g in range(self.G):
+                for bp in range(self.n_heads):
+                    baby = []
+                    for bi in range(self.num_block_rows_A):
+                        idx = (mb*cts_per_mb if self.mode == 'REDUCE' else 0)+bi*self.G+g
+                        x = A_cts[idx]
+                        baby.append([x]+rotate_cols(x, [b*unit for b in range(1, self.bsgs_bs)]))
+                    totals = [None]*self.num_block_rows_A
+                    for a in range(self.bsgs_gs):
+                        restored = []
+                        for b in range(min(self.bsgs_bs, self.d-a*self.bsgs_bs)):
+                            k = a*self.bsgs_bs+b
+                            ridx = (((mb*self.G+g)*self.n_heads+bp)*self.d+k)
+                            sid, position = divmod(ridx, layout['requests_per_seed'])
+                            if sid not in seeds:
+                                attrs = dict(op_class=op_class, type='row_chunk_seed', seed_id=sid,
+                                             pcm_seed_layout=layout)
+                                seeds[sid] = source.matrix_parameter_builder(
+                                    attrs, f'pcm_seed_{sid}', level+1)
+                            seed = materialize_encrypted_param(seeds[sid], previous[0],
+                                                               dependencies=previous[1:])
+                            mask = CkksPlaintextRingtNode(f'pcm_select_{source_id}_{ridx}')
+                            custom_compute(inputs=previous, output=mask, type='encode_pt',
+                                           attributes=dict(op_class=op_class, type='row_chunk_selection',
+                                                           layer_id=source_id, position=position,
+                                                           use_site_level=level))
+                            weight = mult(seed, mask)
+                            row, ci = position % self.d, position // self.d
+                            for bit in range(self.d.bit_length()-1):
+                                step = (1 << bit)*self.S
+                                weight = add(weight, rotate_cols(weight, [step if row & (1 << bit) else -step])[0])
+                            for bit in range(self.num_chunks.bit_length()-1):
+                                step = (1 << bit)*self.chunk_size
+                                weight = add(weight, rotate_cols(weight, [step if ci & (1 << bit) else -step])[0])
+                            restored.append(rescale(weight))
+                        for bi in range(self.num_block_rows_A):
+                            inner = None
+                            for b, weight in enumerate(restored):
+                                product = mult_relin(baby[bi][b], weight)
+                                inner = product if inner is None else add(inner, product)
+                            if a:
+                                inner = rotate_cols(inner, [a*self.bsgs_bs*unit])[0]
+                            totals[bi] = inner if totals[bi] is None else add(totals[bi], inner)
+                        previous = list(totals)
+                    for bi, total in enumerate(totals):
+                        total = self._head_sum(rescale(total))
+                        key = (out_mb, bi, bp)
+                        full_sums[key] = total if key not in full_sums else add(full_sums[key], total)
+                    previous = [full_sums[(out_mb, bi, bp)] for bi in range(self.num_block_rows_A)]
+
+        mask = CkksPlaintextRingtNode(f'pcm_head0_{source_id}')
+        custom_compute(inputs=[source], output=mask, type='encode_pt',
+                       attributes=dict(op_class=op_class, type='mask_h0_pt'))
+        result = [None]*(self.n_out_mbs*cts_per_mb)
+        for mb in range(self.n_out_mbs):
+            for bi in range(self.num_block_rows_A):
+                for bp in range(self.n_heads):
+                    total = rescale(mult(full_sums[(mb, bi, bp)], mask))
+                    g_out, h = divmod(bp, self.S)
+                    if h:
+                        total = rotate_cols(total, [self.chunk_size-h])[0]
+                    idx = mb*cts_per_mb+bi*self.G+g_out
+                    result[idx] = total if result[idx] is None else add(result[idx], total)
+        if self.has_bias:
+            for mb in range(self.n_out_mbs):
+                for bi in range(self.num_block_rows_A):
+                    for g in range(self.G):
+                        idx = mb*cts_per_mb+bi*self.G+g
+                        bias = CkksPlaintextRingtNode(f'pcm_bias_{source_id}_{idx}')
+                        custom_compute(inputs=[source], output=bias, type='encode_pt',
+                                       attributes=dict(op_class=op_class, type='bias_pt', mb=mb, bi=bi, g=g))
+                        result[idx] = add(result[idx], bias)
+        return result
 
     # ------------------------------------------------------------------ #
     #  FHE operation count                                                #
@@ -431,3 +535,13 @@ class ParBlockColMajorCPMM:
             ops[lv]['add'] += n_bias_cts
 
         return dict(ops)
+
+    def get_compact_fhe_op_count(self, level: int) -> dict:
+        ops = self.get_fhe_op_count(level)
+        ops[level]['mult'] += ops[level]['mult_plain']
+        ops[level]['mult_plain'] = 0
+        requests = self.K*self.G*self.n_heads*self.d
+        broadcasts = (self.d*self.num_chunks).bit_length()-1
+        ops[level+1] = dict(rotate=requests*broadcasts, mult_plain=requests,
+                            mult=0, add=requests*broadcasts, rescale=requests)
+        return ops

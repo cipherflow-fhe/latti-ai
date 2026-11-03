@@ -19,6 +19,7 @@
 #include "interface/inference_runner.h"
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <numeric>
 #include <stdexcept>
@@ -122,6 +123,17 @@ ExecutorFunc create_multiplexed_conv_mask_executor(std::shared_ptr<InitInference
                 pt = ParLowerDiagPCMM::mask_wrap_for_config(*context,
                     next_power_of_two(matrix_layers->n_heads), next_power_of_two(sequence_length),
                     feature.at("level").get<uint32_t>(), attrs.at("i_idx").get<uint32_t>());
+            } else if (op_class == "ParBlockColMajorCPMM") {
+                const auto& layer = matrix_layers->json_layers.at(layer_id);
+                const auto& feature = matrix_layers->json_features.at(layer.at("feature_input")[0].get<std::string>());
+                const auto level = feature.at("level").get<uint32_t>();
+                if (attrs.at("type") == "row_chunk_selection")
+                    pt = ParBlockColMajorCPMM::selection_for_config(*context, matrix_layers->matmul_block_size,
+                        matrix_layers->n_heads, level, attrs.at("position").get<uint32_t>());
+                else if (attrs.at("type") == "mask_h0_pt")
+                    pt = ParBlockColMajorCPMM::head0_mask_for_config(*context, matrix_layers->matmul_block_size,
+                        matrix_layers->n_heads, level);
+                else throw std::runtime_error("[Runner] unknown public PCM CPMM parameter");
             } else {
                 pt = generate_matrix_parameter(*context, &matrix_layers->get_layer<Layer>(layer_id), attrs);
             }
@@ -373,7 +385,8 @@ void InferenceRunner::load() {
         eval_context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize_advanced(eval_context));
     }
     n_slots_ = eval_context_->get_parameter().get_n() / 2;
-    if (task_config_.value("mat_pack_style", std::string()) == "par_diagonal_pack") {
+    if (task_config_.value("mat_pack_style", std::string()) == "par_diagonal_pack" ||
+        task_config_.value("mat_pack_style", std::string()) == "par_block_col_major") {
         public_matrix_layers_ = std::make_shared<InitInferenceProcess>(runner_dir_.string(), false);
         public_matrix_layers_->init_parameters(task_config_.value("use_btp", false));
         public_matrix_layers_->load_public_matrix_layers();
@@ -693,10 +706,15 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
         const InputParam& param = param_it->second;
         if (param.is_mat) {
             if (!public_matrix_layers_) throw std::runtime_error("[Runner] unsupported matrix packing style");
-            auto csv = csv_to_array<2>(csv_it->second, {(uint64_t)param.width, (uint64_t)param.height});
+            const bool pcm = task_config_.value("mat_pack_style", std::string()) == "par_block_col_major";
+            auto csv = csv_to_array<2>(csv_it->second,
+                pcm ? std::array<uint64_t, 2>{(uint64_t)param.height, (uint64_t)param.width} :
+                      std::array<uint64_t, 2>{(uint64_t)param.width, (uint64_t)param.height});
             FeatureMatEncrypted input(eval_context_.get(), param.level);
-            auto packed = input.par_diagonal_slots(transpose_2d_array(csv), param.n_heads, param.head_shape,
-                                                   true, param.is_transposed);
+            auto packed = pcm ?
+                input.par_block_col_major_slots(csv, param.matmul_block_size, param.n_heads, param.head_shape[1]) :
+                input.par_diagonal_slots(transpose_2d_array(csv), param.n_heads, param.head_shape,
+                                         true, param.is_transposed);
             if (packed.size() != shape_size(sig)) throw std::runtime_error("[Runner] matrix input count mismatch");
             std::vector<fhe::CkksPlaintextRingt> encoded;
             for (const auto& slots : packed)
@@ -810,7 +828,12 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
             custom_executors["load_encrypted_param_ct"] = create_load_encrypted_param_executor();
         }
         task.bind_custom_executors(custom_executors);
+        // FheTaskGpu::run synchronizes the device before it returns. No GPU
+        // work is submitted by this runner before this call.
+        const auto begin = std::chrono::steady_clock::now();
         task.run(eval_context_.get(), cxx_args, progress_cb, gpu_device_);
+        std::cout << "[Runner] FHE wall seconds: "
+                  << std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count() << std::endl;
 #else
         throw std::runtime_error("[Runner] GPU support is disabled. Reconfigure with -DINFERENCE_SDK_ENABLE_GPU=ON.");
 #endif
